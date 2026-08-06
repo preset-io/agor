@@ -130,6 +130,12 @@
       "import": "./dist/templates/session-context.js",
       "require": "./dist/templates/session-context.cjs"
     },
+    "./templates/mcp-auth-missing": {
+      "source": "./src/templates/mcp-auth-missing.ts",
+      "types": "./dist/templates/mcp-auth-missing.d.ts",
+      "import": "./dist/templates/mcp-auth-missing.js",
+      "require": "./dist/templates/mcp-auth-missing.cjs"
+    },
     "./templates/spawn-subsession-template": {
       "source": "./src/templates/spawn-subsession-template.ts",
       "types": "./dist/templates/spawn-subsession-template.d.ts",

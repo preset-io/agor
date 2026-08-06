@@ -24,6 +24,7 @@ export default defineConfig({
     'lib/feathers-validation': 'src/lib/feathers-validation.ts', // FeathersJS query validation schemas
     'lib/validation': 'src/lib/validation.ts', // Node-only filesystem validation for executors
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
+    'templates/mcp-auth-missing': 'src/templates/mcp-auth-missing.ts', // Per-turn MCP OAuth runtime notice
     'templates/session-context': 'src/templates/session-context.ts', // Agor system prompt rendering
     'templates/spawn-subsession-template': 'src/templates/spawn-subsession-template.ts', // Spawn-subsession meta-prompt
     'templates/teammate-welcome-note': 'src/templates/teammate-welcome-note.ts', // Teammate board welcome note renderer

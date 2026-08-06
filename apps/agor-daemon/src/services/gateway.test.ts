@@ -431,6 +431,45 @@ describe('GatewayService multi-tenant process state', () => {
 });
 
 describe('GatewayService Slack thread catch-up', () => {
+  it('leaves MCP authentication notices to the common executor launch path', async () => {
+    const channel = {
+      ...slackChannel,
+      mcp_server_ids: ['oauth-server'],
+    } as GatewayChannel;
+    const { service, promptCreate } = makeGatewayHarness({ channel, connector: {} });
+    (
+      service as unknown as {
+        mcpServerRepo: { findById: (id: string) => Promise<unknown> };
+        userTokenRepo: { getToken: () => Promise<null> };
+      }
+    ).mcpServerRepo = {
+      findById: vi.fn(async () => ({
+        mcp_server_id: 'oauth-server',
+        name: 'OAuth server',
+        auth: { type: 'oauth', oauth_mode: 'per_user' },
+      })),
+    };
+    (service as unknown as { userTokenRepo: { getToken: () => Promise<null> } }).userTokenRepo = {
+      getToken: vi.fn(async () => null),
+    };
+
+    await service.create({
+      channel_key: channel.channel_key,
+      thread_id: 'C123-100.000000',
+      text: 'please answer',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '103.000000',
+      },
+    });
+
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).not.toContain('[System notice:');
+    expect(prompt).not.toContain('[Agor runtime context]');
+  });
+
   it('runs listener inbound callbacks inside a fresh channel tenant DB scope', async () => {
     const seenTenants: Array<string | undefined> = [];
     const app = {

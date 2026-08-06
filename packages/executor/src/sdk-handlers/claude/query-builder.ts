@@ -33,7 +33,6 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MCPServersConfig, SessionID, TaskID } from '../../types.js';
-import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { createCanUseToolCallback } from '../base/permission-hooks.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
@@ -147,14 +146,6 @@ export async function setupQuery(
     throw new Error(`Session not found: ${sessionId}`);
   }
   const shouldBlockOnMcpStartup = isGatewaySession(session);
-
-  // Determine which user's context to use for environment variables and API
-  // keys: the task creator (prompter) when known, else the session owner.
-  const contextUserId = await resolveContextUserId({
-    session,
-    taskId,
-    tasksService: deps.tasksService,
-  });
 
   // Determine model to use (session config or default)
   // `[1m]` is a first-class Claude Code model-selection suffix. Keep it on
@@ -465,13 +456,12 @@ export async function setupQuery(
   // Fetch and configure MCP servers for this session
   if (deps.sessionMCPRepo && deps.mcpServerRepo) {
     try {
-      // Use shared MCP scoping utility
-      // Pass forUserId to enable per-user OAuth token injection
+      // Use shared MCP scoping utility. The executor token already carries the
+      // authoritative task creator identity for per-user OAuth resolution.
       const serversWithSource = await getMcpServersForSession(sessionId, {
         sessionMCPRepo: deps.sessionMCPRepo,
         mcpServerRepo: deps.mcpServerRepo,
         mcpOAuthAuthHeadersRepo: deps.mcpOAuthAuthHeadersRepo,
-        forUserId: contextUserId,
       });
 
       if (serversWithSource.length > 0) {

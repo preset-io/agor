@@ -1,6 +1,6 @@
 import type { MCPServer, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { getMcpServersForSession } from './scoping';
+import { getMcpServerAvailabilityForSession, getMcpServersForSession } from './scoping';
 
 const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer =>
   ({
@@ -139,5 +139,168 @@ describe('getMcpServersForSession', () => {
       type: 'oauth',
       oauth_access_token: 'real-oauth-token',
     });
+  });
+
+  it('omits OAuth servers that the auth service reports require authentication', async () => {
+    const needsAuth = {
+      ...makeServer('oauth-needs-auth', 'global', 'Needs auth'),
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as MCPServer;
+    const usable = makeServer('usable', 'session', 'Usable');
+
+    const availability = await getMcpServerAvailabilityForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([usable, needsAuth]),
+      } as never,
+      mcpOAuthAuthHeadersRepo: {
+        getAuthHeaders: vi.fn().mockResolvedValue({
+          'oauth-needs-auth': { error: 'needs_reauth' },
+        }),
+      },
+    });
+
+    expect(availability.usable.map(({ server }) => server.mcp_server_id)).toEqual(['usable']);
+    expect(availability.unavailable).toEqual([
+      {
+        server: { server: needsAuth, source: 'global' },
+        reason: 'authentication_required',
+      },
+    ]);
+  });
+
+  it('keeps a refreshable expired OAuth server when the auth service returns its refreshed token', async () => {
+    const refreshable = {
+      ...makeServer('oauth-refreshable', 'session', 'Refreshable'),
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as MCPServer;
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([refreshable]),
+      } as never,
+      mcpOAuthAuthHeadersRepo: {
+        getAuthHeaders: vi.fn().mockResolvedValue({
+          'oauth-refreshable': { authorization: 'Bearer refreshed-token' },
+        }),
+      },
+    });
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].server.auth?.oauth_access_token).toBe('refreshed-token');
+  });
+
+  it('omits an OAuth server after invalid_grant is normalized to needs_reauth', async () => {
+    const invalidGrant = {
+      ...makeServer('oauth-invalid-grant', 'session', 'Invalid grant'),
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as MCPServer;
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([invalidGrant]),
+      } as never,
+      mcpOAuthAuthHeadersRepo: {
+        getAuthHeaders: vi.fn().mockResolvedValue({
+          'oauth-invalid-grant': { error: 'needs_reauth' },
+        }),
+      },
+    });
+
+    expect(servers).toEqual([]);
+  });
+
+  it('does not mislabel or remove OAuth servers on transient auth-service failures', async () => {
+    const transient = {
+      ...makeServer('oauth-transient', 'session', 'Transient'),
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as MCPServer;
+
+    const availability = await getMcpServerAvailabilityForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([transient]),
+      } as never,
+      mcpOAuthAuthHeadersRepo: {
+        getAuthHeaders: vi.fn().mockResolvedValue({
+          'oauth-transient': { error: 'unknown_error' },
+        }),
+      },
+    });
+
+    expect(availability.usable).toEqual([{ server: transient, source: 'session-assigned' }]);
+    expect(availability.unavailable).toEqual([]);
+  });
+
+  it('does not mislabel or remove OAuth servers when the auth service is unreachable', async () => {
+    const oauth = {
+      ...makeServer('oauth-network', 'session', 'Network failure'),
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as MCPServer;
+
+    const availability = await getMcpServerAvailabilityForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([oauth]),
+      } as never,
+      mcpOAuthAuthHeadersRepo: {
+        getAuthHeaders: vi.fn().mockRejectedValue(new Error('connection reset')),
+      },
+    });
+
+    expect(availability.usable).toEqual([{ server: oauth, source: 'session-assigned' }]);
+    expect(availability.unavailable).toEqual([]);
+  });
+
+  it('does not classify missing bearer or JWT configuration as OAuth authentication', async () => {
+    const bearer = {
+      ...makeServer('bearer', 'global', 'Bearer'),
+      auth: { type: 'bearer', token: undefined },
+    } as MCPServer;
+    const jwt = {
+      ...makeServer('jwt', 'session', 'JWT'),
+      auth: { type: 'jwt', api_token: undefined, api_secret: undefined },
+    } as MCPServer;
+    const getAuthHeaders = vi.fn();
+
+    const availability = await getMcpServerAvailabilityForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([jwt, bearer]),
+      } as never,
+      mcpOAuthAuthHeadersRepo: { getAuthHeaders },
+    });
+
+    expect(getAuthHeaders).not.toHaveBeenCalled();
+    expect(availability.unavailable).toEqual([]);
+    expect(availability.usable.map(({ server }) => server.mcp_server_id)).toEqual([
+      'bearer',
+      'jwt',
+    ]);
+  });
+
+  it('preserves stable ordering after unavailable OAuth servers are removed', async () => {
+    const global = makeServer('global-z', 'global', 'zeta');
+    const unavailable = {
+      ...makeServer('global-a', 'global', 'alpha'),
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as MCPServer;
+    const session = makeServer('session-a', 'session', 'alpha');
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([session, global, unavailable]),
+      } as never,
+      mcpOAuthAuthHeadersRepo: {
+        getAuthHeaders: vi.fn().mockResolvedValue({
+          'global-a': { error: 'needs_reauth' },
+        }),
+      },
+    });
+
+    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['global-z', 'session-a']);
   });
 });

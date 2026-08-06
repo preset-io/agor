@@ -49,8 +49,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
-import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
-import { resolveContextUserId } from '../base/context-user.js';
+import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
@@ -286,7 +285,7 @@ export class CodexPromptService {
     private mcpServerRepo?: MCPServerRepository,
     _usersRepo?: UsersRepository,
     useNativeAuth: boolean = false,
-    private tasksService?: TasksService,
+    _tasksService?: TasksService,
     private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     // Store API key from base-executor (already resolved with proper precedence)
@@ -622,24 +621,19 @@ export class CodexPromptService {
    * shared `resolveMCPAuthHeaders` (matching Claude) and injected via env
    * vars referenced by `bearer_token_env_var` (never inlined in the URL).
    *
-   * `forUserId` is required for per-user OAuth token injection at the
-   * scoping layer — without it, OAuth-protected MCP servers won't pick up
-   * the requesting user's stored OAuth tokens.
+   * Per-user OAuth identity comes from the task-scoped executor token.
    */
   private async buildMcpServersConfig(
     sessionId: SessionID,
     mcpToken: string | undefined,
-    forUserId: UserID | undefined,
     requireMcpServers = false
   ): Promise<{ servers: CodexConfigObject; total: number }> {
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
-    codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
     const serversWithSource = await getMcpServersForSession(sessionId, {
       sessionMCPRepo: this.sessionMCPServerRepo,
       mcpServerRepo: this.mcpServerRepo,
       mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
-      forUserId,
     });
 
     const mcpServers = serversWithSource.map((s) => s.server);
@@ -1044,18 +1038,10 @@ export class CodexPromptService {
       );
     }
 
-    // forUserId enables per-user OAuth token injection at the MCP scoping
-    // layer — the task creator (prompter) when known, else the session owner.
-    const forUserId = await resolveContextUserId({
-      session,
-      taskId,
-      tasksService: this.tasksService,
-    });
     const requireMcpServers = isGatewaySession(session);
     const { servers: mcpServersConfig, total: mcpServerCount } = await this.buildMcpServersConfig(
       sessionId,
       mcpToken,
-      forUserId,
       requireMcpServers
     );
 

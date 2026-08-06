@@ -82,7 +82,6 @@ export async function executeOpenCodeTask(params: {
           sessionMCPRepo: repos.sessionMCP,
           mcpServerRepo: repos.mcpServers,
           mcpOAuthAuthHeadersRepo: repos.mcpOAuthAuthHeaders,
-          forUserId: session.created_by,
         }),
       getDaemonUrl,
       createPermissionCallback: (targetSessionId, targetTaskId) =>

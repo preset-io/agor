@@ -62,6 +62,7 @@ import type {
   StreamingEventType,
   Task,
   User,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import { hasMinimumRole, MessageRole, ROLES, SessionStatus, TaskStatus } from '@agor/core/types';
@@ -1165,6 +1166,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionId,
           {
             taskId,
+            prompterUserId: task.created_by as UserID,
             prompt: promptForExecutor,
             permissionMode: options.permissionMode,
             stream: useStreaming,

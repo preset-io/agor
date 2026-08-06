@@ -190,7 +190,6 @@ async function buildCursorMcpServers(args: {
   sessionId: SessionID;
   mcpToken?: string;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
-  forUserId?: string;
 }): Promise<Record<string, McpServerConfig> | undefined> {
   const claimed = new Set<string>();
   const mcpServers: Record<string, McpServerConfig> = {};
@@ -211,7 +210,6 @@ async function buildCursorMcpServers(args: {
     sessionMCPRepo: args.repos.sessionMCP,
     mcpServerRepo: args.repos.mcpServers,
     mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
-    forUserId: args.forUserId,
   });
 
   for (const { server } of serversWithSource) {
@@ -478,7 +476,6 @@ export async function executeCursorTask(params: {
       sessionId,
       mcpToken: session.mcp_token,
       repos,
-      forUserId: session.created_by,
     });
 
     const agent = session.sdk_session_id

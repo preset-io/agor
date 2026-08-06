@@ -3,12 +3,15 @@
  */
 
 export {
+  getMcpServerAvailabilityForSession,
   getMcpServersForSession,
   type MCPAuthHeadersRepository,
   type MCPResolutionDeps,
   type MCPScopingServerRepository,
   type MCPScopingSessionRepository,
+  type MCPServerAvailability,
   type MCPServerWithSource,
+  type UnavailableMcpServer,
 } from './scoping';
 export {
   buildMCPTemplateContextFromEnv,

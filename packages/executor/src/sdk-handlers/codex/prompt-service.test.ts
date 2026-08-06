@@ -2099,8 +2099,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      'agor-bearer-token',
-      undefined
+      'agor-bearer-token'
     );
 
     expect(total).toBe(1);
@@ -2110,20 +2109,14 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     });
   });
 
-  it('passes forUserId to shared MCP scoping for per-user OAuth injection', async () => {
+  it('relies on the task-scoped executor identity for per-user OAuth', async () => {
     const service = makeService();
 
-    await (service as any).buildMcpServersConfig(
-      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      undefined,
-      '019e3700-user-user-user-user00000001'
-    );
+    await (service as any).buildMcpServersConfig('019e3700-aaaa-bbbb-cccc-dddddddddddd');
 
     expect(mcpScopingMocks.getMcpServersForSession).toHaveBeenCalledWith(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      expect.objectContaining({
-        forUserId: '019e3700-user-user-user-user00000001',
-      })
+      expect.not.objectContaining({ forUserId: expect.anything() })
     );
   });
 
@@ -2142,9 +2135,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
 
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
-      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      undefined,
-      undefined
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd'
     );
 
     expect(total).toBe(1);
@@ -2167,9 +2158,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
 
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
-      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      undefined,
-      undefined
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd'
     );
 
     expect(total).toBe(1);
@@ -2201,8 +2190,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      'agor-bearer-token',
-      undefined
+      'agor-bearer-token'
     );
 
     expect(total).toBe(3);
@@ -2218,7 +2206,6 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       'agor-bearer-token',
-      undefined,
       true
     );
 
@@ -2253,7 +2240,6 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       'agor-bearer-token',
-      undefined,
       true
     );
 
@@ -2282,7 +2268,6 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      undefined,
       undefined,
       true
     );
@@ -2319,7 +2304,6 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      undefined,
       undefined,
       true
     );

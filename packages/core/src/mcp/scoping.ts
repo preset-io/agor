@@ -64,6 +64,16 @@ export interface MCPServerWithSource {
   source: 'session-assigned' | 'global';
 }
 
+export interface UnavailableMcpServer {
+  server: MCPServerWithSource;
+  reason: 'authentication_required' | 'authentication_unavailable';
+}
+
+export interface MCPServerAvailability {
+  usable: MCPServerWithSource[];
+  unavailable: UnavailableMcpServer[];
+}
+
 /**
  * Dependencies required for MCP server resolution
  */
@@ -105,16 +115,17 @@ export interface MCPResolutionDeps {
  * // ]
  * ```
  */
-export async function getMcpServersForSession(
+export async function getMcpServerAvailabilityForSession(
   sessionId: SessionID,
   deps: MCPResolutionDeps
-): Promise<MCPServerWithSource[]> {
+): Promise<MCPServerAvailability> {
   const servers: MCPServerWithSource[] = [];
+  const unavailable: UnavailableMcpServer[] = [];
 
   // Early return if dependencies not available
   if (!deps.sessionMCPRepo || !deps.mcpServerRepo) {
     console.warn('⚠️  MCP repository dependencies not available - skipping MCP configuration');
-    return servers;
+    return { usable: servers, unavailable };
   }
 
   try {
@@ -267,6 +278,7 @@ export async function getMcpServersForSession(
             oauthServers.map((server) => server.mcp_server_id)
           );
           let hydrated = 0;
+          const unavailableServerIds = new Set<string>();
           for (let i = 0; i < servers.length; i++) {
             const server = servers[i].server;
             if (server.auth?.type !== 'oauth') continue;
@@ -274,13 +286,18 @@ export async function getMcpServersForSession(
             const header = authHeaders[server.mcp_server_id];
             const bearer = /^Bearer\s+(.+)$/i.exec(header?.authorization ?? '')?.[1];
             if (!bearer) {
-              if (header?.error && header.error !== 'needs_reauth') {
-                console.warn(
-                  `   ⚠️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
-                );
-              } else if (header?.error) {
+              if (header?.error === 'needs_reauth') {
+                unavailable.push({
+                  server: servers[i],
+                  reason: 'authentication_required',
+                });
+                unavailableServerIds.add(server.mcp_server_id);
                 mcpDebug(
                   `   ℹ️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
+                );
+              } else if (header?.error) {
+                console.warn(
+                  `   ⚠️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
                 );
               }
               continue;
@@ -298,6 +315,11 @@ export async function getMcpServersForSession(
             };
             hydrated++;
           }
+          for (let i = servers.length - 1; i >= 0; i--) {
+            if (unavailableServerIds.has(servers[i].server.mcp_server_id)) {
+              servers.splice(i, 1);
+            }
+          }
           mcpDebug(`   🔐 Hydrated OAuth auth headers for ${hydrated} MCP server(s)`);
         } catch (error) {
           console.warn(
@@ -314,21 +336,30 @@ export async function getMcpServersForSession(
     // server-side prompt-cache hits even when the effective server set is the
     // same. Global servers stay before session-assigned servers to preserve the
     // historical scoping precedence; names and IDs make the ordering total.
-    servers.sort((a, b) => {
+    const compareServers = (a: MCPServerWithSource, b: MCPServerWithSource) => {
       const sourceRank = (source: MCPServerWithSource['source']) => (source === 'global' ? 0 : 1);
       return (
         sourceRank(a.source) - sourceRank(b.source) ||
         compareStrings(a.server.name, b.server.name) ||
         compareStrings(String(a.server.mcp_server_id), String(b.server.mcp_server_id))
       );
-    });
+    };
+    servers.sort(compareServers);
+    unavailable.sort((a, b) => compareServers(a.server, b.server));
   } catch (error) {
     console.warn(
       `⚠️  Failed to resolve MCP servers: ${error instanceof Error ? error.message : String(error)}`
     );
-    // Return empty array on error to avoid breaking session creation
-    return [];
+    // Fail closed on resolution errors to avoid breaking session creation.
+    return { usable: [], unavailable: [] };
   }
 
-  return servers;
+  return { usable: servers, unavailable };
+}
+
+export async function getMcpServersForSession(
+  sessionId: SessionID,
+  deps: MCPResolutionDeps
+): Promise<MCPServerWithSource[]> {
+  return (await getMcpServerAvailabilityForSession(sessionId, deps)).usable;
 }

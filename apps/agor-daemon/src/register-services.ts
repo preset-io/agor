@@ -10,6 +10,7 @@ import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon
 
 import {
   type AgorConfig,
+  getBaseUrl,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
   resolveExecutionSecurityMode,
@@ -28,21 +29,24 @@ import {
   runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   type SessionMCPServerRow,
+  SessionRepository,
   select,
   sessionMcpServers,
   shortId,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
+  UsersRepository,
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { getMcpServerAvailabilityForSession } from '@agor/core/mcp';
+import { renderMcpAuthMissingContext } from '@agor/core/templates/mcp-auth-missing';
 import type {
   AuthenticatedParams,
   HookContext,
   MCPAuth,
   MCPServerID,
-  MessageSource,
   Params,
   SessionID,
   UserID,
@@ -133,7 +137,7 @@ import { createSchedulesService } from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
-import { createSessionsService } from './services/sessions.js';
+import { createSessionsService, type ExecuteTaskData } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
 import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
@@ -633,7 +637,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/cursor-models').hooks({ before: { find: [ctx.requireAuth] } });
 
   const branchRepository = new BranchRepository(db);
-  const { UsersRepository, SessionRepository } = await import('@agor/core/db');
   const usersRepository = new UsersRepository(db);
   const sessionsRepository = new SessionRepository(db);
   app.use('/file', createFileService(branchRepository, db, app));
@@ -798,19 +801,20 @@ function createExecuteHandler(
 
   return async (
     sessionId: string,
-    data: {
-      taskId: string;
-      prompt: string;
-      permissionMode?: import('@agor/core/types').PermissionMode;
-      stream?: boolean;
-      messageSource?: MessageSource;
-    },
+    data: ExecuteTaskData,
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
   ) => {
     const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for executor startup');
     const session = await prepareSessionForExecutorStart(db, sessionsService, sessionId, params);
-    const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
+    const prompterUserId = data.prompterUserId;
+    const prompterUser = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+      new UsersRepository(tenantDb).findById(prompterUserId)
+    );
+    if (!prompterUser) {
+      throw new Error(`Task creator ${prompterUserId} not found for executor startup`);
+    }
     if (
       session.agentic_tool_preset_id &&
       data.permissionMode !== undefined &&
@@ -825,7 +829,7 @@ function createExecuteHandler(
         config,
         modelConfig: session.model_config ?? undefined,
         sessionOwnerId: session.created_by,
-        prompterUserId: userId,
+        prompterUserId,
       });
     }
 
@@ -839,7 +843,7 @@ function createExecuteHandler(
     // Hook chain enforces auth before we get here.
     const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
       sessionId,
-      (params as AuthenticatedParams).user!.user_id,
+      prompterUserId,
       {
         taskId: data.taskId,
         branchId: session.branch_id,
@@ -876,7 +880,7 @@ function createExecuteHandler(
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
     const configExecutorUser = config.execution?.executor_unix_user;
-    const sessionUnixUser = session.unix_username;
+    const sessionUnixUser = prompterUser.unix_username;
 
     const impersonationResult = resolveUnixUserForImpersonation({
       mode: unixUserMode,
@@ -947,7 +951,7 @@ function createExecuteHandler(
       // Provider connections are resolved once by the executor through the
       // task-scoped daemon API. Generic process environment never carries them.
       return createUserProcessEnvironment(
-        userId,
+        prompterUserId,
         tenantDb,
         undefined,
         !!executorUnixUser,
@@ -987,9 +991,41 @@ function createExecuteHandler(
 
     executorEnv.DAEMON_URL = daemonUrl;
 
+    const { unavailable: unavailableMcpServers } = await runWithTenantDatabaseScope(
+      db,
+      tenantId,
+      (tenantDb) =>
+        getMcpServerAvailabilityForSession(sessionId as SessionID, {
+          sessionMCPRepo: new SessionMCPServerRepository(tenantDb),
+          mcpServerRepo: new MCPServerRepository(tenantDb),
+          mcpOAuthAuthHeadersRepo: {
+            async getAuthHeaders(mcpServerIds) {
+              const result = (await app.service('mcp-servers/oauth-auth-headers').create(
+                { mcp_server_ids: mcpServerIds },
+                {
+                  ...params,
+                  provider: undefined,
+                  user: prompterUser,
+                }
+              )) as {
+                headers: Record<string, { authorization?: string; error?: string }>;
+              };
+              return result.headers;
+            },
+          },
+        })
+    );
+    const runtimeContext =
+      unavailableMcpServers.length > 0
+        ? renderMcpAuthMissingContext({
+            unavailable: unavailableMcpServers,
+            baseUrl: await getBaseUrl(),
+          })
+        : '';
+    const promptForProvider = runtimeContext ? `${runtimeContext}\n\n${data.prompt}` : data.prompt;
+
     const openCodeLaunch = (() => {
       if (session.agentic_tool !== 'opencode') return undefined;
-      if (!tenantId) throw new Error('Missing active tenant context for OpenCode execution');
       if (!executorHomeDir) throw new Error('Missing executor home for OpenCode execution');
       return OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch({
         tenantId,
@@ -1008,7 +1044,7 @@ function createExecuteHandler(
       params: {
         sessionId,
         taskId,
-        prompt: data.prompt,
+        prompt: promptForProvider,
         tool: session.agentic_tool as
           | 'claude-code'
           | 'gemini'

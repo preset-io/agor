@@ -55,6 +55,7 @@ import type {
   SessionID,
   SessionUpdate,
   TaskID,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import {
@@ -209,6 +210,7 @@ export function isRemoteRelationshipsEnrichedResult(result: unknown): boolean {
  */
 export type ExecuteTaskData = {
   taskId: string;
+  prompterUserId: UserID;
   prompt: string;
   permissionMode?: import('@agor/core/types').PermissionMode;
   stream?: boolean;

@@ -16,7 +16,6 @@ import {
   GatewayOutboundMessageRepository,
   getCurrentTenantId,
   getHiddenTenantId,
-  MCPServerRepository,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
@@ -26,7 +25,6 @@ import {
   shortId,
   type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
-  UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -57,7 +55,6 @@ import type {
   GatewayChannel,
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
-  MCPServerID,
   MessageSource,
   Session,
   SessionID,
@@ -637,8 +634,6 @@ export class GatewayService {
   private sessionRepo: SessionRepository;
   private usersRepo: UsersRepository;
 
-  private mcpServerRepo: MCPServerRepository;
-  private userTokenRepo: UserMCPOAuthTokenRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
 
@@ -689,8 +684,6 @@ export class GatewayService {
     this.sessionRepo = bindRepositoryToTenantUnitOfWork(db, new SessionRepository(db));
     this.usersRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
 
-    this.mcpServerRepo = bindRepositoryToTenantUnitOfWork(db, new MCPServerRepository(db));
-    this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
     this.db = db;
     this.app = app;
   }
@@ -2002,7 +1995,6 @@ export class GatewayService {
 
     let sessionId: SessionID;
     let created = false;
-    let mcpAuthWarning: string | undefined;
     let mappingForCursor: ThreadSessionMap | null = existingMapping ?? null;
 
     // Resolve agentic config: channel config > user defaults > system defaults.
@@ -2231,40 +2223,6 @@ export class GatewayService {
           gatewayMcpServerIds,
           'gateway'
         );
-
-        // Check which MCP servers are not authenticated for this user
-        const unauthedMcpNames: string[] = [];
-        for (const serverId of gatewayMcpServerIds) {
-          try {
-            const server = await this.mcpServerRepo.findById(serverId);
-            if (server?.auth?.type === 'oauth') {
-              const oauthMode = server.auth.oauth_mode || 'per_user';
-              // Unified token store — shared rows key on user_id=NULL, per_user on the caller's id.
-              const tokenUserId = oauthMode === 'shared' ? null : (user.user_id as UserID);
-              // Count a row with a valid refresh_token as "authed" even if the
-              // access_token is expired — the inject hook will JIT-refresh it
-              // before handing it to the executor. This avoids spurious
-              // "not authenticated" warnings for users who are one refresh away.
-              const row = await this.userTokenRepo.getToken(tokenUserId, serverId as MCPServerID);
-              const accessValid = !!(
-                row?.oauth_access_token &&
-                (!row.oauth_token_expires_at || row.oauth_token_expires_at > new Date())
-              );
-              const refreshable = !!row?.oauth_refresh_token;
-              if (!accessValid && !refreshable) {
-                unauthedMcpNames.push(server.display_name || server.name);
-              }
-            }
-          } catch {
-            // Non-fatal — skip auth check for this server
-          }
-        }
-
-        // Track unauthed MCP names so the warning can be prepended to the initial prompt
-        if (unauthedMcpNames.length > 0) {
-          mcpAuthWarning = `[System notice: The following MCP servers are not authenticated for this user and will be unavailable: ${unauthedMcpNames.join(', ')}. The agent will not have access to these tools.]`;
-          console.log(`[gateway] MCP auth warning for: ${unauthedMcpNames.join(', ')}`);
-        }
       }
 
       // Create thread → session mapping
@@ -2490,11 +2448,6 @@ export class GatewayService {
 
       if (channel.channel_type === 'slack') {
         promptText = prependSlackGatewayReplyNote(promptText);
-      }
-
-      // Prepend MCP auth warning to the initial prompt so the agent is aware
-      if (created && mcpAuthWarning) {
-        promptText = `${mcpAuthWarning}\n\n${promptText}`;
       }
 
       // Internal call: pass user, omit provider to bypass auth hooks
