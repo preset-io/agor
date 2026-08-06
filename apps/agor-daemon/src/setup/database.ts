@@ -110,7 +110,9 @@ export async function initializeDatabase(
     skipFirstRunAdminBootstrap?: boolean;
   } = {}
 ): Promise<DatabaseInitResult> {
-  console.log(`📦 Connecting to database: ${dbPath}`);
+  console.log(
+    `[database] connecting backend=${dbPath.startsWith('file:') ? 'sqlite' : 'postgresql'}`
+  );
 
   // Ensure directory exists for SQLite
   await ensureDatabaseDirectory(dbPath);
