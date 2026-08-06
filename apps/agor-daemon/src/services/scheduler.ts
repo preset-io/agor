@@ -63,8 +63,6 @@ import {
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
-  sanitizeDbError,
-  shortId,
   TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
@@ -78,15 +76,19 @@ import type {
   Session,
   SessionID,
   Task,
+  TaskID,
   TenantID,
   User,
   UUID,
 } from '@agor/core/types';
 import {
+  EXECUTING_SESSION_STATUSES,
   isAgenticToolName,
+  isSessionExecuting,
   isTaskPendingDispatch,
+  isTerminalTaskStatus,
+  NONTERMINAL_TASK_STATUSES,
   SessionStatus,
-  TaskStatus,
 } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import {
@@ -104,28 +106,28 @@ import {
 import { buildSessionCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
-/**
- * Session statuses that count as "actively consuming the branch" for
- * the scheduler's concurrency guard. Owned by the scheduler (not the
- * SessionRepository) because the definition of "busy" is a scheduler-
- * policy decision, not a generic session-store fact.
- */
-const ACTIVE_SESSION_STATUSES: ReadonlyArray<SessionStatus> = [
-  SessionStatus.RUNNING,
-  SessionStatus.STOPPING,
-  SessionStatus.AWAITING_PERMISSION,
-  SessionStatus.AWAITING_INPUT,
-];
+type SchedulerWorkLogLevel = 'info' | 'warn' | 'error';
+type SchedulerWorkLogValue = string | number | boolean | null | undefined;
 
-const ACTIVE_TASK_STATUSES: ReadonlyArray<Task['status']> = [
-  TaskStatus.CREATED,
-  TaskStatus.QUEUED,
-  TaskStatus.DISPATCHING,
-  TaskStatus.RUNNING,
-  TaskStatus.STOPPING,
-  TaskStatus.AWAITING_PERMISSION,
-  TaskStatus.AWAITING_INPUT,
-];
+function formatWorkLogValue(value: Exclude<SchedulerWorkLogValue, undefined>): string {
+  return typeof value === 'string' ? JSON.stringify(value) : String(value);
+}
+
+/** Extract only a bounded, non-payload error category for shared logs. */
+function schedulerErrorCode(error: unknown): string {
+  let current = error;
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 8 && current && !seen.has(current); depth += 1) {
+    seen.add(current);
+    if (typeof current !== 'object') break;
+    const record = current as { code?: unknown; cause?: unknown };
+    if (typeof record.code === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(record.code)) {
+      return record.code;
+    }
+    current = record.cause;
+  }
+  return 'operation_failed';
+}
 
 /**
  * Best-effort detection of the partial-unique-index conflict raised by
@@ -197,7 +199,7 @@ export function renderSchedulePrompt(
     };
     return compiledTemplate(context);
   } catch {
-    console.error(`❌ Failed to render prompt template`);
+    console.warn('[scheduler.render] event=template_failed outcome=raw_template_fallback');
     return template;
   }
 }
@@ -271,15 +273,13 @@ export interface SchedulerConfig {
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
   gracePeriod?: number;
-  /** Enable debug logging (default: false) */
-  debug?: boolean;
   /** Unix user mode for validation (default: 'simple') */
   unixUserMode?: UnixUserMode;
   /** Static/single-tenant id used for request-less cron ticks. Undefined means discover due schedule tenants from schedule rows. */
   tenantId?: TenantID | string;
   /** Maximum due schedules read per scan (default: 25). */
   scanBatchSize?: number;
-  /** Maximum idle delay before another scan (default: 60000). */
+  /** Pre-jitter cap for idle scan backoff (default: 60000; default worst case: 72000). */
   maxIdleInterval?: number;
   /** Symmetric scan-delay jitter ratio (default: 0.2). */
   jitterRatio?: number;
@@ -302,7 +302,6 @@ export interface SchedulerTestHooks {
 interface ResolvedSchedulerConfig {
   tickInterval: number;
   gracePeriod: number;
-  debug: boolean;
   unixUserMode: UnixUserMode;
   tenantId?: TenantID | string;
   scanBatchSize: number;
@@ -348,7 +347,6 @@ export class SchedulerService {
     this.config = {
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
-      debug: config.debug ?? false,
       unixUserMode: config.unixUserMode ?? 'simple',
       tenantId:
         typeof config.tenantId === 'string' && config.tenantId.trim()
@@ -390,40 +388,61 @@ export class SchedulerService {
     return runWithTenantDatabaseScope(this.db, getCurrentTenantId(), work);
   }
 
+  private logWorkEvent(
+    level: SchedulerWorkLogLevel,
+    event: string,
+    fields: Record<string, SchedulerWorkLogValue> = {}
+  ): void {
+    const allFields: Record<string, SchedulerWorkLogValue> = {
+      event,
+      instance_id: this.config.workIdentity.instanceId,
+      boot_id: this.config.workIdentity.bootId,
+      tenant_id: getCurrentTenantId(),
+      ...fields,
+    };
+    const details = Object.entries(allFields)
+      .filter(
+        (entry): entry is [string, Exclude<SchedulerWorkLogValue, undefined>] =>
+          entry[1] !== undefined
+      )
+      .map(([key, value]) => `${key}=${formatWorkLogValue(value)}`)
+      .join(' ');
+    const message = `[distributed-work.scheduler] ${details}`;
+    if (level === 'error') console.error(message);
+    else if (level === 'warn') console.warn(message);
+    else console.info(message);
+  }
+
   /**
    * Start the scheduler tick loop
    */
   start(): void {
-    if (this.isRunning) {
-      console.warn('⚠️  Scheduler already running');
-      return;
-    }
-
-    if (this.config.debug) {
-      console.log(`🔄 Starting scheduler (tick interval: ${this.config.tickInterval}ms)`);
-    }
+    if (this.isRunning) return;
     this.isRunning = true;
 
     const initialDelay = initialWorkOffset(this.config.tickInterval, this.config.random());
     this.scheduleNextTick(initialDelay);
+    this.logWorkEvent('info', 'loop_started', {
+      tick_interval_ms: this.config.tickInterval,
+      scan_batch_size: this.config.scanBatchSize,
+      idle_backoff_cap_ms: this.config.maxIdleInterval,
+      jitter_ratio: this.config.jitterRatio,
+      initial_delay_ms: initialDelay,
+    });
   }
 
   /**
    * Stop the scheduler tick loop
    */
   stop(): void {
-    if (!this.isRunning) {
-      console.warn('⚠️  Scheduler not running');
-      return;
-    }
-
-    console.log('🛑 Scheduler stopped');
+    if (!this.isRunning) return;
     this.isRunning = false;
 
     if (this.timerHandle) {
       clearTimeout(this.timerHandle);
       this.timerHandle = undefined;
     }
+    this.logWorkEvent('info', 'loop_stopped');
   }
 
   private scheduleNextTick(delayMs: number): void {
@@ -439,7 +458,9 @@ export class SchedulerService {
       try {
         stats = await this.tick();
       } catch (error) {
-        console.error('❌ Scheduler tick failed:', sanitizeDbError(error));
+        this.logWorkEvent('error', 'scan_failed', {
+          error_code: schedulerErrorCode(error),
+        });
       }
       if (!this.isRunning) return;
       this.idleRounds = stats.candidates === 0 ? this.idleRounds + 1 : 0;
@@ -478,80 +499,76 @@ export class SchedulerService {
       failures: 0,
     };
 
-    try {
-      const recoveryRefs = await this.findIncompleteSessionRefs();
-      const dueScheduleRefs = await this.findDueScheduleRefs(now);
-      stats.recoveryCandidates = recoveryRefs.length;
-      stats.dueCandidates = dueScheduleRefs.length;
-      stats.candidates = recoveryRefs.length + dueScheduleRefs.length;
+    const recoveryRefs = await this.findIncompleteSessionRefs();
+    const dueScheduleRefs = await this.findDueScheduleRefs(now);
+    stats.recoveryCandidates = recoveryRefs.length;
+    stats.dueCandidates = dueScheduleRefs.length;
+    stats.candidates = recoveryRefs.length + dueScheduleRefs.length;
 
-      if (this.config.debug) {
-        console.log(
-          `🔄 Scheduler tick: Found ${recoveryRefs.length} recoveries and ${dueScheduleRefs.length} due schedules`
+    for (const ref of recoveryRefs) {
+      if (!ref.tenantId) {
+        stats.failures += 1;
+        this.logWorkEvent('error', 'recovery_missing_tenant', {
+          session_id: ref.sessionId,
+        });
+        continue;
+      }
+      try {
+        await runWithTenantContext(ref.tenantId, () =>
+          this.recoverIncompleteSession(ref.sessionId, ref.scheduledRunAt, now)
         );
+        stats.processed += 1;
+      } catch (error) {
+        stats.failures += 1;
+        this.logWorkEvent('error', 'recovery_failed', {
+          tenant_id: ref.tenantId,
+          session_id: ref.sessionId,
+          error_code: schedulerErrorCode(error),
+        });
       }
-
-      for (const ref of recoveryRefs) {
-        if (!ref.tenantId) {
-          stats.failures += 1;
-          console.error(`❌ Skipping scheduler recovery ${shortId(ref.sessionId)}: missing tenant`);
-          continue;
-        }
-        try {
-          await runWithTenantContext(ref.tenantId, () =>
-            this.recoverIncompleteSession(ref.sessionId, ref.scheduledRunAt, now)
-          );
-          stats.processed += 1;
-        } catch (error) {
-          stats.failures += 1;
-          console.error(
-            `❌ Failed to recover scheduled session ${shortId(ref.sessionId)}:`,
-            sanitizeDbError(error)
-          );
-        }
-      }
-
-      for (const ref of dueScheduleRefs) {
-        if (!ref.tenantId) {
-          console.error(
-            `❌ Skipping due schedule ${shortId(ref.scheduleId)}: missing tenant metadata`
-          );
-          continue;
-        }
-
-        try {
-          await runWithTenantContext(ref.tenantId, async () => {
-            // Re-load inside the tenant scope before reading schedule content or
-            // spawning work. The system discovery phase only supplies routing
-            // metadata.
-            const schedule = await this.withTenantDatabase(() =>
-              this.scheduleRepo.findById(ref.scheduleId)
-            );
-            if (!schedule) return;
-            await this.processSchedule(schedule, now);
-            stats.processed += 1;
-          });
-        } catch (error) {
-          stats.failures += 1;
-          console.error(
-            `❌ Failed to process schedule ${shortId(ref.scheduleId)}:`,
-            sanitizeDbError(error)
-          );
-          // Continue processing other schedules
-        }
-      }
-      console.info('[DistributedWork]', {
-        component: 'scheduler',
-        event: 'scan_complete',
-        instance_id: this.config.workIdentity.instanceId,
-        boot_id: this.config.workIdentity.bootId,
-        ...stats,
-      });
-      return stats;
-    } catch (error) {
-      console.error('❌ Scheduler tick failed:', sanitizeDbError(error));
-      throw error;
     }
+
+    for (const ref of dueScheduleRefs) {
+      if (!ref.tenantId) {
+        stats.failures += 1;
+        this.logWorkEvent('error', 'schedule_missing_tenant', {
+          schedule_id: ref.scheduleId,
+        });
+        continue;
+      }
+
+      try {
+        await runWithTenantContext(ref.tenantId, async () => {
+          // Re-load inside the tenant scope before reading schedule content or
+          // spawning work. The system discovery phase only supplies routing
+          // metadata.
+          const schedule = await this.withTenantDatabase(() =>
+            this.scheduleRepo.findById(ref.scheduleId)
+          );
+          if (!schedule) return;
+          await this.processSchedule(schedule, now);
+          stats.processed += 1;
+        });
+      } catch (error) {
+        stats.failures += 1;
+        this.logWorkEvent('error', 'schedule_processing_failed', {
+          tenant_id: ref.tenantId,
+          schedule_id: ref.scheduleId,
+          error_code: schedulerErrorCode(error),
+        });
+        // Continue processing other schedules
+      }
+    }
+    if (stats.candidates > 0 || stats.failures > 0) {
+      this.logWorkEvent(stats.failures > 0 ? 'warn' : 'info', 'scan_complete', {
+        candidates: stats.candidates,
+        recovery_candidates: stats.recoveryCandidates,
+        due_candidates: stats.dueCandidates,
+        processed: stats.processed,
+        failures: stats.failures,
+      });
+    }
+    return stats;
   }
 
   private async findIncompleteSessionRefs(): Promise<
@@ -666,25 +683,16 @@ export class SchedulerService {
       if (schedule.next_run_at == null || schedule.next_run_at <= now) {
         await this.withTenantDatabase(() =>
           this.scheduleRepo.update(schedule.schedule_id, { next_run_at: nextRunAt })
-        ).catch((err) =>
-          console.error(
-            `Failed to advance next_run_at for ${schedule.schedule_id}:`,
-            sanitizeDbError(err)
-          )
-        );
-      }
-      if (this.config.debug) {
-        const timeUntilNext = nextRunAt - now;
-        console.log(
-          `   ⏱️  ${schedule.name}: Not due yet (next run in ${Math.round(timeUntilNext / 1000)}s)`
-        );
+        ).catch((error) => {
+          this.logWorkEvent('error', 'cursor_advance_failed', {
+            schedule_id: schedule.schedule_id,
+            error_code: schedulerErrorCode(error),
+          });
+        });
       }
       return;
     }
 
-    console.log(
-      `   🕒 Scheduler due: "${schedule.name}" scheduled_at=${new Date(scheduledRunAt).toISOString()} — spawning session`
-    );
     await this.spawnScheduledSession(schedule, scheduledRunAt, now, { source: 'cron' });
   }
 
@@ -725,10 +733,6 @@ export class SchedulerService {
     // collisions within the same minute) dedupe via scheduled_run_at.
     const scheduledRunAt = roundToMinute(new Date(now)).getTime();
 
-    console.log(
-      `   🖐️  ${schedule.name}: manual execute-now triggered by ${triggeredBy.substring(0, 8)}`
-    );
-
     const session = await this.spawnScheduledSession(schedule, scheduledRunAt, now, {
       source: 'manual',
       triggeredBy,
@@ -765,12 +769,6 @@ export class SchedulerService {
     );
 
     if (!creator) {
-      console.error(`      ❌ Cannot spawn scheduled session: Schedule creator not found`, {
-        schedule_id: schedule.schedule_id,
-        schedule_name: schedule.name,
-        created_by: schedule.created_by,
-        unix_user_mode: this.config.unixUserMode,
-      });
       throw new Error(
         `Schedule creator ${schedule.created_by} not found. Cannot spawn scheduled session.`
       );
@@ -779,16 +777,6 @@ export class SchedulerService {
     const unixUsername = creator.unix_username || null;
 
     if (!unixUsername && unixUserModeRequiresUsername(this.config.unixUserMode)) {
-      console.error(
-        `      ❌ Cannot spawn scheduled session: Creator has no unix_username (${this.config.unixUserMode} mode)`,
-        {
-          schedule_id: schedule.schedule_id,
-          schedule_name: schedule.name,
-          created_by: schedule.created_by,
-          creator_email: creator.email,
-          unix_user_mode: this.config.unixUserMode,
-        }
-      );
       throw new Error(
         `Schedule creator ${creator.email} has no unix_username set. Cannot spawn scheduled session in ${this.config.unixUserMode} Unix user mode.`
       );
@@ -878,7 +866,7 @@ export class SchedulerService {
           ? branch.mcp_server_ids
           : [];
     const candidateSessionId = generateId() as SessionID;
-    const candidateTaskId = generateId() as import('@agor/core/types').TaskID;
+    const candidateTaskId = generateId() as TaskID;
 
     type Admission =
       | { outcome: 'created' | 'existing'; session: Session }
@@ -901,8 +889,8 @@ export class SchedulerService {
           !schedule.allow_concurrent_runs &&
           (await this.sessionRepo.existsActiveOrInitializingInSchedule(
             schedule.schedule_id,
-            ACTIVE_SESSION_STATUSES,
-            ACTIVE_TASK_STATUSES
+            EXECUTING_SESSION_STATUSES,
+            NONTERMINAL_TASK_STATUSES
           ))
         ) {
           return { outcome: 'busy', session: null } as const;
@@ -978,12 +966,7 @@ export class SchedulerService {
     }
 
     if (admission.outcome === 'busy') {
-      console.info('[DistributedWork]', {
-        component: 'scheduler',
-        event: 'occurrence_skipped_busy',
-        instance_id: this.config.workIdentity.instanceId,
-        boot_id: this.config.workIdentity.bootId,
-        tenant_id: getCurrentTenantId(),
+      this.logWorkEvent('info', 'occurrence_skipped_busy', {
         schedule_id: schedule.schedule_id,
         scheduled_run_at: scheduledRunAt,
         source,
@@ -994,17 +977,16 @@ export class SchedulerService {
     }
 
     const recovering = admission.outcome === 'existing';
-    console.info('[DistributedWork]', {
-      component: 'scheduler',
-      event: recovering ? 'occurrence_claim_lost_reconciling' : 'occurrence_claim_won',
-      instance_id: this.config.workIdentity.instanceId,
-      boot_id: this.config.workIdentity.bootId,
-      tenant_id: getCurrentTenantId(),
-      schedule_id: schedule.schedule_id,
-      session_id: admission.session.session_id,
-      scheduled_run_at: scheduledRunAt,
-      source,
-    });
+    this.logWorkEvent(
+      'info',
+      recovering ? 'occurrence_claim_lost_reconciling' : 'occurrence_claim_won',
+      {
+        schedule_id: schedule.schedule_id,
+        session_id: admission.session.session_id,
+        scheduled_run_at: scheduledRunAt,
+        source,
+      }
+    );
     if (
       recovering &&
       (await this.withTenantDatabase(() =>
@@ -1141,12 +1123,7 @@ export class SchedulerService {
   }
 
   private logDeletedScheduleRecovery(scheduleId: ScheduleID, sessionId: SessionID): void {
-    console.info('[DistributedWork]', {
-      component: 'scheduler',
-      event: 'occurrence_recovered_after_schedule_delete',
-      instance_id: this.config.workIdentity.instanceId,
-      boot_id: this.config.workIdentity.bootId,
-      tenant_id: getCurrentTenantId(),
+    this.logWorkEvent('info', 'occurrence_recovered_after_schedule_delete', {
       schedule_id: scheduleId,
       session_id: sessionId,
     });
@@ -1224,12 +1201,7 @@ export class SchedulerService {
         // schedule configuration and initialization. Transient database
         // failures must escape so this occurrence remains recoverable.
         if (!(error instanceof EntityNotFoundError)) throw error;
-        console.warn('[DistributedWork]', {
-          component: 'scheduler',
-          event: 'mcp_attachment_missing',
-          instance_id: this.config.workIdentity.instanceId,
-          boot_id: this.config.workIdentity.bootId,
-          tenant_id: getCurrentTenantId(),
+        this.logWorkEvent('warn', 'mcp_attachment_missing', {
           schedule_id: scheduleId,
           session_id: session.session_id,
           mcp_server_id: serverId,
@@ -1255,17 +1227,16 @@ export class SchedulerService {
     )) as Task;
     await this.config.testHooks?.afterPromptDispatch?.(task);
 
-    console.info('[DistributedWork]', {
-      component: 'scheduler',
-      event: input.recovering ? 'occurrence_recovered' : 'occurrence_initialized',
-      instance_id: this.config.workIdentity.instanceId,
-      boot_id: this.config.workIdentity.bootId,
-      tenant_id: tenantId,
-      schedule_id: scheduleId,
-      session_id: session.session_id,
-      task_id: task.task_id,
-      task_status: task.status,
-    });
+    this.logWorkEvent(
+      'info',
+      input.recovering ? 'occurrence_recovered' : 'occurrence_initialized',
+      {
+        schedule_id: scheduleId,
+        session_id: session.session_id,
+        task_id: task.task_id,
+        task_status: task.status,
+      }
+    );
     return task;
   }
 
@@ -1302,7 +1273,6 @@ export class SchedulerService {
           attempt + 1
         );
       }
-      console.error(`      ❌ Failed to update schedule metadata:`, sanitizeDbError(error));
       throw error;
     }
   }
@@ -1340,6 +1310,7 @@ export class SchedulerService {
     );
     const overflow = mine.slice(schedule.retention);
     const sessionsToDelete: Session[] = [];
+    let activeSkipped = 0;
     for (const session of overflow) {
       const initializationComplete = await this.withTenantDatabase(() =>
         this.sessionRepo.isScheduledInitializationComplete(session.session_id)
@@ -1348,23 +1319,22 @@ export class SchedulerService {
         this.taskRepo.findBySession(session.session_id)
       );
       const active =
-        ACTIVE_SESSION_STATUSES.includes(session.status) ||
+        isSessionExecuting(session) ||
         !initializationComplete ||
-        sessionTasks.some((task) => ACTIVE_TASK_STATUSES.includes(task.status));
+        sessionTasks.some((task) => !isTerminalTaskStatus(task.status));
       if (active) {
-        console.info('[DistributedWork]', {
-          component: 'scheduler',
-          event: 'retention_skipped_active_occurrence',
-          instance_id: this.config.workIdentity.instanceId,
-          boot_id: this.config.workIdentity.bootId,
-          tenant_id: getCurrentTenantId(),
-          schedule_id: schedule.schedule_id,
-          session_id: session.session_id,
-          session_status: session.status,
-        });
+        activeSkipped += 1;
         continue;
       }
       sessionsToDelete.push(session);
+    }
+
+    if (activeSkipped > 0) {
+      this.logWorkEvent('info', 'retention_deferred', {
+        schedule_id: schedule.schedule_id,
+        skipped_active_count: activeSkipped,
+        retention: schedule.retention,
+      });
     }
 
     if (sessionsToDelete.length > 0) {
@@ -1383,9 +1353,11 @@ export class SchedulerService {
         }
       }
 
-      console.log(
-        `      🗑️  Deleted ${sessionsToDelete.length} old sessions on schedule ${schedule.name} (retention: ${schedule.retention})`
-      );
+      this.logWorkEvent('info', 'retention_deleted', {
+        schedule_id: schedule.schedule_id,
+        deleted_count: sessionsToDelete.length,
+        retention: schedule.retention,
+      });
     }
   }
 }

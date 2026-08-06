@@ -35,6 +35,7 @@ import type {
   Session,
   SessionUpdate,
   Task,
+  TaskPendingDispatchStatus,
 } from '@agor/core/types';
 import type {
   ExecuteTaskData,
@@ -147,9 +148,7 @@ export interface SessionsServiceImpl
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
   claimDispatchAndProjectSession(
     taskId: string,
-    expectedStatus:
-      | typeof import('@agor/core/types').TaskStatus.CREATED
-      | typeof import('@agor/core/types').TaskStatus.QUEUED,
+    expectedStatus: TaskPendingDispatchStatus,
     updates: Partial<Task>,
     params?: FeathersParams
   ): Promise<TaskDispatchClaimResult>;

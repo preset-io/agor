@@ -40,6 +40,7 @@ import type {
   SessionID,
   Task,
   TaskID,
+  TaskPendingDispatchStatus,
   UUID,
 } from '@agor/core/types';
 import {
@@ -139,7 +140,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   /** Atomic daemon-side launch-intent fence plus its Session projection. */
   async claimDispatchAndProjectSession(
     taskId: string,
-    expectedStatus: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED,
+    expectedStatus: TaskPendingDispatchStatus,
     updates: Partial<Task>,
     params?: TaskParams
   ): Promise<TaskDispatchClaimResult> {

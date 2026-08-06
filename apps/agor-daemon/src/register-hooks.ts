@@ -169,6 +169,7 @@ import {
 import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
+  resolveTenantIdForDeferredScope,
 } from './utils/tenant-db-scope.js';
 import { enforcePublicWriteFields, markWriteDataPrepared } from './utils/write-data-boundary.js';
 
@@ -796,26 +797,31 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     app.service('sessions').on('created', (session: Session, hook?: Partial<HookContext>) => {
       if (!session.branch_id || !session.unix_username) return;
       if ((hook?.params as { isBranchOwner?: boolean } | undefined)?.isBranchOwner) return;
+      const tenantId = resolveTenantIdForDeferredScope(hook?.params);
       deferWithTenantContext(
         hook?.params,
         async () => {
-          const tenantId = getCurrentTenantId();
-          const branch = await runWithTenantDatabaseScope(db, tenantId, () =>
+          const activeTenantId = getCurrentTenantId();
+          const branch = await runWithTenantDatabaseScope(db, activeTenantId, () =>
             branchRepository.findById(session.branch_id)
           );
           if (!branch?.others_fs_access || branch.others_fs_access === 'none') return;
-          console.log(
-            `[Unix Integration] Non-owner session created in branch ${shortId(session.branch_id)} ` +
-              `by ${session.unix_username} (others_fs_access: ${branch.others_fs_access}), syncing group membership`
+          console.info(
+            `[unix-access.sync] event=scheduled source=session_created` +
+              `${tenantId ? ` tenant_id=${JSON.stringify(tenantId)}` : ''}` +
+              ` branch_id=${JSON.stringify(session.branch_id)}` +
+              ` session_id=${JSON.stringify(session.session_id)}`
           );
           syncBranchUnixAccess(branch.branch_id, '[Executor/session.created.unix-group]', {
             scope: { session_id: session.session_id },
           });
         },
-        (error) =>
+        () =>
           console.error(
-            `[Unix Integration] Failed to trigger group sync for session ${shortId(session.session_id)}:`,
-            error
+            `[unix-access.sync] event=schedule_failed source=session_created` +
+              `${tenantId ? ` tenant_id=${JSON.stringify(tenantId)}` : ''}` +
+              ` branch_id=${JSON.stringify(session.branch_id)}` +
+              ` session_id=${JSON.stringify(session.session_id)}`
           )
       );
     });

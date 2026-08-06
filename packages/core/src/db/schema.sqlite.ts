@@ -16,7 +16,6 @@ import type {
   SandpackConfig,
   Session,
   Task,
-  TaskID,
   UserExternalIdentity,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
@@ -171,20 +170,8 @@ export const sessions = sqliteTable(
         last_context_update_at?: string; // ISO 8601 timestamp
 
         // Custom context for Handlebars templates
-        custom_context?: Record<string, unknown> & {
-          // Scheduled run metadata (populated by scheduler)
-          scheduled_run?: {
-            rendered_prompt: string; // Template after Handlebars rendering
-            run_index: number; // 1st, 2nd, 3rd run for this schedule
-            initial_task_id?: TaskID; // Stable task identity for scheduler recovery
-            schedule_config_snapshot?: {
-              cron: string;
-              timezone: string;
-              retention: number;
-              mcp_server_ids?: string[];
-            };
-          };
-        };
+        // Keep scheduler/gateway/user context owned by the canonical Session type.
+        custom_context?: Session['custom_context'];
 
         // Read-only metadata retained for historical sessions created by the
         // removed experimental Claude CLI integration. No runtime consumes it.

@@ -1180,9 +1180,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
   /**
    * True iff at least one session in this branch has a status in the
-   * given set. Generic primitive — the caller owns the policy
-   * (e.g. the scheduler's "active statuses" list lives in `scheduler.ts`
-   * next to the concurrency-guard call site, not here).
+   * given set. Generic primitive — the caller owns the policy and selects
+   * the appropriate canonical lifecycle set from `@agor/core/types`.
    *
    * Implemented as an existence probe (`SELECT 1 ... LIMIT 1`) rather
    * than a COUNT so busy branches don't pay the cost of counting every
@@ -1240,15 +1239,15 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async existsActiveOrInitializingInSchedule(
     scheduleId: import('@agor/core/types').ScheduleID,
-    activeSessionStatuses: ReadonlyArray<Session['status']>,
-    activeTaskStatuses: ReadonlyArray<import('@agor/core/types').Task['status']>
+    activeSessionStatuses: ReadonlySet<Session['status']>,
+    activeTaskStatuses: ReadonlySet<import('@agor/core/types').Task['status']>
   ): Promise<boolean> {
     const activeSession =
-      activeSessionStatuses.length > 0
+      activeSessionStatuses.size > 0
         ? inArray(sessions.status, [...activeSessionStatuses])
         : sql`false`;
     const taskIsActive =
-      activeTaskStatuses.length > 0 ? inArray(tasks.status, [...activeTaskStatuses]) : sql`false`;
+      activeTaskStatuses.size > 0 ? inArray(tasks.status, [...activeTaskStatuses]) : sql`false`;
     try {
       const row = await select(this.db, { one: sql<number>`1` })
         .from(sessions)

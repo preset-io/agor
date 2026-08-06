@@ -1041,10 +1041,52 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Don't fail the spawn — the executor's createUserMessage fallback
       // (with skip-if-exists) will write the row when it connects.
       console.warn(
-        `⚠️  [Daemon] Failed to write initial user-message row for task ${shortId(task.task_id)} (executor will retry):`,
-        error
+        `[messages.initial] event=write_failed task_id=${JSON.stringify(task.task_id)} outcome=executor_retry`
       );
     }
+  }
+
+  /** Repair one stable initial transcript row from durable Task state. */
+  async function reconcileStableInitialUserMessage(
+    task: Task,
+    params: RouteParams,
+    stableMessageId: MessageID,
+    fallback: {
+      messageStartIndex?: number;
+      startTimestamp?: string;
+      messageSource?: MessageSource;
+    } = {}
+  ): Promise<void> {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for message reconciliation');
+    const persistedStartIndex = task.message_range?.start_index;
+    const hasPersistedStartIndex =
+      typeof persistedStartIndex === 'number' && persistedStartIndex >= 0;
+    const fallbackStartIndex =
+      typeof fallback.messageStartIndex === 'number' && fallback.messageStartIndex >= 0
+        ? fallback.messageStartIndex
+        : undefined;
+    const messageStartIndex = hasPersistedStartIndex
+      ? persistedStartIndex
+      : (fallbackStartIndex ??
+        (await runWithTenantDatabaseScope(db, tenantId, () =>
+          sessionsRepository.countMessages(task.session_id)
+        )));
+    const startTimestamp =
+      (hasPersistedStartIndex ? task.message_range?.start_timestamp : undefined) ??
+      task.started_at ??
+      fallback.startTimestamp ??
+      new Date().toISOString();
+    const persistedSource = task.metadata?.source ?? fallback.messageSource;
+    const messageSource =
+      persistedSource === 'gateway' || persistedSource === 'agor' ? persistedSource : undefined;
+
+    await ensureInitialUserMessage(task, params, {
+      messageStartIndex,
+      startTimestamp,
+      messageSource,
+      stableMessageId,
+    });
   }
 
   /**
@@ -1097,18 +1139,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // on mutable launch-time state (tool enablement, preset validity, or user
     // defaults): no new executor launch will occur on this path.
     if (options.stableInitialMessageId && !isTaskPendingDispatch(task)) {
-      const messageStartIndex =
-        task.message_range?.start_index ??
-        (await runWithTenantDatabaseScope(db, tenantId, () =>
-          sessionsRepository.countMessages(task.session_id)
-        ));
-      const startTimestamp =
-        task.message_range?.start_timestamp ?? task.started_at ?? new Date().toISOString();
-      await ensureInitialUserMessage(task, params, {
-        messageStartIndex,
-        startTimestamp,
+      await reconcileStableInitialUserMessage(task, params, options.stableInitialMessageId, {
         messageSource: runtimeMessageSource,
-        stableMessageId: options.stableInitialMessageId,
       });
       return task;
     }
@@ -1172,23 +1204,26 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       { ...params, provider: undefined }
     );
     if (dispatchClaim.outcome !== 'claimed') {
-      console.info('[DistributedWork]', {
-        component: 'task-dispatch',
-        event: 'claim_lost',
-        task_id: task.task_id,
-        session_id: task.session_id,
-        observed_status: dispatchClaim.task.status,
-      });
+      const workIdentity = app.get('distributedWorkIdentity');
+      console.info(
+        `[distributed-work.task-dispatch] event=claim_lost` +
+          `${workIdentity ? ` instance_id=${JSON.stringify(workIdentity.instanceId)} boot_id=${JSON.stringify(workIdentity.bootId)}` : ''}` +
+          ` tenant_id=${JSON.stringify(tenantId)}` +
+          ` task_id=${JSON.stringify(task.task_id)}` +
+          ` session_id=${JSON.stringify(task.session_id)}` +
+          ` observed_status=${dispatchClaim.task.status}`
+      );
       if (options.stableInitialMessageId) {
-        await ensureInitialUserMessage(dispatchClaim.task, params, {
-          messageStartIndex: dispatchClaim.task.message_range?.start_index ?? messageStartIndex,
-          startTimestamp:
-            dispatchClaim.task.message_range?.start_timestamp ??
-            dispatchClaim.task.started_at ??
+        await reconcileStableInitialUserMessage(
+          dispatchClaim.task,
+          params,
+          options.stableInitialMessageId,
+          {
+            messageStartIndex,
             startTimestamp,
-          messageSource: runtimeMessageSource,
-          stableMessageId: options.stableInitialMessageId,
-        });
+            messageSource: runtimeMessageSource,
+          }
+        );
       }
       return dispatchClaim.task;
     }
@@ -1199,12 +1234,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // write is harmless if the daemon path is enabled.
     // Prefer task.metadata.source (set when the task was queued) over the
     // request's messageSource — the latter applies only to this drain tick.
-    await ensureInitialUserMessage(task, params, {
-      messageStartIndex,
-      startTimestamp,
-      messageSource: runtimeMessageSource,
-      stableMessageId: options.stableInitialMessageId,
-    });
+    if (options.stableInitialMessageId) {
+      await reconcileStableInitialUserMessage(updatedTask, params, options.stableInitialMessageId, {
+        messageStartIndex,
+        startTimestamp,
+        messageSource: runtimeMessageSource,
+      });
+    } else {
+      await ensureInitialUserMessage(task, params, {
+        messageStartIndex,
+        startTimestamp,
+        messageSource: runtimeMessageSource,
+      });
+    }
 
     // Re-apply the Session projection through Feathers so hooks/realtime see
     // the transition. TaskRepository.claimDispatchAndProjectSession already
@@ -1404,18 +1446,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           }
           if (isTaskPendingDispatch(prior)) return null;
 
-          await ensureInitialUserMessage(prior, params, {
-            messageStartIndex:
-              prior.message_range?.start_index ??
-              (await sessionsRepository.countMessages(prior.session_id)),
-            startTimestamp:
-              prior.message_range?.start_timestamp ?? prior.started_at ?? new Date().toISOString(),
-            messageSource:
-              prior.metadata?.source === 'gateway' || prior.metadata?.source === 'agor'
-                ? prior.metadata.source
-                : undefined,
-            stableMessageId: data.idempotencyTaskId as MessageID,
-          });
+          await reconcileStableInitialUserMessage(
+            prior,
+            params,
+            data.idempotencyTaskId as MessageID
+          );
           return prior;
         };
 

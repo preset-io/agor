@@ -701,7 +701,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
     schedulerService = new SchedulerService(db, app, {
       tickInterval: 30000, // 30 seconds
       gracePeriod: 120000, // 2 minutes
-      debug: process.env.NODE_ENV !== 'production',
       unixUserMode: config.execution?.unix_user_mode ?? 'simple',
       // Static mode keeps the historical single-tenant scope. Auth-resolved
       // multi-tenant mode leaves this undefined so the scheduler discovers due
@@ -711,7 +710,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
     });
     app.set('scheduler', schedulerService);
     schedulerService.start();
-    console.log('🔄 Scheduler started (tick interval: 30s)');
   }
 
   // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)
@@ -776,7 +774,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
       // Stop scheduler
       if (schedulerService) {
-        console.log('🔄 Stopping scheduler...');
         schedulerService.stop();
       }
 

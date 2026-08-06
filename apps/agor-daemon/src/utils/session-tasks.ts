@@ -16,10 +16,7 @@
 
 import type { Application } from '@agor/core/feathers';
 import type { Paginated, Params, SessionID, Task } from '@agor/core/types';
-import { EXECUTING_TASK_STATUSES, isTaskExecuting } from '@agor/core/types';
-
-/** Statuses considered "active" — an executor may still be doing work. */
-export const ACTIVE_TASK_STATUSES = EXECUTING_TASK_STATUSES;
+import { isTaskExecuting } from '@agor/core/types';
 
 function recencyKey(t: Task): number {
   return new Date(t.started_at || t.created_at).getTime();

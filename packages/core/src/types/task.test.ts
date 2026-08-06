@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isTaskExecuting, isTaskPendingDispatch, TaskStatus } from './task';
+import {
+  isTaskExecuting,
+  isTaskPendingDispatch,
+  NONTERMINAL_TASK_STATUSES,
+  TaskStatus,
+  TERMINAL_TASK_STATUSES,
+} from './task';
 
 describe('task execution helpers', () => {
   it('identifies only states that still need a daemon dispatch claim', () => {
@@ -9,6 +15,15 @@ describe('task execution helpers', () => {
     expect(isTaskPendingDispatch({ status: TaskStatus.RUNNING })).toBe(false);
     expect(isTaskPendingDispatch({ status: TaskStatus.COMPLETED })).toBe(false);
     expect(isTaskPendingDispatch({ status: TaskStatus.FAILED })).toBe(false);
+  });
+
+  it('keeps terminal and nonterminal status collections exhaustive and disjoint', () => {
+    expect(
+      [...NONTERMINAL_TASK_STATUSES].filter((status) => TERMINAL_TASK_STATUSES.has(status))
+    ).toEqual([]);
+    expect([...NONTERMINAL_TASK_STATUSES, ...TERMINAL_TASK_STATUSES].sort()).toEqual(
+      Object.values(TaskStatus).sort()
+    );
   });
 
   it('identifies executor-owned task states', () => {

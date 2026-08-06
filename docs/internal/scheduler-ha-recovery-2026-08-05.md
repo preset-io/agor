@@ -172,12 +172,13 @@ The 72-second cap remains below the two-minute cron grace. Jitter only reduces h
 contention; uniqueness and atomic transitions own correctness. Clock/random samples
 are injectable or pure for deterministic tests.
 
-Structured `[DistributedWork]` logs include component/event, daemon instance ID,
-boot ID, tenant/schedule/session/task IDs, occurrence time, source, Task status, and
-per-scan candidate/processed/failure counts. Events distinguish occurrence admission
-wins, losses/reconciliation, busy skips, initialization, and recovery. Prompt text,
-MCP credentials, task tokens, and other secrets are not logged. Lease expiration is
-not reported because the scheduler has no lease.
+Bounded `[distributed-work.<component>]` `key=value` logs include event, daemon
+instance ID, boot ID, trusted tenant/schedule/session/task IDs, occurrence time,
+source, Task status, and activity-scan candidate/processed/failure counts. Idle scans
+are omitted. Events distinguish occurrence admission wins, losses/reconciliation,
+busy skips, initialization, and recovery. Prompt text, schedule names, user identity,
+MCP credentials, task tokens, raw errors, and other secrets are not logged. Lease
+expiration is not reported because the scheduler has no lease.
 
 ## Tenant boundary
 

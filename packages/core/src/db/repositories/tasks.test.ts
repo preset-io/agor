@@ -4,7 +4,7 @@
  * Tests for type-safe CRUD operations on tasks with short ID support.
  */
 
-import type { Task, UUID } from '@agor/core/types';
+import type { Task, TaskPendingDispatchStatus, UUID } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
@@ -1777,7 +1777,7 @@ describe('TaskRepository edge cases', () => {
  */
 function createPendingInput(overrides: {
   session_id: string;
-  status: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
+  status: TaskPendingDispatchStatus;
   full_prompt?: string;
   metadata?: Parameters<TaskRepository['createPending']>[0]['metadata'];
 }): Parameters<TaskRepository['createPending']>[0] {

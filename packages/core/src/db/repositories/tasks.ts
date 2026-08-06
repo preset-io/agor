@@ -10,7 +10,9 @@ import type {
   SdkFailure,
   SessionID,
   Task,
+  TaskID,
   TaskMetadata,
+  TaskPendingDispatchStatus,
   TerminationCause,
   UUID,
 } from '@agor/core/types';
@@ -930,11 +932,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   async createPending(input: {
     /** Optional stable identity used by idempotent internal producers. */
-    task_id?: UUID;
+    task_id?: TaskID;
     session_id: SessionID;
     full_prompt: string;
     created_by: string;
-    status: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
+    status: TaskPendingDispatchStatus;
     metadata?: TaskMetadata;
   }): Promise<Task> {
     const taskBase: Partial<Task> = {
@@ -1019,7 +1021,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   async claimDispatchAndProjectSession(
     id: string,
-    expectedStatus: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED,
+    expectedStatus: TaskPendingDispatchStatus,
     updates: Partial<Task>
   ): Promise<TaskDispatchClaimResult> {
     return this.mutateLockedTask(id, async (txDb, currentRow, fullId) => {

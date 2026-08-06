@@ -20,6 +20,9 @@ export const TaskStatus = {
 
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
+/** Task states that have not yet crossed the daemon's durable dispatch fence. */
+export type TaskPendingDispatchStatus = typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
+
 export type ExecutorMode = 'local' | 'templated';
 
 export const ExecutorPulseKind = {
@@ -166,6 +169,11 @@ export const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatu
   TaskStatus.TIMED_OUT,
 ]);
 
+/** Every persisted Task status that still represents unfinished work. */
+export const NONTERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>(
+  Object.values(TaskStatus).filter((status) => !TERMINAL_TASK_STATUSES.has(status))
+);
+
 export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
   return status !== undefined && TERMINAL_TASK_STATUSES.has(status);
 }
@@ -178,7 +186,7 @@ export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
  * merely to reconcile projections around that durable Task.
  */
 export function isTaskPendingDispatch(task: Pick<Task, 'status'>): task is Pick<Task, 'status'> & {
-  status: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
+  status: TaskPendingDispatchStatus;
 } {
   return task.status === TaskStatus.CREATED || task.status === TaskStatus.QUEUED;
 }
