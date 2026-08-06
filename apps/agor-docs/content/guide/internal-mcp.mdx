@@ -89,11 +89,9 @@ HTTP(S) webhook URLs. See [Environments: webhook-only mode](/guide/environment-c
 
 ## External Agent Access
 
-External agents can use the same MCP endpoint:
-
-1. Obtain an authenticated token (session token for scoped access today; broader API tokens are planned).
-2. Connect over HTTP/SSE to `http(s)://<daemon-host>:<port>/mcp`.
-3. Call the same tools internal agents use. No separate API surface required.
+External agents can use the same HTTP endpoint with a personal API key. See
+[Connect an external MCP client](/guide/external-mcp) for verified Claude Code
+and Codex configuration, secret handling, and troubleshooting.
 
 This makes Agor a control plane for other AI systems, enabling remote triage bots, automation pipelines, or custom dashboards to work against live boards.
 
@@ -188,6 +186,7 @@ execution:
 ## Related Reading
 
 - [Sessions & Trees](/guide/sessions) (how agents spawn, fork, and ask side questions through MCP)
+- [Connect an External MCP Client](/guide/external-mcp) (Claude Code and Codex setup)
 - [Teammates](/guide/teammates) (long-lived AI teammates that drive Agor through MCP)
 - [Scheduler](/guide/scheduler) (cron-style triggers that fire prompts via the same surface)
 - [TypeScript Client](/guide/typescript-client) (the non-agent doorway: drive Agor from JS/TS apps, scripts, and services)

@@ -110,7 +110,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     'agor_cards_list',
     {
       description:
-        'List cards with optional filtering by board, card type, zone, search query, or archive status.',
+        'List a page of cards with optional filtering by board, card type, zone, search query, or archive status. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         boardId: mcpOptionalId('boardId', 'Board', 'Filter by board ID'),
@@ -118,7 +118,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         zoneId: mcpOptionalId('zoneId', 'Zone', 'Filter by zone ID (requires boardId)'),
         search: mcpOptionalString('search', 'Search query for card titles/descriptions'),
         archived: z.boolean().optional().describe('Filter by archive status'),
-        limit: mcpLimit(50),
+        limit: mcpLimit(50, 100),
         offset: mcpOffset(0),
       }),
     },
@@ -134,21 +134,27 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       const offset = typeof args.offset === 'number' ? args.offset : 0;
 
       let cardsList: Card[];
+      let total: number | null = null;
       if (zoneId && boardId) {
-        cardsList = await cardsService.findByZoneId(boardId as never, zoneId);
+        const allCards = await cardsService.findByZoneId(boardId as never, zoneId);
+        total = allCards.length;
+        cardsList = allCards.slice(offset, offset + limit);
       } else if (search) {
         cardsList = await cardsService.searchCards(search, {
           boardId: boardId as never,
           archived,
-          limit,
+          limit: limit + 1,
           offset,
         });
       } else if (cardTypeId) {
-        cardsList = await cardsService.findByCardTypeId(cardTypeId as never, { limit, offset });
+        cardsList = await cardsService.findByCardTypeId(cardTypeId as never, {
+          limit: limit + 1,
+          offset,
+        });
       } else if (boardId) {
         cardsList = await cardsService.findByBoardId(boardId as never, {
           archived,
-          limit,
+          limit: limit + 1,
           offset,
         });
       } else {
@@ -156,11 +162,18 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
           query: { $limit: limit, $skip: offset },
         } as never);
         cardsList = 'data' in result ? result.data : result;
+        total = 'data' in result ? result.total : cardsList.length;
       }
 
+      const hasMore = total === null ? cardsList.length > limit : offset + cardsList.length < total;
+      const data = cardsList.slice(0, limit);
       return textResult({
-        total: Array.isArray(cardsList) ? cardsList.length : 0,
-        data: cardsList,
+        total,
+        limit,
+        offset,
+        hasMore,
+        nextOffset: hasMore ? offset + data.length : null,
+        data,
       });
     }
   );

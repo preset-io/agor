@@ -24,6 +24,7 @@ export const guideNavigation: Record<string, NavigationItem> = {
   assistants: { title: 'Assistants', display: 'hidden' },
   knowledge: 'Knowledge',
   'internal-mcp': 'Agor MCP Server',
+  'external-mcp': 'Connect an External MCP Client',
   'multiplayer-social': 'Multiplayer & Social',
   'environment-configuration': 'Environments',
   scheduler: 'Scheduler',

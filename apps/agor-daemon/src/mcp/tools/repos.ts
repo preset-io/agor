@@ -1,8 +1,16 @@
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
+import type { Repo } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ReposServiceImpl } from '../../declarations.js';
-import { mcpLimit, mcpOptionalString, mcpRequiredId, mcpRequiredString } from '../schema.js';
+import {
+  mcpListLimit,
+  mcpOffset,
+  mcpOptionalString,
+  mcpPageResult,
+  mcpRequiredId,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -11,19 +19,42 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_repos_list',
     {
-      description: 'List all repositories accessible to the current user',
+      description:
+        'List a lean page of repositories accessible to the current user. Environment definitions and local paths are omitted by default; use agor_repos_get for details or lean:false when required. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         slug: mcpOptionalString('slug', 'Filter by repository slug'),
-        limit: mcpLimit(50),
+        limit: mcpListLimit(10),
+        offset: mcpOffset(),
+        lean: z.boolean().optional().describe('Return compact records (default: true).'),
       }),
     },
     async (args) => {
+      const limit = args.limit ?? 10;
+      const offset = args.offset ?? 0;
       const query: Record<string, unknown> = {};
       if (args.slug) query.slug = args.slug;
-      if (args.limit) query.$limit = args.limit;
+      query.$limit = limit;
+      query.$skip = offset;
+      query.$sort = { created_at: -1, repo_id: 1 };
       const repos = await ctx.app.service('repos').find({ query, ...ctx.baseServiceParams });
-      return textResult(repos);
+      const page = mcpPageResult<Repo>(repos, limit, offset);
+      if (args.lean === false) return textResult(page);
+      return textResult({
+        ...page,
+        data: page.data.map((repo: Repo) => ({
+          repo_id: repo.repo_id,
+          slug: repo.slug,
+          name: repo.name,
+          repo_type: repo.repo_type,
+          remote_url: repo.remote_url,
+          default_branch: repo.default_branch,
+          clone_status: repo.clone_status,
+          clone_error: repo.clone_error,
+          created_at: repo.created_at,
+          last_updated: repo.last_updated,
+        })),
+      });
     }
   );
 

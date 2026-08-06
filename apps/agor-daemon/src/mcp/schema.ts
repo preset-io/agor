@@ -170,6 +170,42 @@ export function mcpLimit(defaultValue = 50, maxValue?: number) {
   );
 }
 
+/** Safe defaults for broad MCP collection tools. */
+export const MCP_LIST_DEFAULT_LIMIT = 25;
+export const MCP_LIST_MAX_LIMIT = 100;
+
+export function mcpListLimit(defaultValue = MCP_LIST_DEFAULT_LIMIT) {
+  return mcpLimit(defaultValue, MCP_LIST_MAX_LIMIT);
+}
+
+/** Add one consistent, agent-friendly paging envelope to Feathers find results. */
+export function mcpPageResult<T>(result: unknown, requestedLimit: number, requestedOffset: number) {
+  if (
+    !Array.isArray(result) &&
+    (typeof result !== 'object' || result === null || !Array.isArray(Reflect.get(result, 'data')))
+  ) {
+    throw new Error('Expected a Feathers array or paginated find result');
+  }
+
+  const page = Array.isArray(result)
+    ? undefined
+    : (result as { data: T[]; total?: number; limit?: number; skip?: number });
+  const data = (Array.isArray(result) ? result : page?.data) as T[];
+  const total = page?.total ?? data.length;
+  const limit = page?.limit ?? requestedLimit;
+  const offset = page?.skip ?? requestedOffset;
+  const hasMore = offset + data.length < total;
+  return {
+    ...(page ?? {}),
+    data,
+    total,
+    limit,
+    offset,
+    hasMore,
+    nextOffset: hasMore ? offset + data.length : null,
+  };
+}
+
 export function mcpOffset(defaultValue = 0) {
   if (!Number.isSafeInteger(defaultValue) || defaultValue < 0) {
     throw new Error('MCP offset default must be a non-negative safe integer');

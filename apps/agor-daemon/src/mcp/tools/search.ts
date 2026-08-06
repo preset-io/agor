@@ -126,8 +126,8 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
           ),
         read_only: z.boolean().optional().describe('Filter to read-only tools only'),
         destructive: z.boolean().optional().describe('Filter to destructive tools only'),
-        max_results: mcpPositiveIntWithDefault('max_results', 10).describe(
-          'Max results to return (default: 10)'
+        max_results: mcpPositiveIntWithDefault('max_results', 10, 50).describe(
+          'Max results to return (default: 10, max: 50)'
         ),
       }),
       annotations: { readOnlyHint: true },

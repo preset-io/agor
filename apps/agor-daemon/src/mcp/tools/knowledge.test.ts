@@ -525,7 +525,8 @@ describe('Knowledge MCP input schemas', () => {
           namespace_slug: 'global',
           include_my_drafts: true,
           include_other_user_drafts: false,
-          limit: 100,
+          limit: 26,
+          offset: 0,
         }),
       })
     );
@@ -572,6 +573,7 @@ describe('Knowledge MCP input schemas', () => {
           ],
         },
       ],
+      pagination: { limit: 25, offset: 0, hasMore: false, nextOffset: null },
     });
     expect(JSON.stringify(result)).not.toContain('sensitive body');
     expect(JSON.stringify(result)).not.toContain('current_version');

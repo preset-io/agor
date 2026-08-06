@@ -1562,10 +1562,10 @@ describe('agor_teammates_list', () => {
       baseServiceParams,
     });
 
-    const result = await listTeammates({ limit: 200 });
+    const result = await listTeammates({ limit: 100 });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
+    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 101, offset: 0 });
     expect(parsed.total).toBe(1);
     expect(parsed.teammates).toEqual([
       expect.objectContaining({
@@ -1650,7 +1650,7 @@ describe('agor_teammates_list', () => {
 
     await listTeammates({});
 
-    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
+    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 26, offset: 0 });
   });
 
   it('scopes teammate discovery for superadmins when superadmin bypass is disabled', async () => {
@@ -1683,7 +1683,8 @@ describe('agor_teammates_list', () => {
     expect(findTeammateBranches).toHaveBeenCalledWith({
       archived: false,
       userId: 'superadmin-1',
-      limit: 200,
+      limit: 26,
+      offset: 0,
     });
   });
 });

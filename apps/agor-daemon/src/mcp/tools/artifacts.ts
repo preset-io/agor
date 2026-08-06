@@ -30,10 +30,12 @@ import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveArtifactId, resolveBoardId, resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNumber,
   mcpOptionalPositiveInt,
   mcpOptionalString,
+  mcpPageResult,
   mcpRequiredId,
   mcpRequiredString,
 } from '../schema.js';
@@ -690,33 +692,35 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
     'agor_artifacts_list',
     {
       description:
-        'List artifacts, optionally filtered by board. Respects visibility: shows public artifacts plus private artifacts owned by you.',
+        'List a page of artifacts, optionally filtered by board. File maps are omitted. Respects visibility and branch RBAC. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         boardId: mcpOptionalId('boardId', 'Board', 'Filter by board ID'),
-        limit: mcpLimit(50),
+        limit: mcpLimit(25, 100),
+        offset: mcpOffset(0),
       }),
     },
     async (args) => {
-      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const boardIdRaw = coerceString(args.boardId);
       const boardId = boardIdRaw ? await resolveBoardId(ctx, boardIdRaw) : undefined;
-      const limit = typeof args.limit === 'number' ? args.limit : 50;
-
-      let artifactsList: unknown[];
-      if (boardId) {
-        artifactsList = await service.findByBoardId(boardId as never, ctx.userId);
-      } else {
-        artifactsList = await service.findVisible(ctx.userId, { limit });
-      }
-
-      const stripped = (artifactsList as Record<string, unknown>[]).map(
+      const limit = typeof args.limit === 'number' ? args.limit : 25;
+      const offset = typeof args.offset === 'number' ? args.offset : 0;
+      // Use the normal service path so tenant/RBAC/visibility hooks run before
+      // the adapter computes total and applies pagination.
+      const result = await ctx.app.service('artifacts').find({
+        query: {
+          ...(boardId ? { board_id: boardId } : {}),
+          $limit: limit,
+          $skip: offset,
+          $sort: { created_at: -1, artifact_id: 1 },
+        },
+        ...ctx.baseServiceParams,
+      });
+      const page = mcpPageResult(result, limit, offset);
+      const stripped = (page.data as Record<string, unknown>[]).map(
         ({ files: _f, ...rest }) => rest
       );
-      return textResult({
-        total: stripped.length,
-        data: stripped,
-      });
+      return textResult({ ...page, data: stripped });
     }
   );
 

@@ -173,6 +173,7 @@ export interface KnowledgeSearchQuery {
   include_indexing?: boolean;
   includeIndexing?: boolean;
   limit?: number;
+  offset?: number;
   readable_by_user_id?: UserID;
   readable_as_admin?: boolean;
   readable_namespace_ids?: KnowledgeNamespaceID[];
@@ -1443,7 +1444,10 @@ export class KnowledgeSearchRepository {
       );
     }
     const q = query.q?.trim() ?? '';
-    const limit = Math.min(Math.max(query.limit ?? 25, 1), 100);
+    // Internal callers may request one look-ahead row to compute hasMore;
+    // public schemas remain capped at 100.
+    const limit = Math.min(Math.max(query.limit ?? 25, 1), 101);
+    const offset = Math.max(query.offset ?? 0, 0);
     let namespaceId = query.namespace_id;
     if (!namespaceId && query.namespace_slug) {
       const namespace = await this.namespaces.findBySlug(query.namespace_slug);
@@ -1519,7 +1523,7 @@ export class KnowledgeSearchRepository {
 
     const rows = (await dbQuery
       .orderBy(desc(kbDocuments.updated_at))
-      .limit(q ? Math.max(limit, 100) : limit)
+      .limit(q ? Math.max(offset + limit, 100) : offset + limit)
       .all()) as Array<Record<string, unknown>>;
     const baseUrl = await getBaseUrl();
 
@@ -1569,7 +1573,7 @@ export class KnowledgeSearchRepository {
           new Date(b.document.updated_at ?? 0).getTime() -
             new Date(a.document.updated_at ?? 0).getTime()
       )
-      .slice(0, limit);
+      .slice(offset, offset + limit);
   }
 }
 
