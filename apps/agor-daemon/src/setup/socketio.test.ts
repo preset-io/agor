@@ -314,7 +314,7 @@ describe('Socket.IO lifecycle logging', () => {
     warnSpy.mockRestore();
   });
 
-  it('logs first authentication and identity changes but omits same-identity repeats', () => {
+  it('logs post-connect authentication once at info with only the short user ID', () => {
     const { app, io } = buildHarness();
     const socket = makeSocket('alice-sock');
     connect(io, socket);
@@ -325,34 +325,16 @@ describe('Socket.IO lifecycle logging', () => {
       { user: { user_id: ALICE, email: 'alice@example.com' } },
       { connection }
     );
-    (app as any).eventHandlers.get('login')?.(
-      { user: { user_id: ALICE, email: 'repeat@example.com' } },
-      { connection }
-    );
 
     expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy).not.toHaveBeenCalled();
-    expect(debugSpy.mock.calls.flat().join(' ')).not.toContain('re-authenticated');
     expect(logSpy).toHaveBeenCalledWith(
       'socket authenticated: alice-sock user:11111111aaaaaaaaaaaa1111'
     );
     expect(logSpy.mock.calls.flat().join(' ')).not.toContain('alice@example.com');
-    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('repeat@example.com');
-
-    (app as any).eventHandlers.get('login')?.(
-      { user: { user_id: BOB, email: 'bob@example.com' } },
-      { connection }
-    );
-
-    expect(logSpy).toHaveBeenCalledTimes(2);
-    expect(logSpy).toHaveBeenLastCalledWith(
-      'socket authenticated: alice-sock user:22222222bbbbbbbbbbbb2222'
-    );
-    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('bob@example.com');
   });
 
   it('uses the same single authentication signal for handshake-authenticated users', async () => {
-    const { app, io } = buildHarness();
+    const { io } = buildHarness();
     const socket = makeSocket('handshake-sock');
     socket.handshake.auth = {
       token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '5m'),
@@ -365,10 +347,6 @@ describe('Socket.IO lifecycle logging', () => {
       });
     });
     connect(io, socket);
-    (app as any).eventHandlers.get('login')?.(
-      { user: { user_id: ALICE } },
-      { connection: socket.feathers }
-    );
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith(

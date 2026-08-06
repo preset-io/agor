@@ -74,8 +74,6 @@ interface FeathersSocket extends Socket {
     isService?: boolean;
     /** Terminal user scope for handshake-token service sockets (see SocketAuthState). */
     terminalUserId?: string;
-    /** Last identity represented by the socket authentication lifecycle log. */
-    lastLoggedAuthIdentity?: string;
     currentBoardId?: string;
     lastPresenceEmitAt?: number;
     tenant?: TenantContext;
@@ -347,16 +345,11 @@ export function createSocketIOConfig(
     // Track active connections for periodic operational metrics.
     let activeConnections = 0;
 
-    const logAuthenticated = (socket: Socket, userId?: string) => {
-      const fs = socket as FeathersSocket;
-      const identity = userId ? `user:${userId}` : 'service';
-      if (fs.data.lastLoggedAuthIdentity === identity) return;
-      fs.data.lastLoggedAuthIdentity = identity;
-
+    const logAuthenticated = (socketId: string, userId?: string) => {
       console.log(
         userId
-          ? `socket authenticated: ${socket.id} user:${shortId(userId)}`
-          : `socket authenticated: ${socket.id} service`
+          ? `socket authenticated: ${socketId} user:${shortId(userId)}`
+          : `socket authenticated: ${socketId} service`
       );
     };
 
@@ -443,7 +436,7 @@ export function createSocketIOConfig(
             (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
             if (fs.data) fs.data.tenant = tenant;
           }
-          logAuthenticated(socket);
+          logAuthenticated(socket.id);
           return next();
         }
 
@@ -464,7 +457,7 @@ export function createSocketIOConfig(
           if (fs.data) fs.data.tenant = tenant;
         }
 
-        logAuthenticated(socket, user.user_id);
+        logAuthenticated(socket.id, user.user_id);
         next();
       } catch (error) {
         console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
@@ -927,7 +920,7 @@ export function createSocketIOConfig(
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
-          logAuthenticated(socket, userId);
+          logAuthenticated(socket.id, userId);
           // Terminal-executor identities get no user room (see connection handler).
           if (!isTerminalExecutorIdentity(result.user)) {
             socket.join(userRoomName(userId));
