@@ -149,6 +149,22 @@ const ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD = 3;
 const ENVIRONMENT_READY_PROBE_THRESHOLD = 2;
 
 /**
+ * How long an environment may stay `starting` while its health probe keeps
+ * failing, before it is demoted to `error`.
+ *
+ * Without a bound, `starting` has NO exit: a probe failure during startup just
+ * returns and retries forever. A create that dies partway — a failed
+ * postCreate, a container that never boots — would spin indefinitely with no
+ * error, and the UI disables Start while `isStarting`, so the board offers no
+ * way out. That is the same trap as the stale-`running` case, mirrored.
+ *
+ * Generous on purpose: a measured cold Codespace create takes 12–27 min, and
+ * this must never fire during a legitimate build. One hour of CONTINUOUS
+ * failure means something is genuinely wrong, not slow.
+ */
+const ENVIRONMENT_STARTUP_TIMEOUT_MS = 60 * 60 * 1000;
+
+/**
  * Extended branches service with custom methods
  */
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
@@ -2555,7 +2571,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const shouldDemote = this.trackHealthProbeResult(id, isHealthy, currentStatus);
       if (shouldDemote) {
         console.warn(
-          `🔌 ${branch.name}: environment unreachable (HTTP ${response.status}) - marking 'error' so it can be started again`
+          `🔌 ${branch.name}: environment ${
+            currentStatus === 'starting' ? 'never became reachable' : 'unreachable'
+          } (HTTP ${response.status}) - marking 'error' so it can be started again`
         );
       }
 
@@ -2582,12 +2600,25 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             : error.message
           : 'Unknown error';
 
-      // During 'starting' state, don't mark as unhealthy - keep retrying
-      // Only mark as unhealthy when transitioning from healthy->unhealthy in 'running' state
-      if (currentStatus === 'starting') {
+      // Count the failure BEFORE the `starting` early-return below, so a startup
+      // that never succeeds can eventually time out instead of retrying forever.
+      const shouldDemoteOnThrow = this.trackHealthProbeResult(id, false, currentStatus);
+
+      // During 'starting', keep retrying quietly — an environment may legitimately
+      // be building for many minutes and should not flash unhealthy meanwhile.
+      // The exception is the startup timeout, handled just above.
+      if (currentStatus === 'starting' && !shouldDemoteOnThrow) {
         // Don't update health check during startup - wait for first success
         // This prevents the UI from showing unhealthy state while environment is still starting
         return branch;
+      }
+
+      if (shouldDemoteOnThrow) {
+        console.warn(
+          `🔌 ${branch.name}: environment ${
+            currentStatus === 'starting' ? 'never became reachable' : 'unreachable'
+          } (${message}) - marking 'error' so it can be started again`
+        );
       }
 
       const newHealthStatus = 'unhealthy';
@@ -2599,12 +2630,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
       }
 
-      const shouldDemote = this.trackHealthProbeResult(id, false, currentStatus);
-      if (shouldDemote) {
-        console.warn(
-          `🔌 ${branch.name}: environment unreachable (${message}) - marking 'error' so it can be started again`
-        );
-      }
+      const shouldDemote = shouldDemoteOnThrow;
 
       return await this.updateEnvironment(
         id,
@@ -2668,12 +2694,26 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Only a `running` environment can be demoted. `starting` keeps retrying
     // (that is the readiness gate) and `error` is already where we would land.
-    if (currentStatus !== 'running' || streak < ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD) {
-      return false;
+    // A `running` environment that goes unreachable is demoted quickly.
+    if (currentStatus === 'running') {
+      if (streak < ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD) return false;
+      this.healthFailureStreak.delete(id);
+      return true;
     }
 
-    this.healthFailureStreak.delete(id);
-    return true;
+    // A `starting` one gets a long grace period — it may legitimately be
+    // building for 12–27 min — but it must not spin forever. Expressed in time
+    // rather than probe count so it survives a change to the poll interval.
+    if (currentStatus === 'starting') {
+      const allowed = Math.ceil(
+        ENVIRONMENT_STARTUP_TIMEOUT_MS / Math.max(1, ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS)
+      );
+      if (streak < allowed) return false;
+      this.healthFailureStreak.delete(id);
+      return true;
+    }
+
+    return false;
   }
 
   /**

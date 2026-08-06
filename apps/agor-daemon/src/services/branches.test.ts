@@ -2292,6 +2292,41 @@ describe('BranchesService remote environment readiness gate', () => {
     expect(syncEnvironment).not.toHaveBeenCalled();
   });
 
+  it('times out a startup that never becomes reachable, instead of spinning forever', async () => {
+    const branch = remoteBranch();
+    const service = serviceFor(branch);
+    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update) =>
+        ({
+          ...branch,
+          environment_instance: {
+            ...branch.environment_instance,
+            ...(update as Record<string, unknown>),
+          },
+        }) as never
+    );
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('ECONNREFUSED');
+    });
+
+    // A real cold Codespace create takes 12-27 min, so the gate must NOT fire
+    // during a legitimate build. 5 min of failures changes nothing.
+    for (let i = 0; i < 60; i++) {
+      const r = await service.checkHealth(branch.branch_id);
+      expect(r.environment_instance?.status).toBe('starting');
+    }
+    expect(updateEnvironment).not.toHaveBeenCalled();
+
+    // Past the one-hour budget it must give up, so the UI re-enables Start
+    // (which is disabled while `isStarting`) rather than spinning indefinitely.
+    let result = branch as unknown as { environment_instance?: { status?: string } };
+    for (let i = 0; i < 720; i++) {
+      result = (await service.checkHealth(branch.branch_id)) as never;
+      if (result.environment_instance?.status === 'error') break;
+    }
+    expect(result.environment_instance?.status).toBe('error');
+  });
+
   it('still reaches running when the variant defines no sync command', async () => {
     const branch = remoteBranch();
     const service = serviceFor(branch);
