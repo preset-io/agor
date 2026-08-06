@@ -15,6 +15,23 @@ pnpm dev
 
 Open http://localhost:3001
 
+## Site analytics
+
+The public docs deployment sets `NEXT_PUBLIC_GA_ID=G-DME77D3LDH`. A measurement ID is
+public configuration, not a credential. The integration is omitted when the variable is
+unset and is otherwise enabled for production builds. To exercise it in `pnpm dev`, also
+set `NEXT_PUBLIC_ANALYTICS_DEBUG=true`; use a test property or block collection requests.
+
+Google Analytics sends one explicit `page_view` for the initial URL and each client-side
+App Router navigation. Its automatic page view is disabled to prevent duplicates. The
+site currently has no cookie-consent gate and does not interpret the browser's legacy Do
+Not Track signal; this matches the existing site-wide Microsoft Clarity and HubSpot
+loaders. Visitors can block these third-party scripts with browser privacy controls.
+
+The GitHub Pages deployment does not currently send a Content Security Policy. If one is
+added, it must allow the GA loader from `https://www.googletagmanager.com` and collection
+to `https://www.google-analytics.com` (plus the existing Clarity and HubSpot origins).
+
 ## Brand assets
 
 `public/logo-mark.svg` is the transparent Agor mark for normal web and

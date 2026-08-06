@@ -46,6 +46,13 @@ jobs:
       - name: Build docs
         run: pnpm --filter @agor/docs build
         env:
+          # GA measurement IDs are public identifiers, not secrets. Keep this
+          # explicit so static exports cannot silently lose production analytics.
+          NEXT_PUBLIC_GA_ID: G-DME77D3LDH
+
+      - name: Verify production analytics export
+        run: pnpm --filter @agor/docs validate:analytics
+        env:
           NEXT_PUBLIC_GA_ID: G-DME77D3LDH
 
       - name: Setup Pages

@@ -2,8 +2,9 @@ import { Head } from 'nextra/components';
 import 'nextra-theme-docs/style.css';
 import { Hanken_Grotesk, JetBrains_Mono, Space_Grotesk } from 'next/font/google';
 import Script from 'next/script';
-import type { ReactNode } from 'react';
+import { type ReactNode, Suspense } from 'react';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
+import { GoogleAnalytics } from '../components/GoogleAnalytics';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import {
   BRAND_NAME,
@@ -18,6 +19,10 @@ import './styles.css';
 
 const basePath = getBasePath();
 const siteUrl = getSiteUrl();
+const googleAnalyticsId = process.env.NEXT_PUBLIC_GA_ID;
+const analyticsEnabled =
+  Boolean(googleAnalyticsId) &&
+  (process.env.NODE_ENV === 'production' || process.env.NEXT_PUBLIC_ANALYTICS_DEBUG === 'true');
 
 // Marketing type system (see LandingPage.module.css): Space Grotesk for
 // display, Hanken Grotesk for body copy, JetBrains Mono for eyebrows/labels.
@@ -127,6 +132,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <DocsAuroraBackground />
         {children}
+        {analyticsEnabled && googleAnalyticsId ? (
+          <Suspense fallback={null}>
+            <GoogleAnalytics measurementId={googleAnalyticsId} />
+          </Suspense>
+        ) : null}
         {/* HubSpot tracking / embed loader (portal 246818610). */}
         <Script
           id="hs-script-loader"
