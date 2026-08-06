@@ -999,7 +999,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(['once', 'persistent'])
           .optional()
           .describe(
-            'Callback firing mode: "once" (default) fires on first completion then auto-disables, "persistent" fires on every completion'
+            'Callback firing mode: "persistent" (default) fires on every completion until unlinked, "once" fires on the first completion then auto-disables'
           ),
         parentSessionId: z
           .string()
@@ -1082,7 +1082,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         callbackConfig.include_original_prompt = args.includeOriginalPrompt;
       }
       if (wantsCallback) {
-        callbackConfig.callback_mode = args.callbackMode ?? 'once';
+        callbackConfig.callback_mode = args.callbackMode ?? 'persistent';
       }
 
       // Determine the parent session to link to in the genealogy.

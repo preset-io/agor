@@ -742,11 +742,17 @@ describe('agor_sessions_create', () => {
     const result = await agor_sessions_create({
       branchId: 'wt-1',
       agenticTool: 'claude-code',
+      enableCallback: true,
     });
 
     // New session genealogy should reference the calling session as parent
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.genealogy.parent_session_id).toBe('sess-caller');
+    expect(created.callback_config).toMatchObject({
+      enabled: true,
+      callback_session_id: 'sess-caller',
+      callback_mode: 'persistent',
+    });
 
     // Parent's children list should be updated to include the new session
     expect(patchCalls).toHaveLength(1);

@@ -426,8 +426,8 @@ export interface Session {
     callback_created_by?: string;
     /**
      * Callback firing mode:
-     * - "once": Fire callback on first completion, then auto-disable (default)
-     * - "persistent": Fire on every completion (legacy behavior)
+     * - "persistent": Fire on every completion until disabled (default when omitted)
+     * - "once": Fire callback on first completion, then auto-disable
      */
     callback_mode?: 'once' | 'persistent';
   };

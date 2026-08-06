@@ -22,6 +22,11 @@ coalesced by a database uniqueness constraint. Delivery remains best-effort if
 the daemon exits after terminalizing the source task but before callback task
 creation.
 
+Callbacks enabled by `agor_sessions_create` default to `persistent`; use
+`callbackMode: "once"` for a single report. Durable remote relationships can
+be muted or resumed with `agor_session_relationships_set_callback` without
+deleting the relationship. Spawned child and `btw` callbacks remain one-shot.
+
 ## Overrides at create/spawn/subsession time
 
 `agor_sessions_create`, `agor_sessions_spawn`, and `agor_sessions_prompt` with `mode: "subsession"` all accept:
