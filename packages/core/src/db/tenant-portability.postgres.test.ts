@@ -11,6 +11,7 @@
  *   pnpm --filter @agor/core exec vitest run src/db/tenant-portability.postgres.test.ts
  */
 
+import { rmSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -491,19 +492,26 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     await deleteTenantData(db, source);
     await rm(sourceFs, { recursive: true, force: true });
 
-    // A destination whose PARENT is a regular file: classification sees the root
-    // as absent (empty FS portion, so the DB restores and commits), but staging —
-    // which runs after the commit — cannot mkdir under a non-directory and throws.
-    const brokenParent = join(scratch, `${rehomed}-broken`);
-    await writeFile(brokenParent, 'not a directory');
-    const brokenFsRoot = join(brokenParent, 'root');
+    // Remove one already-verified filesystem payload from the archive while the
+    // database restore is in flight. Staging runs only after that transaction
+    // commits, so the missing file deterministically faults the filesystem tail.
+    const archivedPayloadPath = join(archive, 'files', 'repos', 'org', 'file-a.txt');
+    const archivedPayload = await readFile(archivedPayloadPath);
+    let faultInjected = false;
+    const goodFsRoot = join(scratch, `${rehomed}-fs`);
     await expect(
       importTenant(db, {
         archivePath: archive,
         tenantId: rehomed,
-        filesystemRoot: brokenFsRoot,
+        filesystemRoot: goodFsRoot,
+        log: () => {
+          if (faultInjected) return;
+          faultInjected = true;
+          rmSync(archivedPayloadPath);
+        },
       })
     ).rejects.toThrow();
+    await writeFile(archivedPayloadPath, archivedPayload);
 
     // The re-homed database committed despite the filesystem-tail failure.
     const afterFailure = await inspectTenant(db, rehomed);
@@ -511,7 +519,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
 
     // Retry against a healthy destination root: the database is recognised as
     // already applied (no re-insert) and only the filesystem portion completes.
-    const goodFsRoot = join(scratch, `${rehomed}-fs`);
     const retried = await importTenant(db, {
       archivePath: archive,
       tenantId: rehomed,
