@@ -8,7 +8,7 @@ describe('agentic-tool UI integrations', () => {
       modelLabel: 'OpenCode LLM Provider',
       agentSelectionOption: { beta: true },
     });
-    expect(integration?.ModelSelector).toBeTypeOf('function');
-    expect(integration?.permissionModes).toHaveLength(3);
+    expect(integration.ModelSelector).toBeTypeOf('function');
+    expect(integration.permissionModes).toHaveLength(3);
   });
 });

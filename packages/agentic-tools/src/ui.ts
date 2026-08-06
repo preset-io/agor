@@ -41,6 +41,13 @@ const UI_INTEGRATIONS: Partial<Record<AgenticToolName, AgenticToolUIIntegration>
   [OPENCODE_UI_CONTRIBUTION.name]: OPENCODE_UI_CONTRIBUTION,
 };
 
+export function getAgenticToolUIIntegration(tool: 'opencode'): AgenticToolUIIntegration & {
+  agentSelectionOption: NonNullable<AgenticToolUIIntegration['agentSelectionOption']>;
+  onboardingOption: NonNullable<AgenticToolUIIntegration['onboardingOption']>;
+};
+export function getAgenticToolUIIntegration(
+  tool: AgenticToolName
+): AgenticToolUIIntegration | undefined;
 export function getAgenticToolUIIntegration(
   tool: AgenticToolName
 ): AgenticToolUIIntegration | undefined {

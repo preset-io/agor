@@ -33,7 +33,7 @@ import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
-const openCodeOnboarding = getAgenticToolUIIntegration('opencode')?.onboardingOption;
+const openCodeOnboarding = getAgenticToolUIIntegration('opencode').onboardingOption;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -128,10 +128,10 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'custom',
     agent: 'opencode',
-    symbol: openCodeOnboarding?.symbol ?? '',
+    symbol: openCodeOnboarding.symbol,
     provider: '',
-    title: openCodeOnboarding?.title ?? '',
-    description: openCodeOnboarding?.description ?? '',
+    title: openCodeOnboarding.title,
+    description: openCodeOnboarding.description,
     placeholder: 'https://…',
     keyLink: null,
     keyLinkLabel: null,
