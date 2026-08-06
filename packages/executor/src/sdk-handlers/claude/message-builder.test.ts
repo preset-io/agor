@@ -191,8 +191,13 @@ describe('createUserMessage', () => {
     const sessionId = generateId() as SessionID;
     const taskId = generateId() as TaskID;
     const prompt = 'Hello, Claude!';
+    const tasksService = {
+      get: vi.fn().mockResolvedValue({ task_id: taskId, full_prompt: prompt }),
+    } as unknown as TasksService;
 
-    const result = await createUserMessage(sessionId, prompt, taskId, 0, messagesService);
+    const result = await createUserMessage(sessionId, prompt, taskId, 0, messagesService, {
+      tasksService,
+    });
 
     expect(result.session_id).toBe(sessionId);
     expect(result.task_id).toBe(taskId);
@@ -202,6 +207,17 @@ describe('createUserMessage', () => {
     expect(result.content).toBe(prompt);
     expect(result.content_preview).toBe(prompt);
     expect(messagesService.create).toHaveBeenCalledWith(result);
+  });
+
+  it('does not persist a provider prompt when task lookup is unavailable', async () => {
+    const messagesService = createMockMessagesService();
+    const sessionId = generateId() as SessionID;
+    const taskId = generateId() as TaskID;
+
+    await expect(
+      createUserMessage(sessionId, '[Agor runtime context]\nstate', taskId, 0, messagesService)
+    ).rejects.toThrow('without the tasks service');
+    expect(messagesService.create).not.toHaveBeenCalled();
   });
 
   it('should generate valid message ID', async () => {
@@ -381,6 +397,9 @@ describe('createUserMessage', () => {
       const sessionId = generateId() as SessionID;
       const taskId = generateId() as TaskID;
       const otherTaskId = generateId() as TaskID;
+      const tasksService = {
+        get: vi.fn().mockResolvedValue({ task_id: taskId, full_prompt: 'New prompt' }),
+      } as unknown as TasksService;
 
       const existingMessages = [
         {
@@ -398,11 +417,38 @@ describe('createUserMessage', () => {
 
       const result = await createUserMessage(sessionId, 'New prompt', taskId, 1, messagesService, {
         existingMessages,
+        tasksService,
       });
 
       expect(result.task_id).toBe(taskId);
       expect(result.index).toBe(1);
       expect(result.content).toBe('New prompt');
+      expect(messagesService.create).toHaveBeenCalledWith(result);
+    });
+
+    it('persists Task.full_prompt when the daemon write is missing', async () => {
+      const messagesService = createMockMessagesService();
+      const sessionId = generateId() as SessionID;
+      const taskId = generateId() as TaskID;
+      const tasksService = {
+        get: vi.fn().mockResolvedValue({
+          task_id: taskId,
+          full_prompt: 'Original task prompt',
+        }),
+      } as unknown as TasksService;
+
+      const result = await createUserMessage(
+        sessionId,
+        '[Agor runtime context]\nOAuth state for this turn\n\nOriginal task prompt',
+        taskId,
+        0,
+        messagesService,
+        { existingMessages: [], tasksService }
+      );
+
+      expect(tasksService.get).toHaveBeenCalledWith(taskId);
+      expect(result.content).toBe('Original task prompt');
+      expect(result.content_preview).toBe('Original task prompt');
       expect(messagesService.create).toHaveBeenCalledWith(result);
     });
 

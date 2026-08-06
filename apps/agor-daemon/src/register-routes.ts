@@ -101,6 +101,7 @@ import {
   ScheduleNotReadyError,
   type SchedulerService,
 } from './services/scheduler.js';
+import type { ExecuteTaskData } from './services/sessions.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
@@ -287,6 +288,25 @@ export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | un
   return tasks.find(
     (task) => task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
   );
+}
+
+export function buildExecuteTaskData(
+  task: Task,
+  providerPrompt: string,
+  options: {
+    permissionMode?: ExecuteTaskData['permissionMode'];
+    stream?: boolean;
+    messageSource?: MessageSource;
+  }
+): ExecuteTaskData {
+  return {
+    taskId: task.task_id,
+    prompterUserId: task.created_by as UserID,
+    prompt: providerPrompt,
+    permissionMode: options.permissionMode,
+    stream: options.stream,
+    messageSource: options.messageSource,
+  };
 }
 
 /**
@@ -1164,14 +1184,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         await sessionsService.executeTask(
           sessionId,
-          {
-            taskId,
-            prompterUserId: task.created_by as UserID,
-            prompt: promptForExecutor,
+          buildExecuteTaskData(task, promptForExecutor, {
             permissionMode: options.permissionMode,
             stream: useStreaming,
             messageSource: runtimeMessageSource,
-          },
+          }),
           params
         );
 

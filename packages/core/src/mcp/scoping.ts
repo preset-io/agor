@@ -268,17 +268,30 @@ export async function getMcpServerAvailabilityForSession(
       .map(({ server }) => server)
       .filter((server) => server.auth?.type === 'oauth');
     if (oauthServers.length > 0) {
+      const unavailableServerIds = new Set<string>();
+      const markOAuthUnavailable = (
+        entry: MCPServerWithSource,
+        reason: UnavailableMcpServer['reason']
+      ) => {
+        unavailable.push({ server: entry, reason });
+        unavailableServerIds.add(entry.server.mcp_server_id);
+      };
+
       if (!deps.mcpOAuthAuthHeadersRepo) {
         mcpDebug(
           `   ℹ️  ${oauthServers.length} OAuth MCP server(s) resolved without executor auth-header hydrator`
         );
+        for (const entry of servers) {
+          if (entry.server.auth?.type === 'oauth') {
+            markOAuthUnavailable(entry, 'authentication_unavailable');
+          }
+        }
       } else {
         try {
           const authHeaders = await deps.mcpOAuthAuthHeadersRepo.getAuthHeaders(
             oauthServers.map((server) => server.mcp_server_id)
           );
           let hydrated = 0;
-          const unavailableServerIds = new Set<string>();
           for (let i = 0; i < servers.length; i++) {
             const server = servers[i].server;
             if (server.auth?.type !== 'oauth') continue;
@@ -286,15 +299,13 @@ export async function getMcpServerAvailabilityForSession(
             const header = authHeaders[server.mcp_server_id];
             const bearer = /^Bearer\s+(.+)$/i.exec(header?.authorization ?? '')?.[1];
             if (!bearer) {
-              if (header?.error === 'needs_reauth') {
-                unavailable.push({
-                  server: servers[i],
-                  reason: 'authentication_required',
-                });
-                unavailableServerIds.add(server.mcp_server_id);
-                mcpDebug(
-                  `   ℹ️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
-                );
+              const reason =
+                header?.error === 'needs_reauth'
+                  ? 'authentication_required'
+                  : 'authentication_unavailable';
+              markOAuthUnavailable(servers[i], reason);
+              if (reason === 'authentication_required') {
+                mcpDebug(`   ℹ️  OAuth MCP server "${server.name}" requires authentication`);
               } else if (header?.error) {
                 console.warn(
                   `   ⚠️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
@@ -315,11 +326,6 @@ export async function getMcpServerAvailabilityForSession(
             };
             hydrated++;
           }
-          for (let i = servers.length - 1; i >= 0; i--) {
-            if (unavailableServerIds.has(servers[i].server.mcp_server_id)) {
-              servers.splice(i, 1);
-            }
-          }
           mcpDebug(`   🔐 Hydrated OAuth auth headers for ${hydrated} MCP server(s)`);
         } catch (error) {
           console.warn(
@@ -327,6 +333,16 @@ export async function getMcpServerAvailabilityForSession(
               error instanceof Error ? error.message : String(error)
             }`
           );
+          for (const entry of servers) {
+            if (entry.server.auth?.type === 'oauth') {
+              markOAuthUnavailable(entry, 'authentication_unavailable');
+            }
+          }
+        }
+      }
+      for (let i = servers.length - 1; i >= 0; i--) {
+        if (unavailableServerIds.has(servers[i].server.mcp_server_id)) {
+          servers.splice(i, 1);
         }
       }
     }

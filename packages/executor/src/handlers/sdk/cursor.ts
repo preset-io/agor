@@ -28,7 +28,9 @@ import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
+import type { TasksService } from '../../sdk-handlers/base/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
+import { resolvePersistedUserPrompt } from '../../sdk-handlers/claude/message-builder.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import {
   captureGitStateAtTaskEnd,
@@ -278,6 +280,11 @@ async function createUserMessage(args: {
     return existing;
   }
 
+  const persistedPrompt = await resolvePersistedUserPrompt(
+    args.prompt,
+    args.taskId,
+    args.client.service('tasks') as unknown as TasksService
+  );
   const messageId = generateId() as MessageID;
   await args.client.service('messages').create({
     message_id: messageId,
@@ -287,8 +294,8 @@ async function createUserMessage(args: {
     role: MessageRole.USER,
     index: args.index,
     timestamp: new Date().toISOString(),
-    content_preview: args.prompt.substring(0, 200),
-    content: args.prompt,
+    content_preview: persistedPrompt.substring(0, 200),
+    content: persistedPrompt,
     metadata: args.messageSource ? { source: args.messageSource } : undefined,
   });
   return {
@@ -299,8 +306,8 @@ async function createUserMessage(args: {
     role: MessageRole.USER,
     index: args.index,
     timestamp: new Date().toISOString(),
-    content_preview: args.prompt.substring(0, 200),
-    content: args.prompt,
+    content_preview: persistedPrompt.substring(0, 200),
+    content: persistedPrompt,
     metadata: args.messageSource ? { source: args.messageSource } : undefined,
   };
 }

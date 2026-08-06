@@ -67,9 +67,11 @@ export async function createUserMessage(
      * pre-existing user-message row for `taskId` and skip the insert.
      */
     existingMessages?: ReadonlyArray<Message>;
+    /** Authoritative fallback source when the daemon's initial write failed. */
+    tasksService?: TasksService;
   }
 ): Promise<Message> {
-  const { messageSource, existingMessages } = options ?? {};
+  const { messageSource, existingMessages, tasksService } = options ?? {};
 
   // Skip-if-exists guard (Alt D): if the daemon already wrote the initial
   // prompt row for this task, return it instead of inserting a duplicate.
@@ -90,6 +92,8 @@ export async function createUserMessage(
     }
   }
 
+  const persistedPrompt = await resolvePersistedUserPrompt(prompt, taskId, tasksService);
+
   const userMessage: Message = {
     message_id: generateId() as MessageID,
     session_id: sessionId,
@@ -97,14 +101,31 @@ export async function createUserMessage(
     role: MessageRole.USER,
     index: nextIndex,
     timestamp: new Date().toISOString(),
-    content_preview: prompt.substring(0, 200),
-    content: prompt,
+    content_preview: persistedPrompt.substring(0, 200),
+    content: persistedPrompt,
     task_id: taskId,
     metadata: messageSource ? { source: messageSource } : undefined,
   };
 
   await messagesService.create(userMessage);
   return userMessage;
+}
+
+export async function resolvePersistedUserPrompt(
+  providerPrompt: string,
+  taskId?: TaskID,
+  tasksService?: TasksService
+): Promise<string> {
+  if (!taskId) return providerPrompt;
+  if (!tasksService) {
+    throw new Error(`Task ${taskId} cannot persist a user message without the tasks service`);
+  }
+
+  const task = await tasksService.get(taskId);
+  if (typeof task.full_prompt !== 'string') {
+    throw new Error(`Task ${taskId} is missing full_prompt for user-message persistence`);
+  }
+  return task.full_prompt;
 }
 
 /**

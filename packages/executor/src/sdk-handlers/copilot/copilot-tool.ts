@@ -167,7 +167,7 @@ export class CopilotTool implements ITool {
       taskId,
       nextIndex,
       this.messagesService!,
-      { messageSource, existingMessages }
+      { messageSource, existingMessages, tasksService: this.tasksService }
     );
     nextIndex = userMessage.index + 1;
 

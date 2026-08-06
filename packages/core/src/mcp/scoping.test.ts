@@ -98,6 +98,11 @@ describe('getMcpServersForSession', () => {
       const servers = await getMcpServersForSession('session-a' as SessionID, {
         mcpServerRepo: { findAll: vi.fn() } as never,
         sessionMCPRepo: { listEffectiveServers } as never,
+        mcpOAuthAuthHeadersRepo: {
+          getAuthHeaders: vi.fn().mockResolvedValue({
+            'oauth-server': { authorization: 'Bearer resolved-access-token' },
+          }),
+        },
       });
 
       const resolved = servers.find(
@@ -212,7 +217,7 @@ describe('getMcpServersForSession', () => {
     expect(servers).toEqual([]);
   });
 
-  it('does not mislabel or remove OAuth servers on transient auth-service failures', async () => {
+  it('omits OAuth servers when authentication is transiently unavailable', async () => {
     const transient = {
       ...makeServer('oauth-transient', 'session', 'Transient'),
       auth: { type: 'oauth', oauth_mode: 'per_user' },
@@ -230,11 +235,16 @@ describe('getMcpServersForSession', () => {
       },
     });
 
-    expect(availability.usable).toEqual([{ server: transient, source: 'session-assigned' }]);
-    expect(availability.unavailable).toEqual([]);
+    expect(availability.usable).toEqual([]);
+    expect(availability.unavailable).toEqual([
+      {
+        server: { server: transient, source: 'session-assigned' },
+        reason: 'authentication_unavailable',
+      },
+    ]);
   });
 
-  it('does not mislabel or remove OAuth servers when the auth service is unreachable', async () => {
+  it('omits OAuth servers when the auth service is unreachable', async () => {
     const oauth = {
       ...makeServer('oauth-network', 'session', 'Network failure'),
       auth: { type: 'oauth', oauth_mode: 'per_user' },
@@ -250,8 +260,62 @@ describe('getMcpServersForSession', () => {
       },
     });
 
-    expect(availability.usable).toEqual([{ server: oauth, source: 'session-assigned' }]);
-    expect(availability.unavailable).toEqual([]);
+    expect(availability.usable).toEqual([]);
+    expect(availability.unavailable).toEqual([
+      {
+        server: { server: oauth, source: 'session-assigned' },
+        reason: 'authentication_unavailable',
+      },
+    ]);
+  });
+
+  it('omits OAuth servers when the auth service returns no authoritative Bearer header', async () => {
+    const oauth = {
+      ...makeServer('oauth-no-header', 'session', 'Missing header'),
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as MCPServer;
+
+    const availability = await getMcpServerAvailabilityForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([oauth]),
+      } as never,
+      mcpOAuthAuthHeadersRepo: {
+        getAuthHeaders: vi.fn().mockResolvedValue({
+          'oauth-no-header': {},
+        }),
+      },
+    });
+
+    expect(availability.usable).toEqual([]);
+    expect(availability.unavailable).toEqual([
+      {
+        server: { server: oauth, source: 'session-assigned' },
+        reason: 'authentication_unavailable',
+      },
+    ]);
+  });
+
+  it('omits OAuth servers when no trusted auth-header service is available', async () => {
+    const oauth = {
+      ...makeServer('oauth-no-service', 'global', 'No auth service'),
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as MCPServer;
+
+    const availability = await getMcpServerAvailabilityForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([oauth]),
+      } as never,
+    });
+
+    expect(availability.usable).toEqual([]);
+    expect(availability.unavailable).toEqual([
+      {
+        server: { server: oauth, source: 'global' },
+        reason: 'authentication_unavailable',
+      },
+    ]);
   });
 
   it('does not classify missing bearer or JWT configuration as OAuth authentication', async () => {

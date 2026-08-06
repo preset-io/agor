@@ -465,9 +465,15 @@ describe('GatewayService Slack thread catch-up', () => {
       },
     });
 
-    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    const [promptData, promptParams] = promptCreate.mock.calls[0];
+    const prompt = promptData.prompt as string;
     expect(prompt).not.toContain('[System notice:');
     expect(prompt).not.toContain('[Agor runtime context]');
+    expect(promptData.messageSource).toBe('gateway');
+    expect(promptParams).toMatchObject({
+      user,
+      tenant: { tenant_id: 'tenant-channel', source: 'explicit' },
+    });
   });
 
   it('runs listener inbound callbacks inside a fresh channel tenant DB scope', async () => {

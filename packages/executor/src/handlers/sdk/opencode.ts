@@ -72,6 +72,7 @@ export async function executeOpenCodeTask(params: {
     await createUserMessage(sessionId, prompt, taskId, messages.length, repos.messagesService, {
       messageSource: params.messageSource,
       existingMessages: messages,
+      tasksService: repos.tasksService,
     });
 
     const assistantMessageId = generateId() as MessageID;
