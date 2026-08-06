@@ -1,7 +1,7 @@
 import type { Message } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessagesRepository, SessionRepository } from '../../db/feathers-repositories.js';
-import type { MessagesService } from '../base/index.js';
+import type { MessagesService, TasksService } from '../base/index.js';
 import { CodexTool } from './codex-tool.js';
 import type { CodexStreamEvent } from './prompt-service.js';
 
@@ -81,6 +81,11 @@ describe('CodexTool ordered transcript persistence', () => {
     const sessionsRepo = {
       findById: vi.fn().mockResolvedValue(null),
     } as unknown as SessionRepository;
+    const tasksService: TasksService = {
+      get: vi.fn(async () => ({ full_prompt: 'prompt' })),
+      patch: vi.fn(async () => undefined),
+      emit: vi.fn(),
+    };
     const tool = new CodexTool(
       messagesRepo,
       sessionsRepo,
@@ -88,7 +93,8 @@ describe('CodexTool ordered transcript persistence', () => {
       undefined,
       undefined,
       undefined,
-      messagesService
+      messagesService,
+      tasksService
     );
     const events: CodexStreamEvent[] = [
       {
