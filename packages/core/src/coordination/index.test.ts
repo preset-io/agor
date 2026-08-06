@@ -7,51 +7,34 @@ import {
 } from './index';
 
 describe('distributed work diagnostic identity', () => {
-  it('uses configured, daemon-env, hostname, then fallback precedence', () => {
+  it('uses daemon-env, hostname, then daemon precedence', () => {
     const generateBootId = () => 'boot-1';
     expect(
       createDistributedWorkIdentity({
-        configuredInstanceId: ' configured ',
         environment: { AGOR_DAEMON_INSTANCE_ID: ' env ', HOSTNAME: ' host ' },
-        fallbackInstanceId: 'fallback',
-        generateBootId,
-      }).instanceId
-    ).toBe('configured');
-    expect(
-      createDistributedWorkIdentity({
-        environment: { AGOR_DAEMON_INSTANCE_ID: ' env ', HOSTNAME: ' host ' },
-        fallbackInstanceId: 'fallback',
         generateBootId,
       }).instanceId
     ).toBe('env');
     expect(
       createDistributedWorkIdentity({
         environment: { HOSTNAME: ' host ' },
-        fallbackInstanceId: 'fallback',
         generateBootId,
       }).instanceId
     ).toBe('host');
-    expect(
-      createDistributedWorkIdentity({ fallbackInstanceId: ' fallback ', generateBootId }).instanceId
-    ).toBe('fallback');
     expect(createDistributedWorkIdentity({ generateBootId }).instanceId).toBe('daemon');
   });
 
   it('trims values and skips invalid empty precedence candidates', () => {
     expect(
       createDistributedWorkIdentity({
-        configuredInstanceId: '   ',
         environment: { AGOR_DAEMON_INSTANCE_ID: '\t', HOSTNAME: '  stable-host  ' },
-        fallbackInstanceId: '  fallback  ',
         generateBootId: () => '  boot-trimmed  ',
       })
     ).toEqual({ instanceId: 'stable-host', bootId: 'boot-trimmed' });
 
     expect(
       createDistributedWorkIdentity({
-        configuredInstanceId: '',
         environment: { AGOR_DAEMON_INSTANCE_ID: '', HOSTNAME: '' },
-        fallbackInstanceId: ' ',
         generateBootId: () => 'boot-fallback',
       }).instanceId
     ).toBe('daemon');

@@ -20,12 +20,10 @@ describe('daemon distributed-work identity lifecycle', () => {
     const generateBootId = vi.fn(() => 'boot-one');
 
     const initialized = initializeDistributedWorkIdentity(app, {
-      configuredInstanceId: 'runtime-a',
       environment: { AGOR_DAEMON_INSTANCE_ID: 'env-b', HOSTNAME: 'host-c' },
       generateBootId,
     });
     const repeated = initializeDistributedWorkIdentity(app, {
-      configuredInstanceId: 'must-not-replace-runtime-a',
       environment: {},
       generateBootId,
     });
@@ -33,6 +31,7 @@ describe('daemon distributed-work identity lifecycle', () => {
     const futureWorkerConsumer = app.get('distributedWorkIdentity');
 
     expect(generateBootId).toHaveBeenCalledOnce();
+    expect(initialized.instanceId).toBe('env-b');
     expect(repeated).toBe(initialized);
     expect(schedulerConsumer).toBe(initialized);
     expect(futureWorkerConsumer).toBe(initialized);

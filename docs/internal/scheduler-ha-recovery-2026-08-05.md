@@ -136,18 +136,18 @@ when it creates the Feathers application, stores that object on the application,
 injects the same object into SchedulerService. Future background consumers should read
 that app-owned identity rather than creating worker-local identities.
 
-`instanceId` precedence is the existing explicit runtime identifier
-`external_launch.instance_id`, then `AGOR_DAEMON_INSTANCE_ID`, then `HOSTNAME`, then
-the safe `daemon` fallback. Whitespace-only candidates are ignored and selected values
-are trimmed. The platform should supply a stable value when diagnostics must correlate
-one daemon instance across restarts; the fallback is intentionally only a label.
+`instanceId` precedence is `AGOR_DAEMON_INSTANCE_ID`, then `HOSTNAME`, then the safe
+`daemon` fallback. Whitespace-only candidates are ignored and selected values are
+trimmed. The platform should supply a stable value when diagnostics must correlate one
+daemon instance across restarts; the fallback is intentionally only a label. A dedicated
+YAML `deployment.instance_id` may be added later with the HA configuration contract;
+no existing unrelated configuration field is reused for this identity.
 `bootId` is generated exactly once at application initialization and identifies that
 one process incarnation.
 
 Both fields are diagnostic log correlation only. Neither is an authorization,
-fencing, lease, liveness, ownership, or correctness boundary. In particular, using
-the already-settled external-launch runtime identifier as the first diagnostic source
-does not transfer launch auth semantics into `@agor/core/coordination`.
+fencing, lease, liveness, ownership, or correctness boundary. External-launch assertion
+binding remains a separate security concern and is not read or changed by this identity.
 
 ## Scanning, recovery bound, and diagnostics
 

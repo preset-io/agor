@@ -30,12 +30,8 @@ export interface DistributedWorkIdentityEnvironment {
 }
 
 export interface CreateDistributedWorkIdentityOptions {
-  /** Existing explicit runtime-instance configuration, when one is settled. */
-  configuredInstanceId?: string;
   /** Explicit environment snapshot supplied by the daemon composition root. */
   environment?: DistributedWorkIdentityEnvironment;
-  /** Safe diagnostic fallback (default: `daemon`). */
-  fallbackInstanceId?: string;
   /** Process-incarnation ID generator, injected so lifecycle ownership is explicit and tests are deterministic. */
   generateBootId: () => string;
 }
@@ -49,20 +45,20 @@ function normalizedNonEmpty(value: unknown): string | undefined {
 /**
  * Create one diagnostic identity at a process/application composition root.
  *
- * Instance precedence is explicit configuration, AGOR_DAEMON_INSTANCE_ID,
- * HOSTNAME, then the safe fallback. This helper is deliberately stateless: it
- * does not cache, register, heartbeat, claim, lease, fence, or confer any
- * authority. The caller owns creating it exactly once and sharing the result.
+ * Instance precedence is AGOR_DAEMON_INSTANCE_ID, HOSTNAME, then the safe
+ * `daemon` fallback. A dedicated YAML deployment identity may be added later
+ * with the HA configuration contract; unrelated configuration must not be
+ * reused here. This helper is deliberately stateless: it does not cache,
+ * register, heartbeat, claim, lease, fence, or confer any authority. The
+ * caller owns creating it exactly once and sharing the result.
  */
 export function createDistributedWorkIdentity(
   options: CreateDistributedWorkIdentityOptions
 ): DistributedWorkIdentity {
   const environment = options.environment ?? {};
   const instanceId =
-    normalizedNonEmpty(options.configuredInstanceId) ??
     normalizedNonEmpty(environment.AGOR_DAEMON_INSTANCE_ID) ??
     normalizedNonEmpty(environment.HOSTNAME) ??
-    normalizedNonEmpty(options.fallbackInstanceId) ??
     'daemon';
   const bootId = normalizedNonEmpty(options.generateBootId());
   if (!bootId) throw new Error('Distributed work boot ID generator returned an empty value');

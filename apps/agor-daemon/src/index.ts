@@ -278,11 +278,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   const app = feathersExpress(feathers());
   // One application-owned identity spans every background worker in this
-  // daemon process. external_launch.instance_id is the only settled explicit
-  // runtime-instance config field; its authorization semantics remain local
-  // to launch auth, while this shared identity is diagnostic only.
+  // daemon process. A dedicated YAML deployment.instance_id may be added with
+  // the HA config contract later; unrelated auth configuration is not reused.
   const distributedWorkIdentity = initializeDistributedWorkIdentity(app, {
-    configuredInstanceId: config.external_launch?.instance_id,
     environment: {
       AGOR_DAEMON_INSTANCE_ID: process.env.AGOR_DAEMON_INSTANCE_ID,
       HOSTNAME: process.env.HOSTNAME,
