@@ -141,7 +141,7 @@ export interface SessionsServiceImpl
  * Tasks service with custom methods (server-side implementation)
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
-  claimDispatch(
+  claimDispatchAndProjectSession(
     taskId: string,
     expectedStatus:
       | typeof import('@agor/core/types').TaskStatus.CREATED

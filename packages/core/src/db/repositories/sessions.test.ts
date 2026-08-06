@@ -1394,6 +1394,45 @@ describe('SessionRepository schedule-link queries', () => {
     }
   );
 
+  dbTest(
+    'keeps incomplete scheduled Sessions discoverable after schedule deletion',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const scheduleId = await createTestSchedule(db, branch.branch_id);
+      const created = await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_000,
+          scheduled_from_branch: true,
+          custom_context: {
+            scheduled_run: {
+              rendered_prompt: 'durable prompt',
+              run_index: 1,
+              schedule_config_snapshot: {
+                schedule_id: scheduleId,
+                cron: '0 * * * *',
+                timezone: 'UTC',
+                retention: 1,
+                mcp_server_ids: [],
+              },
+            },
+          },
+        })
+      );
+
+      await new ScheduleRepository(db).delete(scheduleId);
+
+      expect((await repo.findById(created.session_id))?.schedule_id).toBeUndefined();
+      const pending = await repo.findIncompleteScheduledRefs(10);
+      expect(pending.find((ref) => ref.session_id === created.session_id)).toMatchObject({
+        session_id: created.session_id,
+        scheduled_run_at: 1_700_000_000_000,
+      });
+    }
+  );
+
   dbTest('findScheduleRun does not match a different scheduled_run_at', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branch = await createTestBranch(db);

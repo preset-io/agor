@@ -136,14 +136,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.heartbeatCallbackRunner = new ExecutorHeartbeatCallbackRunner(heartbeatConfig);
   }
 
-  /** Atomic daemon-side claim for the durable task launch-intent transition. */
-  async claimDispatch(
+  /** Atomic daemon-side launch-intent fence plus its Session projection. */
+  async claimDispatchAndProjectSession(
     taskId: string,
     expectedStatus: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED,
     updates: Partial<Task>,
     params?: TaskParams
   ): Promise<TaskDispatchClaimResult> {
-    const result = await this.taskRepo.claimDispatch(taskId, expectedStatus, updates);
+    const result = await this.taskRepo.claimDispatchAndProjectSession(
+      taskId,
+      expectedStatus,
+      updates
+    );
     if (result.outcome === 'claimed') {
       emitServiceEvent(this.app, {
         path: 'tasks',

@@ -51,7 +51,13 @@ export interface SessionWithLastMessage extends Session {
 
 export interface IncompleteScheduledSessionRef {
   session_id: SessionID;
-  schedule_id: import('@agor/core/types').ScheduleID;
+  /**
+   * The live FK is nullable because deleting a schedule must not erase the
+   * scheduler's ability to finish an occurrence admitted before that delete.
+   * Recovery uses the schedule ID snapshotted in custom_context when this is
+   * absent; system discovery needs only the Session and tenant routing IDs.
+   */
+  schedule_id?: import('@agor/core/types').ScheduleID;
   scheduled_run_at: number;
   created_at: number;
   tenant_id?: string;
@@ -1070,7 +1076,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       .where(
         and(
           eq(sessions.scheduled_from_branch, true),
-          isNotNull(sessions.schedule_id),
           isNotNull(sessions.scheduled_run_at),
           isNull(sessions.scheduler_init_completed_at),
           afterCondition
@@ -1081,7 +1086,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       .all();
     return (rows as Array<Record<string, unknown>>).map((row) => ({
       session_id: row.session_id as SessionID,
-      schedule_id: row.schedule_id as import('@agor/core/types').ScheduleID,
+      ...(typeof row.schedule_id === 'string'
+        ? { schedule_id: row.schedule_id as import('@agor/core/types').ScheduleID }
+        : {}),
       scheduled_run_at: Number(row.scheduled_run_at),
       created_at:
         row.created_at instanceof Date

@@ -5,7 +5,7 @@
  */
 
 import type { Task, UUID } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -1816,7 +1816,7 @@ describe('TaskRepository.createPending', () => {
 
     const claims = await Promise.all(
       Array.from({ length: 5 }, () =>
-        taskRepo.claimDispatch(task.task_id, TaskStatus.CREATED, {
+        taskRepo.claimDispatchAndProjectSession(task.task_id, TaskStatus.CREATED, {
           status: TaskStatus.DISPATCHING,
           started_at: new Date('2026-08-05T00:00:00Z').toISOString(),
         })
@@ -1826,6 +1826,11 @@ describe('TaskRepository.createPending', () => {
     expect(claims.filter((claim) => claim.outcome === 'claimed')).toHaveLength(1);
     expect(claims.filter((claim) => claim.outcome === 'already_claimed')).toHaveLength(4);
     expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.DISPATCHING);
+    await expect(new SessionRepository(db).findById(sessionId)).resolves.toMatchObject({
+      status: SessionStatus.RUNNING,
+      ready_for_prompt: false,
+      tasks: [task.task_id],
+    });
   });
 
   dbTest('clears queue position when claiming a queued task for dispatch', async ({ db }) => {
@@ -1835,7 +1840,7 @@ describe('TaskRepository.createPending', () => {
       createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
     );
 
-    const claim = await taskRepo.claimDispatch(queued.task_id, TaskStatus.QUEUED, {
+    const claim = await taskRepo.claimDispatchAndProjectSession(queued.task_id, TaskStatus.QUEUED, {
       status: TaskStatus.DISPATCHING,
     });
 

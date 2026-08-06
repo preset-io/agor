@@ -27,6 +27,8 @@ import {
   BoardRepository,
   type BranchRepository,
   getCurrentTenantDatabaseScope,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
   shortId,
@@ -785,6 +787,39 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       { logPrefix }
     );
   };
+
+  // Session creation can be an internal scheduler admission that deliberately
+  // bypasses the public Feathers create hook pipeline while a schedule row is
+  // locked. Own the Unix side effect as a service event consumer so both paths
+  // share it, and always defer database/process work until after commit.
+  if (executionMode.unixFsIsolationEnabled) {
+    app.service('sessions').on('created', (session: Session, hook?: Partial<HookContext>) => {
+      if (!session.branch_id || !session.unix_username) return;
+      if ((hook?.params as { isBranchOwner?: boolean } | undefined)?.isBranchOwner) return;
+      deferWithTenantContext(
+        hook?.params,
+        async () => {
+          const tenantId = getCurrentTenantId();
+          const branch = await runWithTenantDatabaseScope(db, tenantId, () =>
+            branchRepository.findById(session.branch_id)
+          );
+          if (!branch?.others_fs_access || branch.others_fs_access === 'none') return;
+          console.log(
+            `[Unix Integration] Non-owner session created in branch ${shortId(session.branch_id)} ` +
+              `by ${session.unix_username} (others_fs_access: ${branch.others_fs_access}), syncing group membership`
+          );
+          syncBranchUnixAccess(branch.branch_id, '[Executor/session.created.unix-group]', {
+            scope: { session_id: session.session_id },
+          });
+        },
+        (error) =>
+          console.error(
+            `[Unix Integration] Failed to trigger group sync for session ${shortId(session.session_id)}:`,
+            error
+          )
+      );
+    });
+  }
 
   const syncUnixAccessForBoardAlignedBranches = async (
     boardId: unknown,
@@ -2624,55 +2659,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
         sessionMcpTokenAfterHooks.create,
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
-
-        // Unix Integration: When a non-owner creates a session in a branch with
-        // others_fs_access != 'none', ensure they're added to the branch and repo
-        // unix groups. Without this, non-owners can't access the .git/ directory
-        // (which uses 2770 = no others access) even if the branch directory itself
-        // allows "others" access via ACLs.
-        ...(executionMode.unixFsIsolationEnabled
-          ? [
-              async (context: HookContext) => {
-                const session = context.result as Session;
-
-                // Only for sessions with a branch and unix_username
-                if (!session.branch_id || !session.unix_username) {
-                  return context;
-                }
-
-                // Check if user is NOT an owner (owners are already handled by sync)
-                const isOwner = context.params?.isBranchOwner;
-                if (isOwner) {
-                  return context;
-                }
-
-                // Load branch to check others_fs_access
-                try {
-                  const branch = await branchRepository.findById(session.branch_id);
-                  if (!branch?.others_fs_access || branch.others_fs_access === 'none') {
-                    return context;
-                  }
-
-                  // Fire-and-forget: trigger unix.sync-branch to add session user to groups
-                  console.log(
-                    `[Unix Integration] Non-owner session created in branch ${shortId(session.branch_id)} ` +
-                      `by ${session.unix_username} (others_fs_access: ${branch.others_fs_access}), syncing group membership`
-                  );
-                  syncBranchUnixAccess(branch.branch_id, '[Executor/session.create.unix-group]', {
-                    scope: { session_id: session.session_id },
-                  });
-                } catch (error) {
-                  // Don't fail session creation if unix sync fails
-                  console.error(
-                    `[Unix Integration] Failed to trigger group sync for session ${shortId(session.session_id)}:`,
-                    error
-                  );
-                }
-
-                return context;
-              },
-            ]
-          : []),
       ],
       patch: [
         async (context) => {

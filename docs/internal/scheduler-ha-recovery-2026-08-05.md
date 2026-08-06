@@ -63,19 +63,21 @@ Three audit corrections mattered:
 
 ## Kill-point audit and settled recovery behavior
 
-| Kill point                               | Old result                                                                              | New result                                                                                                          |
-| ---------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Before Session insert                    | Due cursor remains; later tick retries                                                  | Same                                                                                                                |
-| During/after Session insert              | Insert may win, but later schedulers returned it and permanently skipped initialization | Unique Session is the durable occurrence; later scheduler reconciles it                                             |
-| During MCP attachment                    | Partial attachment set, never repaired                                                  | Effective MCP IDs are snapshotted; attachment is insert-on-conflict idempotent and retried                          |
-| Before initial Task insert               | Prompt permanently lost                                                                 | Stable `initial_task_id` is already in Session; retry creates that Task                                             |
-| After Task insert while CREATED          | CREATED was outside scheduler recovery/startup orphan handling                          | Retry reuses the same Task and atomically claims DISPATCHING                                                        |
-| Two daemons starting the Task            | Process-local session lock did not cross daemon boundaries                              | row-locked expected-state transition has one winner; losers return durable state                                    |
-| After DISPATCHING                        | Runtime supervision owns the durable launch intent                                      | Same ownership, now explicit: scheduler does not replay DISPATCHING work                                            |
-| After prompt dispatch, before metadata   | Existing Session caused metadata advance, but initialization was not checked            | Task state is reconciled, then retention and metadata run                                                           |
-| During retention                         | failure was swallowed after metadata, so cleanup could be missed indefinitely           | retention precedes metadata; absence after a concurrent delete is idempotent, other failures leave the schedule due |
-| After metadata, before completion marker | occurrence was usually treated complete because the cursor had advanced                 | bounded incomplete-Session discovery reconciles once more, then writes the marker                                   |
-| After completion marker                  | occurrence is complete                                                                  | Same; every prior required step is already durable                                                                  |
+| Kill point                                              | Old result                                                                              | New result                                                                                                                                                            |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Before Session insert                                   | Due cursor remains; later tick retries                                                  | Same                                                                                                                                                                  |
+| During/after Session insert                             | Insert may win, but later schedulers returned it and permanently skipped initialization | Unique Session is the durable occurrence; later scheduler reconciles it                                                                                               |
+| Schedule deleted after Session insert                   | FK became NULL and the occurrence disappeared from recovery                             | Discovery does not require the live FK; the Session snapshot finishes prompt/MCP initialization, then skips deleted-schedule metadata/retention                       |
+| During MCP attachment                                   | Partial attachment set, never repaired                                                  | Effective MCP IDs are snapshotted; attachment is insert-on-conflict idempotent and retried                                                                            |
+| Before initial Task insert                              | Prompt permanently lost                                                                 | Stable `initial_task_id` is already in Session; retry creates that Task                                                                                               |
+| After Task insert while CREATED                         | CREATED was outside scheduler recovery/startup orphan handling                          | Retry reuses the same Task and atomically claims DISPATCHING plus its Session RUNNING/task-list projection                                                            |
+| Two daemons starting the Task                           | Process-local session lock did not cross daemon boundaries                              | row-locked expected-state transition has one winner; losers return durable state                                                                                      |
+| After DISPATCHING, before transcript/service projection | SQLite could leave an IDLE Session without its Task/message projection                  | Task claim + Session projection are one dialect-native transaction; the stable initial message ID lets recovery repair the transcript idempotently                    |
+| After durable DISPATCHING projection                    | Runtime supervision owns the durable launch intent                                      | Same ownership, now explicit: scheduler does not replay DISPATCHING work                                                                                              |
+| After prompt dispatch, before metadata                  | Existing Session caused metadata advance, but initialization was not checked            | Task state is reconciled, then retention and metadata run                                                                                                             |
+| During retention                                        | failure was swallowed after metadata, so cleanup could be missed indefinitely           | retention precedes metadata; active/incomplete overflow runs are deferred, absence after a concurrent delete is idempotent, and other failures leave the schedule due |
+| After metadata, before completion marker                | occurrence was usually treated complete because the cursor had advanced                 | bounded incomplete-Session discovery reconciles once more, then writes the marker                                                                                     |
+| After completion marker                                 | occurrence is complete                                                                  | Same; every prior required step is already durable                                                                                                                    |
 
 A process kill cannot be represented by a thrown JavaScript exception, so scheduler
 tests inject crashes immediately after Session admission, MCP attachment, prompt
@@ -96,7 +98,12 @@ Occurrence admission is one short tenant transaction:
 5. commit.
 
 Rendering, configuration resolution, MCP attachment, prompt dispatch, retention, and
-executor launch are not performed while that row lock is held. SQLite keeps its
+executor launch are not performed while that row lock is held. Admission uses the
+already-materialized Session repository path rather than the public Feathers create
+pipeline. Realtime/analytics and Unix-access synchronization run after admission;
+the shared Unix side effect is now a deferred `sessions.created` event consumer so
+ordinary and scheduled Session creation cannot launch a process while holding a
+tenant transaction. SQLite keeps its
 standalone behavior; same-occurrence uniqueness is its race guard and bounded
 `SQLITE_BUSY` retry protects concurrent final metadata updates.
 
@@ -106,7 +113,8 @@ the fence:
 
 - the Session unique key elects the occurrence;
 - the stable Task primary key elects prompt creation;
-- Task status conditionally moving to DISPATCHING elects the launcher;
+- Task status conditionally moving to DISPATCHING elects the launcher and
+  atomically projects RUNNING/task membership onto the Session in both dialects;
 - the existing heartbeat/runtime supervisor owns work after DISPATCHING.
 
 Adding an expiring scheduler lease would create a dangerous pause-after-expiry window
@@ -147,13 +155,14 @@ not reported because the scheduler has no lease.
 
 System discovery has one narrow `scheduler_discovery` RLS capability. It can select
 only enabled schedule routing rows and scheduled Sessions whose internal completion
-marker is NULL. The repository queries project only routing IDs, occurrence time,
+marker is NULL, including an incomplete Session whose live schedule FK was nulled by
+schedule deletion. The repository queries project only routing IDs, occurrence time,
 and `tenant_id`, with predicates and batch limits; prompts/configuration are not
 visible in system scope. The capability is transaction-local. Each candidate is then
 reloaded and processed under its trusted tenant context; Session, Task, MCP, schedule
 metadata, retention, and realtime events remain in that scope. PostgreSQL integration
-coverage checks system routing, tenant reload isolation, concurrent admission, and
-Task fencing.
+coverage checks system routing, tenant reload isolation (including the deleted-schedule
+case), concurrent admission, and Task fencing.
 
 ## Thin reusable foundation and non-goals
 

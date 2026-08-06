@@ -246,7 +246,7 @@ export const sessions = pgTable(
     schedulerInitPendingIdx: index('sessions_scheduler_init_pending_idx')
       .on(table.created_at, table.session_id)
       .where(
-        sql`${table.scheduled_from_branch} = true AND ${table.schedule_id} IS NOT NULL AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL`
+        sql`${table.scheduled_from_branch} = true AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL`
       ),
   })
 );

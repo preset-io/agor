@@ -51,6 +51,7 @@ import type {
   AuthenticatedParams,
   HookContext,
   Message,
+  MessageID,
   MessageSource,
   Paginated,
   Params,
@@ -975,6 +976,71 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   }
 
   /**
+   * Persist the first transcript row for a Task. Scheduled/idempotent prompts
+   * pass a stable message ID, so a replacement daemon can repair a kill after
+   * the dispatch claim without duplicating the prompt. Ordinary prompts retain
+   * the historical best-effort/random-ID behavior and executor fallback.
+   */
+  async function ensureInitialUserMessage(
+    task: Task,
+    params: RouteParams,
+    input: {
+      messageStartIndex: number;
+      startTimestamp: string;
+      messageSource?: MessageSource;
+      stableMessageId?: MessageID;
+    }
+  ): Promise<void> {
+    if (config.execution?.daemon_writes_user_message === false) return;
+
+    const messageRepo = new MessagesRepository(db);
+    if (input.stableMessageId) {
+      const existing = await messageRepo.findById(input.stableMessageId);
+      if (existing) {
+        if (existing.session_id !== task.session_id || existing.task_id !== task.task_id) {
+          throw new Conflict(
+            `Stable initial message identity ${input.stableMessageId} is already in use`
+          );
+        }
+        return;
+      }
+    }
+
+    const isCallback = task.metadata?.is_agor_callback === true;
+    const messageMetadata: Message['metadata'] = {};
+    if (isCallback) messageMetadata.is_agor_callback = true;
+    if (input.messageSource === 'gateway' || input.messageSource === 'agor') {
+      messageMetadata.source = input.messageSource;
+    }
+    const userMessage = buildInitialUserMessage({
+      messageId: input.stableMessageId,
+      sessionId: task.session_id,
+      taskId: task.task_id,
+      index: input.messageStartIndex,
+      timestamp: input.startTimestamp,
+      content: task.full_prompt,
+      type: isCallback ? 'system' : 'user',
+      metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
+    });
+
+    try {
+      await app.service('messages').create(userMessage, params);
+    } catch (error) {
+      if (input.stableMessageId) {
+        const winner = await messageRepo.findById(input.stableMessageId);
+        if (winner?.session_id === task.session_id && winner.task_id === task.task_id) return;
+        throw error;
+      }
+      // Don't fail the spawn — the executor's createUserMessage fallback
+      // (with skip-if-exists) will write the row when it connects.
+      console.warn(
+        `⚠️  [Daemon] Failed to write initial user-message row for task ${shortId(task.task_id)} (executor will retry):`,
+        error
+      );
+    }
+  }
+
+  /**
    * spawnTaskExecutor — sole transition point for `tasks.status` going from
    * `created` / `queued` → `dispatching`.
    *
@@ -1007,6 +1073,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
       messageSource?: MessageSource;
+      stableInitialMessageId?: MessageID;
     },
     params: RouteParams
   ): Promise<Task> {
@@ -1050,14 +1117,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
     if (task.status !== TaskStatus.CREATED && task.status !== TaskStatus.QUEUED) {
       // A concurrent daemon may have won between the caller's read and this
-      // handoff. Returning the durable task is the idempotent success path.
+      // handoff. Repair the deterministic transcript projection before
+      // returning the durable task as the idempotent success path.
+      if (options.stableInitialMessageId) {
+        await ensureInitialUserMessage(task, params, {
+          messageStartIndex: task.message_range?.start_index ?? messageStartIndex,
+          startTimestamp: task.message_range?.start_timestamp ?? task.started_at ?? startTimestamp,
+          messageSource: runtimeMessageSource,
+          stableMessageId: options.stableInitialMessageId,
+        });
+      }
       return task;
     }
 
     // Atomically claim queued/created → launch status. Process-local session
     // locks reduce contention, but this expected-state transition is the
     // cross-daemon fence that prevents duplicate executor launches.
-    const dispatchClaim = await tasksService.claimDispatch(
+    const dispatchClaim = await tasksService.claimDispatchAndProjectSession(
       task.task_id,
       task.status,
       {
@@ -1087,6 +1163,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         session_id: task.session_id,
         observed_status: dispatchClaim.task.status,
       });
+      if (options.stableInitialMessageId) {
+        await ensureInitialUserMessage(dispatchClaim.task, params, {
+          messageStartIndex: dispatchClaim.task.message_range?.start_index ?? messageStartIndex,
+          startTimestamp:
+            dispatchClaim.task.message_range?.start_timestamp ??
+            dispatchClaim.task.started_at ??
+            startTimestamp,
+          messageSource: runtimeMessageSource,
+          stableMessageId: options.stableInitialMessageId,
+        });
+      }
       return dispatchClaim.task;
     }
     const updatedTask = dispatchClaim.task;
@@ -1094,44 +1181,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
     // write is harmless if the daemon path is enabled.
-    if (config.execution?.daemon_writes_user_message !== false) {
-      try {
-        const isCallback = task.metadata?.is_agor_callback === true;
-        const messageMetadata: Message['metadata'] = {};
-        if (isCallback) {
-          messageMetadata.is_agor_callback = true;
-        }
-        // Prefer task.metadata.source (set when the task was queued) over
-        // the request's messageSource — the latter applies only to the
-        // current draining tick, the former to where the prompt originated.
-        if (runtimeMessageSource) {
-          messageMetadata.source = runtimeMessageSource;
-        }
+    // Prefer task.metadata.source (set when the task was queued) over the
+    // request's messageSource — the latter applies only to this drain tick.
+    await ensureInitialUserMessage(task, params, {
+      messageStartIndex,
+      startTimestamp,
+      messageSource: runtimeMessageSource,
+      stableMessageId: options.stableInitialMessageId,
+    });
 
-        const userMessage = buildInitialUserMessage({
-          sessionId: task.session_id,
-          taskId: task.task_id,
-          index: messageStartIndex,
-          timestamp: startTimestamp,
-          content: task.full_prompt,
-          // Callback messages are typed `system` so the UI shows the special
-          // Agor-callback styling. Normal prompts stay `user`.
-          type: isCallback ? 'system' : 'user',
-          metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
-        });
-        await app.service('messages').create(userMessage, params);
-      } catch (msgErr) {
-        // Don't fail the spawn — the executor's createUserMessage fallback
-        // (with skip-if-exists) will write the row when it connects.
-        console.warn(
-          `⚠️  [Daemon] Failed to write initial user-message row for task ${shortId(task.task_id)} (executor will retry):`,
-          msgErr
-        );
-      }
-    }
-
-    // Flip session to RUNNING and append to session.tasks. Done here so both
-    // callers (idle prompt and queue drain) get this for free.
+    // Re-apply the Session projection through Feathers so hooks/realtime see
+    // the transition. TaskRepository.claimDispatchAndProjectSession already
+    // committed the same projection atomically with the Task fence; this
+    // service patch is no longer correctness-critical on SQLite and is
+    // intentionally idempotent.
     //
     // The session-status flip used to fall out of `TasksService.create` when
     // the IDLE path created a task with `status: RUNNING` directly. Now the
@@ -1399,13 +1462,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   id: task.task_id,
                 });
               }
-              if (task.status !== TaskStatus.CREATED) return task;
               return await spawnTaskExecutor(
                 task,
                 {
                   permissionMode: data.permissionMode,
                   stream: data.stream !== false,
                   messageSource,
+                  stableInitialMessageId: data.idempotencyTaskId as MessageID,
                 },
                 params
               );

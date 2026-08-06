@@ -14,7 +14,7 @@ import type {
   TerminationCause,
   UUID,
 } from '@agor/core/types';
-import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -28,7 +28,7 @@ import {
   txAsDb,
   update,
 } from '../database-wrapper';
-import { type TaskInsert, type TaskRow, tasks } from '../schema';
+import { sessions, type TaskInsert, type TaskRow, tasks } from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -1017,7 +1017,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * intent, transcript/session state, or spawn a second executor after losing
    * this transition.
    */
-  async claimDispatch(
+  async claimDispatchAndProjectSession(
     id: string,
     expectedStatus: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED,
     updates: Partial<Task>
@@ -1058,6 +1058,33 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           data: insertData.data,
         })
         .where(eq(tasks.task_id, fullId))
+        .run();
+
+      // The launch-intent transition and its Session projection are one
+      // durable state change. PostgreSQL request scopes already provide an
+      // outer transaction, but standalone SQLite does not; keeping this write
+      // inside the task-claim transaction closes the kill point where a Task
+      // could be DISPATCHING while its Session remained IDLE and omitted the
+      // task from data.tasks.
+      await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, current.session_id));
+      const sessionRow = await select(txDb)
+        .from(sessions)
+        .where(eq(sessions.session_id, current.session_id))
+        .one();
+      if (!sessionRow) {
+        throw new EntityNotFoundError('Session', current.session_id);
+      }
+      const sessionTasks = sessionRow.data.tasks.includes(current.task_id)
+        ? sessionRow.data.tasks
+        : [...sessionRow.data.tasks, current.task_id];
+      await update(txDb, sessions)
+        .set({
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          updated_at: new Date(),
+          data: { ...sessionRow.data, tasks: sessionTasks },
+        })
+        .where(eq(sessions.session_id, current.session_id))
         .run();
       return { outcome: 'claimed', task: merged };
     });

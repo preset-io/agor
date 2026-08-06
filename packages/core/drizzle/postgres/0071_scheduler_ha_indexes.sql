@@ -14,7 +14,6 @@ WHERE "scheduled_from_branch" = true;
 CREATE INDEX "sessions_scheduler_init_pending_idx"
   ON "sessions" ("created_at", "session_id")
   WHERE "scheduled_from_branch" = true
-    AND "schedule_id" IS NOT NULL
     AND "scheduled_run_at" IS NOT NULL
     AND "scheduler_init_completed_at" IS NULL;
 --> statement-breakpoint
@@ -32,6 +31,17 @@ CREATE UNIQUE INDEX "sessions_schedule_run_unique"
 -- Recovery may attach the same MCP server from more than one scheduler process.
 -- Dedupe legacy rows before replacing the non-unique index with a tenant-aware
 -- idempotency constraint.
+UPDATE "session_mcp_servers" AS target
+SET "enabled" = aggregate."enabled"
+FROM (
+  SELECT "tenant_id", "session_id", "mcp_server_id", bool_or("enabled") AS "enabled"
+  FROM "session_mcp_servers"
+  GROUP BY "tenant_id", "session_id", "mcp_server_id"
+) AS aggregate
+WHERE target."tenant_id" = aggregate."tenant_id"
+  AND target."session_id" = aggregate."session_id"
+  AND target."mcp_server_id" = aggregate."mcp_server_id";
+--> statement-breakpoint
 DELETE FROM "session_mcp_servers" AS duplicate
 USING "session_mcp_servers" AS keeper
 WHERE duplicate."tenant_id" = keeper."tenant_id"
@@ -64,7 +74,6 @@ CREATE POLICY "scheduler_recovery_discovery" ON "sessions"
   FOR SELECT
   USING (
     "scheduled_from_branch" = true
-    AND "schedule_id" IS NOT NULL
     AND "scheduled_run_at" IS NOT NULL
     AND "scheduler_init_completed_at" IS NULL
     AND current_setting('agor.system_scope', true) = 'scheduler_discovery'

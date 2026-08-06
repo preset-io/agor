@@ -157,7 +157,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('scheduler HA (PostgreSQL)'
     const claims = await Promise.all(
       Array.from({ length: 5 }, () =>
         runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
-          new TaskRepository(scoped).claimDispatch(taskId, TaskStatus.CREATED, {
+          new TaskRepository(scoped).claimDispatchAndProjectSession(taskId, TaskStatus.CREATED, {
             status: TaskStatus.DISPATCHING,
           })
         )
@@ -218,6 +218,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('scheduler HA (PostgreSQL)'
     const byId = new Map(discovered.map((ref) => [ref.schedule_id, ref.tenant_id]));
     expect(byId.get(a.scheduleId)).toBe(a.tenantId);
     expect(byId.get(b.scheduleId)).toBe(b.tenantId);
+
+    await runWithTenantDatabaseScope(db, a.tenantId, async (scoped) => {
+      await new ScheduleRepository(scoped).delete(a.scheduleId);
+      expect((await new SessionRepository(scoped).findById(pendingA.session_id))?.schedule_id).toBe(
+        undefined
+      );
+    });
 
     const recoveries = await runWithSystemDatabaseScope(
       db,

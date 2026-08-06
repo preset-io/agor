@@ -15,6 +15,7 @@ import {
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import type { Branch, Schedule, Session, Task, UserID } from '@agor/core/types';
 import {
+  SessionStatus,
   TaskStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -117,7 +118,10 @@ async function seedRunnableSchedule(
 
 function createSchedulerApp(db: SchedulerDb) {
   const sessions = new SessionRepository(db);
-  const createSession = vi.fn((data: Partial<Session>, _params?: unknown) => sessions.create(data));
+  const sessionEvent = vi.fn();
+  const removeSession = vi.fn(async (id: string) => {
+    await sessions.delete(id);
+  });
   const prompt = vi.fn(
     async (data: { prompt: string; idempotencyTaskId: string }, params: any) =>
       ({
@@ -131,9 +135,9 @@ function createSchedulerApp(db: SchedulerDb) {
     service: (path: string) => {
       if (path === 'sessions') {
         return {
-          create: createSession,
+          emit: sessionEvent,
           patch: (id: string, data: Partial<Session>) => sessions.update(id, data),
-          remove: vi.fn(),
+          remove: removeSession,
         };
       }
       if (path === '/sessions/:id/prompt') return { create: prompt };
@@ -141,7 +145,7 @@ function createSchedulerApp(db: SchedulerDb) {
       throw new Error(`Unexpected service: ${path}`);
     },
   } as unknown as ConstructorParameters<typeof SchedulerService>[1];
-  return { app, createSession, prompt };
+  return { app, prompt, removeSession, sessionEvent };
 }
 
 describe('scheduler HA occurrence recovery', () => {
@@ -262,6 +266,68 @@ describe('scheduler HA occurrence recovery', () => {
     }
   });
 
+  dbTest('recovers an admitted occurrence after its schedule is deleted', async ({ db }) => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    try {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-deleted-recovery-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        { agentic_tool: 'claude-code' }
+      );
+      const initialTaskId = generateId();
+      const session = await new SessionRepository(db).create({
+        session_id: generateId(),
+        branch_id: schedule.branch_id,
+        created_by: creator.user_id,
+        agentic_tool: 'claude-code',
+        status: 'idle',
+        scheduled_from_branch: true,
+        scheduled_run_at: NOW,
+        schedule_id: schedule.schedule_id,
+        custom_context: {
+          scheduled_run: {
+            rendered_prompt: 'prompt preserved before schedule deletion',
+            run_index: 1,
+            initial_task_id: initialTaskId,
+            schedule_config_snapshot: {
+              schedule_id: schedule.schedule_id,
+              cron: schedule.cron_expression,
+              timezone: 'UTC',
+              retention: schedule.retention,
+              allow_concurrent_runs: schedule.allow_concurrent_runs,
+              mcp_server_ids: [],
+            },
+          },
+        },
+      });
+      await new ScheduleRepository(db).delete(schedule.schedule_id);
+
+      expect((await new SessionRepository(db).findById(session.session_id))?.schedule_id).toBe(
+        undefined
+      );
+      const { app, prompt } = createSchedulerApp(db);
+      await (
+        new SchedulerService(db, app, { tenantId: 'default' }) as unknown as {
+          tick(): Promise<unknown>;
+        }
+      ).tick();
+
+      expect(prompt).toHaveBeenCalledOnce();
+      expect(prompt.mock.calls[0][0]).toMatchObject({
+        prompt: 'prompt preserved before schedule deletion',
+        idempotencyTaskId: initialTaskId,
+      });
+      expect(
+        await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
+      ).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   dbTest('five concurrent scheduler instances create one occurrence', async ({ db }) => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
     try {
@@ -273,7 +339,7 @@ describe('scheduler HA occurrence recovery', () => {
         },
         { agentic_tool: 'claude-code' }
       );
-      const { app, prompt } = createSchedulerApp(db);
+      const { app, prompt, sessionEvent } = createSchedulerApp(db);
       const schedulers = Array.from(
         { length: 5 },
         (_, index) =>
@@ -296,6 +362,7 @@ describe('scheduler HA occurrence recovery', () => {
         1
       );
       expect(new Set(prompt.mock.calls.map((call) => call[0].idempotencyTaskId)).size).toBe(1);
+      expect(sessionEvent.mock.calls.filter(([event]) => event === 'created')).toHaveLength(1);
     } finally {
       nowSpy.mockRestore();
     }
@@ -410,6 +477,58 @@ describe('scheduler HA occurrence recovery', () => {
       }
     }
   );
+
+  dbTest('retention defers active overflow occurrences until they are terminal', async ({ db }) => {
+    const { creator, schedule: createdSchedule } = await seedRunnableSchedule(
+      db,
+      {
+        email: `scheduler-retention-active-${Math.random()}@example.com`,
+        name: 'Schedule creator',
+      },
+      { agentic_tool: 'claude-code' }
+    );
+    const schedule = await new ScheduleRepository(db).update(createdSchedule.schedule_id, {
+      retention: 1,
+    });
+    const sessions = new SessionRepository(db);
+    const olderActive = await sessions.create({
+      session_id: generateId(),
+      branch_id: schedule.branch_id,
+      created_by: creator.user_id,
+      agentic_tool: 'claude-code',
+      status: SessionStatus.RUNNING,
+      scheduled_from_branch: true,
+      scheduled_run_at: NOW - 60_000,
+      schedule_id: schedule.schedule_id,
+    });
+    const newest = await sessions.create({
+      session_id: generateId(),
+      branch_id: schedule.branch_id,
+      created_by: creator.user_id,
+      agentic_tool: 'claude-code',
+      status: SessionStatus.COMPLETED,
+      scheduled_from_branch: true,
+      scheduled_run_at: NOW,
+      schedule_id: schedule.schedule_id,
+    });
+    await sessions.markScheduledInitializationComplete(olderActive.session_id);
+    await sessions.markScheduledInitializationComplete(newest.session_id);
+    const { app, removeSession } = createSchedulerApp(db);
+    const scheduler = new SchedulerService(db, app);
+
+    await (
+      scheduler as unknown as { enforceRetentionPolicy(schedule: Schedule): Promise<void> }
+    ).enforceRetentionPolicy(schedule);
+    expect(removeSession).not.toHaveBeenCalled();
+    expect(await sessions.findById(olderActive.session_id)).not.toBeNull();
+
+    await sessions.update(olderActive.session_id, { status: SessionStatus.COMPLETED });
+    await (
+      scheduler as unknown as { enforceRetentionPolicy(schedule: Schedule): Promise<void> }
+    ).enforceRetentionPolicy(schedule);
+    expect(removeSession).toHaveBeenCalledWith(olderActive.session_id, { provider: undefined });
+    expect(await sessions.findById(olderActive.session_id)).toBeNull();
+  });
 });
 
 describe('renderSchedulePrompt', () => {
@@ -631,7 +750,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
         configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
       }
     );
-    const { app, createSession, prompt } = createSchedulerApp(db);
+    const { app, prompt } = createSchedulerApp(db);
     const scheduler = new SchedulerService(db, app);
 
     await scheduler.executeScheduleNow({
@@ -639,14 +758,13 @@ describe('materializeScheduleAgenticToolConfig', () => {
       triggeredBy: creator.user_id,
     });
 
-    expect(createSession).toHaveBeenCalledOnce();
-    expect(createSession.mock.calls[0][0]).toMatchObject({
+    const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+    expect(created).toMatchObject({
       created_by: creator.user_id,
       agentic_tool: 'codex',
       agentic_tool_preset_id: undefined,
       model_config: { mode: 'exact', model: 'gpt-5.4' },
     });
-    expect(createSession.mock.calls[0][1]).toEqual({ _agenticConfigResolved: true });
     expect(prompt).toHaveBeenCalledOnce();
   });
 
@@ -683,15 +801,14 @@ describe('materializeScheduleAgenticToolConfig', () => {
           codex: { source: 'preset', preset_id: preset.preset_id },
         },
       });
-      const { app, createSession, prompt } = createSchedulerApp(db);
+      const { app, prompt } = createSchedulerApp(db);
 
       await new SchedulerService(db, app).executeScheduleNow({
         scheduleId: schedule.schedule_id,
         triggeredBy: creator.user_id,
       });
 
-      expect(createSession).toHaveBeenCalledOnce();
-      const created = createSession.mock.calls[0][0];
+      const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
       expect({
         agentic_tool_preset_id: created.agentic_tool_preset_id,
         permission_config: created.permission_config,
@@ -712,7 +829,6 @@ describe('materializeScheduleAgenticToolConfig', () => {
           updated_at: expect.any(String),
         },
       });
-      expect(createSession.mock.calls[0][1]).toEqual({ _agenticConfigResolved: true });
       expect(prompt).toHaveBeenCalledOnce();
     }
   );
@@ -738,7 +854,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
         configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
       }
     );
-    const { app, createSession } = createSchedulerApp(db);
+    const { app } = createSchedulerApp(db);
     const expected = resolveSessionDefaults({ agenticTool: 'codex', user: null });
 
     await new SchedulerService(db, app).executeScheduleNow({
@@ -746,14 +862,15 @@ describe('materializeScheduleAgenticToolConfig', () => {
       triggeredBy: creator.user_id,
     });
 
-    expect(createSession.mock.calls[0][0]).toMatchObject({
+    const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+    expect(created).toMatchObject({
       permission_config: expected.permission_config,
       model_config: {
         ...expected.model_config,
         updated_at: expect.any(String),
       },
     });
-    expect(createSession.mock.calls[0][0].model_config?.model).not.toBe('stale-user-model');
+    expect(created.model_config?.model).not.toBe('stale-user-model');
   });
 
   dbTest(
@@ -771,14 +888,14 @@ describe('materializeScheduleAgenticToolConfig', () => {
           model_config: { mode: 'exact', model: 'gpt-5.4' },
         }
       );
-      const { app, createSession, prompt } = createSchedulerApp(db);
+      const { app, prompt } = createSchedulerApp(db);
 
       await new SchedulerService(db, app).executeScheduleNow({
         scheduleId: schedule.schedule_id,
         triggeredBy: creator.user_id,
       });
-      expect(createSession).toHaveBeenCalledOnce();
-      expect(createSession.mock.calls[0][0].model_config?.model).not.toBe('gpt-5.4');
+      const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+      expect(created.model_config?.model).not.toBe('gpt-5.4');
       expect(prompt).toHaveBeenCalledOnce();
     }
   );
@@ -794,7 +911,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
         },
         { agentic_tool: 'claude-code-cli' }
       );
-      const { app, createSession, prompt } = createSchedulerApp(db);
+      const { app, prompt } = createSchedulerApp(db);
 
       const run = new SchedulerService(db, app).executeScheduleNow({
         scheduleId: schedule.schedule_id,
@@ -805,7 +922,9 @@ describe('materializeScheduleAgenticToolConfig', () => {
         name: 'ScheduleNotReadyError',
         code: 'schedule_agentic_tool_removed',
       } satisfies Partial<ScheduleNotReadyError>);
-      expect(createSession).not.toHaveBeenCalled();
+      expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+        0
+      );
       expect(prompt).not.toHaveBeenCalled();
     }
   );
@@ -821,7 +940,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
         },
         { agentic_tool: 'claude-code-cli' }
       );
-      const { app, createSession, prompt } = createSchedulerApp(db);
+      const { app, prompt } = createSchedulerApp(db);
       const scheduler = new SchedulerService(db, app);
       const cronNow = NOW + 30_000;
 
@@ -840,7 +959,9 @@ describe('materializeScheduleAgenticToolConfig', () => {
       expect(updated?.next_run_at).toBeGreaterThan(cronNow);
       expect(updated?.last_run_at).toBeUndefined();
       expect(updated?.last_run_session_id).toBeUndefined();
-      expect(createSession).not.toHaveBeenCalled();
+      expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+        0
+      );
       expect(prompt).not.toHaveBeenCalled();
     }
   );

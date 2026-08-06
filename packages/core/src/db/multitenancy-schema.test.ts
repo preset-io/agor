@@ -121,6 +121,7 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain(
       'ON "session_mcp_servers" ("tenant_id", "session_id", "mcp_server_id")'
     );
+    expect(migration).toContain('bool_or("enabled")');
     expect(migration.match(/CREATE UNIQUE INDEX/g)).toHaveLength(2);
   });
 });

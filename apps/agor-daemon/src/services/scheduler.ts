@@ -39,8 +39,10 @@
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
+import { analyticsLogger } from '@agor/core/analytics';
 import {
   InvalidScheduleAgenticToolConfigError,
+  isTenantAgenticToolEnabled,
   normalizePersistedScheduleAgenticToolConfig,
   unixUserModeRequiresUsername,
 } from '@agor/core/config';
@@ -66,7 +68,7 @@ import {
   TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { Forbidden } from '@agor/core/feathers';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type {
   Branch,
   MCPServerID,
@@ -94,8 +96,8 @@ import {
   materializedAgenticToolConfigurationToScheduleConfig,
   scheduleAgenticToolConfigToSource,
 } from '../utils/agentic-configuration-sources.js';
+import { buildSessionCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import type { SessionParams } from './sessions.js';
 
 /**
  * Session statuses that count as "actively consuming the branch" for
@@ -491,7 +493,7 @@ export class SchedulerService {
         }
         try {
           await runWithTenantContext(ref.tenantId, () =>
-            this.recoverIncompleteSession(ref.sessionId, ref.scheduleId, ref.scheduledRunAt, now)
+            this.recoverIncompleteSession(ref.sessionId, ref.scheduledRunAt, now)
           );
           stats.processed += 1;
         } catch (error) {
@@ -549,7 +551,6 @@ export class SchedulerService {
   private async findIncompleteSessionRefs(): Promise<
     Array<{
       sessionId: SessionID;
-      scheduleId: ScheduleID;
       scheduledRunAt: number;
       tenantId?: TenantID | string;
     }>
@@ -570,7 +571,6 @@ export class SchedulerService {
       }
       return refs.map((ref) => ({
         sessionId: ref.session_id,
-        scheduleId: ref.schedule_id,
         scheduledRunAt: ref.scheduled_run_at,
         tenantId: tenantId ?? ref.tenant_id,
       }));
@@ -836,7 +836,6 @@ export class SchedulerService {
         `Schedule ${schedule.schedule_id} references missing branch ${schedule.branch_id}`
       );
     }
-
     // Prepare all configuration outside the admission transaction. The only
     // work performed while the schedule row is locked is existing/busy checks
     // and the session insert.
@@ -859,6 +858,13 @@ export class SchedulerService {
       );
     }
     const cfg = resolvedConfig.config;
+    if (
+      !(await this.withTenantDatabase(() =>
+        isTenantAgenticToolEnabled(resolvedConfig.activeTool, this.db)
+      ))
+    ) {
+      throw new BadRequest(`${resolvedConfig.activeTool} is disabled for this workspace`);
+    }
     const effectiveMcpIds =
       schedule.mcp_server_ids !== undefined
         ? schedule.mcp_server_ids
@@ -933,9 +939,11 @@ export class SchedulerService {
             },
           },
         };
-        const created = await this.app
-          .service('sessions')
-          .create(session, { _agenticConfigResolved: true } as SessionParams);
+        // This is an already-materialized internal occurrence admission, not a
+        // public Session create. Keep the schedule lock around only the row
+        // checks and repository insert; Feathers validation/hooks (including
+        // Unix process launch side effects) belong outside this critical path.
+        const created = await this.sessionRepo.create(session);
         return { outcome: 'created', session: created } as const;
       });
     } catch (error) {
@@ -947,6 +955,20 @@ export class SchedulerService {
       );
       if (!winner) throw error;
       admission = { outcome: 'existing', session: winner };
+    }
+
+    if (admission.outcome === 'created') {
+      emitServiceEvent(this.app, {
+        path: 'sessions',
+        event: 'created',
+        data: admission.session,
+        id: admission.session.session_id,
+      });
+      analyticsLogger.track(
+        'session.created',
+        buildSessionCreatedAnalyticsProperties(admission.session),
+        { userId: admission.session.created_by }
+      );
     }
 
     if (admission.outcome === 'busy') {
@@ -988,7 +1010,7 @@ export class SchedulerService {
     await this.config.testHooks?.afterSessionAdmission?.(admission.session);
 
     await this.initializeScheduledSession({
-      schedule,
+      scheduleId: schedule.schedule_id,
       session: admission.session,
       creator,
       fallbackPrompt: renderedPrompt,
@@ -996,31 +1018,24 @@ export class SchedulerService {
       recovering,
     });
 
-    // Finalization is ordered retention -> cursor -> completion marker. The
-    // marker, rather than the cron cursor, lets the bounded recovery scan find
-    // manual occurrences and failures that outlive the cron grace window.
-    await this.enforceRetentionPolicy(schedule);
-    await this.config.testHooks?.afterRetention?.(admission.session);
-    await this.updateScheduleMetadata(schedule, scheduledRunAt, admission.session.session_id, now);
-    await this.config.testHooks?.afterMetadata?.(admission.session);
-    await this.withTenantDatabase(() =>
-      this.sessionRepo.markScheduledInitializationComplete(admission.session.session_id)
-    );
+    await this.finalizeScheduledSession({
+      schedule,
+      scheduleId: schedule.schedule_id,
+      session: admission.session,
+      scheduledRunAt,
+      now,
+      runTestHooks: true,
+    });
     return admission.session;
   }
 
   private async recoverIncompleteSession(
     sessionId: SessionID,
-    scheduleId: ScheduleID,
     scheduledRunAt: number,
     now: number
   ): Promise<void> {
     const session = await this.withTenantDatabase(() => this.sessionRepo.findById(sessionId));
-    if (
-      !session ||
-      session.schedule_id !== scheduleId ||
-      session.scheduled_run_at !== scheduledRunAt
-    ) {
+    if (!session?.scheduled_from_branch || session.scheduled_run_at !== scheduledRunAt) {
       return;
     }
     if (
@@ -1030,43 +1045,119 @@ export class SchedulerService {
     ) {
       return;
     }
+    const stored = session.custom_context?.scheduled_run;
+    const scheduleId = (session.schedule_id ?? stored?.schedule_config_snapshot?.schedule_id) as
+      | ScheduleID
+      | undefined;
+    if (!scheduleId) {
+      throw new Error(
+        `Scheduled Session ${session.session_id} has no live or snapshotted schedule identity`
+      );
+    }
     const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
-    if (!schedule) return;
-    const branch = await this.withTenantDatabase(() => this.branchRepo.findById(session.branch_id));
-    if (!branch) return;
     const creator = await this.withTenantDatabase(() => this.userRepo.findById(session.created_by));
     if (!creator) throw new Error(`Scheduled Session creator ${session.created_by} not found`);
-    const fallbackMcpIds =
-      schedule.mcp_server_ids !== undefined
-        ? schedule.mcp_server_ids
-        : branch.mcp_server_ids && branch.mcp_server_ids.length > 0
-          ? branch.mcp_server_ids
-          : [];
+
+    // Every occurrence admitted by the HA scheduler snapshots its rendered
+    // prompt and effective MCP IDs before the Session insert. A live Schedule
+    // is therefore optional during recovery: ON DELETE SET NULL must not turn
+    // an admitted occurrence into permanently invisible work.
+    let fallbackPrompt = stored?.rendered_prompt;
+    let fallbackMcpIds = stored?.schedule_config_snapshot?.mcp_server_ids;
+    if ((fallbackPrompt === undefined || fallbackMcpIds === undefined) && schedule) {
+      const branch = await this.withTenantDatabase(() =>
+        this.branchRepo.findById(session.branch_id)
+      );
+      if (!branch) return;
+      fallbackPrompt ??= renderSchedulePrompt(schedule.prompt, branch, schedule, scheduledRunAt);
+      fallbackMcpIds ??=
+        schedule.mcp_server_ids !== undefined
+          ? schedule.mcp_server_ids
+          : branch.mcp_server_ids && branch.mcp_server_ids.length > 0
+            ? branch.mcp_server_ids
+            : [];
+    }
+    if (fallbackPrompt === undefined) {
+      throw new Error(
+        `Scheduled Session ${session.session_id} has no snapshotted prompt and its Schedule no longer exists`
+      );
+    }
 
     await this.initializeScheduledSession({
-      schedule,
+      scheduleId,
       session,
       creator,
-      fallbackPrompt: renderSchedulePrompt(schedule.prompt, branch, schedule, scheduledRunAt),
-      fallbackMcpIds,
+      fallbackPrompt,
+      fallbackMcpIds: fallbackMcpIds ?? [],
       recovering: true,
     });
-    await this.enforceRetentionPolicy(schedule);
-    await this.updateScheduleMetadata(schedule, scheduledRunAt, session.session_id, now);
+    await this.finalizeScheduledSession({
+      schedule,
+      scheduleId,
+      session,
+      scheduledRunAt,
+      now,
+      runTestHooks: false,
+    });
+  }
+
+  /**
+   * Finalize one initialized occurrence without requiring its live Schedule.
+   * Ordering is retention -> schedule cursor -> Session marker. If schedule
+   * deletion wins a race during finalization, snapshot-backed initialization
+   * is still complete and the FK-independent marker may safely be written.
+   */
+  private async finalizeScheduledSession(input: {
+    schedule: Schedule | null;
+    scheduleId: ScheduleID;
+    session: Session;
+    scheduledRunAt: number;
+    now: number;
+    runTestHooks: boolean;
+  }): Promise<void> {
+    const { schedule, scheduleId, session, scheduledRunAt, now, runTestHooks } = input;
+    if (schedule) {
+      try {
+        await this.enforceRetentionPolicy(schedule);
+        if (runTestHooks) await this.config.testHooks?.afterRetention?.(session);
+        await this.updateScheduleMetadata(schedule, scheduledRunAt, session.session_id, now);
+        if (runTestHooks) await this.config.testHooks?.afterMetadata?.(session);
+      } catch (error) {
+        const stillExists = await this.withTenantDatabase(() =>
+          this.scheduleRepo.findById(scheduleId)
+        );
+        if (stillExists || !(error instanceof EntityNotFoundError)) throw error;
+        this.logDeletedScheduleRecovery(scheduleId, session.session_id);
+      }
+    } else {
+      this.logDeletedScheduleRecovery(scheduleId, session.session_id);
+    }
     await this.withTenantDatabase(() =>
       this.sessionRepo.markScheduledInitializationComplete(session.session_id)
     );
   }
 
+  private logDeletedScheduleRecovery(scheduleId: ScheduleID, sessionId: SessionID): void {
+    console.info('[DistributedWork]', {
+      component: 'scheduler',
+      event: 'occurrence_recovered_after_schedule_delete',
+      instance_id: this.config.workIdentity.instanceId,
+      boot_id: this.config.workIdentity.bootId,
+      tenant_id: getCurrentTenantId(),
+      schedule_id: scheduleId,
+      session_id: sessionId,
+    });
+  }
+
   private async initializeScheduledSession(input: {
-    schedule: Schedule;
+    scheduleId: ScheduleID;
     session: Session;
     creator: User;
     fallbackPrompt: string;
     fallbackMcpIds: readonly string[];
     recovering: boolean;
   }): Promise<Task> {
-    const { schedule, session, creator } = input;
+    const { scheduleId, session, creator } = input;
     const stored = session.custom_context?.scheduled_run;
     const existingTasks = await this.withTenantDatabase(() =>
       this.taskRepo.findBySession(session.session_id)
@@ -1125,7 +1216,7 @@ export class SchedulerService {
           instance_id: this.config.workIdentity.instanceId,
           boot_id: this.config.workIdentity.bootId,
           tenant_id: getCurrentTenantId(),
-          schedule_id: schedule.schedule_id,
+          schedule_id: scheduleId,
           session_id: session.session_id,
           mcp_server_id: serverId,
         });
@@ -1156,7 +1247,7 @@ export class SchedulerService {
       instance_id: this.config.workIdentity.instanceId,
       boot_id: this.config.workIdentity.bootId,
       tenant_id: tenantId,
-      schedule_id: schedule.schedule_id,
+      schedule_id: scheduleId,
       session_id: session.session_id,
       task_id: task.task_id,
       task_status: task.status,
@@ -1233,7 +1324,34 @@ export class SchedulerService {
         orderByScheduledRunAt: 'desc',
       })
     );
-    const sessionsToDelete = mine.slice(schedule.retention);
+    const overflow = mine.slice(schedule.retention);
+    const sessionsToDelete: Session[] = [];
+    for (const session of overflow) {
+      const initializationComplete = await this.withTenantDatabase(() =>
+        this.sessionRepo.isScheduledInitializationComplete(session.session_id)
+      );
+      const sessionTasks = await this.withTenantDatabase(() =>
+        this.taskRepo.findBySession(session.session_id)
+      );
+      const active =
+        ACTIVE_SESSION_STATUSES.includes(session.status) ||
+        !initializationComplete ||
+        sessionTasks.some((task) => ACTIVE_TASK_STATUSES.includes(task.status));
+      if (active) {
+        console.info('[DistributedWork]', {
+          component: 'scheduler',
+          event: 'retention_skipped_active_occurrence',
+          instance_id: this.config.workIdentity.instanceId,
+          boot_id: this.config.workIdentity.bootId,
+          tenant_id: getCurrentTenantId(),
+          schedule_id: schedule.schedule_id,
+          session_id: session.session_id,
+          session_status: session.status,
+        });
+        continue;
+      }
+      sessionsToDelete.push(session);
+    }
 
     if (sessionsToDelete.length > 0) {
       const sessionService = this.app.service('sessions');
