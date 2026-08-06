@@ -65,7 +65,14 @@ import type {
   User,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, MessageRole, ROLES, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  hasMinimumRole,
+  isTaskPendingDispatch,
+  MessageRole,
+  ROLES,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
@@ -1079,6 +1086,33 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   ): Promise<Task> {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Missing active tenant context for task executor startup');
+    const persistedMessageSource = task.metadata?.source ?? options.messageSource;
+    const runtimeMessageSource =
+      persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
+        ? persistedMessageSource
+        : undefined;
+
+    // A stable scheduled Task that has crossed the dispatch fence needs only
+    // deterministic projection repair. Do not make that reconciliation depend
+    // on mutable launch-time state (tool enablement, preset validity, or user
+    // defaults): no new executor launch will occur on this path.
+    if (options.stableInitialMessageId && !isTaskPendingDispatch(task)) {
+      const messageStartIndex =
+        task.message_range?.start_index ??
+        (await runWithTenantDatabaseScope(db, tenantId, () =>
+          sessionsRepository.countMessages(task.session_id)
+        ));
+      const startTimestamp =
+        task.message_range?.start_timestamp ?? task.started_at ?? new Date().toISOString();
+      await ensureInitialUserMessage(task, params, {
+        messageStartIndex,
+        startTimestamp,
+        messageSource: runtimeMessageSource,
+        stableMessageId: options.stableInitialMessageId,
+      });
+      return task;
+    }
+
     const {
       agenticToolEnabled,
       messageStartIndex,
@@ -1097,11 +1131,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
     const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
-    const persistedMessageSource = task.metadata?.source ?? options.messageSource;
-    const runtimeMessageSource =
-      persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
-        ? persistedMessageSource
-        : undefined;
     const startTimestamp = new Date().toISOString();
 
     // The daemon persists launch intent and writes required sentinel git fields
@@ -1115,20 +1144,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       config.execution?.executor_command_template ? 'templated' : 'local'
     );
 
-    if (task.status !== TaskStatus.CREATED && task.status !== TaskStatus.QUEUED) {
-      // A concurrent daemon may have won between the caller's read and this
-      // handoff. Repair the deterministic transcript projection before
-      // returning the durable task as the idempotent success path.
-      if (options.stableInitialMessageId) {
-        await ensureInitialUserMessage(task, params, {
-          messageStartIndex: task.message_range?.start_index ?? messageStartIndex,
-          startTimestamp: task.message_range?.start_timestamp ?? task.started_at ?? startTimestamp,
-          messageSource: runtimeMessageSource,
-          stableMessageId: options.stableInitialMessageId,
-        });
-      }
-      return task;
-    }
+    if (!isTaskPendingDispatch(task)) return task;
 
     // Atomically claim queued/created → launch status. Process-local session
     // locks reduce contention, but this expected-state transition is the
@@ -1373,18 +1389,62 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         let session = await sessionsService.get(id, params);
         id = session.session_id;
-        const activeAgenticTool = requireActiveAgenticTool(session.agentic_tool);
+        const taskRepo = new TaskRepository(db);
 
-        if (!(await isTenantAgenticToolEnabled(activeAgenticTool, db))) {
-          throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
-        }
-        session = await sessionsService.materializeAgenticToolPreset(session, params);
-        if (
-          session.agentic_tool_preset_id &&
-          data.permissionMode !== undefined &&
-          data.permissionMode !== session.permission_config?.mode
-        ) {
-          throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
+        const reconcileDurablyDispatchedTask = async (): Promise<Task | null> => {
+          if (!data.idempotencyTaskId) return null;
+          const prior = await taskRepo.findById(data.idempotencyTaskId);
+          if (!prior) return null;
+          if (prior.session_id !== id) {
+            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+          }
+          const expectedCreator = params.user?.user_id ?? session.created_by;
+          if (prior.created_by !== expectedCreator || prior.full_prompt !== data.prompt) {
+            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+          }
+          if (isTaskPendingDispatch(prior)) return null;
+
+          await ensureInitialUserMessage(prior, params, {
+            messageStartIndex:
+              prior.message_range?.start_index ??
+              (await sessionsRepository.countMessages(prior.session_id)),
+            startTimestamp:
+              prior.message_range?.start_timestamp ?? prior.started_at ?? new Date().toISOString(),
+            messageSource:
+              prior.metadata?.source === 'gateway' || prior.metadata?.source === 'agor'
+                ? prior.metadata.source
+                : undefined,
+            stableMessageId: data.idempotencyTaskId as MessageID,
+          });
+          return prior;
+        };
+
+        // Scheduled recovery is reconciliation, not a fresh launch admission,
+        // once its stable Task has crossed the durable dispatch fence. Return
+        // that Task before consulting mutable tool/preset/user configuration.
+        const durableTask = await reconcileDurablyDispatchedTask();
+        if (durableTask) return durableTask;
+
+        try {
+          const activeAgenticTool = requireActiveAgenticTool(session.agentic_tool);
+          if (!(await isTenantAgenticToolEnabled(activeAgenticTool, db))) {
+            throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
+          }
+          session = await sessionsService.materializeAgenticToolPreset(session, params);
+          if (
+            session.agentic_tool_preset_id &&
+            data.permissionMode !== undefined &&
+            data.permissionMode !== session.permission_config?.mode
+          ) {
+            throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
+          }
+        } catch (error) {
+          // Another daemon can cross the dispatch fence between the first
+          // stable-Task read and launch admission. Re-check before surfacing a
+          // mutable configuration failure; the winner no longer needs launch.
+          const concurrentlyDurableTask = await reconcileDurablyDispatchedTask();
+          if (concurrentlyDurableTask) return concurrentlyDurableTask;
+          throw error;
         }
 
         // Auto-unarchive on prompt
@@ -1414,7 +1474,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // prompts on an idle session could both observe `status === 'idle'`
         // and both spawn executors. Inside the lock the session is re-read,
         // so the decision is made against the freshest possible state.
-        const taskRepo = new TaskRepository(db);
         if (!params.user?.user_id) {
           throw new NotAuthenticated('Authentication required to prompt a session');
         }

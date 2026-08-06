@@ -82,7 +82,12 @@ import type {
   User,
   UUID,
 } from '@agor/core/types';
-import { isAgenticToolName, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  isAgenticToolName,
+  isTaskPendingDispatch,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import {
   getNextRunTime,
@@ -1055,8 +1060,6 @@ export class SchedulerService {
       );
     }
     const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
-    const creator = await this.withTenantDatabase(() => this.userRepo.findById(session.created_by));
-    if (!creator) throw new Error(`Scheduled Session creator ${session.created_by} not found`);
 
     // Every occurrence admitted by the HA scheduler snapshots its rendered
     // prompt and effective MCP IDs before the Session insert. A live Schedule
@@ -1086,7 +1089,6 @@ export class SchedulerService {
     await this.initializeScheduledSession({
       scheduleId,
       session,
-      creator,
       fallbackPrompt,
       fallbackMcpIds: fallbackMcpIds ?? [],
       recovering: true,
@@ -1152,12 +1154,12 @@ export class SchedulerService {
   private async initializeScheduledSession(input: {
     scheduleId: ScheduleID;
     session: Session;
-    creator: User;
+    creator?: User;
     fallbackPrompt: string;
     fallbackMcpIds: readonly string[];
     recovering: boolean;
   }): Promise<Task> {
-    const { scheduleId, session, creator } = input;
+    const { scheduleId, session } = input;
     const stored = session.custom_context?.scheduled_run;
     const existingTasks = await this.withTenantDatabase(() =>
       this.taskRepo.findBySession(session.session_id)
@@ -1168,6 +1170,17 @@ export class SchedulerService {
       // Deterministic legacy fallback: table-local UUID identity may equal the
       // Session ID and is safe across every recovering daemon.
       (session.session_id as import('@agor/core/types').TaskID);
+    const existingInitialTask = existingTasks.find((task) => task.task_id === initialTaskId);
+    let creator = input.creator;
+    if (!creator && (!existingInitialTask || isTaskPendingDispatch(existingInitialTask))) {
+      const recoveredCreator = await this.withTenantDatabase(() =>
+        this.userRepo.findById(session.created_by)
+      );
+      if (!recoveredCreator) {
+        throw new Error(`Scheduled Session creator ${session.created_by} not found`);
+      }
+      creator = recoveredCreator;
+    }
     const renderedPrompt = stored?.rendered_prompt ?? input.fallbackPrompt;
     const snapshotMcpIds = stored?.schedule_config_snapshot?.mcp_server_ids;
     const effectiveMcpIds = snapshotMcpIds ?? input.fallbackMcpIds;
@@ -1235,7 +1248,7 @@ export class SchedulerService {
       {
         route: { id: session.session_id },
         provider: undefined,
-        user: creator,
+        ...(creator ? { user: creator } : {}),
         ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
       } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
     )) as Task;

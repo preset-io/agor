@@ -171,6 +171,19 @@ export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
 }
 
 /**
+ * A Task whose daemon-side launch claim has not yet become durable.
+ *
+ * Every other status is downstream of the CREATED/QUEUED -> DISPATCHING
+ * fence (or terminal) and must never be sent through launch admission again
+ * merely to reconcile projections around that durable Task.
+ */
+export function isTaskPendingDispatch(task: Pick<Task, 'status'>): task is Pick<Task, 'status'> & {
+  status: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
+} {
+  return task.status === TaskStatus.CREATED || task.status === TaskStatus.QUEUED;
+}
+
+/**
  * Task states owned by an active executor turn. These block starting another
  * task in the same session and should be stopped/failed before queue drain can
  * continue. CREATED and QUEUED are intentionally excluded: CREATED is a

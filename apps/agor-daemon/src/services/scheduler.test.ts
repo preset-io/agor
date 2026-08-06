@@ -10,6 +10,7 @@ import {
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { resolveSessionDefaults } from '@agor/core/sessions';
@@ -20,7 +21,7 @@ import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, type MockInstance, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   materializeScheduleAgenticToolConfig,
@@ -265,6 +266,88 @@ describe('scheduler HA occurrence recovery', () => {
       nowSpy.mockRestore();
     }
   });
+
+  dbTest(
+    'already-dispatched recovery does not reload mutable creator launch state',
+    async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+      let creatorLookup: MockInstance<UsersRepository['findById']> | undefined;
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          {
+            email: `scheduler-durable-recovery-${Math.random()}@example.com`,
+            name: 'Schedule creator',
+          },
+          { agentic_tool: 'claude-code' }
+        );
+        await new ScheduleRepository(db).update(schedule.schedule_id, { enabled: false });
+        const initialTaskId = generateId();
+        const session = await new SessionRepository(db).create({
+          session_id: generateId(),
+          branch_id: schedule.branch_id,
+          created_by: creator.user_id,
+          agentic_tool: 'claude-code',
+          status: SessionStatus.IDLE,
+          scheduled_from_branch: true,
+          scheduled_run_at: NOW,
+          schedule_id: schedule.schedule_id,
+          custom_context: {
+            scheduled_run: {
+              rendered_prompt: 'already durably dispatching',
+              run_index: 1,
+              initial_task_id: initialTaskId,
+              schedule_config_snapshot: {
+                schedule_id: schedule.schedule_id,
+                cron: schedule.cron_expression,
+                timezone: 'UTC',
+                retention: schedule.retention,
+                allow_concurrent_runs: schedule.allow_concurrent_runs,
+                mcp_server_ids: [],
+              },
+            },
+          },
+        });
+        const tasks = new TaskRepository(db);
+        const pending = await tasks.createPending({
+          task_id: initialTaskId,
+          session_id: session.session_id,
+          full_prompt: 'already durably dispatching',
+          created_by: creator.user_id,
+          status: TaskStatus.CREATED,
+        });
+        await tasks.claimDispatchAndProjectSession(pending.task_id, TaskStatus.CREATED, {
+          status: TaskStatus.DISPATCHING,
+          started_at: new Date(NOW).toISOString(),
+          message_range: {
+            start_index: 0,
+            end_index: 1,
+            start_timestamp: new Date(NOW).toISOString(),
+          },
+        });
+
+        creatorLookup = vi
+          .spyOn(UsersRepository.prototype, 'findById')
+          .mockRejectedValue(new Error('durable recovery must not reload the creator'));
+        const { app, prompt } = createSchedulerApp(db);
+        await (
+          new SchedulerService(db, app, { tenantId: 'default' }) as unknown as {
+            tick(): Promise<unknown>;
+          }
+        ).tick();
+
+        expect(creatorLookup).not.toHaveBeenCalled();
+        expect(prompt).toHaveBeenCalledOnce();
+        expect(prompt.mock.calls[0][1].user).toBeUndefined();
+        expect(
+          await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
+        ).toBe(true);
+      } finally {
+        creatorLookup?.mockRestore();
+        nowSpy.mockRestore();
+      }
+    }
+  );
 
   dbTest('recovers an admitted occurrence after its schedule is deleted', async ({ db }) => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);

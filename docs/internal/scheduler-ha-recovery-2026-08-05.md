@@ -73,7 +73,7 @@ Three audit corrections mattered:
 | After Task insert while CREATED                         | CREATED was outside scheduler recovery/startup orphan handling                          | Retry reuses the same Task and atomically claims DISPATCHING plus its Session RUNNING/task-list projection                                                            |
 | Two daemons starting the Task                           | Process-local session lock did not cross daemon boundaries                              | row-locked expected-state transition has one winner; losers return durable state                                                                                      |
 | After DISPATCHING, before transcript/service projection | SQLite could leave an IDLE Session without its Task/message projection                  | Task claim + Session projection are one dialect-native transaction; the stable initial message ID lets recovery repair the transcript idempotently                    |
-| After durable DISPATCHING projection                    | Runtime supervision owns the durable launch intent                                      | Same ownership, now explicit: scheduler does not replay DISPATCHING work                                                                                              |
+| After durable DISPATCHING projection                    | Runtime supervision owns the durable launch intent                                      | Scheduler repairs the stable transcript projection and finalizes initialization without replaying work or re-running mutable creator/tool/preset launch admission     |
 | After prompt dispatch, before metadata                  | Existing Session caused metadata advance, but initialization was not checked            | Task state is reconciled, then retention and metadata run                                                                                                             |
 | During retention                                        | failure was swallowed after metadata, so cleanup could be missed indefinitely           | retention precedes metadata; active/incomplete overflow runs are deferred, absence after a concurrent delete is idempotent, and other failures leave the schedule due |
 | After metadata, before completion marker                | occurrence was usually treated complete because the cursor had advanced                 | bounded incomplete-Session discovery reconciles once more, then writes the marker                                                                                     |
@@ -116,6 +116,14 @@ the fence:
 - Task status conditionally moving to DISPATCHING elects the launcher and
   atomically projects RUNNING/task membership onto the Session in both dialects;
 - the existing heartbeat/runtime supervisor owns work after DISPATCHING.
+
+Once the stable initial Task is no longer CREATED/QUEUED, recovery is deliberately
+a projection-only path. It verifies the Task identity and snapshotted prompt, repairs
+the deterministic initial message if needed, and returns before tool enablement,
+preset materialization, or creator lookup. Disabling a tool, deleting a preset, or
+removing the creator after durable dispatch therefore cannot strand the scheduler
+completion marker. Those checks still apply while the Task is absent or pending,
+because crossing DISPATCHING would launch new work.
 
 Adding an expiring scheduler lease would create a dangerous pause-after-expiry window
 around executor launch unless every side effect were independently fenced. The
