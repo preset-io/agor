@@ -616,3 +616,52 @@ describe('MessagesRepository JSON and edge cases', () => {
     expect(created.content).toBe(specialContent);
   });
 });
+
+describe('MessagesRepository.mutateMetadataLocked', () => {
+  dbTest('elects one widget resolver across concurrent SQLite writers', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const message = createMessageData({
+      session_id: sessionId,
+      type: 'widget_request',
+      role: MessageRole.SYSTEM,
+      metadata: {
+        widget: {
+          widget_id: generateId() as MessageID,
+          widget_type: 'test',
+          schema_version: 1,
+          params: {},
+          status: 'pending',
+          requested_at: new Date().toISOString(),
+        },
+      },
+    });
+    message.metadata!.widget!.widget_id = message.message_id;
+    await new MessagesRepository(db).create(message);
+
+    const attempts = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        new MessagesRepository(db).mutateMetadataLocked(message.message_id, (metadata) => {
+          const widget = metadata?.widget;
+          if (widget?.status !== 'pending') return null;
+          return {
+            ...metadata,
+            widget: {
+              ...widget,
+              status: 'resolving',
+              resolution_claim: {
+                token: `claim-${index}`,
+                action: index % 2 === 0 ? 'submit' : 'dismiss',
+                claimed_at: new Date().toISOString(),
+                claimed_by: 'test-user' as UUID,
+              },
+            },
+          };
+        })
+      )
+    );
+
+    expect(attempts.filter((attempt) => attempt.changed)).toHaveLength(1);
+    const stored = await new MessagesRepository(db).findById(message.message_id);
+    expect(stored?.metadata?.widget?.status).toBe('resolving');
+  });
+});

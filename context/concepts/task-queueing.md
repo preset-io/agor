@@ -25,6 +25,9 @@ client's earlier Session GET.
    assigns `max(queue_position) + 1`. The Session row is the per-queue
    sequencer; an ordinary transaction without this lock is insufficient under
    PostgreSQL `READ COMMITTED`. A partial unique index is defense in depth.
+   The prompt endpoint carries tenant identity through a long-route scope;
+   admission itself is a bound short repository unit, so the Session lock is
+   released before title/config work, claim preparation, or event delivery.
 2. **Attempt the head** — the prompt route immediately offers that Task to
    `spawnTaskExecutor`. If the Session is promptable and the Task is the
    durable queue head, it may leave the queue without waiting for a later scan.
@@ -34,8 +37,8 @@ client's earlier Session GET.
    Session promptability, and the expected Task state. The winning transaction
    writes `queued|created -> dispatching` and the Session's running projection.
 4. **Launch after commit** — only `outcome: 'claimed'` may schedule executor
-   launch (a loser may only perform deterministic transcript repair for a
-   stable internal occurrence). No transaction is held while spawning an
+   launch (a loser may only perform deterministic transcript repair after the
+   winner has crossed the fence). No transaction is held while spawning an
    executor or doing external work. The authenticated executor later claims
    `dispatching -> running`.
 
@@ -59,7 +62,18 @@ Queued rows survive daemon restart. Completion, Stop, callbacks, widgets,
 scheduled initialization, and the recovery worker may all trigger draining;
 duplicate triggers converge at the same durable claim. Callback and widget
 occurrences use deterministic Task IDs so competing producers converge on one
-queued row and one position.
+queued row and one position. Their stable initial-message identity is persisted
+in `Task.metadata.initial_message_id`; a later drainer therefore writes exactly
+the same transcript row. A losing admission that still observes `queued` writes
+no transcript row.
+
+Widget submit/dismiss uses a separate short Message-row claim before registry
+or connector work. Only `pending -> resolving` may perform that work; the
+opaque claim token alone may publish `submitted|dismissed`. An interrupted
+attempt remains durably `resolving` and is not replayed automatically because
+the prior side effect may already have happened. A handler that reports an
+error releases the widget to `pending` with a secret-free failure code for an
+explicit retry; handlers must make that reported-error retry idempotent.
 
 ## Invariants
 
@@ -81,6 +95,7 @@ queued row and one position.
 - Fleet recovery: `apps/agor-daemon/src/services/session-queue-worker.ts`
 - Local coalescer: `apps/agor-daemon/src/utils/session-turn-lock.ts`
 - Producer identities: `apps/agor-daemon/src/utils/durable-task-id.ts`
+- Widget resolution fence: `apps/agor-daemon/src/widgets/resolution-store.ts`
 - Reactive client: `packages/client/src/reactive-session.ts`
 
 For post-claim executor lifecycle, heartbeat, SDK pulse/watchdog, and

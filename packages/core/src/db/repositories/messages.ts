@@ -8,12 +8,38 @@
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  isSQLiteDatabase,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
 import { type MessageInsert, type MessageRow, messages } from '../schema';
 import { visibleSessionReferenceAccessExists } from './branch-access';
 
 export class MessagesRepository {
   constructor(private db: Database) {}
+
+  /** Retry a whole locked metadata mutation so SQLite re-reads after contention. */
+  private async runMetadataMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
+    try {
+      return await mutation();
+    } catch (error) {
+      const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      if (
+        isSQLiteDatabase(this.db) &&
+        attempt < 4 &&
+        /SQLITE_BUSY|database is locked|database is busy/i.test(text)
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+        return this.runMetadataMutation(mutation, attempt + 1);
+      }
+      throw error;
+    }
+  }
 
   /**
    * Convert database row to Message type
@@ -86,6 +112,50 @@ export class MessagesRepository {
       .one();
 
     return row ? this.rowToMessage(row) : null;
+  }
+
+  /**
+   * Atomically transform one Message's metadata under a short row lock.
+   *
+   * The callback is deliberately synchronous: callers may decide a durable
+   * state transition while holding the lock, but cannot accidentally perform
+   * network/process work inside the transaction. Returning `null` leaves the
+   * row unchanged and returns the latest locked value to the caller.
+   */
+  async mutateMetadataLocked(
+    messageId: MessageID,
+    mutation: (metadata: Message['metadata'], message: Message) => Message['metadata'] | null
+  ): Promise<{ changed: boolean; message: Message }> {
+    return this.runMetadataMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(txDb, this.db, messages, eq(messages.message_id, messageId));
+          const row = await select(txDb)
+            .from(messages)
+            .where(eq(messages.message_id, messageId))
+            .one();
+          if (!row) throw new Error(`Message ${messageId} not found`);
+
+          const current = this.rowToMessage(row);
+          const metadata = mutation(current.metadata, current);
+          if (metadata === null) return { changed: false, message: current };
+
+          const data = row.data as {
+            content: Message['content'];
+            tool_uses?: Message['tool_uses'];
+            metadata?: Message['metadata'];
+          };
+          const updatedRow = await update(txDb, messages)
+            .set({ data: { ...data, metadata } })
+            .where(eq(messages.message_id, messageId))
+            .returning()
+            .one();
+          return { changed: true, message: this.rowToMessage(updatedRow) };
+        },
+        { sqliteImmediate: true }
+      )
+    );
   }
 
   /**

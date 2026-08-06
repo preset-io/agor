@@ -9,13 +9,15 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
-import type { SessionID, TaskID, UUID } from '../types/id';
+import type { MessageID, SessionID, TaskID, UUID } from '../types/id';
+import { MessageRole } from '../types/message';
 import { TaskStatus } from '../types/task';
 import { createDatabase, type Database } from './client';
 import { isPostgresDatabase } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import {
   BranchRepository,
+  MessagesRepository,
   RepoRepository,
   SessionRepository,
   TaskRepository,
@@ -235,5 +237,75 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Session Task queue HA (Pos
     expect(Object.keys(refs[0] ?? {}).sort()).toEqual(
       ['first_queued_at', 'session_id', 'tenant_id'].sort()
     );
+  });
+
+  it('elects one widget resolver and hides the claim across tenants', async () => {
+    const a = await seedTenant(db, `widget-tenant-a-${generateId()}`);
+    const b = await seedTenant(db, `widget-tenant-b-${generateId()}`);
+    const sessionB = await createSession(db, b);
+    const widgetId = generateId() as MessageID;
+    await runWithTenantDatabaseScope(db, b.tenantId, (scoped) =>
+      new MessagesRepository(scoped).create({
+        message_id: widgetId,
+        session_id: sessionB,
+        type: 'widget_request',
+        role: MessageRole.SYSTEM,
+        index: 0,
+        timestamp: new Date().toISOString(),
+        content_preview: 'Resolve me',
+        content: 'Resolve me',
+        metadata: {
+          widget: {
+            widget_id: widgetId,
+            widget_type: 'test',
+            schema_version: 1,
+            params: {},
+            status: 'pending',
+            requested_at: new Date().toISOString(),
+          },
+        },
+      })
+    );
+
+    let externalEffects = 0;
+    const claims = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        runWithTenantDatabaseScope(db, b.tenantId, async (scoped) => {
+          const result = await new MessagesRepository(scoped).mutateMetadataLocked(
+            widgetId,
+            (metadata) => {
+              const widget = metadata?.widget;
+              if (widget?.status !== 'pending') return null;
+              return {
+                ...metadata,
+                widget: {
+                  ...widget,
+                  status: 'resolving',
+                  resolution_claim: {
+                    token: `daemon-${index}`,
+                    action: index % 2 === 0 ? 'submit' : 'dismiss',
+                    claimed_at: new Date().toISOString(),
+                    claimed_by: b.userId,
+                  },
+                },
+              };
+            }
+          );
+          // Mirrors WidgetResolutionStore: only the committed claimant may
+          // cross into registry/external work.
+          if (result.changed) externalEffects += 1;
+          return result;
+        })
+      )
+    );
+    expect(claims.filter((claim) => claim.changed)).toHaveLength(1);
+    expect(externalEffects).toBe(1);
+
+    await runWithTenantDatabaseScope(db, a.tenantId, async (scoped) => {
+      expect(await new MessagesRepository(scoped).findById(widgetId)).toBeNull();
+      await expect(
+        new MessagesRepository(scoped).mutateMetadataLocked(widgetId, () => ({}))
+      ).rejects.toThrow(/not found/);
+    });
   });
 });

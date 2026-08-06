@@ -35,6 +35,7 @@ import type {
   AuthenticatedParams,
   ContentBlock,
   ExecutorTerminationCompleteInput,
+  MessageID,
   Paginated,
   QueryParams,
   RuntimeTelemetryInput,
@@ -1160,9 +1161,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // for backward compat (legacy sessions without callback_created_by).
       const callbackCreator =
         childSession.callback_config?.callback_created_by ?? targetSession.created_by;
+      const callbackTaskId = completionCallbackTaskId(task.task_id, targetSessionId);
       const createCallbackTask = () =>
         this.taskRepo.createPending({
-          task_id: completionCallbackTaskId(task.task_id, targetSessionId),
+          task_id: callbackTaskId,
           session_id: targetSessionId,
           full_prompt: callbackMessage,
           created_by: callbackCreator,
@@ -1173,6 +1175,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             child_session_id: childSession.session_id,
             child_task_id: task.task_id,
             queued_by_user_id: callbackCreator,
+            initial_message_id: callbackTaskId as MessageID,
           },
         });
       const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;

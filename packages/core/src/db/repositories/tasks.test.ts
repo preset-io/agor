@@ -4,14 +4,15 @@
  * Tests for type-safe CRUD operations on tasks with short ID support.
  */
 
-import type { Task, TaskPendingDispatchStatus, UUID } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
+import type { MessageID, Task, TaskPendingDispatchStatus, UUID } from '@agor/core/types';
+import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BranchRepository } from './branches';
+import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
@@ -1975,6 +1976,105 @@ describe('TaskRepository.createPending', () => {
     expect(claim.task.queue_position).toBeUndefined();
     expect((await taskRepo.findById(queued.task_id))?.queue_position).toBeUndefined();
   });
+
+  dbTest(
+    'writes one correctly ordered widget transcript row only after busy-session drain claims it',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionRepo = new SessionRepository(db);
+      const messagesRepo = new MessagesRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const first = await taskRepo.createPending(
+        createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+      );
+      const firstClaim = await taskRepo.claimDispatchAndProjectSession(
+        first.task_id,
+        TaskStatus.QUEUED,
+        { status: TaskStatus.DISPATCHING }
+      );
+      expect(firstClaim.outcome).toBe('claimed');
+      await messagesRepo.create({
+        message_id: generateId() as MessageID,
+        session_id: sessionId,
+        task_id: first.task_id,
+        type: 'user',
+        role: MessageRole.USER,
+        index: 0,
+        timestamp: new Date().toISOString(),
+        content_preview: 'active prompt',
+        content: 'active prompt',
+      });
+
+      const widgetTaskId = generateId();
+      const widgetTask = await taskRepo.createPending({
+        ...createPendingInput({
+          session_id: sessionId,
+          status: TaskStatus.QUEUED,
+          metadata: {
+            system_authored: true,
+            widget_id: generateId() as MessageID,
+            initial_message_id: widgetTaskId as MessageID,
+          },
+        }),
+        task_id: widgetTaskId,
+      });
+      const lost = await taskRepo.claimDispatchAndProjectSession(
+        widgetTask.task_id,
+        TaskStatus.QUEUED,
+        { status: TaskStatus.DISPATCHING }
+      );
+      expect(lost).toMatchObject({
+        outcome: 'condition_changed',
+        task: { status: TaskStatus.QUEUED },
+      });
+      expect(await messagesRepo.findByTaskId(widgetTask.task_id)).toHaveLength(0);
+
+      await taskRepo.update(first.task_id, { status: TaskStatus.COMPLETED });
+      await sessionRepo.update(sessionId, {
+        status: SessionStatus.IDLE,
+        ready_for_prompt: true,
+      });
+      const drained = await taskRepo.claimDispatchAndProjectSession(
+        widgetTask.task_id,
+        TaskStatus.QUEUED,
+        {
+          status: TaskStatus.DISPATCHING,
+          message_range: {
+            start_index: 1,
+            end_index: 2,
+            start_timestamp: new Date().toISOString(),
+          },
+        }
+      );
+      expect(drained.outcome).toBe('claimed');
+      const stableMessageId = drained.task.metadata!.initial_message_id!;
+      if (!(await messagesRepo.findById(stableMessageId))) {
+        await messagesRepo.create({
+          message_id: stableMessageId,
+          session_id: sessionId,
+          task_id: widgetTask.task_id,
+          type: 'user',
+          role: MessageRole.USER,
+          index: drained.task.message_range.start_index,
+          timestamp: drained.task.message_range.start_timestamp,
+          content_preview: widgetTask.full_prompt,
+          content: widgetTask.full_prompt,
+        });
+      }
+      // A replacement daemon repeats reconciliation against the same durable
+      // identity rather than creating a random second row.
+      if (!(await messagesRepo.findById(stableMessageId))) {
+        throw new Error('stable message unexpectedly missing');
+      }
+
+      const widgetMessages = await messagesRepo.findByTaskId(widgetTask.task_id);
+      expect(widgetMessages).toHaveLength(1);
+      expect(widgetMessages[0]).toMatchObject({ message_id: stableMessageId, index: 1 });
+      expect(
+        (await messagesRepo.findBySessionId(sessionId)).map((message) => message.index)
+      ).toEqual([0, 1]);
+    }
+  );
 
   dbTest(
     'should create QUEUED task with queue_position=1 when no other queued tasks',

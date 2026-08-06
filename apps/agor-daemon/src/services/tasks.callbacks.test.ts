@@ -240,6 +240,7 @@ describe('TasksService completion callbacks', () => {
           child_session_id: childSessionId,
           child_task_id: taskId,
           queued_by_user_id: userId,
+          initial_message_id: durableCallbackTaskId,
         }),
       })
     );

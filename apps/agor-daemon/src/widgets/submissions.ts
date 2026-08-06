@@ -9,14 +9,14 @@
  *   1. Load the widget message row by `widget_id` (message_id == widget_id).
  *   2. Authorize: caller is session creator OR has prompt-tier branch RBAC.
  *   3. Idempotency: status MUST be 'pending'.
- *   4. Dispatch to the registry (`applySubmit` for submit; no side-effect
- *      for dismiss).
- *   5. Patch `metadata.widget.status` to 'submitted' / 'dismissed' along
- *      with `result_meta` and `resolved_at`.
+ *   4. Durably claim `pending -> resolving` with an opaque token.
+ *   5. The sole claimant dispatches to the registry (`applySubmit` for
+ *      submit; no external side-effect for dismiss).
  *   6. Queue a system-authored auto-resume task via the existing
  *      `/sessions/:id/prompt` route (the "Never lose a prompt" #1068 path),
  *      unless `auto_resume === false`.
- *   7. Broadcast `widget:resolved` on the per-session Feathers room.
+ *   7. Token-check `resolving -> submitted|dismissed` with result metadata.
+ *   8. Broadcast `widget:resolved` on the per-session Feathers room.
  *
  * Critical security invariant: the `applySubmit` handler is the ONLY place
  * the raw submit body reaches; from `result_meta` onward, no
@@ -24,7 +24,8 @@
  * design doc for the path-by-path enumeration.
  */
 
-import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import { generateId } from '@agor/core/db';
+import { Conflict, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import type {
   Branch,
   Message,
@@ -36,7 +37,9 @@ import type {
 } from '@agor/core/types';
 import { PERMISSION_RANK, resolveBranchPermission } from '../utils/branch-authorization.js';
 import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
+import { structuredLogErrorCode } from '../utils/structured-log.js';
 import { getWidget, type WidgetSubmitCtx } from './registry.js';
+import type { WidgetResolutionStore } from './resolution-store.js';
 
 /**
  * Minimal Feathers-like surface the resolver needs. Typed against a subset
@@ -53,6 +56,10 @@ export interface WidgetResolverApp {
 
 export interface WidgetResolverDeps {
   app: WidgetResolverApp;
+  /** Durable, short-transaction state machine shared by every daemon. */
+  resolutionStore: WidgetResolutionStore;
+  /** Tenant-scoped custom-event publisher; production must not emit globally. */
+  publishResolved?(payload: Record<string, unknown>): void;
   /** Branch ownership lookup — pulled out so tests can stub without RBAC plumbing. */
   isBranchOwner(branchId: string, userId: UserID): Promise<boolean>;
   /** Optional group-aware effective branch permission lookup. */
@@ -100,15 +107,9 @@ export function canResolveWidget(
 }
 
 /**
- * Per-widget in-process serialization. Two concurrent submits (e.g. two
- * browser tabs both posting in the small window between the status check
- * and the message.patch) would each pass the `status === 'pending'` gate
- * and both run side effects: doubled auto-resume tasks, surprise writes.
- *
- * The lock guards the critical section (status check → applySubmit →
- * message.patch → tasks.create). Sufficient for single-daemon deployments,
- * which is the only deployment shape today. A multi-daemon setup would need
- * a DB-level optimistic check; we accept that trade today.
+ * Per-widget in-process coalescing. Correctness comes from the durable
+ * `WidgetResolutionStore` claim; this map only avoids needless same-process
+ * contention and duplicate auth/config reads.
  */
 const inFlightResolutions = new Map<string, Promise<WidgetResolutionResult>>();
 
@@ -128,9 +129,9 @@ export async function resolveWidget(
     throw new NotAuthenticated('Authentication required to resolve a widget');
   }
 
-  // Serialize concurrent resolutions for the same widget (see comment on
-  // `inFlightResolutions`). The second caller will await the first's
-  // outcome and then hit the `status !== 'pending'` rejection.
+  // Coalesce same-process resolutions. Another daemon can still race here;
+  // the durable pending → resolving claim below elects the sole side-effect
+  // owner across the fleet.
   const existing = inFlightResolutions.get(widgetId);
   if (existing) {
     await existing.catch(() => {}); // swallow — we re-check status below
@@ -198,6 +199,7 @@ async function doResolveWidget(
 
   let resultMeta: unknown | undefined;
   let autoResumePrompt: string | undefined;
+  let parsedSubmit: unknown;
 
   // Context for the registry hooks, built for BOTH paths so a widget can gate
   // who may dismiss it (authorizeDismiss), not just who may submit.
@@ -221,11 +223,7 @@ async function doResolveWidget(
     if (!parsed.success) {
       throw new Forbidden(`Invalid submit payload: ${parsed.error.message}`);
     }
-    const submit = parsed.data;
-
-    await entry.applySubmit(ctx, submit, widget.params);
-    resultMeta = entry.buildResultMeta(submit);
-    autoResumePrompt = entry.buildAutoResumePrompt(resultMeta, widget.params);
+    parsedSubmit = parsed.data;
   } else {
     // dismiss — an admin-only widget gates this so a member-level dismissal
     // can't terminally decline a flow its submit path would have rejected.
@@ -237,68 +235,93 @@ async function doResolveWidget(
       : `[Agor] User dismissed a widget request. Do not re-request immediately — ask whether to proceed without, or move on to other work.`;
   }
 
-  // 5. Patch the widget message — flip status, stamp resolution.
-  const newStatus: WidgetMessageMetadata['status'] =
-    action.kind === 'submit' ? 'submitted' : 'dismissed';
-  const updatedWidget: WidgetMessageMetadata = {
-    ...widget,
-    status: newStatus,
-    resolved_at: new Date().toISOString(),
-    submitted_by: caller.user_id,
-    ...(resultMeta !== undefined ? { result_meta: resultMeta } : {}),
-  };
-  await deps.app.service('messages').patch(widgetId, {
-    metadata: {
-      ...(message.metadata ?? {}),
-      widget: updatedWidget,
-    },
+  // 5. Commit the cross-daemon ownership claim before any submit side effect.
+  // No DB transaction remains open while the registry handler, prompt
+  // admission, or any other external/service work runs.
+  const claimToken = generateId();
+  const claim = await deps.resolutionStore.claim(widget.widget_id, {
+    token: claimToken,
+    action: action.kind,
+    claimedAt: new Date().toISOString(),
+    claimedBy: caller.user_id,
   });
-
-  // 6. Auto-resume task (skipped when the agent set auto_resume:false on
-  //    the original tool call). Goes through `/sessions/:id/prompt` so the
-  //    idle-vs-queued branching is identical to a user-typed prompt — the
-  //    "Never lose a prompt" #1068 path.
-  let autoResumeQueued = false;
-  if (widget.auto_resume !== false && autoResumePrompt) {
-    await deps.app.service('/sessions/:id/prompt').create(
-      {
-        prompt: autoResumePrompt,
-        messageSource: 'agor',
-        // The widget message is the durable occurrence identity. Concurrent
-        // resolvers converge on one Task even if both observed `pending`.
-        idempotencyTaskId: widgetAutoResumeTaskId(widget.widget_id),
-        // Stamp traceability fields onto the queued task so the UI can
-        // distinguish system-authored auto-resume prompts from user-typed
-        // ones, and so the resulting task links back to its widget.
-        metadata: {
-          system_authored: true,
-          widget_id: widget.widget_id,
-        },
-      },
-      {
-        // Internal call — no `provider` so RBAC hooks bypass. Submitter is
-        // attributed (`created_by`) for audit; see §5.3 of the design.
-        user: { user_id: caller.user_id },
-        route: { id: message.session_id },
-      }
-    );
-    autoResumeQueued = true;
+  if (claim.outcome !== 'claimed') {
+    const status = claim.message.metadata?.widget?.status ?? 'unavailable';
+    throw new Forbidden(`Widget ${widgetId} is already ${status}; cannot ${action.kind} again.`);
   }
 
-  // 7. Broadcast on the messages service's room (per-session subscribers
-  //    are already wired up to that channel — see register-services.ts).
-  deps.app.service('messages').emit?.('widget:resolved', {
-    widget_id: widget.widget_id,
-    session_id: message.session_id,
-    status: newStatus,
-    result_meta: resultMeta,
-    resolved_at: updatedWidget.resolved_at,
-    submitted_by: caller.user_id,
-  });
+  try {
+    if (action.kind === 'submit') {
+      // The registry entry and parsed payload are established before the
+      // claim; only the durable winner reaches this external-work boundary.
+      await entry!.applySubmit(ctx, parsedSubmit, widget.params);
+      resultMeta = entry!.buildResultMeta(parsedSubmit);
+      autoResumePrompt = entry!.buildAutoResumePrompt(resultMeta, widget.params);
+    }
 
-  return {
-    widget_id: widget.widget_id,
-    status: newStatus,
-    auto_resume_queued: autoResumeQueued,
-  };
+    // 6. Admit auto-resume before publishing terminal widget state. If this
+    // process dies after admission, the stable Task and initial-message IDs
+    // remain discoverable by another daemon's queue worker.
+    let autoResumeQueued = false;
+    if (widget.auto_resume !== false && autoResumePrompt) {
+      await deps.app.service('/sessions/:id/prompt').create(
+        {
+          prompt: autoResumePrompt,
+          messageSource: 'agor',
+          idempotencyTaskId: widgetAutoResumeTaskId(widget.widget_id),
+          metadata: {
+            system_authored: true,
+            widget_id: widget.widget_id,
+            widget_resolved_by_user_id: caller.user_id,
+          },
+        },
+        {
+          // Stable widget identity must also have stable Task attribution.
+          // The widget row records the actual resolver separately.
+          user: { user_id: session.created_by },
+          route: { id: message.session_id },
+        }
+      );
+      autoResumeQueued = true;
+    }
+
+    // 7. Only the claim token can publish the terminal resolution.
+    const newStatus: WidgetMessageMetadata['status'] =
+      action.kind === 'submit' ? 'submitted' : 'dismissed';
+    const resolvedAt = new Date().toISOString();
+    const finished = await deps.resolutionStore.complete(widget.widget_id, claimToken, {
+      status: newStatus,
+      resolvedAt,
+      submittedBy: caller.user_id,
+      resultMeta,
+    });
+    if (finished.outcome !== 'updated') {
+      throw new Conflict(`Widget ${widgetId} resolution claim was lost before completion`);
+    }
+
+    // 8. Broadcast on the messages service's room (per-session subscribers
+    // are already wired up to that channel — see register-services.ts).
+    const resolvedPayload = {
+      widget_id: widget.widget_id,
+      session_id: message.session_id,
+      status: newStatus,
+      result_meta: resultMeta,
+      resolved_at: resolvedAt,
+      submitted_by: caller.user_id,
+    };
+    if (deps.publishResolved) deps.publishResolved(resolvedPayload);
+    else deps.app.service('messages').emit?.('widget:resolved', resolvedPayload);
+
+    return {
+      widget_id: widget.widget_id,
+      status: newStatus,
+      auto_resume_queued: autoResumeQueued,
+    };
+  } catch (error) {
+    await deps.resolutionStore.fail(widget.widget_id, claimToken, {
+      failedAt: new Date().toISOString(),
+      errorCode: structuredLogErrorCode(error),
+    });
+    throw error;
+  }
 }

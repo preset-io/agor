@@ -52,7 +52,9 @@ Add a new `MessageType` value: `'widget_request'`. A widget message is just a ro
       widget_id: MessageID,        // same as message_id — single source of truth
       widget_type: 'env_vars',     // discriminant for the widget registry
       params: { ... },             // widget-type-specific payload (validated by registry schema)
-      status: 'pending' | 'submitted' | 'dismissed' | 'timed_out',
+      status: 'pending' | 'resolving' | 'submitted' | 'dismissed' | 'already_present',
+      resolution_claim?: { token, action, claimed_at, claimed_by },
+      resolution_failure?: { failed_at, error_code },
       requested_at: ISO8601,
       resolved_at?: ISO8601,
       // RESULT_META is widget-type-specific, scrubbed of secret material.
@@ -243,20 +245,28 @@ buildDismissedPrompt: (params) =>
 
 ### 3.5 Task-queue integration (the resolution path)
 
-When `POST /widgets/:widget_id/submit` succeeds, the submit handler does four things in one transaction:
+When `POST /widgets/:widget_id/submit` succeeds, the handler uses short durable
+transitions around (never across) external work:
 
-1. **Persist values** — call `registry[widget_type].applySubmit(ctx, submit)`. For env-vars, this is `users.patch(userId, { env_vars: { [name]: { value, scope } } })`. Encryption + validation happen inside the existing users service.
-2. **Patch the widget message** — `messages.patch(widget_id, { metadata: { ..., widget: { status: 'submitted', result_meta, resolved_at } } })`. The transcript renderer flips to the "submitted" badge.
-3. **Queue the auto-resume task** (if `auto_resume !== false` was passed to the original tool call) — create a new task via the existing task-creation path with:
+1. **Claim resolution** — one short Message-row transaction moves `pending -> resolving` with an opaque token. Competing daemons and submit-vs-dismiss races lose before side effects.
+2. **Persist values** — the claimant calls `registry[widget_type].applySubmit(ctx, submit)` with no Message-row transaction held. For env-vars, this is `users.patch(userId, { env_vars: { [name]: { value, scope } } })`. Encryption + validation happen inside the existing users service.
+3. **Queue the auto-resume task** (if `auto_resume !== false` was passed to the original tool call) through prompt admission with a deterministic Task ID and durable initial-message ID:
    - `role: 'user'`
-   - `created_by_user_id: <submitter>` (audit) but `metadata.system_authored: true` and `metadata.widget_id` for traceability
+   - stable execution attribution to the Session creator; the actual submitter remains in `metadata.widget.submitted_by` and `Task.metadata.widget_resolved_by_user_id`
+   - `metadata.system_authored: true` and `metadata.widget_id` for traceability
    - `content: registry[widget_type].buildAutoResumePrompt(result_meta, params)`
    - The "Never lose a prompt" infrastructure handles queueing-vs-immediate-dispatch based on session busy state.
-4. **Emit `widget:resolved`** — broadcast on the per-session Feathers room so any other connected UI clients refresh.
+4. **Complete resolution** — a second short Message-row transaction accepts only the opaque claim token and moves `resolving -> submitted|dismissed` with sanitized result metadata.
+5. **Emit `widget:resolved`** — publish through the tenant-scoped per-session Feathers path so other connected UI clients refresh.
 
 Dismissal (`POST /widgets/:widget_id/dismiss`) follows the same path but skips step 1 and uses `buildDismissedPrompt` in step 3.
 
-**No daemon-side await. No long-running HTTP. No timeout on the widget itself.** The widget is durable in the messages table; it can sit `pending` for an hour or a day. The user, the session, or the worktree can move on freely.
+**No transaction is held over external work. No timeout on a pending widget.**
+The widget is durable in the messages table; it can sit `pending` for an hour or
+a day. If a handler reports failure, the token is released back to `pending`
+with a secret-free diagnosis and an explicit retry is allowed (handlers must
+write desired state idempotently). A daemon death with an unknown external
+outcome leaves `resolving` as durable diagnosis and is not replayed blindly.
 
 ### 3.6 What happens if the agent doesn't end its turn?
 
@@ -345,14 +355,14 @@ The only access path to values after submission is the standard env-var read pat
 `POST /widgets/:widget_id/submit` is authenticated via existing FeathersJS session auth. The handler MUST verify:
 
 1. The caller's `user_id` matches `widget_message.session.created_by` **OR** the caller has `prompt`-tier RBAC on the worktree (`others_can >= prompt`). This mirrors who can already prompt the session.
-2. The widget is still `pending` (idempotency — double-submit is a no-op, not a re-write).
-3. The widget's `requested_at` is within the configured TTL.
+2. The widget is still `pending`; a short locked `pending -> resolving` claim is
+   the cross-daemon idempotency fence.
 
 CSRF: same protections as every other authenticated daemon endpoint (existing CORS + same-origin policy + JWT).
 
 ### 5.3 RBAC and multi-user
 
-If a _different_ user submits the widget (in a `prompt`-tier multi-user setup): the env var is written to **the executor's identity's** env_vars (= session creator's), because that's whose env the agent will read at retry. **The submitting user is recorded in `result_meta.submitted_by`** for audit. Surfaced to the agent ("submitted by <user>") so the agent can adjust messaging.
+If a _different_ user submits the widget (in a `prompt`-tier multi-user setup): the env var is written to **the executor's identity's** env_vars (= session creator's), because that's whose env the agent will read at retry. **The submitting user is recorded in `metadata.widget.submitted_by` and the auto-resume Task metadata** for audit; submitted values remain excluded.
 
 This is consistent with `dangerously_allow_session_sharing: false` semantics (default-safe). When session sharing is enabled and a collaborator submits a value, the value lands in the original owner's env — that's an explicit security trade-off documented under that flag.
 
@@ -367,7 +377,7 @@ The widget message persists forever in the transcript with `{ names, status, res
 | Malicious agent crafts the `reason`/`instructions` to phish the user                                        | Inputs rendered as **markdown with a strict allow-list** (no `<script>`, no inline event handlers, no auto-load images). Reuse the same sanitizer the artifact consent modal uses.                                                                                                                 |
 | Agent uses a widget to extract a value indirectly (e.g. asks for "type your value, then say it back to me") | The widget message _names_ what's requested; an agent prompting the user to type a value in-chat _instead of_ using the widget is a UX failure but not new attack surface — same as today. Mitigation is the disclaimer copy on the widget itself: "Type values here, never paste them into chat." |
 | Submission endpoint accepts unsolicited writes (no preceding widget request)                                | Endpoint requires a valid `widget_id` matching a `pending` widget message bound to the caller's session. No widget-less submissions.                                                                                                                                                               |
-| Replay attack with a captured submit payload                                                                | Once submitted, status → `submitted`; resubmission rejected on status check.                                                                                                                                                                                                                       |
+| Replay or concurrent submit/dismiss with a captured payload                                                 | Only one locked `pending -> resolving` transition wins; all losing daemons stop before registry/external work. Terminal resubmission is rejected.                                                                                                                                                  |
 | Stored XSS via env-var name                                                                                 | Existing `^[A-Z_][A-Z0-9_]*$` regex precludes anything renderable as HTML.                                                                                                                                                                                                                         |
 
 ---

@@ -156,6 +156,10 @@ import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
+import {
+  shouldReconcileStableInitialMessage,
+  stableInitialMessageIdForTask,
+} from './utils/task-initial-message.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -169,6 +173,7 @@ import {
   type StagedMulterFile,
 } from './utils/upload.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
+import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
 const DEBUG_AUTH_EVENTS =
@@ -997,7 +1002,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   ): Promise<void> {
     if (config.execution?.daemon_writes_user_message === false) return;
 
-    const messageRepo = new MessagesRepository(db);
+    const messageRepo = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
     if (input.stableMessageId) {
       const existing = await messageRepo.findById(input.stableMessageId);
       if (existing) {
@@ -1131,6 +1136,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   ): Promise<Task> {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Missing active tenant context for task executor startup');
+    const stableInitialMessageId = stableInitialMessageIdForTask(
+      task,
+      options.stableInitialMessageId
+    );
     const persistedMessageSource = task.metadata?.source ?? options.messageSource;
     const runtimeMessageSource =
       persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
@@ -1141,8 +1150,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // deterministic projection repair. Do not make that reconciliation depend
     // on mutable launch-time state (tool enablement, preset validity, or user
     // defaults): no new executor launch will occur on this path.
-    if (options.stableInitialMessageId && !isTaskPendingDispatch(task)) {
-      await reconcileStableInitialUserMessage(task, params, options.stableInitialMessageId, {
+    if (shouldReconcileStableInitialMessage(task, stableInitialMessageId)) {
+      await reconcileStableInitialUserMessage(task, params, stableInitialMessageId, {
         messageSource: runtimeMessageSource,
       });
       return task;
@@ -1222,11 +1231,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           observed_status: dispatchClaim.task.status,
         })
       );
-      if (options.stableInitialMessageId) {
+      if (shouldReconcileStableInitialMessage(dispatchClaim.task, stableInitialMessageId)) {
         await reconcileStableInitialUserMessage(
           dispatchClaim.task,
           params,
-          options.stableInitialMessageId,
+          stableInitialMessageId,
           {
             messageStartIndex,
             startTimestamp,
@@ -1243,8 +1252,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // write is harmless if the daemon path is enabled.
     // Prefer task.metadata.source (set when the task was queued) over the
     // request's messageSource — the latter applies only to this drain tick.
-    if (options.stableInitialMessageId) {
-      await reconcileStableInitialUserMessage(updatedTask, params, options.stableInitialMessageId, {
+    if (stableInitialMessageId) {
+      await reconcileStableInitialUserMessage(updatedTask, params, stableInitialMessageId, {
         messageStartIndex,
         startTimestamp,
         messageSource: runtimeMessageSource,
@@ -1390,7 +1399,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Prompt endpoint
   // ============================================================================
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/sessions/:id/prompt',
     {
@@ -1445,7 +1454,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         let session = await sessionsService.get(id, params);
         id = session.session_id;
-        const taskRepo = new TaskRepository(db);
+        const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
 
         const reconcileDurablyDispatchedTask = async (): Promise<Task | null> => {
           if (!data.idempotencyTaskId) return null;
@@ -1463,7 +1472,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           await reconcileStableInitialUserMessage(
             prior,
             params,
-            data.idempotencyTaskId as MessageID
+            prior.metadata?.initial_message_id ?? (data.idempotencyTaskId as MessageID)
           );
           return prior;
         };
@@ -1547,6 +1556,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
 
             const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy);
+            if (data.idempotencyTaskId) {
+              taskMetadata.initial_message_id = data.idempotencyTaskId as MessageID;
+            }
             const task = await taskRepo.createPending({
               task_id: data.idempotencyTaskId,
               session_id: id as SessionID,
@@ -2837,14 +2849,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const source =
       persistedSource === 'gateway' || persistedSource === 'agor' ? persistedSource : undefined;
     const scheduledInitialTaskId = queuedSession.custom_context?.scheduled_run?.initial_task_id;
+    const stableInitialMessageId = stableInitialMessageIdForTask(
+      stillQueued,
+      scheduledInitialTaskId === stillQueued.task_id
+        ? (scheduledInitialTaskId as MessageID)
+        : undefined
+    );
     const admitted = await spawnTaskExecutor(
       stillQueued,
       {
         stream: true,
         messageSource: source,
-        ...(scheduledInitialTaskId === stillQueued.task_id
-          ? { stableInitialMessageId: scheduledInitialTaskId as MessageID }
-          : {}),
+        ...(stableInitialMessageId ? { stableInitialMessageId } : {}),
       },
       taskParams
     );
@@ -2962,16 +2978,34 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // auto-resume task queueing, and the `widget:resolved` broadcast.
   // ============================================================================
 
+  const widgetResolutionMessages = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
+  const widgetResolutionBranches = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
+    resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
+      emitServiceEvent(app, {
+        path: 'messages',
+        event: 'patched',
+        data: message,
+        id: message.message_id,
+      })
+    ),
+    publishResolved: (payload: Record<string, unknown>) =>
+      emitServiceEvent(app, {
+        path: 'messages',
+        event: 'widget:resolved',
+        data: payload,
+        method: 'patch',
+        id: payload.widget_id as string,
+      }),
     isBranchOwner: async (branchId: string, userId: UUID) =>
-      branchRepository.isOwner(branchId as import('@agor/core/types').BranchID, userId),
+      widgetResolutionBranches.isOwner(branchId as import('@agor/core/types').BranchID, userId),
     resolveBranchPermission: async (branch: import('@agor/core/types').Branch, userId: UUID) =>
-      branchRepository.resolveUserPermission(branch, userId),
+      widgetResolutionBranches.resolveUserPermission(branch, userId),
   };
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/submit',
     {
@@ -2995,7 +3029,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/dismiss',
     {

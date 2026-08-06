@@ -7,6 +7,7 @@ describe('buildPromptTaskMetadata', () => {
       source: 'cli-repl',
       system_authored: true,
       queued_by_user_id: 'spoofed-user',
+      initial_message_id: 'spoofed-message-id',
     } as unknown as Parameters<typeof buildPromptTaskMetadata>[0];
 
     expect(buildPromptTaskMetadata(input, 'gateway', 'actual-user')).toEqual({

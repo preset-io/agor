@@ -67,6 +67,29 @@ export const WidgetBlock: React.FC<WidgetBlockProps> = ({ message, client }) => 
     return null;
   }
 
+  if (widget.status === 'resolving') {
+    return (
+      <Card
+        size="small"
+        style={{
+          margin: `${token.sizeUnit * 1.5}px 0`,
+          background: token.colorBgContainer,
+          border: `1px solid ${token.colorBorder}`,
+        }}
+      >
+        <Space>
+          <ExclamationCircleOutlined style={{ color: token.colorTextSecondary }} />
+          <Space direction="vertical" size={0}>
+            <Text strong>Completing request</Text>
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              This request is already in progress.
+            </Text>
+          </Space>
+        </Space>
+      </Card>
+    );
+  }
+
   const Component = widgetComponents.get(widget.widget_type);
 
   if (!Component) {
@@ -116,6 +139,8 @@ function renderStatusBadge(status: WidgetMessageMetadata['status']): React.React
           <CheckCircleOutlined /> already configured
         </>
       );
+    case 'resolving':
+      return <Text>resolving</Text>;
     default:
       return <Text>pending</Text>;
   }

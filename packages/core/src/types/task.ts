@@ -1,6 +1,6 @@
 // src/types/task.ts
 import type { PersistedAgenticToolName } from './agentic-tool';
-import type { MessageID, SessionID, TaskID } from './id';
+import type { MessageID, SessionID, TaskID, UserID } from './id';
 import type { PersistedMessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
@@ -151,6 +151,15 @@ export interface TaskMetadata {
    * this prompt. Links the task back to the originating widget for audit.
    */
   widget_id?: MessageID;
+  /** User who resolved the widget; Task execution remains session-owner attributed. */
+  widget_resolved_by_user_id?: UserID;
+  /**
+   * Durable identity of the Task's first transcript row. Internal
+   * idempotent producers persist this alongside the Task so any daemon that
+   * later drains the queue can reconcile the same row instead of inventing a
+   * process-local message identity.
+   */
+  initial_message_id?: MessageID;
 }
 
 /**

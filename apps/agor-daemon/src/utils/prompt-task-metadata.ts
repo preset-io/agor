@@ -1,7 +1,7 @@
 import type { MessageSource, TaskMetadata } from '@agor/core/types';
 
 /** Caller-supplied prompt metadata may not claim transport provenance. */
-export type PromptTaskMetadataInput = Omit<Partial<TaskMetadata>, 'source'>;
+export type PromptTaskMetadataInput = Omit<Partial<TaskMetadata>, 'source' | 'initial_message_id'>;
 
 /**
  * Merge caller metadata with daemon-owned provenance.
@@ -15,7 +15,11 @@ export function buildPromptTaskMetadata(
   source: MessageSource | undefined,
   queuedByUserId?: string
 ): TaskMetadata {
-  const { source: _discardedSource, ...safeInput } = (input ?? {}) as Partial<TaskMetadata>;
+  const {
+    source: _discardedSource,
+    initial_message_id: _discardedInitialMessageId,
+    ...safeInput
+  } = (input ?? {}) as Partial<TaskMetadata>;
   return {
     ...safeInput,
     ...(queuedByUserId ? { queued_by_user_id: queuedByUserId } : {}),

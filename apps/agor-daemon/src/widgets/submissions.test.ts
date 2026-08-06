@@ -21,6 +21,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
 import { _resetWidgetRegistryForTests, registerWidget, type WidgetRegistryEntry } from './registry';
+import { WidgetResolutionStore } from './resolution-store';
 import { canResolveWidget, resolveWidget } from './submissions';
 
 interface MockServiceCall {
@@ -41,6 +42,20 @@ function makeApp(records: { message: Message; session: Session; branch: Branch }
   const calls: MockServiceCall[] = [];
   const events: MockEvent[] = [];
   let currentMessage = records.message;
+  const resolutionStore = new WidgetResolutionStore({
+    async mutateMetadataLocked(_id, mutation) {
+      const metadata = mutation(currentMessage.metadata, currentMessage);
+      if (metadata === null) return { changed: false, message: currentMessage };
+      currentMessage = { ...currentMessage, metadata };
+      calls.push({
+        service: 'messages',
+        method: 'patch',
+        id: currentMessage.message_id,
+        data: { metadata },
+      });
+      return { changed: true, message: currentMessage };
+    },
+  });
 
   const services = {
     messages: {
@@ -119,6 +134,7 @@ function makeApp(records: { message: Message; session: Session; branch: Branch }
 
   return {
     app,
+    resolutionStore,
     calls,
     events,
     get currentMessage() {
@@ -253,13 +269,13 @@ describe('resolveWidget', () => {
   it('submits a pending widget: dispatches to applySubmit, patches status, queues auto-resume, broadcasts', async () => {
     const { applySubmit } = registerTestWidget();
     const fixtures = makeFixtures();
-    const { app, calls, events } = makeApp(fixtures);
+    const { app, calls, events, resolutionStore } = makeApp(fixtures);
 
     const result = await resolveWidget(
       'widget-msg-1',
       { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, isBranchOwner: async () => false }
+      { app: app as never, resolutionStore, isBranchOwner: async () => false }
     );
 
     expect(result).toEqual({
@@ -271,7 +287,15 @@ describe('resolveWidget', () => {
 
     // Message was patched with submitted status + result_meta + resolved_at +
     // submitted_by. The secret value MUST NOT appear in the patch.
-    const messagePatch = calls.find((c) => c.service === 'messages' && c.method === 'patch');
+    const messagePatch = calls
+      .filter(
+        (c) =>
+          c.service === 'messages' &&
+          c.method === 'patch' &&
+          (c.data as { metadata?: { widget?: { status?: string } } }).metadata?.widget?.status ===
+            'submitted'
+      )
+      .at(-1);
     expect(messagePatch).toBeDefined();
     const patchedData = messagePatch?.data as {
       metadata: {
@@ -293,15 +317,21 @@ describe('resolveWidget', () => {
     const promptData = promptCall?.data as {
       prompt: string;
       idempotencyTaskId: string;
-      metadata: { system_authored: boolean; widget_id: string };
+      metadata: {
+        system_authored: boolean;
+        widget_id: string;
+        widget_resolved_by_user_id: string;
+      };
     };
     expect(promptData.prompt).toContain('HUBSPOT_API_KEY');
     expect(promptData.prompt).toContain('global');
     expect(promptData.prompt).not.toContain('secret-key');
     expect(promptData.metadata.system_authored).toBe(true);
     expect(promptData.metadata.widget_id).toBe('widget-msg-1');
+    expect(promptData.metadata.widget_resolved_by_user_id).toBe('creator-user-id');
     expect(promptData.idempotencyTaskId).toBe(widgetAutoResumeTaskId('widget-msg-1' as MessageID));
     expect(promptData.idempotencyTaskId).not.toBe('widget-msg-1');
+    expect(calls.indexOf(promptCall!)).toBeLessThan(calls.indexOf(messagePatch!));
 
     // WebSocket event fired.
     const event = events.find((e) => e.event === 'widget:resolved');
@@ -312,14 +342,14 @@ describe('resolveWidget', () => {
   it('rejects a submission from a non-creator without prompt-tier RBAC', async () => {
     registerTestWidget();
     const fixtures = makeFixtures({ branchOthersCan: 'session' });
-    const { app } = makeApp(fixtures);
+    const { app, resolutionStore } = makeApp(fixtures);
 
     await expect(
       resolveWidget(
         'widget-msg-1',
         { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
         { user_id: 'someone-else' as UserID },
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/session creator|prompt/);
   });
@@ -327,42 +357,49 @@ describe('resolveWidget', () => {
   it('allows a submission from a non-creator with prompt-tier RBAC', async () => {
     registerTestWidget();
     const fixtures = makeFixtures({ branchOthersCan: 'prompt' });
-    const { app } = makeApp(fixtures);
+    const { app, calls, resolutionStore } = makeApp(fixtures);
 
     const result = await resolveWidget(
       'widget-msg-1',
       { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
       { user_id: 'someone-else' as UserID },
-      { app: app as never, isBranchOwner: async () => false }
+      { app: app as never, resolutionStore, isBranchOwner: async () => false }
     );
     expect(result.status).toBe('submitted');
+    const promptCall = calls.find(
+      (call) => call.service === '/sessions/:id/prompt' && call.method === 'create'
+    );
+    expect(promptCall?.params).toMatchObject({ user: { user_id: 'creator-user-id' } });
+    expect(promptCall?.data).toMatchObject({
+      metadata: { widget_resolved_by_user_id: 'someone-else' },
+    });
   });
 
   it('rejects a double-submit (idempotency: status must be pending)', async () => {
     registerTestWidget();
     const fixtures = makeFixtures({ widgetStatus: 'submitted' });
-    const { app } = makeApp(fixtures);
+    const { app, resolutionStore } = makeApp(fixtures);
 
     await expect(
       resolveWidget(
         'widget-msg-1',
         { kind: 'submit', body: { value: 'k', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/already submitted/);
   });
 
   it('rejects an unknown widget type on submit (registry miss)', async () => {
     const fixtures = makeFixtures({ widgetType: 'unknown_type' });
-    const { app } = makeApp(fixtures);
+    const { app, resolutionStore } = makeApp(fixtures);
 
     await expect(
       resolveWidget(
         'widget-msg-1',
         { kind: 'submit', body: {} },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/not registered/);
   });
@@ -370,13 +407,13 @@ describe('resolveWidget', () => {
   it('skips auto-resume task when auto_resume: false', async () => {
     registerTestWidget();
     const fixtures = makeFixtures({ autoResume: false });
-    const { app, calls } = makeApp(fixtures);
+    const { app, calls, resolutionStore } = makeApp(fixtures);
 
     const result = await resolveWidget(
       'widget-msg-1',
       { kind: 'submit', body: { value: 'k', scope: 'global' } },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, isBranchOwner: async () => false }
+      { app: app as never, resolutionStore, isBranchOwner: async () => false }
     );
 
     expect(result.auto_resume_queued).toBe(false);
@@ -387,13 +424,13 @@ describe('resolveWidget', () => {
     const applySubmit = vi.fn(async () => {});
     registerTestWidget(applySubmit);
     const fixtures = makeFixtures();
-    const { app, calls } = makeApp(fixtures);
+    const { app, calls, resolutionStore } = makeApp(fixtures);
 
     const result = await resolveWidget(
       'widget-msg-1',
       { kind: 'dismiss' },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, isBranchOwner: async () => false }
+      { app: app as never, resolutionStore, isBranchOwner: async () => false }
     );
 
     expect(result.status).toBe('dismissed');
@@ -409,13 +446,13 @@ describe('resolveWidget', () => {
 
   it('dismissal works even for an unknown widget type (fallback prompt)', async () => {
     const fixtures = makeFixtures({ widgetType: 'unknown_type' });
-    const { app, calls } = makeApp(fixtures);
+    const { app, calls, resolutionStore } = makeApp(fixtures);
 
     const result = await resolveWidget(
       'widget-msg-1',
       { kind: 'dismiss' },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, isBranchOwner: async () => false }
+      { app: app as never, resolutionStore, isBranchOwner: async () => false }
     );
 
     expect(result.status).toBe('dismissed');
@@ -435,14 +472,14 @@ describe('resolveWidget', () => {
       }
     });
     const fixtures = makeFixtures();
-    const { app, calls } = makeApp(fixtures);
+    const { app, calls, resolutionStore } = makeApp(fixtures);
 
     await expect(
       resolveWidget(
         'widget-msg-1',
         { kind: 'dismiss' },
         { user_id: 'creator-user-id' as UserID, role: 'member' },
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/admin/i);
 
@@ -458,14 +495,14 @@ describe('resolveWidget', () => {
       }
     });
     const fixtures = makeFixtures();
-    const { app, calls } = makeApp(fixtures);
+    const { app, calls, resolutionStore } = makeApp(fixtures);
 
     await expect(
       resolveWidget(
         'widget-msg-1',
         { kind: 'dismiss' },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/admin/i);
 
@@ -479,13 +516,13 @@ describe('resolveWidget', () => {
       }
     });
     const fixtures = makeFixtures();
-    const { app } = makeApp(fixtures);
+    const { app, resolutionStore } = makeApp(fixtures);
 
     const result = await resolveWidget(
       'widget-msg-1',
       { kind: 'dismiss' },
       { user_id: 'creator-user-id' as UserID, role: 'admin' },
-      { app: app as never, isBranchOwner: async () => false }
+      { app: app as never, resolutionStore, isBranchOwner: async () => false }
     );
 
     expect(result.status).toBe('dismissed');
@@ -494,14 +531,14 @@ describe('resolveWidget', () => {
   it('throws NotAuthenticated when caller is undefined', async () => {
     registerTestWidget();
     const fixtures = makeFixtures();
-    const { app } = makeApp(fixtures);
+    const { app, resolutionStore } = makeApp(fixtures);
 
     await expect(
       resolveWidget(
         'widget-msg-1',
         { kind: 'submit', body: { value: 'k', scope: 'global' } },
         undefined,
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/Authentication/);
   });
@@ -509,19 +546,19 @@ describe('resolveWidget', () => {
   it('rejects an invalid submit body (Zod schema mismatch)', async () => {
     registerTestWidget();
     const fixtures = makeFixtures();
-    const { app } = makeApp(fixtures);
+    const { app, resolutionStore } = makeApp(fixtures);
 
     await expect(
       resolveWidget(
         'widget-msg-1',
         { kind: 'submit', body: { scope: 'invalid-scope' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/Invalid submit/);
   });
 
-  it('propagates structured per-field applySubmit errors without patching the widget', async () => {
+  it('propagates applySubmit errors and durably diagnoses the claimed attempt', async () => {
     const { applySubmit } = registerTestWidget(
       vi.fn(async () => {
         throw new BadRequest('Field validation failed', {
@@ -530,27 +567,35 @@ describe('resolveWidget', () => {
       })
     );
     const fixtures = makeFixtures();
-    const { app, calls } = makeApp(fixtures);
+    const { app, calls, resolutionStore } = makeApp(fixtures);
 
     await expect(
       resolveWidget(
         'widget-msg-1',
         { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       )
     ).rejects.toMatchObject({
       data: { field_errors: { HUBSPOT_API_KEY: 'Invalid saved value selection' } },
     });
 
     expect(applySubmit).toHaveBeenCalledTimes(1);
-    expect(calls.find((c) => c.service === 'messages' && c.method === 'patch')).toBeUndefined();
+    const patches = calls.filter((c) => c.service === 'messages' && c.method === 'patch');
+    expect(patches).toHaveLength(2);
+    const failed = patches.at(-1)?.data as {
+      metadata: { widget: { status: string; resolution_failure?: { error_code: string } } };
+    };
+    expect(failed.metadata.widget.status).toBe('pending');
+    expect(failed.metadata.widget.resolution_failure?.error_code).toBeTruthy();
+    expect(JSON.stringify(failed)).not.toContain('secret-key');
+    expect(calls.find((c) => c.service === '/sessions/:id/prompt')).toBeUndefined();
   });
 
   it('serializes concurrent resolutions on the same widget — only one applySubmit fires', async () => {
     const { applySubmit } = registerTestWidget();
     const fixtures = makeFixtures();
-    const { app } = makeApp(fixtures);
+    const { app, resolutionStore } = makeApp(fixtures);
 
     // Two callers hit submit in the same tick. The lock should let one
     // through to terminal state; the second sees `status !== 'pending'` and
@@ -560,13 +605,13 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'one', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       ),
       resolveWidget(
         'widget-msg-1',
         { kind: 'submit', body: { value: 'two', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isBranchOwner: async () => false }
+        { app: app as never, resolutionStore, isBranchOwner: async () => false }
       ),
     ]);
 
