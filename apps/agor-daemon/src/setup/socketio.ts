@@ -932,14 +932,18 @@ export function createSocketIOConfig(
     // so we need to join the user room here when the login event fires.
     app.on('login', (authResult: unknown, context: { connection?: unknown; params?: unknown }) => {
       if (!context.connection) return;
-      const result = authResult as { user?: { user_id?: string } };
+      const result = authResult as {
+        user?: { user_id?: string; _isServiceAccount?: boolean };
+      };
       const userId = result.user?.user_id;
       if (!userId) return;
 
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
-          logAuthenticated(socket, userId);
+          const isService =
+            result.user?._isServiceAccount === true || isTerminalExecutorIdentity(result.user);
+          logAuthenticated(socket, isService ? undefined : userId);
           // Terminal-executor identities get no user room (see connection handler).
           if (!isTerminalExecutorIdentity(result.user)) {
             socket.join(userRoomName(userId));

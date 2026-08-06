@@ -36,6 +36,7 @@ import {
   type SocketIOOptions,
   tenantChannelName,
   tenantUserChannelName,
+  userRoomName,
 } from './socketio';
 
 // ---------------------------------------------------------------------------
@@ -413,6 +414,80 @@ describe('Socket.IO lifecycle logging', () => {
     );
     expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('joined user room'));
   });
+
+  it.each([
+    {
+      kind: 'full service',
+      user: {
+        user_id: 'executor-service',
+        email: 'executor@agor.internal',
+        role: 'service',
+        _isServiceAccount: true,
+      },
+      joinsUserRoom: true,
+    },
+    {
+      kind: 'terminal executor',
+      user: {
+        user_id: 'executor-service',
+        email: 'executor@agor.internal',
+        role: 'terminal-executor',
+        _isTerminalExecutor: true,
+        terminal_user_id: ALICE,
+      },
+      joinsUserRoom: false,
+    },
+  ])('logs post-connect $kind authentication as service', ({ user, joinsUserRoom }) => {
+    const { app, io } = buildHarness();
+    const socket = makeSocket('post-connect-service');
+    connect(io, socket);
+
+    const connection = {};
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.({ user }, { connection });
+
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(logSpy).toHaveBeenCalledWith('socket authenticated: post-connect-service service');
+    expect(socket.joined.has(userRoomName('executor-service'))).toBe(joinsUserRoom);
+  });
+
+  it.each([
+    { kind: 'full service', terminalUserId: undefined, joinsUserRoom: true },
+    { kind: 'terminal executor', terminalUserId: ALICE, joinsUserRoom: false },
+  ])(
+    'deduplicates handshake $kind authentication followed by the same service login',
+    async ({ terminalUserId, joinsUserRoom }) => {
+      const { app, io } = buildHarness();
+      const socket = makeSocket('handshake-service');
+      socket.handshake.auth = {
+        token: issueRuntimeToken(
+          {
+            sub: 'executor-service',
+            type: 'service',
+            ...(terminalUserId ? { terminal_user_id: terminalUserId } : {}),
+          },
+          'test-secret',
+          '5m'
+        ),
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        io.middlewares[0]?.(socket, (error?: Error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+      connect(io, socket);
+      (app as any).eventHandlers.get('login')?.(
+        { user: socket.feathers?.user },
+        { connection: socket.feathers }
+      );
+
+      expect(logSpy).toHaveBeenCalledOnce();
+      expect(logSpy).toHaveBeenCalledWith('socket authenticated: handshake-service service');
+      expect(socket.joined.has(userRoomName('executor-service'))).toBe(joinsUserRoom);
+    }
+  );
 
   it('emits an unconditional five-minute gauge and stops it when Engine.IO closes', () => {
     vi.useFakeTimers();
