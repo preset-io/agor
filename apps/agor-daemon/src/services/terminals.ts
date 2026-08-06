@@ -616,12 +616,15 @@ export class TerminalsService {
         {
           logPrefix: `[TerminalsService.executor ${shortId(userId)}]`,
           asUser: finalUnixUser || undefined,
-          env: { ...executorEnv, AGOR_CLOUD_EXECUTOR_TYPE: 'shell' },
+          env: executorEnv,
           templateVariables: {
             // Mode-resolved identity for templated execution: the sudo user in
             // insulated/strict, the caller's unix_username in delegated (no
             // sudo), and unset in simple.
             unix_user: impersonationResult.reportedUnixUser || undefined,
+            // Cloud shell classification: flows through the templated launcher
+            // (env is dropped there) so the control plane can seal shell pods.
+            executor_type: 'shell',
           },
           // Clean up map when executor exits (handles crashes too)
           onExit: () => this.handleExecutorExit(userId),
