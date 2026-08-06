@@ -354,6 +354,9 @@ export function spawnExecutor(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
+        // Default so a template's `{executor_type}` always substitutes; terminals
+        // override to `shell` via their own templateVariables.
+        executor_type: 'executor',
         ...templateVariables,
         tenant_id: tenantId,
       },
@@ -1033,6 +1036,9 @@ export async function runExecutorCommand(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
+        // Default so a template's `{executor_type}` always substitutes; terminals
+        // override to `shell` via their own templateVariables.
+        executor_type: 'executor',
         ...templateVariables,
         tenant_id: tenantId,
       },
