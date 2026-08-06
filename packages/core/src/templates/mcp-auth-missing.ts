@@ -27,7 +27,7 @@ export function renderMcpAuthMissingContext({
     '[Agor runtime context]',
     'These configured OAuth MCP servers require authentication and are unavailable for this turn:',
     ...servers,
-    "Mention this only if relevant to the user's request.",
+    'Begin your response with a concise list of these unavailable servers and their authentication links.',
     '[/Agor runtime context]',
   ].join('\n');
 }

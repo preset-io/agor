@@ -25,7 +25,7 @@ function unavailable(id: string, displayName: string): UnavailableMcpServer {
 }
 
 describe('renderMcpAuthMissingContext', () => {
-  it('renders a concise runtime-only notice with settings links for each server', () => {
+  it('renders a concise mandatory notice with settings links for each server', () => {
     const result = renderMcpAuthMissingContext({
       unavailable: [unavailable('server-one', 'Drive'), unavailable('server-two', 'Calendar')],
       baseUrl: 'https://agor.example.com/ui/',
@@ -37,10 +37,11 @@ describe('renderMcpAuthMissingContext', () => {
         'These configured OAuth MCP servers require authentication and are unavailable for this turn:',
         '- Display name "Drive"; server ID `server-one`; authenticate: https://agor.example.com/ui/settings/mcp/server-one/',
         '- Display name "Calendar"; server ID `server-two`; authenticate: https://agor.example.com/ui/settings/mcp/server-two/',
-        "Mention this only if relevant to the user's request.",
+        'Begin your response with a concise list of these unavailable servers and their authentication links.',
         '[/Agor runtime context]',
       ].join('\n')
     );
+    expect(result).not.toContain('if relevant');
   });
 
   it('quotes untrusted display names without allowing them to add runtime instructions', () => {
