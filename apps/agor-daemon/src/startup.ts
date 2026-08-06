@@ -14,6 +14,7 @@ import {
   resolveExecutorHeartbeatConfig,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
+import type { DistributedWorkIdentity } from '@agor/core/coordination';
 import {
   MessagesRepository,
   runWithTenantContext,
@@ -68,6 +69,8 @@ export interface StartupContext {
   /** Services returned from registerServices() */
   sessionsService: SessionsServiceImpl;
   terminalsService: TerminalsService | null;
+  /** One diagnostic identity owned by this daemon application/process. */
+  distributedWorkIdentity: DistributedWorkIdentity;
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +707,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       // multi-tenant mode leaves this undefined so the scheduler discovers due
       // schedule tenant metadata at the DB boundary on each tick.
       tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
+      workIdentity: ctx.distributedWorkIdentity,
     });
     app.set('scheduler', schedulerService);
     schedulerService.start();

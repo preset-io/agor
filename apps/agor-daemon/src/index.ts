@@ -39,7 +39,7 @@ import {
   resolveSecurity,
   saveConfig,
 } from '@agor/core/config';
-import { getDatabaseUrl } from '@agor/core/db';
+import { generateId, getDatabaseUrl } from '@agor/core/db';
 import {
   authenticate,
   Forbidden,
@@ -63,6 +63,7 @@ import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import { initializeDatabase } from './setup/database.js';
+import { initializeDistributedWorkIdentity } from './setup/distributed-work-identity.js';
 import { warnDeprecatedConfig } from './setup/first-run-admin.js';
 import { securityHeaders } from './setup/security-headers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
@@ -276,6 +277,18 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Create Feathers app + Express middleware
   // --------------------------------------------------------------------------
   const app = feathersExpress(feathers());
+  // One application-owned identity spans every background worker in this
+  // daemon process. external_launch.instance_id is the only settled explicit
+  // runtime-instance config field; its authorization semantics remain local
+  // to launch auth, while this shared identity is diagnostic only.
+  const distributedWorkIdentity = initializeDistributedWorkIdentity(app, {
+    configuredInstanceId: config.external_launch?.instance_id,
+    environment: {
+      AGOR_DAEMON_INSTANCE_ID: process.env.AGOR_DAEMON_INSTANCE_ID,
+      HOSTNAME: process.env.HOSTNAME,
+    },
+    generateBootId: generateId,
+  });
 
   // Configure how many reverse proxies we trust in front of the daemon.
   // Default 0 = ignore X-Forwarded-* entirely (so a client cannot spoof their
@@ -732,5 +745,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     getSocketServer: socketIOConfig.getSocketServer,
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
+    distributedWorkIdentity,
   });
 }

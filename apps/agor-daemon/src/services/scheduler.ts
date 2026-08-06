@@ -339,6 +339,12 @@ export class SchedulerService {
   constructor(db: TenantScopeAwareDatabase, app: Application, config: SchedulerConfig = {}) {
     this.app = app;
     this.db = db;
+    const workIdentity = config.workIdentity ?? app.get('distributedWorkIdentity');
+    if (!workIdentity) {
+      throw new Error(
+        'Scheduler requires the daemon application distributed-work identity or an explicit test identity'
+      );
+    }
     this.config = {
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
@@ -352,12 +358,7 @@ export class SchedulerService {
       maxIdleInterval: config.maxIdleInterval ?? 60_000,
       jitterRatio: config.jitterRatio ?? 0.2,
       random: config.random ?? Math.random,
-      workIdentity:
-        config.workIdentity ??
-        ({
-          instanceId: process.env.AGOR_DAEMON_INSTANCE_ID ?? process.env.HOSTNAME ?? 'daemon',
-          bootId: generateId(),
-        } satisfies DistributedWorkIdentity),
+      workIdentity,
       testHooks: config.testHooks,
     };
     this.branchRepo = new BranchRepository(db);

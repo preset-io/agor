@@ -119,6 +119,7 @@ async function seedRunnableSchedule(
 
 function createSchedulerApp(db: SchedulerDb) {
   const sessions = new SessionRepository(db);
+  const workIdentity = { instanceId: 'test-daemon', bootId: 'test-boot' } as const;
   const sessionEvent = vi.fn();
   const removeSession = vi.fn(async (id: string) => {
     await sessions.delete(id);
@@ -133,6 +134,7 @@ function createSchedulerApp(db: SchedulerDb) {
       }) as Task
   );
   const app = {
+    get: (name: string) => (name === 'distributedWorkIdentity' ? workIdentity : undefined),
     service: (path: string) => {
       if (path === 'sessions') {
         return {
@@ -146,7 +148,7 @@ function createSchedulerApp(db: SchedulerDb) {
       throw new Error(`Unexpected service: ${path}`);
     },
   } as unknown as ConstructorParameters<typeof SchedulerService>[1];
-  return { app, prompt, removeSession, sessionEvent };
+  return { app, prompt, removeSession, sessionEvent, workIdentity };
 }
 
 describe('scheduler HA occurrence recovery', () => {
@@ -157,6 +159,21 @@ describe('scheduler HA occurrence recovery', () => {
     'afterRetention',
     'afterMetadata',
   ] as const;
+
+  dbTest('uses the application-owned diagnostic identity across consumers', async ({ db }) => {
+    const { app, workIdentity } = createSchedulerApp(db);
+    const first = new SchedulerService(db, app);
+    const second = new SchedulerService(db, app);
+    const readIdentity = (scheduler: SchedulerService) =>
+      (
+        scheduler as unknown as {
+          config: { workIdentity: typeof workIdentity };
+        }
+      ).config.workIdentity;
+
+    expect(readIdentity(first)).toBe(workIdentity);
+    expect(readIdentity(second)).toBe(workIdentity);
+  });
 
   for (const stage of killStages) {
     dbTest(`recovers a replacement scheduler killed at ${stage}`, async ({ db }) => {

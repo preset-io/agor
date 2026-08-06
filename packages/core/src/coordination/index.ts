@@ -7,10 +7,67 @@
  */
 
 export interface DistributedWorkIdentity {
-  /** Stable for a configured daemon instance (for example a pod name). */
-  instanceId: string;
-  /** Unique for one daemon process lifetime. */
-  bootId: string;
+  /**
+   * Diagnostic daemon-instance label. It is stable across restarts only when
+   * the deployment supplies a stable configured/environment value.
+   *
+   * This is not an authorization, fencing, lease, liveness, or correctness
+   * boundary.
+   */
+  readonly instanceId: string;
+  /**
+   * Diagnostic identity for one daemon process incarnation.
+   *
+   * This is not an authorization, fencing, lease, liveness, or correctness
+   * boundary.
+   */
+  readonly bootId: string;
+}
+
+export interface DistributedWorkIdentityEnvironment {
+  readonly AGOR_DAEMON_INSTANCE_ID?: string;
+  readonly HOSTNAME?: string;
+}
+
+export interface CreateDistributedWorkIdentityOptions {
+  /** Existing explicit runtime-instance configuration, when one is settled. */
+  configuredInstanceId?: string;
+  /** Explicit environment snapshot supplied by the daemon composition root. */
+  environment?: DistributedWorkIdentityEnvironment;
+  /** Safe diagnostic fallback (default: `daemon`). */
+  fallbackInstanceId?: string;
+  /** Process-incarnation ID generator, injected so lifecycle ownership is explicit and tests are deterministic. */
+  generateBootId: () => string;
+}
+
+function normalizedNonEmpty(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
+/**
+ * Create one diagnostic identity at a process/application composition root.
+ *
+ * Instance precedence is explicit configuration, AGOR_DAEMON_INSTANCE_ID,
+ * HOSTNAME, then the safe fallback. This helper is deliberately stateless: it
+ * does not cache, register, heartbeat, claim, lease, fence, or confer any
+ * authority. The caller owns creating it exactly once and sharing the result.
+ */
+export function createDistributedWorkIdentity(
+  options: CreateDistributedWorkIdentityOptions
+): DistributedWorkIdentity {
+  const environment = options.environment ?? {};
+  const instanceId =
+    normalizedNonEmpty(options.configuredInstanceId) ??
+    normalizedNonEmpty(environment.AGOR_DAEMON_INSTANCE_ID) ??
+    normalizedNonEmpty(environment.HOSTNAME) ??
+    normalizedNonEmpty(options.fallbackInstanceId) ??
+    'daemon';
+  const bootId = normalizedNonEmpty(options.generateBootId());
+  if (!bootId) throw new Error('Distributed work boot ID generator returned an empty value');
+
+  return Object.freeze({ instanceId, bootId });
 }
 
 export interface BackoffPolicy {

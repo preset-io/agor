@@ -7,6 +7,7 @@
  * - Application instance
  */
 
+import type { DistributedWorkIdentity } from '@agor/core/coordination';
 import type {
   TaskDispatchClaimResult,
   TerminationClaimInput,
@@ -50,7 +51,10 @@ export type HookContext<T = unknown> = CoreHookContext<T>;
 /**
  * Application type for the daemon
  */
-export type Application = ExpressApplication;
+export type Application = ExpressApplication & {
+  get(name: 'distributedWorkIdentity'): DistributedWorkIdentity | undefined;
+  set(name: 'distributedWorkIdentity', value: DistributedWorkIdentity): ExpressApplication;
+};
 
 /**
  * Sessions service with custom methods (server-side implementation)

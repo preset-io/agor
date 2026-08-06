@@ -129,6 +129,26 @@ Adding an expiring scheduler lease would create a dangerous pause-after-expiry w
 around executor launch unless every side effect were independently fenced. The
 idempotent state transitions already provide the stronger and smaller design.
 
+### Diagnostic identity lifecycle
+
+The daemon composition root creates exactly one immutable `DistributedWorkIdentity`
+when it creates the Feathers application, stores that object on the application, and
+injects the same object into SchedulerService. Future background consumers should read
+that app-owned identity rather than creating worker-local identities.
+
+`instanceId` precedence is the existing explicit runtime identifier
+`external_launch.instance_id`, then `AGOR_DAEMON_INSTANCE_ID`, then `HOSTNAME`, then
+the safe `daemon` fallback. Whitespace-only candidates are ignored and selected values
+are trimmed. The platform should supply a stable value when diagnostics must correlate
+one daemon instance across restarts; the fallback is intentionally only a label.
+`bootId` is generated exactly once at application initialization and identifies that
+one process incarnation.
+
+Both fields are diagnostic log correlation only. Neither is an authorization,
+fencing, lease, liveness, ownership, or correctness boundary. In particular, using
+the already-settled external-launch runtime identifier as the first diagnostic source
+does not transfer launch auth semantics into `@agor/core/coordination`.
+
 ## Scanning, recovery bound, and diagnostics
 
 Defaults:
@@ -176,7 +196,7 @@ case), concurrent admission, and Task fencing.
 
 Reusable pieces introduced by this slice are intentionally low-level:
 
-- `DistributedWorkIdentity` for instance/boot diagnostics;
+- a pure `DistributedWorkIdentity` factory for app-owned instance/boot diagnostics;
 - pure bounded backoff, jitter, and startup-offset helpers with injected randomness;
 - repository-level stable-ID pending Task creation;
 - repository-level atomic expected-state dispatch claim.

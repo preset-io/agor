@@ -101,6 +101,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     getSocketServer: vi.fn(() => null),
     sessionsService,
     terminalsService: null,
+    distributedWorkIdentity: { instanceId: 'startup-test', bootId: 'startup-test-boot' },
   } as unknown as StartupContext;
 
   return { ctx, baseDb, tasksService, sessionsService };
