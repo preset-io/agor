@@ -766,6 +766,38 @@ describe('agor_sessions_create', () => {
     expect(parsed.note).toContain('sess-caller');
   });
 
+  it('rejects a default callback target the caller cannot prompt', async () => {
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    vi.mocked(ensureCanPromptTargetSession).mockRejectedValueOnce(
+      new Error('Prompt permission required')
+    );
+    const sessionCreate = vi.fn();
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: { create: sessionCreate },
+    });
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-view-only' },
+      ['agor_sessions_create']
+    );
+
+    await expect(
+      agor_sessions_create({
+        branchId: 'wt-1',
+        agenticTool: 'claude-code',
+        enableCallback: true,
+      })
+    ).rejects.toThrow('Prompt permission required');
+    expect(ensureCanPromptTargetSession).toHaveBeenCalledWith(
+      'sess-view-only',
+      'user-1',
+      app,
+      expect.anything()
+    );
+    expect(sessionCreate).not.toHaveBeenCalled();
+  });
+
   it('does not set parent_session_id when called without session context', async () => {
     const sessionCreates: unknown[] = [];
     const patchCalls: unknown[] = [];

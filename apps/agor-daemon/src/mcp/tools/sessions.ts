@@ -1056,10 +1056,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       if (wantsCallback && !effectiveCallbackSessionId) return sessionContextRequiredResult();
 
       // Validate user has prompt permission on the callback target session's branch
-      if (wantsCallback && args.callbackSessionId) {
+      if (wantsCallback && effectiveCallbackSessionId) {
         await runWithMcpTenantDatabaseScope(ctx, (db) =>
           ensureCanPromptTargetSession(
-            args.callbackSessionId!,
+            effectiveCallbackSessionId,
             ctx.userId,
             ctx.app,
             new BranchRepository(db)
