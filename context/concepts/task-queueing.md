@@ -71,9 +71,14 @@ Widget submit/dismiss uses a separate short Message-row claim before registry
 or connector work. Only `pending -> resolving` may perform that work; the
 opaque claim token alone may publish `submitted|dismissed`. An interrupted
 attempt remains durably `resolving` and is not replayed automatically because
-the prior side effect may already have happened. A handler that reports an
-error releases the widget to `pending` with a secret-free failure code for an
-explicit retry; handlers must make that reported-error retry idempotent.
+the prior side effect may already have happened. Only an `applySubmit` handler
+that explicitly reports failure before returning releases the widget to
+`pending` with a secret-free failure code for an explicit retry; handlers must
+make that reported-error retry idempotent. Prompt-admission or completion
+failures after `applySubmit` succeeds leave the claim `resolving` so the effect
+cannot be replayed. Widget creation and lifecycle metadata are daemon-owned:
+generic external Message create/update/patch cannot mint or alter a widget,
+and pending/resolving widgets cannot be externally removed.
 
 ## Invariants
 

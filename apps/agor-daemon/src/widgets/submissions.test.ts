@@ -38,7 +38,12 @@ interface MockEvent {
   payload: unknown;
 }
 
-function makeApp(records: { message: Message; session: Session; branch: Branch }) {
+function makeApp(
+  records: { message: Message; session: Session; branch: Branch },
+  options: {
+    promptCreate?: (data: unknown, params: unknown) => Promise<unknown>;
+  } = {}
+) {
   const calls: MockServiceCall[] = [];
   const events: MockEvent[] = [];
   let currentMessage = records.message;
@@ -119,6 +124,7 @@ function makeApp(records: { message: Message; session: Session; branch: Branch }
           data,
           params,
         });
+        if (options.promptCreate) return options.promptCreate(data, params);
         return { task_id: 'task-mock' };
       },
     },
@@ -590,6 +596,75 @@ describe('resolveWidget', () => {
     expect(failed.metadata.widget.resolution_failure?.error_code).toBeTruthy();
     expect(JSON.stringify(failed)).not.toContain('secret-key');
     expect(calls.find((c) => c.service === '/sessions/:id/prompt')).toBeUndefined();
+  });
+
+  it('does not reopen the claim when prompt admission fails after its Task committed', async () => {
+    const { applySubmit } = registerTestWidget();
+    const fixtures = makeFixtures();
+    const committedTaskIds: string[] = [];
+    const state = makeApp(fixtures, {
+      promptCreate: async (data) => {
+        const taskId = (data as { idempotencyTaskId: string }).idempotencyTaskId;
+        committedTaskIds.push(taskId);
+        throw new Error('response lost after durable Task commit');
+      },
+    });
+    const resolve = () =>
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        {
+          app: state.app as never,
+          resolutionStore: state.resolutionStore,
+          isBranchOwner: async () => false,
+        }
+      );
+
+    await expect(resolve()).rejects.toThrow('response lost after durable Task commit');
+    expect(state.currentMessage.metadata?.widget?.status).toBe('resolving');
+    expect(applySubmit).toHaveBeenCalledTimes(1);
+    expect(committedTaskIds).toEqual([widgetAutoResumeTaskId('widget-msg-1' as MessageID)]);
+
+    await expect(resolve()).rejects.toThrow(/already resolving/);
+    expect(applySubmit).toHaveBeenCalledTimes(1);
+    expect(
+      state.calls.filter(
+        (call) => call.service === '/sessions/:id/prompt' && call.method === 'create'
+      )
+    ).toHaveLength(1);
+  });
+
+  it('does not replay side effects when terminal completion has an unknown outcome', async () => {
+    const { applySubmit } = registerTestWidget();
+    const fixtures = makeFixtures();
+    const state = makeApp(fixtures);
+    vi.spyOn(state.resolutionStore, 'complete').mockRejectedValueOnce(
+      new Error('transient completion failure')
+    );
+    const resolve = () =>
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        {
+          app: state.app as never,
+          resolutionStore: state.resolutionStore,
+          isBranchOwner: async () => false,
+        }
+      );
+
+    await expect(resolve()).rejects.toThrow('transient completion failure');
+    expect(state.currentMessage.metadata?.widget?.status).toBe('resolving');
+    expect(applySubmit).toHaveBeenCalledTimes(1);
+    expect(
+      state.calls.filter(
+        (call) => call.service === '/sessions/:id/prompt' && call.method === 'create'
+      )
+    ).toHaveLength(1);
+
+    await expect(resolve()).rejects.toThrow(/already resolving/);
+    expect(applySubmit).toHaveBeenCalledTimes(1);
   });
 
   it('serializes concurrent resolutions on the same widget — only one applySubmit fires', async () => {

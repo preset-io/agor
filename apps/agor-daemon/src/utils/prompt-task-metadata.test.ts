@@ -10,7 +10,11 @@ describe('buildPromptTaskMetadata', () => {
       initial_message_id: 'spoofed-message-id',
     } as unknown as Parameters<typeof buildPromptTaskMetadata>[0];
 
-    expect(buildPromptTaskMetadata(input, 'gateway', 'actual-user')).toEqual({
+    expect(
+      buildPromptTaskMetadata(input, 'gateway', 'actual-user', {
+        trustedInternalMetadata: true,
+      })
+    ).toEqual({
       system_authored: true,
       queued_by_user_id: 'actual-user',
       source: 'gateway',
@@ -21,6 +25,34 @@ describe('buildPromptTaskMetadata', () => {
     const input = { source: 'cli-repl' } as unknown as Parameters<
       typeof buildPromptTaskMetadata
     >[0];
-    expect(buildPromptTaskMetadata(input, undefined)).toEqual({});
+    expect(
+      buildPromptTaskMetadata(input, undefined, undefined, {
+        trustedInternalMetadata: true,
+      })
+    ).toEqual({});
+  });
+
+  it('drops every daemon-owned provenance field for an external caller', () => {
+    const input = {
+      is_agor_callback: true,
+      callback_dispatches: [{ event: 'session_completion' }],
+      child_session_id: 'child-session',
+      child_task_id: 'child-task',
+      queued_by_user_id: 'spoofed-user',
+      system_authored: true,
+      widget_id: 'spoofed-widget',
+      widget_resolved_by_user_id: 'spoofed-resolver',
+      source: 'gateway',
+      initial_message_id: 'spoofed-message',
+    } as unknown as Parameters<typeof buildPromptTaskMetadata>[0];
+
+    expect(
+      buildPromptTaskMetadata(input, 'agor', 'authenticated-user', {
+        trustedInternalMetadata: false,
+      })
+    ).toEqual({
+      queued_by_user_id: 'authenticated-user',
+      source: 'agor',
+    });
   });
 });

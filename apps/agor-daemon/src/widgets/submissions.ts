@@ -250,78 +250,81 @@ async function doResolveWidget(
     throw new Forbidden(`Widget ${widgetId} is already ${status}; cannot ${action.kind} again.`);
   }
 
-  try {
-    if (action.kind === 'submit') {
-      // The registry entry and parsed payload are established before the
-      // claim; only the durable winner reaches this external-work boundary.
+  if (action.kind === 'submit') {
+    // The registry entry and parsed payload are established before the claim;
+    // only the durable winner reaches this external-work boundary. A handler
+    // that explicitly reports failure is the sole safe case for reopening the
+    // widget: no later admission/completion failure may replay this effect.
+    try {
       await entry!.applySubmit(ctx, parsedSubmit, widget.params);
-      resultMeta = entry!.buildResultMeta(parsedSubmit);
-      autoResumePrompt = entry!.buildAutoResumePrompt(resultMeta, widget.params);
+    } catch (error) {
+      await deps.resolutionStore.fail(widget.widget_id, claimToken, {
+        failedAt: new Date().toISOString(),
+        errorCode: structuredLogErrorCode(error),
+      });
+      throw error;
     }
-
-    // 6. Admit auto-resume before publishing terminal widget state. If this
-    // process dies after admission, the stable Task and initial-message IDs
-    // remain discoverable by another daemon's queue worker.
-    let autoResumeQueued = false;
-    if (widget.auto_resume !== false && autoResumePrompt) {
-      await deps.app.service('/sessions/:id/prompt').create(
-        {
-          prompt: autoResumePrompt,
-          messageSource: 'agor',
-          idempotencyTaskId: widgetAutoResumeTaskId(widget.widget_id),
-          metadata: {
-            system_authored: true,
-            widget_id: widget.widget_id,
-            widget_resolved_by_user_id: caller.user_id,
-          },
-        },
-        {
-          // Stable widget identity must also have stable Task attribution.
-          // The widget row records the actual resolver separately.
-          user: { user_id: session.created_by },
-          route: { id: message.session_id },
-        }
-      );
-      autoResumeQueued = true;
-    }
-
-    // 7. Only the claim token can publish the terminal resolution.
-    const newStatus: WidgetMessageMetadata['status'] =
-      action.kind === 'submit' ? 'submitted' : 'dismissed';
-    const resolvedAt = new Date().toISOString();
-    const finished = await deps.resolutionStore.complete(widget.widget_id, claimToken, {
-      status: newStatus,
-      resolvedAt,
-      submittedBy: caller.user_id,
-      resultMeta,
-    });
-    if (finished.outcome !== 'updated') {
-      throw new Conflict(`Widget ${widgetId} resolution claim was lost before completion`);
-    }
-
-    // 8. Broadcast on the messages service's room (per-session subscribers
-    // are already wired up to that channel — see register-services.ts).
-    const resolvedPayload = {
-      widget_id: widget.widget_id,
-      session_id: message.session_id,
-      status: newStatus,
-      result_meta: resultMeta,
-      resolved_at: resolvedAt,
-      submitted_by: caller.user_id,
-    };
-    if (deps.publishResolved) deps.publishResolved(resolvedPayload);
-    else deps.app.service('messages').emit?.('widget:resolved', resolvedPayload);
-
-    return {
-      widget_id: widget.widget_id,
-      status: newStatus,
-      auto_resume_queued: autoResumeQueued,
-    };
-  } catch (error) {
-    await deps.resolutionStore.fail(widget.widget_id, claimToken, {
-      failedAt: new Date().toISOString(),
-      errorCode: structuredLogErrorCode(error),
-    });
-    throw error;
+    resultMeta = entry!.buildResultMeta(parsedSubmit);
+    autoResumePrompt = entry!.buildAutoResumePrompt(resultMeta, widget.params);
   }
+
+  // 6. Admit auto-resume before publishing terminal widget state. If this
+  // process dies or any downstream operation fails after admission, the
+  // stable Task remains recoverable while this claim stays `resolving`; never
+  // reopen it and replay an already-completed external effect.
+  let autoResumeQueued = false;
+  if (widget.auto_resume !== false && autoResumePrompt) {
+    await deps.app.service('/sessions/:id/prompt').create(
+      {
+        prompt: autoResumePrompt,
+        messageSource: 'agor',
+        idempotencyTaskId: widgetAutoResumeTaskId(widget.widget_id),
+        metadata: {
+          system_authored: true,
+          widget_id: widget.widget_id,
+          widget_resolved_by_user_id: caller.user_id,
+        },
+      },
+      {
+        // Stable widget identity must also have stable Task attribution.
+        // The widget row records the actual resolver separately.
+        user: { user_id: session.created_by },
+        route: { id: message.session_id },
+      }
+    );
+    autoResumeQueued = true;
+  }
+
+  // 7. Only the claim token can publish the terminal resolution.
+  const newStatus: WidgetMessageMetadata['status'] =
+    action.kind === 'submit' ? 'submitted' : 'dismissed';
+  const resolvedAt = new Date().toISOString();
+  const finished = await deps.resolutionStore.complete(widget.widget_id, claimToken, {
+    status: newStatus,
+    resolvedAt,
+    submittedBy: caller.user_id,
+    resultMeta,
+  });
+  if (finished.outcome !== 'updated') {
+    throw new Conflict(`Widget ${widgetId} resolution claim was lost before completion`);
+  }
+
+  // 8. Broadcast on the messages service's room (per-session subscribers
+  // are already wired up to that channel — see register-services.ts).
+  const resolvedPayload = {
+    widget_id: widget.widget_id,
+    session_id: message.session_id,
+    status: newStatus,
+    result_meta: resultMeta,
+    resolved_at: resolvedAt,
+    submitted_by: caller.user_id,
+  };
+  if (deps.publishResolved) deps.publishResolved(resolvedPayload);
+  else deps.app.service('messages').emit?.('widget:resolved', resolvedPayload);
+
+  return {
+    widget_id: widget.widget_id,
+    status: newStatus,
+    auto_resume_queued: autoResumeQueued,
+  };
 }

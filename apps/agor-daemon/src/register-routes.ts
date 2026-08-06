@@ -9,7 +9,6 @@
 import { Transform } from 'node:stream';
 import {
   type AgorConfig,
-  isTenantAgenticToolEnabled,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
@@ -140,7 +139,7 @@ import {
 } from './utils/mcp-header-secrets.js';
 import {
   buildPromptTaskMetadata,
-  type PromptTaskMetadataInput,
+  type InternalPromptTaskMetadataInput,
 } from './utils/prompt-task-metadata.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
 import {
@@ -162,6 +161,7 @@ import {
 } from './utils/task-initial-message.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
+import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
 import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
@@ -173,6 +173,7 @@ import {
   type StagedMulterFile,
 } from './utils/upload.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
+import { assertExternalWidgetMessageCreateAllowed } from './widgets/message-boundary.js';
 import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
@@ -714,6 +715,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/messages/bulk',
     {
       async create(data: unknown, params: RouteParams) {
+        assertExternalWidgetMessageCreateAllowed(data);
         return messagesService.createMany(data as Message[]);
       },
     },
@@ -1161,12 +1163,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       agenticToolEnabled,
       messageStartIndex,
       session: loadedSession,
-    } = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+    } = await runWithTenantDatabaseScope(db, tenantId, async () => {
       const session = await sessionsService.get(task.session_id, params);
       const agenticTool = requireActiveAgenticTool(session.agentic_tool);
       return {
         session,
-        agenticToolEnabled: await isTenantAgenticToolEnabled(agenticTool, tenantDb),
+        agenticToolEnabled: await isAgenticToolEnabledForTenant(db, tenantId, agenticTool),
         // Recompute message_range.start_index against the live message count.
         messageStartIndex: await sessionsRepository.countMessages(task.session_id),
       };
@@ -1410,13 +1412,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           stream?: boolean;
           messageSource?: MessageSource;
           /**
-           * Optional extra task metadata merged onto the queued/created task.
-           * Used by internal callers (e.g. widget submissions) to stamp
+           * Internal-only task metadata merged onto the queued/created task.
+           * Used by daemon callers (e.g. widget submissions) to stamp
            * traceability fields like `system_authored` / `widget_id`.
-           * Transport provenance (`source`) is daemon-owned and deliberately
-           * excluded/sanitized even for stale or untyped clients.
+           * External transports are rejected, and the metadata builder also
+           * strips every internal field defensively for untrusted callers.
            */
-          metadata?: PromptTaskMetadataInput;
+          metadata?: InternalPromptTaskMetadataInput;
           /**
            * Internal-only stable task identity for idempotent producers such
            * as the scheduler. External callers may not set this field.
@@ -1437,6 +1439,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!data.prompt) throw new Error('Prompt required');
         if (data.idempotencyTaskId && params.provider) {
           throw new Forbidden('idempotencyTaskId is internal-only');
+        }
+        if (data.metadata !== undefined && params.provider) {
+          throw new Forbidden('Task metadata is internal-only');
         }
         const promptTenantId = getCurrentTenantId();
         if (!promptTenantId) throw new Error('Missing active tenant context for prompt admission');
@@ -1485,7 +1490,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         try {
           const activeAgenticTool = requireActiveAgenticTool(session.agentic_tool);
-          if (!(await isTenantAgenticToolEnabled(activeAgenticTool, db))) {
+          if (!(await isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool))) {
             throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
           }
           session = await sessionsService.materializeAgenticToolPreset(session, params);
@@ -1555,7 +1560,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
             }
 
-            const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy);
+            const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy, {
+              trustedInternalMetadata: !params.provider,
+            });
             if (data.idempotencyTaskId) {
               taskMetadata.initial_message_id = data.idempotencyTaskId as MessageID;
             }

@@ -67,6 +67,7 @@ import type {
   GroupID,
   HookContext,
   MCPServer,
+  MessageID,
   Paginated,
   Params,
   Session,
@@ -173,6 +174,7 @@ import {
   resolveTenantIdForDeferredScope,
 } from './utils/tenant-db-scope.js';
 import { enforcePublicWriteFields, markWriteDataPrepared } from './utils/write-data-boundary.js';
+import { protectExternalWidgetMessageWrites } from './widgets/message-boundary.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
@@ -554,6 +556,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     requireAuth,
     superadminOpts,
     sessionsService,
+    messagesService,
     boardsService,
     branchRepository,
     usersRepository,
@@ -928,6 +931,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Messages hooks
   // ============================================================================
 
+  const protectWidgetMessageWrites = protectExternalWidgetMessageWrites((messageId) =>
+    messagesService.findByIdForScopeCheck(messageId as MessageID)
+  );
+
   app.service('messages').hooks({
     before: {
       all: [requireAuth, executorRuntimeScopeGuard()],
@@ -949,6 +956,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create messages'),
+        protectWidgetMessageWrites,
         ...(branchRbacEnabled
           ? [
               resolveSessionContext(),
@@ -968,6 +976,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           AGENTIC_TOOL_DISPLAY_NAMES
         ),
       ],
+      update: [protectWidgetMessageWrites],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),
         ...(branchRbacEnabled
@@ -978,6 +987,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
+        protectWidgetMessageWrites,
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete messages'),
@@ -989,6 +999,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
+        protectWidgetMessageWrites,
       ],
     },
     after: {

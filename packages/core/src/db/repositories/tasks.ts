@@ -1220,9 +1220,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         .run();
 
       // The launch-intent transition and its Session projection are one
-      // durable state change. PostgreSQL request scopes already provide an
-      // outer transaction, but standalone SQLite does not; keeping this write
-      // inside the task-claim transaction closes the kill point where a Task
+      // durable state change. Keeping this write inside the task-claim
+      // transaction (independent of any request-scope policy) closes the kill
+      // point where a Task
       // could be DISPATCHING while its Session remained IDLE and omitted the
       // task from data.tasks.
       const sessionTasks = sessionRow.data.tasks.includes(current.task_id)

@@ -111,13 +111,23 @@ the actual resolver is retained on both the widget resolution and
 authorized collaborator from conflicting on the deterministic Task identity
 after admission has already committed.
 
-A handler that reports failure releases the widget to `pending` with a
-secret-free diagnostic so the user can explicitly retry; the current registry
-handlers write desired state idempotently for that path. An abandoned
-`resolving` claim is not automatically stolen: after daemon death the system
-cannot prove whether the external operation happened, so replay would violate
-the at-most-once side-effect policy. Requesting a fresh widget is the safe
-recovery path for that indeterminate outcome.
+Only an `applySubmit` handler that explicitly reports failure before returning
+releases the widget to `pending` with a secret-free diagnostic so the user can
+explicitly retry; the current registry handlers write desired state
+idempotently for that path. Once `applySubmit` returns, failures in prompt
+admission or terminal completion leave the widget `resolving`: reopening it
+would replay an effect that already succeeded. An abandoned `resolving` claim
+is not automatically stolen: after daemon death the system cannot prove
+whether the external operation happened, so replay would violate the
+at-most-once side-effect policy. Requesting a fresh widget is the safe recovery
+path for that indeterminate outcome.
+
+The cooperating-writer token fence is backed by a service boundary:
+transport callers cannot create widgets through generic Message single/bulk
+CRUD, cannot replace or patch widget rows, and cannot remove a
+`pending|resolving` widget. Public prompt callers likewise cannot supply Task
+metadata; callback/widget provenance is accepted only from provider-less
+daemon producers and is defensively stripped otherwise.
 
 ### Durable recovery
 
@@ -151,16 +161,17 @@ discoverable.
 
 ## Kill points and runtime handoff
 
-| Kill point                                           | Durable result                                                                             | Recovery owner                                                                                           |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| Before queued insert commits                         | No Task admitted; request fails.                                                           | Caller may retry.                                                                                        |
-| After queued insert, before claim                    | `queued` Task with stable order.                                                           | Any daemon's queue worker.                                                                               |
-| After claim, before executor launch                  | `dispatching` Task + running Session projection, prompt text and launch timestamp durable. | Existing dispatch-startup/runtime supervision. Never blindly requeue: external launch may have occurred. |
-| After local launch, before executor connects         | Same `dispatching` evidence.                                                               | Dispatch connection deadline and termination coordinator.                                                |
-| After executor connects                              | `running` with connection/heartbeat facts.                                                 | Existing heartbeat/watchdog/containment contract.                                                        |
-| During terminal hook/queue trigger                   | Terminal Task remains immutable; queued rows remain durable.                               | Natural triggers plus fleet queue scan.                                                                  |
-| Widget daemon dies after resolution claim            | Widget remains `resolving` with claimant/action/time.                                      | Durable diagnosis; do not replay an external effect whose outcome is unknown.                            |
-| Widget handler reports side-effect/admission failure | Widget returns to `pending` with a secret-free code and no live claim.                     | User may explicitly retry; registry handlers must make this path idempotent.                             |
+| Kill point                                            | Durable result                                                                             | Recovery owner                                                                                           |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Before queued insert commits                          | No Task admitted; request fails.                                                           | Caller may retry.                                                                                        |
+| After queued insert, before claim                     | `queued` Task with stable order.                                                           | Any daemon's queue worker.                                                                               |
+| After claim, before executor launch                   | `dispatching` Task + running Session projection, prompt text and launch timestamp durable. | Existing dispatch-startup/runtime supervision. Never blindly requeue: external launch may have occurred. |
+| After local launch, before executor connects          | Same `dispatching` evidence.                                                               | Dispatch connection deadline and termination coordinator.                                                |
+| After executor connects                               | `running` with connection/heartbeat facts.                                                 | Existing heartbeat/watchdog/containment contract.                                                        |
+| During terminal hook/queue trigger                    | Terminal Task remains immutable; queued rows remain durable.                               | Natural triggers plus fleet queue scan.                                                                  |
+| Widget daemon dies after resolution claim             | Widget remains `resolving` with claimant/action/time.                                      | Durable diagnosis; do not replay an external effect whose outcome is unknown.                            |
+| Widget `applySubmit` explicitly reports failure       | Widget returns to `pending` with a secret-free code and no live claim.                     | User may explicitly retry; registry handlers must make this path idempotent.                             |
+| Widget prompt admission/completion fails after submit | Widget remains `resolving`; a deterministic Task may already exist.                        | Do not replay the external effect; diagnose/reconcile manually.                                          |
 
 The queue branch does not redesign heartbeat supervision, executor
 containment, or startup orphan cleanup. A required runtime HA follow-up is to
@@ -182,6 +193,7 @@ apply, but queue code must not claim that it can prove external absence.
 | Widget submit-vs-dismiss / duplicate resolver race                   | SQLite repository/store tests; PostgreSQL integration when configured          |
 | Cross-tenant widget claim                                            | PostgreSQL negative integration when configured                                |
 | Prompt/widget short transaction boundaries                           | Route-boundary tests plus bound repository units                               |
+| Public widget/provenance mutation bypasses                           | Feathers transport-hook negatives plus metadata sanitizer tests                |
 | Completion/Stop trigger convergence                                  | Existing completion/Stop tests plus durable claim race tests                   |
 | Cross-tenant discovery/claim                                         | PostgreSQL negative integration and RLS migration contract test                |
 | Queue survives startup                                               | `startup.test.ts`                                                              |

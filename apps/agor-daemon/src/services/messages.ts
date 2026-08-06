@@ -19,6 +19,21 @@ import type {
 import { DrizzleService, type Query } from '../adapters/drizzle';
 
 /**
+ * Public Message transport surface. Full replacement and raw bulk insertion
+ * stay daemon-internal so they cannot bypass widget lifecycle hooks.
+ */
+export const MESSAGES_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+  'findBySession',
+  'findByTask',
+  'findByRange',
+] as const;
+
+/**
  * Message service params
  */
 export type MessageParams = QueryParams<{
