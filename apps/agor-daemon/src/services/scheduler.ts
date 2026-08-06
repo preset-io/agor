@@ -105,29 +105,12 @@ import {
 } from '../utils/agentic-configuration-sources.js';
 import { buildSessionCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-
-type SchedulerWorkLogLevel = 'info' | 'warn' | 'error';
-type SchedulerWorkLogValue = string | number | boolean | null | undefined;
-
-function formatWorkLogValue(value: Exclude<SchedulerWorkLogValue, undefined>): string {
-  return typeof value === 'string' ? JSON.stringify(value) : String(value);
-}
-
-/** Extract only a bounded, non-payload error category for shared logs. */
-function schedulerErrorCode(error: unknown): string {
-  let current = error;
-  const seen = new Set<unknown>();
-  for (let depth = 0; depth < 8 && current && !seen.has(current); depth += 1) {
-    seen.add(current);
-    if (typeof current !== 'object') break;
-    const record = current as { code?: unknown; cause?: unknown };
-    if (typeof record.code === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(record.code)) {
-      return record.code;
-    }
-    current = record.cause;
-  }
-  return 'operation_failed';
-}
+import {
+  formatStructuredLog,
+  type StructuredLogLevel,
+  type StructuredLogValue,
+  structuredLogErrorCode,
+} from '../utils/structured-log.js';
 
 /**
  * Best-effort detection of the partial-unique-index conflict raised by
@@ -389,25 +372,17 @@ export class SchedulerService {
   }
 
   private logWorkEvent(
-    level: SchedulerWorkLogLevel,
+    level: StructuredLogLevel,
     event: string,
-    fields: Record<string, SchedulerWorkLogValue> = {}
+    fields: Record<string, StructuredLogValue> = {}
   ): void {
-    const allFields: Record<string, SchedulerWorkLogValue> = {
+    const message = formatStructuredLog('[distributed-work.scheduler]', {
       event,
       instance_id: this.config.workIdentity.instanceId,
       boot_id: this.config.workIdentity.bootId,
       tenant_id: getCurrentTenantId(),
       ...fields,
-    };
-    const details = Object.entries(allFields)
-      .filter(
-        (entry): entry is [string, Exclude<SchedulerWorkLogValue, undefined>] =>
-          entry[1] !== undefined
-      )
-      .map(([key, value]) => `${key}=${formatWorkLogValue(value)}`)
-      .join(' ');
-    const message = `[distributed-work.scheduler] ${details}`;
+    });
     if (level === 'error') console.error(message);
     else if (level === 'warn') console.warn(message);
     else console.info(message);
@@ -448,23 +423,18 @@ export class SchedulerService {
   private scheduleNextTick(delayMs: number): void {
     if (!this.isRunning) return;
     this.timerHandle = setTimeout(async () => {
-      let stats: SchedulerTickStats = {
-        candidates: 0,
-        recoveryCandidates: 0,
-        dueCandidates: 0,
-        processed: 0,
-        failures: 1,
-      };
+      let stats: SchedulerTickStats | null = null;
       try {
         stats = await this.tick();
       } catch (error) {
         this.logWorkEvent('error', 'scan_failed', {
-          error_code: schedulerErrorCode(error),
+          error_code: structuredLogErrorCode(error),
         });
       }
       if (!this.isRunning) return;
-      this.idleRounds = stats.candidates === 0 ? this.idleRounds + 1 : 0;
-      const saturated = stats.candidates >= this.config.scanBatchSize;
+      const candidates = stats?.candidates ?? 0;
+      this.idleRounds = candidates === 0 ? this.idleRounds + 1 : 0;
+      const saturated = candidates >= this.config.scanBatchSize;
       const nextDelay = saturated
         ? Math.round(50 + this.config.random() * 200)
         : boundedBackoffDelay(
@@ -509,6 +479,7 @@ export class SchedulerService {
       if (!ref.tenantId) {
         stats.failures += 1;
         this.logWorkEvent('error', 'recovery_missing_tenant', {
+          schedule_id: ref.scheduleId,
           session_id: ref.sessionId,
         });
         continue;
@@ -522,8 +493,9 @@ export class SchedulerService {
         stats.failures += 1;
         this.logWorkEvent('error', 'recovery_failed', {
           tenant_id: ref.tenantId,
+          schedule_id: ref.scheduleId,
           session_id: ref.sessionId,
-          error_code: schedulerErrorCode(error),
+          error_code: structuredLogErrorCode(error),
         });
       }
     }
@@ -554,7 +526,7 @@ export class SchedulerService {
         this.logWorkEvent('error', 'schedule_processing_failed', {
           tenant_id: ref.tenantId,
           schedule_id: ref.scheduleId,
-          error_code: schedulerErrorCode(error),
+          error_code: structuredLogErrorCode(error),
         });
         // Continue processing other schedules
       }
@@ -574,6 +546,7 @@ export class SchedulerService {
   private async findIncompleteSessionRefs(): Promise<
     Array<{
       sessionId: SessionID;
+      scheduleId?: ScheduleID;
       scheduledRunAt: number;
       tenantId?: TenantID | string;
     }>
@@ -594,6 +567,7 @@ export class SchedulerService {
       }
       return refs.map((ref) => ({
         sessionId: ref.session_id,
+        scheduleId: ref.schedule_id,
         scheduledRunAt: ref.scheduled_run_at,
         tenantId: tenantId ?? ref.tenant_id,
       }));
@@ -686,7 +660,7 @@ export class SchedulerService {
         ).catch((error) => {
           this.logWorkEvent('error', 'cursor_advance_failed', {
             schedule_id: schedule.schedule_id,
-            error_code: schedulerErrorCode(error),
+            error_code: structuredLogErrorCode(error),
           });
         });
       }
@@ -901,8 +875,7 @@ export class SchedulerService {
           session_id: candidateSessionId,
           branch_id: branch.branch_id,
           agentic_tool: resolvedConfig.activeTool,
-          agentic_tool_preset_id:
-            resolvedConfig.sessionConfig.agentic_tool_preset_id ?? undefined,
+          agentic_tool_preset_id: resolvedConfig.sessionConfig.agentic_tool_preset_id ?? undefined,
           status: SessionStatus.IDLE,
           created_by: schedule.created_by,
           unix_username: unixUsername,
@@ -1147,7 +1120,7 @@ export class SchedulerService {
       existingTasks[0]?.task_id ??
       // Deterministic legacy fallback: table-local UUID identity may equal the
       // Session ID and is safe across every recovering daemon.
-      (session.session_id as import('@agor/core/types').TaskID);
+      (session.session_id as TaskID);
     const existingInitialTask = existingTasks.find((task) => task.task_id === initialTaskId);
     let creator = input.creator;
     if (!creator && (!existingInitialTask || isTaskPendingDispatch(existingInitialTask))) {

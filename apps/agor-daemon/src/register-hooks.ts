@@ -166,6 +166,7 @@ import {
   serviceTokenScopeForCurrentTenant,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
+import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
 import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
@@ -807,21 +808,28 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           );
           if (!branch?.others_fs_access || branch.others_fs_access === 'none') return;
           console.info(
-            `[unix-access.sync] event=scheduled source=session_created` +
-              `${tenantId ? ` tenant_id=${JSON.stringify(tenantId)}` : ''}` +
-              ` branch_id=${JSON.stringify(session.branch_id)}` +
-              ` session_id=${JSON.stringify(session.session_id)}`
+            formatStructuredLog('[unix-access.sync]', {
+              event: 'scheduled',
+              source: 'session_created',
+              tenant_id: tenantId,
+              branch_id: session.branch_id,
+              session_id: session.session_id,
+            })
           );
           syncBranchUnixAccess(branch.branch_id, '[Executor/session.created.unix-group]', {
             scope: { session_id: session.session_id },
           });
         },
-        () =>
+        (error) =>
           console.error(
-            `[unix-access.sync] event=schedule_failed source=session_created` +
-              `${tenantId ? ` tenant_id=${JSON.stringify(tenantId)}` : ''}` +
-              ` branch_id=${JSON.stringify(session.branch_id)}` +
-              ` session_id=${JSON.stringify(session.session_id)}`
+            formatStructuredLog('[unix-access.sync]', {
+              event: 'schedule_failed',
+              source: 'session_created',
+              tenant_id: tenantId,
+              branch_id: session.branch_id,
+              session_id: session.session_id,
+              error_code: structuredLogErrorCode(error),
+            })
           )
       );
     });

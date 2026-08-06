@@ -78,3 +78,8 @@ CREATE POLICY "scheduler_recovery_discovery" ON "sessions"
     AND "scheduler_init_completed_at" IS NULL
     AND current_setting('agor.system_scope', true) = 'scheduler_discovery'
   );
+--> statement-breakpoint
+
+-- Keep the fail-fast lock timeout local to this migration's brief table-locking
+-- DDL so later migrations applied in the same Drizzle batch inherit defaults.
+SET LOCAL lock_timeout = DEFAULT;

@@ -55,7 +55,7 @@ export interface IncompleteScheduledSessionRef {
    * The live FK is nullable because deleting a schedule must not erase the
    * scheduler's ability to finish an occurrence admitted before that delete.
    * Recovery uses the schedule ID snapshotted in custom_context when this is
-   * absent; system discovery needs only the Session and tenant routing IDs.
+   * absent; system discovery projects this only as bounded diagnostic context.
    */
   schedule_id?: import('@agor/core/types').ScheduleID;
   scheduled_run_at: number;

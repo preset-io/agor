@@ -154,6 +154,7 @@ import {
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
+import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -1041,7 +1042,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Don't fail the spawn — the executor's createUserMessage fallback
       // (with skip-if-exists) will write the row when it connects.
       console.warn(
-        `[messages.initial] event=write_failed task_id=${JSON.stringify(task.task_id)} outcome=executor_retry`
+        formatStructuredLog('[messages.initial]', {
+          event: 'write_failed',
+          task_id: task.task_id,
+          outcome: 'executor_retry',
+          error_code: structuredLogErrorCode(error),
+        })
       );
     }
   }
@@ -1206,12 +1212,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (dispatchClaim.outcome !== 'claimed') {
       const workIdentity = app.get('distributedWorkIdentity');
       console.info(
-        `[distributed-work.task-dispatch] event=claim_lost` +
-          `${workIdentity ? ` instance_id=${JSON.stringify(workIdentity.instanceId)} boot_id=${JSON.stringify(workIdentity.bootId)}` : ''}` +
-          ` tenant_id=${JSON.stringify(tenantId)}` +
-          ` task_id=${JSON.stringify(task.task_id)}` +
-          ` session_id=${JSON.stringify(task.session_id)}` +
-          ` observed_status=${dispatchClaim.task.status}`
+        formatStructuredLog('[distributed-work.task-dispatch]', {
+          event: 'claim_lost',
+          instance_id: workIdentity?.instanceId,
+          boot_id: workIdentity?.bootId,
+          tenant_id: tenantId,
+          task_id: task.task_id,
+          session_id: task.session_id,
+          observed_status: dispatchClaim.task.status,
+        })
       );
       if (options.stableInitialMessageId) {
         await reconcileStableInitialUserMessage(
@@ -1548,6 +1557,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 status: TaskStatus.CREATED,
               });
               if (!prior) {
+                // createPending is conflict-tolerant: another daemon can win
+                // between the pre-read and insert. In that case this is only a
+                // harmless same-ID realtime catch-up event, not a correctness
+                // dependency.
                 emitServiceEvent(app, {
                   path: 'tasks',
                   event: 'created',

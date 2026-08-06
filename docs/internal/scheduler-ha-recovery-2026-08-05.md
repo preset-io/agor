@@ -125,6 +125,21 @@ removing the creator after durable dispatch therefore cannot strand the schedule
 completion marker. Those checks still apply while the Task is absent or pending,
 because crossing DISPATCHING would launch new work.
 
+The remaining operator-visible poison case is a persistent failure before that
+dispatch fence (for example, the creator is deleted or launch configuration remains
+invalid after occurrence admission). Recovery keeps retrying and leaves the internal
+completion marker NULL, which intentionally prevents a non-concurrent schedule from
+silently skipping durable, accepted work. Today the repair path is operator action
+(fix the configuration/user or delete/terminalize the incomplete Session); a future
+policy can add a bounded give-up marker once the product contract for retry count,
+age, and failure surfacing is explicit.
+
+Mixed-version daemon fleets are also transitional-risky: migration 0071 backfills
+historical markers, but an old daemon that admits a scheduled Session after the
+migration will not write the new initialization snapshot/marker. Upgrade all
+scheduler daemons together; mixed fleets may temporarily duplicate initial prompt
+work until every daemon is running the fenced implementation.
+
 Adding an expiring scheduler lease would create a dangerous pause-after-expiry window
 around executor launch unless every side effect were independently fenced. The
 idempotent state transitions already provide the stronger and smaller design.
