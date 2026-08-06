@@ -27,10 +27,11 @@ import { SessionsService } from './sessions';
 // The guard only touches the session/task repos built from `db`; the stored
 // `app` is never read on this path. A bare cast keeps the harness minimal.
 const STUB_APP = {} as unknown as Application;
+const TEST_USER_ID = '00000000-0000-7000-8000-000000000001' as UUID;
 
 async function createBranch(db: any): Promise<UUID> {
   await new UsersRepository(db).create({
-    user_id: 'test-user' as UUID,
+    user_id: TEST_USER_ID,
     email: `session-guard-${generateId()}@example.com`,
     name: 'Test User',
   });
@@ -54,7 +55,7 @@ async function createBranch(db: any): Promise<UUID> {
     path: '/tmp/test-repo',
     base_ref: 'main',
     new_branch: false,
-    created_by: 'test-user' as UUID,
+    created_by: TEST_USER_ID,
   });
   return branch.branch_id as UUID;
 }
@@ -70,7 +71,7 @@ async function createSession(
     branch_id: branchId,
     agentic_tool: 'claude-code',
     status: SessionStatus.IDLE,
-    created_by: 'test-user' as UUID,
+    created_by: TEST_USER_ID,
     tasks: [],
     contextFiles: [],
     genealogy: { children: [] },
@@ -84,7 +85,7 @@ async function createTask(db: any, sessionId: UUID, overrides: Partial<Task> = {
   const task = await taskRepo.create({
     task_id: generateId(),
     session_id: sessionId,
-    created_by: 'test-user' as UUID,
+    created_by: TEST_USER_ID,
     full_prompt: 'Do a thing',
     status: TaskStatus.COMPLETED,
     message_range: { start_index: 0, end_index: 2, start_timestamp: new Date().toISOString() },
@@ -131,7 +132,7 @@ describe('SessionsService.patch — agentic_tool immutability guard', () => {
           branch_id: branchId,
           agentic_tool: 'claude-code-cli',
           status: SessionStatus.IDLE,
-          created_by: 'test-user' as UUID,
+          created_by: TEST_USER_ID,
         } as never)
       ).rejects.toThrow(/removed experimental Claude Code CLI integration/i);
     }
@@ -238,7 +239,7 @@ describe('SessionsService direct OpenCode model selection', () => {
       branch_id: branchId,
       agentic_tool: 'opencode' as const,
       status: SessionStatus.IDLE,
-      created_by: 'test-user' as UUID,
+      created_by: TEST_USER_ID,
     };
 
     await expect(service.create({ ...base, model_config: modelConfig() })).rejects.toThrow(
@@ -389,7 +390,7 @@ describe('SessionsService direct OpenCode model selection', () => {
         branch_id: branchId,
         agentic_tool: 'opencode' as const,
         status: SessionStatus.IDLE,
-        created_by: 'test-user' as UUID,
+        created_by: TEST_USER_ID,
         model_config: modelConfig(),
       };
       const callerControlledProvenance: Array<Record<string, unknown>> = [
@@ -444,7 +445,7 @@ describe('SessionsService direct OpenCode model selection', () => {
         branch_id: branchId,
         agentic_tool: 'opencode' as const,
         status: SessionStatus.IDLE,
-        created_by: 'test-user' as UUID,
+        created_by: TEST_USER_ID,
         model_config: incompleteModel,
       };
 

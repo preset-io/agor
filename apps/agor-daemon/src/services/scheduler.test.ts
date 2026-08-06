@@ -308,6 +308,10 @@ describe('materializeScheduleAgenticToolConfig', () => {
   });
 
   dbTest('keeps a concrete inline schedule configuration inline', async ({ db }) => {
+    const creator = await new UsersRepository(db).create({
+      email: `scheduler-inline-${generateId()}@example.com`,
+      name: 'Schedule creator',
+    });
     const config: Schedule['agentic_tool_config'] = {
       agentic_tool: 'codex',
       permission_mode: 'plan',
@@ -315,7 +319,10 @@ describe('materializeScheduleAgenticToolConfig', () => {
     };
 
     await expect(
-      materializeScheduleAgenticToolConfig(db, makeSchedule({ agentic_tool_config: config }))
+      materializeScheduleAgenticToolConfig(
+        db,
+        makeSchedule({ created_by: creator.user_id, agentic_tool_config: config })
+      )
     ).resolves.toMatchObject({
       agentic_tool: 'codex',
       permission_mode: 'ask',
