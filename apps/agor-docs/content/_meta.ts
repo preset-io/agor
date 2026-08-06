@@ -22,6 +22,10 @@ export default {
   'beyond-the-sandbox': heroVariantMeta,
   'not-just-a-tool': heroVariantMeta,
   'right-where-you-work': heroVariantMeta,
+  'team-sport': heroVariantMeta,
+  'selfware-is-dead': heroVariantMeta,
+  'dev-team': heroVariantMeta,
+  'costs-under-control': heroVariantMeta,
   // Navbar links are separate from the content folders so Docs and Blog can
   // also remain in the shared root sidebar on every content surface.
   'docs-navbar': { title: 'Docs', type: 'page', href: '/guide' },

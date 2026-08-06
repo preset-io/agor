@@ -223,6 +223,9 @@
   max-width: 18ch;
   margin: 0 auto;
   font-size: clamp(3.45rem, 6.5vw, 5.75rem);
+  /* Slightly heavier than the shared hairline (100) — the hero's own h1 is
+   * large enough that 100 reads as too thin at this size. */
+  font-weight: 300;
   overflow-wrap: normal;
   word-break: normal;
   hyphens: none;
@@ -235,6 +238,21 @@
   max-width: 44ch;
   margin: 14px auto 0;
   font-size: clamp(1.7rem, 3.2vw, 2.5rem);
+}
+
+/* Author-controlled line breaks for hero variant copy (\n in
+ * heroVariants.tsx → <br/> from HighlightedText). Desktop-and-up only:
+ * nowrap makes each authored line exactly one line (no extra browser-
+ * chosen wraps), with max-width lifted since the author is now doing the
+ * wrapping. Below 640px we deliberately fall back to normal wrapping —
+ * nowrap has no built-in floor, so a long authored line would just run
+ * off the edge of a narrow phone instead of reflowing. */
+@media (min-width: 640px) {
+  .heroCopy h1.heroForcedBreak,
+  .heroCopy h2.heroForcedBreak {
+    white-space: nowrap;
+    max-width: none;
+  }
 }
 
 /* Gradient accent phrase inside headings (mockup treatment, mint → sky).
@@ -263,6 +281,22 @@
 .headingStrong {
   font-weight: 700;
   color: var(--landing-ink);
+}
+
+/* Struck-through "crossing out" word — for a headline replacing one word
+ * with another in front of the reader (e.g. "Agentify ~~Everything~~
+ * Everyone"). Dimmed since it's being dismissed, not emphasized. */
+.headingStrike {
+  color: var(--landing-muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 0.035em;
+  opacity: 0.6;
+}
+
+/* Quiet emphasis — italic, no color/weight change from the surrounding
+ * plain text. For a lighter touch than the two highlight colors. */
+.headingItalic {
+  font-style: italic;
 }
 
 .heroActions {

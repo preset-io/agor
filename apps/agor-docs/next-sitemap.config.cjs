@@ -25,6 +25,10 @@ module.exports = {
     '/beyond-the-sandbox',
     '/not-just-a-tool',
     '/right-where-you-work',
+    '/team-sport',
+    '/selfware-is-dead',
+    '/dev-team',
+    '/costs-under-control',
   ],
 
   // Include static LLM-related files
