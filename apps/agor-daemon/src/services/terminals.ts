@@ -616,7 +616,7 @@ export class TerminalsService {
         {
           logPrefix: `[TerminalsService.executor ${shortId(userId)}]`,
           asUser: finalUnixUser || undefined,
-          env: executorEnv,
+          env: { ...executorEnv, AGOR_CLOUD_EXECUTOR_TYPE: 'shell' },
           templateVariables: {
             // Mode-resolved identity for templated execution: the sudo user in
             // insulated/strict, the caller's unix_username in delegated (no
