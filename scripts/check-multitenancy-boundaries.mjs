@@ -52,7 +52,7 @@ const checks = [
       // helpers live here on purpose. Executor control rooms are explicitly
       // tenant-namespaced and can only be joined from a verified scoped JWT.
       'apps/agor-daemon/src/utils/realtime-publish.ts': 9,
-      'apps/agor-daemon/src/setup/socketio.ts': 17,
+      'apps/agor-daemon/src/setup/socketio.ts': 18,
     },
   },
 

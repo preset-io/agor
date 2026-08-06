@@ -106,7 +106,10 @@ function makeService(
     session_id: parentSessionId,
     status: TaskStatus.QUEUED,
   });
-  const createPending = vi.fn(async (data: Partial<Task>) => ({ ...callbackTask, ...data }));
+  const createPending = vi.fn(async (data: Partial<Task>) => ({
+    task: { ...callbackTask, ...data },
+    created: true,
+  }));
 
   const sessionsPatch = vi.fn(async (id: string, updates: Partial<Session>) => {
     const target = id === parentSessionId ? parentSession : childSession;
@@ -124,14 +127,14 @@ function makeService(
 
   const service = Object.create(TasksService.prototype) as TasksService & {
     repository: typeof repository;
-    taskRepo: typeof repository & { createPending: typeof createPending };
+    taskRepo: typeof repository;
     id: string;
     emit: ReturnType<typeof vi.fn>;
     app: { service: ReturnType<typeof vi.fn> };
     completionCallbackDispatches: Map<string, Promise<unknown>>;
   };
   service.repository = repository;
-  service.taskRepo = { ...repository, createPending };
+  service.taskRepo = repository;
   service.id = 'task_id';
   service.emit = vi.fn();
   service.completionCallbackDispatches = new Map();
@@ -180,12 +183,15 @@ describe('TasksService completion callbacks', () => {
     createPending.mockImplementationOnce(async (data: Partial<Task>) => {
       events.push('callback:queued');
       return {
-        ...makeTask({
-          task_id: callbackTaskId,
-          session_id: parentSessionId,
-          status: TaskStatus.QUEUED,
-        }),
-        ...data,
+        task: {
+          ...makeTask({
+            task_id: callbackTaskId,
+            session_id: parentSessionId,
+            status: TaskStatus.QUEUED,
+          }),
+          ...data,
+        },
+        created: true,
       };
     });
     await runWithTenantDatabaseScope(db as never, 'tenant-1', async () => {
@@ -550,7 +556,74 @@ describe('TasksService completion callbacks', () => {
     await (service as any).dispatchCompletionCallbacks(completedTask, childSession, {});
 
     expect(createPending).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: parentSessionId })
+      expect.objectContaining({ destination_session_id: parentSessionId })
+    );
+  });
+
+  it('delivers a task-level callback without mutating session callback configuration', async () => {
+    const callerSessionId = '018f0000-0000-7000-8000-000000000777';
+    const { service, createPending, sessionsPatch, childSession } = makeService({
+      childSession: { genealogy: { children: [] }, callback_config: undefined },
+      task: {
+        metadata: {
+          completion_callback: {
+            target_session_id: callerSessionId as Task['session_id'],
+            requested_from_session_id: callerSessionId as Task['session_id'],
+            requested_by_user_id: userId,
+          },
+        },
+      },
+    });
+    (service.app.service as any).mockImplementation((name: string) => {
+      if (name === 'sessions') {
+        return {
+          get: vi.fn(async (id: string) =>
+            id === childSessionId
+              ? childSession
+              : makeSession({ session_id: id as Session['session_id'], created_by: userId })
+          ),
+          patch: sessionsPatch,
+          triggerQueueProcessing: vi.fn(async () => undefined),
+        };
+      }
+      if (name === 'messages') return { find: vi.fn(async () => []) };
+      if (name === 'branches') return { get: vi.fn() };
+      throw new Error(`unexpected service ${name}`);
+    });
+
+    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
+    expect(createPending).toHaveBeenCalledWith(
+      expect.objectContaining({ destination_session_id: callerSessionId, source_task_id: taskId })
+    );
+    expect(sessionsPatch).not.toHaveBeenCalledWith(
+      childSessionId,
+      expect.objectContaining({ callback_config: expect.anything() })
+    );
+  });
+
+  it('coalesces task-level and session-level callbacks to the same destination', async () => {
+    const { service, createPending, sessionsPatch } = makeService({
+      task: {
+        metadata: {
+          completion_callback: {
+            target_session_id: parentSessionId as Task['session_id'],
+            requested_from_session_id: parentSessionId as Task['session_id'],
+            requested_by_user_id: userId,
+          },
+        },
+      },
+    });
+
+    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(sessionsPatch).toHaveBeenCalledWith(
+        childSessionId,
+        expect.objectContaining({ callback_config: expect.objectContaining({ enabled: false }) })
+      )
     );
   });
 });

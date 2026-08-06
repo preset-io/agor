@@ -62,6 +62,7 @@ import type {
   SessionMCPServer,
   StreamingEventType,
   Task,
+  TaskMetadata,
   User,
   UUID,
 } from '@agor/core/types';
@@ -221,6 +222,8 @@ export interface RouteParams extends Params {
     name?: string;
   };
   user?: User;
+  /** Trusted internal callback request, populated by MCP tooling only. */
+  _taskCompletionCallback?: NonNullable<TaskMetadata['completion_callback']>;
 }
 
 /** Compatibility tombstone retained for stale Claude CLI restart clients. */
@@ -1566,6 +1569,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             });
             if (data.idempotencyTaskId) {
               taskMetadata.initial_message_id = data.idempotencyTaskId as MessageID;
+            }
+            if (params._taskCompletionCallback) {
+              taskMetadata.completion_callback = params._taskCompletionCallback;
             }
             const task = await taskRepo.createPending({
               task_id: data.idempotencyTaskId,

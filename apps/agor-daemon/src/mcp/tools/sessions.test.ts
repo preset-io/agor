@@ -1134,6 +1134,63 @@ describe('agor_sessions_prompt (subsession mode)', () => {
   });
 });
 
+describe('agor_sessions_prompt task callback', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('binds callback:true to trusted calling session context', async () => {
+    const promptCalls: any[] = [];
+    const app = makeFakeApp({
+      '/sessions/:id/prompt': {
+        create: async (...args: unknown[]) => {
+          promptCalls.push(args);
+          return { task_id: 'task-1', status: 'queued', queue_position: 1 };
+        },
+      },
+    });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_prompt']
+    );
+
+    await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'continue exactly this task',
+      mode: 'continue',
+      callback: true,
+    });
+
+    expect(promptCalls[0][1]).toMatchObject({
+      route: { id: 'sess-target' },
+      _taskCompletionCallback: {
+        target_session_id: 'sess-caller',
+        requested_from_session_id: 'sess-caller',
+        requested_by_user_id: 'user-1',
+      },
+    });
+  });
+
+  it('rejects callback:true without current session context', async () => {
+    const promptCreate = vi.fn();
+    const app = makeFakeApp({ '/sessions/:id/prompt': { create: promptCreate } });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_prompt',
+    ]);
+
+    const result = await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'continue',
+      mode: 'continue',
+      callback: true,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+});
+
 describe('MCP session input validation clarity', () => {
   afterEach(() => {
     vi.resetModules();

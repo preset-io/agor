@@ -696,11 +696,28 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'MCP server IDs for subsession mode. Overrides parent inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
           ),
         modelConfig: modelConfigInputSchema,
+        callback: z
+          .boolean()
+          .optional()
+          .describe(
+            'Send a one-shot completion report for the exact prompted task back to the current calling Agor session.'
+          ),
       }),
     },
     async (args) => {
       const mode = args.mode;
       const sessionId = await resolveSessionId(ctx, args.sessionId);
+      if (args.callback && !ctx.sessionId) return sessionContextRequiredResult();
+      const callbackParams = args.callback
+        ? {
+            ...ctx.baseServiceParams,
+            _taskCompletionCallback: {
+              target_session_id: ctx.sessionId!,
+              requested_from_session_id: ctx.sessionId!,
+              requested_by_user_id: ctx.userId,
+            },
+          }
+        : ctx.baseServiceParams;
 
       if (mode === 'continue') {
         // The prompt route returns the Task entity directly. Whether it ran
@@ -710,7 +727,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .service('/sessions/:id/prompt')
           .create(
             { prompt: args.prompt, stream: true },
-            { ...ctx.baseServiceParams, route: { id: sessionId } }
+            { ...callbackParams, route: { id: sessionId } }
           );
 
         if (task.status === 'queued') {
@@ -784,7 +801,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             permissionMode: updatedSession.permission_config?.mode,
             stream: true,
           },
-          { ...ctx.baseServiceParams, route: { id: forkedSession.session_id } }
+          { ...callbackParams, route: { id: forkedSession.session_id } }
         );
 
         const note =
@@ -818,7 +835,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             permissionMode: childSession.permission_config?.mode,
             stream: true,
           },
-          { ...ctx.baseServiceParams, route: { id: childSession.session_id } }
+          { ...callbackParams, route: { id: childSession.session_id } }
         );
 
         return textResult({
