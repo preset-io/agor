@@ -135,7 +135,8 @@ export interface TaskMetadata {
    * paths race.
    */
   callback_dispatches?: Array<{
-    event: 'session_completion';
+    /** `session_completion` is retained for callbacks recorded before task-level callbacks existed. */
+    event: 'task_completion' | 'session_completion';
     target_session_id: SessionID;
     queued_task_id?: TaskID;
     dispatched_at: string;

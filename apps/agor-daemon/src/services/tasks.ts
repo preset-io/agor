@@ -844,8 +844,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   /**
    * Centralized completion-callback dispatcher.
    *
-   * Both subsessions and generic callback_config callbacks resolve to the same
-   * target/event pair: `session_completion` delivered to
+   * Task-level and session-configured callbacks resolve to the same
+   * target/event pair: `task_completion` delivered to
    * `callback_config.callback_session_id`, with a genealogy-parent fallback for
    * legacy spawned sessions. Keeping all routing here prevents a completed child
    * from notifying its parent once via the rich/template path and again via a
@@ -931,7 +931,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   private callbackDispatchMetadataKey(targetSessionId: SessionID): string {
-    return `session_completion:${targetSessionId}`;
+    return `task_completion:${targetSessionId}`;
   }
 
   private hasCompletionCallbackDispatch(
@@ -940,7 +940,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   ): boolean {
     return (metadata?.callback_dispatches ?? []).some(
       (dispatch) =>
-        dispatch.event === 'session_completion' && dispatch.target_session_id === targetSessionId
+        (dispatch.event === 'task_completion' || dispatch.event === 'session_completion') &&
+        dispatch.target_session_id === targetSessionId
     );
   }
 
@@ -958,7 +959,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       callback_dispatches: [
         ...(latestTask.metadata?.callback_dispatches ?? []),
         {
-          event: 'session_completion',
+          event: 'task_completion',
           target_session_id: targetSessionId,
           queued_task_id: queuedTaskId,
           dispatched_at: new Date().toISOString(),

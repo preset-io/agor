@@ -708,6 +708,16 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const mode = args.mode;
       const sessionId = await resolveSessionId(ctx, args.sessionId);
       if (args.callback && !ctx.sessionId) return sessionContextRequiredResult();
+      if (args.callback) {
+        await runWithMcpTenantDatabaseScope(ctx, (db) =>
+          ensureCanPromptTargetSession(
+            ctx.sessionId!,
+            ctx.userId,
+            ctx.app,
+            new BranchRepository(db)
+          )
+        );
+      }
       const callbackParams = args.callback
         ? {
             ...ctx.baseServiceParams,

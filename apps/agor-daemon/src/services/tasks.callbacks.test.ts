@@ -270,7 +270,7 @@ describe('TasksService completion callbacks', () => {
     await vi.waitFor(() =>
       expect(getStoredTask().metadata?.callback_dispatches).toEqual([
         expect.objectContaining({
-          event: 'session_completion',
+          event: 'task_completion',
           target_session_id: parentSessionId,
           queued_task_id: durableCallbackTaskId,
         }),
@@ -486,7 +486,7 @@ describe('TasksService completion callbacks', () => {
         metadata: {
           callback_dispatches: [
             {
-              event: 'session_completion',
+              event: 'task_completion',
               target_session_id: parentSessionId,
               queued_task_id: callbackTaskId,
               dispatched_at: '2026-01-01T00:00:06.000Z',
@@ -501,7 +501,7 @@ describe('TasksService completion callbacks', () => {
       metadata: {
         callback_dispatches: [
           {
-            event: 'session_completion',
+            event: 'task_completion',
             target_session_id: parentSessionId,
             queued_task_id: callbackTaskId,
             dispatched_at: '2026-01-01T00:00:06.000Z',
