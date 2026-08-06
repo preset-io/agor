@@ -23,6 +23,8 @@ import {
   shortId,
   type TaskDispatchClaimResult,
   TaskRepository,
+  type TaskTerminationCoordinationClaimInput,
+  type TaskTerminationCoordinationClaimResult,
   type TenantScopeAwareDatabase,
   type TerminationClaimInput,
   type TerminationClaimResult,
@@ -391,43 +393,59 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       !result.task.termination_request.executor_quiesced_at;
     if (!claimed && !retryingActiveRequest) return result;
 
-    if (claimed) {
+    await this.runAfterTenantDatabaseCommit('publish termination claim', async () => {
+      if (claimed) {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: result.task,
+          id: result.task.task_id,
+          params,
+        });
+      }
+      // A repeated claim keeps the original requested_at fence but
+      // re-publishes the private control event. This makes Stop retryable
+      // after a lost socket delivery without creating a new cancellation
+      // epoch.
       emitServiceEvent(this.app, {
         path: 'tasks',
-        event: 'patched',
+        event: 'termination_requested',
         data: result.task,
         id: result.task.task_id,
+        method: 'patch',
         params,
       });
-    }
-    // A repeated claim keeps the original requested_at fence but re-publishes
-    // the private control event. This makes Stop retryable after a lost socket
-    // delivery without creating a new cancellation epoch.
-    emitServiceEvent(this.app, {
-      path: 'tasks',
-      event: 'termination_requested',
-      data: result.task,
-      id: result.task.task_id,
-      method: 'patch',
-      params,
+      if (claimed) {
+        const session = await this.app
+          .service('sessions')
+          .get(result.task.session_id, { ...(params ?? {}), provider: undefined });
+        emitServiceEvent(this.app, {
+          path: 'sessions',
+          event: 'patched',
+          data: session,
+          id: session.session_id,
+          params,
+        });
+      }
     });
-    if (!claimed) return result;
+    return result;
+  }
 
-    try {
-      await this.app
-        .service('sessions')
-        .patch(
-          result.task.session_id,
-          { status: SessionStatus.STOPPING, ready_for_prompt: false },
-          { ...(params ?? {}), provider: undefined }
-        );
-    } catch (error) {
-      // The durable Task claim owns termination. A transient projection write
-      // must not prevent the coordinator from containing the process.
-      console.warn(
-        `[termination] Failed to project STOPPING onto session ${shortId(result.task.session_id)}:`,
-        error instanceof Error ? error.message : String(error)
-      );
+  async claimTerminationCoordination(
+    input: TaskTerminationCoordinationClaimInput,
+    params?: TaskParams
+  ): Promise<TaskTerminationCoordinationClaimResult> {
+    const result = await this.taskRepo.claimTerminationCoordination(input);
+    if (result.outcome === 'claimed') {
+      await this.runAfterTenantDatabaseCommit('publish termination coordination', async () => {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: result.task,
+          id: result.task.task_id,
+          params,
+        });
+      });
     }
     return result;
   }
@@ -439,40 +457,40 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const result = await this.taskRepo.settleTermination(input);
     if (result.outcome !== 'transitioned' && result.outcome !== 'unverified') return result;
 
-    emitServiceEvent(this.app, {
-      path: 'tasks',
-      event: 'patched',
-      data: result.task,
-      id: result.task.task_id,
-      params,
-    });
-    if (result.outcome === 'unverified') return result;
+    await this.runAfterTenantDatabaseCommit('publish termination settlement', async () => {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: result.task,
+        id: result.task.task_id,
+        params,
+      });
+      if (result.outcome === 'unverified') return;
 
-    this.trackTaskCompleted(result.task);
-    const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
-    const isStop = result.task.status === TaskStatus.STOPPED;
-    const completionParams = {
-      ...internalParams,
-      // Failure containment never drains queued work automatically. User Stop
-      // delegates that hand-off to its caller while the session lock is held;
-      // a late CLI confirmation has no caller and drains here instead.
-      suppressTerminalQueueProcessing: !isStop || params?.suppressTerminalQueueProcessing === true,
-    };
-    const sessionProjected = await this.processCompletionSideEffects(
-      result.task,
-      result.task.status,
-      completionParams
-    );
-    if (!sessionProjected) {
-      try {
-        await this.projectTerminalSession(result.task, result.task.status, completionParams);
-      } catch (error) {
-        console.warn(
-          `[termination] Failed to settle session ${shortId(result.task.session_id)}:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    }
+      this.trackTaskCompleted(result.task);
+      const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
+      const isStop = result.task.status === TaskStatus.STOPPED;
+      const completionParams = {
+        ...internalParams,
+        // Avoid a second eager hand-off from the settlement path. The durable
+        // all-daemon queue worker will independently reevaluate the committed
+        // Task outcome and Session projection; user Stop may still delegate
+        // an immediate hand-off to its caller while the Session lock is held.
+        suppressTerminalQueueProcessing:
+          !isStop || params?.suppressTerminalQueueProcessing === true,
+      };
+      // The repository committed the authoritative Task settlement and
+      // minimal Session projection atomically. Post-commit work must never
+      // patch that projection again: a new Task may already have claimed the
+      // Session, and an unconditional retry here would clobber
+      // RUNNING/ready=false.
+      await this.processCompletionSideEffects(
+        result.task,
+        result.task.status,
+        completionParams,
+        true
+      );
+    });
     return result;
   }
 
@@ -561,7 +579,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   private async processCompletionSideEffects(
     task: Task,
     status: Task['status'],
-    params?: TaskParams
+    params?: TaskParams,
+    sessionProjectionAlreadyCommitted = false
   ): Promise<boolean> {
     if (!task.session_id || !this.app) return false;
     try {
@@ -599,10 +618,22 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         return false;
       }
 
-      await this.projectTerminalSession(task, status, params);
-      console.log(
-        `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
-      );
+      if (sessionProjectionAlreadyCommitted) {
+        // Publish the latest Session fact rather than rewriting it. It may
+        // already reflect a newer Task admitted after the settlement commit.
+        emitServiceEvent(this.app, {
+          path: 'sessions',
+          event: 'patched',
+          data: session,
+          id: session.session_id,
+          params,
+        });
+      } else {
+        await this.projectTerminalSession(task, status, params);
+        console.log(
+          `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
+        );
+      }
 
       // Defensive fallback for tasks created before create-time auto-title
       // ran (or after a transient title-patch failure). Later completed
@@ -1339,7 +1370,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     const task = await this.taskRepo.reportRuntimeTelemetry(data.task_id, data.pulse);
-    if (!task) throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
+    if (!task) {
+      // Heartbeat responses are also the executor's durable control-plane
+      // read. This lets a reconnected executor observe STOPPING through any
+      // daemon even before cross-replica realtime fanout is enabled.
+      const current = await this.taskRepo.findById(data.task_id);
+      if (current?.status === TaskStatus.STOPPING && current.termination_request) return current;
+      throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
+    }
     analyticsLogger.track(
       'executor.heartbeat',
       {

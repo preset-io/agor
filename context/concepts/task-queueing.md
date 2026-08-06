@@ -93,6 +93,21 @@ and pending/resolving widgets cannot be externally removed.
 8. SQLite preserves the same user-visible ordering and lifecycle without
    pretending to provide multi-daemon authority.
 
+## Runtime supervision handoff
+
+- Queued Tasks are durable user intent and survive daemon startup in both
+  standalone and shared PostgreSQL modes. Replica startup is never a queue
+  outcome.
+- Shared PostgreSQL startup also leaves active Tasks and their Session
+  projection untouched; bounded runtime reconciliation acts only on expired
+  dispatch facts, stale executor heartbeats, or existing durable termination
+  requests.
+- Queue release follows authoritative Task settlement and the resulting
+  Session projection. It is not keyed to daemon identity or restart notices.
+- Verified containment may make the Session promptable and show a new-Task
+  Resume action. Unverified containment remains `stopping` and guarded behind
+  owner/admin force-fail.
+
 ## Key files
 
 - Persistence: `packages/core/src/db/repositories/tasks.ts`

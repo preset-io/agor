@@ -744,5 +744,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
     distributedWorkIdentity,
+    // Explicit compatibility boundary until daemon HA configuration lands.
+    // Shared PostgreSQL deployments must opt into `shared_postgres` rather
+    // than silently changing standalone restart semantics.
+    taskRuntimePolicy: 'standalone',
   });
 }

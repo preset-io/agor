@@ -2,7 +2,12 @@ import { createTenantScopedDatabaseProxy, MissingTenantDatabaseScopeError } from
 import type { Session, Task } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { cleanupOrphanStatuses, type StartupContext } from './startup.js';
+import {
+  cleanupOrphanStatuses,
+  prepareTaskRuntimeStartup,
+  type StartupContext,
+  shouldContainLocalExecutorsOnShutdown,
+} from './startup.js';
 
 interface StartupFixtures {
   orphanedTasks?: Task[];
@@ -129,6 +134,27 @@ function makeSession(overrides: Partial<Session>): Session {
 }
 
 describe('startup tenant database scope', () => {
+  it('contains local executors only under the standalone shutdown contract', () => {
+    expect(shouldContainLocalExecutorsOnShutdown('standalone')).toBe(true);
+    expect(shouldContainLocalExecutorsOnShutdown('shared_postgres')).toBe(false);
+  });
+
+  it('leaves healthy Tasks, Sessions, and queued work untouched in shared PostgreSQL mode', async () => {
+    const { ctx, tasksService, sessionsService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [makeTask({ status: TaskStatus.RUNNING })],
+      queuedTasks: [makeTask({ task_id: 'queued-1', status: TaskStatus.QUEUED })],
+    });
+    ctx.taskRuntimePolicy = 'shared_postgres';
+
+    await expect(prepareTaskRuntimeStartup(ctx)).resolves.toBeNull();
+    expect(tasksService.getOrphaned).not.toHaveBeenCalled();
+    expect(tasksService.find).not.toHaveBeenCalled();
+    expect(tasksService.patch).not.toHaveBeenCalled();
+    expect(tasksService.settleTermination).not.toHaveBeenCalled();
+    expect(sessionsService.find).not.toHaveBeenCalled();
+    expect(sessionsService.patch).not.toHaveBeenCalled();
+  });
+
   it('runs orphan cleanup inside an explicit startup tenant DB scope', async () => {
     const { ctx, baseDb } = makeStartupContextWithGuardedDb();
 

@@ -310,6 +310,13 @@ export const tasks = pgTable(
     executor_connected_at: t.timestamp('executor_connected_at'),
     completed_at: t.timestamp('completed_at'),
     last_executor_heartbeat_at: t.timestamp('last_executor_heartbeat_at'),
+    dispatch_timeout_observed_at: t.timestamp('dispatch_timeout_observed_at'),
+    termination_coordination_token: text('termination_coordination_token'),
+    termination_coordination_claimed_at: t.timestamp('termination_coordination_claimed_at'),
+    termination_coordination_expires_at: t.timestamp('termination_coordination_expires_at'),
+    termination_coordination_instance_id: text('termination_coordination_instance_id'),
+    termination_coordination_boot_id: text('termination_coordination_boot_id'),
+    termination_unverified_at: t.timestamp('termination_unverified_at'),
     status: text('status', {
       enum: [
         'queued',
@@ -382,6 +389,19 @@ export const tasks = pgTable(
     // Composite for "latest task for session" queries (ORDER BY created_at DESC LIMIT 1).
     sessionCreatedIdx: index('tasks_session_created_idx').on(table.session_id, table.created_at),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
+    runtimeDispatchIdx: index('tasks_runtime_dispatch_idx')
+      .on(table.started_at, table.task_id)
+      .where(
+        sql`${table.status} = 'dispatching' AND ${table.executor_connected_at} IS NULL AND ${table.started_at} IS NOT NULL AND ${table.dispatch_timeout_observed_at} IS NULL`
+      ),
+    runtimeHeartbeatIdx: index('tasks_runtime_heartbeat_idx')
+      .on(table.last_executor_heartbeat_at, table.task_id)
+      .where(
+        sql`${table.status} IN ('running', 'awaiting_permission', 'awaiting_input') AND ${table.last_executor_heartbeat_at} IS NOT NULL`
+      ),
+    runtimeTerminationIdx: index('tasks_runtime_termination_idx')
+      .on(table.termination_coordination_expires_at, table.task_id)
+      .where(sql`${table.status} = 'stopping' AND ${table.termination_unverified_at} IS NULL`),
     // Partial unique index — defense-in-depth for `tasks.createPending` race
     // serialization. Only QUEUED rows are constrained; CREATED/RUNNING/done
     // rows have NULL queue_position and are unaffected.

@@ -124,6 +124,21 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).not.toContain('WITH CHECK');
   });
 
+  it('limits task-runtime discovery to active routing rows and an explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0073_task_runtime_reconciliation.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('"status" IN');
+    expect(migration).toContain("'dispatching'");
+    expect(migration).toContain("'running'");
+    expect(migration).toContain("'stopping'");
+    expect(migration).toContain("current_setting('agor.system_scope', true)");
+    expect(migration).toContain("= 'task_runtime_discovery'");
+    expect(migration).not.toContain('WITH CHECK');
+  });
+
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {
     const migration = readRepoFile('packages/core/drizzle/postgres/0071_scheduler_ha_indexes.sql');
 

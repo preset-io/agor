@@ -264,6 +264,7 @@ export class AgorExecutor {
       taskId: this.config.taskId,
       enabled: heartbeatConfig?.enabled ?? true,
       intervalMs: heartbeatConfig?.interval_ms,
+      onTask: (task) => this.handleTaskLifecycleUpdate(task),
     });
     const watchdogConfig =
       this.config.resolvedConfig?.execution?.sdk_watchdog ?? resolveSdkWatchdogConfig();

@@ -22,7 +22,25 @@ export type ContainmentResult =
   | { status: 'verified_absent' }
   | { status: 'unverified'; reason: string };
 
-const executorProcesses = new Map<string, ExecutorContainmentIdentity>();
+export const DEFAULT_EXECUTOR_TERM_GRACE_MS = 3_000;
+export const DEFAULT_EXECUTOR_KILL_GRACE_MS = 2_000;
+
+// Production daemons are separate processes, but application-scoped registries
+// make the ownership boundary explicit and let HA tests construct independent
+// daemon applications in one process without sharing local handles. Callers
+// outside an application composition root retain the legacy default registry.
+const defaultRegistryOwner = {};
+const executorProcessesByOwner = new WeakMap<object, Map<string, ExecutorContainmentIdentity>>();
+
+function executorProcesses(owner?: object): Map<string, ExecutorContainmentIdentity> {
+  const key = owner ?? defaultRegistryOwner;
+  let registry = executorProcessesByOwner.get(key);
+  if (!registry) {
+    registry = new Map();
+    executorProcessesByOwner.set(key, registry);
+  }
+  return registry;
+}
 
 const CONTAINMENT_FENCE_VERSION = 1;
 
@@ -196,13 +214,16 @@ async function waitForAbsence(
   return inspectGroup(pgid, 0, asUser) === 'absent';
 }
 
-export function trackExecutorProcess(input: {
-  sessionId: string;
-  taskId: string;
-  pid: number;
-  asUser?: string;
-}): void {
-  executorProcesses.set(input.sessionId, {
+export function trackExecutorProcess(
+  input: {
+    sessionId: string;
+    taskId: string;
+    pid: number;
+    asUser?: string;
+  },
+  owner?: object
+): void {
+  executorProcesses(owner).set(input.sessionId, {
     ...input,
     pgid: input.pid,
     startIdentity: readStartIdentity(input.pid),
@@ -211,20 +232,22 @@ export function trackExecutorProcess(input: {
   });
 }
 
-export function markExecutorProcessExited(sessionId: string, pid?: number): void {
-  const tracked = executorProcesses.get(sessionId);
+export function markExecutorProcessExited(sessionId: string, pid?: number, owner?: object): void {
+  const tracked = executorProcesses(owner).get(sessionId);
   if (tracked && (!pid || tracked.pid === pid)) tracked.leaderExited = true;
 }
 
-export function untrackExecutorProcess(sessionId: string, taskId?: string): void {
-  const tracked = executorProcesses.get(sessionId);
-  if (!taskId || tracked?.taskId === taskId) executorProcesses.delete(sessionId);
+export function untrackExecutorProcess(sessionId: string, taskId?: string, owner?: object): void {
+  const registry = executorProcesses(owner);
+  const tracked = registry.get(sessionId);
+  if (!taskId || tracked?.taskId === taskId) registry.delete(sessionId);
 }
 
 export function getTrackedExecutor(
-  sessionId: string
+  sessionId: string,
+  owner?: object
 ): Readonly<ExecutorContainmentIdentity> | undefined {
-  return executorProcesses.get(sessionId);
+  return executorProcesses(owner).get(sessionId);
 }
 
 async function containExecutorIdentity(
@@ -312,7 +335,7 @@ async function containExecutorIdentity(
   if (
     await waitForAbsence(
       tracked.pgid,
-      options.termGraceMs ?? 3000,
+      options.termGraceMs ?? DEFAULT_EXECUTOR_TERM_GRACE_MS,
       options.pollMs ?? 50,
       tracked.asUser
     )
@@ -326,7 +349,7 @@ async function containExecutorIdentity(
   if (
     await waitForAbsence(
       tracked.pgid,
-      options.killGraceMs ?? 2000,
+      options.killGraceMs ?? DEFAULT_EXECUTOR_KILL_GRACE_MS,
       options.pollMs ?? 50,
       tracked.asUser
     )
@@ -345,9 +368,10 @@ export async function containExecutorProcess(
     termGraceMs?: number;
     killGraceMs?: number;
     pollMs?: number;
-  } = {}
+  } = {},
+  owner?: object
 ): Promise<ContainmentResult> {
-  const tracked = executorProcesses.get(sessionId);
+  const tracked = executorProcesses(owner).get(sessionId);
   if (!tracked || tracked.taskId !== taskId) {
     return { status: 'unverified', reason: 'No matching local executor is tracked.' };
   }
@@ -363,9 +387,12 @@ export async function retainExecutorContainmentFence(
   fenceKey: string,
   sessionId: string,
   taskId: string,
-  root = containmentFenceRoot()
+  rootOrOwner: string | object = containmentFenceRoot(),
+  owner?: object
 ): Promise<void> {
-  const executor = executorProcesses.get(sessionId);
+  const root = typeof rootOrOwner === 'string' ? rootOrOwner : containmentFenceRoot();
+  const registryOwner = typeof rootOrOwner === 'string' ? owner : rootOrOwner;
+  const executor = executorProcesses(registryOwner).get(sessionId);
   if (!executor || executor.taskId !== taskId) {
     throw new Error('Cannot retain a containment fence without a matching local executor');
   }
@@ -417,7 +444,8 @@ export async function releaseExecutorContainmentFenceIntent(
  */
 export async function verifyExecutorContainmentFence(
   fenceKey: string,
-  root = containmentFenceRoot()
+  root = containmentFenceRoot(),
+  owner?: object
 ): Promise<boolean> {
   const directory = containmentFenceDirectory(fenceKey, root);
   let files: string[];
@@ -442,10 +470,10 @@ export async function verifyExecutorContainmentFence(
       continue;
     }
 
-    const candidate = executorProcesses.get(stored.executor.sessionId);
+    const candidate = executorProcesses(owner).get(stored.executor.sessionId);
     const live = candidate?.taskId === stored.executor.taskId ? candidate : undefined;
     const result = live
-      ? await containExecutorProcess(live.sessionId, live.taskId)
+      ? await containExecutorProcess(live.sessionId, live.taskId, {}, owner)
       : await containExecutorIdentity(stored.executor, { recovered: true });
     if (result.status !== 'verified_absent') {
       verified = false;
@@ -463,10 +491,10 @@ export async function verifyExecutorContainmentFence(
   return verified;
 }
 
-export async function containAllTrackedExecutors(): Promise<void> {
+export async function containAllTrackedExecutors(owner?: object): Promise<void> {
   await Promise.all(
-    [...executorProcesses.values()].map((tracked) =>
-      containExecutorProcess(tracked.sessionId, tracked.taskId).then((result) => {
+    [...executorProcesses(owner).values()].map((tracked) =>
+      containExecutorProcess(tracked.sessionId, tracked.taskId, {}, owner).then((result) => {
         if (result.status === 'unverified') {
           console.warn(`⚠️  [Executor] Graceful-shutdown containment: ${result.reason}`);
         }

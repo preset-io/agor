@@ -84,6 +84,21 @@ export type TerminationCause =
   | 'heartbeat_lost'
   | 'sdk_health_failure';
 
+/**
+ * Expiring, database-fenced ownership of one containment attempt.
+ *
+ * The daemon identity is diagnostic. `claim_token` is the correctness fence:
+ * a coordinator may settle containment only while this exact token remains on
+ * the Task. A replacement daemon can claim a new token after expiry.
+ */
+export interface TerminationCoordinationClaim {
+  claim_token: string;
+  claimed_at: string;
+  lease_expires_at: string;
+  instance_id: string;
+  boot_id: string;
+}
+
 export interface TerminationRequest {
   cause: TerminationCause;
   requested_at: string;
@@ -96,6 +111,8 @@ export interface TerminationRequest {
    * process-group absence verification before the session becomes promptable.
    */
   executor_quiesced_at?: string;
+  /** Current expiring containment coordinator, if one has been elected. */
+  coordination?: TerminationCoordinationClaim;
 }
 
 export interface ExecutorTerminationCompleteInput {

@@ -8,10 +8,10 @@
  * list — WITHOUT disturbing non-widget order, message indices, or identity.
  */
 
-import type { Message } from '@agor-live/client';
+import type { Message, Task } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 
-import { type Block, groupMessagesIntoBlocks } from './TaskBlock';
+import { type Block, groupMessagesIntoBlocks, isVerifiedRuntimeInterruption } from './TaskBlock';
 
 function userMessage(index: number, id: string): Message {
   return {
@@ -150,5 +150,33 @@ describe('groupMessagesIntoBlocks — assistant activity', () => {
     expect(groupMessagesIntoBlocks([message])).toEqual([
       { type: 'agent-chain', messages: [message] },
     ]);
+  });
+});
+
+describe('verified runtime interruption projection', () => {
+  const task = {
+    status: 'failed',
+    sdk_failure: { termination: 'verified' },
+    termination_request: { cause: 'heartbeat_lost' },
+  } as unknown as Task;
+
+  it('offers outcome-based recovery only for the latest verified interruption', () => {
+    expect(isVerifiedRuntimeInterruption(task, true)).toBe(true);
+    expect(isVerifiedRuntimeInterruption(task, false)).toBe(false);
+  });
+
+  it('keeps unverified containment and user Stop out of Resume UX', () => {
+    expect(
+      isVerifiedRuntimeInterruption(
+        { ...task, sdk_failure: { ...task.sdk_failure!, termination: 'unverified' } } as Task,
+        true
+      )
+    ).toBe(false);
+    expect(
+      isVerifiedRuntimeInterruption(
+        { ...task, termination_request: { ...task.termination_request!, cause: 'user_stop' } },
+        true
+      )
+    ).toBe(false);
   });
 });

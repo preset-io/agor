@@ -1,4 +1,4 @@
-import type { ExecutorPulseKind, TaskID } from '@agor/core/types';
+import type { ExecutorPulseKind, Task, TaskID } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
 export interface ExecutorHeartbeatOptions {
@@ -7,6 +7,8 @@ export interface ExecutorHeartbeatOptions {
   enabled?: boolean;
   intervalMs?: number;
   warn?: (...args: unknown[]) => void;
+  /** Observe the durable Task returned by any daemon handling this heartbeat. */
+  onTask?: (task: Task) => void;
 }
 
 export interface ExecutorHeartbeatHandle {
@@ -39,10 +41,11 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     if (stopped || inFlight) return;
     inFlight = true;
     try {
-      await options.client.service('tasks').reportRuntimeTelemetry({
+      const task = await options.client.service('tasks').reportRuntimeTelemetry({
         task_id: options.taskId,
         ...(latestPulse ? { pulse: latestPulse } : {}),
       });
+      options.onTask?.(task as Task);
     } catch (error) {
       warn(
         '[executor-heartbeat] Failed to write heartbeat:',
