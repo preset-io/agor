@@ -787,12 +787,12 @@ export class GatewayService {
       const matched = await this.usersRepo.findByEmailForAlignment(mappedEmail);
       if (matched) {
         console.log(
-          `[gateway] ${platform} user aligned via user_map: ${externalId} → ${mappedEmail} → Agor user ${shortId(matched.user_id)}`
+          `[gateway] ${platform} user alignment succeeded: source=user_map agor_user=${shortId(matched.user_id)}`
         );
         return matched;
       }
       console.warn(
-        `[gateway] user_map entry ${externalId} → ${mappedEmail} but no Agor user with that email`
+        `[gateway] ${platform} user alignment failed: source=user_map result=agor_user_not_found`
       );
     }
 
@@ -802,7 +802,7 @@ export class GatewayService {
       const matched = await this.usersRepo.findByEmailForAlignment(normalizedEmail);
       if (matched) {
         console.log(
-          `[gateway] ${platform} user aligned via email: ${externalId ?? 'unknown'} (${normalizedEmail}) → Agor user ${shortId(matched.user_id)}`
+          `[gateway] ${platform} user alignment succeeded: source=email agor_user=${shortId(matched.user_id)}`
         );
         return matched;
       }
@@ -1882,11 +1882,11 @@ export class GatewayService {
 
         if (matchedUser) {
           console.log(
-            `[gateway] Slack user aligned: ${email} → Agor user ${shortId(matchedUser.user_id)} (${matchedUser.name || matchedUser.email})`
+            `[gateway] Slack user alignment succeeded: agor_user=${shortId(matchedUser.user_id)}`
           );
           user = await usersService.get(matchedUser.user_id);
         } else {
-          console.log(`[gateway] Slack user alignment failed: no Agor user with email ${email}`);
+          console.log('[gateway] Slack user alignment failed: result=agor_user_not_found');
           this.sendSystemMessage(
             channel,
             data.thread_id,
@@ -1902,9 +1902,7 @@ export class GatewayService {
         // Alignment is enabled but email couldn't be resolved (missing
         // users:read.email scope, Slack API error, or no email on profile).
         // Reject instead of silently falling back to channel owner.
-        console.log(
-          `[gateway] Slack user alignment failed: could not resolve email for Slack user ${data.user_name ?? 'unknown'} (thread=${data.thread_id})`
-        );
+        console.log('[gateway] Slack user alignment failed: result=identity_email_unavailable');
         this.sendSystemMessage(
           channel,
           data.thread_id,
@@ -1936,9 +1934,7 @@ export class GatewayService {
         user = await usersService.get(matchedUser.user_id);
       } else {
         // Reject — no silent fallback to channel owner.
-        console.log(
-          `[gateway] GitHub user alignment failed: no Agor mapping for ${githubLogin ?? 'unknown'} (thread=${data.thread_id})`
-        );
+        console.log('[gateway] GitHub user alignment failed: result=agor_user_not_found');
         // Edit the Processing comment with rejection message (if we have one)
         if (data.metadata?.processing_comment_id) {
           try {
@@ -1977,9 +1973,7 @@ export class GatewayService {
       } else {
         // Reject — no silent fallback to channel owner. Deliver the rejection by
         // editing the "👀 on it" ack (or a fresh comment if the ack is absent).
-        console.log(
-          `[gateway] Shortcut user alignment failed: no Agor mapping for ${shortcutMemberId ?? 'unknown'} (thread=${data.thread_id})`
-        );
+        console.log('[gateway] Shortcut user alignment failed: result=agor_user_not_found');
         try {
           const connector = getConnector(channel.channel_type as ChannelType, channel.config);
           await connector.sendMessage({
