@@ -1793,6 +1793,57 @@ function createPendingInput(overrides: {
 }
 
 describe('TaskRepository.createPending', () => {
+  dbTest('reconciles concurrent stable-ID creation to one task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const taskId = generateId();
+    const input = createPendingInput({ session_id: sessionId, status: TaskStatus.CREATED });
+
+    const tasks = await Promise.all(
+      Array.from({ length: 5 }, () => taskRepo.createPending({ ...input, task_id: taskId }))
+    );
+
+    expect(new Set(tasks.map((task) => task.task_id))).toEqual(new Set([taskId]));
+    expect(await taskRepo.findBySession(sessionId)).toHaveLength(1);
+  });
+
+  dbTest('atomically fences concurrent dispatch claims', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.CREATED })
+    );
+
+    const claims = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        taskRepo.claimDispatch(task.task_id, TaskStatus.CREATED, {
+          status: TaskStatus.DISPATCHING,
+          started_at: new Date('2026-08-05T00:00:00Z').toISOString(),
+        })
+      )
+    );
+
+    expect(claims.filter((claim) => claim.outcome === 'claimed')).toHaveLength(1);
+    expect(claims.filter((claim) => claim.outcome === 'already_claimed')).toHaveLength(4);
+    expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.DISPATCHING);
+  });
+
+  dbTest('clears queue position when claiming a queued task for dispatch', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const queued = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
+
+    const claim = await taskRepo.claimDispatch(queued.task_id, TaskStatus.QUEUED, {
+      status: TaskStatus.DISPATCHING,
+    });
+
+    expect(claim.outcome).toBe('claimed');
+    expect(claim.task.queue_position).toBeUndefined();
+    expect((await taskRepo.findById(queued.task_id))?.queue_position).toBeUndefined();
+  });
+
   dbTest(
     'should create QUEUED task with queue_position=1 when no other queued tasks',
     async ({ db }) => {

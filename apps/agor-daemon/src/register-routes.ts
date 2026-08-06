@@ -1048,10 +1048,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       config.execution?.executor_command_template ? 'templated' : 'local'
     );
 
-    // Patch task: queued/created → launch status, with real ranges. queue_position
-    // is cleared here so a draining task is no longer considered queued.
-    const updatedTask = (await app.service('tasks').patch(
+    if (task.status !== TaskStatus.CREATED && task.status !== TaskStatus.QUEUED) {
+      // A concurrent daemon may have won between the caller's read and this
+      // handoff. Returning the durable task is the idempotent success path.
+      return task;
+    }
+
+    // Atomically claim queued/created → launch status. Process-local session
+    // locks reduce contention, but this expected-state transition is the
+    // cross-daemon fence that prevents duplicate executor launches.
+    const dispatchClaim = await tasksService.claimDispatch(
       task.task_id,
+      task.status,
       {
         ...launchState,
         ...(launchState.executor_mode
@@ -1070,7 +1078,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         },
       },
       { ...params, provider: undefined }
-    )) as Task;
+    );
+    if (dispatchClaim.outcome !== 'claimed') {
+      console.info('[DistributedWork]', {
+        component: 'task-dispatch',
+        event: 'claim_lost',
+        task_id: task.task_id,
+        session_id: task.session_id,
+        observed_status: dispatchClaim.task.status,
+      });
+      return dispatchClaim.task;
+    }
+    const updatedTask = dispatchClaim.task;
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
@@ -1259,6 +1278,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
            * excluded/sanitized even for stale or untyped clients.
            */
           metadata?: PromptTaskMetadataInput;
+          /**
+           * Internal-only stable task identity for idempotent producers such
+           * as the scheduler. External callers may not set this field.
+           */
+          idempotencyTaskId?: UUID;
         },
         params: RouteParams
       ) {
@@ -1272,6 +1296,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         let id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         if (!data.prompt) throw new Error('Prompt required');
+        if (data.idempotencyTaskId && params.provider) {
+          throw new Forbidden('idempotencyTaskId is internal-only');
+        }
 
         // Validate and normalize messageSource
         const messageSource = normalizeMessageSource(data.messageSource, params);
@@ -1346,6 +1373,44 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               taskRepo,
               params
             );
+
+            // A scheduled occurrence owns a stable initial task ID persisted
+            // with its session. Reconciliation always targets that row rather
+            // than inferring idempotence from process-local locks or creating a
+            // second queued prompt after another daemon starts it.
+            if (data.idempotencyTaskId) {
+              const prior = await taskRepo.findById(data.idempotencyTaskId);
+              if (prior && prior.session_id !== id) {
+                throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+              }
+              const task = await taskRepo.createPending({
+                task_id: data.idempotencyTaskId,
+                session_id: id as SessionID,
+                full_prompt: data.prompt,
+                created_by: createdBy,
+                status: TaskStatus.CREATED,
+              });
+              if (!prior) {
+                emitServiceEvent(app, {
+                  path: 'tasks',
+                  event: 'created',
+                  data: task,
+                  params,
+                  id: task.task_id,
+                });
+              }
+              if (task.status !== TaskStatus.CREATED) return task;
+              return await spawnTaskExecutor(
+                task,
+                {
+                  permissionMode: data.permissionMode,
+                  stream: data.stream !== false,
+                  messageSource,
+                },
+                params
+              );
+            }
+
             const queuedTasks = await taskRepo.findQueued(id as SessionID);
             const shouldQueue =
               !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||

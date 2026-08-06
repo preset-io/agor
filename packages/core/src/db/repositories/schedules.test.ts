@@ -325,6 +325,23 @@ describe('ScheduleRepository.findDue', () => {
 
     expect(refs).toEqual([{ schedule_id: due.schedule_id }]);
   });
+
+  dbTest('findDueRefs enforces the scheduler batch limit', async ({ db }) => {
+    const ctx = await setupContext(db);
+    const now = Date.now();
+    await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        ctx.scheduleRepo.create({
+          ...scheduleData({ name: `due-${index}`, next_run_at: now - 5_000 + index }),
+          branch_id: ctx.branchId,
+          created_by: ctx.userId,
+        })
+      )
+    );
+
+    expect(await ctx.scheduleRepo.findDueRefs(now, 2)).toHaveLength(2);
+    await expect(ctx.scheduleRepo.findDueRefs(now, 0)).rejects.toThrow(/between 1 and 1000/);
+  });
 });
 
 describe('ScheduleRepository.findAccessibleSchedules', () => {

@@ -259,7 +259,10 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
    * workers can enter the correct tenant DB scope before loading schedule
    * contents or spawning sessions.
    */
-  async findDueRefs(now: number = Date.now()): Promise<DueScheduleRef[]> {
+  async findDueRefs(now: number = Date.now(), limit = 25): Promise<DueScheduleRef[]> {
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
+      throw new RepositoryError('Due schedule discovery limit must be between 1 and 1000');
+    }
     const tenantColumn = (schedules as unknown as { tenant_id?: unknown }).tenant_id;
     const columns =
       isPostgresDatabase(this.db) && tenantColumn
@@ -270,6 +273,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       .from(schedules)
       .where(this.dueCondition(now))
       .orderBy(asc(schedules.next_run_at))
+      .limit(limit)
       .all();
 
     return (rows as Array<{ schedule_id: string; tenant_id?: unknown }>).map((row) => ({
@@ -278,6 +282,15 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         ? { tenant_id: row.tenant_id }
         : {}),
     }));
+  }
+
+  /**
+   * Serialize the short admission decision for one schedule on PostgreSQL.
+   * Call inside an existing tenant database scope/transaction. No rendering,
+   * launching, or other external work belongs under this row lock.
+   */
+  async lockForRunAdmission(scheduleId: ScheduleID): Promise<void> {
+    await lockRowForUpdate(this.db, this.db, schedules, eq(schedules.schedule_id, scheduleId));
   }
 
   /**

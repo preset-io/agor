@@ -18,6 +18,7 @@ import {
 import {
   enqueueTenantDatabasePostCommitCallback,
   shortId,
+  type TaskDispatchClaimResult,
   TaskRepository,
   type TenantScopeAwareDatabase,
   type TerminationClaimInput,
@@ -133,6 +134,26 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.db = db;
     const heartbeatConfig = resolveExecutorHeartbeatConfig(app.get?.('config')?.execution);
     this.heartbeatCallbackRunner = new ExecutorHeartbeatCallbackRunner(heartbeatConfig);
+  }
+
+  /** Atomic daemon-side claim for the durable task launch-intent transition. */
+  async claimDispatch(
+    taskId: string,
+    expectedStatus: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED,
+    updates: Partial<Task>,
+    params?: TaskParams
+  ): Promise<TaskDispatchClaimResult> {
+    const result = await this.taskRepo.claimDispatch(taskId, expectedStatus, updates);
+    if (result.outcome === 'claimed') {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: result.task,
+        params,
+        id: result.task.task_id,
+      });
+    }
+    return result;
   }
 
   /**

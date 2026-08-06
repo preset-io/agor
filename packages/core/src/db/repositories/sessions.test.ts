@@ -94,6 +94,7 @@ function createPostgresStyleSessionRow(overrides?: Partial<SessionRow> & { tenan
     scheduled_run_at: null,
     scheduled_from_branch: false,
     schedule_id: null,
+    scheduler_init_completed_at: null,
     ready_for_prompt: false,
     archived: false,
     archived_reason: null,
@@ -1350,6 +1351,48 @@ describe('SessionRepository schedule-link queries', () => {
     const found = await repo.findScheduleRun(scheduleId, 1_700_000_000_000);
     expect(found).toBeNull();
   });
+
+  dbTest(
+    'discovers and idempotently completes pending scheduled initialization',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const scheduleId = await createTestSchedule(db, branch.branch_id);
+      const created = await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_000,
+          scheduled_from_branch: true,
+        })
+      );
+      await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_001,
+          scheduled_from_branch: true,
+        })
+      );
+
+      const firstPage = await repo.findIncompleteScheduledRefs(1);
+      const secondPage = await repo.findIncompleteScheduledRefs(1, firstPage[0]);
+      expect(firstPage).toHaveLength(1);
+      expect(secondPage).toHaveLength(1);
+      expect(secondPage[0].session_id).not.toBe(firstPage[0].session_id);
+
+      expect((await repo.findIncompleteScheduledRefs(10)).map((ref) => ref.session_id)).toContain(
+        created.session_id
+      );
+      expect(await repo.isScheduledInitializationComplete(created.session_id)).toBe(false);
+      expect(await repo.markScheduledInitializationComplete(created.session_id)).toBe(true);
+      expect(await repo.markScheduledInitializationComplete(created.session_id)).toBe(false);
+      expect(await repo.isScheduledInitializationComplete(created.session_id)).toBe(true);
+      expect(
+        (await repo.findIncompleteScheduledRefs(10)).map((ref) => ref.session_id)
+      ).not.toContain(created.session_id);
+    }
+  );
 
   dbTest('findScheduleRun does not match a different scheduled_run_at', async ({ db }) => {
     const repo = new SessionRepository(db);

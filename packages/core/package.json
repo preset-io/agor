@@ -262,6 +262,12 @@
       "import": "./dist/sessions/index.js",
       "require": "./dist/sessions/index.cjs"
     },
+    "./coordination": {
+      "source": "./src/coordination/index.ts",
+      "types": "./dist/coordination/index.d.ts",
+      "import": "./dist/coordination/index.js",
+      "require": "./dist/coordination/index.cjs"
+    },
     "./models/browser": {
       "source": "./src/models/browser.ts",
       "types": "./dist/models/browser.d.ts",

@@ -141,7 +141,6 @@ const checks = [
     // Baseline of existing raw transaction call sites. New work should use the
     // Agor store/tenant transaction wrapper once introduced.
     baseline: {
-      'packages/core/src/db/database-wrapper.ts': 1,
       // Tenant scopes use one transaction for agor.tenant_id. Narrow system
       // capabilities use a second transaction path so their RLS GUC is local
       // to one pooled connection checkout and cannot leak after discovery.

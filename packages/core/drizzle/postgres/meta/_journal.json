@@ -491,6 +491,13 @@
       "when": 1785800000000,
       "tag": "0070_tenant_portability_deferrable_fks",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1785888000000,
+      "tag": "0071_scheduler_ha_indexes",
+      "breakpoints": true
     }
   ]
 }

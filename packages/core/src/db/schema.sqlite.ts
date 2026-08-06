@@ -16,6 +16,7 @@ import type {
   SandpackConfig,
   Session,
   Task,
+  TaskID,
   UserExternalIdentity,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
@@ -107,6 +108,10 @@ export const sessions = sqliteTable(
       (): import('drizzle-orm/sqlite-core').AnySQLiteColumn => schedules.schedule_id,
       { onDelete: 'set null' }
     ),
+    // Internal scheduler recovery marker. Existing rows are backfilled by the
+    // migration; new occurrences remain NULL until initialization, retention,
+    // and schedule metadata are durable.
+    scheduler_init_completed_at: t.timestamp('scheduler_init_completed_at'),
 
     // UI state (materialized for efficient highlighting queries)
     ready_for_prompt: t.bool('ready_for_prompt').notNull().default(false),
@@ -171,10 +176,12 @@ export const sessions = sqliteTable(
           scheduled_run?: {
             rendered_prompt: string; // Template after Handlebars rendering
             run_index: number; // 1st, 2nd, 3rd run for this schedule
+            initial_task_id?: TaskID; // Stable task identity for scheduler recovery
             schedule_config_snapshot?: {
               cron: string;
               timezone: string;
               retention: number;
+              mcp_server_ids?: string[];
             };
           };
         };
@@ -227,6 +234,11 @@ export const sessions = sqliteTable(
       // both are set. Non-scheduled sessions (schedule_id NULL) must
       // coexist freely.
       .where(sql`${table.schedule_id} IS NOT NULL AND ${table.scheduled_run_at} IS NOT NULL`),
+    schedulerInitPendingIdx: index('sessions_scheduler_init_pending_idx')
+      .on(table.created_at, table.session_id)
+      .where(
+        sql`${table.scheduled_from_branch} = true AND ${table.schedule_id} IS NOT NULL AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL`
+      ),
   })
 );
 
@@ -1520,8 +1532,8 @@ export const sessionMcpServers = sqliteTable(
     added_at: t.timestamp('added_at').notNull(),
   },
   (table) => ({
-    // Composite primary key
-    pk: index('session_mcp_servers_pk').on(table.session_id, table.mcp_server_id),
+    // Idempotency guard for recovery and concurrent attachment.
+    pk: uniqueIndex('session_mcp_servers_pk').on(table.session_id, table.mcp_server_id),
     // Indexes for queries
     sessionIdx: index('session_mcp_servers_session_idx').on(table.session_id),
     serverIdx: index('session_mcp_servers_server_idx').on(table.mcp_server_id),

@@ -101,4 +101,26 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain("= 'upload_maintenance'");
     expect(migration).not.toContain('WITH CHECK');
   });
+
+  it('limits scheduler discovery to enabled rows and an explicit capability', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0071_scheduler_ha_indexes.sql');
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('"enabled" = true');
+    expect(migration).toContain('"scheduler_init_completed_at" IS NULL');
+    expect(migration).toContain('"scheduled_from_branch" = true');
+    expect(migration).toContain("current_setting('agor.system_scope', true)");
+    expect(migration).toContain("= 'scheduler_discovery'");
+    expect(migration).not.toContain('WITH CHECK');
+  });
+
+  it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0071_scheduler_ha_indexes.sql');
+
+    expect(migration).toContain('ON "sessions" ("tenant_id", "schedule_id", "scheduled_run_at")');
+    expect(migration).toContain(
+      'ON "session_mcp_servers" ("tenant_id", "session_id", "mcp_server_id")'
+    );
+    expect(migration.match(/CREATE UNIQUE INDEX/g)).toHaveLength(2);
+  });
 });

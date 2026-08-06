@@ -48,6 +48,7 @@ export default defineConfig({
     'models/gemini-shared': 'src/models/gemini-shared.ts', // Shared Gemini metadata/constants
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sessions/index': 'src/sessions/index.ts', // Session config defaults resolution
+    'coordination/index': 'src/coordination/index.ts', // Pure distributed-work identity and delay mechanics
     'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini)
     'client/claude-system-suppression': 'src/client/claude-system-suppression.ts', // Browser-safe Claude system event suppression rules
     'tools/mcp/http-headers': 'src/tools/mcp/http-headers.ts', // MCP custom HTTP header utilities

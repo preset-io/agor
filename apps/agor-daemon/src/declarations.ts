@@ -8,6 +8,7 @@
  */
 
 import type {
+  TaskDispatchClaimResult,
   TerminationClaimInput,
   TerminationClaimResult,
   TerminationSettlementInput,
@@ -140,6 +141,14 @@ export interface SessionsServiceImpl
  * Tasks service with custom methods (server-side implementation)
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
+  claimDispatch(
+    taskId: string,
+    expectedStatus:
+      | typeof import('@agor/core/types').TaskStatus.CREATED
+      | typeof import('@agor/core/types').TaskStatus.QUEUED,
+    updates: Partial<Task>,
+    params?: FeathersParams
+  ): Promise<TaskDispatchClaimResult>;
   connectExecutor(data: { task_id: string }, params?: FeathersParams): Promise<Task>;
   reportTerminationComplete(
     data: import('@agor/core/types').ExecutorTerminationCompleteInput,

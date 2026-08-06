@@ -656,6 +656,13 @@ export interface ScheduledRunMetadata {
   run_index: number;
 
   /**
+   * Stable identity of the occurrence's initial task. The scheduler persists
+   * this with the session before creating the task so recovery can reconcile
+   * the same prompt after a daemon crash without creating a second task.
+   */
+  initial_task_id?: TaskID;
+
+  /**
    * Whether this run was triggered manually via execute-now (vs. cron tick).
    */
   triggered_manually?: boolean;
@@ -688,6 +695,8 @@ export interface ScheduledRunMetadata {
     retention: number;
     /** Concurrency policy at run time (applies to both cron and manual paths) */
     allow_concurrent_runs?: boolean;
+    /** Effective MCP attachment snapshot used by crash recovery. */
+    mcp_server_ids?: string[];
   };
 }
 
