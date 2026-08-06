@@ -105,7 +105,6 @@ export interface ExecutorTemplateVariables {
   session_id?: string;
   branch_id?: string;
   log_level?: string;
-  // Executor classification (e.g. `shell`) forwarded to the templated launcher.
   executor_type?: string;
   /**
    * Trusted runtime tenant identity. This is populated from the ambient tenant
@@ -354,8 +353,6 @@ export function spawnExecutor(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
-        // Default so a template's `{executor_type}` always substitutes; terminals
-        // override to `shell` via their own templateVariables.
         executor_type: 'executor',
         ...templateVariables,
         tenant_id: tenantId,
@@ -1036,8 +1033,6 @@ export async function runExecutorCommand(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
-        // Default so a template's `{executor_type}` always substitutes; terminals
-        // override to `shell` via their own templateVariables.
         executor_type: 'executor',
         ...templateVariables,
         tenant_id: tenantId,
