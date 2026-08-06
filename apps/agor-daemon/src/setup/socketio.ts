@@ -344,16 +344,21 @@ export function createSocketIOConfig(
 
     // Track active connections for periodic operational metrics.
     let activeConnections = 0;
-    // Intentionally system-global: keep only a saturated count, never socket,
-    // user, tenant, channel, or client metadata.
+    // Intentionally system-global: the aggregate keeps only a saturated count,
+    // never socket, user, tenant, channel, or client metadata.
     let unauthenticatedDisconnects = 0;
-    const authenticatedSockets = new WeakSet<Socket>();
+    // Weak per-socket state owns both auth-log dedupe and durable auth history.
+    const authenticatedIdentities = new WeakMap<Socket, string>();
 
-    const logAuthenticated = (socketId: string, userId?: string) => {
+    const logAuthenticated = (socket: Socket, userId?: string) => {
+      const identity = userId ? `user:${userId}` : 'service';
+      if (authenticatedIdentities.get(socket) === identity) return;
+      authenticatedIdentities.set(socket, identity);
+
       console.log(
         userId
-          ? `socket authenticated: ${socketId} user:${shortId(userId)}`
-          : `socket authenticated: ${socketId} service`
+          ? `socket authenticated: ${socket.id} user:${shortId(userId)}`
+          : `socket authenticated: ${socket.id} service`
       );
     };
 
@@ -440,7 +445,7 @@ export function createSocketIOConfig(
             (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
             if (fs.data) fs.data.tenant = tenant;
           }
-          logAuthenticated(socket.id);
+          logAuthenticated(socket);
           return next();
         }
 
@@ -461,7 +466,7 @@ export function createSocketIOConfig(
           if (fs.data) fs.data.tenant = tenant;
         }
 
-        logAuthenticated(socket.id, user.user_id);
+        logAuthenticated(socket, user.user_id);
         next();
       } catch (error) {
         console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
@@ -475,9 +480,6 @@ export function createSocketIOConfig(
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
       activeConnections++;
-      if (isAuthenticated(getSocketAuthState(socket))) {
-        authenticatedSockets.add(socket);
-      }
       const user = (socket as FeathersSocket).feathers?.user;
       console.debug(
         `🔌 Socket.io connection established: ${socket.id} (auth: ${user ? 'handshake' : 'anonymous'}, user: ${user ? shortId(user.user_id) : 'unknown'}, total: ${activeConnections})`
@@ -897,7 +899,7 @@ export function createSocketIOConfig(
       socket.on('disconnect', (reason) => {
         activeConnections--;
         const disconnectedBeforeAuthentication =
-          !authenticatedSockets.has(socket) && !isAuthenticated(getSocketAuthState(socket));
+          !authenticatedIdentities.has(socket) && !isAuthenticated(getSocketAuthState(socket));
         if (disconnectedBeforeAuthentication) {
           unauthenticatedDisconnects = Math.min(
             unauthenticatedDisconnects + 1,
@@ -937,8 +939,7 @@ export function createSocketIOConfig(
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
-          authenticatedSockets.add(socket);
-          logAuthenticated(socket.id, userId);
+          logAuthenticated(socket, userId);
           // Terminal-executor identities get no user room (see connection handler).
           if (!isTerminalExecutorIdentity(result.user)) {
             socket.join(userRoomName(userId));
