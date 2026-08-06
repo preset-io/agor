@@ -1449,11 +1449,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           assertTenantWritable(tenantDb, promptTenantId)
         );
 
-        // Validate and normalize messageSource
+        // Derive external provenance server-side. Only provider-less,
+        // daemon-internal producers may preserve an explicit gateway source.
         const messageSource = normalizeMessageSource(data.messageSource, params);
         if (messageSource !== data.messageSource && data.messageSource !== undefined) {
           console.warn(
-            `[Daemon] Invalid messageSource value: ${data.messageSource}, defaulted based on provider`
+            `[Daemon] Ignored caller-supplied messageSource: ${data.messageSource}; using ${messageSource ?? 'no source'}`
           );
         }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildPromptTaskMetadata } from './prompt-task-metadata.js';
+import { normalizeMessageSource } from './task-runner.js';
 
 describe('buildPromptTaskMetadata', () => {
   it('drops a stale legacy source and makes normalized provenance authoritative', () => {
@@ -48,6 +49,19 @@ describe('buildPromptTaskMetadata', () => {
 
     expect(
       buildPromptTaskMetadata(input, 'agor', 'authenticated-user', {
+        trustedInternalMetadata: false,
+      })
+    ).toEqual({
+      queued_by_user_id: 'authenticated-user',
+      source: 'agor',
+    });
+  });
+
+  it('persists server-derived provenance when an external prompt spoofs gateway source', () => {
+    const source = normalizeMessageSource('gateway', { provider: 'rest' });
+
+    expect(
+      buildPromptTaskMetadata(undefined, source, 'authenticated-user', {
         trustedInternalMetadata: false,
       })
     ).toEqual({

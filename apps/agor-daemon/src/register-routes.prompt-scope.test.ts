@@ -29,4 +29,15 @@ describe('prompt and widget transaction scopes', () => {
       expect(route).toContain('registerLongAuthenticatedRoute(');
     }
   });
+
+  it('routes prompt admission and explicit Task runs through server-owned provenance', () => {
+    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const runStart = source.indexOf("'/tasks/:id/run'", promptStart);
+    const prompt = source.slice(promptStart, runStart);
+    const run = source.slice(runStart, source.indexOf("'/sessions/:id/spawn-prompt'", runStart));
+
+    expect(prompt).toContain('normalizeMessageSource(data.messageSource, params)');
+    expect(prompt).toContain('buildPromptTaskMetadata(data.metadata, messageSource, createdBy');
+    expect(run).toContain('messageSource: normalizeMessageSource(data.messageSource, params)');
+  });
 });

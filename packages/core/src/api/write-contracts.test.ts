@@ -5,6 +5,7 @@ import type {
   ScheduleCreateData,
   SchedulePatchData,
 } from '../types/index.js';
+import { MessageRole } from '../types/index.js';
 import type { AgorClient, ClientInput, GatewayChannelsService, SchedulesService } from './index.js';
 
 type ScheduleCreateInput = Parameters<SchedulesService['create']>[0];
@@ -85,6 +86,28 @@ function assertClientWriteBoundaries(client: AgorClient): void {
   });
   // @ts-expect-error required create fields cannot be omitted.
   void client.service('gateway-channels').create({ agentic_config: { agent: 'codex' } });
+
+  void client.service('messages/bulk').create([
+    {
+      session_id: 'session-id',
+      task_id: 'task-id',
+      role: MessageRole.USER,
+      type: 'user',
+      content: 'Imported transcript row',
+    },
+  ]);
+  // @ts-expect-error public Message CRUD does not expose full replacement.
+  void client.service('messages').update('message-id', {});
+  // @ts-expect-error bulk insertion is only available on /messages/bulk.
+  void client.service('messages').createMany([]);
+  // @ts-expect-error /messages/bulk is a narrow create-only endpoint.
+  void client.service('messages/bulk').find();
+
+  // Provenance is derived from the authenticated transport, not caller input.
+  // @ts-expect-error messageSource is daemon-owned provenance.
+  void client.sessions.prompt('session-id', 'Prompt', { messageSource: 'gateway' });
+  // @ts-expect-error messageSource is daemon-owned provenance.
+  void client.tasks.run('task-id', { messageSource: 'gateway' });
 }
 
 void assertClientWriteBoundaries;

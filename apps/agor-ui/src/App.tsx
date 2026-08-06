@@ -1143,7 +1143,6 @@ function AppContent() {
     try {
       await client.sessions.prompt(sessionId, prompt, {
         permissionMode,
-        messageSource: 'agor',
       });
 
       // Clear the draft after sending

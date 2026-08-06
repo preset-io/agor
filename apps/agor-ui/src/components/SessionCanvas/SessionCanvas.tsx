@@ -3063,7 +3063,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   case 'prompt': {
                     await client.sessions.prompt(targetSessionId, renderedTemplate, {
                       permissionMode,
-                      messageSource: 'agor',
                     });
                     resultSessionId = targetSessionId;
                     break;
@@ -3074,7 +3073,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       .create({})) as Session;
                     await client.sessions.prompt(forkedSession.session_id, renderedTemplate, {
                       permissionMode,
-                      messageSource: 'agor',
                     });
                     resultSessionId = forkedSession.session_id;
                     break;
@@ -3085,7 +3083,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       .create({})) as Session;
                     await client.sessions.prompt(spawnedSession.session_id, renderedTemplate, {
                       permissionMode,
-                      messageSource: 'agor',
                     });
                     resultSessionId = spawnedSession.session_id;
                     break;

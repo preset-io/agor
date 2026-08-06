@@ -480,8 +480,8 @@ Scope:
 - Extend `appendSystemMessage` helper's `type` union to include `widget_request`.
 - Add `metadata.widget` shape to `Message['metadata']` type (typed via a discriminated union over `widget_type`, with `schema_version: number` baked in).
 - Daemon-side registry shape at `apps/agor-daemon/src/widgets/registry.ts` (empty in Part 1; widget types register themselves in their own PRs). The registry entry type includes `paramsSchema`, `submitSchema`, `applySubmit`, `buildResultMeta`, `buildAutoResumePrompt`, `buildDismissedPrompt`.
-- New FeathersJS service `widget-submissions` registering `POST /widgets/:widget_id/submit` and `POST /widgets/:widget_id/dismiss`. Auth: caller must match session creator OR have `prompt`-tier worktree RBAC. Idempotency: status must be `pending`.
-- Submit handler dispatches by `widget_type` to the registry (no-op for empty registry), then: patches the message row, creates an auto-resume task via the existing task-creation path (`tasks.create` with `role: 'user'`, `metadata.system_authored: true`, `metadata.widget_id`), emits `widget:resolved`.
+- Custom authenticated routes `POST /widgets/:widget_id/submit` and `POST /widgets/:widget_id/dismiss`. Auth: caller must match session creator OR have `prompt`-tier worktree RBAC. A tenant-bound `WidgetResolutionStore` durably claims `pending → resolving` before external work and fences terminal completion with the claim token.
+- Submit handlers dispatch by `widget_type` to the registry (no-op for empty registry), then use durable prompt admission with a stable Task identity for auto-resume. Generic Message mutation cannot change widget lifecycle fields. Successful resolution emits `widget:resolved`; post-effect failures remain diagnosable without reopening the external effect.
 - `widget:resolved` Feathers event on the per-session room.
 - New MCP tool domain marker (`domain: 'widgets'` for `agor_search_tools` filtering).
 - UI: `WidgetBlock` dispatcher component in `apps/agor-ui/src/components/MessageBlock/` that switches on `metadata.widget.widget_type`, plus a placeholder "Unknown widget type" fallback for forward-compat with newer widgets in older clients.
