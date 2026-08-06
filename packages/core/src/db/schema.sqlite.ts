@@ -364,6 +364,11 @@ export const tasks = sqliteTable(
     queuedPositionUnique: uniqueIndex('tasks_queued_position_unique')
       .on(table.session_id, table.queue_position)
       .where(sql`${table.status} = 'queued'`),
+    // Standalone recovery uses the same bounded Session scan without tenant
+    // routing metadata.
+    queueScanIdx: index('tasks_queue_scan_idx')
+      .on(table.session_id, table.created_at)
+      .where(sql`${table.status} = 'queued'`),
   })
 );
 

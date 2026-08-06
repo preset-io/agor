@@ -1807,6 +1807,55 @@ describe('TaskRepository.createPending', () => {
     expect(await taskRepo.findBySession(sessionId)).toHaveLength(1);
   });
 
+  dbTest('reconciles concurrent stable-ID queue admission to one position', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const taskId = generateId();
+    const input = createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED });
+
+    const admitted = await Promise.all(
+      Array.from({ length: 5 }, () => taskRepo.createPending({ ...input, task_id: taskId }))
+    );
+
+    expect(new Set(admitted.map((task) => task.task_id))).toEqual(new Set([taskId]));
+    expect(new Set(admitted.map((task) => task.queue_position))).toEqual(new Set([1]));
+    expect(await taskRepo.findQueued(sessionId)).toHaveLength(1);
+  });
+
+  dbTest(
+    'recovers a stable CREATED task into queue order without changing identity',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const taskId = generateId();
+      const stableInput = createPendingInput({
+        session_id: sessionId,
+        status: TaskStatus.CREATED,
+        full_prompt: 'scheduled occurrence',
+      });
+      await taskRepo.createPending({ ...stableInput, task_id: taskId });
+      const existingHead = await taskRepo.createPending(
+        createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+      );
+
+      const recovered = await taskRepo.createPending({
+        ...stableInput,
+        status: TaskStatus.QUEUED,
+        task_id: taskId,
+      });
+
+      expect(recovered).toMatchObject({
+        task_id: taskId,
+        status: TaskStatus.QUEUED,
+        queue_position: 2,
+      });
+      expect((await taskRepo.findQueued(sessionId)).map((task) => task.task_id)).toEqual([
+        existingHead.task_id,
+        taskId,
+      ]);
+    }
+  );
+
   dbTest('atomically fences concurrent dispatch claims', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -1831,6 +1880,84 @@ describe('TaskRepository.createPending', () => {
       ready_for_prompt: false,
       tasks: [task.task_id],
     });
+  });
+
+  dbTest('serializes different Task claims to one active Session dispatch', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const [first, second] = await Promise.all([
+      taskRepo.createPending(
+        createPendingInput({ session_id: sessionId, status: TaskStatus.CREATED })
+      ),
+      taskRepo.createPending(
+        createPendingInput({ session_id: sessionId, status: TaskStatus.CREATED })
+      ),
+    ]);
+
+    const claims = await Promise.all([
+      taskRepo.claimDispatchAndProjectSession(first.task_id, TaskStatus.CREATED, {
+        status: TaskStatus.DISPATCHING,
+      }),
+      taskRepo.claimDispatchAndProjectSession(second.task_id, TaskStatus.CREATED, {
+        status: TaskStatus.DISPATCHING,
+      }),
+    ]);
+
+    expect(claims.filter((claim) => claim.outcome === 'claimed')).toHaveLength(1);
+    expect(claims.filter((claim) => claim.outcome === 'condition_changed')).toHaveLength(1);
+    const persisted = await taskRepo.findBySession(sessionId);
+    expect(persisted.filter((task) => task.status === TaskStatus.DISPATCHING)).toHaveLength(1);
+    await expect(new SessionRepository(db).findById(sessionId)).resolves.toMatchObject({
+      status: SessionStatus.RUNNING,
+      tasks: [claims.find((claim) => claim.outcome === 'claimed')!.task.task_id],
+    });
+  });
+
+  dbTest('only lets the durable queue head claim dispatch', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const first = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
+    const second = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
+
+    await expect(
+      taskRepo.claimDispatchAndProjectSession(second.task_id, TaskStatus.QUEUED, {
+        status: TaskStatus.DISPATCHING,
+      })
+    ).resolves.toMatchObject({ outcome: 'condition_changed', task: { status: TaskStatus.QUEUED } });
+    await expect(
+      taskRepo.claimDispatchAndProjectSession(first.task_id, TaskStatus.QUEUED, {
+        status: TaskStatus.DISPATCHING,
+      })
+    ).resolves.toMatchObject({ outcome: 'claimed' });
+  });
+
+  dbTest('does not let an explicit CREATED Task jump a durable prompt queue', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const queued = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
+    const created = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.CREATED })
+    );
+
+    await expect(
+      taskRepo.claimDispatchAndProjectSession(created.task_id, TaskStatus.CREATED, {
+        status: TaskStatus.DISPATCHING,
+      })
+    ).resolves.toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.CREATED },
+    });
+    await expect(
+      taskRepo.claimDispatchAndProjectSession(queued.task_id, TaskStatus.QUEUED, {
+        status: TaskStatus.DISPATCHING,
+      })
+    ).resolves.toMatchObject({ outcome: 'claimed' });
   });
 
   dbTest('clears queue position when claiming a queued task for dispatch', async ({ db }) => {
@@ -1964,12 +2091,10 @@ describe('TaskRepository.createPending', () => {
       // createQueued TOCTOU race that existed before the read-then-insert was
       // wrapped in a transaction.
       //
-      // libsql serializes concurrent write transactions, so under contention
-      // some inserts may surface SQLITE_BUSY. Either outcome (success with
-      // unique position OR transient BUSY) is correct — what we forbid is
-      // *committed* duplicates. Successful rows must therefore have distinct,
-      // monotonically-increasing positions starting at 1.
-      const settled = await Promise.allSettled([
+      // libSQL serializes concurrent write transactions. The repository may
+      // retry transient SQLITE_BUSY, but callers still receive one successful,
+      // ordered admission decision rather than a leaked contention error.
+      const admitted = await Promise.all([
         taskRepo.createPending(
           createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
         ),
@@ -1981,16 +2106,7 @@ describe('TaskRepository.createPending', () => {
         ),
       ]);
 
-      const successes = settled
-        .filter((r): r is PromiseFulfilledResult<Task> => r.status === 'fulfilled')
-        .map((r) => r.value);
-
-      expect(successes.length).toBeGreaterThan(0);
-
-      const positions = successes.map((t) => t.queue_position).sort();
-      const unique = new Set(positions);
-      expect(unique.size).toBe(positions.length); // no duplicates
-      expect(positions[0]).toBe(1); // numbering starts at 1
+      expect(admitted.map((task) => task.queue_position).sort()).toEqual([1, 2, 3]);
     }
   );
 });
@@ -2035,6 +2151,33 @@ describe('TaskRepository.findQueued', () => {
       'second queued',
       'third queued',
     ]);
+  });
+
+  dbTest('discovers bounded queued Session refs with a stable cursor', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionA = await createSessionWithDeps(db);
+    const sessionB = await createSessionWithDeps(db);
+    await taskRepo.createPending(
+      createPendingInput({ session_id: sessionA, status: TaskStatus.QUEUED })
+    );
+    await taskRepo.createPending(
+      createPendingInput({ session_id: sessionA, status: TaskStatus.QUEUED })
+    );
+    await taskRepo.createPending(
+      createPendingInput({ session_id: sessionB, status: TaskStatus.QUEUED })
+    );
+
+    const firstPage = await taskRepo.findQueuedSessionRefs(1);
+    const secondPage = await taskRepo.findQueuedSessionRefs(1, firstPage[0]);
+
+    expect(firstPage).toHaveLength(1);
+    expect(secondPage).toHaveLength(1);
+    expect(new Set([firstPage[0]!.session_id, secondPage[0]!.session_id])).toEqual(
+      new Set([sessionA, sessionB])
+    );
+    expect(firstPage[0]!.tenant_id).toBeUndefined();
+    expect(Number.isFinite(firstPage[0]!.first_queued_at)).toBe(true);
+    await expect(taskRepo.findQueuedSessionRefs(0)).rejects.toThrow(/between 1 and 1000/);
   });
 });
 

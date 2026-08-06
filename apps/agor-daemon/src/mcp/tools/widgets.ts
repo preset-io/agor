@@ -31,6 +31,7 @@ import { getRequiredSecretFields, hasMinimumRole, MessageRole, ROLES } from '@ag
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { widgetAutoResumeTaskId } from '../../utils/durable-task-id.js';
 import { findHostTaskForSession } from '../../utils/session-tasks.js';
 import {
   type EnvVarsParams,
@@ -219,6 +220,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
             {
               prompt,
               messageSource: 'agor',
+              idempotencyTaskId: widgetAutoResumeTaskId(widgetId),
               metadata: {
                 system_authored: true,
                 widget_id: widgetId,

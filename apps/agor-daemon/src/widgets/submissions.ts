@@ -35,6 +35,7 @@ import type {
   WidgetMessageMetadata,
 } from '@agor/core/types';
 import { PERMISSION_RANK, resolveBranchPermission } from '../utils/branch-authorization.js';
+import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
 import { getWidget, type WidgetSubmitCtx } from './registry.js';
 
 /**
@@ -263,6 +264,9 @@ async function doResolveWidget(
       {
         prompt: autoResumePrompt,
         messageSource: 'agor',
+        // The widget message is the durable occurrence identity. Concurrent
+        // resolvers converge on one Task even if both observed `pending`.
+        idempotencyTaskId: widgetAutoResumeTaskId(widget.widget_id),
         // Stamp traceability fields onto the queued task so the UI can
         // distinguish system-authored auto-resume prompts from user-typed
         // ones, and so the resulting task links back to its widget.

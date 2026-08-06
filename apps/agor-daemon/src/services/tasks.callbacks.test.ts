@@ -1,6 +1,7 @@
 import { runWithTenantDatabaseScope } from '@agor/core/db';
 import { type Session, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { completionCallbackTaskId } from '../utils/durable-task-id.js';
 import { TasksService } from './tasks';
 
 const childSessionId = '018f0000-0000-7000-8000-000000000101';
@@ -8,6 +9,10 @@ const parentSessionId = '018f0000-0000-7000-8000-000000000102';
 const taskId = '018f0000-0000-7000-8000-000000000201';
 const callbackTaskId = '018f0000-0000-7000-8000-000000000301';
 const userId = '018f0000-0000-7000-8000-000000000401';
+const durableCallbackTaskId = completionCallbackTaskId(
+  taskId as Task['task_id'],
+  parentSessionId as Session['session_id']
+);
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -226,6 +231,7 @@ describe('TasksService completion callbacks', () => {
     await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     expect(createPending).toHaveBeenCalledWith(
       expect.objectContaining({
+        task_id: durableCallbackTaskId,
         session_id: parentSessionId,
         status: TaskStatus.QUEUED,
         metadata: expect.objectContaining({
@@ -259,7 +265,7 @@ describe('TasksService completion callbacks', () => {
         expect.objectContaining({
           event: 'session_completion',
           target_session_id: parentSessionId,
-          queued_task_id: callbackTaskId,
+          queued_task_id: durableCallbackTaskId,
         }),
       ])
     );

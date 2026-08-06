@@ -16,21 +16,27 @@ import type {
   TerminationCause,
   UUID,
 } from '@agor/core/types';
-import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
-import { and, eq, inArray, like, sql } from 'drizzle-orm';
+import {
+  EXECUTING_TASK_STATUSES,
+  isTerminalTaskStatus,
+  SessionStatus,
+  sessionCanStartTask,
+  TaskStatus,
+} from '@agor/core/types';
+import { and, asc, eq, gt, inArray, like, ne, or, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
   deleteFrom,
   insert,
+  isPostgresDatabase,
   isSQLiteDatabase,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
-  txAsDb,
   update,
 } from '../database-wrapper';
-import { sessions, type TaskInsert, type TaskRow, tasks } from '../schema';
+import { type SessionRow, sessions, type TaskInsert, type TaskRow, tasks } from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -131,6 +137,15 @@ export interface TaskDispatchClaimResult {
   task: Task;
 }
 
+/** Routing-only row returned to the all-daemon queue recovery scanner. */
+export interface QueuedSessionRef {
+  session_id: SessionID;
+  first_queued_at: number;
+  tenant_id?: string;
+}
+
+export type QueuedSessionCursor = Pick<QueuedSessionRef, 'session_id' | 'tenant_id'>;
+
 /**
  * Task repository implementation
  */
@@ -165,6 +180,59 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
           if (!row) throw new EntityNotFoundError('Task', id);
           return mutation(txDb, row, fullId);
+        },
+        { sqliteImmediate: true }
+      )
+    );
+  }
+
+  /**
+   * Lock a Task together with its owning Session, always Session first.
+   *
+   * Session-first ordering is the cross-daemon turn mutex. It serializes
+   * claims for different Tasks in the same Session, whereas a Task-only lock
+   * can prevent duplicate launch of one Task but cannot prevent two distinct
+   * Tasks from launching concurrently.
+   */
+  private async mutateLockedSessionTask<T>(
+    id: string,
+    mutation: (
+      txDb: Database,
+      taskRow: TaskRow,
+      sessionRow: SessionRow,
+      fullId: string
+    ) => Promise<T>
+  ): Promise<T> {
+    const fullId = await this.resolveId(id);
+    const routing = await select(this.db, { session_id: tasks.session_id })
+      .from(tasks)
+      .where(eq(tasks.task_id, fullId))
+      .one();
+    if (!routing) throw new EntityNotFoundError('Task', id);
+
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(
+            txDb,
+            this.db,
+            sessions,
+            eq(sessions.session_id, routing.session_id)
+          );
+          const sessionRow = await select(txDb)
+            .from(sessions)
+            .where(eq(sessions.session_id, routing.session_id))
+            .one();
+          if (!sessionRow) throw new EntityNotFoundError('Session', routing.session_id);
+
+          await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, fullId));
+          const taskRow = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+          if (!taskRow) throw new EntityNotFoundError('Task', id);
+          if (taskRow.session_id !== sessionRow.session_id) {
+            throw new RepositoryError('Task changed Session during dispatch admission');
+          }
+          return mutation(txDb, taskRow, sessionRow, fullId);
         },
         { sqliteImmediate: true }
       )
@@ -920,10 +988,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * caller would otherwise have to assemble by hand.
    *
    * For QUEUED tasks, `queue_position = max(queue_position) + 1` is computed
-   * inside a transaction so concurrent writers don't both observe the same
-   * max and collide. (The schema also carries a partial unique index on
-   * `(session_id, queue_position) WHERE status='queued'` as a belt-and-
-   * suspenders against transaction-isolation surprises.)
+   * while holding the owning Session row lock. A transaction by itself does
+   * not serialize PostgreSQL READ COMMITTED readers; the Session lock is the
+   * durable per-queue sequencer shared by every daemon. (The schema also
+   * carries a partial unique index as defense in depth.)
    *
    * Sentinel contract: while a task carries `message_range.start_index = -1`
    * and `git_state.sha_at_start = ''`, it has not yet been pinned to real
@@ -981,50 +1049,105 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       return existing;
     }
 
-    // QUEUED: serialize the read-then-insert in a transaction so concurrent
-    // callers can't both observe the same `max(queue_position)` and produce
-    // duplicate positions. Two prompts arriving in the same tick now order
-    // deterministically instead of racing.
-    return this.db.transaction(async (tx) => {
-      const positionRow = await select(txAsDb(tx), {
-        maxPos: sql<number | null>`max(${tasks.queue_position})`,
-      })
-        .from(tasks)
-        .where(sql`${tasks.session_id} = ${input.session_id} AND ${tasks.status} = 'queued'`)
-        .one();
+    // QUEUED: lock the durable Session row before max+1. This is required on
+    // PostgreSQL: two ordinary READ COMMITTED transactions can otherwise read
+    // the same max concurrently and merely turn the unique index into a loser
+    // error rather than making one ordered admission decision.
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(
+            txDb,
+            this.db,
+            sessions,
+            eq(sessions.session_id, input.session_id)
+          );
+          const sessionRow = await select(txDb)
+            .from(sessions)
+            .where(eq(sessions.session_id, input.session_id))
+            .one();
+          if (!sessionRow) throw new EntityNotFoundError('Session', input.session_id);
 
-      const nextPosition = (positionRow?.maxPos ?? 0) + 1;
-      const insertData = this.taskToInsert({
-        ...taskBase,
-        queue_position: nextPosition,
-      });
-      await insert(txAsDb(tx), tasks).values(insertData).run();
+          let existingCreated: Task | undefined;
+          if (input.task_id) {
+            await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, input.task_id));
+            const existingRow = await select(txDb)
+              .from(tasks)
+              .where(eq(tasks.task_id, input.task_id))
+              .one();
+            if (existingRow) {
+              const existing = this.rowToTask(existingRow);
+              if (
+                existing.session_id !== input.session_id ||
+                existing.created_by !== input.created_by ||
+                existing.full_prompt !== input.full_prompt
+              ) {
+                throw new RepositoryError(`Task identity ${input.task_id} is already in use`);
+              }
+              if (existing.status !== TaskStatus.CREATED) return existing;
 
-      const row = await select(txAsDb(tx))
-        .from(tasks)
-        .where(eq(tasks.task_id, insertData.task_id))
-        .one();
-      if (!row) {
-        throw new RepositoryError('Failed to retrieve created queued task');
-      }
-      return this.rowToTask(row);
-    });
+              // A stable internal producer may recover a standalone SQLite
+              // crash that committed CREATED before launch admission. Move
+              // that same Task into the durable queue rather than letting it
+              // jump an already-admitted prompt or remain undiscoverable.
+              existingCreated = existing;
+            }
+          }
+
+          const positionRow = await select(txDb, {
+            maxPos: sql<number | null>`max(${tasks.queue_position})`,
+          })
+            .from(tasks)
+            .where(sql`${tasks.session_id} = ${input.session_id} AND ${tasks.status} = 'queued'`)
+            .one();
+
+          const nextPosition = (positionRow?.maxPos ?? 0) + 1;
+          if (existingCreated) {
+            await update(txDb, tasks)
+              .set({ status: TaskStatus.QUEUED, queue_position: nextPosition })
+              .where(eq(tasks.task_id, existingCreated.task_id))
+              .run();
+            return {
+              ...existingCreated,
+              status: TaskStatus.QUEUED,
+              queue_position: nextPosition,
+            };
+          }
+
+          const insertData = this.taskToInsert({
+            ...taskBase,
+            queue_position: nextPosition,
+          });
+          await insert(txDb, tasks).values(insertData).run();
+
+          const row = await select(txDb)
+            .from(tasks)
+            .where(eq(tasks.task_id, insertData.task_id))
+            .one();
+          if (!row) throw new RepositoryError('Failed to retrieve created queued task');
+          return this.rowToTask(row);
+        },
+        { sqliteImmediate: true }
+      )
+    );
   }
 
   /**
    * Atomically claim the CREATED/QUEUED -> DISPATCHING transition.
    *
-   * The row lock and expected-state check are the fence. A second daemon that
-   * read the old state may do preparatory work, but it cannot write launch
-   * intent, transcript/session state, or spawn a second executor after losing
-   * this transition.
+   * The Session row lock, queue-head check, and Task expected-state check are
+   * the fence. A Task-only fence prevents duplicate launch of one Task but is
+   * insufficient when two daemons claim different Tasks for the same Session.
+   * A loser may do preparatory reads, but it cannot write launch intent,
+   * transcript/session state, or spawn an executor.
    */
   async claimDispatchAndProjectSession(
     id: string,
     expectedStatus: TaskPendingDispatchStatus,
     updates: Partial<Task>
   ): Promise<TaskDispatchClaimResult> {
-    return this.mutateLockedTask(id, async (txDb, currentRow, fullId) => {
+    return this.mutateLockedSessionTask(id, async (txDb, currentRow, sessionRow, fullId) => {
       const current = this.rowToTask(currentRow);
       if (current.status !== expectedStatus) {
         return {
@@ -1037,6 +1160,40 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       }
       if (updates.status !== TaskStatus.DISPATCHING) {
         throw new RepositoryError('Dispatch claim must transition to dispatching');
+      }
+
+      // A queue claimant may only take the durable head. An explicit CREATED
+      // task may not jump an existing prompt queue. Both checks run under the
+      // same Session lock that serializes enqueue position assignment.
+      const queuedHead = await select(txDb, { task_id: tasks.task_id })
+        .from(tasks)
+        .where(and(eq(tasks.session_id, current.session_id), eq(tasks.status, TaskStatus.QUEUED)))
+        .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
+        .limit(1)
+        .one();
+      if (
+        (expectedStatus === TaskStatus.QUEUED && queuedHead?.task_id !== fullId) ||
+        (expectedStatus === TaskStatus.CREATED && queuedHead != null)
+      ) {
+        return { outcome: 'condition_changed', task: current };
+      }
+
+      const competingExecution = await select(txDb, { task_id: tasks.task_id })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.session_id, current.session_id),
+            ne(tasks.task_id, fullId),
+            inArray(tasks.status, [...EXECUTING_TASK_STATUSES])
+          )
+        )
+        .limit(1)
+        .one();
+      if (
+        competingExecution ||
+        !sessionCanStartTask(sessionRow.status, sessionRow.ready_for_prompt)
+      ) {
+        return { outcome: 'condition_changed', task: current };
       }
 
       const merged: Task = {
@@ -1068,14 +1225,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       // inside the task-claim transaction closes the kill point where a Task
       // could be DISPATCHING while its Session remained IDLE and omitted the
       // task from data.tasks.
-      await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, current.session_id));
-      const sessionRow = await select(txDb)
-        .from(sessions)
-        .where(eq(sessions.session_id, current.session_id))
-        .one();
-      if (!sessionRow) {
-        throw new EntityNotFoundError('Session', current.session_id);
-      }
       const sessionTasks = sessionRow.data.tasks.includes(current.task_id)
         ? sessionRow.data.tasks
         : [...sessionRow.data.tasks, current.task_id];
@@ -1100,7 +1249,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const rows = await select(this.db)
         .from(tasks)
         .where(sql`${tasks.session_id} = ${sessionId} AND ${tasks.status} = 'queued'`)
-        .orderBy(tasks.queue_position)
+        .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
         .all();
 
       return rows.map((row: TaskRow) => this.rowToTask(row));
@@ -1121,7 +1270,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const row = await select(this.db)
         .from(tasks)
         .where(sql`${tasks.session_id} = ${sessionId} AND ${tasks.status} = 'queued'`)
-        .orderBy(tasks.queue_position)
+        .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
         .limit(1)
         .one();
 
@@ -1132,6 +1281,59 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
+  }
+
+  /**
+   * Bounded routing-only discovery for all-daemon queue recovery.
+   *
+   * The cursor is fairness state only. QUEUED rows remain the durable
+   * authority, and callers wrap after an empty page. PostgreSQL system scope
+   * exposes only queued rows through the dedicated RLS capability; each
+   * returned Session must be reloaded and mutated in its trusted tenant scope.
+   */
+  async findQueuedSessionRefs(
+    limit = 25,
+    after?: QueuedSessionCursor
+  ): Promise<QueuedSessionRef[]> {
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
+      throw new RepositoryError('Queued Session discovery limit must be between 1 and 1000');
+    }
+
+    const tenantColumn = (tasks as unknown as { tenant_id?: typeof tasks.session_id }).tenant_id;
+    const postgresTenantColumn = isPostgresDatabase(this.db) ? tenantColumn : undefined;
+    const afterCondition = postgresTenantColumn
+      ? after?.tenant_id
+        ? or(
+            gt(postgresTenantColumn, after.tenant_id),
+            and(eq(postgresTenantColumn, after.tenant_id), gt(tasks.session_id, after.session_id))
+          )
+        : undefined
+      : after
+        ? gt(tasks.session_id, after.session_id)
+        : undefined;
+    const columns = {
+      session_id: tasks.session_id,
+      first_queued_at: sql<Date | number>`min(${tasks.created_at})`,
+      ...(postgresTenantColumn ? { tenant_id: postgresTenantColumn } : {}),
+    };
+    const grouped = select(this.db, columns)
+      .from(tasks)
+      .where(and(eq(tasks.status, TaskStatus.QUEUED), afterCondition))
+      .groupBy(
+        ...(postgresTenantColumn ? [postgresTenantColumn, tasks.session_id] : [tasks.session_id])
+      );
+    const rows = postgresTenantColumn
+      ? await grouped.orderBy(asc(postgresTenantColumn), asc(tasks.session_id)).limit(limit).all()
+      : await grouped.orderBy(asc(tasks.session_id)).limit(limit).all();
+
+    return (rows as Array<Record<string, unknown>>).map((row) => ({
+      session_id: row.session_id as SessionID,
+      first_queued_at:
+        row.first_queued_at instanceof Date
+          ? row.first_queued_at.getTime()
+          : new Date(row.first_queued_at as string | number).getTime(),
+      ...(typeof row.tenant_id === 'string' ? { tenant_id: row.tenant_id } : {}),
+    }));
   }
 
   /**

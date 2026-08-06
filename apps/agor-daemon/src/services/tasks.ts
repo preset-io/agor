@@ -16,7 +16,10 @@ import {
   resolveSdkWatchdogConfig,
 } from '@agor/core/config';
 import {
+  assertTenantWritable,
   enqueueTenantDatabasePostCommitCallback,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
   shortId,
   type TaskDispatchClaimResult,
   TaskRepository,
@@ -29,6 +32,7 @@ import {
 import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
+  AuthenticatedParams,
   ContentBlock,
   ExecutorTerminationCompleteInput,
   Paginated,
@@ -57,6 +61,7 @@ import {
   requestExecutorTermination,
 } from '../termination-coordinator.js';
 import { appendSystemMessage } from '../utils/append-system-message.js';
+import { completionCallbackTaskId } from '../utils/durable-task-id.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
   type ExecutorHeartbeatCallbackPayload,
@@ -86,20 +91,21 @@ function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): b
 export type TaskParams = QueryParams<{
   session_id?: string;
   status?: Task['status'];
-}> & {
-  /**
-   * Internal-only: terminal task patches normally drain queued work for the
-   * owning session. Heartbeat-loss handling must not auto-start queued prompts.
-   */
-  suppressTerminalQueueProcessing?: boolean;
-  /**
-   * Internal-only escape hatch for preserving an ephemeral BTW fork after
-   * terminal transition. Most callers should leave this unset.
-   */
-  suppressBtwCleanup?: boolean;
-  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
-  _agorSqlSessionAccessUserId?: UUID;
-};
+}> &
+  AuthenticatedParams & {
+    /**
+     * Internal-only: terminal task patches normally drain queued work for the
+     * owning session. Heartbeat-loss handling must not auto-start queued prompts.
+     */
+    suppressTerminalQueueProcessing?: boolean;
+    /**
+     * Internal-only escape hatch for preserving an ephemeral BTW fork after
+     * terminal transition. Most callers should leave this unset.
+     */
+    suppressBtwCleanup?: boolean;
+    /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+    _agorSqlSessionAccessUserId?: UUID;
+  };
 
 interface CompletionCallbackDispatchResult {
   callbackTask?: Task;
@@ -859,7 +865,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       params
     );
 
-    if (dispatchResult.callbackTask) {
+    if (dispatchResult.callbackTask?.status === TaskStatus.QUEUED) {
       // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.
       // The queue processor uses a promise-based lock that will:
       // - If target is busy: wait for current processing, then retry (self-healing)
@@ -1154,26 +1160,39 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // for backward compat (legacy sessions without callback_created_by).
       const callbackCreator =
         childSession.callback_config?.callback_created_by ?? targetSession.created_by;
-      const callbackTask = await this.taskRepo.createPending({
-        session_id: targetSessionId,
-        full_prompt: callbackMessage,
-        created_by: callbackCreator,
-        status: TaskStatus.QUEUED,
-        metadata: {
-          is_agor_callback: true,
-          source: 'agor',
-          child_session_id: childSession.session_id,
-          child_task_id: task.task_id,
-          queued_by_user_id: callbackCreator,
-        },
-      });
+      const createCallbackTask = () =>
+        this.taskRepo.createPending({
+          task_id: completionCallbackTaskId(task.task_id, targetSessionId),
+          session_id: targetSessionId,
+          full_prompt: callbackMessage,
+          created_by: callbackCreator,
+          status: TaskStatus.QUEUED,
+          metadata: {
+            is_agor_callback: true,
+            source: 'agor',
+            child_session_id: childSession.session_id,
+            child_task_id: task.task_id,
+            queued_by_user_id: callbackCreator,
+          },
+        });
+      const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+      const callbackTask = tenantId
+        ? await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+            await assertTenantWritable(tenantDb, tenantId);
+            return createCallbackTask();
+          })
+        : await createCallbackTask();
 
-      // Emit so reactive-session subscribers see the new queued task.
-      this.emit?.('queued', callbackTask);
-
-      console.log(
-        `🔔 Queued callback task ${shortId(callbackTask.task_id)} on session ${shortId(targetSessionId)} from child ${shortId(childSession.session_id)}`
-      );
+      if (callbackTask.status === TaskStatus.QUEUED) {
+        // Stable identity can return a previously admitted Task. Only publish
+        // a queue notification while it is actually queued; a concurrently
+        // claimed or completed callback needs reconciliation, not another
+        // apparent enqueue.
+        this.emit?.('queued', callbackTask);
+        console.log(
+          `🔔 Queued callback task ${shortId(callbackTask.task_id)} on session ${shortId(targetSessionId)} from child ${shortId(childSession.session_id)}`
+        );
+      }
 
       // NOTE: Queue processing is handled by the centralized dispatcher after
       // it confirms a callback task was actually queued.

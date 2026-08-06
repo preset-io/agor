@@ -24,7 +24,7 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
-import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { containAllTrackedExecutors } from './executor-tracking.js';
 import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
@@ -32,6 +32,7 @@ import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
 import { SchedulerService } from './services/scheduler.js';
+import { SessionQueueWorker } from './services/session-queue-worker.js';
 import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
@@ -150,7 +151,6 @@ interface OrphanCleanupResult {
   orphanedTasks: Task[];
   orphanedSessions: Session[];
   sessionIdsWithOrphanedTasks: Set<string>;
-  queuedTasks: Task[];
   sessionsResetFromOrphanedTasks: number;
 }
 
@@ -217,29 +217,10 @@ async function cleanupOrphanStatusesInTenantScope(
     }
   }
 
-  // Wipe the queue BEFORE making any session promptable. Running tasks are marked STOPPED above,
-  // which invalidates the ordering premise of anything waiting behind them — a queued prompt
-  // typically depends on whatever was running first. Wiping here prevents the session after-patch
-  // hook (triggered below) from draining queued tasks that should be discarded.
-  const queuedTasks = await collectAllPages<Task>(
-    (skip) =>
-      tasksService.find({
-        query: { status: TaskStatus.QUEUED, $limit: 1000, $skip: skip },
-        ...startupParams,
-      }) as Promise<Task[] | Paginated<Task>>
-  );
-
-  if (queuedTasks.length > 0) {
-    for (const task of queuedTasks) {
-      await tasksService.patch(
-        task.task_id,
-        {
-          status: TaskStatus.STOPPED,
-        },
-        startupParams as never
-      );
-    }
-  }
+  // QUEUED Tasks are durable user intent. Leave them intact across daemon
+  // restarts; the fleet-wide queue worker will discover and attempt them after
+  // startup cleanup has made their Session promptable again. Active runtime
+  // cleanup above is intentionally separate from durable queue recovery.
 
   // Find all orphaned sessions (RUNNING, STOPPING, AWAITING_PERMISSION, AWAITING_INPUT, TIMED_OUT)
   const orphanedSessions: Session[] = [];
@@ -319,13 +300,12 @@ async function cleanupOrphanStatusesInTenantScope(
   // see SessionPromptState in @agor/core/types), so it is the normal resting
   // state of every read session. Discriminate by the session's most recent
   // task: only sessions whose latest task was non-terminal at boot (just
-  // orphan-stopped / queue-wiped above, or still in an executing state) were
+  // orphan-stopped above, or still in an executing state) were
   // actually interrupted; read sessions have a terminal latest task from a
   // previous run and must be left untouched.
-  const bootInterruptedTaskIds = new Set<string>([
-    ...orphanedTasks.map((t: Task) => t.task_id as string),
-    ...queuedTasks.map((t: Task) => t.task_id as string),
-  ]);
+  const bootInterruptedTaskIds = new Set<string>(
+    orphanedTasks.map((t: Task) => t.task_id as string)
+  );
 
   const idleNotReadySessions = await collectAllPages<Session>(
     (skip) =>
@@ -369,7 +349,7 @@ async function cleanupOrphanStatusesInTenantScope(
   const cleanupParts: string[] = [
     `${orphanedTasks.length} orphaned task(s) stopped`,
     `${orphanedSessions.length} active session(s) reset`,
-    `${queuedTasks.length} queued task(s) stopped`,
+    'durable queued task(s) preserved',
   ];
   if (sessionsResetFromOrphanedTasks > 0) {
     cleanupParts.push(`${sessionsResetFromOrphanedTasks} task-owned session(s) reset`);
@@ -384,7 +364,6 @@ async function cleanupOrphanStatusesInTenantScope(
     orphanedTasks,
     orphanedSessions,
     sessionIdsWithOrphanedTasks,
-    queuedTasks,
     sessionsResetFromOrphanedTasks,
   };
 }
@@ -694,7 +673,19 @@ export async function startup(ctx: StartupContext): Promise<void> {
     console.log('💓 Executor heartbeat disabled');
   }
 
-  // 6. Start scheduler service (background worker)
+  // 6. Start the all-daemon durable Session queue scanner. Discovery is
+  // bounded and may overlap freely; the database dispatch claim, not this
+  // timer, elects the launcher.
+  const queueMultiTenancy = resolveMultiTenancyConfig(config);
+  const sessionQueueWorker = new SessionQueueWorker(db, {
+    tenantId: queueMultiTenancy.mode === 'static' ? queueMultiTenancy.static_tenant_id : undefined,
+    workIdentity: ctx.distributedWorkIdentity,
+    processSession: (sessionId, params) =>
+      ctx.sessionsService.triggerQueueProcessing(sessionId, params as never),
+  });
+  sessionQueueWorker.start();
+
+  // 7. Start scheduler service (background worker)
   let schedulerService: SchedulerService | null = null;
   {
     const multiTenancy = resolveMultiTenancyConfig(config);
@@ -712,7 +703,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     schedulerService.start();
   }
 
-  // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)
+  // 8. Start Knowledge embedding indexer (no-op unless semantic search is configured)
   let knowledgeEmbeddingIndexer: KnowledgeEmbeddingIndexer | null = null;
   knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
     tenantId: startupTenantParams(config).tenant.tenant_id,
@@ -721,7 +712,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
   app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
   console.log('🧠 Knowledge embedding indexer started');
 
-  // 8. Initialize gateway listeners. Static mode preserves the historical
+  // 9. Initialize gateway listeners. Static mode preserves the historical
   // tenant. Auth-resolved mode performs narrow global ID discovery, then
   // reloads and starts each channel under its immutable tenant identity.
   const gatewayService = safeService('gateway') as unknown as GatewayService | undefined;
@@ -736,7 +727,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     });
   }
 
-  // 8. Graceful shutdown handler
+  // 10. Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
 
@@ -751,6 +742,10 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
       // Stop heartbeat supervisor
       heartbeatSupervisor.stop();
+
+      // Stop durable Session queue discovery. Any in-flight database claim is
+      // still safe; stop only prevents the next local scan.
+      sessionQueueWorker.stop();
 
       await containAllTrackedExecutors();
 

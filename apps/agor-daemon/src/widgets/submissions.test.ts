@@ -16,9 +16,10 @@
  */
 
 import { BadRequest } from '@agor/core/feathers';
-import type { Branch, Message, Session, UserID } from '@agor/core/types';
+import type { Branch, Message, MessageID, Session, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
 import { _resetWidgetRegistryForTests, registerWidget, type WidgetRegistryEntry } from './registry';
 import { canResolveWidget, resolveWidget } from './submissions';
 
@@ -291,6 +292,7 @@ describe('resolveWidget', () => {
     expect(promptCall).toBeDefined();
     const promptData = promptCall?.data as {
       prompt: string;
+      idempotencyTaskId: string;
       metadata: { system_authored: boolean; widget_id: string };
     };
     expect(promptData.prompt).toContain('HUBSPOT_API_KEY');
@@ -298,6 +300,8 @@ describe('resolveWidget', () => {
     expect(promptData.prompt).not.toContain('secret-key');
     expect(promptData.metadata.system_authored).toBe(true);
     expect(promptData.metadata.widget_id).toBe('widget-msg-1');
+    expect(promptData.idempotencyTaskId).toBe(widgetAutoResumeTaskId('widget-msg-1' as MessageID));
+    expect(promptData.idempotencyTaskId).not.toBe('widget-msg-1');
 
     // WebSocket event fired.
     const event = events.find((e) => e.event === 'widget:resolved');

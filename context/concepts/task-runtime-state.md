@@ -14,12 +14,11 @@ safe release.
 ```text
 Prompt
   |
-  +-- busy session --> QUEUED
-  `-- available ----> CREATED
-                         |
-                         | daemon persists launch intent
-                         v
-                     DISPATCHING
+  `-- durable admission --> QUEUED
+                               |
+                     queue-head/Session claim
+                               v
+                          DISPATCHING
                          |
                          | authenticated executor claims task
                          v
@@ -99,6 +98,10 @@ still block admission until it is dispatched or settled.
 Queue materialization and draining are documented separately in
 [task-queueing.md](task-queueing.md).
 
+Prompt admission normally enters through `queued` even for an idle Session, so
+ordering and idle-vs-waiting are one database decision. `created` remains for
+the explicit create-then-run API and scheduled compatibility/reconciliation.
+
 ## The runtime facts stored on a task
 
 | Fact                         | What it answers                                                        | What it does not answer                  |
@@ -138,6 +141,10 @@ an explicit mapping-review point.
 ### Daemon heartbeat supervisor
 
 - A task remains `dispatching` until an authenticated executor claims it.
+- The dispatch claim and Session projection commit before any executor launch.
+  A daemon death in that gap therefore leaves durable, diagnosable launch
+  intent rather than silently returning the prompt to the queue. Re-enqueueing
+  automatically would be unsafe because the external launch may have happened.
 - The default dispatch connection deadline is five minutes.
 - A local dispatch that misses the deadline enters termination coordination.
 - A templated/remote dispatch records a warning and keeps waiting because the
@@ -210,6 +217,12 @@ admission/UI projection:
   state and may trigger queue processing;
 - reconciliation repairs a failed/not-ready session when no non-queued task
   still owns that busy state.
+
+`queued` Tasks are not startup orphans and are never wiped during daemon
+startup. The all-daemon queue worker rediscovers them. Fleet-safe ownership and
+cross-tenant reconciliation of already-`dispatching`/running work remains the
+runtime-supervision contract; this queue layer deliberately does not redesign
+heartbeat, containment, or startup orphan ownership.
 
 `Session.ready_for_prompt` is also used as an attention/acknowledgement flag. It
 is not equivalent to promptability and must not be checked alone. Use the

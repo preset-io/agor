@@ -17,6 +17,7 @@ import {
   resolveTenantContext,
 } from '@agor/core/config';
 import {
+  assertTenantWritable,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   generateId,
@@ -919,15 +920,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   /**
-   * Per-session "turn" lock — single source of truth for "who's allowed to
-   * spawn an executor for this session right now" mutual exclusion. Shared
-   * by `/sessions/:id/prompt`'s idle branch, `/tasks/:id/run`, and the
-   * queue processor's drain loop. See `utils/session-turn-lock.ts`.
-   *
-   * Without this, two concurrent prompts on the same idle session could
-   * both observe `status === 'idle'` and both spawn executors — a race
-   * that pre-dates the `/tasks/:id/run` route but is now fixed across all
-   * three entry points.
+   * Per-session local turn coalescing. This reduces redundant preparatory
+   * reads and duplicate drain triggers inside one daemon; it is not a
+   * correctness authority. Queue-position admission and the Session+Task
+   * dispatch fence in PostgreSQL are authoritative across daemons.
    */
   const sessionTurnLocks: SessionTurnLocks = new Map();
 
@@ -1099,8 +1095,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    * spawnTaskExecutor — sole transition point for `tasks.status` going from
    * `created` / `queued` → `dispatching`.
    *
-   * Both the IDLE branch of POST /sessions/:id/prompt and the queued-task
-   * drainer call this helper. Centralising the transition guarantees that:
+   * Both POST /sessions/:id/prompt's immediate queue-head attempt and the
+   * queued-task drainer call this helper. Centralising the transition
+   * guarantees that:
    *
    *   - `message_range.start_index`, `git_state.{ref,sha}_at_start`, and
    *     `started_at` are recomputed against fresh state right before the
@@ -1187,28 +1184,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // Atomically claim queued/created → launch status. Process-local session
     // locks reduce contention, but this expected-state transition is the
     // cross-daemon fence that prevents duplicate executor launches.
-    const dispatchClaim = await tasksService.claimDispatchAndProjectSession(
-      task.task_id,
-      task.status,
-      {
-        ...launchState,
-        ...(launchState.executor_mode
-          ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
-          : {}),
-        queue_position: undefined,
-        message_range: {
-          start_index: messageStartIndex,
-          end_index: messageStartIndex + 1,
-          start_timestamp: startTimestamp,
-          end_timestamp: startTimestamp,
+    const dispatchClaim = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      await assertTenantWritable(tenantDb, tenantId);
+      return tasksService.claimDispatchAndProjectSession(
+        task.task_id,
+        task.status,
+        {
+          ...launchState,
+          ...(launchState.executor_mode
+            ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
+            : {}),
+          queue_position: undefined,
+          message_range: {
+            start_index: messageStartIndex,
+            end_index: messageStartIndex + 1,
+            start_timestamp: startTimestamp,
+            end_timestamp: startTimestamp,
+          },
+          git_state: {
+            ref_at_start: refAtStart,
+            sha_at_start: gitStateAtStart,
+          },
         },
-        git_state: {
-          ref_at_start: refAtStart,
-          sha_at_start: gitStateAtStart,
-        },
-      },
-      { ...params, provider: undefined }
-    );
+        { ...params, provider: undefined }
+      );
+    });
     if (dispatchClaim.outcome !== 'claimed') {
       const workIdentity = app.get('distributedWorkIdentity');
       console.info(
@@ -1429,6 +1429,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (data.idempotencyTaskId && params.provider) {
           throw new Forbidden('idempotencyTaskId is internal-only');
         }
+        const promptTenantId = getCurrentTenantId();
+        if (!promptTenantId) throw new Error('Missing active tenant context for prompt admission');
+        await runWithTenantDatabaseScope(db, promptTenantId, (tenantDb) =>
+          assertTenantWritable(tenantDb, promptTenantId)
+        );
 
         // Validate and normalize messageSource
         const messageSource = normalizeMessageSource(data.messageSource, params);
@@ -1507,17 +1512,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new Error('Cannot send prompt: session is currently stopping');
         }
 
-        // The route is one path: always materialize a Task. Whether it runs
-        // immediately or gets queued is the *response*, not a different code
-        // path. Sentinels and queue-position assignment live in
-        // `taskRepo.createPending` so callers don't reassemble them by hand.
-        //
-        // Wrapped in `withSessionTurnLock` so the queue-vs-idle decision and
-        // the subsequent spawn are atomic with respect to other entry points
-        // (`/tasks/:id/run`, the queue drainer). Without this, two concurrent
-        // prompts on an idle session could both observe `status === 'idle'`
-        // and both spawn executors. Inside the lock the session is re-read,
-        // so the decision is made against the freshest possible state.
+        // Every prompt first takes one durable queue position. The subsequent
+        // Session+Task database claim decides whether this Task leaves the
+        // queue immediately or remains queued. This avoids a split
+        // read-session/create-CREATED race: two daemons can admit concurrently,
+        // but only the durable head can claim the idle Session.
         if (!params.user?.user_id) {
           throw new NotAuthenticated('Authentication required to prompt a session');
         }
@@ -1540,126 +1539,72 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               params
             );
 
-            // A scheduled occurrence owns a stable initial task ID persisted
-            // with its session. Reconciliation always targets that row rather
-            // than inferring idempotence from process-local locks or creating a
-            // second queued prompt after another daemon starts it.
-            if (data.idempotencyTaskId) {
-              const prior = await taskRepo.findById(data.idempotencyTaskId);
-              if (prior && prior.session_id !== id) {
-                throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
-              }
-              const task = await taskRepo.createPending({
-                task_id: data.idempotencyTaskId,
-                session_id: id as SessionID,
-                full_prompt: data.prompt,
-                created_by: createdBy,
-                status: TaskStatus.CREATED,
-              });
-              if (!prior) {
-                // createPending is conflict-tolerant: another daemon can win
-                // between the pre-read and insert. In that case this is only a
-                // harmless same-ID realtime catch-up event, not a correctness
-                // dependency.
-                emitServiceEvent(app, {
-                  path: 'tasks',
-                  event: 'created',
-                  data: task,
-                  params,
-                  id: task.task_id,
-                });
-              }
-              return await spawnTaskExecutor(
-                task,
-                {
-                  permissionMode: data.permissionMode,
-                  stream: data.stream !== false,
-                  messageSource,
-                  stableInitialMessageId: data.idempotencyTaskId as MessageID,
-                },
-                params
-              );
+            const prior = data.idempotencyTaskId
+              ? await taskRepo.findById(data.idempotencyTaskId)
+              : null;
+            if (prior && prior.session_id !== id) {
+              throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
             }
 
-            const queuedTasks = await taskRepo.findQueued(id as SessionID);
-            const shouldQueue =
-              !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
-              queuedTasks.length > 0;
-
-            if (shouldQueue) {
-              const queuedTask = await taskRepo.createPending({
-                session_id: id as SessionID,
-                full_prompt: data.prompt,
-                created_by: createdBy,
-                status: TaskStatus.QUEUED,
-                metadata: buildPromptTaskMetadata(data.metadata, messageSource, createdBy),
-              });
-              await tasksService.autoTitleSession(queuedTask, params);
-
-              console.log(
-                `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
-                  `(session status: ${lockedSession.status}, existing queue items: ${queuedTasks.length})`
-              );
-
-              app.service('tasks').emit('queued', queuedTask);
-
-              if (sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)) {
-                deferInFreshTenantScope(params, async () => {
-                  try {
-                    await sessionsService.triggerQueueProcessing(id as SessionID, params);
-                  } catch (error) {
-                    console.error(
-                      `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
-                      error
-                    );
-                  }
-                });
-              }
-
-              // Uniform response: the entity is always a Task. Caller inspects
-              // `task.status` (`'queued'` here) and `task.queue_position` to know
-              // what happened.
-              return queuedTask;
-            }
-
-            console.log(`   Session agent: ${lockedSession.agentic_tool}`);
-            console.log(
-              `   Session permission_config.mode: ${lockedSession.permission_config?.mode || 'not set'}`
-            );
-
-            // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
-            // which is the sole place that populates message_range / git_state,
-            // writes the user-message row, and spawns the executor. Both this
-            // path and processNextQueuedTask go through that helper so behavior
-            // stays in lockstep.
-            const idleTaskMetadata = buildPromptTaskMetadata(data.metadata, messageSource);
+            const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy);
             const task = await taskRepo.createPending({
+              task_id: data.idempotencyTaskId,
               session_id: id as SessionID,
               full_prompt: data.prompt,
               created_by: createdBy,
-              status: TaskStatus.CREATED,
-              metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
+              status: TaskStatus.QUEUED,
+              metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
             });
             await tasksService.autoTitleSession(task, params);
-            // Bypassing the service means no native 'created' emit; do it here
-            // so reactive clients see the new task before the executor spawns.
-            emitServiceEvent(app, {
-              path: 'tasks',
-              event: 'created',
-              data: task,
-              params,
-              id: task.task_id,
-            });
 
-            return await spawnTaskExecutor(
+            if (!prior) {
+              // Repository admission bypasses TasksService.create. Publish the
+              // entity before its possible patched/dispatch event so reactive
+              // clients observe a coherent lifecycle.
+              emitServiceEvent(app, {
+                path: 'tasks',
+                event: 'created',
+                data: task,
+                params,
+                id: task.task_id,
+              });
+            }
+
+            const admitted = await spawnTaskExecutor(
               task,
               {
                 permissionMode: data.permissionMode,
                 stream: data.stream !== false,
                 messageSource,
+                ...(data.idempotencyTaskId
+                  ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
+                  : {}),
               },
               params
             );
+
+            if (admitted.status === TaskStatus.QUEUED) {
+              console.log(
+                `📬 [Prompt] Queued task for session ${shortId(id)} at position ${admitted.queue_position} ` +
+                  `(observed session status: ${lockedSession.status})`
+              );
+              app.service('tasks').emit('queued', admitted);
+
+              // Immediate triggers are a latency hint. Durable all-daemon
+              // discovery remains the recovery path if this process dies or
+              // another claim changes the Session after our observation.
+              deferInFreshTenantScope(params, async () => {
+                try {
+                  await sessionsService.triggerQueueProcessing(id as SessionID, params);
+                } catch (error) {
+                  console.error(`❌ [Prompt] Failed to trigger queued Task processing:`, error);
+                }
+              });
+            }
+
+            // Uniform response: QUEUED means durable wait; DISPATCHING/RUNNING
+            // means this or another daemon already won the launch claim.
+            return admitted;
           },
           { waiterTimeoutMs: 30_000 }
         );
@@ -1774,11 +1719,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           }
         }
 
-        // Acquire the session-turn lock before validating session state and
-        // spawning. This is what closes the race against concurrent
-        // /tasks/:id/run on different tasks of the same session, against
-        // /sessions/:id/prompt's idle branch, and against the queue
-        // drainer — they all serialize through `sessionTurnLocks`.
+        // The local lock coalesces same-process contenders. The repository's
+        // Session-first dispatch claim is authoritative against other daemons
+        // and also refuses to jump a durable prompt queue.
         return await withSessionTurnLock(
           sessionTurnLocks,
           task.session_id,
@@ -1803,7 +1746,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               );
             }
 
-            return await runExistingTask(
+            const result = await runExistingTask(
               task,
               {
                 permissionMode: data.permissionMode,
@@ -1816,6 +1759,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 spawnFn: spawnTaskExecutor,
               }
             );
+            if (result.status === TaskStatus.CREATED) {
+              throw new Conflict(
+                `Cannot run task ${shortId(taskId)}: another Task or queued prompt owns the Session turn.`
+              );
+            }
+            return result;
           },
           { waiterTimeoutMs: 30_000 }
         );
@@ -2680,10 +2629,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Queue listing — task-centric (was message-centric pre-never-lose-prompt).
   // The queue is the set of tasks with status='queued', ranked by
   // queue_position. Each queued task carries the full prompt + metadata; on
-  // drain it transitions queued → running via spawnTaskExecutor.
+  // drain it transitions queued → dispatching via spawnTaskExecutor.
   //
-  // Enqueueing goes through `POST /sessions/:id/prompt` — the daemon decides
-  // run-vs-queue based on session state and reports it back via `task.status`.
+  // Enqueueing goes through `POST /sessions/:id/prompt`: every admission first
+  // takes a durable position, then the database claim decides whether it may
+  // leave the queue immediately and reports the actual status to the caller.
   // ============================================================================
 
   registerAuthenticatedRoute(
@@ -2710,14 +2660,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // Queue processing implementation — task-centric. Acquires the shared
-  // `sessionTurnLocks` (declared near the top of registerRoutes) so the
-  // drainer can't race `/sessions/:id/prompt` or `/tasks/:id/run` for the
-  // same session. The retry-on-existing-lock indirection (vs. a plain
-  // `withSessionTurnLock` wrapper) preserves the original "if drain is in
-  // flight, schedule a retry instead of stacking concurrent drainers"
-  // semantics — important because callbacks can fire processNextQueuedTask
-  // from arbitrary points in the lifecycle.
+  // Queue processing implementation — task-centric. `sessionTurnLocks` and
+  // `queueRetryScheduled` only coalesce duplicate work inside this daemon.
+  // They may disappear on process death without losing correctness: the
+  // durable queue head plus Session-first dispatch claim are authoritative,
+  // and the all-daemon queue worker rediscovers missed work.
   const queueRetryScheduled = new Set<SessionID>();
 
   async function processNextQueuedTask(sessionId: SessionID, params: RouteParams): Promise<void> {
@@ -2844,7 +2791,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    const userId = nextTask.metadata?.queued_by_user_id;
+    const userId = nextTask.metadata?.queued_by_user_id ?? nextTask.created_by;
     const userRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
     const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
 
@@ -2882,23 +2829,34 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    // spawnTaskExecutor handles the QUEUED → RUNNING transition (recomputes
+    // spawnTaskExecutor handles the QUEUED → DISPATCHING claim (recomputes
     // message_range/git_state, writes the user-message row, appends to
     // session.tasks, spawns the executor). We pass the messageSource from
     // task.metadata so callback styling survives the queue → run hop.
     const persistedSource = nextTask.metadata?.source;
     const source =
       persistedSource === 'gateway' || persistedSource === 'agor' ? persistedSource : undefined;
-    await spawnTaskExecutor(
+    const scheduledInitialTaskId = queuedSession.custom_context?.scheduled_run?.initial_task_id;
+    const admitted = await spawnTaskExecutor(
       stillQueued,
       {
         stream: true,
         messageSource: source,
+        ...(scheduledInitialTaskId === stillQueued.task_id
+          ? { stableInitialMessageId: scheduledInitialTaskId as MessageID }
+          : {}),
       },
       taskParams
     );
-
-    console.log(`✅ Queued task drained for session ${shortId(sessionId)}`);
+    if (admitted.status === TaskStatus.QUEUED) {
+      taskQueueDebug(
+        `⏸️  Queue head ${shortId(admitted.task_id)} remains queued after a lost/changed claim`
+      );
+      return;
+    }
+    console.log(
+      `✅ Queue head ${shortId(admitted.task_id)} observed as ${admitted.status} for session ${shortId(sessionId)}`
+    );
   }
 
   // Inject queue processor into sessions service.

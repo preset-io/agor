@@ -388,6 +388,12 @@ export const tasks = pgTable(
     queuedPositionUnique: uniqueIndex('tasks_queued_position_unique')
       .on(table.tenant_id, table.session_id, table.queue_position)
       .where(sql`${table.status} = 'queued'`),
+    // Bounded all-daemon recovery discovers one routing ref per queued
+    // Session in tenant/session order. The partial predicate keeps active and
+    // historical Tasks out of this small recovery index.
+    queueScanIdx: index('tasks_queue_scan_idx')
+      .on(table.tenant_id, table.session_id, table.created_at)
+      .where(sql`${table.status} = 'queued'`),
   })
 );
 

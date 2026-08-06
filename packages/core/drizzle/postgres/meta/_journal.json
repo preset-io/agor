@@ -498,6 +498,13 @@
       "when": 1785888000000,
       "tag": "0071_scheduler_ha_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1785974400000,
+      "tag": "0072_task_queue_ha",
+      "breakpoints": true
     }
   ]
 }

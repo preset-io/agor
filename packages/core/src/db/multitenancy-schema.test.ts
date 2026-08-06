@@ -114,6 +114,16 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).not.toContain('WITH CHECK');
   });
 
+  it('limits task queue discovery to durable queued rows and an explicit capability', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0072_task_queue_ha.sql');
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('"status" = \'queued\'');
+    expect(migration).toContain("current_setting('agor.system_scope', true)");
+    expect(migration).toContain("= 'task_queue_discovery'");
+    expect(migration).not.toContain('WITH CHECK');
+  });
+
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {
     const migration = readRepoFile('packages/core/drizzle/postgres/0071_scheduler_ha_indexes.sql');
 

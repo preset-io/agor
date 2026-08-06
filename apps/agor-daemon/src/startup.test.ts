@@ -135,7 +135,6 @@ describe('startup tenant database scope', () => {
     await expect(cleanupOrphanStatuses(ctx)).resolves.toMatchObject({
       orphanedTasks: [],
       orphanedSessions: [],
-      queuedTasks: [],
       sessionsResetFromOrphanedTasks: 0,
     });
     expect(baseDb.marker).toHaveBeenCalled();
@@ -173,7 +172,7 @@ describe('startup tenant database scope', () => {
     expect(baseDb.marker).not.toHaveBeenCalled();
   });
 
-  it('cleans every queued task when recovery spans multiple pages', async () => {
+  it('preserves every durable queued task for the fleet queue worker', async () => {
     const queuedTasks = Array.from({ length: 1001 }, (_, index) =>
       makeTask({ task_id: `queued-${index}`, status: TaskStatus.QUEUED })
     );
@@ -181,9 +180,9 @@ describe('startup tenant database scope', () => {
 
     await cleanupOrphanStatuses(ctx);
 
-    expect(tasksService.patch).toHaveBeenCalledTimes(queuedTasks.length);
-    expect(tasksService.find).toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.objectContaining({ $skip: 1000 }) })
+    expect(tasksService.patch).not.toHaveBeenCalled();
+    expect(tasksService.find).not.toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ status: TaskStatus.QUEUED }) })
     );
   });
 });
