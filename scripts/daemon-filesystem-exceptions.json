@@ -294,6 +294,20 @@
     "reviewDate": null
   },
   {
+    "id": "DAEMON-FS-CAP-170",
+    "class": "A",
+    "file": "packages/core/src/unix/user-env-file.ts",
+    "import": "node:fs",
+    "symbol": "existsSync",
+    "local": "existsSync",
+    "operation": "call:existsSync@cleanup#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Skips privileged safety-net cleanup after the target-user launch wrapper has already removed its env file.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
     "id": "DAEMON-FS-CAP-064",
     "class": "A",
     "file": "packages/core/src/unix/user-env-file.ts",

@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildSpawnArgs, escapeShellArg } from './run-as-user.js';
 
@@ -140,7 +144,7 @@ describe('run-as-user', () => {
         // Script references ENVFILE from $1, not interpolated. Uses `set -eu`
         // so a failed source aborts BEFORE rm+exec (fail-closed).
         expect(result.args[5]).toBe(
-          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec "$@"'
+          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec env "$@"'
         );
         // Positional args: separator, envFilePath, then the real command
         expect(result.args[6]).toBe('--');
@@ -149,17 +153,72 @@ describe('run-as-user', () => {
         expect(result.args[9]).toBe('script.js');
       });
 
+      it('makes sourced secrets and positional env visible before command input handling', () => {
+        const directory = mkdtempSync(join(tmpdir(), 'agor-run-as-user-'));
+        const envFilePath = join(directory, 'agor-env-startup');
+        const secret = "secret with 'quotes'=and\nnewlines";
+        const env = {
+          LOG_LEVEL: 'warn',
+          NODE_ENV: 'production',
+          GIT_CONFIG_PARAMETERS:
+            "'transfer.credentialsInUrl'='die' 'http.extraHeader'='quoted value'",
+          HOSTILE_VALUE: "spaces 'quotes' = equals\nand newlines",
+        };
+        const commandArgs = [
+          '-e',
+          'process.stdout.write(JSON.stringify({ secret: process.env.ANTHROPIC_API_KEY, logLevel: process.env.LOG_LEVEL, nodeEnv: process.env.NODE_ENV, gitConfig: process.env.GIT_CONFIG_PARAMETERS, hostile: process.env.HOSTILE_VALUE }))',
+        ];
+        writeFileSync(envFilePath, `ANTHROPIC_API_KEY=${escapeShellArg(secret)}\n`, {
+          mode: 0o600,
+        });
+
+        try {
+          const result = buildSpawnArgs(process.execPath, commandArgs, {
+            asUser: 'alice',
+            envFilePath,
+            env,
+          });
+          expect(result.args.slice(8)).toEqual([
+            ...Object.entries(env).map(([key, value]) => `${key}=${value}`),
+            process.execPath,
+            ...commandArgs,
+          ]);
+          const output = execFileSync('bash', result.args.slice(4), { encoding: 'utf8' });
+
+          expect(JSON.parse(output)).toEqual({
+            secret,
+            logLevel: env.LOG_LEVEL,
+            nodeEnv: env.NODE_ENV,
+            gitConfig: env.GIT_CONFIG_PARAMETERS,
+            hostile: env.HOSTILE_VALUE,
+          });
+          expect(existsSync(envFilePath)).toBe(false);
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      });
+
+      it('rejects invalid inline env names before spawn', () => {
+        expect(() =>
+          buildSpawnArgs('node', ['executor.js'], {
+            asUser: 'alice',
+            envFilePath: '/tmp/agor-env-nonce',
+            env: { 'INVALID-NAME': 'value' },
+          })
+        ).toThrow('buildSpawnArgs: invalid env var name: "INVALID-NAME"');
+      });
+
       it('inner script is fail-closed (set -eu aborts before exec on source failure)', () => {
         const result = buildSpawnArgs('node', [], {
           asUser: 'alice',
           envFilePath: '/tmp/agor-env-x',
         });
         // `set -eu` MUST appear before the source step so that a failed
-        // `.  "$ENVFILE"` prevents the `exec "$@"` from launching with
+        // `.  "$ENVFILE"` prevents the `exec env "$@"` from launching with
         // missing secrets.
         const script = result.args[5];
         expect(script.indexOf('set -eu')).toBeLessThan(script.indexOf('. "$ENVFILE"'));
-        expect(script.indexOf('. "$ENVFILE"')).toBeLessThan(script.indexOf('exec "$@"'));
+        expect(script.indexOf('. "$ENVFILE"')).toBeLessThan(script.indexOf('exec env "$@"'));
       });
 
       it('REGRESSION: does NOT contain any secret values in argv', () => {
@@ -321,14 +380,14 @@ describe('run-as-user', () => {
 
       it('default (shell: false) keeps argv-mode behaviour for executor callers', () => {
         // Belt-and-braces: the executor spawn path must continue to use
-        // `exec "$@"` so that `node executor.js --stdin` runs without an
+        // `exec env "$@"` so that `node executor.js --stdin` runs without an
         // extra shell layer. Adding `shell` must not regress it.
         const result = buildSpawnArgs('node', ['executor.js', '--stdin'], {
           asUser: 'alice',
           envFilePath: '/tmp/agor-env-default',
         });
         expect(result.args[5]).toBe(
-          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec "$@"'
+          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec env "$@"'
         );
         expect(result.args.slice(8)).toEqual(['node', 'executor.js', '--stdin']);
       });
