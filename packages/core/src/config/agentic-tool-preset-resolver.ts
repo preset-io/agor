@@ -148,6 +148,9 @@ export async function materializeAgenticToolConfiguration(
       : args.executionOwnerId
         ? await new UsersRepository(db).findById(args.executionOwnerId)
         : null;
+  if (args.executionOwnerId && !owner) {
+    throw new AgenticConfigurationResolutionError(`User not found: ${args.executionOwnerId}`);
+  }
   let preset: AgenticToolPreset | undefined;
   let configuration: DefaultAgenticToolConfig;
   if (hasReference) {

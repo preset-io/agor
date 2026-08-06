@@ -111,6 +111,20 @@ function singleProviderSettings(
   };
 }
 
+function deviceCodeAttempt(attemptId: string) {
+  return {
+    attemptId,
+    providerId: 'openai',
+    phase: 'awaiting_callback' as const,
+    expiresAt: '2026-08-05T12:00:00.000Z',
+    authorization: {
+      url: 'https://auth.openai.com/device',
+      method: 'auto' as const,
+      instructions: 'Enter code ABCD-12345',
+    },
+  };
+}
+
 describe('OpenCodeProviderSettings', () => {
   it('keeps the selected provider credential draft isolated from visible runtime providers', async () => {
     const providers: Settings = {
@@ -855,17 +869,7 @@ describe('OpenCodeProviderSettings', () => {
     const oauthOnly = singleProviderSettings('openai', 'OpenAI', [
       { index: 0, type: 'oauth', label: 'ChatGPT' },
     ]);
-    const attempt = {
-      attemptId: 'attempt-copy',
-      providerId: 'openai',
-      phase: 'awaiting_callback' as const,
-      expiresAt: '2026-08-05T12:00:00.000Z',
-      authorization: {
-        url: 'https://auth.openai.com/device',
-        method: 'auto' as const,
-        instructions: 'Enter code ABCD-12345',
-      },
-    };
+    const attempt = deviceCodeAttempt('attempt-copy');
     const service = createAuthService({
       find: vi.fn().mockResolvedValue(oauthOnly),
       get: vi.fn().mockResolvedValue(attempt),
@@ -879,6 +883,26 @@ describe('OpenCodeProviderSettings', () => {
 
     await screen.findByRole('button', { name: 'Authorization code copied' });
     expect(copyText).toHaveBeenCalledWith('ABCD-12345');
+  });
+
+  it('keeps the device code copy action available when clipboard access rejects', async () => {
+    const oauthOnly = singleProviderSettings('openai', 'OpenAI', [
+      { index: 0, type: 'oauth', label: 'ChatGPT' },
+    ]);
+    const attempt = deviceCodeAttempt('attempt-copy-failure');
+    const service = createAuthService({
+      find: vi.fn().mockResolvedValue(oauthOnly),
+      get: vi.fn().mockResolvedValue(attempt),
+      create: vi.fn().mockResolvedValue(attempt),
+    });
+    const copyText = vi.fn().mockRejectedValue(new Error('Clipboard unavailable'));
+    renderSettings(service, copyText);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect with ChatGPT' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy authorization code' }));
+
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith('ABCD-12345'));
+    expect(screen.getByRole('button', { name: 'Copy authorization code' })).toBeInTheDocument();
   });
 
   it('submits a code callback once and clears the secret from UI state', async () => {

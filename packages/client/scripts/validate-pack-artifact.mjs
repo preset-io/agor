@@ -100,12 +100,12 @@ const requiredCompatibilityExports = [
   'AGENTIC_TOOL_KEY_CREATION_URL',
   'AGENTIC_TOOL_CAPABILITIES',
 ];
-symlinkSync(
-  path.join(packageDir, 'node_modules'),
-  path.join(packedRoot, 'node_modules'),
-  'junction'
-);
 try {
+  symlinkSync(
+    path.join(packageDir, 'node_modules'),
+    path.join(packedRoot, 'node_modules'),
+    'junction'
+  );
   execFileSync(process.execPath, [
     '--input-type=module',
     '-e',

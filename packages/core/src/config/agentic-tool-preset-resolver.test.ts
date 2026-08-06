@@ -221,6 +221,22 @@ describe('agentic tool preset resolution', () => {
     ).rejects.toThrow(/execution owner does not match/i);
   });
 
+  dbTest('rejects a missing execution owner before resolving their defaults', async ({ db }) => {
+    const missingUserId = '00000000-0000-7000-8000-000000000099' as UserID;
+    const args = {
+      tool: 'codex' as const,
+      source: { reference: USER_DEFAULT_AGENTIC_CONFIGURATION } as const,
+      executionOwnerId: missingUserId,
+    };
+
+    await expect(materializeAgenticToolConfiguration(db, args)).rejects.toThrow(
+      `User not found: ${missingUserId}`
+    );
+    await expect(
+      materializeAgenticToolConfiguration(db, { ...args, executionOwner: null })
+    ).rejects.toThrow(`User not found: ${missingUserId}`);
+  });
+
   dbTest('missing workspace default fails closed when presets are required', async ({ db }) => {
     await new TenantAgenticToolSettingsRepository(db).patch('codex', {
       inline_configuration_allowed: false,

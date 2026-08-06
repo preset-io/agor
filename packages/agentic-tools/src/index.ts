@@ -92,9 +92,10 @@ export function getAgenticToolModelSelectionError(
   input: { provider?: string; model?: string } | null | undefined
 ): string | undefined {
   const policy = AGENTIC_TOOL_INTEGRATIONS[tool].modelConfiguration;
-  return policy?.missingSelectionError && !policy.isSelectionComplete?.(input)
-    ? policy.missingSelectionError
-    : undefined;
+  if (!policy?.missingSelectionError) return undefined;
+  return isAgenticToolModelSelectionComplete(tool, input)
+    ? undefined
+    : policy.missingSelectionError;
 }
 
 export function agenticToolRequiresModelSelection(tool: AgenticToolName): boolean {

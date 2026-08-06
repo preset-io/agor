@@ -233,9 +233,11 @@ export function OpenCodeProviderListItem({
                                 )
                               }
                               onClick={() =>
-                                void copyText(authorizationCode).then((copied) => {
-                                  if (copied) setCopiedAuthorizationCode(authorizationCode);
-                                })
+                                void copyText(authorizationCode)
+                                  .then((copied) => {
+                                    if (copied) setCopiedAuthorizationCode(authorizationCode);
+                                  })
+                                  .catch(() => undefined)
                               }
                             />
                           </Tooltip>
