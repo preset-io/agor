@@ -94,7 +94,7 @@ export interface MCPTemplateResolutionResult {
  * @returns Template context for MCP config resolution (user vars only)
  */
 export function buildMCPTemplateContextFromEnv(
-  env: NodeJS.ProcessEnv | Record<string, string | undefined>
+  env: Readonly<Record<string, string | undefined>>
 ): MCPTemplateContext {
   // Get the list of user-defined env var keys (set by daemon)
   const userEnvKeysStr = env[AGOR_USER_ENV_KEYS_VAR];

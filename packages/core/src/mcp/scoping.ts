@@ -10,8 +10,8 @@
  *
  * Template Resolution:
  * MCP server env vars can contain Handlebars templates like {{ user.env.GITHUB_TOKEN }}.
- * Templates are resolved using process.env, which contains the user's decrypted
- * environment variables (populated by createUserProcessEnvironment when spawning).
+ * Templates are resolved from an explicit caller environment when supplied, or
+ * process.env by default for provider-side callers running inside the executor.
  *
  * Note: owner_user_id on MCP servers is NOT used for filtering. Global MCPs are
  * truly global and available to all sessions regardless of who created them.
@@ -92,6 +92,13 @@ export interface MCPResolutionDeps {
    * When provided, MCP servers with per-user OAuth will have tokens injected.
    */
   forUserId?: string;
+  /**
+   * Environment used to resolve `user.env.*` MCP templates.
+   *
+   * Daemon launch paths should pass the task prompter's already-prepared
+   * executor environment. Provider-side callers default to their process env.
+   */
+  templateEnv?: Readonly<Record<string, string | undefined>>;
 }
 
 /**
@@ -197,9 +204,10 @@ export async function getMcpServerAvailabilityForSession(
     }
 
     // STEP 3: Resolve templates in config fields (url, env.*, auth.*)
-    // process.env contains user's decrypted env vars (set by createUserProcessEnvironment)
+    // Executor-side callers resolve from process.env by default. Daemon callers
+    // can provide the exact user's prepared environment without mutating globals.
     // SECURITY: Only user-defined vars are exposed (via AGOR_USER_ENV_KEYS)
-    const templateContext = buildMCPTemplateContextFromEnv(process.env);
+    const templateContext = buildMCPTemplateContextFromEnv(deps.templateEnv ?? process.env);
     let templatesResolved = 0;
     let serversSkipped = 0;
 

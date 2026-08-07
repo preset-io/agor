@@ -174,6 +174,43 @@ describe('getMcpServersForSession', () => {
     ]);
   });
 
+  it('resolves a full OAuth URL from an explicit template env before classifying reauth', async () => {
+    const needsAuth = {
+      ...makeServer('oauth-templated-url', 'global', 'Templated URL'),
+      url: '{{ user.env.MCP_URL }}',
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as MCPServer;
+    const getAuthHeaders = vi.fn().mockResolvedValue({
+      'oauth-templated-url': { error: 'needs_reauth' },
+    });
+
+    const availability = await getMcpServerAvailabilityForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: {
+        listEffectiveServers: vi.fn().mockResolvedValue([needsAuth]),
+      } as never,
+      mcpOAuthAuthHeadersRepo: { getAuthHeaders },
+      templateEnv: {
+        AGOR_USER_ENV_KEYS: 'MCP_URL',
+        MCP_URL: 'https://prompter.example.com/mcp',
+      },
+    });
+
+    expect(getAuthHeaders).toHaveBeenCalledWith(['oauth-templated-url']);
+    expect(availability.usable).toEqual([]);
+    expect(availability.unavailable).toHaveLength(1);
+    expect(availability.unavailable[0]).toMatchObject({
+      server: {
+        server: {
+          mcp_server_id: 'oauth-templated-url',
+          url: 'https://prompter.example.com/mcp',
+        },
+        source: 'global',
+      },
+      reason: 'authentication_required',
+    });
+  });
+
   it('keeps a refreshable expired OAuth server when the auth service returns its refreshed token', async () => {
     const refreshable = {
       ...makeServer('oauth-refreshable', 'session', 'Refreshable'),

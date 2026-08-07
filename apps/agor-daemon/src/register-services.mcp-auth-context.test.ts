@@ -78,12 +78,12 @@ const prompter = {
   role: 'member',
 } as User;
 
-const oauthServer = (id: string, name: string): MCPServer =>
+const oauthServer = (id: string, name: string, url = `https://${id}.example.com/mcp`): MCPServer =>
   ({
     mcp_server_id: id,
     name,
     transport: 'http',
-    url: `https://${id}.example.com/mcp`,
+    url,
     scope: 'global',
     source: 'user',
     enabled: true,
@@ -157,6 +157,7 @@ describe('task creator executor launch context', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -212,6 +213,54 @@ describe('task creator executor launch context', () => {
     expect(JSON.stringify(payload)).not.toContain('owner-secret');
     expect(options).toMatchObject({ templateVariables: { unix_user: 'prompter-b' } });
     expect(options.asUser).toBeUndefined();
+  });
+
+  it('uses only the task creator env to resolve full MCP URLs before the OAuth notice', async () => {
+    vi.stubEnv('AGOR_USER_ENV_KEYS', 'MCP_URL,OWNER_ONLY_URL');
+    vi.stubEnv('MCP_URL', 'https://daemon-ambient.example.com/mcp');
+    vi.stubEnv('OWNER_ONLY_URL', 'https://owner-only.example.com/mcp');
+    vi.mocked(createUserProcessEnvironment).mockResolvedValueOnce({
+      AGOR_USER_ENV_KEYS: 'MCP_URL',
+      IDENTITY: PROMPTER_ID,
+      MCP_URL: 'https://prompter.example.com/mcp',
+    });
+    vi.mocked(MCPServerRepository.prototype.findAll).mockResolvedValueOnce([
+      oauthServer('oauth-required', 'Prompter authentication', '{{ user.env.MCP_URL }}'),
+      oauthServer(
+        'oauth-owner-only',
+        'Owner-only environment must stay isolated',
+        '{{ user.env.OWNER_ONLY_URL }}'
+      ),
+    ]);
+    const { handler, oauthLookup } = makeHarness();
+
+    await runWithTenantContext('tenant-b', () =>
+      handler(
+        SESSION_ID,
+        {
+          taskId: TASK_ID,
+          prompterUserId: PROMPTER_ID,
+          prompt: 'Original task prompt',
+        },
+        { user: owner, tenant: { tenant_id: 'tenant-b', source: 'auth_claim' } }
+      )
+    );
+
+    expect(oauthLookup).toHaveBeenCalledWith(
+      { mcp_server_ids: ['oauth-required'] },
+      expect.objectContaining({ provider: undefined, user: prompter })
+    );
+    const [payload] = vi.mocked(spawnExecutor).mock.calls[0];
+    expect(payload.env).toMatchObject({
+      AGOR_USER_ENV_KEYS: 'MCP_URL',
+      IDENTITY: PROMPTER_ID,
+      MCP_URL: 'https://prompter.example.com/mcp',
+    });
+    expect(payload.params.prompt).toContain('Prompter authentication');
+    expect(payload.params.prompt).toContain('require authentication');
+    expect(payload.params.prompt).not.toContain('Owner-only environment must stay isolated');
+    expect(JSON.stringify(payload)).not.toContain('owner-only.example.com');
+    expect(JSON.stringify(payload)).not.toContain('daemon-ambient.example.com');
   });
 
   it('fails before token, environment, OAuth, or spawn when B is not in the active tenant', async () => {

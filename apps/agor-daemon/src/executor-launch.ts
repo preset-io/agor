@@ -251,6 +251,7 @@ export function createExecuteHandler(
         getMcpServerAvailabilityForSession(sessionId as SessionID, {
           sessionMCPRepo: new SessionMCPServerRepository(tenantDb),
           mcpServerRepo: new MCPServerRepository(tenantDb),
+          templateEnv: executorEnv,
           mcpOAuthAuthHeadersRepo: {
             async getAuthHeaders(mcpServerIds) {
               const result = (await app.service('mcp-servers/oauth-auth-headers').create(
