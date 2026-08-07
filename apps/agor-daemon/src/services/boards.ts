@@ -105,13 +105,18 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    * `$sort` / `$select` / pagination never touch the omitted fields, and
    * `boards.get(id)` is unaffected and always returns the full board.
    *
-   * The boards query validator (`boardQuerySchema`) accepts `board_id` and
-   * `lean` but strips `archived`, so there is no archived predicate to push. A
+   * The boards query validator (`boardQuerySchema`) accepts `board_id`,
+   * `archived`, and `lean`. A
    * `{ $in }` is only pushed when every element is a string, keeping the
    * superset invariant unconditional.
    */
   protected async fetchData(query: Query, params?: BoardParams): Promise<Board[]> {
-    const filter: { boardIds?: BoardID[]; visibleToUserId?: UUID; lean?: boolean } = {};
+    const filter: {
+      archived?: boolean;
+      boardIds?: BoardID[];
+      visibleToUserId?: UUID;
+      lean?: boolean;
+    } = {};
 
     if (params?._agorSqlBoardAccessUserId) {
       filter.visibleToUserId = params._agorSqlBoardAccessUserId;
@@ -122,6 +127,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       filter.lean = true;
     }
     delete leanQuery.lean;
+
+    if (typeof query.archived === 'boolean') filter.archived = query.archived;
 
     const boardId = query.board_id;
     if (typeof boardId === 'string') {

@@ -52,7 +52,7 @@ import {
   parseKnowledgeUri,
   titleFromKnowledgePath,
 } from '@agor/core/types';
-import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
@@ -461,7 +461,7 @@ export class KnowledgeNamespaceRepository
     const rows = await select(this.db)
       .from(kbNamespaces)
       .where(and(...conditions))
-      .orderBy(desc(kbNamespaces.updated_at))
+      .orderBy(desc(kbNamespaces.updated_at), asc(kbNamespaces.namespace_id))
       .all();
     return rows.map((row: KBNamespaceRow) => this.rowToNamespace(row));
   }
@@ -1259,7 +1259,7 @@ export class KnowledgeDocumentRepository
     const rows = await select(this.db)
       .from(kbDocuments)
       .where(and(...conditions))
-      .orderBy(desc(kbDocuments.updated_at))
+      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
       .all();
     const [baseUrl, namespaceRows] = await Promise.all([
       getBaseUrl(),
@@ -1571,7 +1571,8 @@ export class KnowledgeSearchRepository {
         (a, b) =>
           b.score - a.score ||
           new Date(b.document.updated_at ?? 0).getTime() -
-            new Date(a.document.updated_at ?? 0).getTime()
+            new Date(a.document.updated_at ?? 0).getTime() ||
+          a.document.document_id.localeCompare(b.document.document_id)
       )
       .slice(offset, offset + limit);
   }

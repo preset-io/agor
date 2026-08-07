@@ -1123,20 +1123,23 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (!service)
         return knowledgeNotImplementedResult('agor_kb_namespaces_list', ['kb/namespaces']);
 
-      const query: Record<string, unknown> = {
-        archived: args.includeArchived === true,
-        $limit: args.limit,
-        $skip: args.offset,
-        $sort: { created_at: -1, namespace_id: 1 },
-      };
+      const query: Record<string, unknown> = { archived: args.includeArchived === true };
       if (args.slug) query.slug = coerceString(args.slug);
       if (args.kind) query.kind = args.kind;
 
       if (service.find) {
         const limit = args.limit ?? 10;
         const offset = args.offset ?? 0;
+        // This authorization-aware service intentionally returns an array after
+        // resolving per-namespace permissions. Page only after that filtering.
+        const authorized = (await service.find(mcpParams(ctx, query))) as KnowledgeNamespace[];
         const page = mcpPageResult<KnowledgeNamespace>(
-          await service.find(mcpParams(ctx, { ...query, $limit: limit, $skip: offset })),
+          {
+            data: authorized.slice(offset, offset + limit),
+            total: authorized.length,
+            limit,
+            skip: offset,
+          },
           limit,
           offset
         );
@@ -2244,8 +2247,6 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const path = coerceString(args.path) ?? parsedUri?.path;
       if (namespace) query.namespace_slug = namespace;
       if (path) query.path = path;
-      if (args.limit) query.$limit = args.limit;
-      query.$skip = args.offset;
       if (!query.document_id && (!query.namespace_slug || !query.path)) {
         throw new Error(
           'Provide documentId, a valid agor://kb/<namespace>/<path> uri, or namespace + path.'
@@ -2255,7 +2256,22 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (service.find) {
         const limit = args.limit ?? 20;
         const offset = args.offset ?? 0;
-        return textResult(mcpPageResult(await service.find(mcpParams(ctx, query)), limit, offset));
+        // Versions are filtered for document/namespace visibility by the
+        // service before this array is returned. Slice afterward so offset and
+        // totals cannot drift from the authorized set.
+        const authorized = (await service.find(mcpParams(ctx, query))) as unknown[];
+        return textResult(
+          mcpPageResult(
+            {
+              data: authorized.slice(offset, offset + limit),
+              total: authorized.length,
+              limit,
+              skip: offset,
+            },
+            limit,
+            offset
+          )
+        );
       }
       return knowledgeNotImplementedResult('agor_kb_history', ['kb/versions.find']);
     }

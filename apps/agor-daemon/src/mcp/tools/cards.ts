@@ -10,6 +10,7 @@ import {
   mcpOffset,
   mcpOptionalId,
   mcpOptionalString,
+  mcpPageResult,
   mcpRequiredId,
   mcpRequiredNumber,
   mcpRequiredString,
@@ -133,48 +134,19 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       const limit = typeof args.limit === 'number' ? args.limit : 50;
       const offset = typeof args.offset === 'number' ? args.offset : 0;
 
-      let cardsList: Card[];
-      let total: number | null = null;
-      if (zoneId && boardId) {
-        const allCards = await cardsService.findByZoneId(boardId as never, zoneId);
-        total = allCards.length;
-        cardsList = allCards.slice(offset, offset + limit);
-      } else if (search) {
-        cardsList = await cardsService.searchCards(search, {
-          boardId: boardId as never,
-          archived,
-          limit: limit + 1,
-          offset,
-        });
-      } else if (cardTypeId) {
-        cardsList = await cardsService.findByCardTypeId(cardTypeId as never, {
-          limit: limit + 1,
-          offset,
-        });
-      } else if (boardId) {
-        cardsList = await cardsService.findByBoardId(boardId as never, {
-          archived,
-          limit: limit + 1,
-          offset,
-        });
-      } else {
-        const result = await cardsService.find({
-          query: { $limit: limit, $skip: offset },
-        } as never);
-        cardsList = 'data' in result ? result.data : result;
-        total = 'data' in result ? result.total : cardsList.length;
-      }
+      const query: Record<string, unknown> = {
+        archived,
+        $limit: limit,
+        $skip: offset,
+        $sort: { created_at: -1, card_id: 1 },
+      };
+      if (boardId) query.board_id = boardId;
+      if (cardTypeId) query.card_type_id = cardTypeId;
+      if (zoneId) query.zone_id = zoneId;
+      if (search) query.search = search;
 
-      const hasMore = total === null ? cardsList.length > limit : offset + cardsList.length < total;
-      const data = cardsList.slice(0, limit);
-      return textResult({
-        total,
-        limit,
-        offset,
-        hasMore,
-        nextOffset: hasMore ? offset + data.length : null,
-        data,
-      });
+      const result = await cardsService.find({ query, ...ctx.baseServiceParams } as never);
+      return textResult(mcpPageResult<Card>(result, limit, offset));
     }
   );
 
