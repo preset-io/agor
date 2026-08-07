@@ -139,6 +139,18 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).not.toContain('WITH CHECK');
   });
 
+  it('limits Knowledge embedding discovery to routing-only candidate rows', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0074_knowledge_embedding_claims.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('"content_text" IS NOT NULL');
+    expect(migration).toContain('"embedding_status" IN');
+    expect(migration).toContain("= 'knowledge_embedding_discovery'");
+    expect(migration).not.toContain('WITH CHECK');
+  });
+
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {
     const migration = readRepoFile('packages/core/drizzle/postgres/0071_scheduler_ha_indexes.sql');
 

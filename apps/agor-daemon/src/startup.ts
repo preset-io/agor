@@ -750,7 +750,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 8. Start Knowledge embedding indexer (no-op unless semantic search is configured)
   let knowledgeEmbeddingIndexer: KnowledgeEmbeddingIndexer | null = null;
   knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
-    tenantId: startupTenantParams(config).tenant.tenant_id,
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    workIdentity: ctx.distributedWorkIdentity,
   });
   knowledgeEmbeddingIndexer.start();
   app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
@@ -774,6 +776,13 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 10. Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
+
+    // Refuse new cost-bearing claims before any other shutdown work can wait.
+    // stop() also aborts the local provider wait and drains its active DB step.
+    if (knowledgeEmbeddingIndexer) {
+      console.log('🧠 Stopping Knowledge embedding indexer...');
+      await knowledgeEmbeddingIndexer.stop();
+    }
 
     // The process-global sentinel is meaningful only for a standalone daemon.
     // In shared mode it cannot identify which replica owned any Task.
@@ -812,12 +821,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
       if (gatewayService) {
         console.log('🌐 Stopping gateway listeners...');
         await gatewayService.stopListeners();
-      }
-
-      // Stop Knowledge embedding indexer
-      if (knowledgeEmbeddingIndexer) {
-        console.log('🧠 Stopping Knowledge embedding indexer...');
-        knowledgeEmbeddingIndexer.stop();
       }
 
       // Stop scheduler

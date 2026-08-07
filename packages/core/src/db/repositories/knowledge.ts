@@ -57,7 +57,15 @@ import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
 import {
   groupMemberships,
   groups,
@@ -745,6 +753,23 @@ export class KnowledgeNamespaceRepository
         .set({ archived: true, archived_at: archivedAt, updated_at: archivedAt })
         .where(eq(kbDocuments.namespace_id, fullId))
         .run();
+      await update(txDb, kbDocumentUnits)
+        .set({
+          embedding_status: 'not_configured',
+          embedding_error: null,
+          embedding_claim_token: null,
+          embedding_claim_generation: sql`${kbDocumentUnits.embedding_claim_generation} + 1`,
+          embedding_claimed_at: null,
+          embedding_claim_expires_at: null,
+          embedding_claim_instance_id: null,
+          embedding_claim_boot_id: null,
+          embedding_retry_at: null,
+          updated_at: archivedAt,
+        })
+        .where(
+          sql`${kbDocumentUnits.document_id} IN (SELECT document_id FROM kb_documents WHERE namespace_id = ${fullId})`
+        )
+        .run();
     });
   }
 }
@@ -1203,7 +1228,9 @@ export class KnowledgeDocumentRepository
     }
 
     for (const status of result.values()) {
-      status.queue_depth = status.chunks.pending + status.chunks.stale;
+      // Error rows are durably retryable after embedding_retry_at, so they
+      // remain part of the queue even while their backoff is active.
+      status.queue_depth = status.chunks.pending + status.chunks.stale + status.chunks.error;
       if (status.total_units === 0) status.state = 'empty';
       else if (status.chunks.error > 0) status.state = 'error';
       else if (status.chunks.stale > 0) status.state = 'stale';
@@ -1339,6 +1366,32 @@ export class KnowledgeDocumentRepository
             })
           )
           .run();
+
+        // Once the document pointer advances, provider work for the previous
+        // version is obsolete. Fence an in-flight daemon in the same document
+        // transaction; ready historical vectors remain available for reuse.
+        if (current.current_version_id) {
+          await update(txDb, kbDocumentUnits)
+            .set({
+              embedding_status: 'not_configured',
+              embedding_error: null,
+              embedding_claim_token: null,
+              embedding_claim_generation: sql`${kbDocumentUnits.embedding_claim_generation} + 1`,
+              embedding_claimed_at: null,
+              embedding_claim_expires_at: null,
+              embedding_claim_instance_id: null,
+              embedding_claim_boot_id: null,
+              embedding_retry_at: null,
+              updated_at: new Date(),
+            })
+            .where(
+              and(
+                eq(kbDocumentUnits.version_id, current.current_version_id),
+                inArray(kbDocumentUnits.embedding_status, ['pending', 'stale', 'error'])
+              )
+            )
+            .run();
+        }
       }
 
       const merged = deepMerge(current, {
@@ -1417,11 +1470,28 @@ export class KnowledgeDocumentRepository
 
   async delete(id: string): Promise<void> {
     const fullId = await this.resolveId(id);
-    const result = await update(this.db, kbDocuments)
-      .set({ archived: true, archived_at: new Date(), updated_at: new Date() })
-      .where(eq(kbDocuments.document_id, fullId))
-      .run();
-    if (result.rowsAffected === 0) throw new EntityNotFoundError('KnowledgeDocument', id);
+    await runDatabaseTransaction(this.db, async (txDb) => {
+      const result = await update(txDb, kbDocuments)
+        .set({ archived: true, archived_at: new Date(), updated_at: new Date() })
+        .where(eq(kbDocuments.document_id, fullId))
+        .run();
+      if (result.rowsAffected === 0) throw new EntityNotFoundError('KnowledgeDocument', id);
+      await update(txDb, kbDocumentUnits)
+        .set({
+          embedding_status: 'not_configured',
+          embedding_error: null,
+          embedding_claim_token: null,
+          embedding_claim_generation: sql`${kbDocumentUnits.embedding_claim_generation} + 1`,
+          embedding_claimed_at: null,
+          embedding_claim_expires_at: null,
+          embedding_claim_instance_id: null,
+          embedding_claim_boot_id: null,
+          embedding_retry_at: null,
+          updated_at: new Date(),
+        })
+        .where(eq(kbDocumentUnits.document_id, fullId))
+        .run();
+    });
   }
 }
 

@@ -57,7 +57,7 @@ describe('isKnowledgeEmbeddingMaterializationSnapshotCurrent', () => {
 function sqlText(query: { queryChunks?: unknown[] }): string {
   return (query.queryChunks ?? [])
     .map((chunk) => {
-      const value = (chunk as { value?: unknown }).value;
+      const value = (chunk as { value?: unknown } | undefined)?.value;
       return Array.isArray(value) ? value.join('') : '';
     })
     .join('');
@@ -76,11 +76,14 @@ describe('buildKnowledgeEmbeddingReuseSql', () => {
       model: 'text-embedding-3-small',
       dimensions: 1536,
       limit: 32,
+      claimToken: 'claim-current',
     });
 
     const text = sqlText(query as never);
     expect(text).toContain("old_u.embedding_status = 'ready'");
-    expect(text).toContain('SELECT unit_id, version_id, content_md5');
+    expect(text).toContain('SELECT u.unit_id, u.version_id, u.content_md5');
+    expect(text).toContain('d.current_version_id = u.version_id');
+    expect(text).toContain('u.embedding_claim_token = ');
     expect(text).toContain('p.version_id AS new_version_id');
     expect(text).toContain('prev_v.version_id AS previous_version_id');
     expect(text).toContain('JOIN kb_document_versions new_v');
@@ -167,15 +170,20 @@ describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
   dbTest('runs only after commit with request tenant scopes detached', async ({ db }) => {
     vi.useFakeTimers();
     try {
-      const indexer = new KnowledgeEmbeddingIndexer(db, { tenantId: 'bootstrap-tenant' });
+      const indexer = new KnowledgeEmbeddingIndexer(db, {
+        tenantId: 'bootstrap-tenant',
+        random: () => 1,
+      });
       const observedScopes: Array<{ tenantId: string | undefined; hasDatabase: boolean }> = [];
       const tick = vi.fn(async () => {
         observedScopes.push({
           tenantId: getCurrentTenantId() as string | undefined,
           hasDatabase: Boolean(getCurrentTenantDatabase()),
         });
+        return { candidates: 0, claimed: 0, indexed: 0, failures: 0, saturated: false };
       });
       indexer.tick = tick;
+      indexer.start();
 
       await runWithTenantContext('request-tenant', () =>
         runWithTenantDatabaseScope(db, 'request-tenant', async () => {
@@ -185,9 +193,10 @@ describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
       );
 
       expect(tick).not.toHaveBeenCalled();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
       expect(tick).toHaveBeenCalledTimes(1);
       expect(observedScopes).toEqual([{ tenantId: undefined, hasDatabase: false }]);
+      await indexer.stop();
     } finally {
       vi.useRealTimers();
     }
@@ -196,9 +205,19 @@ describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
   dbTest('does not wake when the surrounding tenant transaction rolls back', async ({ db }) => {
     vi.useFakeTimers();
     try {
-      const indexer = new KnowledgeEmbeddingIndexer(db, { tenantId: 'bootstrap-tenant' });
-      const tick = vi.fn(async () => {});
+      const indexer = new KnowledgeEmbeddingIndexer(db, {
+        tenantId: 'bootstrap-tenant',
+        random: () => 1,
+      });
+      const tick = vi.fn(async () => ({
+        candidates: 0,
+        claimed: 0,
+        indexed: 0,
+        failures: 0,
+        saturated: false,
+      }));
       indexer.tick = tick;
+      indexer.start();
 
       await expect(
         runWithTenantContext('request-tenant', () =>
@@ -209,43 +228,54 @@ describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
         )
       ).rejects.toThrow('rollback');
 
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
       expect(tick).not.toHaveBeenCalled();
+      await indexer.stop();
     } finally {
       vi.useRealTimers();
     }
   });
 
   dbTest('reruns after a wake arrives during an active tick', async ({ db }) => {
-    vi.useFakeTimers();
     try {
-      const indexer = new KnowledgeEmbeddingIndexer(db, { tenantId: 'bootstrap-tenant' });
+      const indexer = new KnowledgeEmbeddingIndexer(db, {
+        tenantId: 'bootstrap-tenant',
+        random: () => 1,
+      });
       let releaseFirst!: () => void;
       let signalStarted!: () => void;
+      let signalSecond!: () => void;
       const firstStarted = new Promise<void>((resolve) => {
         signalStarted = resolve;
+      });
+      const secondStarted = new Promise<void>((resolve) => {
+        signalSecond = resolve;
       });
       const holdFirst = new Promise<void>((resolve) => {
         releaseFirst = resolve;
       });
       let calls = 0;
-      indexer.indexBatch = vi.fn(async () => {
+      const checkOnce = vi.fn(async () => {
         calls += 1;
         if (calls === 1) {
           signalStarted();
           await holdFirst;
+        } else {
+          signalSecond();
         }
-        return 0;
+        return { candidates: 0, claimed: 0, indexed: 0, failures: 0, saturated: false };
       });
+      Object.defineProperty(indexer, 'checkOnce', { value: checkOnce });
+      indexer.start();
 
-      const firstTick = indexer.tick();
+      indexer.wake();
       await firstStarted;
       indexer.wake();
       releaseFirst();
-      await firstTick;
-      await vi.runAllTimersAsync();
+      await secondStarted;
 
-      expect(indexer.indexBatch).toHaveBeenCalledTimes(2);
+      expect(checkOnce).toHaveBeenCalledTimes(2);
+      await indexer.stop();
     } finally {
       vi.useRealTimers();
     }

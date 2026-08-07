@@ -23,6 +23,7 @@ export interface EmbeddingOptions {
   model: string;
   dimensions: number;
   baseUrl?: string;
+  signal?: AbortSignal;
 }
 
 export interface EmbeddingProvider {
@@ -74,6 +75,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
         input: inputs.map((input) => input.text),
         dimensions: options.dimensions,
       }),
+      signal: options.signal,
     });
 
     if (!response.ok) {
