@@ -285,7 +285,8 @@ describe('SessionsService direct OpenCode model selection', () => {
       default_agentic_selection: user.default_agentic_selection,
     };
 
-    for (const agentic_tool_preset_id of [
+    for (const agenticToolPresetId of [
+      undefined,
       USER_DEFAULT_AGENTIC_CONFIGURATION,
       WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
     ]) {
@@ -293,7 +294,9 @@ describe('SessionsService direct OpenCode model selection', () => {
         {
           branch_id: branchId,
           agentic_tool: 'opencode',
-          agentic_tool_preset_id,
+          ...(agenticToolPresetId === undefined
+            ? {}
+            : { agentic_tool_preset_id: agenticToolPresetId }),
           status: SessionStatus.IDLE,
           created_by: user.user_id,
         },
@@ -313,7 +316,7 @@ describe('SessionsService direct OpenCode model selection', () => {
       default_agentic_config: reloadedUser?.default_agentic_config,
       default_agentic_selection: reloadedUser?.default_agentic_selection,
     }).toEqual(defaultsBefore);
-    expect(findCatalog).toHaveBeenCalledTimes(2);
+    expect(findCatalog).toHaveBeenCalledTimes(3);
     const preset = await new AgenticToolPresetRepository(db).create(
       {
         tool: 'opencode',
@@ -335,7 +338,7 @@ describe('SessionsService direct OpenCode model selection', () => {
         { user } as never
       )
     ).rejects.toThrow(/provider and model/i);
-    expect(findCatalog).toHaveBeenCalledTimes(2);
+    expect(findCatalog).toHaveBeenCalledTimes(3);
   });
 
   dbTest('materializes selected user and workspace presets on direct create', async ({ db }) => {
