@@ -1522,7 +1522,7 @@ export class KnowledgeSearchRepository {
     }
 
     const rows = (await dbQuery
-      .orderBy(desc(kbDocuments.updated_at))
+      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
       .limit(q ? Math.max(offset + limit, 100) : offset + limit)
       .all()) as Array<Record<string, unknown>>;
     const baseUrl = await getBaseUrl();
