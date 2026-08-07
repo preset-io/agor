@@ -85,6 +85,34 @@ Set `AGOR_AGENTIC_TOOLS_DIR` when integrations must live in an administrator-pro
 read-only location. Executors receive the resolved absolute directory across Agor's supported Unix
 identity modes; every executing user must be able to traverse and read that directory.
 
+Run `agor install` as the user the daemon runs as. Integrations install under that user's home
+directory, so installing them with `sudo` places them in root's home where the daemon cannot see
+them — `agor doctor` then reports them as missing. Set `AGOR_AGENTIC_TOOLS_DIR` explicitly when the
+daemon and its executors run as different users.
+
+### Upgrading
+
+Managed integrations are installed per Agor version, so upgrading Agor leaves the previous version's
+integrations behind and the new version starts with none. Reinstall the same set with `--restore`:
+
+```bash
+npm install -g agor-live@latest
+agor install --restore
+```
+
+`--restore` reads the tools you had on your previous version and installs them at the new one. On a
+machine with nothing installed yet it reports that there is nothing to restore and exits
+successfully, so it is safe in unattended upgrade scripts.
+
+Integrations from older versions are kept until you remove them. Reclaim that space with `--prune`,
+which deletes managed directories belonging to every version except the one you are running:
+
+```bash
+agor install --restore --prune
+```
+
+Verify the result at any time with `agor doctor`.
+
 Microsoft Teams gateway support remains optional and separate from agentic tools:
 
 ```bash

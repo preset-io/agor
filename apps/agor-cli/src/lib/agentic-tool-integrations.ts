@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export {
@@ -57,6 +57,93 @@ export async function readManagedIntegrationManifest(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Sort key for an Agor version directory name. Non-numeric segments (e.g. the
+ * `0-rc` in `1.0-rc.2`) parse to their leading digits, which is enough to order
+ * release directories; anything unparseable sorts lowest rather than throwing.
+ */
+function versionSortKey(version: string): number[] {
+  return version.split('.').map((part) => {
+    const parsed = Number.parseInt(part, 10);
+    return Number.isFinite(parsed) ? parsed : -1;
+  });
+}
+
+function compareVersions(a: string, b: string): number {
+  const left = versionSortKey(a);
+  const right = versionSortKey(b);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+/**
+ * Agor versions that have a managed tool directory on disk, oldest first.
+ * Staging/backup directories are dot-prefixed and therefore skipped.
+ */
+export async function listManagedAgorVersions(): Promise<string[]> {
+  try {
+    const entries = await readdir(getAgenticToolsRoot(), { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name)
+      .sort(compareVersions);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Tools with a verified manifest under a given Agor version. Directories whose
+ * manifest is absent or misaligned are ignored, so a half-written install is
+ * never reported as something worth restoring.
+ */
+export async function listInstalledAgenticTools(
+  agorVersion: string
+): Promise<InstallableAgenticTool[]> {
+  let entries: string[];
+  try {
+    entries = (await readdir(join(getAgenticToolsRoot(), agorVersion), { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+
+  const tools = entries.filter(isInstallableAgenticTool);
+  const verified = await Promise.all(
+    tools.map(async (tool) =>
+      (await readManagedIntegrationManifest(tool, agorVersion)) ? tool : undefined
+    )
+  );
+  return verified.filter((tool): tool is InstallableAgenticTool => tool !== undefined);
+}
+
+/**
+ * The newest version older than `currentVersion` that still has tools installed,
+ * i.e. the set a user had before upgrading Agor.
+ */
+export async function findRestorableAgenticTools(currentVersion: string): Promise<{
+  version: string;
+  tools: InstallableAgenticTool[];
+} | null> {
+  const candidates = (await listManagedAgorVersions())
+    .filter((version) => compareVersions(version, currentVersion) < 0)
+    .reverse();
+  for (const version of candidates) {
+    const tools = await listInstalledAgenticTools(version);
+    if (tools.length > 0) return { version, tools };
+  }
+  return null;
+}
+
+/** Remove a managed version directory wholesale. */
+export async function removeManagedAgorVersion(version: string): Promise<void> {
+  await rm(join(getAgenticToolsRoot(), version), { recursive: true, force: true });
 }
 
 function runNpmInstall(prefix: string, packageSpec: string): Promise<void> {
