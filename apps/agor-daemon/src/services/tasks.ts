@@ -1171,7 +1171,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // for backward compat (legacy sessions without callback_created_by).
       const taskCallback = task.metadata?.completion_callback;
       const callbackCreator =
-        childSession.callback_config?.callback_created_by ?? targetSession.created_by;
+        (taskCallback?.target_session_id === targetSessionId
+          ? taskCallback.requested_by_user_id
+          : undefined) ??
+        childSession.callback_config?.callback_created_by ??
+        targetSession.created_by;
       const callbackTaskId = completionCallbackTaskId(task.task_id, targetSessionId);
       const createCallbackTask = () =>
         this.taskRepo.createPending({
