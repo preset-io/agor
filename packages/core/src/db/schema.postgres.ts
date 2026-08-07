@@ -2248,13 +2248,7 @@ export const kbDocumentUnits = pgTable(
     contentHashIdx: index('kb_document_units_content_hash_idx').on(table.content_md5),
     embeddingStatusIdx: index('kb_document_units_embedding_status_idx').on(table.embedding_status),
     embeddingWorkScanIdx: index('kb_document_units_embedding_work_scan_idx')
-      .on(
-        table.tenant_id,
-        table.embedding_retry_at,
-        table.embedding_claim_expires_at,
-        table.created_at,
-        table.unit_id
-      )
+      .on(table.created_at, table.tenant_id, table.unit_id)
       .where(
         sql`${table.content_text} IS NOT NULL AND ${table.embedding_status} IN ('pending', 'stale', 'error')`
       ),

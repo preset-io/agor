@@ -18,6 +18,7 @@ import type { KnowledgeDocumentUnitID, KnowledgeSemanticPolicy, TenantID } from 
 import {
   DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
   type EmbeddingProvider,
+  EmbeddingProviderHttpError,
   embeddingToPgvector,
   SUPPORTED_OPENAI_EMBEDDING_MODELS,
   sha256Text,
@@ -27,6 +28,16 @@ import {
   isKnowledgeEmbeddingMaterializationSnapshotCurrent,
   KnowledgeEmbeddingReuseService,
 } from './knowledge-embedding-reuse.js';
+
+export class KnowledgeEmbeddingPreClaimError extends Error {
+  constructor(
+    message: string,
+    readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = 'KnowledgeEmbeddingPreClaimError';
+  }
+}
 
 interface PreparedEmbeddingBatch {
   semantic: KnowledgeSemanticPolicy;
@@ -62,6 +73,22 @@ export function hasExactEmbeddingResultIds(
     actual.size === results.length &&
     actual.size === expected.size &&
     [...expected].every((id) => actual.has(id))
+  );
+}
+
+export function hasExpectedEmbeddingShape(
+  results: readonly { dimensions: number; embedding: readonly number[] }[],
+  expectedDimensions: number
+): boolean {
+  return (
+    Number.isInteger(expectedDimensions) &&
+    expectedDimensions > 0 &&
+    results.every(
+      (result) =>
+        result.dimensions === expectedDimensions &&
+        result.embedding.length === expectedDimensions &&
+        result.embedding.every(Number.isFinite)
+    )
   );
 }
 
@@ -149,17 +176,24 @@ export class KnowledgeEmbeddingBatchProcessor {
     // the aggregate again below, so a concurrent settings change cannot make
     // stale policy own work. Keeping storage DDL in its own tenant transaction
     // avoids holding the aggregate lock while storage is inspected/materialized.
-    const runnable = await this.withTenantDatabase(tenantId, async (scopedDb) => {
-      const settings = await new KnowledgeSemanticSettingsRepository(scopedDb).find();
-      return this.isProviderPolicyRunnable(settings, settings.api_key_configured);
-    });
-    if (!runnable) return false;
+    try {
+      const runnable = await this.withTenantDatabase(tenantId, async (scopedDb) => {
+        const settings = await new KnowledgeSemanticSettingsRepository(scopedDb).find();
+        return this.isProviderPolicyRunnable(settings, settings.api_key_configured);
+      });
+      if (!runnable) return false;
 
-    const capability = await this.withTenantDatabase(tenantId, (scopedDb) =>
-      this.options.ensureStorage(scopedDb)
-    );
-    if (!capability.available) {
-      throw new Error(capability.reason ?? 'Knowledge pgvector storage is unavailable');
+      const capability = await this.withTenantDatabase(tenantId, (scopedDb) =>
+        this.options.ensureStorage(scopedDb)
+      );
+      if (!capability.available) {
+        throw new Error(capability.reason ?? 'Knowledge pgvector storage is unavailable');
+      }
+    } catch (error) {
+      throw new KnowledgeEmbeddingPreClaimError(
+        error instanceof Error ? error.message : String(error),
+        error
+      );
     }
     this.pgvectorStorageReady = true;
     return true;
@@ -226,6 +260,7 @@ export class KnowledgeEmbeddingBatchProcessor {
     error: unknown
   ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
+    const httpError = error instanceof EmbeddingProviderHttpError ? error : null;
     await this.withTenantDatabase(tenantId, (scopedDb) =>
       new KnowledgeEmbeddingWorkRepository(scopedDb).failClaims({
         claimToken: prepared.claimToken,
@@ -233,8 +268,68 @@ export class KnowledgeEmbeddingBatchProcessor {
         error: message,
         baseRetryMs: this.options.retryBaseMs,
         maxRetryMs: this.options.retryMaxMs,
+        retryable: httpError?.retryable ?? true,
+        retryAfterMs: httpError?.retryAfterMs ?? null,
+        retryAfterAt: httpError?.retryAfterAt ?? null,
       })
     );
+  }
+
+  private async releaseProviderClaims(
+    tenantId: TenantID | string,
+    prepared: PreparedEmbeddingBatch
+  ): Promise<number> {
+    const released = await this.withTenantDatabase(tenantId, (scopedDb) =>
+      new KnowledgeEmbeddingWorkRepository(scopedDb).releaseClaims({
+        claimToken: prepared.claimToken,
+        claims: prepared.providerClaims,
+      })
+    );
+    return released.length;
+  }
+
+  private async admitProviderCall(
+    tenantId: TenantID | string,
+    prepared: PreparedEmbeddingBatch
+  ): Promise<boolean> {
+    return this.withTenantDatabase(tenantId, async (scopedDb) => {
+      const settings = new KnowledgeSemanticSettingsRepository(scopedDb);
+      const current = await settings.lockAggregateForUpdate(scopedDb);
+      const currentApiKey = await settings.getApiKey();
+      const work = new KnowledgeEmbeddingWorkRepository(scopedDb);
+      if (
+        !currentApiKey ||
+        !this.isProviderPolicyRunnable(current, true) ||
+        !isKnowledgeEmbeddingMaterializationSnapshotCurrent(
+          prepared.semantic,
+          current,
+          prepared.apiKey,
+          currentApiKey
+        )
+      ) {
+        await work.releaseClaims({
+          claimToken: prepared.claimToken,
+          claims: prepared.providerClaims,
+        });
+        return false;
+      }
+
+      const admitted = await work.renewClaimsForProviderCall({
+        claimToken: prepared.claimToken,
+        claims: prepared.providerClaims,
+        leaseMs: this.options.claimLeaseMs,
+      });
+      const exactAdmission =
+        admitted.length === prepared.providerClaims.length &&
+        prepared.providerClaims.every((claim) => admitted.includes(claim.unit_id));
+      if (!exactAdmission) {
+        await work.releaseClaims({
+          claimToken: prepared.claimToken,
+          claims: prepared.providerClaims,
+        });
+      }
+      return exactAdmission;
+    });
   }
 
   private async commitProviderResults(
@@ -245,6 +340,9 @@ export class KnowledgeEmbeddingBatchProcessor {
     const claimById = new Map(prepared.providerClaims.map((claim) => [claim.unit_id, claim]));
     if (!hasExactEmbeddingResultIds([...claimById.keys()], results)) {
       throw new Error('Embedding provider returned an incomplete or mismatched batch');
+    }
+    if (!hasExpectedEmbeddingShape(results, prepared.semantic.dimensions)) {
+      throw new Error('Embedding provider returned vectors with invalid dimensions or values');
     }
     return this.withTenantDatabase(tenantId, async (scopedDb) => {
       const settings = new KnowledgeSemanticSettingsRepository(scopedDb);
@@ -292,6 +390,18 @@ export class KnowledgeEmbeddingBatchProcessor {
       return { claimed: prepared.claims.length, indexed: prepared.reused };
     }
     if (this.options.isShutdownRequested()) {
+      await this.releaseProviderClaims(tenantId, prepared);
+      return { claimed: prepared.claims.length, indexed: prepared.reused };
+    }
+
+    if (!(await this.admitProviderCall(tenantId, prepared))) {
+      return { claimed: prepared.claims.length, indexed: prepared.reused };
+    }
+    // JavaScript cannot interleave another turn between this check and the
+    // synchronous provider.embed invocation below. A stop observed here is a
+    // proven no-call path and may safely relinquish the claim.
+    if (this.options.isShutdownRequested()) {
+      await this.releaseProviderClaims(tenantId, prepared);
       return { claimed: prepared.claims.length, indexed: prepared.reused };
     }
 

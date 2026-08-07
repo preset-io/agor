@@ -752,6 +752,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
   knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
     tenantId:
       startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    distributedMode: startupMultiTenancy.mode !== 'static',
     workIdentity: ctx.distributedWorkIdentity,
   });
   knowledgeEmbeddingIndexer.start();

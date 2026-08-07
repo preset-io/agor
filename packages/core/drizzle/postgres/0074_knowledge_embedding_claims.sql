@@ -22,6 +22,46 @@ ALTER TABLE "kb_document_units" ADD COLUMN "embedding_retry_at" timestamp with t
 
 -- Historical and archived chunks are not provider work. Older code left some
 -- of them pending, which could otherwise consume every bounded discovery page.
+-- FORCE RLS is already enabled on all three tables. Open only the exact
+-- transaction-local migration capability needed by this cleanup, then remove
+-- every temporary policy before the migration transaction can commit.
+DROP POLICY IF EXISTS "knowledge_embedding_migration_0074_select" ON "kb_document_units";
+--> statement-breakpoint
+CREATE POLICY "knowledge_embedding_migration_0074_select" ON "kb_document_units"
+  FOR SELECT
+  USING (
+    current_setting('agor.system_scope', true) = 'knowledge_embedding_migration_0074'
+  );
+--> statement-breakpoint
+DROP POLICY IF EXISTS "knowledge_embedding_migration_0074_update" ON "kb_document_units";
+--> statement-breakpoint
+CREATE POLICY "knowledge_embedding_migration_0074_update" ON "kb_document_units"
+  FOR UPDATE
+  USING (
+    current_setting('agor.system_scope', true) = 'knowledge_embedding_migration_0074'
+  )
+  WITH CHECK (
+    current_setting('agor.system_scope', true) = 'knowledge_embedding_migration_0074'
+  );
+--> statement-breakpoint
+DROP POLICY IF EXISTS "knowledge_embedding_migration_0074_select" ON "kb_documents";
+--> statement-breakpoint
+CREATE POLICY "knowledge_embedding_migration_0074_select" ON "kb_documents"
+  FOR SELECT
+  USING (
+    current_setting('agor.system_scope', true) = 'knowledge_embedding_migration_0074'
+  );
+--> statement-breakpoint
+DROP POLICY IF EXISTS "knowledge_embedding_migration_0074_select" ON "kb_namespaces";
+--> statement-breakpoint
+CREATE POLICY "knowledge_embedding_migration_0074_select" ON "kb_namespaces"
+  FOR SELECT
+  USING (
+    current_setting('agor.system_scope', true) = 'knowledge_embedding_migration_0074'
+  );
+--> statement-breakpoint
+SELECT set_config('agor.system_scope', 'knowledge_embedding_migration_0074', true);
+--> statement-breakpoint
 UPDATE "kb_document_units" AS u
 SET "embedding_status" = 'not_configured',
     "embedding_error" = NULL,
@@ -37,13 +77,21 @@ WHERE u."embedding_status" IN ('pending', 'stale', 'error')
       AND n."archived" = false
   );
 --> statement-breakpoint
+SELECT set_config('agor.system_scope', '', true);
+--> statement-breakpoint
+DROP POLICY "knowledge_embedding_migration_0074_update" ON "kb_document_units";
+--> statement-breakpoint
+DROP POLICY "knowledge_embedding_migration_0074_select" ON "kb_document_units";
+--> statement-breakpoint
+DROP POLICY "knowledge_embedding_migration_0074_select" ON "kb_documents";
+--> statement-breakpoint
+DROP POLICY "knowledge_embedding_migration_0074_select" ON "kb_namespaces";
+--> statement-breakpoint
 
 CREATE INDEX "kb_document_units_embedding_work_scan_idx"
   ON "kb_document_units" (
-    "tenant_id",
-    "embedding_retry_at",
-    "embedding_claim_expires_at",
     "created_at",
+    "tenant_id",
     "unit_id"
   )
   WHERE "content_text" IS NOT NULL
@@ -62,3 +110,8 @@ CREATE POLICY "knowledge_embedding_discovery" ON "kb_document_units"
     AND "content_text" IS NOT NULL
     AND "embedding_status" IN ('pending', 'stale', 'error')
   );
+--> statement-breakpoint
+
+-- Migrations share one transaction, so do not leak this DDL safety timeout into
+-- later migrations in the same upgrade run.
+SET LOCAL lock_timeout = DEFAULT;

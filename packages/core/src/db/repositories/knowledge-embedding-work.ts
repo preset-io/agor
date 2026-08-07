@@ -15,8 +15,7 @@ export interface KnowledgeEmbeddingRoutingRef {
  * This is a discovery optimization only; it carries no claim authority.
  */
 export interface KnowledgeEmbeddingRoutingCursor {
-  tenantRank: number;
-  eligibleAt: string;
+  createdAt: string;
   tenantId: TenantID | string;
   unitId: KnowledgeDocumentUnitID;
 }
@@ -59,6 +58,10 @@ function asDate(value: unknown): Date {
   return value instanceof Date ? value : new Date(String(value));
 }
 
+function asBoolean(value: unknown): boolean {
+  return value === true || value === 'true' || value === 't' || value === 1 || value === '1';
+}
+
 function assertPositiveInteger(value: number, label: string): void {
   if (!Number.isInteger(value) || value <= 0)
     throw new Error(`${label} must be a positive integer`);
@@ -69,6 +72,75 @@ function unitFilter(unitIds: readonly (KnowledgeDocumentUnitID | string)[]) {
     unitIds.map((unitId) => sql`${unitId}`),
     sql`, `
   )})`;
+}
+
+const ROUTING_OVERSCAN_FACTOR = 4;
+
+/**
+ * Build the exact bounded routing query used by discovery. Exported so the
+ * PostgreSQL integration suite can EXPLAIN the production query rather than a
+ * hand-maintained approximation.
+ */
+export function buildKnowledgeEmbeddingRoutingScanSql(options: {
+  limit: number;
+  after?: KnowledgeEmbeddingRoutingCursor;
+  through?: KnowledgeEmbeddingRoutingCursor;
+}) {
+  assertPositiveInteger(options.limit, 'Knowledge embedding discovery limit');
+  const after = options.after;
+  if (
+    after &&
+    (!after.createdAt.trim() || !String(after.tenantId).trim() || !String(after.unitId).trim())
+  ) {
+    throw new Error('Knowledge embedding discovery cursor fields must be non-empty');
+  }
+  const afterFilter = after
+    ? sql`AND (created_at, tenant_id, unit_id) > (
+        CAST(${after.createdAt} AS timestamptz), ${after.tenantId}, ${after.unitId}
+      )`
+    : sql``;
+  const through = options.through;
+  if (
+    through &&
+    (!through.createdAt.trim() ||
+      !String(through.tenantId).trim() ||
+      !String(through.unitId).trim())
+  ) {
+    throw new Error('Knowledge embedding discovery high-water fields must be non-empty');
+  }
+  const throughFilter = through
+    ? sql`AND (created_at, tenant_id, unit_id) <= (
+        CAST(${through.createdAt} AS timestamptz), ${through.tenantId}, ${through.unitId}
+      )`
+    : sql``;
+  const rawLimit = options.limit * ROUTING_OVERSCAN_FACTOR + 1;
+
+  return sql`SELECT
+          tenant_id,
+          unit_id,
+          COALESCE(embedding_retry_at, created_at) AS eligible_at,
+          created_at::text AS created_cursor_at,
+          (
+            (
+              embedding_status IN ('pending', 'stale')
+              OR (
+                embedding_status = 'error'
+                AND (embedding_retry_at IS NULL OR embedding_retry_at <= clock_timestamp())
+              )
+            )
+            AND (
+              embedding_claim_token IS NULL
+              OR embedding_claim_expires_at IS NULL
+              OR embedding_claim_expires_at <= clock_timestamp()
+            )
+          ) AS is_eligible
+        FROM kb_document_units
+        WHERE content_text IS NOT NULL
+          AND embedding_status IN ('pending', 'stale', 'error')
+          ${afterFilter}
+          ${throughFilter}
+        ORDER BY created_at, tenant_id, unit_id
+        LIMIT ${rawLimit}`;
 }
 
 /**
@@ -82,12 +154,7 @@ function unitFilter(unitIds: readonly (KnowledgeDocumentUnitID | string)[]) {
 export class KnowledgeEmbeddingWorkRepository {
   constructor(private readonly db: Database) {}
 
-  /**
-   * Return the first bounded, tenant-fair page of state-eligible routing refs.
-   * Ranking emits one candidate per tenant before a second candidate from any
-   * tenant, up to perTenantLimit. Tenant policy admission and the atomic claim
-   * remain separate correctness gates.
-   */
+  /** Return the first bounded page of state-eligible routing refs. */
   async findRoutingRefs(options: {
     limit: number;
     perTenantLimit: number;
@@ -105,96 +172,107 @@ export class KnowledgeEmbeddingWorkRepository {
     limit: number;
     perTenantLimit: number;
     after?: KnowledgeEmbeddingRoutingCursor;
+    through?: KnowledgeEmbeddingRoutingCursor;
   }): Promise<KnowledgeEmbeddingRoutingPage> {
     assertPositiveInteger(options.limit, 'Knowledge embedding discovery limit');
     assertPositiveInteger(options.perTenantLimit, 'Knowledge embedding per-tenant limit');
     if (options.after) {
-      assertPositiveInteger(options.after.tenantRank, 'Knowledge embedding discovery tenant rank');
       if (
-        !options.after.eligibleAt.trim() ||
+        !options.after.createdAt.trim() ||
         !String(options.after.tenantId).trim() ||
         !String(options.after.unitId).trim()
       ) {
         throw new Error('Knowledge embedding discovery cursor fields must be non-empty');
       }
     }
+    if (options.through) {
+      if (
+        !options.through.createdAt.trim() ||
+        !String(options.through.tenantId).trim() ||
+        !String(options.through.unitId).trim()
+      ) {
+        throw new Error('Knowledge embedding discovery high-water fields must be non-empty');
+      }
+    }
     if (!isPostgresDatabase(this.db)) return { refs: [], nextCursor: null };
 
-    const after = options.after;
-    const afterFilter = after
-      ? sql`AND (
-          tenant_rank > ${after.tenantRank}
-          OR (
-            tenant_rank = ${after.tenantRank}
-            AND eligible_at > CAST(${after.eligibleAt} AS timestamptz)
-          )
-          OR (
-            tenant_rank = ${after.tenantRank}
-            AND eligible_at = CAST(${after.eligibleAt} AS timestamptz)
-            AND tenant_id > ${after.tenantId}
-          )
-          OR (
-            tenant_rank = ${after.tenantRank}
-            AND eligible_at = CAST(${after.eligibleAt} AS timestamptz)
-            AND tenant_id = ${after.tenantId}
-            AND unit_id > ${after.unitId}
-          )
-        )`
-      : sql``;
+    // Fetch a fixed raw overscan page. Eligibility and tenant caps are applied
+    // only inside this bounded set so future-retry, live-claim, archived, or
+    // otherwise poison rows cannot force a backlog-sized window/sort.
+    const overscanLimit = options.limit * ROUTING_OVERSCAN_FACTOR;
 
     const result = await executeRaw(
       this.db,
-      sql`WITH eligible AS (
-            SELECT
-              tenant_id,
-              unit_id,
-              COALESCE(embedding_retry_at, created_at) AS eligible_at,
-              row_number() OVER (
-                PARTITION BY tenant_id
-                ORDER BY COALESCE(embedding_retry_at, created_at), created_at, unit_id
-              ) AS tenant_rank
-            FROM kb_document_units
-            WHERE content_text IS NOT NULL
-              AND (
-                embedding_status IN ('pending', 'stale')
-                OR (
-                  embedding_status = 'error'
-                  AND (embedding_retry_at IS NULL OR embedding_retry_at <= clock_timestamp())
-                )
-              )
-              AND (
-                embedding_claim_token IS NULL
-                OR embedding_claim_expires_at IS NULL
-                OR embedding_claim_expires_at <= clock_timestamp()
-              )
-          )
-          SELECT tenant_id, unit_id, eligible_at, tenant_rank, eligible_at::text AS eligible_cursor_at
-          FROM eligible
-          WHERE tenant_rank <= ${options.perTenantLimit}
-            ${afterFilter}
-          ORDER BY tenant_rank, eligible_at, tenant_id, unit_id
-          LIMIT ${options.limit + 1}`
+      buildKnowledgeEmbeddingRoutingScanSql({
+        limit: options.limit,
+        ...(options.after ? { after: options.after } : {}),
+        ...(options.through ? { through: options.through } : {}),
+      })
     );
 
     const rows = rowsOf(result);
-    const pageRows = rows.slice(0, options.limit);
-    const refs = pageRows.map((row) => ({
-      tenant_id: row.tenant_id ? String(row.tenant_id) : undefined,
-      unit_id: String(row.unit_id) as KnowledgeDocumentUnitID,
-      eligible_at: asDate(row.eligible_at),
-    }));
-    const last = pageRows.at(-1);
+    const pageRows = rows.slice(0, overscanLimit);
+    const refs: KnowledgeEmbeddingRoutingRef[] = [];
+    const byTenant = new Map<string, number>();
+    let lastProcessed: Record<string, unknown> | undefined;
+    let lastProcessedIndex = -1;
+    for (const [index, row] of pageRows.entries()) {
+      lastProcessed = row;
+      lastProcessedIndex = index;
+      if (!asBoolean(row.is_eligible)) continue;
+      const tenantId = String(row.tenant_id ?? '');
+      const tenantCount = byTenant.get(tenantId) ?? 0;
+      if (tenantCount >= options.perTenantLimit) continue;
+      refs.push({
+        tenant_id: tenantId || undefined,
+        unit_id: String(row.unit_id) as KnowledgeDocumentUnitID,
+        eligible_at: asDate(row.eligible_at),
+      });
+      byTenant.set(tenantId, tenantCount + 1);
+      if (refs.length >= options.limit) break;
+    }
+    const hasMore =
+      lastProcessedIndex >= 0 &&
+      (lastProcessedIndex < pageRows.length - 1 || rows.length > overscanLimit);
     return {
       refs,
       nextCursor:
-        rows.length > options.limit && last
+        hasMore && lastProcessed
           ? {
-              tenantRank: Number(last.tenant_rank),
-              eligibleAt: String(last.eligible_cursor_at),
-              tenantId: String(last.tenant_id),
-              unitId: String(last.unit_id) as KnowledgeDocumentUnitID,
+              createdAt: String(lastProcessed.created_cursor_at),
+              tenantId: String(lastProcessed.tenant_id),
+              unitId: String(lastProcessed.unit_id) as KnowledgeDocumentUnitID,
             }
           : null,
+    };
+  }
+
+  /**
+   * Snapshot the inclusive upper tuple for one finite process-local traversal.
+   * The same partial work index supports this descending one-row lookup. Newer
+   * rows are deliberately deferred until the traversal wraps; durable claims,
+   * not this cursor, remain authoritative.
+   */
+  async findRoutingHighWater(): Promise<KnowledgeEmbeddingRoutingCursor | null> {
+    if (!isPostgresDatabase(this.db)) return null;
+    const result = await executeRaw(
+      this.db,
+      sql`SELECT
+            created_at::text AS created_cursor_at,
+            tenant_id,
+            unit_id
+          FROM kb_document_units
+          WHERE content_text IS NOT NULL
+            AND embedding_status IN ('pending', 'stale', 'error')
+          ORDER BY created_at DESC, tenant_id DESC, unit_id DESC
+          LIMIT 1`
+    );
+    const row = rowsOf(result)[0];
+    if (!row) return null;
+    return {
+      createdAt: String(row.created_cursor_at),
+      tenantId: String(row.tenant_id),
+      unitId: String(row.unit_id) as KnowledgeDocumentUnitID,
     };
   }
 
@@ -311,6 +389,91 @@ export class KnowledgeEmbeddingWorkRepository {
   }
 
   /**
+   * Final provider admission. Renew only exact, still-live claims whose content
+   * and current document generation still match the claimed snapshot. This is
+   * called in a fresh tenant transaction immediately before the external side
+   * effect.
+   */
+  async renewClaimsForProviderCall(input: {
+    claimToken: string;
+    claims: readonly Pick<
+      KnowledgeEmbeddingClaim,
+      'unit_id' | 'claim_generation' | 'content_text' | 'content_md5'
+    >[];
+    leaseMs: number;
+  }): Promise<KnowledgeDocumentUnitID[]> {
+    if (!isPostgresDatabase(this.db) || input.claims.length === 0) return [];
+    assertPositiveInteger(input.leaseMs, 'Knowledge embedding lease');
+    const admitted: KnowledgeDocumentUnitID[] = [];
+    const ordered = [...input.claims].sort((a, b) =>
+      String(a.unit_id).localeCompare(String(b.unit_id))
+    );
+    for (const claim of ordered) {
+      const result = await executeRaw(
+        this.db,
+        sql`UPDATE kb_document_units AS u
+            SET embedding_claim_expires_at = clock_timestamp() + (${input.leaseMs} * interval '1 millisecond'),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE u.unit_id = ${claim.unit_id}
+              AND u.embedding_claim_token = ${input.claimToken}
+              AND u.embedding_claim_generation = ${claim.claim_generation}
+              AND u.embedding_claim_expires_at > clock_timestamp()
+              AND u.content_text IS NOT DISTINCT FROM ${claim.content_text}
+              AND u.content_md5 IS NOT DISTINCT FROM ${claim.content_md5}
+              AND u.embedding_status IN ('pending', 'stale', 'error')
+              AND EXISTS (
+                SELECT 1
+                FROM kb_documents AS d
+                JOIN kb_namespaces AS n ON n.namespace_id = d.namespace_id
+                WHERE d.document_id = u.document_id
+                  AND d.current_version_id = u.version_id
+                  AND d.archived = false
+                  AND n.archived = false
+              )
+            RETURNING u.unit_id`
+      );
+      const unitId = rowsOf(result)[0]?.unit_id;
+      if (unitId) admitted.push(String(unitId) as KnowledgeDocumentUnitID);
+    }
+    return admitted;
+  }
+
+  /**
+   * Relinquish exact claims only when the caller has proved no provider call
+   * was initiated. Incrementing the generation fences later local paths.
+   */
+  async releaseClaims(input: {
+    claimToken: string;
+    claims: readonly Pick<KnowledgeEmbeddingClaim, 'unit_id' | 'claim_generation'>[];
+  }): Promise<KnowledgeDocumentUnitID[]> {
+    if (!isPostgresDatabase(this.db) || input.claims.length === 0) return [];
+    const released: KnowledgeDocumentUnitID[] = [];
+    const ordered = [...input.claims].sort((a, b) =>
+      String(a.unit_id).localeCompare(String(b.unit_id))
+    );
+    for (const claim of ordered) {
+      const result = await executeRaw(
+        this.db,
+        sql`UPDATE kb_document_units AS u
+            SET embedding_claim_token = NULL,
+                embedding_claim_generation = u.embedding_claim_generation + 1,
+                embedding_claimed_at = NULL,
+                embedding_claim_expires_at = NULL,
+                embedding_claim_instance_id = NULL,
+                embedding_claim_boot_id = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE u.unit_id = ${claim.unit_id}
+              AND u.embedding_claim_token = ${input.claimToken}
+              AND u.embedding_claim_generation = ${claim.claim_generation}
+            RETURNING u.unit_id`
+      );
+      const unitId = rowsOf(result)[0]?.unit_id;
+      if (unitId) released.push(String(unitId) as KnowledgeDocumentUnitID);
+    }
+    return released;
+  }
+
+  /**
    * Commit vectors only while every unit still has the exact live claim,
    * content snapshot, current document version, and unexpired database lease.
    */
@@ -397,13 +560,16 @@ export class KnowledgeEmbeddingWorkRepository {
     return completed;
   }
 
-  /** Record a retryable provider failure and release only the exact live claim. */
+  /** Record a classified provider failure and release only the exact live claim. */
   async failClaims(input: {
     claimToken: string;
     claims: readonly Pick<KnowledgeEmbeddingClaim, 'unit_id' | 'claim_generation'>[];
     error: string;
     baseRetryMs: number;
     maxRetryMs: number;
+    retryable?: boolean;
+    retryAfterMs?: number | null;
+    retryAfterAt?: Date | null;
   }): Promise<KnowledgeDocumentUnitID[]> {
     if (!isPostgresDatabase(this.db) || input.claims.length === 0) return [];
     assertPositiveInteger(input.baseRetryMs, 'Knowledge embedding retry base');
@@ -411,6 +577,17 @@ export class KnowledgeEmbeddingWorkRepository {
     if (input.maxRetryMs < input.baseRetryMs) {
       throw new Error('Knowledge embedding retry maximum must be at least its base');
     }
+    if (
+      input.retryAfterMs !== undefined &&
+      input.retryAfterMs !== null &&
+      (!Number.isInteger(input.retryAfterMs) || input.retryAfterMs < 0)
+    ) {
+      throw new Error('Knowledge embedding Retry-After must be a non-negative integer');
+    }
+    if (input.retryAfterAt && !Number.isFinite(input.retryAfterAt.getTime())) {
+      throw new Error('Knowledge embedding Retry-After timestamp must be valid');
+    }
+    const retryable = input.retryable !== false;
     const failed: KnowledgeDocumentUnitID[] = [];
     const ordered = [...input.claims].sort((a, b) =>
       String(a.unit_id).localeCompare(String(b.unit_id))
@@ -419,7 +596,7 @@ export class KnowledgeEmbeddingWorkRepository {
       const result = await executeRaw(
         this.db,
         sql`UPDATE kb_document_units AS u
-            SET embedding_status = 'error',
+            SET embedding_status = ${retryable ? 'error' : 'not_configured'},
                 embedding_error = ${input.error},
                 embedding_claim_token = NULL,
                 embedding_claimed_at = NULL,
@@ -427,12 +604,21 @@ export class KnowledgeEmbeddingWorkRepository {
                 embedding_claim_instance_id = NULL,
                 embedding_claim_boot_id = NULL,
                 embedding_failure_count = u.embedding_failure_count + 1,
-                embedding_retry_at = clock_timestamp() + (
-                  LEAST(
-                    ${input.maxRetryMs},
-                    ${input.baseRetryMs} * power(2, LEAST(u.embedding_failure_count, 10))
-                  ) * interval '1 millisecond'
-                ),
+                embedding_retry_at = CASE
+                  WHEN ${retryable} THEN GREATEST(
+                    clock_timestamp() + (
+                      GREATEST(
+                        ${input.retryAfterMs ?? 0},
+                        LEAST(
+                          ${input.maxRetryMs},
+                          ${input.baseRetryMs} * power(2, LEAST(u.embedding_failure_count, 10))
+                        ) * (0.8 + random() * 0.4)
+                      ) * interval '1 millisecond'
+                    ),
+                    COALESCE(${input.retryAfterAt?.toISOString() ?? null}::timestamptz, '-infinity'::timestamptz)
+                  )
+                  ELSE NULL
+                END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE u.unit_id = ${claim.unit_id}
               AND u.embedding_claim_token = ${input.claimToken}

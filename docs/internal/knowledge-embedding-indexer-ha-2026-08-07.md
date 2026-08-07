@@ -30,8 +30,9 @@ expired claim ----------------------------+
 
 eligible -- atomic claim --> token + generation + database-time expiry
 claimed  -- reusable vector --> ready (same transaction)
-claimed  -- provider outside transaction --> fenced completion --> ready
-claimed  -- provider failure --> error + failure_count + database-time retry_at
+claimed  -- final exact admission/renewal --> provider outside transaction
+claimed  -- retryable provider failure --> error + database-time retry_at + jitter
+claimed  -- permanent provider failure --> not_configured (operator reindex required)
 claimed  -- crash/ambiguous provider outcome --> lease expiry --> eligible
 
 old document version / archived document or namespace --> not_configured
@@ -74,28 +75,48 @@ dead-letter budget would be a separate product policy and is not implied by
 this coordination layer.
 
 The default provider timeout is 90 seconds and the claim lease is five minutes.
-Bounded batches leave ample transaction/commit margin, so the initial version
-does not renew claims. If a future provider legitimately needs calls near the
-lease duration, renewal must be an exact token+generation database-time
-transition rather than a process-local heartbeat.
+Immediately before the provider side effect, a fresh tenant transaction locks
+the semantic-policy aggregate, validates the policy/key snapshot, and renews
+only the exact token+generation/content claims using database time. Partial
+admission makes no call and releases the surviving exact claims.
 
-Normal provider failures durably release the exact live claim as `error`,
+Retryable provider failures durably release the exact live claim as `error`,
 increment `embedding_failure_count`, and set capped exponential `retry_at` using
-database time. A crash before that failure transition instead recovers through
-lease expiry. Retry timing and ownership survive daemon restarts.
+database time and database-side jitter. HTTP `Retry-After` is a lower bound even
+when it exceeds the normal cap; absolute HTTP dates remain absolute and are
+compared directly with PostgreSQL time rather than converted through daemon
+wall-clock time. Permanent HTTP 4xx responses (except explicitly retryable
+408/409/425/429) transition to `not_configured`; an operator must fix
+configuration and reindex. Their durable error remains visible in indexing
+status. A crash before a failure transition instead recovers through lease
+expiry. Retry timing and ownership survive daemon restarts.
 
 ## Discovery, pacing, and fairness
 
 - Every daemon scans; there is no fleet leader or central work controller.
-- A scan is globally bounded (default 32) and per-tenant bounded (default 8).
-- PostgreSQL ranks one candidate per tenant before offering a second candidate,
-  preventing one large backlog from monopolizing a page.
+- Distributed scans return at most 32 candidates and at most 8 for one tenant.
+- Every routing page returns at most a fixed 4× overscan plus one sentinel. It uses
+  `(created_at, tenant_id, unit_id)` keyset traversal backed by the partial work
+  index; it never computes a window over the full backlog. PostgreSQL may still
+  choose a sequential scan for a small table; the integration plan fixture
+  verifies an index scan for a representative large backlog.
+- The process-local cursor advances across live claims, future retries, paused
+  tenants, and other skipped rows. Each traversal captures an inclusive maximum
+  tuple cutoff. Normally ordered later-keyed appends are deferred and cannot
+  prevent a finite wrap. This is not an MVCC membership snapshot: a backdated
+  insert at or below the cutoff can join the active traversal. The
+  cursor/high-water pair is a pacing/fairness optimization and carries no
+  authority.
 - Claiming remains authoritative because discovery results are hints and may be
   stale by the time a tenant transaction begins.
-- Replicas apply a randomized startup offset.
-- Full pages use a short jittered saturated-drain delay.
-- Productive/error rounds use a jittered normal interval.
-- Empty rounds use bounded exponential idle backoff with jitter.
+- Auth-resolved distributed replicas apply a randomized startup offset and the
+  distributed caps above. Static standalone PostgreSQL starts immediately and
+  preserves the public 1–128 `batch_size` contract (default scan cap 128).
+- Distributed full pages use a short jittered saturated-drain delay.
+- Distributed productive/error rounds use a jittered normal interval; empty
+  rounds use bounded exponential idle backoff with jitter.
+- Standalone keeps its fixed 30-second polling interval after immediate startup
+  (with a fixed short delay only while draining a finite keyset traversal).
 - Post-commit `wake()` calls are local latency hints only; durable polling is
   sufficient for recovery and correctness.
 
@@ -108,11 +129,13 @@ Startup constructs one scanner on every daemon. Static tenancy preserves the
 configured tenant scope. Auth-resolved tenancy uses routing-only system
 discovery and then explicitly enters each discovered tenant scope.
 
-Shutdown first refuses new scans and clears local timers. If a provider HTTP
-request is in progress, its `AbortSignal` is triggered and the current loop is
-awaited. Its durable claim is deliberately **not** released: aborting the local
-wait does not prove that the provider did not already accept the cost-bearing
-request. Database lease expiry safely hands it to another daemon.
+Shutdown first refuses new scans and clears local timers. A claim prepared but
+not yet admitted/called is released with its exact token+generation. If a
+provider HTTP request is in progress, its `AbortSignal` is triggered and the
+durable claim is deliberately **not** released: aborting the local wait does not
+prove that the provider did not already accept the cost-bearing request. Drain
+wait is bounded (default 10 seconds); timeout is logged and shutdown continues,
+leaving database lease expiry to recover the work.
 
 ## Kill-point audit
 
@@ -120,7 +143,9 @@ request. Database lease expiry safely hands it to another daemon.
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
 | Before discovery or claim                            | No state change                                                                      | Any daemon may discover later.                                                        |
 | During claim transaction                             | Transaction commits completely or rolls back                                         | No provider call occurs before commit.                                                |
-| After claim, before provider call                    | Live claim remains                                                                   | One recovery call after database-time expiry; no first-call cost.                     |
+| After claim, before provider call (graceful stop)    | Exact claim is released and generation-fenced                                        | No provider cost; another daemon may claim immediately.                               |
+| After claim, before provider call (crash)            | Live claim remains                                                                   | One recovery call after database-time expiry; no first-call cost.                     |
+| During final provider admission                      | Transaction renews all exact claims or releases survivors and makes no call          | No partial provider batch.                                                            |
 | During DB-only embedding reuse                       | Claim, vector copy, ready state, and reuse telemetry share one transaction           | Rollback leaves the claimable unit unchanged.                                         |
 | After provider acceptance, before response           | Live claim remains                                                                   | Ambiguous at-least-once outcome; at most one replacement call in the next generation. |
 | Transport failure after possible provider acceptance | Exact claim becomes durable `error` with backoff                                     | Ambiguous at-least-once outcome; one retry caller can win each later generation.      |
@@ -130,33 +155,41 @@ request. Database lease expiry safely hands it to another daemon.
 | Content update while claimed                         | Old unit becomes non-work and generation increments in the document transaction      | Old provider result cannot commit; new version is separate work.                      |
 | Document delete while claimed                        | Document archives and all its unit claims are fenced in one transaction              | Provider result cannot commit.                                                        |
 | Namespace delete while claimed                       | Namespace/documents archive and descendant unit claims are fenced in one transaction | Provider result cannot commit and archived vectors cannot seed reuse.                 |
-| Provider/model/key/chunking change                   | Current units are rematerialized/fenced under the semantic-policy aggregate lock     | Results from the old policy snapshot cannot commit.                                   |
+| Provider/model/key/chunking change                   | Current units are rematerialized/fenced under the semantic-policy aggregate lock     | Final admission and completion both reject the old snapshot.                          |
 | Pause while claimed                                  | Current tokens clear and generations increment under the policy lock                 | The accepted call may cost money, but cannot publish.                                 |
 | Daemon graceful stop during provider call            | HTTP wait aborts; claim stays live                                                   | Same safe ambiguous-outcome handling as a crash.                                      |
 
 ## Support and failure semantics
 
-- **PostgreSQL + pgvector:** semantic materialization and multi-daemon HA are
-  supported. PostgreSQL rows, RLS, database time, and transactions are the
-  authority.
+- **PostgreSQL + pgvector:** this is a locally validated multi-indexer HA
+  foundation. PostgreSQL rows, RLS, database time, and transactions are the
+  authority. Full independently deployed multi-daemon fault, outage, and soak
+  testing remains pending.
 - **SQLite standalone:** migrations retain schema portability, but vector
   semantic indexing remains an explicit no-op and text Knowledge search keeps
   working. No Redis or in-memory fallback pretends to provide durable claims.
-- **Mixed schema/app versions:** the additive migration must be applied before
-  daemons using claim columns start. This does not change user-visible Knowledge
-  document/settings models.
+- **Mixed schema/app versions:** migration 0074 is deliberately non-rolling.
+  Existing PostgreSQL installations must stop every daemon, run
+  `agor db migrate --offline-cutover`, then start only the new version. Normal
+  startup refuses the pending migration; the explicit flag is an operator
+  acknowledgement because one host cannot prove another host is stopped.
+  Fresh installations and SQLite are unaffected.
 - **Provider exactly-once:** not supported. Duplicate cost is bounded as above
   and cannot be eliminated without provider idempotency/reconciliation support.
 
 ## Validation matrix
 
-The PostgreSQL integration suite covers multi-daemon claim races, database-time
-expiry/reclaim, stale-generation rejection, document update/delete fencing,
-durable failure/retry races, tenant-fair discovery, routing-only projection,
-and a cross-tenant negative claim. Service/unit coverage adds policy/key/chunk
-snapshot fencing, pause fencing, provider `AbortSignal` propagation,
-post-commit wake behavior, saturated rerun behavior, and the SQLite no-op
-regression.
+The PostgreSQL integration suite covers a real non-default-tenant 0073→0074
+upgrade under FORCE RLS/NOBYPASSRLS, concurrent claimant/indexer races, final
+admission, database-time expiry/reclaim, stale-generation rejection, document
+update/delete fencing, retry/permanent-failure transitions, bounded poison-row
+traversal, routing-only projection, query-plan shape, and cross-tenant negative
+claims. The daemon PostgreSQL test uses two real indexers plus a blocking
+provider seam to prove successful vector commits, ambiguous abort/reclaim/stale
+completion, and tenant A/B provider input and credential isolation. Unit
+coverage adds response ID/vector validation, typed HTTP/Retry-After behavior,
+policy/key/chunk snapshot fencing, pause fencing, post-commit wake behavior,
+bounded shutdown, topology defaults, and the SQLite no-op regression.
 
 The PostgreSQL suite is environment-gated by `AGOR_TEST_POSTGRES_URL` and
 `AGOR_DB_DIALECT=postgresql`; a missing disposable database must be reported as

@@ -54,6 +54,21 @@ Run that as a database owner or another role with permission to create extension
 
 If pgvector is missing or the Agor DB user cannot enable it, semantic search returns a clear `semantic_unavailable` error and text search continues to work.
 
+### PostgreSQL upgrade through migration 0074
+
+Migration `0074_knowledge_embedding_claims` changes the ownership protocol used by Knowledge embedding workers. Existing PostgreSQL installations must apply this migration as a **stop-the-world cutover**. Rolling old and new daemons against the same database during this one upgrade is not supported.
+
+1. Stop every Agor daemon connected to the database.
+2. From the new release, run:
+
+   ```bash
+   agor db migrate --offline-cutover --yes
+   ```
+
+3. Start only daemons running the new release.
+
+Normal daemon startup and `agor db migrate --yes` deliberately refuse this migration on an existing PostgreSQL database unless `--offline-cutover` is present. The flag is an operator acknowledgement; it cannot verify that another host has stopped. Fresh installations and SQLite databases do not require this cutover.
+
 ---
 
 ## Authentication
@@ -81,7 +96,7 @@ Workspace administrators can define live, tool-specific presets under **Workspac
 
 Administrators can require presets independently for each tool. Presets contain runtime behavior (model, permissions, and sandbox policy) but never provider credentials or MCP attachments. MCP servers are selected independently on sessions, schedules, and gateway channels. Referenced presets cannot be deleted. Editing a preset affects the next task started by every session, schedule, or gateway channel that references it; a running task keeps the configuration resolved when it started.
 
-Each tool may have one workspace default preset. Users can choose that moving workspace default, a specific preset, or (when policy permits) an inline personal default. Creation forms also offer **Use my default**.  Sessions and gateway channels resolve those defaults when saved, then store the concrete preset reference or inline configuration. Schedules preserve a symbolic user/workspace default and resolve it from the schedule creator immediately before every run, so later default changes apply to the next run. A schedule that names a specific preset continues to follow that preset directly.
+Each tool may have one workspace default preset. Users can choose that moving workspace default, a specific preset, or (when policy permits) an inline personal default. Creation forms also offer **Use my default**. Sessions and gateway channels resolve those defaults when saved, then store the concrete preset reference or inline configuration. Schedules preserve a symbolic user/workspace default and resolve it from the schedule creator immediately before every run, so later default changes apply to the next run. A schedule that names a specific preset continues to follow that preset directly.
 
 Agor uses these credentials only to authenticate the agent runtime with the provider SDK/CLI. Stored secrets are encrypted at rest and are not written into the prompt transcript or intentionally sent to the model as text.
 

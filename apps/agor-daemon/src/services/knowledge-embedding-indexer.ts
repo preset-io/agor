@@ -24,7 +24,10 @@ import {
 import type { TenantID } from '@agor/core/types';
 import { type EmbeddingProvider, OpenAIEmbeddingProvider } from '../knowledge/embeddings.js';
 import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
-import { KnowledgeEmbeddingBatchProcessor } from './knowledge-embedding-batch-processor.js';
+import {
+  KnowledgeEmbeddingBatchProcessor,
+  KnowledgeEmbeddingPreClaimError,
+} from './knowledge-embedding-batch-processor.js';
 
 export {
   buildKnowledgeEmbeddingReuseSql,
@@ -32,22 +35,48 @@ export {
   mergeEmbeddingReuseIntoNextMetadata,
 } from './knowledge-embedding-reuse.js';
 
-const DEFAULT_TICK_MS = 5_000;
+const DEFAULT_STANDALONE_TICK_MS = 30_000;
+const DEFAULT_DISTRIBUTED_TICK_MS = 5_000;
 const DEFAULT_MAX_IDLE_MS = 60_000;
-const DEFAULT_STARTUP_OFFSET_MS = 30_000;
-const DEFAULT_SCAN_BATCH_SIZE = 32;
-const DEFAULT_PER_TENANT_BATCH_SIZE = 8;
+const DEFAULT_DISTRIBUTED_STARTUP_OFFSET_MS = 30_000;
+const DEFAULT_DISTRIBUTED_SCAN_BATCH_SIZE = 32;
+const DEFAULT_DISTRIBUTED_PER_TENANT_BATCH_SIZE = 8;
+const DEFAULT_STANDALONE_BATCH_SIZE = 128;
 const DEFAULT_CLAIM_LEASE_MS = 5 * 60_000;
 const DEFAULT_PROVIDER_TIMEOUT_MS = 90_000;
+const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_BASE_MS = 5_000;
 const DEFAULT_RETRY_MAX_MS = 5 * 60_000;
 const MIN_CLAIM_COMMIT_MARGIN_MS = 30_000;
 const SATURATED_DRAIN_BASE_MS = 150;
 const SATURATED_DRAIN_JITTER_RATIO = 2 / 3;
 
+export function knowledgeEmbeddingTopologyDefaults(distributedMode: boolean): {
+  scanBatchSize: number;
+  perTenantBatchSize: number;
+  tickIntervalMs: number;
+  startupOffsetMaxMs: number;
+} {
+  return distributedMode
+    ? {
+        scanBatchSize: DEFAULT_DISTRIBUTED_SCAN_BATCH_SIZE,
+        perTenantBatchSize: DEFAULT_DISTRIBUTED_PER_TENANT_BATCH_SIZE,
+        tickIntervalMs: DEFAULT_DISTRIBUTED_TICK_MS,
+        startupOffsetMaxMs: DEFAULT_DISTRIBUTED_STARTUP_OFFSET_MS,
+      }
+    : {
+        scanBatchSize: DEFAULT_STANDALONE_BATCH_SIZE,
+        perTenantBatchSize: DEFAULT_STANDALONE_BATCH_SIZE,
+        tickIntervalMs: DEFAULT_STANDALONE_TICK_MS,
+        startupOffsetMaxMs: 0,
+      };
+}
+
 export interface KnowledgeEmbeddingIndexerOptions {
   /** Static/single-tenant id. Undefined enables routing-only system discovery. */
   tenantId?: TenantID | string;
+  /** Enable multi-tenant routing pacing/caps. Production startup sets this explicitly. */
+  distributedMode?: boolean;
   /** Diagnostic only; the opaque per-batch token is the correctness fence. */
   workIdentity?: DistributedWorkIdentity;
   scanBatchSize?: number;
@@ -57,6 +86,7 @@ export interface KnowledgeEmbeddingIndexerOptions {
   startupOffsetMaxMs?: number;
   claimLeaseMs?: number;
   providerTimeoutMs?: number;
+  shutdownDrainTimeoutMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
   random?: () => number;
@@ -64,7 +94,12 @@ export interface KnowledgeEmbeddingIndexerOptions {
   generateClaimToken?: () => string;
   ensureStorage?: typeof ensureKnowledgePgvectorStorage;
   /** Test seam; production discovery always uses PostgreSQL/RLS. */
-  discover?: (after?: KnowledgeEmbeddingRoutingCursor) => Promise<KnowledgeEmbeddingRoutingPage>;
+  discover?: (
+    after: KnowledgeEmbeddingRoutingCursor | undefined,
+    through: KnowledgeEmbeddingRoutingCursor
+  ) => Promise<KnowledgeEmbeddingRoutingPage>;
+  /** Test seam paired with `discover`; production snapshots through PostgreSQL. */
+  discoverHighWater?: () => Promise<KnowledgeEmbeddingRoutingCursor | null>;
 }
 
 export interface KnowledgeEmbeddingIndexerStats {
@@ -89,11 +124,14 @@ export class KnowledgeEmbeddingIndexer {
   private rerunRequested = false;
   private idleRounds = 0;
   private routingCursor: KnowledgeEmbeddingRoutingCursor | undefined;
+  private routingHighWater: KnowledgeEmbeddingRoutingCursor | undefined;
   private readonly scanBatchSize: number;
   private readonly perTenantBatchSize: number;
   private readonly tickIntervalMs: number;
   private readonly maxIdleIntervalMs: number;
   private readonly startupOffsetMaxMs: number;
+  private readonly shutdownDrainTimeoutMs: number;
+  private readonly distributedMode: boolean;
   private readonly random: () => number;
   private readonly workIdentity: DistributedWorkIdentity;
   private readonly batchProcessor: KnowledgeEmbeddingBatchProcessor;
@@ -102,11 +140,15 @@ export class KnowledgeEmbeddingIndexer {
     private readonly db: TenantScopeAwareDatabase,
     private readonly options: KnowledgeEmbeddingIndexerOptions = {}
   ) {
-    this.scanBatchSize = options.scanBatchSize ?? DEFAULT_SCAN_BATCH_SIZE;
-    this.perTenantBatchSize = options.perTenantBatchSize ?? DEFAULT_PER_TENANT_BATCH_SIZE;
-    this.tickIntervalMs = options.tickIntervalMs ?? DEFAULT_TICK_MS;
+    this.distributedMode = options.distributedMode ?? options.tenantId === undefined;
+    const topologyDefaults = knowledgeEmbeddingTopologyDefaults(this.distributedMode);
+    this.scanBatchSize = options.scanBatchSize ?? topologyDefaults.scanBatchSize;
+    this.perTenantBatchSize = options.perTenantBatchSize ?? topologyDefaults.perTenantBatchSize;
+    this.tickIntervalMs = options.tickIntervalMs ?? topologyDefaults.tickIntervalMs;
     this.maxIdleIntervalMs = options.maxIdleIntervalMs ?? DEFAULT_MAX_IDLE_MS;
-    this.startupOffsetMaxMs = options.startupOffsetMaxMs ?? DEFAULT_STARTUP_OFFSET_MS;
+    this.startupOffsetMaxMs = options.startupOffsetMaxMs ?? topologyDefaults.startupOffsetMaxMs;
+    this.shutdownDrainTimeoutMs =
+      options.shutdownDrainTimeoutMs ?? DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS;
     const claimLeaseMs = options.claimLeaseMs ?? DEFAULT_CLAIM_LEASE_MS;
     const providerTimeoutMs = options.providerTimeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
     const retryBaseMs = options.retryBaseMs ?? DEFAULT_RETRY_BASE_MS;
@@ -126,6 +168,7 @@ export class KnowledgeEmbeddingIndexer {
       [providerTimeoutMs, 'provider timeout'],
       [retryBaseMs, 'retry base'],
       [retryMaxMs, 'retry maximum'],
+      [this.shutdownDrainTimeoutMs, 'shutdown drain timeout'],
     ] as const) {
       if (!Number.isInteger(value) || value <= 0) {
         throw new Error(`Knowledge embedding ${label} must be a positive integer`);
@@ -167,6 +210,7 @@ export class KnowledgeEmbeddingIndexer {
     this.started = true;
     this.shutdownRequested = false;
     this.routingCursor = undefined;
+    this.routingHighWater = undefined;
     this.schedule(initialWorkOffset(this.startupOffsetMaxMs, this.random()));
   }
 
@@ -184,7 +228,26 @@ export class KnowledgeEmbeddingIndexer {
     this.batchProcessor.abortProviderWait(
       new Error('Knowledge embedding indexer is shutting down')
     );
-    if (this.activeRun) await this.activeRun;
+    const activeRun = this.activeRun;
+    if (!activeRun) return;
+    let timedOut = false;
+    let timeout: NodeJS.Timeout | undefined;
+    await Promise.race([
+      activeRun,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, this.shutdownDrainTimeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (timedOut) {
+      console.warn(
+        `[distributed-work.knowledge-index] event=shutdown_drain_timeout instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} timeout_ms=${this.shutdownDrainTimeoutMs}`
+      );
+    }
   }
 
   private schedule(delayMs: number, replace = false): void {
@@ -243,19 +306,23 @@ export class KnowledgeEmbeddingIndexer {
       this.schedule(0, true);
       return;
     }
-    const delay = stats.saturated
-      ? jitterDelay(SATURATED_DRAIN_BASE_MS, SATURATED_DRAIN_JITTER_RATIO, this.random())
-      : stats.claimed > 0 || stats.failures > 0
-        ? jitterDelay(this.tickIntervalMs, 0.2, this.random())
-        : boundedBackoffDelay(
-            this.idleRounds,
-            {
-              baseDelayMs: this.tickIntervalMs,
-              maxDelayMs: this.maxIdleIntervalMs,
-              jitterRatio: 0.2,
-            },
-            this.random()
-          );
+    const delay = !this.distributedMode
+      ? stats.saturated
+        ? SATURATED_DRAIN_BASE_MS
+        : this.tickIntervalMs
+      : stats.saturated
+        ? jitterDelay(SATURATED_DRAIN_BASE_MS, SATURATED_DRAIN_JITTER_RATIO, this.random())
+        : stats.claimed > 0 || stats.failures > 0
+          ? jitterDelay(this.tickIntervalMs, 0.2, this.random())
+          : boundedBackoffDelay(
+              this.idleRounds,
+              {
+                baseDelayMs: this.tickIntervalMs,
+                maxDelayMs: this.maxIdleIntervalMs,
+                jitterRatio: 0.2,
+              },
+              this.random()
+            );
     this.schedule(delay);
   }
 
@@ -272,12 +339,34 @@ export class KnowledgeEmbeddingIndexer {
     }
   }
 
+  private async snapshotRoutingHighWater(): Promise<KnowledgeEmbeddingRoutingCursor | null> {
+    if (this.options.discoverHighWater) return this.options.discoverHighWater();
+    const find = (scopedDb: TenantScopedDatabase) =>
+      new KnowledgeEmbeddingWorkRepository(scopedDb).findRoutingHighWater();
+    if (this.options.tenantId) {
+      return runWithTenantDatabaseScope(this.db, this.options.tenantId, find);
+    }
+    return runWithSystemDatabaseScope(
+      this.db,
+      'Knowledge embedding routing high-water discovery',
+      (systemDb) => new KnowledgeEmbeddingWorkRepository(systemDb).findRoutingHighWater(),
+      { capability: 'knowledge_embedding_discovery' }
+    );
+  }
+
   private async discoverRoutingPage(): Promise<KnowledgeEmbeddingRoutingPage> {
-    if (this.options.discover) return this.options.discover(this.routingCursor);
+    if (!this.routingHighWater) {
+      this.routingHighWater = (await this.snapshotRoutingHighWater()) ?? undefined;
+      if (!this.routingHighWater) return { refs: [], nextCursor: null };
+    }
+    if (this.options.discover) {
+      return this.options.discover(this.routingCursor, this.routingHighWater);
+    }
     const find = (scopedDb: TenantScopedDatabase) =>
       new KnowledgeEmbeddingWorkRepository(scopedDb).findRoutingPage({
         limit: this.scanBatchSize,
         perTenantLimit: this.perTenantBatchSize,
+        through: this.routingHighWater!,
         ...(this.routingCursor ? { after: this.routingCursor } : {}),
       });
     if (this.options.tenantId) {
@@ -290,6 +379,7 @@ export class KnowledgeEmbeddingIndexer {
         new KnowledgeEmbeddingWorkRepository(systemDb).findRoutingPage({
           limit: this.scanBatchSize,
           perTenantLimit: this.perTenantBatchSize,
+          through: this.routingHighWater!,
           ...(this.routingCursor ? { after: this.routingCursor } : {}),
         }),
       { capability: 'knowledge_embedding_discovery' }
@@ -301,7 +391,12 @@ export class KnowledgeEmbeddingIndexer {
     if (this.shutdownRequested) return emptyStats();
     if (!isPostgresDatabase(this.db)) return emptyStats();
     const page = await this.discoverRoutingPage();
-    this.routingCursor = page.nextCursor ?? undefined;
+    if (page.nextCursor) {
+      this.routingCursor = page.nextCursor;
+    } else {
+      this.routingCursor = undefined;
+      this.routingHighWater = undefined;
+    }
     const { refs } = page;
     const stats: KnowledgeEmbeddingIndexerStats = {
       ...emptyStats(),
@@ -335,10 +430,18 @@ export class KnowledgeEmbeddingIndexer {
         stats.claimed += result.claimed;
         stats.indexed += result.indexed;
       } catch (error) {
-        stats.failures += 1;
-        console.warn(
-          `[distributed-work.knowledge-index] event=tenant_batch_failed instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} tenant_id=${JSON.stringify(tenantId)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
-        );
+        if (error instanceof KnowledgeEmbeddingPreClaimError) {
+          // No durable claim/provider side effect occurred. Treat capability
+          // failures as idle so an exhausted traversal enters bounded backoff.
+          console.warn(
+            `[distributed-work.knowledge-index] event=tenant_batch_blocked instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} tenant_id=${JSON.stringify(tenantId)} error=${JSON.stringify(error.message)}`
+          );
+        } else {
+          stats.failures += 1;
+          console.warn(
+            `[distributed-work.knowledge-index] event=tenant_batch_failed instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} tenant_id=${JSON.stringify(tenantId)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+          );
+        }
       }
     }
     return stats;

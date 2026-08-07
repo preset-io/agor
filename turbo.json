@@ -3,6 +3,8 @@
   "globalDependencies": ["**/.env.*local", "pnpm-lock.yaml"],
   "globalPassThroughEnv": [
     "AGOR_DB_DIALECT",
+    "AGOR_POSTGRES_TEST_CONCURRENCY",
+    "AGOR_POSTGRES_TEST_RUN_ID",
     "AGOR_TEST_POSTGRES_ADMIN_URL",
     "AGOR_TEST_POSTGRES_URL",
     "BIOME_BIN",

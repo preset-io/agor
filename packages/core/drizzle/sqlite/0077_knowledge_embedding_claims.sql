@@ -34,8 +34,6 @@ WHERE `embedding_status` IN ('pending', 'stale', 'error')
 --> statement-breakpoint
 CREATE INDEX `kb_document_units_embedding_work_scan_idx`
   ON `kb_document_units` (
-    `embedding_retry_at`,
-    `embedding_claim_expires_at`,
     `created_at`,
     `unit_id`
   )

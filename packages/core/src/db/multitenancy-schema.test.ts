@@ -148,7 +148,15 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain('"content_text" IS NOT NULL');
     expect(migration).toContain('"embedding_status" IN');
     expect(migration).toContain("= 'knowledge_embedding_discovery'");
-    expect(migration).not.toContain('WITH CHECK');
+    const runtimeDiscoveryPolicy = migration.slice(
+      migration.indexOf('CREATE POLICY "knowledge_embedding_discovery"')
+    );
+    expect(runtimeDiscoveryPolicy).not.toContain('WITH CHECK');
+    expect(migration).toContain("= 'knowledge_embedding_migration_0074'");
+    expect(migration).toContain('WITH CHECK');
+    expect(migration.match(/DROP POLICY "knowledge_embedding_migration_0074_/g)).toHaveLength(4);
+    expect(migration).toContain("SET LOCAL lock_timeout = '3s'");
+    expect(migration.trim().endsWith('SET LOCAL lock_timeout = DEFAULT;')).toBe(true);
   });
 
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {

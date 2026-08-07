@@ -74,7 +74,7 @@ export class KnowledgeIndexingStatusService {
     const latestError = await select(this.db, { error: kbDocumentUnits.embedding_error })
       .from(kbDocumentUnits)
       .where(
-        sql`${currentUnitFilter} AND ${kbDocumentUnits.embedding_status} = 'error' AND ${kbDocumentUnits.embedding_error} IS NOT NULL`
+        sql`${currentUnitFilter} AND ${kbDocumentUnits.embedding_status} IN ('error', 'not_configured') AND ${kbDocumentUnits.embedding_error} IS NOT NULL`
       )
       .orderBy(sql`${kbDocumentUnits.updated_at} DESC NULLS LAST`)
       .limit(1)

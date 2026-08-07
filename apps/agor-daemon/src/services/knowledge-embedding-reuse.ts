@@ -142,6 +142,12 @@ export function buildKnowledgeEmbeddingReuseSql(params: KnowledgeEmbeddingReuseS
              AND old_u.embedding_status = 'ready'
              AND old_u.embedding_model = ${params.model}
              AND old_u.embedding_dimensions = ${params.dimensions}
+            JOIN kb_documents old_d
+              ON old_d.document_id = old_u.document_id
+             AND old_d.archived = false
+            JOIN kb_namespaces old_n
+              ON old_n.namespace_id = old_d.namespace_id
+             AND old_n.archived = false
             JOIN kb_unit_embeddings e
               ON e.unit_id = old_u.unit_id
              AND e.embedding_space_id = ${params.embeddingSpaceId}

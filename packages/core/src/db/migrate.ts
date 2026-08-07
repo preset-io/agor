@@ -43,6 +43,38 @@ export class MigrationError extends Error {
   }
 }
 
+const OFFLINE_CUTOVER_MIGRATIONS = new Set(['0074_knowledge_embedding_claims']);
+
+export interface RunMigrationsOptions {
+  /**
+   * Acknowledge that every daemon using this existing database is stopped.
+   * This is deliberately separate from ordinary non-interactive confirmation.
+   */
+  allowOfflineCutover?: boolean;
+}
+
+export class OfflineMigrationCutoverRequiredError extends MigrationError {
+  readonly migrations: string[];
+
+  constructor(migrations: string[]) {
+    super(
+      `Offline migration cutover required for: ${migrations.join(', ')}. Stop every daemon using this database, run \`agor db migrate --offline-cutover\` once, then start only daemons running the new version.`
+    );
+    this.name = 'OfflineMigrationCutoverRequiredError';
+    this.migrations = migrations;
+  }
+}
+
+export function pendingOfflineCutoverMigrations(status: {
+  pending: readonly string[];
+  applied: readonly string[];
+}): string[] {
+  // A genuinely fresh database cannot have an old worker using the pre-claim
+  // protocol, so first installation remains automatic.
+  if (status.applied.length === 0) return [];
+  return status.pending.filter((tag) => OFFLINE_CUTOVER_MIGRATIONS.has(tag));
+}
+
 function getRootCause(error: unknown): unknown {
   let current = error;
   while (current instanceof Error && current.cause) {
@@ -258,13 +290,24 @@ export async function checkMigrationStatus(db: Database): Promise<{
  * - Automatically bootstraps migration tracking
  * - Marks baseline migration as applied
  */
-export async function runMigrations(db: Database): Promise<void> {
+export async function runMigrations(
+  db: Database,
+  options: RunMigrationsOptions = {}
+): Promise<void> {
   try {
     console.log('Running database migrations...');
 
     const migrationsFolder = getMigrationsFolder(db);
     console.log(`Using migrations folder: ${migrationsFolder}`);
     console.log(`Database dialect: ${isSQLiteDatabase(db) ? 'sqlite' : 'postgres'}`);
+
+    if (isPostgresDatabase(db) && options.allowOfflineCutover !== true) {
+      const status = await checkMigrationStatus(db);
+      const offlineMigrations = pendingOfflineCutoverMigrations(status);
+      if (offlineMigrations.length > 0) {
+        throw new OfflineMigrationCutoverRequiredError(offlineMigrations);
+      }
+    }
 
     // Drizzle handles everything:
     // 1. Creates __drizzle_migrations table if needed
@@ -281,6 +324,7 @@ export async function runMigrations(db: Database): Promise<void> {
 
     console.log('✅ Migrations complete');
   } catch (error) {
+    if (error instanceof OfflineMigrationCutoverRequiredError) throw error;
     console.error('❌ Migration failed:', sanitizeDbError(error));
     throw new MigrationError('Migration failed', error);
   }
