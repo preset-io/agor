@@ -1,11 +1,15 @@
 /**
  * @agor/core/sdk - Centralized AI SDK re-exports
  *
- * All AI SDK dependencies are managed in @agor/core to:
+ * Shared, always-bundled AI SDK dependencies are managed in @agor/core to:
  * - Ensure version consistency across the monorepo
  * - Centralize peer dependency management (zod, OpenTelemetry, etc.)
  * - Enable re-use across packages (executor, daemon, CLI, UI)
  * - Simplify dependency management
+ *
+ * Optional integrations such as Gemini and Cursor are owned and loaded by
+ * their executor or daemon integration module so they do not inflate every
+ * agor-live installation.
  *
  * Usage:
  *   import { Claude } from '@agor/core/sdk';

@@ -15,6 +15,7 @@
     "README.md"
   ],
   "scripts": {
+    "postinstall": "node scripts/postinstall.js",
     "check:content": "node scripts/check-package-content.mjs"
   },
   "imports": {

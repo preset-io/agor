@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertOpenCodeBinaryCompatibility } from '@agor/agentic-tool-opencode/runtime';
 
 export type AgenticToolDiagnostic = {
   id: string;
@@ -84,13 +85,17 @@ async function diagnoseExecutable(
     };
   }
   try {
+    const version =
+      tool.id === 'opencode'
+        ? await assertOpenCodeBinaryCompatibility(executable)
+        : await readVersion(executable);
     return {
       id: tool.id,
       name: tool.name,
       kind: 'executable',
       status: 'ready',
       path: isAbsolute(executable) ? executable : undefined,
-      version: await readVersion(executable),
+      version,
       docsUrl: DOCS_BASE,
     };
   } catch (error) {

@@ -11,7 +11,6 @@
 import { checkNodeVersion } from './version-check.js';
 
 checkNodeVersion();
-await import('../scripts/postinstall.js');
 
 // Use dynamic import to ensure version check runs first
 const { execute } = await import('@oclif/core');

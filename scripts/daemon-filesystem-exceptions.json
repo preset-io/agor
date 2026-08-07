@@ -1580,5 +1580,19 @@
     "rationale": "Checks executability only for the operator-configured AGOR_OPENCODE_PATH or candidates derived from the daemon PATH; no tenant or request path is accepted.",
     "reviewTarget": null,
     "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-OPENCODE-015",
+    "class": "A",
+    "file": "packages/agentic-tool-opencode/src/runtime/binary.ts",
+    "import": "node:child_process",
+    "symbol": "spawn",
+    "local": "spawn",
+    "operation": "call:spawn@readOpenCodeBinaryVersion#1",
+    "owner": "daemon OpenCode runtime readiness",
+    "boundary": "operator-controlled executable discovery",
+    "rationale": "Runs only the resolved operator-installed OpenCode executable with the fixed --version argument to enforce compatibility with Agor's pinned SDK; no tenant-controlled command or arguments are accepted.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

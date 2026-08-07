@@ -49,9 +49,10 @@ curl -X GET http://localhost:3030/sessions \
   -H "Authorization: Bearer <your-token>"
 ```
 
-**Using the token in the API reference:** Open the authentication section in
-the request client and provide the token as a Bearer token. Requests target the
-local daemon declared in the schema; credentials stay in your browser.
+The public API reference is intentionally read-only. Browsers cannot call your
+local daemon from `agor.live` unless you deliberately add that origin to the
+daemon's CORS policy. Use cURL or another local API client for requests; this
+avoids broadening the daemon's default browser trust boundary.
 
 **Authentication is always required.** On first daemon start, an admin user is auto-created with a random password. The credentials are written to `~/.agor/admin-credentials` (mode 0600) and printed once to the daemon log. Use those to log in and obtain a JWT.
 

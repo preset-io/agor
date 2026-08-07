@@ -2,7 +2,7 @@
   "info": {
     "title": "Agor API",
     "description": "REST and WebSocket API for Agor agent orchestration platform",
-    "version": "0.1.0"
+    "version": "0.24.0"
   },
   "servers": [
     {
@@ -19,37 +19,6 @@
       }
     },
     "schemas": {
-      "messages": {
-        "type": "object",
-        "properties": {
-          "message_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "session_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "task_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["user", "assistant", "system", "tool_use", "tool_result"]
-          },
-          "role": {
-            "type": "string"
-          },
-          "content": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
       "sessions": {
         "type": "object",
         "additionalProperties": true,
@@ -84,6 +53,37 @@
         "type": "object",
         "additionalProperties": true,
         "description": "Schema for leaderboardList. See @agor-live/client for the authoritative TypeScript type."
+      },
+      "messages": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["user", "assistant", "system", "tool_use", "tool_result"]
+          },
+          "role": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       },
       "messagesList": {
         "type": "object",
@@ -183,12 +183,12 @@
       "_id": {
         "type": "object",
         "additionalProperties": true,
-        "description": "Schema for :id. See @agor-live/client for the authoritative TypeScript type."
+        "description": "Schema for _id. See @agor-live/client for the authoritative TypeScript type."
       },
       "_idList": {
         "type": "object",
         "additionalProperties": true,
-        "description": "Schema for :idList. See @agor-live/client for the authoritative TypeScript type."
+        "description": "Schema for _idList. See @agor-live/client for the authoritative TypeScript type."
       },
       "repos": {
         "type": "object",
@@ -691,9 +691,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["sessions"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -716,6 +716,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -727,8 +728,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{session_id}": {
@@ -766,9 +766,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["sessions"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -804,6 +804,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -815,8 +816,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -852,6 +852,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -863,8 +864,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -900,9 +900,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["sessions"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/session-streams": {
@@ -927,6 +927,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["session-streams"],
         "security": [],
         "requestBody": {
@@ -938,8 +939,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/session-streams/{id}": {
@@ -977,9 +977,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["session-streams"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/tasks": {
@@ -1040,9 +1040,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["tasks"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -1065,6 +1065,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["tasks"],
         "security": [],
         "requestBody": {
@@ -1076,8 +1077,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/tasks/{task_id}": {
@@ -1115,9 +1115,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["tasks"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -1153,6 +1153,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["tasks"],
         "security": [],
         "requestBody": {
@@ -1164,8 +1165,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -1201,9 +1201,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["tasks"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/leaderboard": {
@@ -1264,9 +1264,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["leaderboard"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/messages": {
@@ -1327,9 +1327,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["messages"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -1352,6 +1352,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["messages"],
         "security": [],
         "requestBody": {
@@ -1363,8 +1364,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/messages/{message_id}": {
@@ -1402,9 +1402,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["messages"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -1440,6 +1440,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["messages"],
         "security": [],
         "requestBody": {
@@ -1451,8 +1452,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -1488,9 +1488,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["messages"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/boards": {
@@ -1551,9 +1551,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["boards"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -1576,6 +1576,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["boards"],
         "security": [],
         "requestBody": {
@@ -1587,8 +1588,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/boards/{board_id}": {
@@ -1626,9 +1626,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["boards"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -1664,6 +1664,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["boards"],
         "security": [],
         "requestBody": {
@@ -1675,8 +1676,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -1712,6 +1712,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["boards"],
         "security": [],
         "requestBody": {
@@ -1723,8 +1724,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -1760,9 +1760,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["boards"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/board-objects": {
@@ -1823,9 +1823,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["board-objects"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -1848,6 +1848,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["board-objects"],
         "security": [],
         "requestBody": {
@@ -1859,8 +1860,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/board-objects/{id}": {
@@ -1898,9 +1898,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["board-objects"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -1936,6 +1936,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["board-objects"],
         "security": [],
         "requestBody": {
@@ -1947,8 +1948,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -1984,9 +1984,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["board-objects"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/card-types": {
@@ -2047,9 +2047,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["card-types"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -2072,6 +2072,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["card-types"],
         "security": [],
         "requestBody": {
@@ -2083,8 +2084,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/card-types/{card_type_id}": {
@@ -2122,9 +2122,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["card-types"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -2160,6 +2160,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["card-types"],
         "security": [],
         "requestBody": {
@@ -2171,8 +2172,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -2208,6 +2208,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["card-types"],
         "security": [],
         "requestBody": {
@@ -2219,8 +2220,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -2256,9 +2256,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["card-types"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/cards": {
@@ -2319,9 +2319,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["cards"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -2344,6 +2344,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["cards"],
         "security": [],
         "requestBody": {
@@ -2355,8 +2356,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/cards/{card_id}": {
@@ -2394,9 +2394,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["cards"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -2432,6 +2432,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["cards"],
         "security": [],
         "requestBody": {
@@ -2443,8 +2444,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -2480,6 +2480,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["cards"],
         "security": [],
         "requestBody": {
@@ -2491,8 +2492,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -2528,9 +2528,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["cards"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/artifacts": {
@@ -2591,9 +2591,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["artifacts"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -2616,6 +2616,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["artifacts"],
         "security": [],
         "requestBody": {
@@ -2627,8 +2628,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/artifacts/{artifact_id}": {
@@ -2666,9 +2666,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["artifacts"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -2704,6 +2704,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["artifacts"],
         "security": [],
         "requestBody": {
@@ -2715,8 +2716,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -2752,9 +2752,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["artifacts"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/board-comments": {
@@ -2815,9 +2815,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["board-comments"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -2840,6 +2840,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["board-comments"],
         "security": [],
         "requestBody": {
@@ -2851,8 +2852,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/board-comments/{comment_id}": {
@@ -2890,9 +2890,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["board-comments"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -2928,6 +2928,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["board-comments"],
         "security": [],
         "requestBody": {
@@ -2939,8 +2940,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -2976,6 +2976,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["board-comments"],
         "security": [],
         "requestBody": {
@@ -2987,8 +2988,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -3024,9 +3024,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["board-comments"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/branches": {
@@ -3087,9 +3087,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["branches"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -3112,6 +3112,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -3123,8 +3124,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{branch_id}": {
@@ -3162,9 +3162,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["branches"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -3200,6 +3200,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -3211,8 +3212,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -3248,6 +3248,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -3259,8 +3260,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -3296,9 +3296,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["branches"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/groups": {
@@ -3359,9 +3359,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["groups"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -3384,6 +3384,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["groups"],
         "security": [],
         "requestBody": {
@@ -3395,8 +3396,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/groups/{id}": {
@@ -3434,9 +3434,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["groups"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -3472,6 +3472,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["groups"],
         "security": [],
         "requestBody": {
@@ -3483,8 +3484,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -3520,9 +3520,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["groups"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/group-memberships": {
@@ -3583,9 +3583,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["group-memberships"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -3608,6 +3608,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["group-memberships"],
         "security": [],
         "requestBody": {
@@ -3619,8 +3620,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/group-memberships/{id}": {
@@ -3658,9 +3658,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["group-memberships"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/branches/{id}/effective-access": {
@@ -3730,9 +3730,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["branches"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/boards/{id}/aligned-branches": {
@@ -3802,9 +3802,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["boards"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/branches/{id}/fs-access-users": {
@@ -3874,9 +3874,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["branches"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/repos": {
@@ -3937,9 +3937,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["repos"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -3962,6 +3962,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["repos"],
         "security": [],
         "requestBody": {
@@ -3973,8 +3974,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/repos/{repo_id}": {
@@ -4012,9 +4012,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["repos"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -4050,6 +4050,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["repos"],
         "security": [],
         "requestBody": {
@@ -4061,8 +4062,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -4098,6 +4098,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["repos"],
         "security": [],
         "requestBody": {
@@ -4109,8 +4110,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -4146,9 +4146,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["repos"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/schedules": {
@@ -4209,9 +4209,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["schedules"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -4234,6 +4234,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["schedules"],
         "security": [],
         "requestBody": {
@@ -4245,8 +4246,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/schedules/{schedule_id}": {
@@ -4284,9 +4284,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["schedules"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -4322,6 +4322,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["schedules"],
         "security": [],
         "requestBody": {
@@ -4333,8 +4334,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -4370,9 +4370,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["schedules"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/kb/namespaces": {
@@ -4433,9 +4433,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -4458,6 +4458,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -4469,8 +4470,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/kb/namespaces/{namespace_id}": {
@@ -4508,9 +4508,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -4546,6 +4546,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -4557,8 +4558,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -4594,6 +4594,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -4605,8 +4606,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -4642,9 +4642,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/kb/documents": {
@@ -4705,9 +4705,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -4730,6 +4730,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -4741,8 +4742,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/kb/documents/{document_id}": {
@@ -4780,9 +4780,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -4818,6 +4818,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -4829,8 +4830,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -4866,6 +4866,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -4877,8 +4878,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -4914,9 +4914,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/kb/document-edits": {
@@ -4941,6 +4941,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -4952,8 +4953,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/kb/versions": {
@@ -5014,9 +5014,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/kb/search": {
@@ -5077,9 +5077,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -5102,6 +5102,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -5113,8 +5114,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/kb/settings": {
@@ -5175,9 +5175,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -5200,6 +5200,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -5211,8 +5212,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/kb/settings/{id}": {
@@ -5250,6 +5250,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -5261,8 +5262,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       }
     },
     "/kb/indexing/status": {
@@ -5323,9 +5323,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/kb/indexing/reindex": {
@@ -5350,6 +5350,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -5361,8 +5362,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/kb/graph": {
@@ -5423,9 +5423,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["kb"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -5448,6 +5448,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["kb"],
         "security": [],
         "requestBody": {
@@ -5459,8 +5460,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/mcp-servers": {
@@ -5521,9 +5521,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["mcp-servers"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -5546,6 +5546,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -5557,8 +5558,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/mcp-servers/{mcp_server_id}": {
@@ -5596,9 +5596,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["mcp-servers"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -5634,6 +5634,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -5645,8 +5646,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -5682,6 +5682,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -5693,8 +5694,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -5730,9 +5730,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["mcp-servers"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/mcp-servers/test-jwt": {
@@ -5757,6 +5757,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -5768,8 +5769,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/mcp-servers/test-oauth": {
@@ -5794,6 +5794,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -5805,8 +5806,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/mcp-servers/oauth-start": {
@@ -5831,6 +5831,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -5842,8 +5843,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/mcp-servers/oauth-complete": {
@@ -5868,6 +5868,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -5879,8 +5880,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/mcp-servers/oauth-disconnect": {
@@ -5905,6 +5905,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -5916,8 +5917,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/mcp-servers/oauth-status": {
@@ -5978,9 +5978,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["mcp-servers"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/mcp-servers/oauth-auth-headers": {
@@ -6005,6 +6005,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -6016,8 +6017,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/mcp-servers/oauth-refresh": {
@@ -6042,6 +6042,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -6053,8 +6054,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/mcp-servers/discover": {
@@ -6079,6 +6079,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["mcp-servers"],
         "security": [],
         "requestBody": {
@@ -6090,8 +6091,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/gateway-channels": {
@@ -6152,9 +6152,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["gateway-channels"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -6177,6 +6177,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["gateway-channels"],
         "security": [],
         "requestBody": {
@@ -6188,8 +6189,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/gateway-channels/{id}": {
@@ -6227,9 +6227,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["gateway-channels"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -6265,6 +6265,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["gateway-channels"],
         "security": [],
         "requestBody": {
@@ -6276,8 +6277,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -6313,9 +6313,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["gateway-channels"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/gateway-channels/test": {
@@ -6340,6 +6340,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["gateway-channels"],
         "security": [],
         "requestBody": {
@@ -6351,8 +6352,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/gateway-channels/app-info": {
@@ -6377,6 +6377,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["gateway-channels"],
         "security": [],
         "requestBody": {
@@ -6388,8 +6389,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/thread-session-map": {
@@ -6450,9 +6450,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["thread-session-map"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -6475,6 +6475,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["thread-session-map"],
         "security": [],
         "requestBody": {
@@ -6486,8 +6487,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/thread-session-map/{id}": {
@@ -6525,9 +6525,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["thread-session-map"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "put": {
         "parameters": [
@@ -6563,6 +6563,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["thread-session-map"],
         "security": [],
         "requestBody": {
@@ -6574,8 +6575,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "patch": {
         "parameters": [
@@ -6611,6 +6611,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["thread-session-map"],
         "security": [],
         "requestBody": {
@@ -6622,8 +6623,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -6659,9 +6659,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["thread-session-map"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/gateway": {
@@ -6686,6 +6686,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["gateway"],
         "security": [],
         "requestBody": {
@@ -6697,8 +6698,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/admin/local-actions": {
@@ -6723,6 +6723,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["admin"],
         "security": [],
         "requestBody": {
@@ -6734,8 +6735,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/agentic-tool-settings": {
@@ -6796,9 +6796,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["agentic-tool-settings"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/agentic-tool-settings/{id}": {
@@ -6836,9 +6836,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["agentic-tool-settings"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -6874,6 +6874,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["agentic-tool-settings"],
         "security": [],
         "requestBody": {
@@ -6885,8 +6886,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       }
     },
     "/agentic-tool-presets": {
@@ -6947,9 +6947,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["agentic-tool-presets"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -6972,6 +6972,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["agentic-tool-presets"],
         "security": [],
         "requestBody": {
@@ -6983,8 +6984,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/agentic-tool-presets/{id}": {
@@ -7022,9 +7022,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["agentic-tool-presets"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -7060,6 +7060,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["agentic-tool-presets"],
         "security": [],
         "requestBody": {
@@ -7071,8 +7072,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -7108,9 +7108,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["agentic-tool-presets"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/config/resolve-api-key": {
@@ -7135,6 +7135,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["config"],
         "security": [],
         "requestBody": {
@@ -7146,8 +7147,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/check-auth": {
@@ -7172,6 +7172,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["check-auth"],
         "security": [],
         "requestBody": {
@@ -7183,8 +7184,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/opencode-auth": {
@@ -7245,9 +7245,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["opencode-auth"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -7270,6 +7270,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["opencode-auth"],
         "security": [],
         "requestBody": {
@@ -7281,8 +7282,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/opencode-auth/{id}": {
@@ -7320,9 +7320,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["opencode-auth"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -7358,6 +7358,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["opencode-auth"],
         "security": [],
         "requestBody": {
@@ -7369,8 +7370,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -7406,9 +7406,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["opencode-auth"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/opencode-models": {
@@ -7469,9 +7469,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["opencode-models"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/codex-auth/import": {
@@ -7496,6 +7496,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["codex-auth"],
         "security": [],
         "requestBody": {
@@ -7507,8 +7508,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/codex-auth/device": {
@@ -7569,9 +7569,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["codex-auth"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -7594,6 +7594,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["codex-auth"],
         "security": [],
         "requestBody": {
@@ -7605,8 +7606,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/codex-auth/logout": {
@@ -7631,6 +7631,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["codex-auth"],
         "security": [],
         "requestBody": {
@@ -7642,8 +7643,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/claude-models": {
@@ -7704,9 +7704,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["claude-models"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/copilot-models": {
@@ -7767,9 +7767,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["copilot-models"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/cursor-models": {
@@ -7830,9 +7830,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["cursor-models"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/file": {
@@ -7893,9 +7893,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["file"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/file/{id}": {
@@ -7933,9 +7933,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["file"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       }
     },
     "/files": {
@@ -7996,9 +7996,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["files"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/templates": {
@@ -8023,6 +8023,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["templates"],
         "security": [],
         "requestBody": {
@@ -8034,8 +8035,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/terminals": {
@@ -8060,6 +8060,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["terminals"],
         "security": [],
         "requestBody": {
@@ -8071,8 +8072,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/session-env-selections": {
@@ -8133,9 +8133,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["session-env-selections"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/session-mcp-servers": {
@@ -8196,9 +8196,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["session-mcp-servers"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/users": {
@@ -8259,9 +8259,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["users"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -8284,6 +8284,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["users"],
         "security": [],
         "requestBody": {
@@ -8295,8 +8296,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/users/{id}": {
@@ -8334,9 +8334,9 @@
           }
         },
         "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["users"],
-        "security": [],
-        "summary": "Retrieves a single resource with the given id from the service"
+        "security": []
       },
       "patch": {
         "parameters": [
@@ -8372,6 +8372,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["users"],
         "security": [],
         "requestBody": {
@@ -8383,8 +8384,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -8420,9 +8420,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["users"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/artifacts/{id}/payload": {
@@ -8492,9 +8492,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["artifacts"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/artifacts/{id}/console": {
@@ -8529,6 +8529,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["artifacts"],
         "security": [],
         "requestBody": {
@@ -8540,8 +8541,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/artifacts/{id}/sandpack-error": {
@@ -8576,6 +8576,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["artifacts"],
         "security": [],
         "requestBody": {
@@ -8587,8 +8588,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/artifacts/{id}/runtime-response/{requestId}": {
@@ -8632,6 +8632,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["artifacts"],
         "security": [],
         "requestBody": {
@@ -8643,8 +8644,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/artifacts/{id}/trust": {
@@ -8679,6 +8679,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["artifacts"],
         "security": [],
         "requestBody": {
@@ -8690,8 +8691,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/me/artifact-trust-grants": {
@@ -8752,9 +8752,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["me"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/me/artifact-trust-grants/{id}": {
@@ -8792,9 +8792,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["me"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/boards/{id}/archive": {
@@ -8829,6 +8829,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["boards"],
         "security": [],
         "requestBody": {
@@ -8840,8 +8841,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/boards/{id}/unarchive": {
@@ -8876,6 +8876,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["boards"],
         "security": [],
         "requestBody": {
@@ -8887,8 +8888,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/authentication": {
@@ -8913,6 +8913,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["authentication"],
         "security": [],
         "requestBody": {
@@ -8924,8 +8925,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/authentication/{id}": {
@@ -8963,9 +8963,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["authentication"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/auth/launch": {
@@ -8990,6 +8990,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["auth"],
         "security": [],
         "requestBody": {
@@ -9001,8 +9002,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/authentication/refresh": {
@@ -9027,6 +9027,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["authentication"],
         "security": [],
         "requestBody": {
@@ -9038,8 +9039,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/authentication/impersonate": {
@@ -9064,6 +9064,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["authentication"],
         "security": [],
         "requestBody": {
@@ -9075,8 +9076,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/messages/bulk": {
@@ -9101,6 +9101,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["messages"],
         "security": [],
         "requestBody": {
@@ -9112,8 +9113,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/messages/streaming": {
@@ -9138,6 +9138,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["messages"],
         "security": [],
         "requestBody": {
@@ -9149,8 +9150,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/tasks/streaming": {
@@ -9175,6 +9175,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["tasks"],
         "security": [],
         "requestBody": {
@@ -9186,8 +9187,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/fork": {
@@ -9222,6 +9222,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -9233,8 +9234,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/spawn": {
@@ -9269,6 +9269,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -9280,8 +9281,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/genealogy": {
@@ -9351,9 +9351,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["sessions"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/sessions/{id}/archive": {
@@ -9388,6 +9388,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -9399,8 +9400,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/unarchive": {
@@ -9435,6 +9435,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -9446,8 +9447,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/restart-cli": {
@@ -9482,6 +9482,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -9493,8 +9494,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/prompt": {
@@ -9529,6 +9529,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -9540,8 +9541,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/tasks/{id}/run": {
@@ -9576,6 +9576,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["tasks"],
         "security": [],
         "requestBody": {
@@ -9587,8 +9588,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/spawn-prompt": {
@@ -9623,6 +9623,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -9634,8 +9635,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{id}/fire-zone-trigger": {
@@ -9670,6 +9670,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -9681,8 +9682,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/stop": {
@@ -9717,6 +9717,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -9728,8 +9729,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/tasks/queue": {
@@ -9799,9 +9799,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["sessions"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/sessions/{id}/permission-decision": {
@@ -9836,6 +9836,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -9847,8 +9848,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/widgets/{id}/submit": {
@@ -9883,6 +9883,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["widgets"],
         "security": [],
         "requestBody": {
@@ -9894,8 +9895,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/widgets/{id}/dismiss": {
@@ -9930,6 +9930,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["widgets"],
         "security": [],
         "requestBody": {
@@ -9941,8 +9942,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/tasks/bulk": {
@@ -9967,6 +9967,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["tasks"],
         "security": [],
         "requestBody": {
@@ -9978,8 +9979,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/tasks/{id}/complete": {
@@ -10014,6 +10014,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["tasks"],
         "security": [],
         "requestBody": {
@@ -10025,8 +10026,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/tasks/{id}/fail": {
@@ -10061,6 +10061,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["tasks"],
         "security": [],
         "requestBody": {
@@ -10072,8 +10073,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/repos/local": {
@@ -10098,6 +10098,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["repos"],
         "security": [],
         "requestBody": {
@@ -10109,8 +10110,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/repos/clone": {
@@ -10135,6 +10135,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["repos"],
         "security": [],
         "requestBody": {
@@ -10146,8 +10147,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/repos/{id}/branches": {
@@ -10182,6 +10182,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["repos"],
         "security": [],
         "requestBody": {
@@ -10193,8 +10194,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/repos/{id}/branches/{name}/{id_2}": {
@@ -10250,9 +10250,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["repos"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/repos/{id}/import-agor-yml": {
@@ -10287,6 +10287,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["repos"],
         "security": [],
         "requestBody": {
@@ -10298,8 +10299,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/repos/{id}/export-agor-yml": {
@@ -10334,6 +10334,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["repos"],
         "security": [],
         "requestBody": {
@@ -10345,8 +10346,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/api/v1/user/api-keys": {
@@ -10407,9 +10407,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["api"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [],
@@ -10432,6 +10432,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["api"],
         "security": [],
         "requestBody": {
@@ -10443,8 +10444,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/api/v1/user/api-keys/{id}": {
@@ -10482,6 +10482,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["api"],
         "security": [],
         "requestBody": {
@@ -10493,8 +10494,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -10530,9 +10530,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["api"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/board-comments/{id}/toggle-reaction": {
@@ -10567,6 +10567,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["board-comments"],
         "security": [],
         "requestBody": {
@@ -10578,8 +10579,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/board-comments/{id}/reply": {
@@ -10614,6 +10614,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["board-comments"],
         "security": [],
         "requestBody": {
@@ -10625,8 +10626,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{id}/start": {
@@ -10661,6 +10661,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -10672,8 +10673,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{id}/stop": {
@@ -10708,6 +10708,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -10719,8 +10720,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{id}/restart": {
@@ -10755,6 +10755,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -10766,8 +10767,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{id}/nuke": {
@@ -10802,6 +10802,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -10813,8 +10814,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{id}/render-environment": {
@@ -10849,6 +10849,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -10860,8 +10861,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{id}/health": {
@@ -10931,9 +10931,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["branches"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/branches/{id}/archive-or-delete": {
@@ -10968,6 +10968,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -10979,8 +10980,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{id}/unarchive": {
@@ -11015,6 +11015,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -11026,8 +11027,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/schedules/{id}/run-now": {
@@ -11062,6 +11062,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["schedules"],
         "security": [],
         "requestBody": {
@@ -11073,8 +11074,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/{id}/execute-schedule-now": {
@@ -11109,6 +11109,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -11120,8 +11121,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/branches/logs": {
@@ -11182,9 +11182,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["branches"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     },
     "/boards/{id}/sessions": {
@@ -11219,6 +11219,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["boards"],
         "security": [],
         "requestBody": {
@@ -11230,8 +11231,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/mcp-servers": {
@@ -11301,9 +11301,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["sessions"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [
@@ -11336,6 +11336,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -11347,8 +11348,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/mcp-servers/{id_2}": {
@@ -11395,6 +11395,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -11406,8 +11407,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -11452,9 +11452,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["sessions"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/sessions/{id}/env-selections": {
@@ -11524,9 +11524,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["sessions"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       },
       "post": {
         "parameters": [
@@ -11559,6 +11559,7 @@
           }
         },
         "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -11570,8 +11571,7 @@
               }
             }
           }
-        },
-        "summary": "Creates a new resource with data"
+        }
       }
     },
     "/sessions/{id}/env-selections/{id_2}": {
@@ -11618,6 +11618,7 @@
           }
         },
         "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
         "tags": ["sessions"],
         "security": [],
         "requestBody": {
@@ -11629,8 +11630,7 @@
               }
             }
           }
-        },
-        "summary": "Updates the resource identified by id using data"
+        }
       },
       "delete": {
         "parameters": [
@@ -11675,9 +11675,9 @@
           }
         },
         "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
         "tags": ["sessions"],
-        "security": [],
-        "summary": "Removes the resource with id"
+        "security": []
       }
     },
     "/health": {
@@ -11738,9 +11738,9 @@
           }
         },
         "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
         "tags": ["health"],
-        "security": [],
-        "summary": "Retrieves a list of all resources from the service"
+        "security": []
       }
     }
   },

@@ -17,6 +17,7 @@
   "dependencies": {
     "@agor/core": "workspace:*",
     "@agor/daemon": "workspace:*",
+    "@agor/agentic-tool-opencode": "workspace:*",
     "@agor-live/client": "workspace:*",
     "@oclif/core": "^4.11.14",
     "@oclif/plugin-help": "^6.2.53",

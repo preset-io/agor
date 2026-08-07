@@ -12,3 +12,7 @@ curl --fail --silent --show-error http://localhost:3030/docs.json \
 ```
 
 Review the schema diff with the code change that altered the API.
+
+The agor-live publish smoke test generates the schema from its fully registered
+daemon and runs `scripts/check-openapi-snapshot.mjs`. It ignores only the
+release-stamped `info.version`; endpoint and component drift fails CI.

@@ -43,6 +43,8 @@ export function ApiReference() {
             layout: 'modern',
             darkMode,
             hideDarkModeToggle: true,
+            hideClientButton: true,
+            hideTestRequestButton: true,
             documentDownloadType: 'none',
             customCss,
           }}

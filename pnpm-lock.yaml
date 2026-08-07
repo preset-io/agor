@@ -112,6 +112,9 @@ importers:
       '@agor-live/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@agor/agentic-tool-opencode':
+        specifier: workspace:*
+        version: link:../../packages/agentic-tool-opencode
       '@agor/core':
         specifier: workspace:*
         version: link:../../packages/core

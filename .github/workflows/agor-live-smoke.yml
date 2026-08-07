@@ -205,6 +205,8 @@ jobs:
             echo "::error::/ui/ JS asset response is invalid (${SIZE} bytes, ${CTYPE}) — static serving broken"
             exit 1
           fi
+          curl -fsS http://localhost:3030/docs.json -o /tmp/agor-openapi.json
+          node "$GITHUB_WORKSPACE/scripts/check-openapi-snapshot.mjs" /tmp/agor-openapi.json
           echo "✓ Smoke test passed"
 
       - name: Stop daemon

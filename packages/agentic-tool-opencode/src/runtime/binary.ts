@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
@@ -12,11 +13,61 @@ async function isExecutable(path: string): Promise<boolean> {
   }
 }
 
+export async function readOpenCodeBinaryVersion(binary: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(binary, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`OpenCode version check timed out for ${binary}`));
+    }, 5_000);
+    child.stdout.on('data', (chunk) => {
+      output += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      output += String(chunk);
+    });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(`OpenCode version check exited with code ${code}`));
+        return;
+      }
+      const version = output.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/)?.[0];
+      if (!version) {
+        reject(
+          new Error(`Could not parse OpenCode version from: ${output.trim() || '(no output)'}`)
+        );
+        return;
+      }
+      resolve(version);
+    });
+  });
+}
+
+export async function assertOpenCodeBinaryCompatibility(binary: string): Promise<string> {
+  const version = await readOpenCodeBinaryVersion(binary);
+  if (version !== OPENCODE_VERSION) {
+    throw new Error(
+      `OpenCode CLI ${version} is incompatible with Agor's pinned SDK ${OPENCODE_VERSION}. ` +
+        `Install OpenCode ${OPENCODE_VERSION}, or point AGOR_OPENCODE_PATH to that version.`
+    );
+  }
+  return version;
+}
+
 /** Resolve the user-installed OpenCode CLI without assuming how it was installed. */
 export async function resolvePackagedOpenCodeBinary(): Promise<string> {
   const configured = process.env.AGOR_OPENCODE_PATH?.trim();
   if (configured) {
-    if (await isExecutable(configured)) return configured;
+    if (await isExecutable(configured)) {
+      await assertOpenCodeBinaryCompatibility(configured);
+      return configured;
+    }
     throw new Error(`AGOR_OPENCODE_PATH is not executable: ${configured}`);
   }
 
@@ -24,7 +75,10 @@ export async function resolvePackagedOpenCodeBinary(): Promise<string> {
   for (const directory of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
     for (const name of names) {
       const candidate = join(directory, name);
-      if (await isExecutable(candidate)) return candidate;
+      if (await isExecutable(candidate)) {
+        await assertOpenCodeBinaryCompatibility(candidate);
+        return candidate;
+      }
     }
   }
 
