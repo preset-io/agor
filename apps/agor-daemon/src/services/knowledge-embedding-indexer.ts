@@ -9,6 +9,8 @@ import {
   generateId,
   getCurrentTenantId,
   isPostgresDatabase,
+  type KnowledgeEmbeddingRoutingCursor,
+  type KnowledgeEmbeddingRoutingPage,
   type KnowledgeEmbeddingRoutingRef,
   KnowledgeEmbeddingWorkRepository,
   runWithoutTenantContext,
@@ -62,7 +64,7 @@ export interface KnowledgeEmbeddingIndexerOptions {
   generateClaimToken?: () => string;
   ensureStorage?: typeof ensureKnowledgePgvectorStorage;
   /** Test seam; production discovery always uses PostgreSQL/RLS. */
-  discover?: () => Promise<KnowledgeEmbeddingRoutingRef[]>;
+  discover?: (after?: KnowledgeEmbeddingRoutingCursor) => Promise<KnowledgeEmbeddingRoutingPage>;
 }
 
 export interface KnowledgeEmbeddingIndexerStats {
@@ -70,6 +72,7 @@ export interface KnowledgeEmbeddingIndexerStats {
   claimed: number;
   indexed: number;
   failures: number;
+  /** Another bounded keyset page remains in the current discovery traversal. */
   saturated: boolean;
 }
 
@@ -85,6 +88,7 @@ export class KnowledgeEmbeddingIndexer {
   private shutdownRequested = false;
   private rerunRequested = false;
   private idleRounds = 0;
+  private routingCursor: KnowledgeEmbeddingRoutingCursor | undefined;
   private readonly scanBatchSize: number;
   private readonly perTenantBatchSize: number;
   private readonly tickIntervalMs: number;
@@ -162,6 +166,7 @@ export class KnowledgeEmbeddingIndexer {
     if (this.started) return;
     this.started = true;
     this.shutdownRequested = false;
+    this.routingCursor = undefined;
     this.schedule(initialWorkOffset(this.startupOffsetMaxMs, this.random()));
   }
 
@@ -221,10 +226,11 @@ export class KnowledgeEmbeddingIndexer {
     let stats = emptyStats();
     try {
       stats = await this.tick();
-      // Discovery is only a hint. A full page can be wholly unclaimable (for
-      // example while its tenant policy is paused), so no durable progress is
-      // an idle round even when candidates were returned.
-      this.idleRounds = stats.claimed === 0 && stats.failures === 0 ? this.idleRounds + 1 : 0;
+      // A keyset traversal drains quickly, but it is finite. Only an exhausted
+      // traversal with no durable progress counts as idle and backs off.
+      if (!stats.saturated) {
+        this.idleRounds = stats.claimed === 0 && stats.failures === 0 ? this.idleRounds + 1 : 0;
+      }
     } catch (error) {
       this.idleRounds += 1;
       console.warn(
@@ -237,20 +243,19 @@ export class KnowledgeEmbeddingIndexer {
       this.schedule(0, true);
       return;
     }
-    const delay =
-      stats.saturated && stats.claimed > 0
-        ? jitterDelay(SATURATED_DRAIN_BASE_MS, SATURATED_DRAIN_JITTER_RATIO, this.random())
-        : stats.claimed > 0 || stats.failures > 0
-          ? jitterDelay(this.tickIntervalMs, 0.2, this.random())
-          : boundedBackoffDelay(
-              this.idleRounds,
-              {
-                baseDelayMs: this.tickIntervalMs,
-                maxDelayMs: this.maxIdleIntervalMs,
-                jitterRatio: 0.2,
-              },
-              this.random()
-            );
+    const delay = stats.saturated
+      ? jitterDelay(SATURATED_DRAIN_BASE_MS, SATURATED_DRAIN_JITTER_RATIO, this.random())
+      : stats.claimed > 0 || stats.failures > 0
+        ? jitterDelay(this.tickIntervalMs, 0.2, this.random())
+        : boundedBackoffDelay(
+            this.idleRounds,
+            {
+              baseDelayMs: this.tickIntervalMs,
+              maxDelayMs: this.maxIdleIntervalMs,
+              jitterRatio: 0.2,
+            },
+            this.random()
+          );
     this.schedule(delay);
   }
 
@@ -267,12 +272,13 @@ export class KnowledgeEmbeddingIndexer {
     }
   }
 
-  private async discoverRoutingRefs(): Promise<KnowledgeEmbeddingRoutingRef[]> {
-    if (this.options.discover) return this.options.discover();
+  private async discoverRoutingPage(): Promise<KnowledgeEmbeddingRoutingPage> {
+    if (this.options.discover) return this.options.discover(this.routingCursor);
     const find = (scopedDb: TenantScopedDatabase) =>
-      new KnowledgeEmbeddingWorkRepository(scopedDb).findRoutingRefs({
+      new KnowledgeEmbeddingWorkRepository(scopedDb).findRoutingPage({
         limit: this.scanBatchSize,
         perTenantLimit: this.perTenantBatchSize,
+        ...(this.routingCursor ? { after: this.routingCursor } : {}),
       });
     if (this.options.tenantId) {
       return runWithTenantDatabaseScope(this.db, this.options.tenantId, find);
@@ -281,9 +287,10 @@ export class KnowledgeEmbeddingIndexer {
       this.db,
       'Knowledge embedding routing discovery',
       (systemDb) =>
-        new KnowledgeEmbeddingWorkRepository(systemDb).findRoutingRefs({
+        new KnowledgeEmbeddingWorkRepository(systemDb).findRoutingPage({
           limit: this.scanBatchSize,
           perTenantLimit: this.perTenantBatchSize,
+          ...(this.routingCursor ? { after: this.routingCursor } : {}),
         }),
       { capability: 'knowledge_embedding_discovery' }
     );
@@ -293,11 +300,13 @@ export class KnowledgeEmbeddingIndexer {
   async checkOnce(): Promise<KnowledgeEmbeddingIndexerStats> {
     if (this.shutdownRequested) return emptyStats();
     if (!isPostgresDatabase(this.db)) return emptyStats();
-    const refs = await this.discoverRoutingRefs();
+    const page = await this.discoverRoutingPage();
+    this.routingCursor = page.nextCursor ?? undefined;
+    const { refs } = page;
     const stats: KnowledgeEmbeddingIndexerStats = {
       ...emptyStats(),
       candidates: refs.length,
-      saturated: refs.length >= this.scanBatchSize,
+      saturated: page.nextCursor !== null,
     };
     const byTenant = new Map<string, KnowledgeEmbeddingRoutingRef[]>();
     for (const ref of refs) {

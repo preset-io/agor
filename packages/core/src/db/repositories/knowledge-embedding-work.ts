@@ -10,6 +10,23 @@ export interface KnowledgeEmbeddingRoutingRef {
   eligible_at: Date;
 }
 
+/**
+ * Process-local keyset for one bounded traversal of routing candidates.
+ * This is a discovery optimization only; it carries no claim authority.
+ */
+export interface KnowledgeEmbeddingRoutingCursor {
+  tenantRank: number;
+  eligibleAt: string;
+  tenantId: TenantID | string;
+  unitId: KnowledgeDocumentUnitID;
+}
+
+export interface KnowledgeEmbeddingRoutingPage {
+  refs: KnowledgeEmbeddingRoutingRef[];
+  /** Non-null while the current bounded traversal has another page. */
+  nextCursor: KnowledgeEmbeddingRoutingCursor | null;
+}
+
 export interface KnowledgeEmbeddingClaim {
   unit_id: KnowledgeDocumentUnitID;
   document_id: string;
@@ -66,17 +83,64 @@ export class KnowledgeEmbeddingWorkRepository {
   constructor(private readonly db: Database) {}
 
   /**
-   * Return a bounded, tenant-fair page of claimable routing references.
+   * Return the first bounded, tenant-fair page of state-eligible routing refs.
    * Ranking emits one candidate per tenant before a second candidate from any
-   * tenant, up to perTenantLimit. Atomic claim remains the correctness fence.
+   * tenant, up to perTenantLimit. Tenant policy admission and the atomic claim
+   * remain separate correctness gates.
    */
   async findRoutingRefs(options: {
     limit: number;
     perTenantLimit: number;
   }): Promise<KnowledgeEmbeddingRoutingRef[]> {
+    return (await this.findRoutingPage(options)).refs;
+  }
+
+  /**
+   * Keyset-paginate one bounded traversal so a stable unclaimable front page
+   * cannot hide runnable tenants. The caller resets to the beginning when
+   * nextCursor is null. Rows that move earlier while claims reconcile are
+   * intentionally revisited on the next traversal.
+   */
+  async findRoutingPage(options: {
+    limit: number;
+    perTenantLimit: number;
+    after?: KnowledgeEmbeddingRoutingCursor;
+  }): Promise<KnowledgeEmbeddingRoutingPage> {
     assertPositiveInteger(options.limit, 'Knowledge embedding discovery limit');
     assertPositiveInteger(options.perTenantLimit, 'Knowledge embedding per-tenant limit');
-    if (!isPostgresDatabase(this.db)) return [];
+    if (options.after) {
+      assertPositiveInteger(options.after.tenantRank, 'Knowledge embedding discovery tenant rank');
+      if (
+        !options.after.eligibleAt.trim() ||
+        !String(options.after.tenantId).trim() ||
+        !String(options.after.unitId).trim()
+      ) {
+        throw new Error('Knowledge embedding discovery cursor fields must be non-empty');
+      }
+    }
+    if (!isPostgresDatabase(this.db)) return { refs: [], nextCursor: null };
+
+    const after = options.after;
+    const afterFilter = after
+      ? sql`AND (
+          tenant_rank > ${after.tenantRank}
+          OR (
+            tenant_rank = ${after.tenantRank}
+            AND eligible_at > CAST(${after.eligibleAt} AS timestamptz)
+          )
+          OR (
+            tenant_rank = ${after.tenantRank}
+            AND eligible_at = CAST(${after.eligibleAt} AS timestamptz)
+            AND tenant_id > ${after.tenantId}
+          )
+          OR (
+            tenant_rank = ${after.tenantRank}
+            AND eligible_at = CAST(${after.eligibleAt} AS timestamptz)
+            AND tenant_id = ${after.tenantId}
+            AND unit_id > ${after.unitId}
+          )
+        )`
+      : sql``;
 
     const result = await executeRaw(
       this.db,
@@ -104,18 +168,34 @@ export class KnowledgeEmbeddingWorkRepository {
                 OR embedding_claim_expires_at <= clock_timestamp()
               )
           )
-          SELECT tenant_id, unit_id, eligible_at
+          SELECT tenant_id, unit_id, eligible_at, tenant_rank, eligible_at::text AS eligible_cursor_at
           FROM eligible
           WHERE tenant_rank <= ${options.perTenantLimit}
+            ${afterFilter}
           ORDER BY tenant_rank, eligible_at, tenant_id, unit_id
-          LIMIT ${options.limit}`
+          LIMIT ${options.limit + 1}`
     );
 
-    return rowsOf(result).map((row) => ({
+    const rows = rowsOf(result);
+    const pageRows = rows.slice(0, options.limit);
+    const refs = pageRows.map((row) => ({
       tenant_id: row.tenant_id ? String(row.tenant_id) : undefined,
       unit_id: String(row.unit_id) as KnowledgeDocumentUnitID,
       eligible_at: asDate(row.eligible_at),
     }));
+    const last = pageRows.at(-1);
+    return {
+      refs,
+      nextCursor:
+        rows.length > options.limit && last
+          ? {
+              tenantRank: Number(last.tenant_rank),
+              eligibleAt: String(last.eligible_cursor_at),
+              tenantId: String(last.tenant_id),
+              unitId: String(last.unit_id) as KnowledgeDocumentUnitID,
+            }
+          : null,
+    };
   }
 
   /**

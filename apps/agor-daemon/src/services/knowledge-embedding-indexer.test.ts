@@ -167,37 +167,84 @@ describe('mergeEmbeddingReuseIntoNextMetadata', () => {
 });
 
 describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
-  dbTest('backs off a saturated discovery page when no claim can progress', async ({ db }) => {
-    vi.useFakeTimers();
-    try {
-      const indexer = new KnowledgeEmbeddingIndexer(db, {
-        tenantId: 'bootstrap-tenant',
-        startupOffsetMaxMs: 0,
-        tickIntervalMs: 1_000,
-        maxIdleIntervalMs: 8_000,
-        random: () => 0.5,
-      });
-      const tick = vi.fn(async () => ({
-        candidates: 32,
-        claimed: 0,
-        indexed: 0,
-        failures: 0,
-        saturated: true,
-      }));
-      indexer.tick = tick;
-      indexer.start();
+  dbTest(
+    'backs off an exhausted full discovery page when no claim can progress',
+    async ({ db }) => {
+      vi.useFakeTimers();
+      try {
+        const indexer = new KnowledgeEmbeddingIndexer(db, {
+          tenantId: 'bootstrap-tenant',
+          startupOffsetMaxMs: 0,
+          tickIntervalMs: 1_000,
+          maxIdleIntervalMs: 8_000,
+          random: () => 0.5,
+        });
+        const tick = vi.fn(async () => ({
+          candidates: 32,
+          claimed: 0,
+          indexed: 0,
+          failures: 0,
+          saturated: false,
+        }));
+        indexer.tick = tick;
+        indexer.start();
 
-      await vi.advanceTimersByTimeAsync(0);
-      expect(tick).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1_999);
-      expect(tick).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(tick).toHaveBeenCalledTimes(2);
-      await indexer.stop();
-    } finally {
-      vi.useRealTimers();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(tick).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1_999);
+        expect(tick).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(tick).toHaveBeenCalledTimes(2);
+        await indexer.stop();
+      } finally {
+        vi.useRealTimers();
+      }
     }
-  });
+  );
+
+  dbTest(
+    'quickly drains a bounded discovery traversal past an unclaimable page',
+    async ({ db }) => {
+      vi.useFakeTimers();
+      try {
+        const indexer = new KnowledgeEmbeddingIndexer(db, {
+          tenantId: 'bootstrap-tenant',
+          startupOffsetMaxMs: 0,
+          tickIntervalMs: 1_000,
+          maxIdleIntervalMs: 8_000,
+          random: () => 0.5,
+        });
+        const tick = vi
+          .fn()
+          .mockResolvedValueOnce({
+            candidates: 32,
+            claimed: 0,
+            indexed: 0,
+            failures: 0,
+            saturated: true,
+          })
+          .mockResolvedValueOnce({
+            candidates: 1,
+            claimed: 1,
+            indexed: 1,
+            failures: 0,
+            saturated: false,
+          });
+        indexer.tick = tick;
+        indexer.start();
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(tick).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(149);
+        expect(tick).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(tick).toHaveBeenCalledTimes(2);
+        await indexer.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
   dbTest('runs only after commit with request tenant scopes detached', async ({ db }) => {
     vi.useFakeTimers();
@@ -212,7 +259,13 @@ describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
           tenantId: getCurrentTenantId() as string | undefined,
           hasDatabase: Boolean(getCurrentTenantDatabase()),
         });
-        return { candidates: 0, claimed: 0, indexed: 0, failures: 0, saturated: false };
+        return {
+          candidates: 0,
+          claimed: 0,
+          indexed: 0,
+          failures: 0,
+          saturated: false,
+        };
       });
       indexer.tick = tick;
       indexer.start();
@@ -295,7 +348,13 @@ describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
         } else {
           signalSecond();
         }
-        return { candidates: 0, claimed: 0, indexed: 0, failures: 0, saturated: false };
+        return {
+          candidates: 0,
+          claimed: 0,
+          indexed: 0,
+          failures: 0,
+          saturated: false,
+        };
       });
       Object.defineProperty(indexer, 'checkOnce', { value: checkOnce });
       indexer.start();

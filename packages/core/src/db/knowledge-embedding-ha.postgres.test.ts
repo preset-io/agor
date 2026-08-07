@@ -23,7 +23,10 @@ import {
   KnowledgeDocumentRepository,
   KnowledgeNamespaceRepository,
 } from './repositories/knowledge';
-import { KnowledgeEmbeddingWorkRepository } from './repositories/knowledge-embedding-work';
+import {
+  type KnowledgeEmbeddingRoutingCursor,
+  KnowledgeEmbeddingWorkRepository,
+} from './repositories/knowledge-embedding-work';
 import { UsersRepository } from './repositories/users';
 import { kbDocumentUnits } from './schema';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
@@ -298,6 +301,32 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(Object.keys(refs[0] ?? {}).sort()).toEqual(
         ['eligible_at', 'tenant_id', 'unit_id'].sort()
       );
+
+      // A daemon retains this keyset only for one bounded traversal. Even if
+      // every page before these tenants is paused/unclaimable, subsequent
+      // pages must eventually expose every eligible tenant before wrapping.
+      const pagedTenants = new Set<string>();
+      let after: KnowledgeEmbeddingRoutingCursor | undefined;
+      for (let pageNumber = 0; pageNumber < 256; pageNumber += 1) {
+        const page = await runWithSystemDatabaseScope(
+          db,
+          'Knowledge embedding HA paginated discovery',
+          (systemDb) =>
+            new KnowledgeEmbeddingWorkRepository(systemDb).findRoutingPage({
+              limit: 1,
+              perTenantLimit: 2,
+              ...(after ? { after } : {}),
+            }),
+          { capability: 'knowledge_embedding_discovery' }
+        );
+        for (const ref of page.refs) {
+          if (ref.tenant_id) pagedTenants.add(String(ref.tenant_id));
+        }
+        after = page.nextCursor ?? undefined;
+        if (!after) break;
+      }
+      expect([...pagedTenants]).toEqual(expect.arrayContaining([tenantA, tenantB, tenantC]));
+      expect(after).toBeUndefined();
 
       const crossTenantClaim = await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
         new KnowledgeEmbeddingWorkRepository(scoped).claimCurrentUnits({
