@@ -49,7 +49,6 @@
   "dependencies": {
     "@agor/core": "workspace:*",
     "@opencode-ai/sdk": "1.14.33",
-    "opencode-ai": "1.14.33",
     "zod": "^4.4.3"
   },
   "devDependencies": {

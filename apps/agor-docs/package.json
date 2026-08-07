@@ -15,6 +15,7 @@
     "build:search": "pagefind --site out --output-path out/_pagefind && rm -rf public/_pagefind && cp -R out/_pagefind public/_pagefind"
   },
   "dependencies": {
+    "@scalar/api-reference-react": "0.9.60",
     "@theguild/remark-mermaid": "^0.3.0",
     "katex": "^0.17.0",
     "lucide-react": "^1.24.0",

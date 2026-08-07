@@ -1568,30 +1568,16 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-OPENCODE-013",
-    "class": "A",
-    "file": "packages/agentic-tool-opencode/src/runtime/binary.ts",
-    "import": "node:fs/promises",
-    "symbol": "readFile",
-    "local": "readFile",
-    "operation": "call:readFile@findPackageLocation#1",
-    "owner": "daemon packaged OpenCode readiness",
-    "boundary": "fixed installed-package version preflight",
-    "rationale": "Reads only package manifests reached from the installed OpenCode CLI and SDK module locations; no caller path is accepted.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
     "id": "DAEMON-FS-CAP-OPENCODE-014",
     "class": "A",
     "file": "packages/agentic-tool-opencode/src/runtime/binary.ts",
     "import": "node:fs/promises",
     "symbol": "access",
     "local": "access",
-    "operation": "call:access@resolvePackagedOpenCodeBinary#1",
-    "owner": "daemon packaged OpenCode readiness",
-    "boundary": "fixed packaged native-binary preflight",
-    "rationale": "Checks only the version-pinned OpenCode binary derived from the installed CLI package before catalog options are exposed.",
+    "operation": "call:access@isExecutable#1",
+    "owner": "daemon OpenCode runtime readiness",
+    "boundary": "operator-controlled executable discovery",
+    "rationale": "Checks executability only for the operator-configured AGOR_OPENCODE_PATH or candidates derived from the daemon PATH; no tenant or request path is accepted.",
     "reviewTarget": null,
     "reviewDate": null
   }

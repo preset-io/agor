@@ -1,85 +1,36 @@
 import { constants as fsConstants } from 'node:fs';
-import { access, readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { access } from 'node:fs/promises';
+import { delimiter, join } from 'node:path';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
 
-type PackageLocation = { packageJsonPath: string; version: string };
-
-async function findPackageLocation(
-  entryPath: string,
-  packageName: string
-): Promise<PackageLocation> {
-  let current = dirname(entryPath);
-  for (;;) {
-    const packageJsonPath = join(current, 'package.json');
-    try {
-      const parsed = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
-        name?: string;
-        version?: string;
-      };
-      if (parsed.name === packageName && parsed.version) {
-        return { packageJsonPath, version: parsed.version };
-      }
-    } catch {
-      // Keep walking toward the package root.
-    }
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
+async function isExecutable(path: string): Promise<boolean> {
+  try {
+    await access(path, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
   }
-  throw new Error(`OpenCode package ${packageName} is not installed correctly`);
 }
 
-async function findPackageInLookupPaths(
-  resolver: NodeJS.Require,
-  packageName: string
-): Promise<PackageLocation> {
-  for (const lookupPath of resolver.resolve.paths(packageName) ?? []) {
-    try {
-      return await findPackageLocation(join(lookupPath, packageName, 'index.js'), packageName);
-    } catch {
-      // Try the next Node resolution path.
-    }
-  }
-  throw new Error(`OpenCode package ${packageName} is not installed correctly`);
-}
-
+/** Resolve the user-installed OpenCode CLI without assuming how it was installed. */
 export async function resolvePackagedOpenCodeBinary(): Promise<string> {
-  const packageRequire = createRequire(import.meta.url);
-  let cli: PackageLocation;
-  let sdk: PackageLocation;
-  try {
-    cli = await findPackageLocation(
-      packageRequire.resolve('opencode-ai/package.json'),
-      'opencode-ai'
-    );
-    sdk = await findPackageInLookupPaths(packageRequire, '@opencode-ai/sdk');
-  } catch (error) {
-    throw new Error(
-      `OpenCode ${OPENCODE_VERSION} is not fully installed; reinstall Agor with optional dependencies enabled`,
-      { cause: error }
-    );
+  const configured = process.env.AGOR_OPENCODE_PATH?.trim();
+  if (configured) {
+    if (await isExecutable(configured)) return configured;
+    throw new Error(`AGOR_OPENCODE_PATH is not executable: ${configured}`);
   }
 
-  if (cli.version !== OPENCODE_VERSION || sdk.version !== OPENCODE_VERSION) {
-    throw new Error(
-      `OpenCode SDK/CLI mismatch: expected ${OPENCODE_VERSION}, found SDK ${sdk.version} and CLI ${cli.version}`
-    );
+  const names = process.platform === 'win32' ? ['opencode.exe', 'opencode.cmd'] : ['opencode'];
+  for (const directory of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
+    for (const name of names) {
+      const candidate = join(directory, name);
+      if (await isExecutable(candidate)) return candidate;
+    }
   }
 
-  const packageRoot = dirname(cli.packageJsonPath);
-  const binary =
-    process.platform === 'win32'
-      ? join(packageRoot, 'bin', 'opencode.exe')
-      : join(packageRoot, 'bin', '.opencode');
-  try {
-    await access(binary, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK);
-  } catch (error) {
-    throw new Error(
-      `Packaged OpenCode ${OPENCODE_VERSION} native binary is missing or not executable; reinstall Agor with optional dependencies enabled`,
-      { cause: error }
-    );
-  }
-  return binary;
+  throw new Error(
+    `OpenCode ${OPENCODE_VERSION} is not available to the Agor executor. ` +
+      'Install the OpenCode CLI using its official instructions, ensure `opencode` is on the daemon PATH, ' +
+      'or set AGOR_OPENCODE_PATH. See https://agor.live/guide/extended-install#agentic-tools'
+  );
 }

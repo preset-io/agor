@@ -440,8 +440,6 @@
     "@feathersjs/socketio": "^5.0.45",
     "@feathersjs/socketio-client": "^5.0.45",
     "@feathersjs/typebox": "^5.0.45",
-    "@google/gemini-cli-core": "^0.31.0",
-    "@google/genai": "^1.43.0",
     "@libsql/client": "^0.17.4",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
@@ -451,7 +449,6 @@
     "@slack/web-api": "^7.19.0",
     "analytics": "^0.8.19",
     "bcryptjs": "^2.4.3",
-    "botbuilder": "^4.23.3",
     "cron-parser": "^5.6.1",
     "cronstrue": "^3.24.0",
     "drizzle-orm": "^0.45.2",
@@ -466,6 +463,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@google/genai": "^1.43.0",
+    "@google/gemini-cli-core": "^0.40.0",
+    "botbuilder": "^4.23.3",
     "@types/bcryptjs": "^2.4.6",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",

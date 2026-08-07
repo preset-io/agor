@@ -22,8 +22,13 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createRequire } from 'node:module';
 
-import { BotFrameworkAdapter, type ConversationReference, TurnContext } from 'botbuilder';
+import type {
+  BotFrameworkAdapter as BotFrameworkAdapterType,
+  ConversationReference,
+  TurnContext as TurnContextType,
+} from 'botbuilder';
 
 import type { ChannelType } from '../../types/gateway';
 import type { GatewayConnector, InboundMessage } from '../connector';
@@ -36,6 +41,20 @@ interface TeamsConfig {
   webhook_path?: string;
   require_mention?: boolean;
   allow_thread_replies_without_mention?: boolean;
+}
+
+type BotBuilderModule = typeof import('botbuilder');
+
+function loadBotBuilder(): BotBuilderModule {
+  try {
+    return createRequire(import.meta.url)('botbuilder') as BotBuilderModule;
+  } catch (error) {
+    throw new Error(
+      'Microsoft Teams support requires the optional botbuilder package. ' +
+        'Install it alongside Agor, then retry. See https://agor.live/guide/extended-install#agentic-tools',
+      { cause: error }
+    );
+  }
 }
 
 /**
@@ -177,7 +196,8 @@ function wrapResponse(res: ServerResponse): ServerResponse & {
 export class TeamsConnector implements GatewayConnector {
   readonly channelType: ChannelType = 'teams';
 
-  private adapter: BotFrameworkAdapter;
+  private adapter: BotFrameworkAdapterType;
+  private TurnContext: BotBuilderModule['TurnContext'];
   private config: TeamsConfig;
   private server: Server | null = null;
 
@@ -194,6 +214,8 @@ export class TeamsConnector implements GatewayConnector {
       throw new Error('Teams connector requires app_password in config');
     }
 
+    const { BotFrameworkAdapter, TurnContext } = loadBotBuilder();
+    this.TurnContext = TurnContext;
     this.adapter = new BotFrameworkAdapter({
       appId: this.config.app_id,
       appPassword: this.config.app_password,
@@ -275,7 +297,7 @@ export class TeamsConnector implements GatewayConnector {
         this.adapter.processActivity(
           req as IncomingMessage & { body: unknown; headers: Record<string, string> },
           wrapResponse(res),
-          async (turnContext: TurnContext) => {
+          async (turnContext: TurnContextType) => {
             const activity = turnContext.activity;
 
             // Only handle message activities
@@ -289,7 +311,7 @@ export class TeamsConnector implements GatewayConnector {
             }
 
             // Store ConversationReference for proactive messaging
-            const ref = TurnContext.getConversationReference(activity);
+            const ref = this.TurnContext.getConversationReference(activity);
 
             // Resolve bot name from the first activity's recipient
             if (!botName && activity.recipient?.name) {

@@ -6,6 +6,8 @@ overrides:
   '@codemirror/view': 6.43.0
   '@esbuild-kit/core-utils>esbuild': 0.25.4
   '@google/genai': ^1.43.0
+  # Gemini core still uses Zod 3 APIs; keep it out of the workspace-wide Zod 4 override.
+  '@google/gemini-cli-core>zod': ^3.25.76
   '@github/copilot': '>=1.0.43 <2'
   '@grpc/grpc-js': '>=1.14.4 <2'
   '@hono/node-server': '>=1.19.14 <2'
@@ -74,6 +76,7 @@ peerDependencyRules:
 allowBuilds:
   # Prebuilt binaries ship with the package; the build script is only a fallback.
   '@parcel/watcher': false
+  '@github/keytar@7.10.6': false
   '@scarf/scarf@1.4.0': false
   'es5-ext@0.10.64': false
   'esbuild@0.25.4 || 0.25.12': true
@@ -84,5 +87,7 @@ allowBuilds:
   'sharp@0.34.5': true
   'sqlite3@5.1.7': true
   'tree-sitter-bash@0.25.0': true
+  # Scalar's React wrapper uses its Vue core; vue-demi selects the installed Vue runtime.
+  'vue-demi@0.14.10': true
 patchedDependencies:
   streamdown@2.5.0: patches/streamdown@2.5.0.patch

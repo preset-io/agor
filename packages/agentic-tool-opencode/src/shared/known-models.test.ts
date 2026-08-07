@@ -8,7 +8,6 @@ describe('OpenCode known model catalog', () => {
       readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
     ) as { dependencies: Record<string, string> };
 
-    expect(manifest.dependencies['opencode-ai']).toBe(OPENCODE_VERSION);
     expect(manifest.dependencies['@opencode-ai/sdk']).toBe(OPENCODE_VERSION);
   });
 

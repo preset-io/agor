@@ -2,10 +2,7 @@
  * Conversation Converter - Pure utility for converting Gemini CLI SDK conversation format to API format
  */
 
-import type { GenAI } from '@agor/core/sdk';
-
-type Content = GenAI.Content;
-type Part = GenAI.Part;
+import type { Content, Part } from '@google/genai';
 
 /**
  * Convert SDK's ConversationRecord to Gemini Content[] format

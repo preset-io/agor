@@ -27,6 +27,83 @@ Homebrew is a convenience path for macOS/Linux users; npm remains the canonical 
 
 ---
 
+## Agentic tools
+
+Agor orchestrates agentic tools, but you only need to install the tools you use. Agor detects
+compatible command-line tools from your `PATH`; it does not silently install or modify them.
+
+After installing Agor, inspect the tools available in the current environment:
+
+```bash
+agor agentic-tools
+agor doctor
+```
+
+`agor init` prints the same readiness summary during first-run setup. A missing optional tool does
+not prevent Agor from starting.
+
+### Command-line tools
+
+Install command-line tools using the vendor-supported method you prefer (npm, Homebrew, or the
+vendor installer), then rerun `agor doctor`. Agor validates the executable rather than guessing how
+it was installed.
+
+| Agentic tool | Executable | Installation |
+| --- | --- | --- |
+| Claude Code | `claude` | [Claude Code setup](https://docs.anthropic.com/en/docs/claude-code/setup) |
+| Codex | `codex` | [Codex](https://github.com/openai/codex) |
+| OpenCode | `opencode` | [OpenCode install](https://opencode.ai/docs) |
+
+If Agor runs as a service or under another Unix user, that process must be able to execute the same
+absolute path. A tool visible in an interactive shell may not be on the daemon's `PATH`; use
+`agor doctor` from the daemon environment when diagnosing this distinction.
+
+Gemini, GitHub Copilot, and Cursor use in-process SDK integrations. Agor reports their SDK
+availability separately from credentials. The standard `agor-live` install currently includes
+Copilot support. Gemini and Cursor are optional; npm users can add their compatible SDKs beside Agor:
+
+```bash
+npm install -g agor-live@latest @google/gemini-cli-core@^0.40.0 @google/genai@^1.43.0
+```
+
+```bash
+npm install -g agor-live@latest @cursor/sdk@^1.0.23
+```
+
+Microsoft Teams gateway support is also optional:
+
+```bash
+npm install -g agor-live@latest botbuilder@^4.23.3
+```
+
+Installing the packages in the same command ensures npm places them in a location Agor can resolve.
+Afterward, run `agor doctor`. Credentials are configured in **Settings → Agentic Tools** after the
+runtime is available; Teams credentials are configured with the gateway channel.
+
+> Agor never runs Homebrew, npm, or a vendor installation script on your behalf during
+> `npm install`, startup, or `agor init`. Installation remains an explicit administrator action.
+
+---
+
+## npm reports `EMFILE` after a cache cleanup
+
+A cold npm cache makes npm fetch, cache, and extract many packages concurrently. On systems with a
+low open-file limit this can fail with `EMFILE`, `ENFILE`, or `TAR_ENTRY_ERROR`, even when the same
+install succeeds with a warm cache. Check the current limit with `ulimit -n`.
+
+Prefer raising the limit for the install. If that is unavailable, reducing npm's network concurrency
+also reduces concurrent cache writes:
+
+```bash
+npm_config_maxsockets=8 npm install -g agor-live@latest
+```
+
+Re-running the same npm command is safe; npm reuses the cache entries completed by the first attempt.
+If the error persists, collect `node -v`, `npm -v`, `ulimit -Sn`, `ulimit -Hn`, `npm cache path`,
+`df -h`, and `df -i` when reporting it.
+
+---
+
 ## Optional: Zellij (for the web terminal)
 
 Agor has a built-in web terminal that uses [Zellij](https://zellij.dev/) for persistent, multiplexed terminal sessions. The terminal is **optional**. Agor runs fine without it; if you don't have Zellij, terminal buttons in the UI will show a friendly message instead.

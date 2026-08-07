@@ -494,7 +494,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // no email, so we bucket purely by IP. Trust only Express's resolved
     // `req.ip` (which respects `app.set('trust proxy', n)`) — never
     // X-Forwarded-For directly.
-    keyGenerator: (req: Request): string => buildAuthRateLimitKey(req),
+    // express-rate-limit can resolve Feathers' Express 4 declaration copy
+    // alongside the daemon's Express 5 declarations. The runtime request is
+    // the same object; infer the middleware signature and narrow at our edge.
+    keyGenerator: (req): string => buildAuthRateLimitKey(req as unknown as Request),
     message: 'Too many authentication attempts. Please try again in 15 minutes.',
   });
 

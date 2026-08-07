@@ -11,6 +11,7 @@
 import { checkNodeVersion } from './version-check.js';
 
 checkNodeVersion();
+await import('../scripts/postinstall.js');
 
 // Use dynamic imports to ensure version check runs first
 const path = await import('node:path');

@@ -29,6 +29,7 @@ import { isDaemonRunning } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
+import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
 
 export default class Init extends Command {
   static description = 'Initialize Agor environment (creates ~/.agor/ and database)';
@@ -409,6 +410,22 @@ export default class Init extends Command {
     this.log(`   Branches: ${chalk.cyan(join(baseDir, 'worktrees'))}`);
     this.log(`   Concepts: ${chalk.cyan(join(baseDir, 'concepts'))}`);
     this.log(`   Logs: ${chalk.cyan(join(baseDir, 'logs'))}`);
+    this.log('');
+
+    this.log(chalk.bold('Agentic tools:'));
+    const tools = await diagnoseAgenticTools();
+    for (const tool of tools) {
+      const marker = tool.status === 'ready' ? chalk.green('✓') : chalk.yellow('○');
+      const detail =
+        tool.status === 'ready' ? (tool.version ?? tool.path ?? 'ready') : 'not available';
+      this.log(`   ${marker} ${tool.name}: ${detail}`);
+    }
+    const missingCount = tools.filter((tool) => tool.status !== 'ready').length;
+    if (missingCount > 0) {
+      this.log(chalk.dim(`   ${missingCount} optional agentic tool(s) are unavailable.`));
+      this.log(chalk.dim('   See: https://agor.live/guide/extended-install'));
+      this.log(chalk.dim('   Recheck at any time with: agor doctor'));
+    }
     this.log('');
 
     // Check if daemon is running

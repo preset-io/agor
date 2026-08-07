@@ -8,11 +8,11 @@
  * No transformations, no calculated fields - just pure SDK responses.
  */
 
-import type { Claude, Codex, Gemini } from '@agor/core/sdk';
+import type { Claude, Codex } from '@agor/core/sdk';
 import type { MessageID } from '@agor/core/types';
+import type { ServerGeminiFinishedEvent } from '@google/gemini-cli-core';
 
 type SDKResultMessage = Claude.SDKResultMessage;
-type ServerGeminiFinishedEvent = Gemini.ServerGeminiFinishedEvent;
 type TurnCompletedEvent = Codex.TurnCompletedEvent;
 
 // ============================================================================

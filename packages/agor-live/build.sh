@@ -299,6 +299,16 @@ echo "  → Copying UI..."
 mkdir -p "$DIST_STAGE/ui"
 cp -r "$REPO_ROOT/apps/agor-ui/dist/"* "$DIST_STAGE/ui/"
 
+# Build outputs are copied wholesale above, but declaration source maps, compiled
+# tests, incremental compiler state, and editor backups are not runtime assets.
+# Keeping them out of the CLI package reduces tar extraction/inode pressure
+# without removing declarations used by the bundled @agor packages.
+echo "  → Removing non-runtime build artifacts..."
+find "$DIST_STAGE" -type f \
+  \( -name '*.d.ts.map' -o -name '*.test.js' -o -name '*.test.cjs' -o -name '*.test.d.ts' \
+     -o -name '*.tsbuildinfo' -o -name '*.backup' \) -delete
+find "$DIST_STAGE" -type d -name test -prune -exec rm -rf {} +
+
 if [[ "$WITH_SANDPACK" == true ]]; then
   # sandpack-bundler outputs to www/ or dist/ depending on version
   SANDPACK_OUT=""
@@ -352,6 +362,11 @@ if [[ -d "$SCRIPT_DIR/dist/static/sandpack" ]]; then
   du -sh "$SCRIPT_DIR/dist/static/sandpack" | awk '{print "    Sandpack: " $1}'
 fi
 du -sh "$CLIENT_DIR/dist" | awk '{print "  @agor-live/client: " $1}'
+
+echo ""
+echo "🔍 Checking package-content budget..."
+cd "$SCRIPT_DIR"
+pnpm check:content
 
 echo ""
 echo "✅ Build complete!"

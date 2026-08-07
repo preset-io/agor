@@ -31,10 +31,6 @@ export type {
 } from '@anthropic-ai/claude-agent-sdk';
 // Claude Agent SDK - namespace export
 export * as Claude from '@anthropic-ai/claude-agent-sdk';
-// Gemini CLI SDK
-export * as Gemini from '@google/gemini-cli-core';
-// Google GenAI SDK
-export * as GenAI from '@google/genai';
 // Codex SDK - direct type exports for convenience
 export type { CodexOptions, Thread, ThreadItem } from '@openai/codex-sdk';
 // Codex SDK - namespace export

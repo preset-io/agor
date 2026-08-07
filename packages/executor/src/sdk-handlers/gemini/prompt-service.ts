@@ -13,14 +13,14 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { GenAI } from '@agor/core/sdk';
-import { Gemini } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
+import type * as GeminiTypes from '@google/gemini-cli-core';
+import type { Part } from '@google/genai';
 
-type ResumedSessionData = Gemini.ResumedSessionData;
-type Part = GenAI.Part;
+const Gemini: typeof GeminiTypes = await import('@google/gemini-cli-core');
+type ResumedSessionData = GeminiTypes.ResumedSessionData;
 
 import { shortId } from '@agor/core/db';
 import { getMcpServersForSession } from '@agor/core/mcp';
@@ -410,20 +410,24 @@ export class GeminiPromptService {
         });
         const messageBus = new Gemini.MessageBus(policyEngine);
         const scheduler = new Gemini.Scheduler({
-          config,
+          // Gemini 0.40 replaced the standalone config option with its
+          // execution-scoped AgentLoopContext. Config implements that contract.
+          context: config,
           messageBus,
           getPreferredEditor: () => undefined,
           schedulerId: `scheduler-${promptId}`,
         });
 
         // Convert pending tool calls to ToolCallRequestInfo format and execute via Scheduler
-        const toolCallRequests: Gemini.ToolCallRequestInfo[] = pendingToolCalls.map((toolCall) => ({
-          callId: toolCall.callId,
-          name: toolCall.name,
-          args: toolCall.args,
-          isClientInitiated: false,
-          prompt_id: promptId,
-        }));
+        const toolCallRequests: GeminiTypes.ToolCallRequestInfo[] = pendingToolCalls.map(
+          (toolCall) => ({
+            callId: toolCall.callId,
+            name: toolCall.name,
+            args: toolCall.args,
+            isClientInitiated: false,
+            prompt_id: promptId,
+          })
+        );
 
         console.debug(
           `[Gemini Loop] Executing ${toolCallRequests.length} tool calls via Scheduler...`
