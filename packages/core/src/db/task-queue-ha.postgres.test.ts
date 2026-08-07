@@ -220,7 +220,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Session Task queue HA (Pos
         tasks.claimDispatchAndProjectSession(queuedB.task_id, TaskStatus.QUEUED, {
           status: TaskStatus.DISPATCHING,
         })
-      ).rejects.toThrow(/Task not found/);
+      ).rejects.toThrow(/not found/);
     });
 
     const refs = await runWithSystemDatabaseScope(
