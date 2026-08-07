@@ -1376,24 +1376,17 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 <Tag
                   icon={<RobotOutlined />}
                   color="default"
+                  truncate
+                  title={modelName}
                   style={{
                     cursor: managedByPreset ? 'default' : 'pointer',
                     height: 22,
                     display: 'inline-flex',
                     alignItems: 'center',
-                    maxWidth: 180,
                   }}
                   data-testid="model-chip"
                 >
-                  <span
-                    style={{
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {modelName}
-                  </span>
+                  {modelName}
                 </Tag>
               </Popover>
             )}

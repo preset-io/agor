@@ -183,6 +183,32 @@ describe('SessionFooter', () => {
     expect(screen.getByTestId('model-chip')).toBeInTheDocument();
   });
 
+  it('Model chip truncates a long provider/model id instead of overflowing its border', () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={
+          {
+            ...baseSession,
+            agentic_tool: 'opencode',
+            model_config: {
+              model: 'kimi-for-coding-highspeed',
+              provider: 'kimi-for-coding',
+              mode: 'exact',
+            },
+          } as unknown as Session
+        }
+      />,
+      { wrapper: Wrapper }
+    );
+    const chip = screen.getByTestId('model-chip');
+    const label = 'kimi-for-coding/kimi-for-coding-highspeed';
+    // Full id stays reachable on hover even when the chip has to ellipsize.
+    expect(chip).toHaveAttribute('title', label);
+    expect(chip.style.maxWidth).toBe('100%');
+    expect(within(chip).getByText(label).style.textOverflow).toBe('ellipsis');
+  });
+
   it('Timer chip renders as a plain div when footerTimerTask is present', () => {
     const timerTask = {
       task_id: 't1',
