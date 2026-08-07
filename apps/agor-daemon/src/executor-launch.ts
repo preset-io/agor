@@ -134,11 +134,11 @@ export function createExecuteHandler(
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
     const configExecutorUser = config.execution?.executor_unix_user;
-    const sessionUnixUser = prompterUser.unix_username;
+    const prompterUnixUser = prompterUser.unix_username;
 
     const impersonationResult = resolveUnixUserForImpersonation({
       mode: unixUserMode,
-      userUnixUsername: sessionUnixUser,
+      userUnixUsername: prompterUnixUser,
       executorUnixUser: configExecutorUser,
     });
 
@@ -335,7 +335,7 @@ export function createExecuteHandler(
         // Mode-resolved identity for the execution substrate: the sudo user in
         // insulated/strict, the session's unix_username in delegated (no sudo),
         // and unset in simple. Supersedes the interim
-        // `sessionUnixUser || executorUnixUser` ordering from #2082, which
+        // `prompterUnixUser || executorUnixUser` ordering from #2082, which
         // shadowed insulated mode's configured executor identity.
         unix_user: impersonationResult.reportedUnixUser || undefined,
       },
