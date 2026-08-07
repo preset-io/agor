@@ -167,6 +167,38 @@ describe('mergeEmbeddingReuseIntoNextMetadata', () => {
 });
 
 describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
+  dbTest('backs off a saturated discovery page when no claim can progress', async ({ db }) => {
+    vi.useFakeTimers();
+    try {
+      const indexer = new KnowledgeEmbeddingIndexer(db, {
+        tenantId: 'bootstrap-tenant',
+        startupOffsetMaxMs: 0,
+        tickIntervalMs: 1_000,
+        maxIdleIntervalMs: 8_000,
+        random: () => 0.5,
+      });
+      const tick = vi.fn(async () => ({
+        candidates: 32,
+        claimed: 0,
+        indexed: 0,
+        failures: 0,
+        saturated: true,
+      }));
+      indexer.tick = tick;
+      indexer.start();
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(tick).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(tick).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(tick).toHaveBeenCalledTimes(2);
+      await indexer.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   dbTest('runs only after commit with request tenant scopes detached', async ({ db }) => {
     vi.useFakeTimers();
     try {

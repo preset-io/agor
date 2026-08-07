@@ -51,6 +51,20 @@ export interface KnowledgeEmbeddingBatchProcessorOptions {
   isShutdownRequested: () => boolean;
 }
 
+export function hasExactEmbeddingResultIds(
+  expectedIds: readonly string[],
+  results: readonly { id: string }[]
+): boolean {
+  const expected = new Set(expectedIds);
+  const actual = new Set(results.map((result) => result.id));
+  return (
+    expected.size === expectedIds.length &&
+    actual.size === results.length &&
+    actual.size === expected.size &&
+    [...expected].every((id) => actual.has(id))
+  );
+}
+
 /**
  * Tenant-scoped claim/materialize/provider/commit state machine.
  *
@@ -111,11 +125,11 @@ export class KnowledgeEmbeddingBatchProcessor {
     return created.embedding_space_id as string;
   }
 
-  private validateProviderPolicy(
+  private isProviderPolicyRunnable(
     semantic: KnowledgeSemanticPolicy,
-    apiKey: string | null
-  ): apiKey is string {
-    if (!semantic.enabled || semantic.indexing.paused || !apiKey) return false;
+    apiKeyConfigured: boolean
+  ): boolean {
+    if (!semantic.enabled || semantic.indexing.paused || !apiKeyConfigured) return false;
     if (semantic.provider !== 'openai') return false;
     if (!SUPPORTED_OPENAI_EMBEDDING_MODELS.has(semantic.model)) {
       throw new Error(`Unsupported OpenAI embedding model: ${semantic.model}`);
@@ -128,26 +142,40 @@ export class KnowledgeEmbeddingBatchProcessor {
     return true;
   }
 
+  private async ensureStorageForRunnablePolicy(tenantId: TenantID | string): Promise<boolean> {
+    if (this.pgvectorStorageReady) return true;
+
+    // This is only a routing preflight. The claim transaction locks and checks
+    // the aggregate again below, so a concurrent settings change cannot make
+    // stale policy own work. Keeping storage DDL in its own tenant transaction
+    // avoids holding the aggregate lock while storage is inspected/materialized.
+    const runnable = await this.withTenantDatabase(tenantId, async (scopedDb) => {
+      const settings = await new KnowledgeSemanticSettingsRepository(scopedDb).find();
+      return this.isProviderPolicyRunnable(settings, settings.api_key_configured);
+    });
+    if (!runnable) return false;
+
+    const capability = await this.withTenantDatabase(tenantId, (scopedDb) =>
+      this.options.ensureStorage(scopedDb)
+    );
+    if (!capability.available) {
+      throw new Error(capability.reason ?? 'Knowledge pgvector storage is unavailable');
+    }
+    this.pgvectorStorageReady = true;
+    return true;
+  }
+
   private async prepareBatch(
     tenantId: TenantID | string,
     unitIds: KnowledgeDocumentUnitID[]
   ): Promise<PreparedEmbeddingBatch | null> {
     if (unitIds.length === 0 || this.options.isShutdownRequested()) return null;
-    if (!this.pgvectorStorageReady) {
-      const capability = await this.withTenantDatabase(tenantId, (scopedDb) =>
-        this.options.ensureStorage(scopedDb)
-      );
-      if (!capability.available) {
-        throw new Error(capability.reason ?? 'Knowledge pgvector storage is unavailable');
-      }
-      this.pgvectorStorageReady = true;
-    }
-
+    if (!(await this.ensureStorageForRunnablePolicy(tenantId))) return null;
     return this.withTenantDatabase(tenantId, async (scopedDb) => {
       const settings = new KnowledgeSemanticSettingsRepository(scopedDb);
       const semantic = await settings.lockAggregateForUpdate(scopedDb);
       const apiKey = await settings.getApiKey();
-      if (!this.validateProviderPolicy(semantic, apiKey)) return null;
+      if (!apiKey || !this.isProviderPolicyRunnable(semantic, true)) return null;
       const batchSize = Math.min(
         Math.max(semantic.indexing.batch_size, 1),
         this.options.perTenantBatchSize,
@@ -215,10 +243,7 @@ export class KnowledgeEmbeddingBatchProcessor {
     results: Awaited<ReturnType<EmbeddingProvider['embed']>>
   ): Promise<number> {
     const claimById = new Map(prepared.providerClaims.map((claim) => [claim.unit_id, claim]));
-    if (
-      results.length !== prepared.providerClaims.length ||
-      results.some((row) => !claimById.has(row.id as KnowledgeDocumentUnitID))
-    ) {
+    if (!hasExactEmbeddingResultIds([...claimById.keys()], results)) {
       throw new Error('Embedding provider returned an incomplete or mismatched batch');
     }
     return this.withTenantDatabase(tenantId, async (scopedDb) => {

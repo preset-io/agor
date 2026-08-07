@@ -221,7 +221,10 @@ export class KnowledgeEmbeddingIndexer {
     let stats = emptyStats();
     try {
       stats = await this.tick();
-      this.idleRounds = stats.candidates === 0 && stats.failures === 0 ? this.idleRounds + 1 : 0;
+      // Discovery is only a hint. A full page can be wholly unclaimable (for
+      // example while its tenant policy is paused), so no durable progress is
+      // an idle round even when candidates were returned.
+      this.idleRounds = stats.claimed === 0 && stats.failures === 0 ? this.idleRounds + 1 : 0;
     } catch (error) {
       this.idleRounds += 1;
       console.warn(
@@ -234,19 +237,20 @@ export class KnowledgeEmbeddingIndexer {
       this.schedule(0, true);
       return;
     }
-    const delay = stats.saturated
-      ? jitterDelay(SATURATED_DRAIN_BASE_MS, SATURATED_DRAIN_JITTER_RATIO, this.random())
-      : stats.claimed > 0 || stats.failures > 0
-        ? jitterDelay(this.tickIntervalMs, 0.2, this.random())
-        : boundedBackoffDelay(
-            this.idleRounds,
-            {
-              baseDelayMs: this.tickIntervalMs,
-              maxDelayMs: this.maxIdleIntervalMs,
-              jitterRatio: 0.2,
-            },
-            this.random()
-          );
+    const delay =
+      stats.saturated && stats.claimed > 0
+        ? jitterDelay(SATURATED_DRAIN_BASE_MS, SATURATED_DRAIN_JITTER_RATIO, this.random())
+        : stats.claimed > 0 || stats.failures > 0
+          ? jitterDelay(this.tickIntervalMs, 0.2, this.random())
+          : boundedBackoffDelay(
+              this.idleRounds,
+              {
+                baseDelayMs: this.tickIntervalMs,
+                maxDelayMs: this.maxIdleIntervalMs,
+                jitterRatio: 0.2,
+              },
+              this.random()
+            );
     this.schedule(delay);
   }
 
