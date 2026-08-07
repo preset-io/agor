@@ -652,6 +652,10 @@ async function exchangeCodeForToken(
   // fall back to body params for public clients or providers that don't support Basic auth.
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
+    // GitHub's classic OAuth endpoint returns a form-encoded response by
+    // default. Request JSON explicitly so the response follows the OAuth token
+    // response shape parsed below.
+    Accept: 'application/json',
   };
 
   if (clientSecret) {
