@@ -49,7 +49,7 @@
   "dependencies": {
     "@agor/core": "workspace:*",
     "@opencode-ai/sdk": "1.14.33",
-    "opencode-ai": "1.14.33",
+    "opencode-ai": "1.18.13",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -61,19 +61,19 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.10",
     "@ant-design/icons": "^6.3.2",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.3",
-    "antd": "^6.5.0",
+    "antd": "^6.5.3",
     "jsdom": "^27.1.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tsx": "^4.23.0"
   },
   "peerDependencies": {
     "@ant-design/icons": "^6.3.2",
-    "antd": "^6.5.0",
-    "react": "^19.2.7"
+    "antd": "^6.5.3",
+    "react": "^19.2.8"
   },
   "peerDependenciesMeta": {
     "@ant-design/icons": {

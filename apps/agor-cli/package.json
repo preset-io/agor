@@ -18,8 +18,8 @@
     "@agor/core": "workspace:*",
     "@agor/daemon": "workspace:*",
     "@agor-live/client": "workspace:*",
-    "@oclif/core": "^4.11.14",
-    "@oclif/plugin-help": "^6.2.53",
+    "@oclif/core": "^4.13.3",
+    "@oclif/plugin-help": "^6.2.56",
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",
     "inquirer": "^12.10.0"
