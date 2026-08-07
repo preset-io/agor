@@ -49,6 +49,11 @@ export function escapeShellArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
+/** Check whether a name is a valid shell environment-variable identifier. */
+export function isValidEnvVarName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+}
+
 /**
  * Options for runAsUser
  */
@@ -272,7 +277,7 @@ export function buildSpawnArgs(
 
     const envEntries = Object.entries(env ?? {});
     for (const [key] of envEntries) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      if (!isValidEnvVarName(key)) {
         throw new Error(`buildSpawnArgs: invalid env var name: ${JSON.stringify(key)}`);
       }
     }

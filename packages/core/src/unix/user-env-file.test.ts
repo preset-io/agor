@@ -96,4 +96,18 @@ describe('prepareImpersonationEnv', () => {
       input: `ANTHROPIC_API_KEY=${escapeShellArg(secret)}\n`,
     });
   });
+
+  it('rejects invalid defined names before writing a secret env file', () => {
+    expect(() =>
+      prepareImpersonationEnv({
+        asUser: 'alice',
+        env: {
+          ANTHROPIC_API_KEY: 'sk-ant-secret-that-must-not-reach-disk',
+          'INVALID-NAME': 'value',
+        },
+      })
+    ).toThrow('prepareImpersonationEnv: invalid env var name: "INVALID-NAME"');
+
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
 });
