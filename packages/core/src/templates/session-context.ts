@@ -24,8 +24,18 @@ export async function loadAgorSystemPromptTemplate(): Promise<string> {
  *
  * This intentionally does not accept session/repo dependencies. Agents should
  * fetch live Agor context through MCP instead of embedding dynamic values here.
+ *
+ * The rendered prompt is static for the life of the process, so the disk read
+ * and render happen once and the result is shared by every tool and turn.
  */
-export async function renderAgorSystemPrompt(): Promise<string> {
-  const template = await loadAgorSystemPromptTemplate();
-  return renderTemplate(template, {});
+let cachedPrompt: Promise<string> | undefined;
+
+export function renderAgorSystemPrompt(): Promise<string> {
+  cachedPrompt ??= loadAgorSystemPromptTemplate()
+    .then((template) => renderTemplate(template, {}))
+    .catch((error) => {
+      cachedPrompt = undefined;
+      throw error;
+    });
+  return cachedPrompt;
 }
