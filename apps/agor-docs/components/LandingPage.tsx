@@ -820,7 +820,9 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
               <button
                 type="button"
                 className={styles.primaryButton}
-                onClick={() => (variant ? setIsDemoFormOpen(true) : openBetaForm('landing-hero'))}
+                onClick={() =>
+                  openBetaForm(variant ? `landing-hero-${heroVariant}` : 'landing-hero')
+                }
               >
                 {variant ? variant.ctaLabel : 'Sign up for Agor Cloud'}
               </button>
