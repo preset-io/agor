@@ -1,9 +1,8 @@
 import { spawn } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
 import { access } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { delimiter, dirname, join } from 'node:path';
-import { getAgenticToolInstallDir } from '@agor/core/agentic-integrations';
+import { delimiter, join } from 'node:path';
+import { resolveManagedAgenticToolPackageDirectory } from '@agor/core/agentic-integrations';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
 
 async function isExecutable(path: string): Promise<boolean> {
@@ -81,11 +80,13 @@ export async function resolvePackagedOpenCodeBinary(): Promise<OpenCodeCommand> 
   if (process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
     const agorVersion = process.env.AGOR_VERSION;
     if (!agorVersion) throw new Error('AGOR_VERSION is missing from the packaged Agor runtime');
-    const installDir = getAgenticToolInstallDir('opencode', agorVersion);
     try {
-      const require = createRequire(join(installDir, 'package.json'));
-      const packageJson = require.resolve('opencode-ai/package.json');
-      const wrapper = join(dirname(packageJson), 'bin', 'opencode');
+      const packageDirectory = await resolveManagedAgenticToolPackageDirectory(
+        'opencode',
+        agorVersion,
+        'opencode-ai'
+      );
+      const wrapper = join(packageDirectory, 'bin', 'opencode');
       if (!(await isExecutable(wrapper)))
         throw new Error(`managed OpenCode wrapper is not accessible: ${wrapper}`);
       const command = { executable: process.execPath, argsPrefix: [wrapper] };

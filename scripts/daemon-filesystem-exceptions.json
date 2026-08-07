@@ -1633,7 +1633,7 @@
     "operation": "call:realpath@resolveManagedAgenticToolIntegration#1",
     "owner": "daemon agentic tool runtime",
     "boundary": "operator-controlled versioned integration loading",
-    "rationale": "Canonicalizes the operator-controlled managed integration root before enforcing package path containment.",
+    "rationale": "Canonicalizes the registry-selected integration wrapper entry before importing the managed module.",
     "reviewTarget": null,
     "reviewDate": null
   },
@@ -1644,10 +1644,10 @@
     "import": "node:fs/promises",
     "symbol": "realpath",
     "local": "realpath",
-    "operation": "call:realpath@resolveManagedAgenticToolIntegration#2",
+    "operation": "call:realpath@resolveManagedAgenticToolPackageDirectory#1",
     "owner": "daemon agentic tool runtime",
     "boundary": "operator-controlled versioned integration loading",
-    "rationale": "Canonicalizes the registry-selected integration wrapper entry before enforcing containment in the managed root.",
+    "rationale": "Canonicalizes the operator-controlled managed integration root before enforcing arbitrary package containment.",
     "reviewTarget": null,
     "reviewDate": null
   },
@@ -1662,6 +1662,20 @@
     "owner": "daemon agentic tool runtime",
     "boundary": "operator-controlled versioned integration loading",
     "rationale": "Canonicalizes the registry-selected vendor SDK package directory found inside the isolated npm tree before enforcing containment in the managed root.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-175",
+    "class": "A",
+    "file": "packages/core/src/agentic-integrations.ts",
+    "import": "node:fs/promises",
+    "symbol": "realpath",
+    "local": "realpath",
+    "operation": "call:realpath@resolveManagedAgenticToolPackageDirectory#2",
+    "owner": "daemon agentic tool runtime",
+    "boundary": "operator-controlled versioned integration loading",
+    "rationale": "Canonicalizes the registry-selected integration wrapper entry used as the starting point for contained dependency discovery.",
     "reviewTarget": null,
     "reviewDate": null
   }

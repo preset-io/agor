@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { getAgenticToolInstallDir, loadManagedAgenticToolSdk } from './agentic-integrations.js';
+import {
+  getAgenticToolInstallDir,
+  loadManagedAgenticToolSdk,
+  resolveManagedAgenticToolPackageDirectory,
+} from './agentic-integrations.js';
 
 const originalEnv = {
   AGOR_AGENTIC_TOOLS_DIR: process.env.AGOR_AGENTIC_TOOLS_DIR,
@@ -110,6 +114,25 @@ describe('managed agentic tool loading', () => {
       await expect(loadManagedAgenticToolSdk('claude-code')).rejects.toThrow(
         'Run: agor install claude'
       );
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects an additional runtime package symlinked outside the managed tree',
+    async () => {
+      const packageDirectory = await createFakeManagedClaude('1.2.7');
+      await writeFile(
+        join(packageDirectory, 'index.js'),
+        "export const AGOR_INTEGRATION_VERSION = '1.2.7'; export const sdk = {};"
+      );
+      const outside = await mkdtemp(join(tmpdir(), 'agor-agentic-runtime-'));
+      temporaryDirectories.push(outside);
+      const runtimeDirectory = join(packageDirectory, '..', '..', 'opencode-ai');
+      await symlink(outside, runtimeDirectory, 'dir');
+
+      await expect(
+        resolveManagedAgenticToolPackageDirectory('claude-code', '1.2.7', 'opencode-ai')
+      ).rejects.toThrow('opencode-ai resolved outside the managed directory');
     }
   );
 

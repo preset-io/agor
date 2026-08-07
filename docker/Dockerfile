@@ -232,8 +232,8 @@ RUN node /opt/agor-live/scripts/postinstall.js \
 # ============================================================================
 # Stage 4b: Production from source (slim runtime — pinned to its git SHA)
 # ============================================================================
-# Same runtime shape as `production` (inherits base: Zellij, gh, and the
-# development OpenCode CLI), but ships agor-live built from source
+# Same runtime shape as `production` (inherits the shared base with Zellij and
+# gh, but no agentic-tool runtimes), while shipping agor-live built from source
 # instead of `npm install -g agor-live@latest`. Only the deployed artifact is
 # copied in — the multi-GB builder (source + dev deps + store) is left behind.
 #

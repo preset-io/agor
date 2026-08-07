@@ -80,6 +80,31 @@ async function findInstalledPackageDirectory(
   throw new Error(`${packageName} is missing from the managed integration tree`);
 }
 
+/** Locate one package dependency and prove its canonical path stays in the managed tool root. */
+export async function resolveManagedAgenticToolPackageDirectory(
+  tool: InstallableAgenticTool,
+  agorVersion: string,
+  packageName: string
+): Promise<string> {
+  const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
+  const installDir = getAgenticToolInstallDir(tool, agorVersion);
+  const require = createRequire(join(installDir, 'package.json'));
+  const realInstallDir = await realpath(installDir);
+  const integrationEntry = await realpath(require.resolve(definition.packageName));
+  if (!isContainedPath(realInstallDir, integrationEntry)) {
+    throw new Error('integration wrapper resolved outside the managed directory');
+  }
+  const packageDirectory = await findInstalledPackageDirectory(
+    integrationEntry,
+    packageName,
+    realInstallDir
+  );
+  if (!isContainedPath(realInstallDir, packageDirectory)) {
+    throw new Error(`${packageName} resolved outside the managed directory`);
+  }
+  return packageDirectory;
+}
+
 /** Resolve and validate both wrapper and vendor code inside one managed tree. */
 export async function resolveManagedAgenticToolIntegration<T>(
   tool: InstallableAgenticTool,
@@ -88,19 +113,8 @@ export async function resolveManagedAgenticToolIntegration<T>(
   const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
   const installDir = getAgenticToolInstallDir(tool, agorVersion);
   const require = createRequire(join(installDir, 'package.json'));
-  const realInstallDir = await realpath(installDir);
   const integrationEntry = await realpath(require.resolve(definition.packageName));
-  const vendorDirectory = await findInstalledPackageDirectory(
-    integrationEntry,
-    definition.vendorPackage,
-    realInstallDir
-  );
-  if (
-    !isContainedPath(realInstallDir, integrationEntry) ||
-    !isContainedPath(realInstallDir, vendorDirectory)
-  ) {
-    throw new Error('integration or vendor dependency resolved outside the managed directory');
-  }
+  await resolveManagedAgenticToolPackageDirectory(tool, agorVersion, definition.vendorPackage);
   return import(pathToFileURL(integrationEntry).href) as Promise<ManagedAgenticToolIntegration<T>>;
 }
 
