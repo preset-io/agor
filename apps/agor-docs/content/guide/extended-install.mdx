@@ -93,25 +93,36 @@ daemon and its executors run as different users.
 ### Upgrading
 
 Managed integrations are installed per Agor version, so upgrading Agor leaves the previous version's
-integrations behind and the new version starts with none. Reinstall the same set with `--restore`:
+integrations behind and the new version starts with none. Reinstall the tools you use, naming them
+explicitly, and confirm the result:
 
 ```bash
 npm install -g agor-live@latest
+agor install claude codex
+agor doctor
+```
+
+Naming the tools is the form to script against. It depends on nothing Agor recorded previously, so
+it behaves identically on a fresh machine, after skipping several versions, and in an
+immutable-infrastructure image built from scratch.
+
+On a machine that already had integrations installed, `--restore` reinstalls whatever the previous
+version had, as a convenience for interactive upgrades:
+
+```bash
 agor install --restore
 ```
 
-`--restore` reads the tools you had on your previous version and installs them at the new one. On a
-machine with nothing installed yet it reports that there is nothing to restore and exits
-successfully, so it is safe in unattended upgrade scripts.
+On a machine with nothing installed it reports that there is nothing to restore and exits
+successfully, so it is safe to leave in an unattended script — but a fresh or rebuilt host has no
+previous version to read, so provisioning must still name its tools.
 
 Integrations from older versions are kept until you remove them. Reclaim that space with `--prune`,
 which deletes managed directories belonging to every version except the one you are running:
 
 ```bash
-agor install --restore --prune
+agor install --prune
 ```
-
-Verify the result at any time with `agor doctor`.
 
 Microsoft Teams gateway support remains optional and separate from agentic tools:
 
