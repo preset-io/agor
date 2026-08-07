@@ -193,10 +193,12 @@ describe('OpenCodeTool abort cleanup', () => {
 });
 
 describe('OpenCodeTool prompt variants', () => {
-  it('submits the configured Agor effort as the native prompt variant', async () => {
-    await expect(submittedPrompt('max')).resolves.toMatchObject({
-      body: { variant: 'max' },
-    });
+  it('submits the configured Agor effort as the native prompt variant alongside the Agor system prompt', async () => {
+    const request = await submittedPrompt('max');
+
+    expect(request?.body).toMatchObject({ variant: 'max' });
+    expect(request?.body?.system).toContain('Agor Session Context');
+    expect(request?.body?.system).toContain('agor_sessions_get_current_context');
   });
 
   it('admits an effort exposed as a native model variant', async () => {
@@ -219,9 +221,10 @@ describe('OpenCodeTool prompt variants', () => {
     expect((error as Error).message).not.toContain('must-not-cross');
   });
 
-  it('omits the native prompt variant when Agor effort is unset', async () => {
+  it('omits the native prompt variant but still submits the Agor system prompt when effort is unset', async () => {
     const request = await submittedPrompt();
 
     expect(request?.body).not.toHaveProperty('variant');
+    expect(request?.body?.system).toContain('Agor Session Context');
   });
 });

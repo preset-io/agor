@@ -8,6 +8,7 @@
 
 import type { SpawnOptions } from 'node:child_process';
 import type { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import {
@@ -897,11 +898,16 @@ export class OpenCodeTool {
       new Error(
         `OpenCode prompt failed for ${context.provider}/${context.model}. Reconnect ${context.provider} in OpenCode settings or choose another provider/model.`
       );
+    // Carry the shared Agor orientation on every turn. `system` appends to
+    // OpenCode's provider baseline; the managed agent's own prompt would
+    // replace it.
+    const agorSystemPrompt = await renderAgorSystemPrompt();
     const request = {
       path: { id: context.opencodeSessionId },
       signal: input.signal,
       body: {
         agent: AGOR_MANAGED_AGENT,
+        system: agorSystemPrompt,
         parts: [{ type: 'text' as const, text: input.prompt }],
         ...(input.effort ? { variant: input.effort } : {}),
         ...(context.model && context.provider
