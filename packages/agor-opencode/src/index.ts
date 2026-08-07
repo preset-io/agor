@@ -1,0 +1,4 @@
+/** Agor-managed, release-aligned opencode integration. */
+export const AGOR_INTEGRATION_VERSION = '0.24.0';
+export const VENDOR_PACKAGE = '@opencode-ai/sdk';
+export * as sdk from '@opencode-ai/sdk';

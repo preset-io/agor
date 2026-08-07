@@ -40,7 +40,8 @@
     "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check",
     "check:multitenancy-boundaries": "node scripts/check-multitenancy-boundaries.mjs",
     "check:daemon-filesystem-boundaries": "node scripts/check-daemon-filesystem-boundaries.mjs",
-    "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs"
+    "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs",
+    "check:agentic-tool-packages": "node scripts/check-agentic-tool-packages.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.6",

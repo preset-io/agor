@@ -7,6 +7,7 @@
  * the SDK call fails.
  */
 
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
@@ -99,7 +100,7 @@ export class CursorModelsService {
     }
 
     try {
-      const { Cursor } = await import('@cursor/sdk');
+      const { Cursor } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
       const dynamic = await withTimeout(
         Cursor.models.list({ apiKey: resolution.apiKey }),
         CURSOR_MODELS_TIMEOUT_MS,

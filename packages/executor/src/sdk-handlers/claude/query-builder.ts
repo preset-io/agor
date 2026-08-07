@@ -5,19 +5,18 @@
  * Manages MCP server configuration, resume/fork/spawn logic, and working directory validation.
  */
 
-import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import { validateDirectory } from '@agor/core/lib/validation';
-import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import { isGatewaySession } from '@agor/core/types';
+import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 
-const { query } = Claude;
-type PermissionMode = Claude.PermissionMode;
-type Options = Claude.Options;
+type PermissionMode = ClaudeSdk.PermissionMode;
+type Options = ClaudeSdk.Options;
 
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
@@ -44,37 +43,6 @@ export function formatListForLog(items: string[], maxItems = 5): string {
     return items.join(', ');
   }
   return `${items.slice(0, maxItems).join(', ')} +${items.length - maxItems} more`;
-}
-
-/**
- * Get path to Claude Code executable
- * Uses `which claude` to find it in PATH
- */
-function getClaudeCodePath(): string {
-  try {
-    const path = execSync('which claude', { encoding: 'utf-8' }).trim();
-    if (path) return path;
-  } catch {
-    // which failed, try common paths
-  }
-
-  // Fallback to common installation paths
-  const commonPaths = [
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-    `${process.env.HOME}/.nvm/versions/node/v20.19.4/bin/claude`,
-  ];
-
-  for (const path of commonPaths) {
-    try {
-      execSync(`test -x "${path}"`, { encoding: 'utf-8' });
-      return path;
-    } catch {}
-  }
-
-  throw new Error(
-    'Claude Code executable not found. Install with: npm install -g @anthropic-ai/claude-code'
-  );
 }
 
 /**
@@ -220,7 +188,6 @@ export async function setupQuery(
   }
 
   // Get Claude Code path
-  const claudeCodePath = getClaudeCodePath();
 
   // Buffer to capture stderr for better error messages
   let stderrBuffer = '';
@@ -239,7 +206,6 @@ export async function setupQuery(
     // Defensive copy — the const is readonly but the SDK option is typed `string[]`.
     disallowedTools: [...CLAUDE_CODE_DISALLOWED_TOOLS],
     model, // Use configured model or default
-    pathToClaudeCodeExecutable: claudeCodePath,
     // Allow access to common directories outside CWD (e.g., /tmp)
     additionalDirectories: ['/tmp', '/var/tmp'],
     // Enable token-level streaming (yields partial messages as tokens arrive)
@@ -594,7 +560,8 @@ export async function setupQuery(
 
   let result: AsyncGenerator<unknown>;
   try {
-    result = query({
+    const Claude = await loadManagedAgenticToolSdk<typeof ClaudeSdk>('claude-code');
+    result = Claude.query({
       prompt: asUserMessageIterable(prompt),
       // queryOptions uses Record<string,unknown> to accommodate apiKey, which is valid at
       // runtime but not in the public Options type.
@@ -603,7 +570,6 @@ export async function setupQuery(
   } catch (syncError) {
     // This is rare - SDK usually returns AsyncGenerator that throws later
     console.error(`❌ CRITICAL: query() threw synchronous error (very unusual):`, syncError);
-    console.error(`   Claude Code path: ${claudeCodePath}`);
     console.error(`   CWD: ${cwd}`);
     console.error(`   API key set: ${deps.apiKey ? 'YES' : 'NO'}`);
     console.error(`   Resume session: ${queryOptions.resume || 'none (fresh session)'}`);

@@ -29,59 +29,70 @@ Homebrew is a convenience path for macOS/Linux users; npm remains the canonical 
 
 ## Agentic tools
 
-Agor orchestrates agentic tools, but you only need to install the tools you use. Agor detects
-compatible command-line tools from your `PATH`; it does not silently install or modify them.
+Agor keeps its base installation small by installing only the agentic tools you choose. Each tool is
+an isolated, version-aligned package with the exact same version as Agor. Those packages pin the vendor SDK and the matching runtime expected
+by that SDK, so Agor never guesses whether an unrelated executable from your shell is compatible.
 
-After installing Agor, inspect the tools available in the current environment:
+The normal setup remains:
+
+```bash
+npm install -g agor-live@latest
+agor init
+```
+
+During `agor init`, select any agentic tools you want installed. The choice is explicit: the original
+npm installation never downloads optional runtimes, and initialization shows the selection before
+running npm. You can skip everything and add tools later:
+
+```bash
+agor install claude
+agor install claude codex
+agor install gemini
+```
+
+`agor install` uses your configured npm registry, proxy, authentication, and integrity verification,
+but installs into Agor's private runtime directory rather than changing global npm state. Installation
+is staged and swapped into place only after the exact Agor package version is verified. It does not
+replace Claude, Codex, or other tools you may already use from your terminal.
+
+Inspect the managed integrations at any time:
 
 ```bash
 agor agentic-tools
 agor doctor
 ```
 
-`agor init` prints the same readiness summary during first-run setup. A missing optional tool does
-not prevent Agor from starting.
+An absent integration does not prevent Agor from starting. Selecting that tool for a session produces
+an actionable error with the corresponding `agor install` command.
 
-### Command-line tools
-
-Install command-line tools using the vendor-supported method you prefer (npm, Homebrew, or the
-vendor installer), then rerun `agor doctor`. Agor validates the executable rather than guessing how
-it was installed.
-
-| Agentic tool | Executable | Installation |
+| Agentic tool | Install command | Managed package |
 | --- | --- | --- |
-| Claude Code | `claude` | [Claude Code setup](https://docs.anthropic.com/en/docs/claude-code/setup) |
-| Codex | `codex` | [Codex](https://github.com/openai/codex) |
-| OpenCode | `opencode` | [OpenCode install](https://opencode.ai/docs) |
+| Claude Code | `agor install claude` | `@agor/claude` |
+| Codex | `agor install codex` | `@agor/codex` |
+| Gemini | `agor install gemini` | `@agor/gemini` |
+| GitHub Copilot | `agor install copilot` | `@agor/copilot` |
+| OpenCode | `agor install opencode` | `@agor/opencode` |
+| Cursor | `agor install cursor` | `@agor/cursor` |
 
-If Agor runs as a service or under another Unix user, that process must be able to execute the same
-absolute path. A tool visible in an interactive shell may not be on the daemon's `PATH`; use
-`agor doctor` from the daemon environment when diagnosing this distinction.
-
-Gemini, GitHub Copilot, and Cursor use in-process SDK integrations. Agor reports their SDK
-availability separately from credentials. The standard `agor-live` install currently includes
-Copilot support. Gemini and Cursor are optional; npm users can add their compatible SDKs beside Agor:
+For automated images and CI, run the same noninteractive commands after installing Agor:
 
 ```bash
-npm install -g agor-live@latest @google/gemini-cli-core@^0.40.0 @google/genai@^1.43.0
+npm install -g agor-live@latest
+agor install claude codex
 ```
 
-```bash
-npm install -g agor-live@latest @cursor/sdk@^1.0.23
-```
+Set `AGOR_AGENTIC_TOOLS_DIR` when integrations must live in an administrator-provisioned shared
+read-only location. Executors receive the resolved absolute directory across Agor's supported Unix
+identity modes; every executing user must be able to traverse and read that directory.
 
-Microsoft Teams gateway support is also optional:
+Microsoft Teams gateway support remains optional and separate from agentic tools:
 
 ```bash
 npm install -g agor-live@latest botbuilder@^4.23.3
 ```
 
-Installing the packages in the same command ensures npm places them in a location Agor can resolve.
-Afterward, run `agor doctor`. Credentials are configured in **Settings → Agentic Tools** after the
-runtime is available; Teams credentials are configured with the gateway channel.
-
-> Agor never runs Homebrew, npm, or a vendor installation script on your behalf during
-> `npm install`, startup, or `agor init`. Installation remains an explicit administrator action.
+Credentials are configured in **Settings → Agentic Tools** after the runtime is installed; Teams
+credentials are configured with the gateway channel.
 
 ---
 

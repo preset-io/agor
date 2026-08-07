@@ -1594,5 +1594,33 @@
     "rationale": "Runs only the resolved operator-installed OpenCode executable with the fixed --version argument to enforce compatibility with Agor's pinned SDK; no tenant-controlled command or arguments are accepted.",
     "reviewTarget": null,
     "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-170",
+    "class": "A",
+    "file": "packages/core/src/agentic-integrations.ts",
+    "import": "<non-literal-dynamic-import>",
+    "symbol": "<expression>",
+    "local": "<dynamic>",
+    "operation": "review:dynamic-import@loadManagedAgenticToolSdk#1",
+    "owner": "daemon agentic tool runtime",
+    "boundary": "operator-controlled versioned integration loading",
+    "rationale": "Loads the compile-time registry-selected vendor SDK in source-development mode; the specifier cannot originate from a tenant or request.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-171",
+    "class": "A",
+    "file": "packages/core/src/agentic-integrations.ts",
+    "import": "<non-literal-dynamic-import>",
+    "symbol": "<expression>",
+    "local": "<dynamic>",
+    "operation": "review:dynamic-import@loadManagedAgenticToolSdk#2",
+    "owner": "daemon agentic tool runtime",
+    "boundary": "operator-controlled versioned integration loading",
+    "rationale": "Loads an entry resolved inside the operator-controlled, version-scoped managed integration directory after path-containment validation; no tenant or request path is accepted.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

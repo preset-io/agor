@@ -4,11 +4,12 @@
  * Since we now use native SDK modes directly, this is a simple 1:1 mapping.
  */
 
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import type { GeminiPermissionMode } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 
-const Gemini: typeof GeminiTypes = await import('@google/gemini-cli-core');
+const Gemini = await loadManagedAgenticToolSdk<typeof GeminiTypes>('gemini');
 
 /**
  * The default Gemini permission mode, used for fallback.

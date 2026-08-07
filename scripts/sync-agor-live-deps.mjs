@@ -36,6 +36,9 @@ const writeJson = (relPath, data) =>
 
 const target = readJson(targetManifest);
 const targetDeps = { ...(target.dependencies ?? {}) };
+// This is the only dependency owned directly by the publishable wrapper.
+// Everything else is derived from the copied workspace packages below.
+const targetOnlyDependencies = new Set(['@agor-live/client']);
 
 const aggregated = new Map();
 const conflicts = [];
@@ -64,6 +67,12 @@ if (conflicts.length) {
 }
 
 const updates = [];
+for (const dep of Object.keys(targetDeps)) {
+  if (!targetOnlyDependencies.has(dep) && !aggregated.has(dep)) {
+    updates.push({ dep, from: targetDeps[dep], to: undefined });
+    if (mode === 'write') delete targetDeps[dep];
+  }
+}
 for (const [dep, version] of aggregated) {
   const current = targetDeps[dep];
   if (current !== version) {
@@ -78,7 +87,7 @@ if (mode === 'check') {
   if (updates.length) {
     console.error('packages/agor-live/package.json is missing dependency updates:');
     for (const update of updates) {
-      console.error(` - ${update.dep}: expected ${update.to}, found ${update.from ?? '∅'}`);
+      console.error(` - ${update.dep}: expected ${update.to ?? '∅'}, found ${update.from ?? '∅'}`);
     }
     console.error('Run pnpm sync:agor-live-deps to fix.');
     process.exit(1);
@@ -102,5 +111,5 @@ writeJson(targetManifest, target);
 
 console.log(`Updated ${targetManifest} with ${updates.length} change(s):`);
 for (const update of updates) {
-  console.log(` - ${update.dep}: ${update.from ?? '∅'} -> ${update.to}`);
+  console.log(` - ${update.dep}: ${update.from ?? '∅'} -> ${update.to ?? '∅'}`);
 }

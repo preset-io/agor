@@ -49,7 +49,8 @@ export default defineConfig({
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sessions/index': 'src/sessions/index.ts', // Session config defaults resolution
     'coordination/index': 'src/coordination/index.ts', // Pure distributed-work identity and delay mechanics
-    'sdk/index': 'src/sdk/index.ts', // Always-bundled AI SDK re-exports (Claude, Codex)
+    'sdk/index': 'src/sdk/index.ts', // Legacy always-bundled SDK re-exports (Claude, Codex)
+    'agentic-integrations': 'src/agentic-integrations.ts', // Managed agentic-tool package registry and loader
     'client/claude-system-suppression': 'src/client/claude-system-suppression.ts', // Browser-safe Claude system event suppression rules
     'tools/mcp/http-headers': 'src/tools/mcp/http-headers.ts', // MCP custom HTTP header utilities
     'tools/mcp/auth-secrets': 'src/tools/mcp/auth-secrets.ts', // MCP auth secret redaction/restoration utilities
@@ -71,6 +72,10 @@ export default defineConfig({
   dts: false,
   clean: process.env.TSUP_CLEAN !== 'false',
   splitting: false,
+  // These pure-JS, high-fanout feature dependencies are compiled into the
+  // copied core artifact. Keeping them out of the consumer dependency graph
+  // materially lowers cold-cache npm extraction concurrency and inode use.
+  noExternal: [/^analytics$/, /^open$/, /^@octokit\/(auth-app|rest)$/],
   shims: true, // Enable shims for import.meta.url in CJS builds
   // Don't bundle agent SDKs and Node.js-only dependencies
   external: [

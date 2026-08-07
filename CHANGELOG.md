@@ -31,7 +31,17 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 ## Unreleased
 
+### Features
+
+- **Version-aligned agentic tool installs** — keeps the base npm install lean and adds explicit `agor install <tool>` / `agor init` flows for isolated Claude, Codex, Copilot, Gemini, OpenCode, and Cursor integrations. ([#2201](https://github.com/preset-io/agor/pull/2201))
+
+### Fixes
+
+- **Reliable cold-cache global installs** — removes deprecated transitive trees and bundled agent runtimes from `agor-live`, bundles selected high-fanout pure-JS dependencies, and adds package-content and low-file-descriptor installation checks. ([#2201](https://github.com/preset-io/agor/pull/2201))
+
 ### Chores
+
+- **Prepare agor-live 0.24.0** — bumps `agor-live`, `@agor-live/client`, and the version-aligned `@agor/*` integration packages together. ([#2201](https://github.com/preset-io/agor/pull/2201))
 
 - **Prepare agor-live patch release** — bumps `agor-live` and `@agor-live/client` to 0.23.2 and keeps the standalone agor-live package lock in sync. ([#1857](https://github.com/preset-io/agor/pull/1857))
 - **Refresh Claude tooling and agor-live patch versions** — bumps Claude Code CLI, Claude Agent SDK, and Anthropic SDK pins; adds Claude Sonnet 5 to the Claude model fallback catalog; and bumps `agor-live` / `@agor-live/client` to 0.23.1. ([#1727](https://github.com/preset-io/agor/pull/1727))

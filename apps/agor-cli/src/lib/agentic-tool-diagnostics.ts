@@ -1,13 +1,20 @@
-import { spawn } from 'node:child_process';
-import { access } from 'node:fs/promises';
-import { delimiter, isAbsolute, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { assertOpenCodeBinaryCompatibility } from '@agor/agentic-tool-opencode/runtime';
+import { createRequire } from 'node:module';
+import { isAbsolute, join, relative, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import {
+  AGENTIC_TOOL_INTEGRATIONS,
+  getAgenticToolInstallDir,
+  type InstallableAgenticTool,
+} from '@agor/core/agentic-integrations';
+import {
+  getAgenticToolInstallSlug,
+  readManagedIntegrationManifest,
+} from './agentic-tool-integrations.js';
 
 export type AgenticToolDiagnostic = {
-  id: string;
+  id: InstallableAgenticTool;
   name: string;
-  kind: 'executable' | 'package';
+  kind: 'managed-integration';
   status: 'ready' | 'missing' | 'unusable';
   path?: string;
   version?: string;
@@ -16,117 +23,69 @@ export type AgenticToolDiagnostic = {
 };
 
 const DOCS_BASE = 'https://agor.live/guide/extended-install';
-const EXECUTABLES = [
-  { id: 'claude-code', name: 'Claude Code', commands: ['claude'] },
-  { id: 'codex', name: 'Codex', commands: ['codex'] },
-  { id: 'opencode', name: 'OpenCode', commands: ['opencode'] },
-] as const;
 
-const PACKAGES = [
-  { id: 'copilot', name: 'GitHub Copilot', packageName: '@github/copilot-sdk' },
-  { id: 'gemini', name: 'Gemini', packageName: '@google/gemini-cli-core' },
-  { id: 'cursor', name: 'Cursor SDK', packageName: '@cursor/sdk' },
-] as const;
-
-async function findExecutable(command: string, pathValue = process.env.PATH ?? '') {
-  const extensions =
-    process.platform === 'win32' ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';') : [''];
-  for (const directory of pathValue.split(delimiter).filter(Boolean)) {
-    for (const extension of extensions) {
-      const candidate = join(directory, `${command}${extension.toLowerCase()}`);
-      try {
-        await access(candidate);
-        return candidate;
-      } catch {
-        // Continue searching PATH.
-      }
-    }
-  }
-  return undefined;
-}
-
-async function readVersion(executable: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(executable, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error('version check timed out'));
-    }, 5000);
-    child.stdout.on('data', (chunk) => {
-      output += String(chunk);
-    });
-    child.stderr.on('data', (chunk) => {
-      output += String(chunk);
-    });
-    child.once('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`version check exited with code ${code}`));
-      else resolve(output.trim().split(/\r?\n/, 1)[0] || 'version unknown');
-    });
-  });
-}
-
-async function diagnoseExecutable(
-  tool: (typeof EXECUTABLES)[number]
+async function diagnoseManagedIntegration(
+  tool: InstallableAgenticTool,
+  agorVersion: string
 ): Promise<AgenticToolDiagnostic> {
-  const executable = await findExecutable(tool.commands[0]);
-  if (!executable) {
+  const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
+  const installDir = getAgenticToolInstallDir(tool, agorVersion);
+  const manifest = await readManagedIntegrationManifest(tool, agorVersion);
+  if (!manifest) {
     return {
-      id: tool.id,
-      name: tool.name,
-      kind: 'executable',
+      id: tool,
+      name: definition.displayName,
+      kind: 'managed-integration',
       status: 'missing',
+      detail: `Run: agor install ${getAgenticToolInstallSlug(tool)}`,
       docsUrl: DOCS_BASE,
     };
   }
+
   try {
-    const version =
-      tool.id === 'opencode'
-        ? await assertOpenCodeBinaryCompatibility(executable)
-        : await readVersion(executable);
+    const require = createRequire(join(installDir, 'package.json'));
+    const entry = require.resolve(definition.packageName);
+    const relativeEntry = relative(installDir, entry);
+    if (
+      relativeEntry.startsWith(`..${sep}`) ||
+      relativeEntry === '..' ||
+      isAbsolute(relativeEntry)
+    ) {
+      throw new Error('integration resolved outside its managed directory');
+    }
+    const integration = (await import(pathToFileURL(entry).href)) as {
+      AGOR_INTEGRATION_VERSION?: string;
+      sdk?: unknown;
+    };
+    if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdk) {
+      throw new Error('integration module failed its version check');
+    }
     return {
-      id: tool.id,
-      name: tool.name,
-      kind: 'executable',
+      id: tool,
+      name: definition.displayName,
+      kind: 'managed-integration',
       status: 'ready',
-      path: isAbsolute(executable) ? executable : undefined,
-      version,
+      path: installDir,
+      version: manifest.packageVersion,
       docsUrl: DOCS_BASE,
     };
   } catch (error) {
     return {
-      id: tool.id,
-      name: tool.name,
-      kind: 'executable',
+      id: tool,
+      name: definition.displayName,
+      kind: 'managed-integration',
       status: 'unusable',
-      path: executable,
-      detail: error instanceof Error ? error.message : String(error),
+      path: installDir,
+      detail: `${error instanceof Error ? error.message : String(error)}. Run: agor install ${getAgenticToolInstallSlug(tool)}`,
       docsUrl: DOCS_BASE,
     };
   }
 }
 
-async function diagnosePackage(tool: (typeof PACKAGES)[number]): Promise<AgenticToolDiagnostic> {
-  try {
-    const packageJson = import.meta.resolve(tool.packageName);
-    return {
-      id: tool.id,
-      name: tool.name,
-      kind: 'package',
-      status: 'ready',
-      path: packageJson.startsWith('file:') ? fileURLToPath(packageJson) : packageJson,
-      docsUrl: DOCS_BASE,
-    };
-  } catch {
-    return { id: tool.id, name: tool.name, kind: 'package', status: 'missing', docsUrl: DOCS_BASE };
-  }
-}
-
-export async function diagnoseAgenticTools(): Promise<AgenticToolDiagnostic[]> {
-  return Promise.all([...EXECUTABLES.map(diagnoseExecutable), ...PACKAGES.map(diagnosePackage)]);
+export async function diagnoseAgenticTools(agorVersion: string): Promise<AgenticToolDiagnostic[]> {
+  return Promise.all(
+    (Object.keys(AGENTIC_TOOL_INTEGRATIONS) as InstallableAgenticTool[]).map((tool) =>
+      diagnoseManagedIntegration(tool, agorVersion)
+    )
+  );
 }

@@ -2,9 +2,6 @@ import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock minimal dependencies
-vi.mock('node:child_process', () => ({
-  execSync: vi.fn().mockReturnValue('/usr/bin/claude\n'),
-}));
 vi.mock('@agor/core/lib/validation', () => ({
   validateDirectory: vi.fn().mockResolvedValue(undefined),
 }));
@@ -12,7 +9,7 @@ vi.mock('@agor/core/db', () => ({
   // shortId is used in log lines inside query-builder; passthrough mock.
   shortId: vi.fn((id: string) => id),
 }));
-vi.mock('@agor/core/sdk', () => ({ Claude: { query: vi.fn() } }));
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
 }));
@@ -38,8 +35,8 @@ vi.mock('../base/permission-hooks.js', () => ({
 }));
 
 import { getMcpServersForSession } from '@agor/core/mcp';
-import { Claude } from '@agor/core/sdk';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
+import * as Claude from '@anthropic-ai/claude-agent-sdk';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 

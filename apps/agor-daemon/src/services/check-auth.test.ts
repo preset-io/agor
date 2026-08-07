@@ -1,6 +1,6 @@
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
-import { Claude } from '@agor/core/sdk';
+import * as Claude from '@anthropic-ai/claude-agent-sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCheckAuthService } from './check-auth';
@@ -15,11 +15,7 @@ vi.mock('@agor/core/config', async () => {
   };
 });
 
-vi.mock('@agor/core/sdk', () => ({
-  Claude: {
-    query: vi.fn(),
-  },
-}));
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }));
 
 vi.mock('../utils/executor-codex-auth.js', async () => {
   const actual = await vi.importActual<typeof import('../utils/executor-codex-auth.js')>(

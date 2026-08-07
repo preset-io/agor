@@ -10,7 +10,9 @@ export default class AgenticTools extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(AgenticTools);
-    const diagnostics = await diagnoseAgenticTools();
+    const diagnostics = await diagnoseAgenticTools(
+      process.env.AGOR_INTEGRATION_VERSION ?? this.config.version
+    );
     if (flags.json) {
       this.log(JSON.stringify({ agenticTools: diagnostics }, null, 2));
       return;

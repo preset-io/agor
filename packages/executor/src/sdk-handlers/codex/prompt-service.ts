@@ -26,16 +26,17 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import { getMcpServersForSession } from '@agor/core/mcp';
 import type { CodexOptions, Thread, ThreadItem } from '@agor/core/sdk';
-import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { CodexSandboxMode, ContextUsageSnapshot, EffortLevel } from '@agor/core/types';
 import { getDefaultPermissionMode, isGatewaySession } from '@agor/core/types';
 import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
+import type * as CodexSdk from '@openai/codex-sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -252,7 +253,7 @@ export type CodexStreamEvent =
     };
 
 export class CodexPromptService {
-  private codex?: InstanceType<typeof Codex.Codex>;
+  private codex?: InstanceType<typeof CodexSdk.Codex>;
   private lastApiKey: string | null = null;
   private lastBaseUrl: string | null = null;
   private lastClientFingerprint: string | null = null;
@@ -397,10 +398,10 @@ export class CodexPromptService {
     apiKey: string | undefined,
     baseUrl: string | undefined,
     config: CodexConfigObject | undefined
-  ): ConstructorParameters<typeof Codex.Codex>[0] {
+  ): ConstructorParameters<typeof CodexSdk.Codex>[0] {
     const useSubscription = this.useNativeAuth && !apiKey;
 
-    const options: ConstructorParameters<typeof Codex.Codex>[0] = {
+    const options: ConstructorParameters<typeof CodexSdk.Codex>[0] = {
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
       ...(config ? { config } : {}),
@@ -505,7 +506,7 @@ export class CodexPromptService {
    * keeps abandoned app-server/MCP transports from overlapping the new client.
    */
   private async closeCodexClient(
-    client: InstanceType<typeof Codex.Codex> | undefined
+    client: InstanceType<typeof CodexSdk.Codex> | undefined
   ): Promise<void> {
     if (!client) return;
     const candidate = client as unknown as {
@@ -524,15 +525,16 @@ export class CodexPromptService {
   }
 
   private async replaceCodexClient(
-    options: ConstructorParameters<typeof Codex.Codex>[0]
+    options: ConstructorParameters<typeof CodexSdk.Codex>[0]
   ): Promise<void> {
     const previous = this.codex;
     this.codex = undefined;
     await this.closeCodexClient(previous);
+    const Codex = await loadManagedAgenticToolSdk<typeof CodexSdk>('codex');
     this.codex = new Codex.Codex(options);
   }
 
-  private getCodexClient(): InstanceType<typeof Codex.Codex> {
+  private getCodexClient(): InstanceType<typeof CodexSdk.Codex> {
     if (!this.codex) {
       throw new Error('Codex SDK client was not initialized before use');
     }

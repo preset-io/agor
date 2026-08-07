@@ -1,0 +1,39 @@
+{
+  "name": "@agor/copilot",
+  "version": "0.24.0",
+  "description": "Version-aligned copilot agentic tool integration for Agor",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup && tsc --emitDeclarationOnly --declaration --declarationMap --noEmit false --incremental false",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "check:pack": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "0.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "BUSL-1.1"
+}

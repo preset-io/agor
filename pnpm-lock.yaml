@@ -170,27 +170,9 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@aws-sdk/client-s3':
-        specifier: ^3.1101.0
-        version: 3.1101.0
-      '@aws-sdk/lib-storage':
-        specifier: ^3.1101.0
-        version: 3.1101.0(@aws-sdk/client-s3@3.1101.0)
-      '@github/copilot-sdk':
-        specifier: ^0.2.2
-        version: 0.2.2
       '@modelcontextprotocol/sdk':
         specifier: '>=1.29.0 <2'
         version: 1.29.0(supports-color@8.1.1)(zod@4.4.3)
-      '@octokit/auth-app':
-        specifier: ^8.2.0
-        version: 8.2.0
-      '@octokit/rest':
-        specifier: ^22.0.1
-        version: 22.0.1
-      '@types/mdast':
-        specifier: ^4.0.4
-        version: 4.0.4
       compression:
         specifier: ^1.8.1
         version: 1.8.1(supports-color@8.1.1)
@@ -221,27 +203,12 @@ importers:
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
-      mdast-util-gfm:
-        specifier: ^3.1.0
-        version: 3.1.0(supports-color@8.1.1)
-      mdast-util-to-markdown:
-        specifier: ^2.1.2
-        version: 2.1.2
       multer:
         specifier: ^2.2.0
         version: 2.2.0
-      remark-gfm:
-        specifier: ^4.0.1
-        version: 4.0.1(supports-color@8.1.1)
-      remark-parse:
-        specifier: ^11.0.0
-        version: 11.0.0(supports-color@8.1.1)
       socket.io:
         specifier: ^4.8.3
         version: 4.8.3(supports-color@8.1.1)
-      unified:
-        specifier: ^11.0.5
-        version: 11.0.5
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.197
@@ -249,9 +216,24 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.109.0
         version: 0.109.0(zod@4.4.3)
+      '@aws-sdk/client-s3':
+        specifier: ^3.1101.0
+        version: 3.1101.0
+      '@aws-sdk/lib-storage':
+        specifier: ^3.1101.0
+        version: 3.1101.0(@aws-sdk/client-s3@3.1101.0)
       '@cursor/sdk':
         specifier: ^1.0.23
         version: 1.0.23
+      '@github/copilot-sdk':
+        specifier: ^0.2.2
+        version: 0.2.2
+      '@octokit/auth-app':
+        specifier: ^8.2.0
+        version: 8.2.0
+      '@octokit/rest':
+        specifier: ^22.0.1
+        version: 22.0.1
       '@types/compression':
         specifier: ^1.8.1
         version: 1.8.1
@@ -264,6 +246,9 @@ importers:
       '@types/jsonwebtoken':
         specifier: ^9.0.10
         version: 9.0.10
+      '@types/mdast':
+        specifier: ^4.0.4
+        version: 4.0.4
       '@types/multer':
         specifier: ^2.2.0
         version: 2.2.0
@@ -276,6 +261,18 @@ importers:
       glob:
         specifier: ^11.1.0
         version: 11.1.0
+      mdast-util-gfm:
+        specifier: ^3.1.0
+        version: 3.1.0(supports-color@8.1.1)
+      mdast-util-to-markdown:
+        specifier: ^2.1.2
+        version: 2.1.2
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1(supports-color@8.1.1)
+      remark-parse:
+        specifier: ^11.0.0
+        version: 11.0.0(supports-color@8.1.1)
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
@@ -285,6 +282,9 @@ importers:
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
+      unified:
+        specifier: ^11.0.5
+        version: 11.0.5
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
@@ -623,23 +623,94 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
+  packages/agor-claude:
+    dependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: 0.3.197
+        version: 0.3.197(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.6.0
+        version: 24.10.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  packages/agor-codex:
+    dependencies:
+      '@openai/codex-sdk':
+        specifier: 0.144.0
+        version: 0.144.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.6.0
+        version: 24.10.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  packages/agor-copilot:
+    dependencies:
+      '@github/copilot-sdk':
+        specifier: 0.2.2
+        version: 0.2.2
+    devDependencies:
+      '@types/node':
+        specifier: ^24.6.0
+        version: 24.10.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  packages/agor-cursor:
+    dependencies:
+      '@cursor/sdk':
+        specifier: 1.0.23
+        version: 1.0.23
+    devDependencies:
+      '@types/node':
+        specifier: ^24.6.0
+        version: 24.10.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  packages/agor-gemini:
+    dependencies:
+      '@google/gemini-cli-core':
+        specifier: 0.40.1
+        version: 0.40.1(encoding@0.1.13)(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.6.0
+        version: 24.10.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/agor-live:
     dependencies:
       '@agor-live/client':
         specifier: workspace:*
         version: link:../client
-      '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.3.197
-        version: 0.3.197(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
       '@anthropic-ai/sdk':
         specifier: ^0.109.0
         version: 0.109.0(zod@4.4.3)
-      '@aws-sdk/client-s3':
-        specifier: ^3.1101.0
-        version: 3.1101.0
-      '@aws-sdk/lib-storage':
-        specifier: ^3.1101.0
-        version: 3.1101.0(@aws-sdk/client-s3@3.1101.0)
       '@feathersjs/authentication':
         specifier: ^5.0.45
         version: 5.0.45(typescript@6.0.3)
@@ -673,9 +744,6 @@ importers:
       '@feathersjs/typebox':
         specifier: ^5.0.45
         version: 5.0.45(typescript@6.0.3)
-      '@github/copilot-sdk':
-        specifier: ^0.2.2
-        version: 0.2.2
       '@libsql/client':
         specifier: ^0.17.4
         version: 0.17.4
@@ -688,15 +756,6 @@ importers:
       '@oclif/plugin-help':
         specifier: ^6.2.53
         version: 6.2.53
-      '@octokit/auth-app':
-        specifier: ^8.2.0
-        version: 8.2.0
-      '@octokit/rest':
-        specifier: ^22.0.1
-        version: 22.0.1
-      '@openai/codex-sdk':
-        specifier: ^0.144.0
-        version: 0.144.0
       '@opencode-ai/sdk':
         specifier: 1.14.33
         version: 1.14.33
@@ -709,12 +768,6 @@ importers:
       '@slack/web-api':
         specifier: ^7.19.0
         version: 7.19.0(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1)
-      '@types/mdast':
-        specifier: ^4.0.4
-        version: 4.0.4
-      analytics:
-        specifier: ^0.8.19
-        version: 0.8.19(@types/dlv@1.1.5)
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
@@ -772,33 +825,15 @@ importers:
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
-      md-to-slack:
-        specifier: ^1.1.7
-        version: 1.1.7
-      mdast-util-gfm:
-        specifier: ^3.1.0
-        version: 3.1.0(supports-color@8.1.1)
-      mdast-util-to-markdown:
-        specifier: ^2.1.2
-        version: 2.1.2
       multer:
         specifier: ^2.2.0
         version: 2.2.0
       node-pty:
         specifier: ^1.2.0-beta.12
         version: 1.2.0-beta.12
-      open:
-        specifier: ^11.0.0
-        version: 11.0.0
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
-      remark-gfm:
-        specifier: ^4.0.1
-        version: 4.0.1(supports-color@8.1.1)
-      remark-parse:
-        specifier: ^11.0.0
-        version: 11.0.0(supports-color@8.1.1)
       simple-git:
         specifier: ^3.36.0
         version: 3.36.0(supports-color@8.1.1)
@@ -811,18 +846,31 @@ importers:
       socket.io-client:
         specifier: ^4.8.3
         version: 4.8.3(supports-color@8.1.1)
-      unified:
-        specifier: ^11.0.5
-        version: 11.0.5
       uuid:
         specifier: ^14.0.1
         version: 14.0.1
-      uuidv7:
-        specifier: ^1.1.0
-        version: 1.1.0
       zod:
         specifier: ^4.3.6
         version: 4.4.3
+
+  packages/agor-opencode:
+    dependencies:
+      '@opencode-ai/sdk':
+        specifier: 1.14.33
+        version: 1.14.33
+      opencode-ai:
+        specifier: 1.14.33
+        version: 1.14.33
+    devDependencies:
+      '@types/node':
+        specifier: ^24.6.0
+        version: 24.10.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
 
   packages/client:
     dependencies:
@@ -872,9 +920,6 @@ importers:
       '@agor/git':
         specifier: workspace:*
         version: link:../git
-      '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.3.197
-        version: 0.3.197(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
       '@anthropic-ai/sdk':
         specifier: ^0.109.0
         version: 0.109.0(zod@4.4.3)
@@ -914,15 +959,6 @@ importers:
       '@libsql/client':
         specifier: ^0.17.4
         version: 0.17.4
-      '@octokit/auth-app':
-        specifier: ^8.2.0
-        version: 8.2.0
-      '@octokit/rest':
-        specifier: ^22.0.1
-        version: 22.0.1
-      '@openai/codex-sdk':
-        specifier: ^0.144.0
-        version: 0.144.0
       '@slack/socket-mode':
         specifier: ^2.0.7
         version: 2.0.7(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1)
@@ -932,9 +968,6 @@ importers:
       '@slack/web-api':
         specifier: ^7.19.0
         version: 7.19.0(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1)
-      analytics:
-        specifier: ^0.8.19
-        version: 0.8.19(@types/dlv@1.1.5)
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
@@ -953,9 +986,6 @@ importers:
       js-yaml:
         specifier: ^5.2.3
         version: 5.2.3
-      open:
-        specifier: ^11.0.0
-        version: 11.0.0
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
@@ -975,12 +1005,24 @@ importers:
         specifier: ^4.3.6
         version: 4.4.3
     devDependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: ^0.3.197
+        version: 0.3.197(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
       '@google/gemini-cli-core':
         specifier: ^0.40.0
         version: 0.40.1(encoding@0.1.13)(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
       '@google/genai':
         specifier: ^1.43.0
         version: 1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(supports-color@8.1.1)
+      '@octokit/auth-app':
+        specifier: ^8.2.0
+        version: 8.2.0
+      '@octokit/rest':
+        specifier: ^22.0.1
+        version: 22.0.1
+      '@openai/codex-sdk':
+        specifier: ^0.144.0
+        version: 0.144.0
       '@types/bcryptjs':
         specifier: ^2.4.6
         version: 2.4.6
@@ -993,6 +1035,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^4.1.10
         version: 4.1.10(vitest@4.1.10)
+      analytics:
+        specifier: ^0.8.19
+        version: 0.8.19(@types/dlv@1.1.5)
       botbuilder:
         specifier: ^4.23.3
         version: 4.23.3(debug@4.4.3(supports-color@8.1.1))(encoding@0.1.13)(supports-color@8.1.1)
@@ -1005,6 +1050,9 @@ importers:
       handlebars:
         specifier: '>=4.7.9 <5'
         version: 4.7.9
+      open:
+        specifier: ^11.0.0
+        version: 11.0.0
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
@@ -1032,9 +1080,6 @@ importers:
       '@agor/git':
         specifier: workspace:*
         version: link:../git
-      '@github/copilot-sdk':
-        specifier: ^0.2.2
-        version: 0.2.2
       diff:
         specifier: '>=8.0.3 <9'
         version: 8.0.3
@@ -1045,15 +1090,24 @@ importers:
         specifier: ^4.3.6
         version: 4.4.3
     devDependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: ^0.3.197
+        version: 0.3.197(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
       '@cursor/sdk':
         specifier: ^1.0.23
         version: 1.0.23
+      '@github/copilot-sdk':
+        specifier: ^0.2.2
+        version: 0.2.2
       '@google/gemini-cli-core':
         specifier: ^0.40.0
         version: 0.40.1(encoding@0.1.13)(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
       '@google/genai':
         specifier: ^1.43.0
         version: 1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(supports-color@8.1.1)
+      '@openai/codex-sdk':
+        specifier: ^0.144.0
+        version: 0.144.0
       '@types/diff':
         specifier: ^6.0.0
         version: 6.0.0
@@ -7788,11 +7842,6 @@ packages:
     engines: {node: '>= 18'}
     hasBin: true
 
-  marked@16.4.1:
-    resolution: {integrity: sha512-ntROs7RaN3EvWfy3EZi14H4YxmT6A5YvywfhO+0pm+cH/dnSQRmdAmoFIc3B9aiwTehyk7pESH4ofyBY+V5hZg==}
-    engines: {node: '>= 20'}
-    hasBin: true
-
   marked@16.4.2:
     resolution: {integrity: sha512-TI3V8YYWvkVf3KJe1dRkpnjs68JUPyEa5vjKrp1XEEJUAOaQc+Qj+L1qWbPd0SJuAdQkFU0h73sXXqwDYxsiDA==}
     engines: {node: '>= 20'}
@@ -7810,10 +7859,6 @@ packages:
   mathjax-full@3.2.2:
     resolution: {integrity: sha512-+LfG9Fik+OuI8SLwsiR02IVdjcnRCy5MufYLi0C3TdMT56L/pjB0alMVGgoWJF8pN9Rc7FESycZB9BMNWIid5w==}
     deprecated: Version 4 replaces this package with the scoped package @mathjax/src
-
-  md-to-slack@1.1.7:
-    resolution: {integrity: sha512-DJsByDZGQaXEkwCw/V+luLsUPD58uAm2thJqYMPegdNVwFWDUxsgLsor/W1sKHI7GTyFWGuYSeD7EDrdZNG34w==}
-    engines: {node: '>=22.16.0'}
 
   mdast-util-find-and-replace@3.0.2:
     resolution: {integrity: sha512-Tmd1Vg/m3Xz43afeNxDIhWRtFZgM2VLyaf4vSTYwudTyeuTneoL3qtWMA5jeLyz/O1vDJmmV4QuScFCA2tBPwg==}
@@ -8436,6 +8481,70 @@ packages:
   open@11.0.0:
     resolution: {integrity: sha512-smsWv2LzFjP03xmvFoJ331ss6h+jixfA4UUV/Bsiyuu4YJPfN+FIQGOIiv4w9/+MoHkfkJ22UIaQWRVFRfH6Vw==}
     engines: {node: '>=20'}
+
+  opencode-ai@1.14.33:
+    resolution: {integrity: sha512-eB0VcDh4up1NoY4efBwRz4DAa8gnvnv9Dm0WAGVEq7bQCgSytMM9TEpX94vENJTqzxBANS4Pxcegb/ZG6JMA2g==}
+    hasBin: true
+
+  opencode-darwin-arm64@1.14.33:
+    resolution: {integrity: sha512-MDQgymI5Wla7uicU6gbcFOoryHjl8CRz6fXsWGsEp8R+hjqfKSrZ6ChNJlK93UsC9hl8bVvCbVcq7FR87guaKw==}
+    cpu: [arm64]
+    os: [darwin]
+
+  opencode-darwin-x64-baseline@1.14.33:
+    resolution: {integrity: sha512-2QQNX3kTx/f5utUpwjFxIxOke618EUxyDR9mTaGOzEoWCV/Hrs4CtEkpxsA8ImA8Ffehbrsg861haVLCdeuwVQ==}
+    cpu: [x64]
+    os: [darwin]
+
+  opencode-darwin-x64@1.14.33:
+    resolution: {integrity: sha512-pHdUaNJZ0KDJxoqTLvgUJPt7l/CG2CniIcrc6Cg5rNP6ZRP1NtpeONCRkB5YfmanDvQzDWwVFa3+5ULRDfyrnA==}
+    cpu: [x64]
+    os: [darwin]
+
+  opencode-linux-arm64-musl@1.14.33:
+    resolution: {integrity: sha512-m7AiRtiDtm+nKsS9TXcqa3BF58yl3QMg82Dq68EF8x2LjwuaI+qETwGuGJz4d9QqvtySPfK7bF0dgSMnNTVlBQ==}
+    cpu: [arm64]
+    os: [linux]
+
+  opencode-linux-arm64@1.14.33:
+    resolution: {integrity: sha512-IxesoCtjC4I/f9cUPov5KZeF6EEHiiDa9rHXNY3ogYjyBEtTCo5dTy07riENftzEnCA5u/EsYJO2eFyaGTrWtw==}
+    cpu: [arm64]
+    os: [linux]
+
+  opencode-linux-x64-baseline-musl@1.14.33:
+    resolution: {integrity: sha512-8LEhnEc0n5LbohgLqXPDssLXAc0QqUf2Dhw7OYfaUFo/FjBKYi9WktQ6uaIAxa7qMe26ZU23dNMCmnSO81b5kQ==}
+    cpu: [x64]
+    os: [linux]
+
+  opencode-linux-x64-baseline@1.14.33:
+    resolution: {integrity: sha512-gC7xFrN2UEmWx4eq8lgQvuwPL1vF9+t484YpZPc8bbkS3sbyxvjmrKtHXIanhU2BWwFbmUmZYW78/gMWooAfTw==}
+    cpu: [x64]
+    os: [linux]
+
+  opencode-linux-x64-musl@1.14.33:
+    resolution: {integrity: sha512-WZYtKjFYxhPUZcADklVg4MXPDJM7Gtg/rKikZk5vPIhz0POrhrTCK/43i1PM6rg2kVLNdxsjtmbIdab0frz9Xw==}
+    cpu: [x64]
+    os: [linux]
+
+  opencode-linux-x64@1.14.33:
+    resolution: {integrity: sha512-rE0moyGzCayR/XadwdPeEeD9Efw/mtPjFUntdHlaF73BygNMgiTtgxBsFdyEOaYCO8ZFhW9XvIjsloYcg99Twg==}
+    cpu: [x64]
+    os: [linux]
+
+  opencode-windows-arm64@1.14.33:
+    resolution: {integrity: sha512-uisW4Hc6j8UH8TgQiVNBUrCtuBSMVOdziohWJtVzN9DG8/3x/pjAVsqG+Du5V5ljgJpvwZeeO+Vvx8XXupGp+Q==}
+    cpu: [arm64]
+    os: [win32]
+
+  opencode-windows-x64-baseline@1.14.33:
+    resolution: {integrity: sha512-lPbg3UEBfP3P7jmKQkMzTsuPC3oJvXhMzVjsd5BRbYUBfuiW6k0+cOJL6orijbPmqZx/8B6iquRnGY3AAbLtng==}
+    cpu: [x64]
+    os: [win32]
+
+  opencode-windows-x64@1.14.33:
+    resolution: {integrity: sha512-0HDW/My00nlTYMpQX2JYIQExDX3RKSWncurpNf3lzPPjeCmZq9Vtf6XvzEmxDTEBEr+VG4fZYUd3udAq8gNJ+w==}
+    cpu: [x64]
+    os: [win32]
 
   openssl-wrapper@0.3.4:
     resolution: {integrity: sha512-iITsrx6Ho8V3/2OVtmZzzX8wQaKAaFXEJQdzoPUZDtyf5jWFlqo+h+OhGT4TATQ47f9ACKHua8nw7Qoy85aeKQ==}
@@ -9890,10 +9999,6 @@ packages:
   uuid@9.0.1:
     resolution: {integrity: sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==}
     deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
-    hasBin: true
-
-  uuidv7@1.1.0:
-    resolution: {integrity: sha512-2VNnOC0+XQlwogChUDzy6pe8GQEys9QFZBGOh54l6qVfwoCUwwRvk7rDTgaIsRgsF5GFa5oiNg8LqXE3jofBBg==}
     hasBin: true
 
   validate-npm-package-license@3.0.4:
@@ -11704,7 +11809,7 @@ snapshots:
       '@google-cloud/logging': 11.2.1(encoding@0.1.13)(supports-color@8.1.1)
       '@google-cloud/opentelemetry-cloud-monitoring-exporter': 0.21.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.7.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.7.1(@opentelemetry/api@1.9.0))(encoding@0.1.13)(supports-color@8.1.1)
       '@google-cloud/opentelemetry-cloud-trace-exporter': 3.0.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.7.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.7.1(@opentelemetry/api@1.9.0))(encoding@0.1.13)(supports-color@8.1.1)
-      '@google/genai': 1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(supports-color@8.1.1)
+      '@google/genai': 1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@3.25.76))(supports-color@8.1.1)
       '@grpc/grpc-js': 1.14.4
       '@iarna/toml': 2.2.5
       '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@3.25.76)
@@ -11787,6 +11892,19 @@ snapshots:
       - react-native-b4a
       - supports-color
       - tree-sitter
+      - utf-8-validate
+
+  '@google/genai@1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@3.25.76))(supports-color@8.1.1)':
+    dependencies:
+      google-auth-library: 10.5.0(supports-color@8.1.1)
+      p-retry: 4.6.2
+      protobufjs: 7.6.5
+      ws: 8.21.0
+    optionalDependencies:
+      '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@3.25.76)
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
       - utf-8-validate
 
   '@google/genai@1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(supports-color@8.1.1)':
@@ -18251,8 +18369,6 @@ snapshots:
 
   marked@15.0.12: {}
 
-  marked@16.4.1: {}
-
   marked@16.4.2: {}
 
   marked@17.0.6: {}
@@ -18265,10 +18381,6 @@ snapshots:
       mhchemparser: 4.2.1
       mj-context-menu: 0.6.1
       speech-rule-engine: 4.1.2
-
-  md-to-slack@1.1.7:
-    dependencies:
-      marked: 16.4.1
 
   mdast-util-find-and-replace@3.0.2:
     dependencies:
@@ -19265,6 +19377,57 @@ snapshots:
       is-inside-container: 1.0.0
       powershell-utils: 0.1.0
       wsl-utils: 0.3.1
+
+  opencode-ai@1.14.33:
+    optionalDependencies:
+      opencode-darwin-arm64: 1.14.33
+      opencode-darwin-x64: 1.14.33
+      opencode-darwin-x64-baseline: 1.14.33
+      opencode-linux-arm64: 1.14.33
+      opencode-linux-arm64-musl: 1.14.33
+      opencode-linux-x64: 1.14.33
+      opencode-linux-x64-baseline: 1.14.33
+      opencode-linux-x64-baseline-musl: 1.14.33
+      opencode-linux-x64-musl: 1.14.33
+      opencode-windows-arm64: 1.14.33
+      opencode-windows-x64: 1.14.33
+      opencode-windows-x64-baseline: 1.14.33
+
+  opencode-darwin-arm64@1.14.33:
+    optional: true
+
+  opencode-darwin-x64-baseline@1.14.33:
+    optional: true
+
+  opencode-darwin-x64@1.14.33:
+    optional: true
+
+  opencode-linux-arm64-musl@1.14.33:
+    optional: true
+
+  opencode-linux-arm64@1.14.33:
+    optional: true
+
+  opencode-linux-x64-baseline-musl@1.14.33:
+    optional: true
+
+  opencode-linux-x64-baseline@1.14.33:
+    optional: true
+
+  opencode-linux-x64-musl@1.14.33:
+    optional: true
+
+  opencode-linux-x64@1.14.33:
+    optional: true
+
+  opencode-windows-arm64@1.14.33:
+    optional: true
+
+  opencode-windows-x64-baseline@1.14.33:
+    optional: true
+
+  opencode-windows-x64@1.14.33:
+    optional: true
 
   openssl-wrapper@0.3.4: {}
 
@@ -21158,8 +21321,6 @@ snapshots:
   uuid@8.3.2: {}
 
   uuid@9.0.1: {}
-
-  uuidv7@1.1.0: {}
 
   validate-npm-package-license@3.0.4:
     dependencies:

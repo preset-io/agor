@@ -10,7 +10,9 @@ export default class Doctor extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Doctor);
-    const agenticTools = await diagnoseAgenticTools();
+    const agenticTools = await diagnoseAgenticTools(
+      process.env.AGOR_INTEGRATION_VERSION ?? this.config.version
+    );
     if (flags.json) {
       this.log(JSON.stringify({ ok: true, agenticTools }, null, 2));
       return;

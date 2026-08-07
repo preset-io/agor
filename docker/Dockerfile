@@ -56,15 +56,14 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
   mv /tmp/gh_*/bin/gh /usr/local/bin/ && \
   rm -rf /tmp/gh_*
 
-# Install pnpm and AI coding agent CLIs
-# Pinned versions for reproducibility across dev and prod
-# NOTE: Update these versions when upgrading Agor SDKs (see packages/core/package.json)
+# Install the workspace package manager. Claude, Codex, and Gemini runtimes
+# are supplied by their version-aligned SDK dependencies during development;
+# installing separate global copies here caused large duplicate, mismatched payloads.
+# OpenCode's SDK does not include its CLI, so retain the exact runtime used by
+# the workspace adapter until Docker builds consume `agor install opencode`.
 RUN npm install -g \
   pnpm@11.17.0 \
-  @anthropic-ai/claude-code@2.1.197 \
-  @google/gemini-cli@0.31.0 \
-  @openai/codex@0.141.0 \
-  opencode-ai@1.2.15
+  opencode-ai@1.14.33
 
 # Arguments for matching host user UID/GID (default to 1000)
 ARG UID=1000
@@ -235,7 +234,7 @@ RUN node /opt/agor-live/scripts/postinstall.js \
 # Stage 4b: Production from source (slim runtime — pinned to its git SHA)
 # ============================================================================
 # Same runtime shape as `production` (inherits base: Zellij, gh, and the
-# Claude/Codex/Gemini/OpenCode CLIs), but ships agor-live built from source
+# development OpenCode CLI), but ships agor-live built from source
 # instead of `npm install -g agor-live@latest`. Only the deployed artifact is
 # copied in — the multi-GB builder (source + dev deps + store) is left behind.
 #

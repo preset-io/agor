@@ -17,6 +17,7 @@
  */
 
 import { getAgenticToolIntegration, TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
@@ -25,7 +26,6 @@ import {
   type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
-import { Claude } from '@agor/core/sdk';
 import type {
   AuthCheckResult,
   AuthCheckStatus,
@@ -33,6 +33,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { isAgenticToolName } from '@agor/core/types';
+import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
 import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
@@ -73,7 +74,7 @@ const unknown = (hint?: string): AuthCheckResult => ({
  */
 async function probeClaudeCodeAuth(
   env?: Record<string, string | undefined>
-): Promise<{ ok: boolean; account: Claude.AccountInfo | null }> {
+): Promise<{ ok: boolean; account: ClaudeSdk.AccountInfo | null }> {
   let releaseHeldInput!: () => void;
   const heldInputPromise = new Promise<void>((resolve) => {
     releaseHeldInput = resolve;
@@ -84,6 +85,7 @@ async function probeClaudeCodeAuth(
     await heldInputPromise;
   }
 
+  const Claude = await loadManagedAgenticToolSdk<typeof ClaudeSdk>('claude-code');
   const q = Claude.query({
     prompt: neverYields(),
     options: env ? { env } : {},
@@ -200,7 +202,7 @@ async function validateApiKey(
         // The Cursor SDK throws on any failure and does not expose a status code,
         // so a rejection cannot be told apart from a transport error — treat a
         // successful call as authenticated and any throw as unknown (fail safe).
-        const { Cursor } = await import('@cursor/sdk');
+        const { Cursor } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
         await Promise.race([
           Cursor.me({ apiKey: key }),
           new Promise<never>((_, reject) =>

@@ -30,6 +30,12 @@ import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
 import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
+import {
+  AGENTIC_TOOL_INTEGRATIONS,
+  getAgenticToolInstallSlug,
+  type InstallableAgenticTool,
+  installManagedIntegration,
+} from '../lib/agentic-tool-integrations.js';
 
 export default class Init extends Command {
   static description = 'Initialize Agor environment (creates ~/.agor/ and database)';
@@ -413,17 +419,56 @@ export default class Init extends Command {
     this.log('');
 
     this.log(chalk.bold('Agentic tools:'));
-    const tools = await diagnoseAgenticTools();
+    let tools = await diagnoseAgenticTools(
+      process.env.AGOR_INTEGRATION_VERSION ?? this.config.version
+    );
     for (const tool of tools) {
       const marker = tool.status === 'ready' ? chalk.green('✓') : chalk.yellow('○');
       const detail =
         tool.status === 'ready' ? (tool.version ?? tool.path ?? 'ready') : 'not available';
       this.log(`   ${marker} ${tool.name}: ${detail}`);
     }
-    const missingCount = tools.filter((tool) => tool.status !== 'ready').length;
-    if (missingCount > 0) {
-      this.log(chalk.dim(`   ${missingCount} optional agentic tool(s) are unavailable.`));
-      this.log(chalk.dim('   See: https://agor.live/guide/extended-install'));
+    let missingTools = tools.filter((tool) => tool.status !== 'ready');
+    if (missingTools.length > 0 && !skipPrompts && process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
+      this.log('');
+      const agorVersion = process.env.AGOR_INTEGRATION_VERSION ?? this.config.version;
+      this.log(
+        chalk.dim(
+          `Selected packages will be installed with npm under ${process.env.AGOR_AGENTIC_TOOLS_DIR ?? '~/.agor/agentic-tools'}/${agorVersion}.`
+        )
+      );
+      const { selectedTools } = await inquirer.prompt<{ selectedTools: InstallableAgenticTool[] }>([
+        {
+          type: 'checkbox',
+          name: 'selectedTools',
+          message: 'Install any of these optional agentic tools now?',
+          choices: missingTools.map((tool) => ({
+            name: `${tool.name} (${AGENTIC_TOOL_INTEGRATIONS[tool.id].packageName}@${agorVersion})`,
+            value: tool.id,
+          })),
+        },
+      ]);
+      for (const tool of selectedTools) {
+        this.log(
+          chalk.bold(`\nInstalling ${tools.find((item) => item.id === tool)?.name ?? tool}…`)
+        );
+        await installManagedIntegration(tool, agorVersion);
+      }
+      if (selectedTools.length > 0) {
+        tools = await diagnoseAgenticTools(
+          process.env.AGOR_INTEGRATION_VERSION ?? this.config.version
+        );
+        missingTools = tools.filter((tool) => tool.status !== 'ready');
+        this.log(chalk.green('\n✓ Selected agentic tools installed'));
+      }
+    }
+    if (missingTools.length > 0) {
+      this.log(chalk.dim(`   ${missingTools.length} optional agentic tool(s) are not installed.`));
+      this.log(
+        chalk.dim(
+          `   Add one later with: agor install ${getAgenticToolInstallSlug(missingTools[0].id)}`
+        )
+      );
       this.log(chalk.dim('   Recheck at any time with: agor doctor'));
     }
     this.log('');

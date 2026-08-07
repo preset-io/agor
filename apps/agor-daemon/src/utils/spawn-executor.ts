@@ -601,6 +601,12 @@ function executorEnvironmentForImpersonation(env: Record<string, string>): Recor
     PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
     NODE_ENV: env.NODE_ENV,
     LOG_LEVEL: env.LOG_LEVEL,
+    // Version-aligned agentic tool packages are system runtime metadata, not
+    // tenant credentials. Preserve their absolute read-only location when an
+    // executor crosses a Unix identity boundary.
+    AGOR_VERSION: env.AGOR_VERSION,
+    AGOR_AGENTIC_TOOLS_DIR: env.AGOR_AGENTIC_TOOLS_DIR,
+    AGOR_MANAGED_AGENTIC_TOOLS: env.AGOR_MANAGED_AGENTIC_TOOLS,
     ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
     ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
     ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,

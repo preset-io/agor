@@ -11,13 +11,14 @@
  * - Events stream back through the session's event emitter
  */
 
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
+import type * as CopilotSdk from '@github/copilot-sdk';
 import type { CopilotSession } from '@github/copilot-sdk';
-import { CopilotClient } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -106,7 +107,7 @@ export interface CopilotRawResponse {
 }
 
 export class CopilotPromptService {
-  private client: InstanceType<typeof CopilotClient> | null = null;
+  private client: InstanceType<typeof CopilotSdk.CopilotClient> | null = null;
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
 
@@ -257,7 +258,8 @@ export class CopilotPromptService {
     console.log(`   Working directory: ${branch.path}`);
 
     // Create CopilotClient (spawns CLI process)
-    this.client = new CopilotClient({
+    const Copilot = await loadManagedAgenticToolSdk<typeof CopilotSdk>('copilot');
+    this.client = new Copilot.CopilotClient({
       useStdio: true,
       githubToken: this.apiKey || undefined,
       env: {

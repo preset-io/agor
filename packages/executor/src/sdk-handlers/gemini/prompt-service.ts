@@ -13,13 +13,14 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
 
-const Gemini: typeof GeminiTypes = await import('@google/gemini-cli-core');
+const Gemini = await loadManagedAgenticToolSdk<typeof GeminiTypes>('gemini');
 type ResumedSessionData = GeminiTypes.ResumedSessionData;
 
 import { shortId } from '@agor/core/db';

@@ -8,6 +8,7 @@
  * Cursor run when Agor stops the executor.
  */
 
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { generateId, shortId } from '@agor/core/db';
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
@@ -24,7 +25,7 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/sdk';
+import type { McpServerConfig, Run, SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
@@ -444,6 +445,7 @@ export async function executeCursorTask(params: {
     );
   }
 
+  const { Agent } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
   let currentRun: Run | undefined;
   const abortHandler = () => {
     if (!currentRun) return;

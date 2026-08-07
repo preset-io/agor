@@ -3,8 +3,11 @@ import { rmSync } from 'node:fs';
 
 const limits = {
   files: 2400,
-  unpackedBytes: 75 * 1024 * 1024,
-  packedBytes: 20 * 1024 * 1024,
+  // A modest byte increase buys a much larger inode/package reduction: select
+  // high-fanout pure-JS trees are bundled into dist instead of extracted as
+  // hundreds of dependency files during a cold global npm install.
+  unpackedBytes: 95 * 1024 * 1024,
+  packedBytes: 23 * 1024 * 1024,
 };
 
 let filename;

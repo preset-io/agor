@@ -47,12 +47,18 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CLIENT_DIR="$REPO_ROOT/packages/client"
+INTEGRATION_IDS=(claude codex copilot gemini opencode cursor)
+INTEGRATION_DIRS=()
+for id in "${INTEGRATION_IDS[@]}"; do
+  INTEGRATION_DIRS+=("$REPO_ROOT/packages/agor-$id")
+done
 
 echo "🏗️  Building agor-live + @agor-live/client"
 echo ""
 echo "📍 Repository root: $REPO_ROOT"
 echo "📦 agor-live:       $SCRIPT_DIR"
 echo "📦 @agor-live/client: $CLIENT_DIR"
+echo "🧩 Agentic tools:   ${INTEGRATION_IDS[*]}"
 echo ""
 
 # ── Version bump ─────────────────────────────────────────────────────────────
@@ -70,17 +76,28 @@ if [[ -n "$BUMP" ]]; then
   NEW_VERSION="$MAJOR.$MINOR.$PATCH"
   echo "📌 Version bump: $CURRENT_VERSION → $NEW_VERSION ($BUMP)"
 
-  # Update both package.json files
-  node -e "
-    const fs = require('fs');
-    for (const p of ['$SCRIPT_DIR/package.json', '$CLIENT_DIR/package.json']) {
-      const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
-      pkg.version = '$NEW_VERSION';
-      fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
-    }
-  "
+  # Update the base, client, and every version-aligned integration package.
+  node - "$NEW_VERSION" "$SCRIPT_DIR" "$CLIENT_DIR" "${INTEGRATION_DIRS[@]}" <<'NODE'
+const fs = require('fs');
+const [version, base, client, ...integrations] = process.argv.slice(2);
+for (const directory of [base, client, ...integrations]) {
+  const packagePath = `${directory}/package.json`;
+  const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+  pkg.version = version;
+  fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
+}
+for (const directory of integrations) {
+  const sourcePath = `${directory}/src/index.ts`;
+  const source = fs.readFileSync(sourcePath, 'utf8').replace(
+    /AGOR_INTEGRATION_VERSION = '[^']+'/,
+    `AGOR_INTEGRATION_VERSION = '${version}'`
+  );
+  fs.writeFileSync(sourcePath, source);
+}
+NODE
   echo "  ✓ Updated agor-live/package.json"
   echo "  ✓ Updated @agor-live/client/package.json"
+  echo "  ✓ Updated version-aligned agentic tool packages"
   echo ""
 else
   NEW_VERSION=$(node -p "require('$SCRIPT_DIR/package.json').version")
@@ -100,6 +117,10 @@ else
 fi
 
 echo "📦 Version: $NEW_VERSION"
+echo ""
+
+cd "$REPO_ROOT"
+pnpm check:agentic-tool-packages
 echo ""
 
 # ── Install dependencies ─────────────────────────────────────────────────────
@@ -305,7 +326,7 @@ cp -r "$REPO_ROOT/apps/agor-ui/dist/"* "$DIST_STAGE/ui/"
 # without removing declarations used by the bundled @agor packages.
 echo "  → Removing non-runtime build artifacts..."
 find "$DIST_STAGE" -type f \
-  \( -name '*.d.ts.map' -o -name '*.test.js' -o -name '*.test.cjs' -o -name '*.test.d.ts' \
+  \( -name '*.map' -o -name '*.test.js' -o -name '*.test.cjs' -o -name '*.test.d.ts' \
      -o -name '*.tsbuildinfo' -o -name '*.backup' \) -delete
 find "$DIST_STAGE" -type d -name test -prune -exec rm -rf {} +
 
@@ -379,11 +400,17 @@ if [[ "$PUBLISH" == true ]]; then
   if [[ "$DRY_RUN" == true ]]; then
     echo "🧪 Dry run — showing what would be published..."
     echo ""
-    echo "── agor-live@$NEW_VERSION ──"
-    cd "$SCRIPT_DIR" && pnpm publish --dry-run --no-git-checks 2>&1 | tail -20
-    echo ""
+    for directory in "${INTEGRATION_DIRS[@]}"; do
+      package_name=$(node -p "require('$directory/package.json').name")
+      echo "── $package_name@$NEW_VERSION ──"
+      cd "$directory" && pnpm publish --access public --dry-run --no-git-checks 2>&1 | tail -20
+      echo ""
+    done
     echo "── @agor-live/client@$NEW_VERSION ──"
     cd "$CLIENT_DIR" && pnpm publish --access public --dry-run --no-git-checks 2>&1 | tail -20
+    echo ""
+    echo "── agor-live@$NEW_VERSION ──"
+    cd "$SCRIPT_DIR" && pnpm publish --dry-run --no-git-checks 2>&1 | tail -20
   else
     echo "🚀 Publishing packages..."
     echo ""
@@ -392,14 +419,21 @@ if [[ "$PUBLISH" == true ]]; then
     # plain `npm publish` leaves the protocol verbatim and breaks consumers.
     # `--no-git-checks` skips pnpm's "branch must be main / clean tree" guard
     # since this script runs from feature/release branches with dist/ artifacts.
-    echo "── Publishing agor-live@$NEW_VERSION ──"
     cd "$SCRIPT_DIR" && npm whoami >/dev/null 2>&1 || npm login
-    cd "$SCRIPT_DIR" && pnpm publish --no-git-checks
-    echo ""
+    for directory in "${INTEGRATION_DIRS[@]}"; do
+      package_name=$(node -p "require('$directory/package.json').name")
+      echo "── Publishing $package_name@$NEW_VERSION ──"
+      cd "$directory" && pnpm publish --access public --no-git-checks
+      echo ""
+    done
     echo "── Publishing @agor-live/client@$NEW_VERSION ──"
     cd "$CLIENT_DIR" && pnpm publish --access public --no-git-checks
     echo ""
-    echo "✅ Both packages published!"
+    # Publish agor-live last so every version referenced by `agor install` already exists.
+    echo "── Publishing agor-live@$NEW_VERSION ──"
+    cd "$SCRIPT_DIR" && pnpm publish --no-git-checks
+    echo ""
+    echo "✅ All packages published!"
     echo "  npm i agor-live@$NEW_VERSION"
     echo "  npm i @agor-live/client@$NEW_VERSION"
   fi

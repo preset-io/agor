@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
 import { access } from 'node:fs/promises';
-import { delimiter, join } from 'node:path';
+import { createRequire } from 'node:module';
+import { delimiter, dirname, join } from 'node:path';
+import { getAgenticToolInstallDir } from '@agor/core/agentic-integrations';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
 
 async function isExecutable(path: string): Promise<boolean> {
@@ -62,6 +64,29 @@ export async function assertOpenCodeBinaryCompatibility(binary: string): Promise
 
 /** Resolve the user-installed OpenCode CLI without assuming how it was installed. */
 export async function resolvePackagedOpenCodeBinary(): Promise<string> {
+  if (process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
+    const agorVersion = process.env.AGOR_VERSION;
+    if (!agorVersion) throw new Error('AGOR_VERSION is missing from the packaged Agor runtime');
+    const installDir = getAgenticToolInstallDir('opencode', agorVersion);
+    try {
+      const require = createRequire(join(installDir, 'package.json'));
+      const packageJson = require.resolve('opencode-ai/package.json');
+      const binary = join(
+        dirname(packageJson),
+        'bin',
+        process.platform === 'win32' ? 'opencode.exe' : 'opencode'
+      );
+      if (!(await isExecutable(binary)))
+        throw new Error(`managed binary is not executable: ${binary}`);
+      await assertOpenCodeBinaryCompatibility(binary);
+      return binary;
+    } catch (error) {
+      throw new Error(
+        `OpenCode support is not usable for Agor ${agorVersion}: ${error instanceof Error ? error.message : String(error)}. Run: agor install opencode`
+      );
+    }
+  }
+
   const configured = process.env.AGOR_OPENCODE_PATH?.trim();
   if (configured) {
     if (await isExecutable(configured)) {
