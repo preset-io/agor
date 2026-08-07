@@ -33,6 +33,7 @@ interface MockClientOptions {
   failTaskMessageFetch?: boolean;
   /** When true, `session-streams.create` blocks until releaseCreate() is called. */
   deferCreate?: boolean;
+  deferTaskMessageFetch?: string;
 }
 
 function createMockClient(opts: MockClientOptions) {
@@ -40,12 +41,17 @@ function createMockClient(opts: MockClientOptions) {
   // tests can assert the subscribe-before-hydrate ordering and dispose races.
   const order: string[] = [];
 
+  const messageFetchResolvers: Array<() => void> = [];
   const messageFindAll = vi.fn(async ({ query }: { query: Record<string, unknown> }) => {
     if (typeof query.task_id === 'string') {
       if (opts.failTaskMessageFetch) {
         throw new Error('latest-task message fetch failed');
       }
-      return opts.messagesByTask[query.task_id] ?? [];
+      const snapshot = [...(opts.messagesByTask[query.task_id] ?? [])];
+      if (opts.deferTaskMessageFetch === query.task_id) {
+        await new Promise<void>((resolve) => messageFetchResolvers.push(resolve));
+      }
+      return snapshot;
     }
     // Eager path: every message for the session.
     return Object.values(opts.messagesByTask).flat();
@@ -144,6 +150,9 @@ function createMockClient(opts: MockClientOptions) {
     emitServiceEvent,
     order,
     releaseCreate: releaseCreateFn,
+    releaseMessageFetch: () => {
+      for (const resolve of messageFetchResolvers.splice(0)) resolve();
+    },
   };
 }
 
@@ -236,6 +245,64 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
 
     expect(handle.state.loading).toBe(false);
     expect(messageFindAll).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReactiveSessionHandle message snapshot reconciliation', () => {
+  it.each([
+    ['immediate', TaskStatus.CREATED],
+    ['drained queue', TaskStatus.DISPATCHING],
+  ])(
+    'does not lose a realtime user message during a stale %s task fetch',
+    async (_path, status) => {
+      const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+      const mock = createMockClient(opts);
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+      await handle.ready();
+
+      const task = makeTask('new-task', status);
+      mock.emitServiceEvent('tasks', 'created', task);
+      opts.deferTaskMessageFetch = task.task_id;
+      const loading = handle.loadTaskMessages(task.task_id);
+      await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalled());
+
+      const created = makeMessage(task.task_id, 2);
+      const patched = { ...created, content_preview: 'patched metadata' } as Message;
+      const earlier = makeMessage(task.task_id, 1);
+      mock.emitServiceEvent('messages', 'created', created);
+      mock.emitServiceEvent('messages', 'created', created); // duplicate delivery
+      mock.emitServiceEvent('messages', 'patched', patched); // reordered update
+      mock.emitServiceEvent('messages', 'created', earlier); // out-of-order index
+      mock.emitServiceEvent('messages', 'created', {
+        ...makeMessage(task.task_id, 1),
+        message_id: 'other-session-message',
+        session_id: 'session-2',
+      });
+      mock.releaseMessageFetch();
+      await loading;
+
+      expect(handle.getTaskMessages(task.task_id)).toEqual([earlier, patched]);
+    }
+  );
+
+  it('does not resurrect a message removed while a reconnect/refetch snapshot is in flight', async () => {
+    const existing = makeMessage('task-1', 0);
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.COMPLETED)],
+      messagesByTask: { 'task-1': [existing] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    opts.deferTaskMessageFetch = 'task-1';
+    const resync = handle.resync();
+    await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalledTimes(2));
+    mock.emitServiceEvent('messages', 'removed', existing);
+    mock.releaseMessageFetch();
+    await resync;
+
+    expect(handle.getTaskMessages('task-1')).toEqual([]);
   });
 });
 
