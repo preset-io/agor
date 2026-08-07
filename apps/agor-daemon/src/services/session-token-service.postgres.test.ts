@@ -33,7 +33,7 @@ import {
 } from '../auth/executor-session-token.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import { ServiceJWTStrategy } from '../auth/service-jwt-strategy.js';
-import { SessionTokenService } from './session-token-service.js';
+import { type SessionTokenAuthorityStore, SessionTokenService } from './session-token-service.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -81,9 +81,29 @@ function makeExecutorAuthenticationService(sessionTokenService: SessionTokenServ
 
 describe('executor token Feathers authentication contract', () => {
   it('re-authenticates a fresh connection through the production JWT strategy', async () => {
+    const authorityStore: SessionTokenAuthorityStore = {
+      async issue() {},
+      async validateAndConsume(input) {
+        return {
+          session_id: input.sessionId,
+          ...(input.taskId ? { task_id: input.taskId } : {}),
+          ...(input.branchId ? { branch_id: input.branchId } : {}),
+          user_id: input.userId,
+        };
+      },
+      async revoke() {
+        return true;
+      },
+      async revokeSession() {
+        return 1;
+      },
+      async purgeRetained() {
+        return 0;
+      },
+    };
     const service = new SessionTokenService(
       { expiration_ms: 60_000, max_uses: -1 },
-      { startCleanupTimer: false }
+      { authorityStore, startCleanupTimer: false }
     );
     service.setJwtSecret(jwtSecret);
     const token = runWithTenantContext('tenant-fast-auth', () =>
