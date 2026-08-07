@@ -11,7 +11,9 @@ import {
   checkMigrationStatus,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
+  detectDialectFromUrl,
   formatPendingMigrationsMessage,
+  getDatabaseDialect,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   seedInitialData,
@@ -47,7 +49,7 @@ async function ensureDatabaseDirectory(dbPath: string): Promise<void> {
   try {
     await access(dbDir, constants.F_OK);
   } catch {
-    console.log(`📁 Creating database directory: ${dbDir}`);
+    console.log('[database] creating sqlite directory');
     await mkdir(dbDir, { recursive: true });
   }
 
@@ -110,9 +112,8 @@ export async function initializeDatabase(
     skipFirstRunAdminBootstrap?: boolean;
   } = {}
 ): Promise<DatabaseInitResult> {
-  console.log(
-    `[database] connecting backend=${dbPath.startsWith('file:') ? 'sqlite' : 'postgresql'}`
-  );
+  const dialect = detectDialectFromUrl(dbPath) ?? getDatabaseDialect();
+  console.log(`[database] connecting backend=${dialect}`);
 
   // Ensure directory exists for SQLite
   await ensureDatabaseDirectory(dbPath);

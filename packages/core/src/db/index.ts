@@ -49,6 +49,7 @@ export * from './pending-migrations';
 export * from './repositories';
 export * from './sanitize-error';
 export * from './schema';
+export { detectDialectFromUrl, getDatabaseDialect } from './schema-factory';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';
 // Tenant database lifecycle primitives. Filesystem-backed portability operations
