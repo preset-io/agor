@@ -9,6 +9,19 @@ import {
 } from './index.js';
 
 describe('agentic-tool integrations', () => {
+  it.each(['codex', 'opencode'] as const)(
+    'exposes every Agor reasoning effort level for %s',
+    (tool) => {
+      expect(AGENTIC_TOOL_CAPABILITIES[tool].reasoningEffortLevels).toEqual([
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ]);
+    }
+  );
+
   it('describes every canonical tool exactly once', () => {
     expect(Object.keys(AGENTIC_TOOL_INTEGRATIONS).sort()).toEqual([...AGENTIC_TOOL_NAMES].sort());
   });

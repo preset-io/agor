@@ -455,7 +455,7 @@ Agor exposes the `effort` parameter to control how much reasoning the agent appl
 | `xhigh`  | Extra reasoning depth            | Demanding tasks before max       |
 | `max`    | Highest effort (model-dependent) | Critical decisions, architecture |
 
-On Codex, both `xhigh` and `max` map to Codex's `xhigh` (its ceiling). Codex `minimal` is not exposed by Agor.
+On Codex, `xhigh` and `max` are passed through unchanged. Codex `minimal` is not exposed by Agor.
 
 ### Extended Context (1M tokens)
 

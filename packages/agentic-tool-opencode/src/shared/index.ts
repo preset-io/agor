@@ -22,6 +22,7 @@ export const OPENCODE_INTEGRATION = Object.freeze({
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
+    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   authentication: 'runtime-managed',
   sdkVersion: '@opencode-ai/sdk@1.14.33',

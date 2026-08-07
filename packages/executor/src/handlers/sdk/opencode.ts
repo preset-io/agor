@@ -115,6 +115,7 @@ export async function executeOpenCodeTask(params: {
         directory: branch.path,
         provider: session.model_config.provider,
         model: session.model_config.model,
+        effort: session.model_config.effort,
         mcpToken: session.mcp_token,
         permissionMode: params.permissionMode,
         signal: params.abortController.signal,

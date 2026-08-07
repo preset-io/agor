@@ -12,6 +12,7 @@ import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import {
   type ContentBlock,
+  type EffortLevel,
   type ExecutorPulseKind,
   type MCPServer,
   type MessageID,
@@ -82,6 +83,7 @@ export type RunOpenCodeTurnInput = {
   directory: string;
   provider?: string;
   model?: string;
+  effort?: EffortLevel;
   mcpToken?: string;
   permissionMode?: PermissionMode;
   dataHome?: string;
@@ -633,7 +635,13 @@ export class OpenCodeTool {
         directory: input.directory,
         headers: { Authorization: authorization },
       });
-      await this.assertExplicitModelAvailable(client, input.directory, provider, model);
+      await this.assertExplicitModelAvailable(
+        client,
+        input.directory,
+        provider,
+        model,
+        input.effort
+      );
 
       const { openCodeSessionId, sessionWasCreated } = await this.resolveSession(client, input);
 
@@ -751,9 +759,11 @@ export class OpenCodeTool {
     client: OpenCodeClient,
     directory: string,
     providerId: string,
-    modelId: string
+    modelId: string,
+    effort?: EffortLevel
   ): Promise<void> {
-    let available = false;
+    let modelAvailable = false;
+    let effortAvailable = !effort;
     try {
       const query = { directory };
       const [catalogResponse, runtimeResponse] = await Promise.all([
@@ -761,22 +771,32 @@ export class OpenCodeTool {
         client.provider.list({ query }),
       ]);
       const provider = catalogResponse.data?.providers.find((entry) => entry.id === providerId);
-      available =
+      const selectedModel = provider
+        ? Object.entries(provider.models).find(
+            ([candidateId, model]) => candidateId === modelId || model.id === modelId
+          )?.[1]
+        : undefined;
+      modelAvailable =
         !catalogResponse.error &&
         !runtimeResponse.error &&
         Boolean(runtimeResponse.data?.connected.includes(providerId)) &&
-        Boolean(
-          provider &&
-            Object.entries(provider.models).some(
-              ([candidateId, model]) => candidateId === modelId || model.id === modelId
-            )
-        );
+        Boolean(selectedModel);
+      if (modelAvailable && effort) {
+        // OpenCode returns native variants here; the generated SDK model type currently omits them.
+        const variants = (selectedModel as { variants?: Record<string, unknown> }).variants;
+        effortAvailable = Boolean(variants && Object.hasOwn(variants, effort));
+      }
     } catch {
       // Public failure stays independent of raw provider objects and SDK details.
     }
-    if (!available) {
+    if (!modelAvailable) {
       throw new Error(
         'The selected OpenCode provider/model is not available for this session owner and branch configuration; retry discovery or enter an available exact pair'
+      );
+    }
+    if (!effortAvailable) {
+      throw new Error(
+        "The selected OpenCode reasoning effort is not available for this session owner's provider/model and branch configuration; choose a supported effort or leave it unset"
       );
     }
   }
@@ -883,10 +903,12 @@ export class OpenCodeTool {
       body: {
         agent: AGOR_MANAGED_AGENT,
         parts: [{ type: 'text' as const, text: input.prompt }],
+        ...(input.effort ? { variant: input.effort } : {}),
         ...(context.model && context.provider
           ? { model: { providerID: context.provider, modelID: context.model } }
           : {}),
-      },
+        // OpenCode accepts `variant`; the generated SDK request type currently omits it.
+      } as NonNullable<Parameters<OpenCodeClient['session']['prompt']>[0]>['body'],
       query: context.branchPath ? { directory: context.branchPath } : undefined,
     };
     const transcriptRequest = {

@@ -1,3 +1,4 @@
+import type { EffortLevel } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenCodeCleanupUnverifiedError } from './managed-server.js';
 import { OpenCodeTool } from './opencode-tool.js';
@@ -49,6 +50,82 @@ function settleRuntimeCleanup(
       ): Promise<void>;
     }
   ).settleRuntimeCleanup(activeSessionAbort, collectorStop, close);
+}
+
+async function submittedPrompt(effort?: EffortLevel) {
+  const prompt = vi.fn(async () => ({ error: { name: 'PromptError' } }));
+  const stream = (async function* () {})();
+  const client = {
+    event: { subscribe: vi.fn(async () => ({ stream })) },
+    session: {
+      messages: vi.fn(async () => ({ data: [], error: undefined })),
+      prompt,
+    },
+  };
+  const tool = new OpenCodeTool({});
+  const executeTask = (
+    tool as unknown as {
+      executeTask(
+        client: unknown,
+        input: unknown,
+        context: unknown,
+        callbacks: undefined,
+        registerStop: (stop: () => Promise<void>) => void,
+        sanitizer: { error(value: unknown): Error }
+      ): Promise<unknown>;
+    }
+  ).executeTask.bind(tool);
+
+  await expect(
+    executeTask(
+      client,
+      {
+        agorSessionId: 'session-1',
+        taskId: 'task-1',
+        prompt: 'Continue',
+        agorAssistantMessageId: 'message-1',
+        effort,
+        signal: new AbortController().signal,
+      },
+      {
+        opencodeSessionId: 'opencode-session-1',
+        provider: 'openai',
+        model: 'gpt-test',
+        branchPath: '/workspace',
+      },
+      undefined,
+      () => undefined,
+      { error: (value) => (value instanceof Error ? value : new Error(String(value))) }
+    )
+  ).rejects.toThrow(/prompt failed/i);
+
+  return prompt.mock.calls[0]?.[0];
+}
+
+function assertExplicitModelAvailable(model: Record<string, unknown>, effort?: EffortLevel) {
+  const tool = new OpenCodeTool({});
+  const client = {
+    config: {
+      providers: vi.fn(async () => ({
+        data: { providers: [{ id: 'openai', models: { 'gpt-test': model } }] },
+        error: undefined,
+      })),
+    },
+    provider: {
+      list: vi.fn(async () => ({ data: { connected: ['openai'] }, error: undefined })),
+    },
+  };
+  return (
+    tool as unknown as {
+      assertExplicitModelAvailable(
+        client: unknown,
+        directory: string,
+        provider: string,
+        model: string,
+        effort?: EffortLevel
+      ): Promise<void>;
+    }
+  ).assertExplicitModelAvailable(client, '/workspace', 'openai', 'gpt-test', effort);
 }
 
 describe('OpenCodeTool abort cleanup', () => {
@@ -113,4 +190,38 @@ describe('OpenCodeTool abort cleanup', () => {
       );
     }
   );
+});
+
+describe('OpenCodeTool prompt variants', () => {
+  it('submits the configured Agor effort as the native prompt variant', async () => {
+    await expect(submittedPrompt('max')).resolves.toMatchObject({
+      body: { variant: 'max' },
+    });
+  });
+
+  it('admits an effort exposed as a native model variant', async () => {
+    await expect(
+      assertExplicitModelAvailable({ id: 'gpt-test', variants: { max: {} } }, 'max')
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects an unsupported effort before prompt submission without exposing catalog secrets', async () => {
+    const error = await assertExplicitModelAvailable(
+      {
+        id: 'gpt-test',
+        variants: { high: { apiKey: 'must-not-cross' } },
+      },
+      'max'
+    ).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/reasoning effort.*not available/i);
+    expect((error as Error).message).not.toContain('must-not-cross');
+  });
+
+  it('omits the native prompt variant when Agor effort is unset', async () => {
+    const request = await submittedPrompt();
+
+    expect(request?.body).not.toHaveProperty('variant');
+  });
 });
