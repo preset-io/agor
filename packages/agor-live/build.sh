@@ -308,9 +308,13 @@ cp -r "$REPO_ROOT/apps/agor-cli/dist/"* "$DIST_STAGE/cli/"
 echo "  → Copying daemon..."
 mkdir -p "$DIST_STAGE/daemon"
 # .build-info (sha + builtAt) is stamped into apps/agor-daemon/dist by the
-# daemon's own build script (apps/agor-daemon/scripts/stamp-build-info.mjs)
-# and gets carried along by this cp -r. loadBuildInfo() reads it at boot.
-cp -r "$REPO_ROOT/apps/agor-daemon/dist/"* "$DIST_STAGE/daemon/"
+# daemon's own build script (apps/agor-daemon/scripts/stamp-build-info.mjs).
+# loadBuildInfo() reads it at boot.
+#
+# Copy from `dist/.` rather than `dist/*`: the glob does NOT match dotfiles, so
+# `dist/*` silently dropped .build-info and every published build reported
+# buildSha "dev" instead of the commit it was built from.
+cp -r "$REPO_ROOT/apps/agor-daemon/dist/." "$DIST_STAGE/daemon/"
 
 echo "  → Copying executor..."
 mkdir -p "$DIST_STAGE/executor"
