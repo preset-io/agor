@@ -250,18 +250,24 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
 
 describe('ReactiveSessionHandle message snapshot reconciliation', () => {
   it.each([
-    ['immediate', TaskStatus.CREATED],
-    ['drained queue', TaskStatus.DISPATCHING],
+    ['immediate', false],
+    ['drained queue', true],
   ])(
     'does not lose a realtime user message during a stale %s task fetch',
-    async (_path, status) => {
+    async (_path, startsQueued) => {
       const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
       const mock = createMockClient(opts);
       const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
       await handle.ready();
 
-      const task = makeTask('new-task', status);
+      const task = makeTask('new-task', startsQueued ? TaskStatus.QUEUED : TaskStatus.CREATED);
       mock.emitServiceEvent('tasks', 'created', task);
+      if (startsQueued) {
+        mock.emitServiceEvent('tasks', 'patched', {
+          ...task,
+          status: TaskStatus.DISPATCHING,
+        });
+      }
       opts.deferTaskMessageFetch = task.task_id;
       const loading = handle.loadTaskMessages(task.task_id);
       await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalled());

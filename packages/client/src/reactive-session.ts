@@ -312,10 +312,7 @@ export class ReactiveSessionHandle {
 
   async loadTaskMessages(taskId: string): Promise<Message[]> {
     this.assertNotDisposed();
-    const messages = await this.fetchMessagesWithoutRealtimeGap(
-      { task_id: taskId, $sort: { index: 1 } },
-      (message) => message.task_id === taskId
-    );
+    const messages = await this.fetchTaskMessagesWithoutRealtimeGap(taskId);
     this.updateState((prev) => {
       const nextByTask = new Map(prev.messagesByTask);
       nextByTask.set(taskId, sortMessagesByIndex(messages));
@@ -387,6 +384,20 @@ export class ReactiveSessionHandle {
       this.cancelMessageFetch(fetchSequence);
       throw error;
     }
+  }
+
+  private async fetchTaskMessagesWithoutRealtimeGap(taskId: string): Promise<Message[]> {
+    return this.fetchMessagesWithoutRealtimeGap(
+      { task_id: taskId, $sort: { index: 1 } },
+      (message) => message.task_id === taskId && this.matchesSession(message.session_id)
+    );
+  }
+
+  private async fetchSessionMessagesWithoutRealtimeGap(): Promise<Message[]> {
+    return this.fetchMessagesWithoutRealtimeGap(
+      { session_id: this.sessionId, $sort: { index: 1 } },
+      (message) => this.matchesSession(message.session_id)
+    );
   }
 
   unloadTaskMessages(taskId: string): void {
@@ -467,10 +478,7 @@ export class ReactiveSessionHandle {
       let loadedTaskIds = new Set<string>();
 
       if (this.options.taskHydration === 'eager') {
-        const allMessages = await this.fetchMessagesWithoutRealtimeGap(
-          { session_id: this.sessionId, $sort: { index: 1 } },
-          (message) => this.matchesSession(message.session_id)
-        );
+        const allMessages = await this.fetchSessionMessagesWithoutRealtimeGap();
         messagesByTask = groupMessagesByTask(allMessages);
         loadedTaskIds = new Set(messagesByTask.keys());
       } else if (this.options.taskHydration === 'lazy') {
@@ -483,9 +491,8 @@ export class ReactiveSessionHandle {
         const latestTask = findLatestHydratableTask(tasks);
         if (latestTask) {
           try {
-            const latestMessages = await this.fetchMessagesWithoutRealtimeGap(
-              { task_id: latestTask.task_id, $sort: { index: 1 } },
-              (message) => message.task_id === latestTask.task_id
+            const latestMessages = await this.fetchTaskMessagesWithoutRealtimeGap(
+              latestTask.task_id
             );
             messagesByTask.set(latestTask.task_id, sortMessagesByIndex(latestMessages));
             loadedTaskIds.add(latestTask.task_id);
@@ -1089,10 +1096,7 @@ export class ReactiveSessionHandle {
       let loadedTaskIds = this.stateSnapshot.loadedTaskIds;
 
       if (this.options.taskHydration === 'eager') {
-        const allMessages = await this.fetchMessagesWithoutRealtimeGap(
-          { session_id: this.sessionId, $sort: { index: 1 } },
-          (message) => this.matchesSession(message.session_id)
-        );
+        const allMessages = await this.fetchSessionMessagesWithoutRealtimeGap();
         messagesByTask = groupMessagesByTask(allMessages);
         loadedTaskIds = new Set(messagesByTask.keys());
       } else if (this.options.taskHydration === 'lazy') {
@@ -1106,10 +1110,7 @@ export class ReactiveSessionHandle {
         if (toRefresh.size > 0) {
           const refreshedByTask = new Map<string, Message[]>();
           for (const taskId of toRefresh) {
-            const taskMessages = await this.fetchMessagesWithoutRealtimeGap(
-              { task_id: taskId, $sort: { index: 1 } },
-              (message) => message.task_id === taskId
-            );
+            const taskMessages = await this.fetchTaskMessagesWithoutRealtimeGap(taskId);
             refreshedByTask.set(taskId, sortMessagesByIndex(taskMessages));
           }
           messagesByTask = refreshedByTask;
