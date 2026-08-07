@@ -34,7 +34,7 @@
     "@cursor/sdk": "^1.0.23",
     "@github/copilot-sdk": "^0.2.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@octokit/auth-app": "^8.2.0",
+    "@octokit/auth-app": "^8.3.0",
     "@octokit/rest": "^22.0.1",
     "@types/mdast": "^4.0.4",
     "compression": "^1.8.1",
