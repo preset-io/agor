@@ -110,7 +110,8 @@ export default async function Page(props: PageProps) {
   const pathname = `/${params.mdxPath?.join('/') ?? ''}`;
 
   // "Full" layout pages (theme.layout: 'full' in _meta.ts, e.g. the hero
-  // A/B variants) skip the docs Wrapper entirely — same treatment as the
+  // A/B variants and the Agor Cloud landing page) skip the docs Wrapper
+  // entirely — same treatment as the
   // root "/" route (app/page.tsx), which never goes through Wrapper at all.
   // Wrapper's sidebar/TOC/copy-page shell only *hides* sub-pieces for
   // layout:'full'; it doesn't collapse the two-column shell itself, so
