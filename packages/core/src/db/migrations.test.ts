@@ -53,6 +53,48 @@ describe('Postgres migrations', () => {
     );
     expect(heartbeatMigration).toMatch(/AT TIME ZONE 'UTC'/i);
   });
+
+  it('persists only an executor bearer fingerprint behind forced tenant RLS', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0075_executor_session_token_authority.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain('"token_fingerprint" varchar(64) PRIMARY KEY NOT NULL');
+    expect(migration).not.toMatch(/"(?:raw_)?token"\s/);
+    expect(migration).toContain(
+      'ALTER TABLE "executor_session_token_authorities" FORCE ROW LEVEL SECURITY'
+    );
+    expect(migration).toContain('"tenant_id" = COALESCE');
+  });
+});
+
+describe('Executor session token authority migrations', () => {
+  it('keeps the SQLite schema compatible without enabling shared authority', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-token-authority-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+
+    try {
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0078_executor_session_token_authority.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const columns = await client.execute('PRAGMA table_info(executor_session_token_authorities)');
+      const columnNames = columns.rows.map((column) => column.name);
+
+      expect(columnNames).toContain('token_fingerprint');
+      expect(columnNames).not.toContain('tenant_id');
+      expect(columnNames).not.toContain('token');
+      expect(columnNames).not.toContain('raw_token');
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('SDK session storage retirement migrations', () => {

@@ -30,6 +30,21 @@ import * as postgresSchema from './schema.postgres';
 import { buildTenantDeletionManifest } from './tenant-deletion-manifest';
 import { IMPERATIVE_TENANT_TABLES } from './tenant-imperative-tables';
 
+/**
+ * Tenant-owned runtime authority that must be deleted with the tenant but must
+ * never be exported/imported. Restoring an unexpired token-authority row could
+ * reactivate a bearer JWT when source and destination share signing secrets.
+ */
+export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
+  'executor_session_token_authorities',
+]);
+
+function portableDeletionManifest() {
+  return buildTenantDeletionManifest().filter(
+    (entry) => !NON_PORTABLE_TENANT_TABLES.has(entry.name)
+  );
+}
+
 /** A tenant table together with the column that scopes it to a tenant. */
 export interface TenantPortabilityTable {
   /** Physical table name in the `public` schema. */
@@ -66,7 +81,7 @@ export interface TenantPortabilityForeignKey {
  * moved. See {@link IMPERATIVE_TENANT_TABLES}.
  */
 export function buildTenantInsertOrder(): TenantPortabilityTable[] {
-  const deletionOrder = buildTenantDeletionManifest();
+  const deletionOrder = portableDeletionManifest();
   // Deletion order is child-first; reversing yields parent-first insert order.
   return [...deletionOrder]
     .reverse()
@@ -75,9 +90,14 @@ export function buildTenantInsertOrder(): TenantPortabilityTable[] {
 
 /** Movable tenant tables (compiled manifest), in a stable sorted order. */
 export function tenantPortabilityTableNames(): string[] {
-  return buildTenantDeletionManifest()
+  return portableDeletionManifest()
     .map((entry) => entry.name)
     .sort();
+}
+
+/** Tenant-owned authority tables deliberately omitted from portable archives. */
+export function nonPortableTenantTableNames(): string[] {
+  return [...NON_PORTABLE_TENANT_TABLES].sort();
 }
 
 let cachedPortabilityForeignKeys: readonly TenantPortabilityForeignKey[] | null = null;

@@ -533,6 +533,13 @@
       "when": 1786150000000,
       "tag": "0077_knowledge_embedding_claims",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "6",
+      "when": 1786150100000,
+      "tag": "0078_executor_session_token_authority",
+      "breakpoints": true
     }
   ]
 }

@@ -34,6 +34,9 @@ function migrationTenantTables(): string[] {
     'packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'
   );
   const uploadsMigration = readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql');
+  const executorTokenMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -41,6 +44,7 @@ function migrationTenantTables(): string[] {
         ...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g),
         ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...uploadsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...executorTokenMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -53,6 +57,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
     readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
     readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -157,6 +162,20 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration.match(/DROP POLICY "knowledge_embedding_migration_0074_/g)).toHaveLength(4);
     expect(migration).toContain("SET LOCAL lock_timeout = '3s'");
     expect(migration.trim().endsWith('SET LOCAL lock_timeout = DEFAULT;')).toBe(true);
+  });
+
+  it('limits executor token maintenance to retained tombstones and an explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('"expires_at" < CURRENT_TIMESTAMP');
+    expect(migration).toContain('"revoked_at" < CURRENT_TIMESTAMP');
+    expect(migration).toContain("= 'executor_token_maintenance'");
+    expect(migration).not.toMatch(
+      /CREATE POLICY "executor_session_token_maintenance"[\s\S]*WITH CHECK/
+    );
   });
 
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {

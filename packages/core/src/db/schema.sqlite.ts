@@ -393,6 +393,39 @@ export const tasks = sqliteTable(
 );
 
 /**
+ * Schema mirror for PostgreSQL executor-session token authority.
+ *
+ * Standalone SQLite intentionally continues to use SessionTokenService's
+ * process-local token Map; this table exists only to keep the dual schemas and
+ * migration history compatible if a database changes dialect later.
+ */
+export const executorSessionTokenAuthorities = sqliteTable(
+  'executor_session_token_authorities',
+  {
+    token_fingerprint: text('token_fingerprint', { length: 64 }).primaryKey(),
+    token_type: text('token_type').notNull(),
+    purpose: text('purpose').notNull(),
+    session_id: text('session_id').notNull(),
+    task_id: text('task_id'),
+    branch_id: text('branch_id'),
+    user_id: text('user_id').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    max_uses: integer('max_uses').notNull(),
+    use_count: integer('use_count').notNull().default(0),
+    last_used_at: t.timestamp('last_used_at'),
+    revoked_at: t.timestamp('revoked_at'),
+  },
+  (table) => ({
+    sessionIdx: index('executor_session_token_authorities_session_idx').on(table.session_id),
+    expiresIdx: index('executor_session_token_authorities_expires_idx').on(table.expires_at),
+    revokedIdx: index('executor_session_token_authorities_revoked_idx')
+      .on(table.revoked_at)
+      .where(sql`${table.revoked_at} IS NOT NULL`),
+  })
+);
+
+/**
  * Messages table - Conversation messages within sessions
  *
  * Stores individual messages (user, assistant, system) for full conversation replay.
@@ -2348,6 +2381,9 @@ export type SessionRelationshipRow = typeof sessionRelationships.$inferSelect;
 export type SessionRelationshipInsert = typeof sessionRelationships.$inferInsert;
 export type TaskRow = typeof tasks.$inferSelect;
 export type TaskInsert = typeof tasks.$inferInsert;
+export type ExecutorSessionTokenAuthorityRow = typeof executorSessionTokenAuthorities.$inferSelect;
+export type ExecutorSessionTokenAuthorityInsert =
+  typeof executorSessionTokenAuthorities.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
 export type BoardRow = typeof boards.$inferSelect;

@@ -19,6 +19,7 @@ export type SystemDatabaseCapability =
   | 'scheduler_discovery'
   | 'task_queue_discovery'
   | 'task_runtime_discovery'
+  | 'executor_token_maintenance'
   | 'upload_maintenance';
 
 export interface TenantContextScope {

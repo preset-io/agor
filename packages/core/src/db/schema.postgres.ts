@@ -418,6 +418,46 @@ export const tasks = pgTable(
 );
 
 /**
+ * Durable authority for executor-session JWTs in shared PostgreSQL deployments.
+ *
+ * The bearer JWT is never stored. `token_fingerprint` is SHA-256 over the
+ * high-entropy signed token and is useful only as an exact authority lookup;
+ * authentication still requires a valid JWT signature and matching claims.
+ * `session_id` is intentionally not a foreign key because this token family is
+ * also used for executor-backed branch/environment operations with synthetic
+ * session labels (for example `environment-start`).
+ */
+export const executorSessionTokenAuthorities = pgTable(
+  'executor_session_token_authorities',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    token_fingerprint: varchar('token_fingerprint', { length: 64 }).primaryKey(),
+    token_type: text('token_type').notNull(),
+    purpose: text('purpose').notNull(),
+    session_id: text('session_id').notNull(),
+    task_id: text('task_id'),
+    branch_id: text('branch_id'),
+    user_id: text('user_id').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    max_uses: integer('max_uses').notNull(),
+    use_count: integer('use_count').notNull().default(0),
+    last_used_at: t.timestamp('last_used_at'),
+    revoked_at: t.timestamp('revoked_at'),
+  },
+  (table) => ({
+    tenantSessionIdx: index('executor_session_token_authorities_tenant_session_idx').on(
+      table.tenant_id,
+      table.session_id
+    ),
+    expiresIdx: index('executor_session_token_authorities_expires_idx').on(table.expires_at),
+    revokedIdx: index('executor_session_token_authorities_revoked_idx')
+      .on(table.revoked_at)
+      .where(sql`${table.revoked_at} IS NOT NULL`),
+  })
+);
+
+/**
  * Messages table - Conversation messages within sessions
  *
  * Stores individual messages (user, assistant, system) for full conversation replay.
@@ -2451,6 +2491,9 @@ export type SessionRelationshipRow = typeof sessionRelationships.$inferSelect;
 export type SessionRelationshipInsert = typeof sessionRelationships.$inferInsert;
 export type TaskRow = typeof tasks.$inferSelect;
 export type TaskInsert = typeof tasks.$inferInsert;
+export type ExecutorSessionTokenAuthorityRow = typeof executorSessionTokenAuthorities.$inferSelect;
+export type ExecutorSessionTokenAuthorityInsert =
+  typeof executorSessionTokenAuthorities.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
 export type BoardRow = typeof boards.$inferSelect;

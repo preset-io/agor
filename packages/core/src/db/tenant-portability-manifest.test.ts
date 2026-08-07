@@ -9,13 +9,17 @@ import { buildTenantDeletionManifest } from './tenant-deletion-manifest';
 import {
   buildTenantInsertOrder,
   derivedImperativeTableNames,
+  nonPortableTenantTableNames,
   tenantPortabilityForeignKeys,
   tenantPortabilityTableNames,
 } from './tenant-portability-manifest';
 
 describe('buildTenantInsertOrder', () => {
   it('is the exact reverse of the deletion (child-first) order', () => {
-    const deletion = buildTenantDeletionManifest().map((entry) => entry.name);
+    const nonPortable = new Set(nonPortableTenantTableNames());
+    const deletion = buildTenantDeletionManifest()
+      .map((entry) => entry.name)
+      .filter((name) => !nonPortable.has(name));
     const insert = buildTenantInsertOrder().map((entry) => entry.name);
     expect(insert).toEqual([...deletion].reverse());
   });
@@ -38,6 +42,13 @@ describe('buildTenantInsertOrder', () => {
     for (const derived of derivedImperativeTableNames()) {
       expect(insertNames.has(derived)).toBe(false);
     }
+  });
+
+  it('deletes but never exports transient bearer-token authority', () => {
+    const nonPortable = nonPortableTenantTableNames();
+    expect(nonPortable).toEqual(['executor_session_token_authorities']);
+    expect(buildTenantDeletionManifest().map((entry) => entry.name)).toContain(nonPortable[0]);
+    expect(buildTenantInsertOrder().map((entry) => entry.name)).not.toContain(nonPortable[0]);
   });
 });
 

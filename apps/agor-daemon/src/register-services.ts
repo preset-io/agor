@@ -27,6 +27,7 @@ import {
   inArray,
   isPostgresDatabase,
   MCPServerRepository,
+  runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   type SessionMCPServerRow,
@@ -210,10 +211,13 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   // Initialize session token service
   const { SessionTokenService } = await import('./services/session-token-service.js');
-  const sessionTokenService = new SessionTokenService({
-    expiration_ms: config.execution?.session_token_expiration_ms || 24 * 60 * 60 * 1000,
-    max_uses: config.execution?.session_token_max_uses || -1,
-  });
+  const sessionTokenService = new SessionTokenService(
+    {
+      expiration_ms: config.execution?.session_token_expiration_ms ?? 24 * 60 * 60 * 1000,
+      max_uses: config.execution?.session_token_max_uses ?? -1,
+    },
+    { db }
+  );
 
   const appRecord = app as unknown as Record<string, unknown>;
   appRecord.sessionTokenService = sessionTokenService;
@@ -848,9 +852,10 @@ function createExecuteHandler(
         branchId: session.branch_id,
         // Executor JWTs authenticate on every daemon API call over the runtime
         // connection, so low per-call max-use limits make normal execution
-        // fail after startup. Keep expiry + in-memory revocation for these
-        // scoped runtime credentials; revisit max-use semantics once they can
-        // be counted per connection/task instead of per service method.
+        // fail after startup. Keep expiry + revocation for these scoped runtime
+        // credentials; reconnect reuses the same token and does not consume a
+        // separate connection allowance. Bounded tokens retain per-validation
+        // use counting for compatibility.
         maxUses: -1,
       }
     );
@@ -1157,8 +1162,16 @@ function createExecuteHandler(
           console.error(`❌ [Executor] Failed to coordinate executor exit:`, error);
         }
 
-        appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
-        nativeState?.finished.resolve();
+        try {
+          // Launcher callbacks can outlive the tenant transaction that spawned
+          // them. Leave any inherited DB scope before opening the fresh
+          // tenant scope derived from the verified token claim.
+          await runWithoutTenantDatabaseScope(() =>
+            appWithExecutor.sessionTokenService?.revokeToken(sessionToken)
+          );
+        } finally {
+          nativeState?.finished.resolve();
+        }
       },
     });
 

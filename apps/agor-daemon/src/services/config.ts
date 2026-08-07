@@ -122,8 +122,8 @@ export class ConfigService {
        * Explicit task-scoped executor JWT proof. The Socket.io connection can
        * authenticate as the session creator user while dropping custom JWT
        * claims from later service params, so executors include the minted token
-       * on this secret-resolution call and the daemon validates it against the
-       * in-memory session-token registry.
+       * on this secret-resolution call and the daemon validates its signature,
+       * scope, and active token authority.
        */
       executorSessionToken?: string;
     },

@@ -7,6 +7,7 @@ import {
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
+  isPostgresDatabaseHandle,
   MissingTenantDatabaseScopeError,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
@@ -72,6 +73,19 @@ describe('tenant operation context', () => {
 });
 
 describe('tenant-scoped database proxy', () => {
+  it('inspects a guarded handle dialect without requiring tenant scope', () => {
+    const sqlite = createTenantScopedDatabaseProxy({ run: vi.fn() } as unknown as Database, {
+      requireScope: true,
+    });
+    const postgres = createTenantScopedDatabaseProxy(
+      { transaction: vi.fn() } as unknown as Database,
+      { requireScope: true }
+    );
+
+    expect(isPostgresDatabaseHandle(sqlite)).toBe(false);
+    expect(isPostgresDatabaseHandle(postgres)).toBe(true);
+  });
+
   it('routes repository-style calls to the active tenant transaction', async () => {
     const tx = {
       execute: vi.fn(async () => []),
