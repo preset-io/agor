@@ -1,6 +1,7 @@
+import { realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const AGENTIC_TOOL_INTEGRATIONS = {
@@ -45,6 +46,64 @@ export function getAgenticToolInstallDir(
   return join(getAgenticToolsRoot(), agorVersion, tool);
 }
 
+function isContainedPath(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate);
+  return !(
+    relativePath.startsWith(`..${sep}`) ||
+    relativePath === '..' ||
+    isAbsolute(relativePath)
+  );
+}
+
+export type ManagedAgenticToolIntegration<T = unknown> = {
+  AGOR_INTEGRATION_VERSION?: string;
+  sdk?: T;
+  sdkV2?: unknown;
+};
+
+async function findInstalledPackageDirectory(
+  fromEntry: string,
+  packageName: string,
+  installRoot: string
+): Promise<string> {
+  const packageSegments = packageName.split('/');
+  for (let directory = dirname(fromEntry); isContainedPath(installRoot, directory); ) {
+    try {
+      return await realpath(join(directory, 'node_modules', ...packageSegments));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  throw new Error(`${packageName} is missing from the managed integration tree`);
+}
+
+/** Resolve and validate both wrapper and vendor code inside one managed tree. */
+export async function resolveManagedAgenticToolIntegration<T>(
+  tool: InstallableAgenticTool,
+  agorVersion: string
+): Promise<ManagedAgenticToolIntegration<T>> {
+  const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
+  const installDir = getAgenticToolInstallDir(tool, agorVersion);
+  const require = createRequire(join(installDir, 'package.json'));
+  const realInstallDir = await realpath(installDir);
+  const integrationEntry = await realpath(require.resolve(definition.packageName));
+  const vendorDirectory = await findInstalledPackageDirectory(
+    integrationEntry,
+    definition.vendorPackage,
+    realInstallDir
+  );
+  if (
+    !isContainedPath(realInstallDir, integrationEntry) ||
+    !isContainedPath(realInstallDir, vendorDirectory)
+  ) {
+    throw new Error('integration or vendor dependency resolved outside the managed directory');
+  }
+  return import(pathToFileURL(integrationEntry).href) as Promise<ManagedAgenticToolIntegration<T>>;
+}
+
 /**
  * Load an SDK from Agor's isolated, version-aligned integration tree.
  * Source checkouts use workspace dependencies unless managed mode is explicitly enabled.
@@ -58,28 +117,14 @@ export async function loadManagedAgenticToolSdk<T>(tool: InstallableAgenticTool)
 
   const agorVersion = process.env.AGOR_VERSION;
   if (!agorVersion) throw new Error('AGOR_VERSION is missing from the packaged Agor runtime');
-  const installDir = getAgenticToolInstallDir(tool, agorVersion);
-  const require = createRequire(join(installDir, 'package.json'));
-  let integrationEntry: string;
+  let integration: ManagedAgenticToolIntegration<T>;
   try {
-    integrationEntry = require.resolve(definition.packageName);
-    const relativeEntry = relative(installDir, integrationEntry);
-    if (
-      relativeEntry.startsWith(`..${sep}`) ||
-      relativeEntry === '..' ||
-      isAbsolute(relativeEntry)
-    ) {
-      throw new Error('resolved outside the managed integration directory');
-    }
+    integration = await resolveManagedAgenticToolIntegration<T>(tool, agorVersion);
   } catch {
     throw new Error(
       `${definition.displayName} support is not installed for Agor ${agorVersion}. Run: agor install ${installSlug}`
     );
   }
-  const integration = (await import(pathToFileURL(integrationEntry).href)) as {
-    AGOR_INTEGRATION_VERSION?: string;
-    sdk?: T;
-  };
   if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdk) {
     throw new Error(
       `${definition.displayName} support does not match Agor ${agorVersion}. Run: agor install ${installSlug}`

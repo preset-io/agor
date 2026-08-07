@@ -16,12 +16,20 @@ async function isExecutable(path: string): Promise<boolean> {
 }
 
 export async function readOpenCodeBinaryVersion(binary: string): Promise<string> {
+  return readOpenCodeCommandVersion({ executable: binary, argsPrefix: [] });
+}
+
+export type OpenCodeCommand = { executable: string; argsPrefix: readonly string[] };
+
+async function readOpenCodeCommandVersion(command: OpenCodeCommand): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command.executable, [...command.argsPrefix, '--version'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let output = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error(`OpenCode version check timed out for ${binary}`));
+      reject(new Error(`OpenCode version check timed out for ${command.executable}`));
     }, 5_000);
     child.stdout.on('data', (chunk) => {
       output += String(chunk);
@@ -52,7 +60,13 @@ export async function readOpenCodeBinaryVersion(binary: string): Promise<string>
 }
 
 export async function assertOpenCodeBinaryCompatibility(binary: string): Promise<string> {
-  const version = await readOpenCodeBinaryVersion(binary);
+  return assertOpenCodeCommandCompatibility({ executable: binary, argsPrefix: [] });
+}
+
+export async function assertOpenCodeCommandCompatibility(
+  command: OpenCodeCommand
+): Promise<string> {
+  const version = await readOpenCodeCommandVersion(command);
   if (version !== OPENCODE_VERSION) {
     throw new Error(
       `OpenCode CLI ${version} is incompatible with Agor's pinned SDK ${OPENCODE_VERSION}. ` +
@@ -63,7 +77,7 @@ export async function assertOpenCodeBinaryCompatibility(binary: string): Promise
 }
 
 /** Resolve the user-installed OpenCode CLI without assuming how it was installed. */
-export async function resolvePackagedOpenCodeBinary(): Promise<string> {
+export async function resolvePackagedOpenCodeBinary(): Promise<OpenCodeCommand> {
   if (process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
     const agorVersion = process.env.AGOR_VERSION;
     if (!agorVersion) throw new Error('AGOR_VERSION is missing from the packaged Agor runtime');
@@ -71,15 +85,12 @@ export async function resolvePackagedOpenCodeBinary(): Promise<string> {
     try {
       const require = createRequire(join(installDir, 'package.json'));
       const packageJson = require.resolve('opencode-ai/package.json');
-      const binary = join(
-        dirname(packageJson),
-        'bin',
-        process.platform === 'win32' ? 'opencode.exe' : 'opencode'
-      );
-      if (!(await isExecutable(binary)))
-        throw new Error(`managed binary is not executable: ${binary}`);
-      await assertOpenCodeBinaryCompatibility(binary);
-      return binary;
+      const wrapper = join(dirname(packageJson), 'bin', 'opencode');
+      if (!(await isExecutable(wrapper)))
+        throw new Error(`managed OpenCode wrapper is not accessible: ${wrapper}`);
+      const command = { executable: process.execPath, argsPrefix: [wrapper] };
+      await assertOpenCodeCommandCompatibility(command);
+      return command;
     } catch (error) {
       throw new Error(
         `OpenCode support is not usable for Agor ${agorVersion}: ${error instanceof Error ? error.message : String(error)}. Run: agor install opencode`
@@ -91,7 +102,7 @@ export async function resolvePackagedOpenCodeBinary(): Promise<string> {
   if (configured) {
     if (await isExecutable(configured)) {
       await assertOpenCodeBinaryCompatibility(configured);
-      return configured;
+      return { executable: configured, argsPrefix: [] };
     }
     throw new Error(`AGOR_OPENCODE_PATH is not executable: ${configured}`);
   }
@@ -102,7 +113,7 @@ export async function resolvePackagedOpenCodeBinary(): Promise<string> {
       const candidate = join(directory, name);
       if (await isExecutable(candidate)) {
         await assertOpenCodeBinaryCompatibility(candidate);
-        return candidate;
+        return { executable: candidate, argsPrefix: [] };
       }
     }
   }

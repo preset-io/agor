@@ -8,7 +8,7 @@ import type {
   OpenCodeProviderConnection,
   OpenCodeProviderDiscovery,
 } from '@agor/core/types';
-import { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import type { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import { createOpenCodeKnownModelCatalog } from '../shared/known-models.js';
 import type { OpenCodeAuthPayload } from './auth-payload.js';
 import {
@@ -17,6 +17,7 @@ import {
   verifyOpenCodeAuthFileBoundary as defaultVerifyOpenCodeAuthFileBoundary,
   OPENCODE_VERSION,
 } from './managed-server.js';
+import { loadOpenCodeSdkV2 } from './sdk-loader.js';
 
 export type { OpenCodeAuthPayload } from './auth-payload.js';
 
@@ -102,6 +103,7 @@ async function withFreshClient<T>(
     dataHome,
     secrets: [...secrets, directory],
   });
+  const { createOpencodeClient } = await loadOpenCodeSdkV2();
   const client = createOpencodeClient({
     baseUrl: server.baseUrl,
     directory,

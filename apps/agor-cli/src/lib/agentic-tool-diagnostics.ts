@@ -1,10 +1,8 @@
-import { createRequire } from 'node:module';
-import { isAbsolute, join, relative, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   AGENTIC_TOOL_INTEGRATIONS,
   getAgenticToolInstallDir,
   type InstallableAgenticTool,
+  resolveManagedAgenticToolIntegration,
 } from '@agor/core/agentic-integrations';
 import {
   getAgenticToolInstallSlug,
@@ -43,20 +41,7 @@ async function diagnoseManagedIntegration(
   }
 
   try {
-    const require = createRequire(join(installDir, 'package.json'));
-    const entry = require.resolve(definition.packageName);
-    const relativeEntry = relative(installDir, entry);
-    if (
-      relativeEntry.startsWith(`..${sep}`) ||
-      relativeEntry === '..' ||
-      isAbsolute(relativeEntry)
-    ) {
-      throw new Error('integration resolved outside its managed directory');
-    }
-    const integration = (await import(pathToFileURL(entry).href)) as {
-      AGOR_INTEGRATION_VERSION?: string;
-      sdk?: unknown;
-    };
+    const integration = await resolveManagedAgenticToolIntegration(tool, agorVersion);
     if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdk) {
       throw new Error('integration module failed its version check');
     }

@@ -56,14 +56,9 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
   mv /tmp/gh_*/bin/gh /usr/local/bin/ && \
   rm -rf /tmp/gh_*
 
-# Install the workspace package manager. Claude, Codex, and Gemini runtimes
-# are supplied by their version-aligned SDK dependencies during development;
-# installing separate global copies here caused large duplicate, mismatched payloads.
-# OpenCode's SDK does not include its CLI, so retain the exact runtime used by
-# the workspace adapter until Docker builds consume `agor install opencode`.
-RUN npm install -g \
-  pnpm@11.17.0 \
-  opencode-ai@1.14.33
+# Install only the workspace package manager in the shared image. Agentic-tool
+# runtimes are not part of production unless explicitly installed through Agor.
+RUN npm install -g pnpm@11.17.0
 
 # Arguments for matching host user UID/GID (default to 1000)
 ARG UID=1000
@@ -118,6 +113,10 @@ USER agor
 # Stage 2: Development (hot-reload for daemon and UI)
 # ============================================================================
 FROM base AS development
+
+# Source mode resolves OpenCode from PATH; keep its exact development runtime
+# out of the shared production base.
+RUN sudo npm install -g opencode-ai@1.14.33
 
 # Copy package files for dependency installation (as root, then chown)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

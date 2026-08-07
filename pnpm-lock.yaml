@@ -536,9 +536,6 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../core
-      '@opencode-ai/sdk':
-        specifier: 1.14.33
-        version: 1.14.33
       zod:
         specifier: ^4.3.6
         version: 4.4.3
@@ -546,6 +543,9 @@ importers:
       '@ant-design/icons':
         specifier: ^6.3.2
         version: 6.3.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@opencode-ai/sdk':
+        specifier: 1.14.33
+        version: 1.14.33
       '@testing-library/jest-dom':
         specifier: ^6.9.1
         version: 6.9.1
@@ -756,9 +756,6 @@ importers:
       '@oclif/plugin-help':
         specifier: ^6.2.53
         version: 6.2.53
-      '@opencode-ai/sdk':
-        specifier: 1.14.33
-        version: 1.14.33
       '@slack/socket-mode':
         specifier: ^2.0.7
         version: 2.0.7(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1)

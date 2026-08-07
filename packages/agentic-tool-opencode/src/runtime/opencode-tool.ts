@@ -21,8 +21,9 @@ import {
   type TaskID,
   type ToolUse,
 } from '@agor/core/types';
-import { createOpencodeClient } from '@opencode-ai/sdk';
+import type { createOpencodeClient } from '@opencode-ai/sdk';
 import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '../shared/index.js';
+import type { OpenCodeCommand } from './binary.js';
 import {
   createOpenCodeEventTranslator,
   type OpenCodeEventEffect,
@@ -37,6 +38,7 @@ import {
   resolvePackagedOpenCodeBinary,
   startManagedOpenCodeServer,
 } from './managed-server.js';
+import { loadOpenCodeSdk } from './sdk-loader.js';
 
 export { resolvePackagedOpenCodeBinary };
 
@@ -144,7 +146,7 @@ export type OpenCodeCanUseToolCallback = (
 }>;
 
 export type OpenCodeToolDependencies = {
-  resolveBinary?: () => Promise<string>;
+  resolveBinary?: () => Promise<string | OpenCodeCommand>;
   spawn?: (executable: string, args: readonly string[], options: SpawnOptions) => ManagedChild;
   createClient?: typeof createOpencodeClient;
   resolveInvocationConfig?: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
@@ -444,7 +446,7 @@ export class OpenCodeTool {
     | 'cancelPendingPermissions'
     | 'enrichContentBlocks'
   > & {
-    createClient: typeof createOpencodeClient;
+    createClient?: typeof createOpencodeClient;
     resolveInvocationConfig: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
     resolveMcpServers: NonNullable<OpenCodeToolDependencies['resolveMcpServers']>;
     getDaemonUrl: NonNullable<OpenCodeToolDependencies['getDaemonUrl']>;
@@ -457,7 +459,7 @@ export class OpenCodeTool {
     this.dependencies = {
       resolveBinary: dependencies.resolveBinary,
       spawn: dependencies.spawn,
-      createClient: dependencies.createClient ?? createOpencodeClient,
+      createClient: dependencies.createClient,
       resolveInvocationConfig:
         dependencies.resolveInvocationConfig ??
         ((input) =>
@@ -628,7 +630,9 @@ export class OpenCodeTool {
     let outcome: OpenCodeTurnResult | undefined;
     let turnFailure: Error | undefined;
     try {
-      client = this.dependencies.createClient({
+      const createClient =
+        this.dependencies.createClient ?? (await loadOpenCodeSdk()).createOpencodeClient;
+      client = createClient({
         baseUrl,
         directory: input.directory,
         headers: { Authorization: authorization },

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -33,11 +33,27 @@ async function createFakeManagedClaude(version: string): Promise<string> {
     '@agor',
     'claude'
   );
+  const vendorDirectory = join(
+    getAgenticToolInstallDir('claude-code', version),
+    'node_modules',
+    '@anthropic-ai',
+    'claude-agent-sdk'
+  );
   await mkdir(packageDirectory, { recursive: true });
+  await mkdir(vendorDirectory, { recursive: true });
   await writeFile(
     join(packageDirectory, 'package.json'),
     JSON.stringify({ name: '@agor/claude', type: 'module', exports: './index.js' })
   );
+  await writeFile(
+    join(vendorDirectory, 'package.json'),
+    JSON.stringify({
+      name: '@anthropic-ai/claude-agent-sdk',
+      type: 'module',
+      exports: './index.js',
+    })
+  );
+  await writeFile(join(vendorDirectory, 'index.js'), 'export const vendor = true;');
   return packageDirectory;
 }
 
@@ -65,6 +81,37 @@ describe('managed agentic tool loading', () => {
       'does not match Agor 1.2.4'
     );
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects a vendor dependency symlinked outside the managed tree',
+    async () => {
+      const packageDirectory = await createFakeManagedClaude('1.2.6');
+      await writeFile(
+        join(packageDirectory, 'index.js'),
+        "export const AGOR_INTEGRATION_VERSION = '1.2.6'; export const sdk = {};"
+      );
+      const vendorDirectory = join(
+        packageDirectory,
+        '..',
+        '..',
+        '@anthropic-ai',
+        'claude-agent-sdk'
+      );
+      const outside = await mkdtemp(join(tmpdir(), 'agor-agentic-vendor-'));
+      temporaryDirectories.push(outside);
+      await writeFile(
+        join(outside, 'package.json'),
+        JSON.stringify({ type: 'module', exports: './index.js' })
+      );
+      await writeFile(join(outside, 'index.js'), 'export const vendor = true;');
+      await rm(vendorDirectory, { recursive: true });
+      await symlink(outside, vendorDirectory, 'dir');
+
+      await expect(loadManagedAgenticToolSdk('claude-code')).rejects.toThrow(
+        'Run: agor install claude'
+      );
+    }
+  );
 
   it('returns an actionable error when support is absent', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-agentic-tools-'));

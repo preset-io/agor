@@ -10,6 +10,7 @@ const forbiddenBaseDependencies = [
   '@github/copilot-sdk',
   '@google/gemini-cli-core',
   '@cursor/sdk',
+  '@opencode-ai/sdk',
   'opencode-ai',
 ];
 const failures = [];
