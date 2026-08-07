@@ -40,6 +40,7 @@ const identity: TenantDatabaseIdentity = {
   schemaVersion: '0072_example',
   migrations: ['0000_a', '0072_example'],
   tenantTables: [],
+  nonPortableTenantTables: ['executor_session_token_authorities'],
   presentImperativeTables: [],
   fingerprint: sha256Hex('identity'),
 };

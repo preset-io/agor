@@ -20,7 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { UUID } from '../types/id';
 import { createDatabase, type Database } from './client';
-import { executeRaw, isPostgresDatabase, select, update } from './database-wrapper';
+import { executeRaw, insert, isPostgresDatabase, select, update } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import { BoardRepository } from './repositories/boards';
 import { BranchRepository } from './repositories/branches';
@@ -121,6 +121,26 @@ async function addSession(db: Database, tenantId: string): Promise<void> {
       agentic_tool: 'claude-code',
       created_by: 'tenant-portability-test-user',
     });
+  });
+}
+
+async function seedNonPortableExecutorAuthority(db: Database, tenantId: string): Promise<void> {
+  const fingerprint = generateId().replaceAll('-', '').repeat(2);
+  await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    await insert(scoped, pg.executorSessionTokenAuthorities)
+      .values({
+        tenant_id: tenantId,
+        token_fingerprint: fingerprint,
+        token_type: 'executor-session',
+        purpose: 'executor-task',
+        session_id: 'tenant-portability-non-portable-authority',
+        user_id: 'tenant-portability-test-user',
+        created_at: new Date(),
+        expires_at: new Date(Date.now() + 60_000),
+        max_uses: -1,
+        use_count: 0,
+      })
+      .run();
   });
 }
 
@@ -612,6 +632,35 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     // The occupied tenant was left untouched by the refused re-home.
     const inspection = await inspectTenant(db, occupied);
     expect(inspection.database.totalRows).toBeGreaterThan(0);
+
+    await deleteTenantData(db, source);
+    await deleteTenantData(db, occupied);
+  });
+
+  it('models non-portable token authority explicitly and treats it as destination occupancy', async () => {
+    const source = `tpnp-src-${generateId()}`;
+    const occupied = `tpnp-dst-${generateId()}`;
+    await seedTenant(db, source);
+    const archive = join(scratch, `${source}-archive`);
+    await exportTenant(db, source, { archivePath: archive });
+
+    const manifest = await readManifest(archive);
+    expect(manifest.database.identity.nonPortableTenantTables).toEqual([
+      'executor_session_token_authorities',
+    ]);
+    expect(manifest.database.identity.tenantTables).not.toContain(
+      'executor_session_token_authorities'
+    );
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'executor_session_token_authorities'
+    );
+
+    // A destination containing only non-portable authority is not empty. An
+    // import must never retain that bearer policy beside newly restored rows.
+    await seedNonPortableExecutorAuthority(db, occupied);
+    await expect(importTenant(db, { archivePath: archive, tenantId: occupied })).rejects.toThrow(
+      /destination database is not empty/i
+    );
 
     await deleteTenantData(db, source);
     await deleteTenantData(db, occupied);

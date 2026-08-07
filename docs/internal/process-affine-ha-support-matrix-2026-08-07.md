@@ -97,6 +97,27 @@ enabling shared mode or changing any other process-affine surface.
   (`packages/core/drizzle/sqlite/0078_executor_session_token_authority.sql:1-27`;
   `session-token-service.ts:280-293,354-388`).
 
+### Review remediation
+
+The first Codex review and PostgreSQL CI exposed three blocking integration
+gaps, all corrected before follow-up review:
+
+- the tenant database identity now classifies movable and non-portable tables
+  separately. Archives carry the non-portable classification but never its
+  rows, and import/re-home treats any destination authority row as occupied
+  rather than silently retaining it;
+- retention SQL uses the Drizzle timestamp column encoder for every raw
+  PostgreSQL `Date` parameter, including the integration fixture;
+- executor `onExit` explicitly accepts asynchronous callbacks and centrally
+  observes synchronous throws and promise rejections with bounded, secret-safe
+  logging, so revocation failure is not an unhandled rejection.
+
+Reconnect coverage now enters the production Feathers `ServiceJWTStrategy`
+twice with distinct connection objects. The PostgreSQL form still issues on
+daemon A and performs both authentications through daemon B; the fast form
+executes without the PostgreSQL test gate so this boundary cannot silently
+degrade when the database suite is unavailable.
+
 ### Owner death and recovery after this prerequisite
 
 If daemon A issued the token and dies, its sockets and any in-flight ACK still

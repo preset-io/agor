@@ -264,6 +264,10 @@ function assertIdentityShape(identity: unknown): void {
     'Archive manifest database.identity.tenantTables must be an array of table names'
   );
   assertManifest(
+    isStringArray(identity.nonPortableTenantTables),
+    'Archive manifest database.identity.nonPortableTenantTables must be an array of table names'
+  );
+  assertManifest(
     isStringArray(identity.presentImperativeTables),
     'Archive manifest database.identity.presentImperativeTables must be an array of table names'
   );

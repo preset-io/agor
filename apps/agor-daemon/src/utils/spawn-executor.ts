@@ -133,7 +133,7 @@ export interface SpawnExecutorOptions {
    * excluded: it must come from the ambient tenant context.
    */
   templateVariables?: Omit<ExecutorTemplateVariables, 'tenant_id'>;
-  onExit?: (code: number | null, context: ExecutorSpawnContext) => void;
+  onExit?: (code: number | null, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
   onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
@@ -150,6 +150,29 @@ export interface ExecutorCommandResult {
     message: string;
     details?: unknown;
   };
+}
+
+/**
+ * Invoke a fire-and-forget lifecycle callback while observing both synchronous
+ * throws and asynchronous rejections. The spawn API deliberately remains void,
+ * but callback failures must never become process-level unhandled rejections.
+ * Error objects are not logged because database failures can carry bound token
+ * fingerprints or other sensitive parameters.
+ */
+function observeExitCallback(
+  callback: SpawnExecutorOptions['onExit'],
+  code: number | null,
+  context: ExecutorSpawnContext,
+  logPrefix: string
+): void {
+  if (!callback) return;
+  try {
+    void Promise.resolve(callback(code, context)).catch(() => {
+      console.error(`${logPrefix} Executor exit callback failed`);
+    });
+  } catch {
+    console.error(`${logPrefix} Executor exit callback failed`);
+  }
 }
 
 export interface RunExecutorCommandOptions
@@ -403,7 +426,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
         `This usually means the branch or repo directory was deleted out-of-band. ` +
         `Verify that the volume backing the working directory persists across restarts.`
     );
-    options.onExit?.(127, { mode: 'local' });
+    observeExitCallback(options.onExit, 127, { mode: 'local' }, logPrefix);
     return;
   }
 
@@ -424,7 +447,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code, { mode: 'local' });
+    observeExitCallback(options.onExit, code, { mode: 'local' }, logPrefix);
   };
 
   const executorProcess = spawn(cmd, args, {
@@ -484,7 +507,7 @@ function spawnExecutorWithTemplate(
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code, { mode: 'templated' });
+    observeExitCallback(options.onExit, code, { mode: 'templated' }, logPrefix);
   };
 
   const executorProcess = spawn('sh', ['-c', command], {

@@ -205,6 +205,26 @@ describe('configured executor spawning', () => {
     expect(onExit).toHaveBeenCalledWith(17, { mode: 'templated' });
   });
 
+  it('observes async onExit rejection without logging sensitive error details', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const onExit = vi.fn(async () => {
+      throw new Error('bound token fingerprint must not be logged');
+    });
+    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+
+    configureExecutor({ executor_command_template: 'echo {command}' });
+    spawnExecutor({ command: 'git.clone' }, { onExit, logPrefix: '[test]' });
+
+    proc.emit('exit', 17);
+    await vi.waitFor(() => {
+      expect(console.error).toHaveBeenCalledWith('[test] Executor exit callback failed');
+    });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
+      'bound token fingerprint'
+    );
+  });
+
   it('keeps createConfiguredSpawner isolated from module-level defaults', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);

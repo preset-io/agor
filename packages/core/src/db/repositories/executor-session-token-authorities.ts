@@ -253,8 +253,11 @@ export class ExecutorSessionTokenAuthorityRepository {
         sql`
           SELECT tenant_id
           FROM ${executorSessionTokenAuthorities}
-          WHERE expires_at < ${cutoff}
-             OR (revoked_at IS NOT NULL AND revoked_at < ${cutoff})
+          WHERE expires_at < ${sql.param(cutoff, executorSessionTokenAuthorities.expires_at)}
+             OR (
+               revoked_at IS NOT NULL
+               AND revoked_at < ${sql.param(cutoff, executorSessionTokenAuthorities.revoked_at)}
+             )
           GROUP BY tenant_id
           ORDER BY tenant_id
           LIMIT ${limit}
@@ -286,8 +289,11 @@ export class ExecutorSessionTokenAuthorityRepository {
             DELETE FROM ${executorSessionTokenAuthorities}
             WHERE tenant_id = ${tenantId}
               AND (
-                expires_at < ${cutoff}
-                OR (revoked_at IS NOT NULL AND revoked_at < ${cutoff})
+                expires_at < ${sql.param(cutoff, executorSessionTokenAuthorities.expires_at)}
+                OR (
+                  revoked_at IS NOT NULL
+                  AND revoked_at < ${sql.param(cutoff, executorSessionTokenAuthorities.revoked_at)}
+                )
               )
             RETURNING 1
           )

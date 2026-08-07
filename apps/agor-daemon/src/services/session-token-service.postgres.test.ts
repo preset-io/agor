@@ -13,20 +13,26 @@ import {
   createTenantScopedDatabaseProxy,
   ExecutorSessionTokenAuthorityRepository,
   executeRaw,
+  executorSessionTokenAuthorities,
   initializeDatabase,
   isPostgresDatabase,
   type RawDatabase,
   runWithoutTenantDatabaseScope,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   sql,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { AuthenticationService, feathers } from '@agor/core/feathers';
+import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
 } from '../auth/executor-session-token.js';
+import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
+import { ServiceJWTStrategy } from '../auth/service-jwt-strategy.js';
 import { SessionTokenService } from './session-token-service.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -45,6 +51,73 @@ function makeService(db: TenantScopeAwareDatabase, now: () => Date, maxUses = -1
   service.setJwtSecret(jwtSecret);
   return service;
 }
+
+function makeExecutorAuthenticationService(sessionTokenService: SessionTokenService) {
+  const app = feathers();
+  app.set('authentication', {
+    secret: jwtSecret,
+    entity: 'user',
+    entityId: 'user_id',
+    service: 'users',
+    authStrategies: ['jwt'],
+    jwtOptions: {
+      header: { typ: 'access' },
+      audience: RUNTIME_JWT_AUDIENCE,
+      issuer: RUNTIME_JWT_ISSUER,
+      algorithm: 'HS256',
+      expiresIn: '1m',
+    },
+  });
+  app.use('users', {
+    async get(userId: string) {
+      return { user_id: userId, email: '', role: ROLES.MEMBER };
+    },
+  });
+  const authentication = new AuthenticationService(app);
+  authentication.register('jwt', new ServiceJWTStrategy(sessionTokenService));
+  app.use('authentication', authentication);
+  return app.service('authentication');
+}
+
+describe('executor token Feathers authentication contract', () => {
+  it('re-authenticates a fresh connection through the production JWT strategy', async () => {
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: -1 },
+      { startCleanupTimer: false }
+    );
+    service.setJwtSecret(jwtSecret);
+    const token = runWithTenantContext('tenant-fast-auth', () =>
+      service.generateToken('session-fast-auth', 'user-fast-auth', {
+        taskId: 'task-fast-auth',
+        branchId: 'branch-fast-auth',
+      })
+    );
+    const authentication = makeExecutorAuthenticationService(service);
+
+    for (let connectionNumber = 0; connectionNumber < 2; connectionNumber += 1) {
+      const connection: Record<string, unknown> = {};
+      const result = await authentication.create(
+        { strategy: 'jwt', accessToken: await token },
+        { connection }
+      );
+      expect(result).toMatchObject({
+        session_id: 'session-fast-auth',
+        task_id: 'task-fast-auth',
+        branch_id: 'branch-fast-auth',
+        user: { user_id: 'user-fast-auth' },
+      });
+      expect(connection).toMatchObject({
+        authentication: {
+          strategy: 'jwt',
+        },
+      });
+      expect(
+        typeof (connection.authentication as { accessToken?: unknown } | undefined)?.accessToken
+      ).toBe('string');
+    }
+    service.close();
+  });
+});
 
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
   'SessionTokenService authority (PostgreSQL)',
@@ -74,7 +147,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await (rawDb as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
     });
 
-    it('issues on daemon A and authenticates initial connection plus reconnect on daemon B', async () => {
+    it('issues on daemon A and authenticates fresh Feathers connections on daemon B', async () => {
       const tenantId = `executor-token-peer-${randomUUID()}`;
       const token = await runWithTenantDatabaseScope(db, tenantId, () =>
         daemonA.generateToken('session-peer', 'user-peer', {
@@ -84,23 +157,48 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         })
       );
 
-      const initial = await daemonB.validateToken(token, {
-        tenantId,
-        userId: 'user-peer',
-        sessionId: 'session-peer',
-        taskId: 'task-peer',
-        branchId: 'branch-peer',
-      });
-      const reconnect = await daemonB.validateToken(token, {
-        tenantId,
-        userId: 'user-peer',
-        sessionId: 'session-peer',
-        taskId: 'task-peer',
-        branchId: 'branch-peer',
-      });
+      const authentication = makeExecutorAuthenticationService(daemonB);
+      const initialConnection: Record<string, unknown> = {};
+      const reconnectConnection: Record<string, unknown> = {};
+      const initial = await authentication.create(
+        { strategy: 'jwt', accessToken: token },
+        { connection: initialConnection }
+      );
+      const reconnect = await authentication.create(
+        { strategy: 'jwt', accessToken: token },
+        { connection: reconnectConnection }
+      );
 
-      expect(initial).toMatchObject({ session_id: 'session-peer', task_id: 'task-peer' });
-      expect(reconnect).toEqual(initial);
+      expect(initial).toMatchObject({
+        session_id: 'session-peer',
+        task_id: 'task-peer',
+        branch_id: 'branch-peer',
+        user: { user_id: 'user-peer' },
+      });
+      expect(reconnect).toMatchObject({
+        session_id: 'session-peer',
+        task_id: 'task-peer',
+        branch_id: 'branch-peer',
+        user: { user_id: 'user-peer' },
+      });
+      expect(initialConnection).toMatchObject({
+        authentication: {
+          strategy: 'jwt',
+        },
+      });
+      expect(
+        typeof (initialConnection.authentication as { accessToken?: unknown } | undefined)
+          ?.accessToken
+      ).toBe('string');
+      expect(reconnectConnection).toMatchObject({
+        authentication: {
+          strategy: 'jwt',
+        },
+      });
+      expect(
+        typeof (reconnectConnection.authentication as { accessToken?: unknown } | undefined)
+          ?.accessToken
+      ).toBe('string');
 
       await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         const result = await (
@@ -356,7 +454,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           scoped,
           sql`
             UPDATE executor_session_token_authorities
-            SET revoked_at = ${new Date(wallNow.getTime() - 25 * 60 * 60 * 1000)}
+            SET revoked_at = ${sql.param(
+              new Date(wallNow.getTime() - 25 * 60 * 60 * 1000),
+              executorSessionTokenAuthorities.revoked_at
+            )}
             WHERE token_fingerprint = ${oldRevokedFingerprint}
           `
         );

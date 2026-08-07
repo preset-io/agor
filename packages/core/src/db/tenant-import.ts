@@ -48,6 +48,7 @@ import {
 } from './tenant-archive';
 import { resolveTenantDatabaseIdentity } from './tenant-catalog';
 import {
+  countTenantTableRows,
   deriveExpectedTenantTableSnapshots,
   insertTenantTableRows,
   snapshotTenantTableHashes,
@@ -110,12 +111,22 @@ type PortionState = 'empty' | 'matches' | 'conflict';
 async function classifyDatabase(
   db: Database,
   tenantId: string,
-  expectedByName: Map<string, { rowCount: number; sha256: string }>
+  expectedByName: Map<string, { rowCount: number; sha256: string }>,
+  nonPortableTableNames: readonly string[]
 ): Promise<{ state: PortionState; totalRows: number }> {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     const snapshots = await snapshotTenantTableHashes(scoped, tenantId);
     let totalRows = 0;
     let anyMismatch = false;
+    // Non-portable authority rows are intentionally absent from the archive,
+    // but they still prove the destination tenant is occupied. Silently
+    // retaining one could reactivate a source-independent bearer after an
+    // otherwise successful import/re-home, so any such row is a conflict.
+    for (const tableName of nonPortableTableNames) {
+      const rowCount = await countTenantTableRows(scoped, tableName, tenantId);
+      totalRows += rowCount;
+      if (rowCount > 0) anyMismatch = true;
+    }
     for (const snapshot of snapshots) {
       totalRows += snapshot.rowCount;
       const expected = expectedByName.get(snapshot.name);
@@ -269,7 +280,12 @@ export async function importTenant(
   );
 
   // Classify each destination portion.
-  const dbClassification = await classifyDatabase(db, tenantId, expectedByName);
+  const dbClassification = await classifyDatabase(
+    db,
+    tenantId,
+    expectedByName,
+    identity.nonPortableTenantTables
+  );
   if (dbClassification.state === 'conflict') {
     throw new MalformedArchiveError(
       'Refusing to import: destination database is not empty and does not match this archive'
