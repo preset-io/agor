@@ -742,11 +742,17 @@ describe('agor_sessions_create', () => {
     const result = await agor_sessions_create({
       branchId: 'wt-1',
       agenticTool: 'claude-code',
+      enableCallback: true,
     });
 
     // New session genealogy should reference the calling session as parent
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.genealogy.parent_session_id).toBe('sess-caller');
+    expect(created.callback_config).toMatchObject({
+      enabled: true,
+      callback_session_id: 'sess-caller',
+      callback_mode: 'persistent',
+    });
 
     // Parent's children list should be updated to include the new session
     expect(patchCalls).toHaveLength(1);
@@ -758,6 +764,38 @@ describe('agor_sessions_create', () => {
     // Note in response should mention the parent link
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.note).toContain('sess-caller');
+  });
+
+  it('rejects a default callback target the caller cannot prompt', async () => {
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    vi.mocked(ensureCanPromptTargetSession).mockRejectedValueOnce(
+      new Error('Prompt permission required')
+    );
+    const sessionCreate = vi.fn();
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: { create: sessionCreate },
+    });
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-view-only' },
+      ['agor_sessions_create']
+    );
+
+    await expect(
+      agor_sessions_create({
+        branchId: 'wt-1',
+        agenticTool: 'claude-code',
+        enableCallback: true,
+      })
+    ).rejects.toThrow('Prompt permission required');
+    expect(ensureCanPromptTargetSession).toHaveBeenCalledWith(
+      'sess-view-only',
+      'user-1',
+      app,
+      expect.anything()
+    );
+    expect(sessionCreate).not.toHaveBeenCalled();
   });
 
   it('does not set parent_session_id when called without session context', async () => {
@@ -1131,6 +1169,93 @@ describe('agor_sessions_prompt (subsession mode)', () => {
       effort: 'max',
       provider: 'anthropic',
     });
+  });
+});
+
+describe('agor_sessions_prompt task callback', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('binds callback:true to trusted calling session context', async () => {
+    const promptCalls: any[] = [];
+    const app = makeFakeApp({
+      '/sessions/:id/prompt': {
+        create: async (...args: unknown[]) => {
+          promptCalls.push(args);
+          return { task_id: 'task-1', status: 'queued', queue_position: 1 };
+        },
+      },
+    });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_prompt']
+    );
+
+    await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'continue exactly this task',
+      mode: 'continue',
+      callback: true,
+    });
+
+    expect(promptCalls[0][1]).toMatchObject({
+      route: { id: 'sess-target' },
+      _taskCompletionCallback: {
+        target_session_id: 'sess-caller',
+        requested_from_session_id: 'sess-caller',
+        requested_by_user_id: 'user-1',
+      },
+    });
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    expect(ensureCanPromptTargetSession).toHaveBeenCalledWith(
+      'sess-caller',
+      'user-1',
+      app,
+      expect.anything()
+    );
+  });
+
+  it('rejects callback:true when the caller cannot prompt its callback session', async () => {
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    vi.mocked(ensureCanPromptTargetSession).mockRejectedValueOnce(
+      new Error('Prompt permission required')
+    );
+    const promptCreate = vi.fn();
+    const app = makeFakeApp({ '/sessions/:id/prompt': { create: promptCreate } });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-view-only' },
+      ['agor_sessions_prompt']
+    );
+
+    await expect(
+      agor_sessions_prompt({
+        sessionId: 'sess-target',
+        prompt: 'continue',
+        mode: 'continue',
+        callback: true,
+      })
+    ).rejects.toThrow('Prompt permission required');
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects callback:true without current session context', async () => {
+    const promptCreate = vi.fn();
+    const app = makeFakeApp({ '/sessions/:id/prompt': { create: promptCreate } });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_prompt',
+    ]);
+
+    const result = await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'continue',
+      mode: 'continue',
+      callback: true,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(promptCreate).not.toHaveBeenCalled();
   });
 });
 

@@ -39,7 +39,7 @@ import {
   resolveSecurity,
   saveConfig,
 } from '@agor/core/config';
-import { getDatabaseUrl } from '@agor/core/db';
+import { generateId, getDatabaseUrl } from '@agor/core/db';
 import {
   authenticate,
   Forbidden,
@@ -63,6 +63,7 @@ import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import { initializeDatabase } from './setup/database.js';
+import { initializeDistributedWorkIdentity } from './setup/distributed-work-identity.js';
 import { warnDeprecatedConfig } from './setup/first-run-admin.js';
 import { securityHeaders } from './setup/security-headers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
@@ -276,6 +277,16 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Create Feathers app + Express middleware
   // --------------------------------------------------------------------------
   const app = feathersExpress(feathers());
+  // One application-owned identity spans every background worker in this
+  // daemon process. A dedicated YAML deployment.instance_id may be added with
+  // the HA config contract later; unrelated auth configuration is not reused.
+  const distributedWorkIdentity = initializeDistributedWorkIdentity(app, {
+    environment: {
+      AGOR_DAEMON_INSTANCE_ID: process.env.AGOR_DAEMON_INSTANCE_ID,
+      HOSTNAME: process.env.HOSTNAME,
+    },
+    generateBootId: generateId,
+  });
 
   // Configure how many reverse proxies we trust in front of the daemon.
   // Default 0 = ignore X-Forwarded-* entirely (so a client cannot spoof their
@@ -732,5 +743,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     getSocketServer: socketIOConfig.getSocketServer,
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
+    distributedWorkIdentity,
+    // Explicit compatibility boundary until daemon HA configuration lands.
+    // Shared PostgreSQL deployments must opt into `shared_postgres` rather
+    // than silently changing standalone restart semantics.
+    taskRuntimePolicy: 'standalone',
   });
 }

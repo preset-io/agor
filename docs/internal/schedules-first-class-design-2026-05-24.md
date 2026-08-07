@@ -17,7 +17,10 @@ Promote schedules from a one-per-branch blob of columns on `branches` into a fir
 - **Migration** is a single PR: add `schedules`, backfill existing enabled schedules with `timezone_mode='utc'`, ship UI, and drop the four `schedule_*` columns + `data.schedule` JSON blob from `branches` in the same migration. (Per Max — no PR stacking.)
 - **Modal** rewrite — **prompt textarea up top**, compact agent picker, advanced settings collapsed. Add IANA tz dropdown only when `mode=local`.
 - **RBAC:** the schedules service reuses the branch-tier helpers that sessions already uses (`ensureBranchPermission`, `loadBranch`, `injectCreatedBy`, etc. — see §4.4). Tier requirements mirror sessions: `view` to list/get, `session` to create, `session`-for-own / `all`-for-others to patch, `all` to delete, `prompt`-or-own-`session` to `run_now`. Same `config.execution.branch_rbac` feature flag. One new helper: `scopeScheduleQuery` (SQL-JOIN find filter).
-- **Cross-cutting:** HA design ([#1252](https://github.com/preset-io/agor/pull/1252)) wants Postgres advisory locks around the tick — first-class schedules makes the locked region per-schedule instead of per-tick, which is the right scaling shape anyway.
+- **Cross-cutting (updated 2026-08-05):** the original HA draft proposed
+  PostgreSQL advisory locks, but no scheduler callsite ever acquired one. The
+  implemented first HA slice uses a short schedule-row `FOR UPDATE` admission
+  lock plus durable Session/Task identities and transitions; see §7d.
 
 Recommended data-model shape (one paragraph): a `schedules` row owns its own cron, timezone-mode, prompt, agentic-tool config, and enabled flag; `(enabled, next_run_at)` index drives the scheduler; sessions get a nullable `schedule_id` FK so "click a run, open the session" is one join; multiple schedules per branch fall out for free.
 
@@ -113,19 +116,19 @@ schedule?: {
 
 [`apps/agor-daemon/src/services/scheduler.ts`](../../apps/agor-daemon/src/services/scheduler.ts) — single file, ~700 lines.
 
-| Concern             | Where                                                                       | Notes                                                                                                               |
-| ------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Tick interval       | [`:113`](../../apps/agor-daemon/src/services/scheduler.ts#L113)             | `30_000ms`, configurable                                                                                            |
-| Grace window        | [`:114`](../../apps/agor-daemon/src/services/scheduler.ts#L114)             | `120_000ms`; "fire most recent missed run, no backfill"                                                             |
-| `setInterval` start | [`:142`](../../apps/agor-daemon/src/services/scheduler.ts#L142)             | This is the line [#1252 §HA](https://github.com/preset-io/agor/pull/1252) wants wrapped in a Postgres advisory lock |
-| Due query           | [`:212-220`](../../apps/agor-daemon/src/services/scheduler.ts#L212-L220)    | `findAll().filter(enabled)` — in-memory                                                                             |
-| Cron parser         | [`cron.ts:8`](../../packages/core/src/utils/cron.ts#L8)                     | `cron-parser` v5                                                                                                    |
-| Cron tz             | [`cron.ts:21,39,85,105,130,158`](../../packages/core/src/utils/cron.ts#L21) | Hardcoded `'UTC'` everywhere                                                                                        |
-| Dedup               | [`:439-441`](../../apps/agor-daemon/src/services/scheduler.ts#L439-L441)    | `findAll()` then `.find(scheduled_run_at === ...)`                                                                  |
-| Concurrency guard   | [`:449-470`](../../apps/agor-daemon/src/services/scheduler.ts#L449-L470)    | Cron = silent skip; manual = `ScheduleBusyError` → 409                                                              |
-| Spawn               | [`:483-526`](../../apps/agor-daemon/src/services/scheduler.ts#L483-L526)    | Normal `sessions.create()` with markers                                                                             |
-| Metadata write-back | [`:644-649`](../../apps/agor-daemon/src/services/scheduler.ts#L644-L649)    | Updates `schedule_last_triggered_at`, `schedule_next_run_at`                                                        |
-| Retention           | [`:665-705`](../../apps/agor-daemon/src/services/scheduler.ts#L665-L705)    | `findAll()` then sort DESC by `scheduled_run_at`, slice(N) → delete                                                 |
+| Concern             | Where                                                                       | Notes                                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Tick interval       | [`:113`](../../apps/agor-daemon/src/services/scheduler.ts#L113)             | `30_000ms`, configurable                                                                                                |
+| Grace window        | [`:114`](../../apps/agor-daemon/src/services/scheduler.ts#L114)             | `120_000ms`; "fire most recent missed run, no backfill"                                                                 |
+| `setInterval` start | [`:142`](../../apps/agor-daemon/src/services/scheduler.ts#L142)             | Historical implementation; the HA slice replaced this with jittered `setTimeout` scans and did not add an advisory lock |
+| Due query           | [`:212-220`](../../apps/agor-daemon/src/services/scheduler.ts#L212-L220)    | `findAll().filter(enabled)` — in-memory                                                                                 |
+| Cron parser         | [`cron.ts:8`](../../packages/core/src/utils/cron.ts#L8)                     | `cron-parser` v5                                                                                                        |
+| Cron tz             | [`cron.ts:21,39,85,105,130,158`](../../packages/core/src/utils/cron.ts#L21) | Hardcoded `'UTC'` everywhere                                                                                            |
+| Dedup               | [`:439-441`](../../apps/agor-daemon/src/services/scheduler.ts#L439-L441)    | `findAll()` then `.find(scheduled_run_at === ...)`                                                                      |
+| Concurrency guard   | [`:449-470`](../../apps/agor-daemon/src/services/scheduler.ts#L449-L470)    | Cron = silent skip; manual = `ScheduleBusyError` → 409                                                                  |
+| Spawn               | [`:483-526`](../../apps/agor-daemon/src/services/scheduler.ts#L483-L526)    | Normal `sessions.create()` with markers                                                                                 |
+| Metadata write-back | [`:644-649`](../../apps/agor-daemon/src/services/scheduler.ts#L644-L649)    | Updates `schedule_last_triggered_at`, `schedule_next_run_at`                                                            |
+| Retention           | [`:665-705`](../../apps/agor-daemon/src/services/scheduler.ts#L665-L705)    | `findAll()` then sort DESC by `scheduled_run_at`, slice(N) → delete                                                     |
 
 ### 3.3 Session-as-run encoding
 
@@ -814,26 +817,20 @@ Keep 30s — it's the right granularity (cron's minimum is 1min so 30s gives 2 t
 Today: `sessionRepo.findAll() → .filter(branch_id) → .find(scheduled_run_at)` ([`scheduler.ts:439-441`](../../apps/agor-daemon/src/services/scheduler.ts#L439-L441)).
 Proposed: `SELECT 1 FROM sessions WHERE schedule_id = ? AND scheduled_run_at = ? LIMIT 1` using `sessions_schedule_run_unique`. Indexed lookup.
 
-### 7d. HA / lock semantics (cross-ref #1252)
+### 7d. HA / lock semantics (updated 2026-08-05)
 
-[#1252](https://github.com/preset-io/agor/pull/1252) §T2 calls for a Postgres advisory lock around the scheduler tick ([`scheduler.ts:142`](../../apps/agor-daemon/src/services/scheduler.ts#L142)). With first-class schedules the right shape is **per-schedule** locking, not per-tick — and we're shipping that in V1.
+The V1 design text previously claimed that a per-schedule PostgreSQL advisory lock
+was implemented. It was not: the scheduler never called the helper, and holding a
+transaction while spawning would have violated the short-transaction requirement.
 
-```ts
-// pseudocode — runs once per due schedule, inside the tick loop
-const lockKey = hashScheduleId(schedule.schedule_id); // stable bigint
-const acquired = await db.execute(sql`SELECT pg_try_advisory_xact_lock(${lockKey})`);
-if (!acquired) continue; // another holder is handling this schedule
-// spawn session, advance metadata...
-// transaction commit auto-releases the lock
-```
+The first actual HA slice uses a short `FOR UPDATE` lock on the durable schedule row
+only for occurrence admission and the schedule-scoped concurrency check. Session
+uniqueness, stable initial Task identity, and the atomic Task DISPATCHING transition
+own correctness after commit. SQLite keeps occurrence uniqueness as its race guard.
+The unused advisory-lock helpers were removed.
 
-**Important V1 scope note: Agor is single-daemon today.** The per-schedule lock guards _same-schedule_ duplicate work — useful as forward-positioning if multi-daemon ever lands — but on its own it does NOT preserve the branch-wide `allow_concurrent_runs=false` invariant across daemons. Two daemons could lock two different schedules on the same branch and both pass the branch-level concurrency check. Branch-scoped advisory locking (or a fully serialized scheduler leader) is deferred until multi-daemon is actually supported.
-
-What V1 _does_ protect — even forward into multi-daemon — is duplicate same-schedule runs: a partial unique index `sessions_schedule_run_unique ON (schedule_id, scheduled_run_at) WHERE schedule_id IS NOT NULL AND scheduled_run_at IS NOT NULL` causes the second `(schedule_id, scheduled_run_at)` insert to fail at the DB layer; the scheduler catches the unique-violation as a dedup hit. This guard is dialect-neutral.
-
-**SQLite path:** the advisory-lock attempt is a no-op (`tryAdvisoryXactLock` short-circuits via `isPostgresDatabase`). SQLite is single-node by definition; the unique index alone protects against intra-process check-then-create races between the cron tick and manual run-now paths.
-
-**Coordination with #1252:** that PR's recommended advisory-lock helper lives in `packages/core/src/db/database-wrapper.ts` (`tryAdvisoryXactLock`, `advisoryLockKeyForUuid`) — we built it as part of this work.
+See [scheduler HA and recoverable occurrence initialization](./scheduler-ha-recovery-2026-08-05.md)
+for the implemented state machine, kill-point audit, and recovery bounds.
 
 ---
 
@@ -910,7 +907,8 @@ Max wrote it. Concepts that translate:
 - **Drop** the four `branches.schedule_*` columns + `data.schedule` blob in the same migration (§5.3)
 - Schedules CRUD service (Feathers + REST + WebSocket events)
 - Branch-tier RBAC wired via existing helpers, gated by `execution.branch_rbac` (§4.4)
-- Scheduler reads from `schedules`, honors `timezone_mode`, takes per-schedule `pg_try_advisory_xact_lock` (§7d)
+- Scheduler reads from `schedules`, honors `timezone_mode`, and uses the
+  schedule-row/session/task coordination model documented in §7d
 - New modal with prompt-on-top, local-mode default, IANA tz dropdown
 - Runs side panel
 - 6 MCP tools (§4.3): `agor_schedules_{list,get,create,patch,delete,run_now}`
@@ -936,7 +934,10 @@ Max wrote it. Concepts that translate:
 2. ✅ **Default `timezone_mode = 'local'`.** Backfilled rows get `'utc'` to preserve current behavior. See §4.2.
 3. ✅ **Single PR** — no stacking. `schedules` create + backfill + old-column drop all in one migration per dialect, transaction-wrapped. See §5.3.
 4. ✅ **MCP tool surface — standard CRUD.** Six tools: `agor_schedules_list`, `agor_schedules_get`, `agor_schedules_create`, `agor_schedules_patch`, `agor_schedules_delete`, `agor_schedules_run_now`. Mirrors `agor_branches_*` / `agor_sessions_*` / `agor_boards_*` conventions. See §4.3.
-5. ✅ **Per-schedule Postgres advisory lock in V1.** Cheap (`pg_try_advisory_xact_lock(hash(schedule_id))` per row) and forward-compatible with #1252 HA. SQLite single-node tick stays lock-free. See §7d.
+5. ✅ **HA correction (2026-08-05).** V1 never acquired its claimed advisory
+   lock. The implemented prerequisite uses a short PostgreSQL schedule-row lock,
+   occurrence uniqueness, stable initial Task identity, and an atomic dispatch
+   fence. SQLite remains standalone. See §7d.
 
 ### All RBAC questions resolved (from Max, 2026-05-24)
 
@@ -964,4 +965,4 @@ Non-blocking follow-ups, called out where they live:
 
 - **[#1246 — global search design](https://github.com/preset-io/agor/pull/1246)** — schedules should be a searchable entity in V1 (name + description). Same pattern as branches/sessions/boards in #1246's static registry. Also: that PR's `?focus=<id>` work on SessionCanvas is what "Open in canvas" in the runs view (§6c) would use.
 - **[#1251 — reconnection & state refresh](https://github.com/preset-io/agor/pull/1251)** — minor: when the daemon reconnects after a long drop, the schedules list should be in the rehydrate set. No structural overlap.
-- **[#1252 — daemon HA](https://github.com/preset-io/agor/pull/1252)** — direct overlap. The recommended Postgres advisory lock around the scheduler tick ([`scheduler.ts:142`](../../apps/agor-daemon/src/services/scheduler.ts#L142)) is per-tick today; first-class schedules unlocks per-schedule locking, which is the right HA shape. See §7d. Coordinate ordering with that work.
+- **[#1252 — daemon HA](https://github.com/preset-io/agor/pull/1252)** — direct overlap. The advisory-lock proposal was never implemented; the first actual scheduler HA slice is the schedule-row/Session/Task model in §7d.

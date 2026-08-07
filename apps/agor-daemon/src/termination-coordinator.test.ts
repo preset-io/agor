@@ -2,8 +2,15 @@ import { TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const containExecutorProcess = vi.hoisted(() => vi.fn());
+const getTrackedExecutor = vi.hoisted(() => vi.fn());
 const untrackExecutorProcess = vi.hoisted(() => vi.fn());
-vi.mock('./executor-tracking.js', () => ({ containExecutorProcess, untrackExecutorProcess }));
+vi.mock('./executor-tracking.js', () => ({
+  containExecutorProcess,
+  DEFAULT_EXECUTOR_KILL_GRACE_MS: 2_000,
+  DEFAULT_EXECUTOR_TERM_GRACE_MS: 3_000,
+  getTrackedExecutor,
+  untrackExecutorProcess,
+}));
 
 import {
   beginExecutorTermination,
@@ -21,13 +28,35 @@ function task(status = TaskStatus.RUNNING, extra: Record<string, unknown> = {}) 
 function appDouble(tool = 'codex') {
   let current = task();
   const claimTermination = vi.fn();
+  const claimTerminationCoordination = vi.fn(async (input: { claimToken: string }) => {
+    current = {
+      ...current,
+      termination_request: {
+        ...current.termination_request,
+        coordination: {
+          claim_token: input.claimToken,
+          claimed_at: '2026-01-01T00:00:01.000Z',
+          lease_expires_at: '2026-01-01T00:00:31.000Z',
+          instance_id: 'daemon-a',
+          boot_id: 'boot-a',
+        },
+      },
+    };
+    return { outcome: 'claimed', task: current };
+  });
   const settleTermination = vi.fn();
   const sessionGet = vi.fn(async () => ({ session_id: sessionId, agentic_tool: tool }));
   const app = {
     service: (name: string) =>
       name === 'tasks'
-        ? { get: async () => current, claimTermination, settleTermination }
+        ? {
+            get: async () => current,
+            claimTermination,
+            claimTerminationCoordination,
+            settleTermination,
+          }
         : { get: sessionGet },
+    get: () => ({ instanceId: 'daemon-a', bootId: 'boot-a' }),
   } as never;
   const claim = (value: ReturnType<typeof task>, outcome = 'claimed') => {
     claimTermination.mockImplementationOnce(async () => {
@@ -44,7 +73,26 @@ function appDouble(tool = 'codex') {
   const setCurrent = (value: ReturnType<typeof task>) => {
     current = value;
   };
-  return { app, claim, settle, setCurrent, claimTermination, settleTermination, sessionGet };
+  const markExecutorQuiesced = () => {
+    current = {
+      ...current,
+      termination_request: {
+        ...current.termination_request,
+        executor_quiesced_at: '2026-01-01T00:00:01.100Z',
+      },
+    };
+  };
+  return {
+    app,
+    claim,
+    settle,
+    setCurrent,
+    markExecutorQuiesced,
+    claimTermination,
+    claimTerminationCoordination,
+    settleTermination,
+    sessionGet,
+  };
 }
 
 const stopping = (cause: 'user_stop' | 'sdk_health_failure' | 'heartbeat_lost') =>
@@ -73,6 +121,8 @@ function deferContainment() {
 describe('termination coordinator', () => {
   beforeEach(() => {
     containExecutorProcess.mockReset();
+    getTrackedExecutor.mockReset();
+    getTrackedExecutor.mockReturnValue({ taskId, sessionId });
     untrackExecutorProcess.mockReset();
   });
 
@@ -128,13 +178,7 @@ describe('termination coordinator', () => {
       cooperativeGraceMs: 100,
     });
     setTimeout(() => {
-      state.setCurrent({
-        ...remoteStopping,
-        termination_request: {
-          ...remoteStopping.termination_request,
-          executor_quiesced_at: '2026-01-01T00:00:01.100Z',
-        },
-      });
+      state.markExecutorQuiesced();
     }, 5);
 
     await expect(result).resolves.toMatchObject({ status: 'terminal' });
@@ -158,9 +202,12 @@ describe('termination coordinator', () => {
 
     await request(state.app, 'user_stop');
 
-    expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, {
-      preSignalGraceMs: 250,
-    });
+    expect(containExecutorProcess).toHaveBeenCalledWith(
+      sessionId,
+      taskId,
+      { preSignalGraceMs: 250 },
+      state.app
+    );
   });
 
   it('contains a terminal task before releasing its tracked executor', async () => {
@@ -172,8 +219,8 @@ describe('termination coordinator', () => {
       status: 'terminal',
       task: { status: TaskStatus.COMPLETED },
     });
-    expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
-    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
+    expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, {}, state.app);
+    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, state.app);
     expect(containExecutorProcess.mock.invocationCallOrder[0]).toBeLessThan(
       untrackExecutorProcess.mock.invocationCallOrder[0]
     );
@@ -211,7 +258,7 @@ describe('termination coordinator', () => {
       task: { status: TaskStatus.COMPLETED },
     });
     expect(containExecutorProcess).not.toHaveBeenCalled();
-    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
+    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, state.app);
   });
 
   it('does not claim or signal when provider context cannot be loaded', async () => {
@@ -242,6 +289,41 @@ describe('termination coordinator', () => {
     await vi.waitFor(() => expect(state.settleTermination).toHaveBeenCalledOnce());
   });
 
+  it('extends the coordination lease beyond configurable cooperative and signal grace', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble();
+    state.claim(stopping('heartbeat_lost'));
+    state.settle(task(TaskStatus.FAILED));
+
+    await requestExecutorTermination({
+      app: state.app,
+      taskId,
+      cause: 'heartbeat_lost',
+      errorMessage: 'Heartbeat lost',
+      cooperativeGraceMs: 40_000,
+    });
+
+    expect(state.claimTerminationCoordination).toHaveBeenCalledWith(
+      expect.objectContaining({ leaseDurationMs: 50_250 }),
+      expect.any(Object)
+    );
+  });
+
+  it('does not let a non-owner daemon claim verified local-process absence', async () => {
+    getTrackedExecutor.mockReturnValue(undefined);
+    const state = appDouble();
+    state.claim({ ...stopping('heartbeat_lost'), executor_mode: 'local' });
+
+    await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
+      status: 'unverified',
+      task: { status: TaskStatus.STOPPING },
+      reason: expect.stringContaining('owns the local executor process handle'),
+    });
+    expect(state.claimTerminationCoordination).not.toHaveBeenCalled();
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+    expect(state.settleTermination).not.toHaveBeenCalled();
+  });
+
   it('contains a terminal SDK-health race in the background', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
     const state = appDouble('opencode');
@@ -255,8 +337,10 @@ describe('termination coordinator', () => {
     });
 
     expect(result.status).toBe(TaskStatus.COMPLETED);
-    await vi.waitFor(() => expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId));
-    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
+    await vi.waitFor(() =>
+      expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, {}, state.app)
+    );
+    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, state.app);
     expect(state.settleTermination).not.toHaveBeenCalled();
   });
 
@@ -354,7 +438,7 @@ describe('termination coordinator', () => {
       status: 'terminal',
       task: { status: TaskStatus.FAILED },
     });
-    expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
+    expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, {}, state.app);
   });
 
   it('requires the short Task ID before force-failing unverified work', async () => {

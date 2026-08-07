@@ -13,6 +13,20 @@ The MCP-exposed surface for managing sessions, distinct from the broader `agor_*
 
 All enforce the branch-centric model (every session references a branch). Permission modes map to each agent's native settings.
 
+`agor_sessions_prompt` also accepts `callback: true`. The daemon binds this
+one-shot request to the exact task created by the prompt and derives the
+destination from trusted current-session MCP context; callers cannot nominate
+an arbitrary destination. Task-level and existing session-level callbacks keep
+independent lifecycle semantics, while equal source-task/destination events are
+coalesced by a database uniqueness constraint. Delivery remains best-effort if
+the daemon exits after terminalizing the source task but before callback task
+creation.
+
+Callbacks enabled by `agor_sessions_create` default to `persistent`; use
+`callbackMode: "once"` for a single report. Durable remote relationships can
+be muted or resumed with `agor_session_relationships_set_callback` without
+deleting the relationship. Spawned child and `btw` callbacks remain one-shot.
+
 ## Overrides at create/spawn/subsession time
 
 `agor_sessions_create`, `agor_sessions_spawn`, and `agor_sessions_prompt` with `mode: "subsession"` all accept:

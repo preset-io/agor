@@ -2,7 +2,12 @@ import { createTenantScopedDatabaseProxy, MissingTenantDatabaseScopeError } from
 import type { Session, Task } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { cleanupOrphanStatuses, type StartupContext } from './startup.js';
+import {
+  cleanupOrphanStatuses,
+  prepareTaskRuntimeStartup,
+  type StartupContext,
+  shouldContainLocalExecutorsOnShutdown,
+} from './startup.js';
 
 interface StartupFixtures {
   orphanedTasks?: Task[];
@@ -101,6 +106,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     getSocketServer: vi.fn(() => null),
     sessionsService,
     terminalsService: null,
+    distributedWorkIdentity: { instanceId: 'startup-test', bootId: 'startup-test-boot' },
   } as unknown as StartupContext;
 
   return { ctx, baseDb, tasksService, sessionsService };
@@ -128,13 +134,33 @@ function makeSession(overrides: Partial<Session>): Session {
 }
 
 describe('startup tenant database scope', () => {
+  it('contains local executors only under the standalone shutdown contract', () => {
+    expect(shouldContainLocalExecutorsOnShutdown('standalone')).toBe(true);
+    expect(shouldContainLocalExecutorsOnShutdown('shared_postgres')).toBe(false);
+  });
+
+  it('leaves healthy Tasks, Sessions, and queued work untouched in shared PostgreSQL mode', async () => {
+    const { ctx, tasksService, sessionsService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [makeTask({ status: TaskStatus.RUNNING })],
+      queuedTasks: [makeTask({ task_id: 'queued-1', status: TaskStatus.QUEUED })],
+    });
+    ctx.taskRuntimePolicy = 'shared_postgres';
+
+    await expect(prepareTaskRuntimeStartup(ctx)).resolves.toBeNull();
+    expect(tasksService.getOrphaned).not.toHaveBeenCalled();
+    expect(tasksService.find).not.toHaveBeenCalled();
+    expect(tasksService.patch).not.toHaveBeenCalled();
+    expect(tasksService.settleTermination).not.toHaveBeenCalled();
+    expect(sessionsService.find).not.toHaveBeenCalled();
+    expect(sessionsService.patch).not.toHaveBeenCalled();
+  });
+
   it('runs orphan cleanup inside an explicit startup tenant DB scope', async () => {
     const { ctx, baseDb } = makeStartupContextWithGuardedDb();
 
     await expect(cleanupOrphanStatuses(ctx)).resolves.toMatchObject({
       orphanedTasks: [],
       orphanedSessions: [],
-      queuedTasks: [],
       sessionsResetFromOrphanedTasks: 0,
     });
     expect(baseDb.marker).toHaveBeenCalled();
@@ -172,7 +198,7 @@ describe('startup tenant database scope', () => {
     expect(baseDb.marker).not.toHaveBeenCalled();
   });
 
-  it('cleans every queued task when recovery spans multiple pages', async () => {
+  it('preserves every durable queued task for the fleet queue worker', async () => {
     const queuedTasks = Array.from({ length: 1001 }, (_, index) =>
       makeTask({ task_id: `queued-${index}`, status: TaskStatus.QUEUED })
     );
@@ -180,9 +206,9 @@ describe('startup tenant database scope', () => {
 
     await cleanupOrphanStatuses(ctx);
 
-    expect(tasksService.patch).toHaveBeenCalledTimes(queuedTasks.length);
-    expect(tasksService.find).toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.objectContaining({ $skip: 1000 }) })
+    expect(tasksService.patch).not.toHaveBeenCalled();
+    expect(tasksService.find).not.toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ status: TaskStatus.QUEUED }) })
     );
   });
 });

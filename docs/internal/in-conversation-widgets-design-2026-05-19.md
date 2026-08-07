@@ -52,7 +52,9 @@ Add a new `MessageType` value: `'widget_request'`. A widget message is just a ro
       widget_id: MessageID,        // same as message_id — single source of truth
       widget_type: 'env_vars',     // discriminant for the widget registry
       params: { ... },             // widget-type-specific payload (validated by registry schema)
-      status: 'pending' | 'submitted' | 'dismissed' | 'timed_out',
+      status: 'pending' | 'resolving' | 'submitted' | 'dismissed' | 'already_present',
+      resolution_claim?: { token, action, claimed_at, claimed_by },
+      resolution_failure?: { failed_at, error_code },
       requested_at: ISO8601,
       resolved_at?: ISO8601,
       // RESULT_META is widget-type-specific, scrubbed of secret material.
@@ -243,20 +245,32 @@ buildDismissedPrompt: (params) =>
 
 ### 3.5 Task-queue integration (the resolution path)
 
-When `POST /widgets/:widget_id/submit` succeeds, the submit handler does four things in one transaction:
+When `POST /widgets/:widget_id/submit` succeeds, the handler uses short durable
+transitions around (never across) external work:
 
-1. **Persist values** — call `registry[widget_type].applySubmit(ctx, submit)`. For env-vars, this is `users.patch(userId, { env_vars: { [name]: { value, scope } } })`. Encryption + validation happen inside the existing users service.
-2. **Patch the widget message** — `messages.patch(widget_id, { metadata: { ..., widget: { status: 'submitted', result_meta, resolved_at } } })`. The transcript renderer flips to the "submitted" badge.
-3. **Queue the auto-resume task** (if `auto_resume !== false` was passed to the original tool call) — create a new task via the existing task-creation path with:
+1. **Claim resolution** — one short Message-row transaction moves `pending -> resolving` with an opaque token. Competing daemons and submit-vs-dismiss races lose before side effects.
+2. **Persist values** — the claimant calls `registry[widget_type].applySubmit(ctx, submit)` with no Message-row transaction held. For env-vars, this is `users.patch(userId, { env_vars: { [name]: { value, scope } } })`. Encryption + validation happen inside the existing users service.
+3. **Queue the auto-resume task** (if `auto_resume !== false` was passed to the original tool call) through prompt admission with a deterministic Task ID and durable initial-message ID:
    - `role: 'user'`
-   - `created_by_user_id: <submitter>` (audit) but `metadata.system_authored: true` and `metadata.widget_id` for traceability
+   - stable execution attribution to the Session creator; the actual submitter remains in `metadata.widget.submitted_by` and `Task.metadata.widget_resolved_by_user_id`
+   - `metadata.system_authored: true` and `metadata.widget_id` for traceability
    - `content: registry[widget_type].buildAutoResumePrompt(result_meta, params)`
    - The "Never lose a prompt" infrastructure handles queueing-vs-immediate-dispatch based on session busy state.
-4. **Emit `widget:resolved`** — broadcast on the per-session Feathers room so any other connected UI clients refresh.
+4. **Complete resolution** — a second short Message-row transaction accepts only the opaque claim token and moves `resolving -> submitted|dismissed` with sanitized result metadata.
+5. **Emit `widget:resolved`** — publish through the tenant-scoped per-session Feathers path so other connected UI clients refresh.
 
-Dismissal (`POST /widgets/:widget_id/dismiss`) follows the same path but skips step 1 and uses `buildDismissedPrompt` in step 3.
+Dismissal (`POST /widgets/:widget_id/dismiss`) follows the same claim and
+completion path, skips the registry side effect in step 2, and uses
+`buildDismissedPrompt` in step 3.
 
-**No daemon-side await. No long-running HTTP. No timeout on the widget itself.** The widget is durable in the messages table; it can sit `pending` for an hour or a day. The user, the session, or the worktree can move on freely.
+**No transaction is held over external work. No timeout on a pending widget.**
+The widget is durable in the messages table; it can sit `pending` for an hour or
+a day. If `applySubmit` explicitly reports failure before returning, the token
+is released back to `pending` with a secret-free diagnosis and an explicit
+retry is allowed (handlers must write desired state idempotently). Once
+`applySubmit` returns, prompt-admission or completion failures leave
+`resolving`; the completed external effect is never replayed blindly. A daemon
+death with an unknown external outcome follows the same durable diagnosis.
 
 ### 3.6 What happens if the agent doesn't end its turn?
 
@@ -268,17 +282,17 @@ We do **not** rely on tool description alone for correctness; ignoring the contr
 
 ## 4. The env-var widget (concrete v1)
 
-| Piece                  | Path                                                                                                                                                                                     | Reuses                                                         |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| MCP tool               | `apps/agor-daemon/src/mcp/tools/widgets.ts` (new)                                                                                                                                        | `registerTool` pattern from `worktrees.ts`                     |
-| MCP tool return        | `{ widget_id, status: 'requested' }` — fires immediately, agent ends turn                                                                                                                | `textResult()`                                                 |
-| Daemon submit endpoint | `POST /widgets/:widget_id/submit`, `POST /widgets/:widget_id/dismiss` (new routes)                                                                                                       | FeathersJS service `widget-submissions`                        |
-| Persistence            | Thin shim → `app.service('users').patch(userId, { env_vars: { [name]: { value, scope } } })`                                                                                             | existing users service, `encryptApiKey`, blocklist, regex      |
-| Message update         | `app.service('messages').patch(widget_id, { metadata.widget: { status, result_meta, resolved_at } })`                                                                                    | existing messages service                                      |
-| **Auto-resume task**   | `app.service('tasks').create({ session_id, role: 'user', content: buildAutoResumePrompt(rm), metadata: { system_authored: true, widget_id } })` — picks up via the existing prompt queue | "Never lose a prompt" #1068                                    |
-| Event broadcast        | `widget:resolved` Feathers event on the session room                                                                                                                                     | existing per-session room                                      |
-| UI dispatch            | `MessageBlock.tsx`: `if (message.type === 'widget_request') return <WidgetBlock message={message} />`                                                                                    | `PermissionRequestBlock` precedent at MessageBlock.tsx:256-294 |
-| Widget component       | `apps/agor-ui/src/components/Widgets/EnvVarRequestWidget.tsx`                                                                                                                            | form shape from `EnvVarEditor.tsx`                             |
+| Piece                  | Path                                                                                                                                                   | Reuses                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| MCP tool               | `apps/agor-daemon/src/mcp/tools/widgets.ts` (new)                                                                                                      | `registerTool` pattern from `worktrees.ts`                     |
+| MCP tool return        | `{ widget_id, status: 'requested' }` — fires immediately, agent ends turn                                                                              | `textResult()`                                                 |
+| Daemon submit endpoint | `POST /widgets/:widget_id/submit`, `POST /widgets/:widget_id/dismiss` (new routes)                                                                     | FeathersJS service `widget-submissions`                        |
+| Persistence            | Thin shim → `app.service('users').patch(userId, { env_vars: { [name]: { value, scope } } })`                                                           | existing users service, `encryptApiKey`, blocklist, regex      |
+| Message update         | Short locked repository mutations in `WidgetResolutionStore`; generic external Message CRUD cannot alter live widget state                             | widget resolution state machine                                |
+| **Auto-resume task**   | `app.service('/sessions/:id/prompt').create({ prompt: buildAutoResumePrompt(rm), idempotencyTaskId, metadata: { system_authored: true, widget_id } })` | durable prompt admission / "Never lose a prompt" #1068         |
+| Event broadcast        | `widget:resolved` Feathers event on the session room                                                                                                   | existing per-session room                                      |
+| UI dispatch            | `MessageBlock.tsx`: `if (message.type === 'widget_request') return <WidgetBlock message={message} />`                                                  | `PermissionRequestBlock` precedent at MessageBlock.tsx:256-294 |
+| Widget component       | `apps/agor-ui/src/components/Widgets/EnvVarRequestWidget.tsx`                                                                                          | form shape from `EnvVarEditor.tsx`                             |
 
 ### UI sketch
 
@@ -332,7 +346,7 @@ After dismissal:
 | MCP tool return value → agent (synchronous)                             | **No**                                      | Returns `{ widget_id, status: 'requested' }`. Fires immediately, before the user has even seen the widget. Cannot contain values by definition.                                                                                                                                              |
 | UI → `POST /widgets/:id/submit`                                         | **Yes**                                     | Direct browser-to-daemon HTTP request. Auth via the user's session cookie / JWT. **This is the only place values exist on the wire**, and it never traverses the agent.                                                                                                                      |
 | Daemon submit handler → `users.patch`                                   | **Yes (encrypted in transit at app layer)** | Standard env-var write path. `encryptApiKey()` is called inside the users service before DB write.                                                                                                                                                                                           |
-| Daemon → message status update (`messages.patch`)                       | **No**                                      | Updates `metadata.widget.status` and `result_meta` (e.g. `{ names_submitted, scope }`). Explicit allow-list — we patch by field, never spread the submit body.                                                                                                                               |
+| Daemon → locked widget state update                                     | **No**                                      | `WidgetResolutionStore` updates status/claim and sanitized `result_meta`; generic external Message CRUD cannot create or mutate widget lifecycle state.                                                                                                                                      |
 | **Daemon → auto-resume task creation** (the prompt the agent next sees) | **No**                                      | `tasks.create` content is `buildAutoResumePrompt(result_meta)`. The registry's prompt-builders take `result_meta` only — they have no access to the submit body. Add unit test: prompt-builder must accept `result_meta` only, not the raw submit payload (type system + runtime assertion). |
 | `widget:resolved` Feathers event                                        | **No**                                      | Payload is `{ widget_id, status, result_meta }`.                                                                                                                                                                                                                                             |
 | Transcript reload                                                       | **No**                                      | Re-reads the message row; values were never stored on it. The auto-resume task is a normal task row containing only `result_meta`-derived text.                                                                                                                                              |
@@ -345,14 +359,14 @@ The only access path to values after submission is the standard env-var read pat
 `POST /widgets/:widget_id/submit` is authenticated via existing FeathersJS session auth. The handler MUST verify:
 
 1. The caller's `user_id` matches `widget_message.session.created_by` **OR** the caller has `prompt`-tier RBAC on the worktree (`others_can >= prompt`). This mirrors who can already prompt the session.
-2. The widget is still `pending` (idempotency — double-submit is a no-op, not a re-write).
-3. The widget's `requested_at` is within the configured TTL.
+2. The widget is still `pending`; a short locked `pending -> resolving` claim is
+   the cross-daemon idempotency fence.
 
 CSRF: same protections as every other authenticated daemon endpoint (existing CORS + same-origin policy + JWT).
 
 ### 5.3 RBAC and multi-user
 
-If a _different_ user submits the widget (in a `prompt`-tier multi-user setup): the env var is written to **the executor's identity's** env_vars (= session creator's), because that's whose env the agent will read at retry. **The submitting user is recorded in `result_meta.submitted_by`** for audit. Surfaced to the agent ("submitted by <user>") so the agent can adjust messaging.
+If a _different_ user submits the widget (in a `prompt`-tier multi-user setup): the env var is written to **the executor's identity's** env_vars (= session creator's), because that's whose env the agent will read at retry. **The submitting user is recorded in `metadata.widget.submitted_by` and the auto-resume Task metadata** for audit; submitted values remain excluded.
 
 This is consistent with `dangerously_allow_session_sharing: false` semantics (default-safe). When session sharing is enabled and a collaborator submits a value, the value lands in the original owner's env — that's an explicit security trade-off documented under that flag.
 
@@ -367,7 +381,7 @@ The widget message persists forever in the transcript with `{ names, status, res
 | Malicious agent crafts the `reason`/`instructions` to phish the user                                        | Inputs rendered as **markdown with a strict allow-list** (no `<script>`, no inline event handlers, no auto-load images). Reuse the same sanitizer the artifact consent modal uses.                                                                                                                 |
 | Agent uses a widget to extract a value indirectly (e.g. asks for "type your value, then say it back to me") | The widget message _names_ what's requested; an agent prompting the user to type a value in-chat _instead of_ using the widget is a UX failure but not new attack surface — same as today. Mitigation is the disclaimer copy on the widget itself: "Type values here, never paste them into chat." |
 | Submission endpoint accepts unsolicited writes (no preceding widget request)                                | Endpoint requires a valid `widget_id` matching a `pending` widget message bound to the caller's session. No widget-less submissions.                                                                                                                                                               |
-| Replay attack with a captured submit payload                                                                | Once submitted, status → `submitted`; resubmission rejected on status check.                                                                                                                                                                                                                       |
+| Replay or concurrent submit/dismiss with a captured payload                                                 | Only one locked `pending -> resolving` transition wins; all losing daemons stop before registry/external work. Terminal resubmission is rejected.                                                                                                                                                  |
 | Stored XSS via env-var name                                                                                 | Existing `^[A-Z_][A-Z0-9_]*$` regex precludes anything renderable as HTML.                                                                                                                                                                                                                         |
 
 ---
@@ -466,8 +480,8 @@ Scope:
 - Extend `appendSystemMessage` helper's `type` union to include `widget_request`.
 - Add `metadata.widget` shape to `Message['metadata']` type (typed via a discriminated union over `widget_type`, with `schema_version: number` baked in).
 - Daemon-side registry shape at `apps/agor-daemon/src/widgets/registry.ts` (empty in Part 1; widget types register themselves in their own PRs). The registry entry type includes `paramsSchema`, `submitSchema`, `applySubmit`, `buildResultMeta`, `buildAutoResumePrompt`, `buildDismissedPrompt`.
-- New FeathersJS service `widget-submissions` registering `POST /widgets/:widget_id/submit` and `POST /widgets/:widget_id/dismiss`. Auth: caller must match session creator OR have `prompt`-tier worktree RBAC. Idempotency: status must be `pending`.
-- Submit handler dispatches by `widget_type` to the registry (no-op for empty registry), then: patches the message row, creates an auto-resume task via the existing task-creation path (`tasks.create` with `role: 'user'`, `metadata.system_authored: true`, `metadata.widget_id`), emits `widget:resolved`.
+- Custom authenticated routes `POST /widgets/:widget_id/submit` and `POST /widgets/:widget_id/dismiss`. Auth: caller must match session creator OR have `prompt`-tier worktree RBAC. A tenant-bound `WidgetResolutionStore` durably claims `pending → resolving` before external work and fences terminal completion with the claim token.
+- Submit handlers dispatch by `widget_type` to the registry (no-op for empty registry), then use durable prompt admission with a stable Task identity for auto-resume. Generic Message mutation cannot change widget lifecycle fields. Successful resolution emits `widget:resolved`; post-effect failures remain diagnosable without reopening the external effect.
 - `widget:resolved` Feathers event on the per-session room.
 - New MCP tool domain marker (`domain: 'widgets'` for `agor_search_tools` filtering).
 - UI: `WidgetBlock` dispatcher component in `apps/agor-ui/src/components/MessageBlock/` that switches on `metadata.widget.widget_type`, plus a placeholder "Unknown widget type" fallback for forward-compat with newer widgets in older clients.

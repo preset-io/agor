@@ -81,7 +81,7 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Content detail level. "preview" returns first 200 chars (default). "full" returns complete text content.'
           ),
-        limit: mcpLimit(20),
+        limit: mcpLimit(20, 100),
         offset: mcpOffset(0),
         order: z
           .enum(['asc', 'desc'])

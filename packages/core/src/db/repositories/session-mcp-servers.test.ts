@@ -132,6 +132,17 @@ describe('SessionMCPServerRepository.addServer', () => {
     expect(servers[0].mcp_server_id).toBe(server1.mcp_server_id);
   });
 
+  dbTest('deduplicates five concurrent attachments', async ({ db }) => {
+    const { session, server1 } = await setupTestData(db);
+    const repo = new SessionMCPServerRepository(db);
+
+    await Promise.all(
+      Array.from({ length: 5 }, () => repo.addServer(session.session_id, server1.mcp_server_id))
+    );
+
+    expect(await repo.listServers(session.session_id)).toHaveLength(1);
+  });
+
   dbTest('should re-enable disabled server when added again', async ({ db }) => {
     const { session, server1 } = await setupTestData(db);
     const repo = new SessionMCPServerRepository(db);

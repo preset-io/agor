@@ -1,7 +1,13 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": ["**/.env.*local", "pnpm-lock.yaml"],
-  "globalPassThroughEnv": ["AGOR_DB_DIALECT", "BIOME_BIN", "DATABASE_URL"],
+  "globalPassThroughEnv": [
+    "AGOR_DB_DIALECT",
+    "AGOR_TEST_POSTGRES_ADMIN_URL",
+    "AGOR_TEST_POSTGRES_URL",
+    "BIOME_BIN",
+    "DATABASE_URL"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

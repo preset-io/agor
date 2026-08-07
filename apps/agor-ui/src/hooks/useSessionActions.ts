@@ -130,9 +130,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       // Send the prompt to the forked session to actually execute it
       // Skip if prompt is empty (allows forking without initial prompt)
       if (prompt.trim()) {
-        await client.sessions.prompt(forkedSession.session_id, prompt, {
-          messageSource: 'agor',
-        });
+        await client.sessions.prompt(forkedSession.session_id, prompt);
       }
 
       return forkedSession;
@@ -170,9 +168,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
       // Send the prompt to the forked session
       if (prompt.trim()) {
-        await client.sessions.prompt(forkedSession.session_id, prompt, {
-          messageSource: 'agor',
-        });
+        await client.sessions.prompt(forkedSession.session_id, prompt);
       }
 
       return forkedSession;
@@ -206,9 +202,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
       // Send the prompt to the spawned session to actually execute it
       if (config.prompt?.trim()) {
-        await client.sessions.prompt(spawnedSession.session_id, config.prompt, {
-          messageSource: 'agor',
-        });
+        await client.sessions.prompt(spawnedSession.session_id, config.prompt);
       }
 
       return spawnedSession;

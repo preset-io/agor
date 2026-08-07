@@ -19,6 +19,8 @@ import { MessageRole } from '@agor/core/types';
 const CONTENT_PREVIEW_MAX_CHARS = 200;
 
 export interface BuildInitialUserMessageInput {
+  /** Stable identity for idempotent producers; generated for ordinary prompts. */
+  messageId?: Message['message_id'];
   sessionId: SessionID;
   /** Task this message opens. Optional only for v1 orphan-fallback paths. */
   taskId: TaskID | undefined;
@@ -43,7 +45,7 @@ export function buildInitialUserMessage(input: BuildInitialUserMessageInput): Me
       ? input.content.slice(0, CONTENT_PREVIEW_MAX_CHARS)
       : safeStringify(input.content).slice(0, CONTENT_PREVIEW_MAX_CHARS);
   return {
-    message_id: generateId() as UUID as Message['message_id'],
+    message_id: input.messageId ?? (generateId() as UUID as Message['message_id']),
     session_id: input.sessionId,
     task_id: input.taskId,
     type: input.type ?? 'user',

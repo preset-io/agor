@@ -485,10 +485,8 @@ describe('BoardsService.find SQL pushdown', () => {
       'findAll'
     );
 
-    // The boards validator strips `archived`, so with no board_id scope there is
-    // nothing high-selectivity to push: the read falls through to the whole
-    // table and `find` returns every board (including archived) — the real win
-    // is the RBAC board_id $in scope covered below.
+    // Without an archived or board-id predicate the read intentionally falls
+    // through to the whole tenant-scoped table.
     const result = (await service.find({ query: { $sort: { name: 1 } } })) as {
       data: Board[];
       total: number;
@@ -497,6 +495,22 @@ describe('BoardsService.find SQL pushdown', () => {
     expect(repoFindAll).toHaveBeenCalledWith({});
     expect(result.total).toBe(3);
     expect(result.data.map((b) => b.name)).toEqual(['Alpha', 'Beta', 'Gamma']);
+  });
+
+  dbTest('pushes archived filtering into SQL before pagination', async ({ db }) => {
+    const { service } = await seed(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { boardRepo: BoardRepository }).boardRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: { archived: false, $limit: 1, $skip: 1, $sort: { name: 1 } },
+    })) as { data: Board[]; total: number };
+
+    expect(repoFindAll).toHaveBeenCalledWith({ archived: false });
+    expect(result.total).toBe(2);
+    expect(result.data.map((board) => board.name)).toEqual(['Beta']);
   });
 
   dbTest('pushes an accessible board_id $in set into SQL (rbac on)', async ({ db }) => {

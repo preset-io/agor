@@ -24,6 +24,8 @@
     "lint:fix": "biome check --write .",
     "format": "prettier --write .",
     "test": "turbo run test",
+    "test:postgres:integration": "node scripts/run-postgres-integration-tests.mjs",
+    "test:postgres:docker": "bash scripts/test-postgres-docker.sh",
     "typecheck": "turbo run typecheck --filter='!@agor/docs'",
     "check": "pnpm typecheck && pnpm lint && pnpm check:shortid && pnpm check:multitenancy-boundaries && pnpm check:daemon-filesystem-boundaries && turbo run build --filter='!@agor/docs'",
     "check:fix": "pnpm lint:fix && pnpm typecheck && pnpm check:shortid && pnpm check:multitenancy-boundaries && pnpm check:daemon-filesystem-boundaries && turbo run build --filter='!@agor/docs'",

@@ -842,7 +842,7 @@ export function createSocketIOConfig(
       });
 
       // Route terminal tab commands. The daemon emits this server-side via
-      // io.to() (terminals.ts) AFTER enforcing branch RBAC on the HTTP
+      // Socket.IO room targeting (terminals.ts) AFTER enforcing branch RBAC on the HTTP
       // create() path. We must NOT let browsers emit it directly — doing so
       // would let a user with 'view'-only on a branch open a Zellij tab
       // (and a shell) inside that branch, bypassing the HTTP RBAC gate.

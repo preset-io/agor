@@ -14,6 +14,7 @@ import {
   __seedAuthCodeTokenCacheForTests,
   __seedDynamicClientCacheForTests,
   clearAuthCodeTokenCache,
+  completeMCPOAuthFlow,
   discoverAuthorizationServerFromMcpOrigin,
   discoverResourceMetadataUrl,
   getAuthCodeTokenCacheStats,
@@ -22,6 +23,61 @@ import {
   resolveResourceMetadataUrl,
   startMCPOAuthFlow,
 } from './oauth-mcp-transport';
+
+// ---------------------------------------------------------------------------
+// completeMCPOAuthFlow — token exchange request contract
+// ---------------------------------------------------------------------------
+
+describe('completeMCPOAuthFlow token exchange', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    clearAuthCodeTokenCache();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('requests a JSON token response for providers such as GitHub', async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ access_token: 'gho_example', scope: 'repo', token_type: 'bearer' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      ) as unknown as typeof fetch;
+
+    const result = await completeMCPOAuthFlow(
+      {
+        metadataUrl: 'https://github.example/.well-known/oauth-protected-resource',
+        tokenEndpoint: 'https://github.com/login/oauth/access_token',
+        redirectUri: 'http://127.0.0.1:3000/oauth/callback',
+        pkceVerifier: 'verifier',
+        clientId: 'client-id',
+        state: 'state',
+        authorizationUrl: 'https://github.com/login/oauth/authorize',
+      },
+      'authorization-code',
+      'state'
+    );
+
+    expect(result.access_token).toBe('gho_example');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'https://github.com/login/oauth/access_token',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        }),
+      })
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // clearAuthCodeTokenCache — cache clearing semantics

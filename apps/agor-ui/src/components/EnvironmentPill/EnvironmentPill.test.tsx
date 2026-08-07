@@ -98,6 +98,20 @@ describe('EnvironmentPill', () => {
     expect(screen.getByText('env').parentElement).toHaveStyle({ cursor: 'default' });
   });
 
+  it('shows a pointer only for an enabled configure control', () => {
+    const { rerender } = render(<EnvironmentPill {...defaultProps} />);
+
+    expect(screen.getByRole('button', { name: 'Configure environment' })).toHaveStyle({
+      cursor: 'pointer',
+    });
+
+    rerender(<EnvironmentPill {...defaultProps} onEdit={undefined} />);
+
+    const configureButton = screen.getByRole('button', { name: 'Configure environment' });
+    expect(configureButton).toBeDisabled();
+    expect(configureButton).not.toHaveStyle({ cursor: 'pointer' });
+  });
+
   it('can hide only the destructive nuke action while preserving other controls', () => {
     render(<EnvironmentPill {...defaultProps} showNukeEnvironment={false} />);
 

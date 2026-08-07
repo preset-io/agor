@@ -14,7 +14,22 @@
 import type { MessageID, UserID } from './id';
 
 /** Lifecycle status of a widget request. */
-export type WidgetStatus = 'pending' | 'submitted' | 'dismissed' | 'already_present';
+export type WidgetStatus = 'pending' | 'resolving' | 'submitted' | 'dismissed' | 'already_present';
+
+/** Durable ownership of one widget resolution attempt. */
+export interface WidgetResolutionClaim {
+  /** Opaque compare-and-set token; only this claimant may finish the attempt. */
+  token: string;
+  action: 'submit' | 'dismiss';
+  claimed_at: string;
+  claimed_by: UserID;
+}
+
+/** Secret-free diagnosis for a claimed attempt that did not finish. */
+export interface WidgetResolutionFailure {
+  failed_at: string;
+  error_code: string;
+}
 
 /**
  * Widget type discriminant. PR 1 ships the framework with no concrete
@@ -64,6 +79,10 @@ export interface WidgetMessageMetadata<
   result_meta?: TResultMeta;
   /** User who resolved the widget (may differ from session creator under prompt-tier RBAC). */
   submitted_by?: UserID;
+  /** Present while one daemon owns resolution. */
+  resolution_claim?: WidgetResolutionClaim;
+  /** Durable, secret-free diagnosis for the last reported retryable failure. */
+  resolution_failure?: WidgetResolutionFailure;
   /**
    * Whether to auto-queue a system-authored prompt back into the agent on
    * resolution. Per design D6 defaults to `true`; agents opt-out by passing

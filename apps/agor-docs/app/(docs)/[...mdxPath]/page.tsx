@@ -1,5 +1,7 @@
 import { readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { normalizePages } from 'nextra/normalize-pages';
+import { getPageMap } from 'nextra/page-map';
 import { importPage } from 'nextra/pages';
 import { FAQ_SCHEMA } from '../../../lib/faqSchema';
 import {
@@ -95,6 +97,7 @@ export async function generateMetadata(props: PageProps) {
       images: [image],
     },
     authors: frontMatter.author ? [{ name: frontMatter.author }] : undefined,
+    robots: frontMatter.noindex ? { index: false, follow: false } : undefined,
   };
 }
 
@@ -105,6 +108,19 @@ export default async function Page(props: PageProps) {
   const { default: MDXContent, toc, metadata, sourceCode } = await importPage(params.mdxPath);
   const frontMatter = metadata as FrontMatterLike;
   const pathname = `/${params.mdxPath?.join('/') ?? ''}`;
+
+  // "Full" layout pages (theme.layout: 'full' in _meta.ts, e.g. the hero
+  // A/B variants and the Agor Cloud landing page) skip the docs Wrapper
+  // entirely — same treatment as the
+  // root "/" route (app/page.tsx), which never goes through Wrapper at all.
+  // Wrapper's sidebar/TOC/copy-page shell only *hides* sub-pieces for
+  // layout:'full'; it doesn't collapse the two-column shell itself, so
+  // going through it here would still render docs chrome around the page.
+  const { activeThemeContext } = normalizePages({ list: await getPageMap(), route: pathname });
+  if (activeThemeContext.layout === 'full') {
+    return <MDXContent {...props} params={params} />;
+  }
+
   const isBlogPost = params.mdxPath?.[0] === 'blog' && params.mdxPath.length > 1;
   const blogPostingSchema =
     isBlogPost && frontMatter.date

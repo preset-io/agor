@@ -10,8 +10,10 @@ import {
 import type { MCPServer, Session, SessionID, TaskID, User, UserID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createExecuteHandler } from './executor-launch.js';
+import { markExecutorProcessExited, trackExecutorProcess } from './executor-tracking.js';
 import type { RegisterServicesContext } from './register-services.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
+import { requestExecutorTermination } from './termination-coordinator.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
 
 vi.mock('./services/executor-startup.js', async (importOriginal) => {
@@ -23,6 +25,19 @@ vi.mock('./utils/spawn-executor.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./utils/spawn-executor.js')>();
   return { ...actual, spawnExecutor: vi.fn() };
 });
+
+vi.mock('./executor-tracking.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./executor-tracking.js')>();
+  return {
+    ...actual,
+    markExecutorProcessExited: vi.fn(),
+    trackExecutorProcess: vi.fn(),
+  };
+});
+
+vi.mock('./termination-coordinator.js', () => ({
+  requestExecutorTermination: vi.fn(async () => ({ status: 'condition_changed' })),
+}));
 
 vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
@@ -107,7 +122,7 @@ function makeHarness() {
     daemonUrl: 'https://daemon.example.com',
   } as unknown as RegisterServicesContext;
   const handler = createExecuteHandler(ctx, {} as never, {} as never);
-  return { handler, generateToken, oauthLookup };
+  return { app, handler, generateToken, oauthLookup };
 }
 
 describe('task creator executor launch context', () => {
@@ -220,5 +235,56 @@ describe('task creator executor launch context', () => {
     expect(createUserProcessEnvironment).not.toHaveBeenCalled();
     expect(oauthLookup).not.toHaveBeenCalled();
     expect(spawnExecutor).not.toHaveBeenCalled();
+  });
+
+  it('keeps local launch tracking and exit containment scoped to the daemon app', async () => {
+    const { app, handler } = makeHarness();
+
+    await runWithTenantContext('tenant-b', () =>
+      handler(
+        SESSION_ID,
+        { taskId: TASK_ID, prompterUserId: PROMPTER_ID, prompt: 'Run locally' },
+        { user: owner, tenant: { tenant_id: 'tenant-b', source: 'auth_claim' } }
+      )
+    );
+
+    const options = vi.mocked(spawnExecutor).mock.calls[0][1];
+    await options.onSpawn?.({ pid: 4242 } as never, { mode: 'local' });
+    await options.onExit?.(1, { mode: 'local' });
+
+    expect(trackExecutorProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: SESSION_ID, taskId: TASK_ID, pid: 4242 }),
+      app
+    );
+    expect(markExecutorProcessExited).toHaveBeenCalledWith(SESSION_ID, 4242, app);
+    expect(requestExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ app, taskId: TASK_ID, absenceVerified: false })
+    );
+  });
+
+  it('treats only an authoritative templated-launcher failure as absence proof', async () => {
+    const { app, handler } = makeHarness();
+
+    await runWithTenantContext('tenant-b', () =>
+      handler(
+        SESSION_ID,
+        { taskId: TASK_ID, prompterUserId: PROMPTER_ID, prompt: 'Run remotely' },
+        { user: owner, tenant: { tenant_id: 'tenant-b', source: 'auth_claim' } }
+      )
+    );
+
+    const options = vi.mocked(spawnExecutor).mock.calls[0][1];
+    await options.onExit?.(1, { mode: 'templated' });
+
+    expect(markExecutorProcessExited).not.toHaveBeenCalled();
+    expect(requestExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        app,
+        taskId: TASK_ID,
+        absenceVerified: true,
+        expectedStatus: 'dispatching',
+        requireExecutorDisconnected: true,
+      })
+    );
   });
 });

@@ -114,7 +114,6 @@ export interface SessionPromptRequest {
   prompt: string;
   permissionMode?: PermissionMode;
   stream?: boolean;
-  messageSource?: 'gateway' | 'agor';
 }
 
 export interface QueuedSessionPromptResult {
@@ -147,14 +146,12 @@ export interface SessionsClientHelpers {
 }
 
 /**
- * Body shape for `POST /tasks/:id/run`. Matches the prompt route's options
- * so the same defaults (`stream: true`, agor messageSource for socket
- * callers) apply when explicitly triggering an already-created task.
+ * Body shape for `POST /tasks/:id/run`. Message provenance is derived by the
+ * daemon from the authenticated transport rather than accepted from callers.
  */
 export interface TaskRunRequest {
   permissionMode?: PermissionMode;
   stream?: boolean;
-  messageSource?: 'gateway' | 'agor';
 }
 
 export interface TaskRunOptions extends TaskRunRequest {
@@ -410,15 +407,12 @@ export interface TasksService extends AgorService<Task> {
   fail(id: string, data: { error: string }, params?: Params): Promise<Task>;
 }
 
-/**
- * Messages service with bulk creation support
- */
-export interface MessagesService extends AgorService<Message> {
-  /**
-   * Create multiple messages in a single request
-   * Returns array of created messages with IDs
-   */
-  createMany(data: Partial<Message>[]): Promise<Message[]>;
+/** Public Message CRUD surface. Full replacement is daemon-internal. */
+export type MessagesService = Omit<AgorService<Message>, 'update'>;
+
+/** Narrow transport contract for `POST /messages/bulk`. */
+export interface MessagesBulkService {
+  create(data: CreatePayload<Message>[], params?: Params): Promise<Message[]>;
 }
 
 /**
@@ -679,7 +673,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'opencode-models'): OpenCodeModelsService;
 
   // Bulk operation endpoints
-  service(path: 'messages/bulk'): MessagesService;
+  service(path: 'messages/bulk'): MessagesBulkService;
   service(path: 'tasks/bulk'): TasksService;
 
   // Standard services (CRUD only)

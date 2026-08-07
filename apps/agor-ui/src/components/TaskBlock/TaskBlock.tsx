@@ -30,8 +30,8 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Collapse, Flex, Spin, Typography, theme } from 'antd';
-import React, { useMemo, useRef } from 'react';
+import { Alert, Button, Collapse, Flex, Spin, Typography, theme } from 'antd';
+import React, { useMemo, useRef, useState } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
@@ -112,6 +112,67 @@ function isSdkStatusMessage(message: Message): boolean {
   if (message.role !== MessageRole.SYSTEM || !Array.isArray(message.content)) return false;
   return message.content.some(
     (b) => b.type === 'rate_limit' || b.type === 'api_wait' || b.type === 'sdk_event'
+  );
+}
+
+/** Durable outcome projection; re-renders are inherently idempotent. */
+export function isVerifiedRuntimeInterruption(task: Task, isLatestTask = false): boolean {
+  return (
+    isLatestTask &&
+    task.status === TaskStatus.FAILED &&
+    task.sdk_failure?.termination === 'verified' &&
+    task.termination_request?.cause !== 'user_stop'
+  );
+}
+
+function RuntimeInterruptionNotice({
+  task,
+  sessionId,
+  client,
+}: {
+  task: Task;
+  sessionId?: SessionID | null;
+  client?: AgorClient | null;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [resumed, setResumed] = useState(false);
+  const handleResume = async () => {
+    if (!client || !sessionId) return;
+    setSubmitting(true);
+    try {
+      // This deliberately starts a new durable Task. It never attempts to
+      // revive the failed Task or reuse its executor ownership.
+      await client.sessions.prompt(
+        sessionId,
+        'Continue from the interrupted task. Inspect the previous task state first, then continue safely.'
+      );
+      setResumed(true);
+    } catch (error) {
+      console.error('Failed to resume after runtime interruption:', error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ marginBottom: 12 }}
+      message="Task interrupted"
+      description={
+        task.sdk_failure?.reason === 'startup_timeout'
+          ? 'The executor did not start in time. Agor verified containment before making this session promptable.'
+          : 'Agor lost contact with the executor and verified containment before making this session promptable.'
+      }
+      action={
+        client && sessionId && !resumed ? (
+          <Button size="small" type="primary" loading={submitting} onClick={handleResume}>
+            Resume in new task
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -660,6 +721,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               },
               children: (
                 <div style={{ paddingTop: token.sizeUnit }}>
+                  {isVerifiedRuntimeInterruption(task, isLatestTask) && (
+                    <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
+                  )}
                   {/* Show loading spinner while fetching messages */}
                   {messagesLoading && (
                     <div

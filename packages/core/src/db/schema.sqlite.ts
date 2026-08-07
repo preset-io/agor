@@ -107,6 +107,10 @@ export const sessions = sqliteTable(
       (): import('drizzle-orm/sqlite-core').AnySQLiteColumn => schedules.schedule_id,
       { onDelete: 'set null' }
     ),
+    // Internal scheduler recovery marker. Existing rows are backfilled by the
+    // migration; new occurrences remain NULL until initialization, retention,
+    // and schedule metadata are durable.
+    scheduler_init_completed_at: t.timestamp('scheduler_init_completed_at'),
 
     // UI state (materialized for efficient highlighting queries)
     ready_for_prompt: t.bool('ready_for_prompt').notNull().default(false),
@@ -166,18 +170,8 @@ export const sessions = sqliteTable(
         last_context_update_at?: string; // ISO 8601 timestamp
 
         // Custom context for Handlebars templates
-        custom_context?: Record<string, unknown> & {
-          // Scheduled run metadata (populated by scheduler)
-          scheduled_run?: {
-            rendered_prompt: string; // Template after Handlebars rendering
-            run_index: number; // 1st, 2nd, 3rd run for this schedule
-            schedule_config_snapshot?: {
-              cron: string;
-              timezone: string;
-              retention: number;
-            };
-          };
-        };
+        // Keep scheduler/gateway/user context owned by the canonical Session type.
+        custom_context?: Session['custom_context'];
 
         // Read-only metadata retained for historical sessions created by the
         // removed experimental Claude CLI integration. No runtime consumes it.
@@ -227,6 +221,11 @@ export const sessions = sqliteTable(
       // both are set. Non-scheduled sessions (schedule_id NULL) must
       // coexist freely.
       .where(sql`${table.schedule_id} IS NOT NULL AND ${table.scheduled_run_at} IS NOT NULL`),
+    schedulerInitPendingIdx: index('sessions_scheduler_init_pending_idx')
+      .on(table.created_at, table.session_id)
+      .where(
+        sql`${table.scheduled_from_branch} = true AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL`
+      ),
   })
 );
 
@@ -290,6 +289,13 @@ export const tasks = sqliteTable(
     executor_connected_at: t.timestamp('executor_connected_at'),
     completed_at: t.timestamp('completed_at'),
     last_executor_heartbeat_at: t.timestamp('last_executor_heartbeat_at'),
+    dispatch_timeout_observed_at: t.timestamp('dispatch_timeout_observed_at'),
+    termination_coordination_token: text('termination_coordination_token'),
+    termination_coordination_claimed_at: t.timestamp('termination_coordination_claimed_at'),
+    termination_coordination_expires_at: t.timestamp('termination_coordination_expires_at'),
+    termination_coordination_instance_id: text('termination_coordination_instance_id'),
+    termination_coordination_boot_id: text('termination_coordination_boot_id'),
+    termination_unverified_at: t.timestamp('termination_unverified_at'),
     status: text('status', {
       enum: [
         'queued',
@@ -359,11 +365,29 @@ export const tasks = sqliteTable(
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
+    runtimeDispatchIdx: index('tasks_runtime_dispatch_idx')
+      .on(table.started_at, table.task_id)
+      .where(
+        sql`${table.status} = 'dispatching' AND ${table.executor_connected_at} IS NULL AND ${table.started_at} IS NOT NULL AND ${table.dispatch_timeout_observed_at} IS NULL`
+      ),
+    runtimeHeartbeatIdx: index('tasks_runtime_heartbeat_idx')
+      .on(table.last_executor_heartbeat_at, table.task_id)
+      .where(
+        sql`${table.status} IN ('running', 'awaiting_permission', 'awaiting_input') AND ${table.last_executor_heartbeat_at} IS NOT NULL`
+      ),
+    runtimeTerminationIdx: index('tasks_runtime_termination_idx')
+      .on(table.termination_coordination_expires_at, table.task_id)
+      .where(sql`${table.status} = 'stopping' AND ${table.termination_unverified_at} IS NULL`),
     // Partial unique index — defense-in-depth for `tasks.createPending` race
     // serialization. Only QUEUED rows are constrained; CREATED/RUNNING/done
     // rows have NULL queue_position and are unaffected.
     queuedPositionUnique: uniqueIndex('tasks_queued_position_unique')
       .on(table.session_id, table.queue_position)
+      .where(sql`${table.status} = 'queued'`),
+    // Standalone recovery uses the same bounded Session scan without tenant
+    // routing metadata.
+    queueScanIdx: index('tasks_queue_scan_idx')
+      .on(table.session_id, table.created_at)
       .where(sql`${table.status} = 'queued'`),
   })
 );
@@ -1520,8 +1544,8 @@ export const sessionMcpServers = sqliteTable(
     added_at: t.timestamp('added_at').notNull(),
   },
   (table) => ({
-    // Composite primary key
-    pk: index('session_mcp_servers_pk').on(table.session_id, table.mcp_server_id),
+    // Idempotency guard for recovery and concurrent attachment.
+    pk: uniqueIndex('session_mcp_servers_pk').on(table.session_id, table.mcp_server_id),
     // Indexes for queries
     sessionIdx: index('session_mcp_servers_session_idx').on(table.session_id),
     serverIdx: index('session_mcp_servers_server_idx').on(table.mcp_server_id),

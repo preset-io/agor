@@ -361,7 +361,9 @@ const slackThreadHistorySchema = z
       .boolean()
       .optional()
       .describe('Whether Slack should include messages exactly at oldest/latest bounds.'),
-    limit: mcpLimit(50).describe('Maximum Slack messages to request (default: 50, max: 200).'),
+    // Thread replies are one atomic conversation; retain the permissive input
+    // contract and apply the existing runtime clamp in the handler.
+    limit: mcpLimit(50).describe('Maximum Slack messages to request (default: 50).'),
     includeBotMessages: z
       .boolean()
       .optional()
@@ -1277,7 +1279,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           .enum(['slack', 'github', 'teams', 'shortcut', 'discord', 'whatsapp', 'telegram'])
           .optional()
           .describe('Optional platform filter.'),
-        limit: mcpLimit(100),
+        limit: mcpLimit(100, 100),
         skip: mcpOptionalNonNegativeInt('skip', 'Number of gateway channels to skip (default: 0)'),
       }),
     },
@@ -1407,7 +1409,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_outbound_targets_list',
     {
       description:
-        "List Slack gateway outbound targets the caller can use. Returns only outbound-enabled channels where the caller has branch all permission or admin access; when called from a session, results are additionally scoped to channels targeting the session's branch. Secrets and inbound channel keys are never returned.",
+        'List a page of Slack gateway outbound targets the caller can use. Authorization and branch scoping are applied before totals and paging. Advance with offset=nextOffset while hasMore is true. Secrets are never returned.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         branchId: mcpOptionalId('branchId', 'Branch', 'Filter by target branch ID.'),
@@ -1417,6 +1419,8 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           'Filter by gateway channel ID.'
         ),
         channelType: z.enum(['slack']).optional().describe('Only Slack is supported for v0.'),
+        limit: mcpLimit(25, 100),
+        offset: mcpOptionalNonNegativeInt('offset', 'Number of authorized targets to skip.'),
       }),
     },
     async (args) => {
@@ -1475,9 +1479,19 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           });
         }
 
+        channels.sort((a, b) => a.gateway_channel_id.localeCompare(b.gateway_channel_id));
+        const limit = args.limit ?? 25;
+        const offset = args.offset ?? 0;
+        const page = channels.slice(offset, offset + limit);
+        const hasMore = offset + page.length < channels.length;
         return textResult({
-          channels,
-          ...(callerSessionBranchId && channels.length === 0
+          channels: page,
+          total: channels.length,
+          limit,
+          offset,
+          hasMore,
+          nextOffset: hasMore ? offset + page.length : null,
+          ...(callerSessionBranchId && page.length === 0
             ? {
                 hint: "No outbound-enabled channel targets this session's branch — ask an operator to create/enable one.",
               }

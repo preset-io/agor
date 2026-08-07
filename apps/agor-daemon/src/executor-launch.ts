@@ -19,7 +19,6 @@ import type { UnixUserMode } from '@agor/core/unix';
 import type { SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import {
   containExecutorProcess,
-  getTrackedExecutor,
   markExecutorProcessExited,
   retainExecutorContainmentFence,
   trackExecutorProcess,
@@ -343,12 +342,15 @@ export function createExecuteHandler(
         nativeState?.markSpawned();
         if (spawnContext.mode === 'local' && child.pid) {
           localExecutorPid = child.pid;
-          trackExecutorProcess({
-            sessionId,
-            taskId,
-            pid: child.pid,
-            ...(executorUnixUser ? { asUser: executorUnixUser } : {}),
-          });
+          trackExecutorProcess(
+            {
+              sessionId,
+              taskId,
+              pid: child.pid,
+              ...(executorUnixUser ? { asUser: executorUnixUser } : {}),
+            },
+            app
+          );
           console.log(`${logPrefix} PID: ${child.pid}`);
         }
         if (!nativeState) return;
@@ -359,9 +361,9 @@ export function createExecuteHandler(
         }
         const handle = {
           retainContainmentFence: (key: string) =>
-            retainExecutorContainmentFence(key, sessionId, taskId),
+            retainExecutorContainmentFence(key, sessionId, taskId, app),
           verifyAbsence: async () =>
-            (await containExecutorProcess(sessionId, taskId)).status === 'verified_absent',
+            (await containExecutorProcess(sessionId, taskId, {}, app)).status === 'verified_absent',
         };
         return nativeState.fence.attach(handle).then(
           () => nativeState.ready.resolve(),
@@ -374,8 +376,11 @@ export function createExecuteHandler(
       onExit: async (code, spawnContext) => {
         console.log(`${logPrefix} Exited with code ${code}`);
 
-        if (spawnContext.mode === 'local') markExecutorProcessExited(sessionId, localExecutorPid);
+        if (spawnContext.mode === 'local') {
+          markExecutorProcessExited(sessionId, localExecutorPid, app);
+        }
 
+        let templatedLauncherAbsenceVerified = false;
         if (spawnContext.mode === 'templated') {
           const disposition = classifyExecutorExit({
             mode: spawnContext.mode,
@@ -403,6 +408,7 @@ export function createExecuteHandler(
             nativeState?.finished.resolve();
             return;
           }
+          templatedLauncherAbsenceVerified = true;
         }
 
         try {
@@ -412,7 +418,10 @@ export function createExecuteHandler(
             cause: 'heartbeat_lost',
             errorMessage: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
             params,
-            absenceVerified: !getTrackedExecutor(sessionId),
+            // Missing a local process handle is never absence proof. A
+            // configured authoritative templated-launcher failure is the one
+            // launch path that can prove no remote executor was created.
+            absenceVerified: templatedLauncherAbsenceVerified,
             sdkFailure: {
               reason: 'heartbeat_lost',
               detected_at: new Date().toISOString(),

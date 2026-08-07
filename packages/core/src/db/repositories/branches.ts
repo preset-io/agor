@@ -463,6 +463,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     archived?: boolean;
     userId?: UUID;
     limit?: number;
+    offset?: number;
   }): Promise<Branch[]> {
     const teammateKindConditions = [
       eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.teammate.kind')}`, 'teammate'),
@@ -505,7 +506,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
     const rows = await query
       .where(and(...conditions))
+      .orderBy(desc(branches.branch_id))
       .limit(filter?.limit ?? 200)
+      .offset(filter?.offset ?? 0)
       .all();
 
     const baseUrl = await getBaseUrl();

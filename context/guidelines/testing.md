@@ -316,3 +316,36 @@ pnpm test              # Run all
 pnpm test:watch        # Watch mode
 pnpm test -- --coverage
 ```
+
+### PostgreSQL integration suites
+
+Run every `*.postgres.test.ts` suite against a fresh disposable pgvector
+PostgreSQL container with one command:
+
+```bash
+pnpm test:postgres:docker
+```
+
+The command uses the same published pgvector image as CI, applies
+`docker/postgres-init-app-user.sql`, verifies that `agor_app` is both
+`NOSUPERUSER` and `NOBYPASSRLS`, runs the suites serially, and removes the
+container. Serial execution is intentional: each suite asks Drizzle to apply
+the shared migration set, which is not safe to initialize concurrently.
+
+To use an already-running disposable database, set both gates explicitly and
+run the narrower test command:
+
+```bash
+AGOR_DB_DIALECT=postgresql \
+AGOR_TEST_POSTGRES_URL='postgresql://agor_app:<password>@127.0.0.1:5432/agor' \
+AGOR_TEST_POSTGRES_ADMIN_URL='postgresql://<bootstrap-user>:<password>@127.0.0.1:5432/agor' \
+pnpm test:postgres:integration
+```
+
+The admin URL is used only to create and drop a separate empty database for one
+catalog fail-closed fixture. All migrations, application queries, and RLS
+assertions connect through the non-superuser `AGOR_TEST_POSTGRES_URL`.
+
+PostgreSQL-only suites must use the `*.postgres.test.ts` suffix. The runner
+fails if it finds `AGOR_TEST_POSTGRES_URL` in a differently named test, finds no
+PostgreSQL suites, or all selected tests skip, preventing a false-green lane.

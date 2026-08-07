@@ -33,6 +33,7 @@ export type FrontMatterLike = {
   image?: string;
   imageHeight?: number | string;
   imageWidth?: number | string;
+  noindex?: boolean;
   ogImage?: string;
   socialImage?: string;
   title?: string;

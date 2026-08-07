@@ -52,7 +52,7 @@ import {
   parseKnowledgeUri,
   titleFromKnowledgePath,
 } from '@agor/core/types';
-import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
@@ -173,6 +173,7 @@ export interface KnowledgeSearchQuery {
   include_indexing?: boolean;
   includeIndexing?: boolean;
   limit?: number;
+  offset?: number;
   readable_by_user_id?: UserID;
   readable_as_admin?: boolean;
   readable_namespace_ids?: KnowledgeNamespaceID[];
@@ -460,7 +461,7 @@ export class KnowledgeNamespaceRepository
     const rows = await select(this.db)
       .from(kbNamespaces)
       .where(and(...conditions))
-      .orderBy(desc(kbNamespaces.updated_at))
+      .orderBy(desc(kbNamespaces.updated_at), asc(kbNamespaces.namespace_id))
       .all();
     return rows.map((row: KBNamespaceRow) => this.rowToNamespace(row));
   }
@@ -1258,7 +1259,7 @@ export class KnowledgeDocumentRepository
     const rows = await select(this.db)
       .from(kbDocuments)
       .where(and(...conditions))
-      .orderBy(desc(kbDocuments.updated_at))
+      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
       .all();
     const [baseUrl, namespaceRows] = await Promise.all([
       getBaseUrl(),
@@ -1443,7 +1444,10 @@ export class KnowledgeSearchRepository {
       );
     }
     const q = query.q?.trim() ?? '';
-    const limit = Math.min(Math.max(query.limit ?? 25, 1), 100);
+    // Internal callers may request one look-ahead row to compute hasMore;
+    // public schemas remain capped at 100.
+    const limit = Math.min(Math.max(query.limit ?? 25, 1), 101);
+    const offset = Math.max(query.offset ?? 0, 0);
     let namespaceId = query.namespace_id;
     if (!namespaceId && query.namespace_slug) {
       const namespace = await this.namespaces.findBySlug(query.namespace_slug);
@@ -1518,8 +1522,8 @@ export class KnowledgeSearchRepository {
     }
 
     const rows = (await dbQuery
-      .orderBy(desc(kbDocuments.updated_at))
-      .limit(q ? Math.max(limit, 100) : limit)
+      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
+      .limit(q ? Math.max(offset + limit, 100) : offset + limit)
       .all()) as Array<Record<string, unknown>>;
     const baseUrl = await getBaseUrl();
 
@@ -1567,9 +1571,10 @@ export class KnowledgeSearchRepository {
         (a, b) =>
           b.score - a.score ||
           new Date(b.document.updated_at ?? 0).getTime() -
-            new Date(a.document.updated_at ?? 0).getTime()
+            new Date(a.document.updated_at ?? 0).getTime() ||
+          a.document.document_id.localeCompare(b.document.document_id)
       )
-      .slice(0, limit);
+      .slice(offset, offset + limit);
   }
 }
 

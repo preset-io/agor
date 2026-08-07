@@ -169,6 +169,7 @@ export const boardQuerySchema = createQuerySchema(
     name: Type.Optional(Type.String({ maxLength: 255 })),
     slug: Type.Optional(Type.String({ maxLength: 255 })),
     created_by: Type.Optional(CommonSchemas.uuid),
+    archived: Type.Optional(CommonSchemas.boolean),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),
     // List-only projection flag: when true, the boards service omits the heavy

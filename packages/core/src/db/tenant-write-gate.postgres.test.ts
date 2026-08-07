@@ -22,7 +22,12 @@ import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
 import * as pg from './schema.postgres';
 import { deleteTenantData } from './tenant-deletion';
-import { runWithTenantContext, runWithTenantDatabaseScope } from './tenant-scope';
+import {
+  createTenantScopedDatabaseProxy,
+  runWithoutTenantDatabaseScope,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
+} from './tenant-scope';
 import { bindRepositoryToTenantUnitOfWork } from './tenant-unit-of-work';
 import {
   acquireTenantWriteGate,
@@ -244,7 +249,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
     // Bind a repository to the unit-of-work boundary and drive it with ONLY a
     // tenant identity in context (no ambient DB scope) — the gateway / MCP /
     // custom-route shape that never reaches the request-hook gate check.
-    const sessionRepo = bindRepositoryToTenantUnitOfWork(db as never, new SessionRepository(db));
+    const tenantScopedDb = createTenantScopedDatabaseProxy(db);
+    const sessionRepo = bindRepositoryToTenantUnitOfWork(
+      tenantScopedDb,
+      new SessionRepository(tenantScopedDb)
+    );
 
     const { generation } = await acquireTenantWriteGate(db, tenant, { reason: 'freeze' });
 
@@ -304,10 +313,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
         await assertTenantWriteGateGeneration(scoped, tenant, generation);
 
         // Kick off a forced re-acquire from the other connection; it must block.
-        forced = acquireTenantWriteGate(other, tenant, { force: true }).then((result) => {
-          forcedSettled = true;
-          return result;
-        });
+        forced = runWithoutTenantDatabaseScope(() =>
+          acquireTenantWriteGate(other, tenant, { force: true }).then((result) => {
+            forcedSettled = true;
+            return result;
+          })
+        );
 
         // Give the blocked acquire ample time to prove it cannot proceed.
         await new Promise((resolve) => setTimeout(resolve, 300));

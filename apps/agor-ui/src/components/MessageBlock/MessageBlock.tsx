@@ -265,8 +265,7 @@ function DaemonRestartNotice({
     try {
       await client.sessions.prompt(
         sessionId,
-        'Please resume where you left off before the daemon restarted.',
-        { messageSource: 'agor' }
+        'Please resume where you left off before the daemon restarted.'
       );
       setResumed(true);
     } catch (err) {

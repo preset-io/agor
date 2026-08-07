@@ -3,20 +3,25 @@ import {
   BranchRepository,
   createTenantScopedDatabaseProxy,
   generateId,
+  MCPServerRepository,
   RepoRepository,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   ScheduleRepository,
+  SessionMCPServerRepository,
   SessionRepository,
+  TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { resolveSessionDefaults } from '@agor/core/sessions';
-import type { Branch, Schedule, Session, UserID } from '@agor/core/types';
+import type { Branch, Schedule, Session, Task, UserID } from '@agor/core/types';
 import {
+  SessionStatus,
+  TaskStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, type MockInstance, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   materializeScheduleAgenticToolConfig,
@@ -114,17 +119,517 @@ async function seedRunnableSchedule(
 
 function createSchedulerApp(db: SchedulerDb) {
   const sessions = new SessionRepository(db);
-  const createSession = vi.fn((data: Partial<Session>, _params?: unknown) => sessions.create(data));
-  const prompt = vi.fn(async () => ({}));
+  const workIdentity = { instanceId: 'test-daemon', bootId: 'test-boot' } as const;
+  const sessionEvent = vi.fn();
+  const removeSession = vi.fn(async (id: string) => {
+    await sessions.delete(id);
+  });
+  const prompt = vi.fn(
+    async (data: { prompt: string; idempotencyTaskId: string }, params: any) =>
+      ({
+        task_id: data.idempotencyTaskId,
+        session_id: params.route.id,
+        status: TaskStatus.DISPATCHING,
+        full_prompt: data.prompt,
+      }) as Task
+  );
   const app = {
+    get: (name: string) => (name === 'distributedWorkIdentity' ? workIdentity : undefined),
     service: (path: string) => {
-      if (path === 'sessions') return { create: createSession, remove: vi.fn() };
+      if (path === 'sessions') {
+        return {
+          emit: sessionEvent,
+          patch: (id: string, data: Partial<Session>) => sessions.update(id, data),
+          remove: removeSession,
+        };
+      }
       if (path === '/sessions/:id/prompt') return { create: prompt };
+      if (path === 'session-mcp-servers') return { emit: vi.fn() };
       throw new Error(`Unexpected service: ${path}`);
     },
   } as unknown as ConstructorParameters<typeof SchedulerService>[1];
-  return { app, createSession, prompt };
+  return { app, prompt, removeSession, sessionEvent, workIdentity };
 }
+
+describe('scheduler HA occurrence recovery', () => {
+  const killStages = [
+    'afterSessionAdmission',
+    'afterMcpAttachments',
+    'afterPromptDispatch',
+    'afterRetention',
+    'afterMetadata',
+  ] as const;
+
+  dbTest('uses the application-owned diagnostic identity across consumers', async ({ db }) => {
+    const { app, workIdentity } = createSchedulerApp(db);
+    const first = new SchedulerService(db, app);
+    const second = new SchedulerService(db, app);
+    const readIdentity = (scheduler: SchedulerService) =>
+      (
+        scheduler as unknown as {
+          config: { workIdentity: typeof workIdentity };
+        }
+      ).config.workIdentity;
+
+    expect(readIdentity(first)).toBe(workIdentity);
+    expect(readIdentity(second)).toBe(workIdentity);
+  });
+
+  for (const stage of killStages) {
+    dbTest(`recovers a replacement scheduler killed at ${stage}`, async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          {
+            email: `scheduler-recovery-${stage}-${Math.random()}@example.com`,
+            name: 'Schedule creator',
+          },
+          { agentic_tool: 'claude-code' }
+        );
+        const mcpServer = await new MCPServerRepository(db).create({
+          name: `scheduler-recovery-${stage}-${generateId()}`,
+          transport: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+          scope: 'global',
+          source: 'user',
+          enabled: true,
+        });
+        await new ScheduleRepository(db).update(schedule.schedule_id, {
+          mcp_server_ids: [mcpServer.mcp_server_id],
+        });
+        const { app, prompt } = createSchedulerApp(db);
+        let killed = false;
+        const crash = async () => {
+          if (killed) return;
+          killed = true;
+          throw new Error(`simulated kill at ${stage}`);
+        };
+        const first = new SchedulerService(db, app, {
+          testHooks: { [stage]: crash },
+          workIdentity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+        });
+        await expect(
+          first.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).rejects.toThrow(`simulated kill at ${stage}`);
+
+        const replacement = new SchedulerService(db, app, {
+          workIdentity: { instanceId: 'daemon-b', bootId: 'boot-b' },
+        });
+        const recovered = await replacement.executeScheduleNow({
+          scheduleId: schedule.schedule_id,
+          triggeredBy: creator.user_id,
+        });
+
+        const sessions = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+        expect(sessions).toHaveLength(1);
+        expect(recovered.session_id).toBe(sessions[0].session_id);
+        expect(await new SessionMCPServerRepository(db).count(recovered.session_id)).toBe(1);
+        const taskIds = prompt.mock.calls.map((call) => call[0].idempotencyTaskId);
+        expect(new Set(taskIds).size).toBeLessThanOrEqual(1);
+        const updated = await new ScheduleRepository(db).findById(schedule.schedule_id);
+        expect(updated?.last_run_session_id).toBe(recovered.session_id);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  }
+
+  dbTest('background recovery is independent of cron grace and manual retry', async ({ db }) => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    try {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-late-recovery-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        { agentic_tool: 'claude-code' }
+      );
+      const { app, prompt } = createSchedulerApp(db);
+      const killed = new SchedulerService(db, app, {
+        tenantId: 'default',
+        testHooks: {
+          afterSessionAdmission: () => {
+            throw new Error('simulated process death');
+          },
+        },
+      });
+      await expect(
+        killed.executeScheduleNow({
+          scheduleId: schedule.schedule_id,
+          triggeredBy: creator.user_id,
+        })
+      ).rejects.toThrow('simulated process death');
+
+      nowSpy.mockReturnValue(NOW + 10 * 60_000);
+      const replacement = new SchedulerService(db, app, { tenantId: 'default' });
+      await (
+        replacement as unknown as {
+          tick(): Promise<unknown>;
+        }
+      ).tick();
+
+      expect(prompt).toHaveBeenCalledOnce();
+      const [session] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+      expect(
+        await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
+      ).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  dbTest(
+    'already-dispatched recovery does not reload mutable creator launch state',
+    async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+      let creatorLookup: MockInstance<UsersRepository['findById']> | undefined;
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          {
+            email: `scheduler-durable-recovery-${Math.random()}@example.com`,
+            name: 'Schedule creator',
+          },
+          { agentic_tool: 'claude-code' }
+        );
+        await new ScheduleRepository(db).update(schedule.schedule_id, { enabled: false });
+        const initialTaskId = generateId();
+        const session = await new SessionRepository(db).create({
+          session_id: generateId(),
+          branch_id: schedule.branch_id,
+          created_by: creator.user_id,
+          agentic_tool: 'claude-code',
+          status: SessionStatus.IDLE,
+          scheduled_from_branch: true,
+          scheduled_run_at: NOW,
+          schedule_id: schedule.schedule_id,
+          custom_context: {
+            scheduled_run: {
+              rendered_prompt: 'already durably dispatching',
+              run_index: 1,
+              initial_task_id: initialTaskId,
+              schedule_config_snapshot: {
+                schedule_id: schedule.schedule_id,
+                cron: schedule.cron_expression,
+                timezone: 'UTC',
+                retention: schedule.retention,
+                allow_concurrent_runs: schedule.allow_concurrent_runs,
+                mcp_server_ids: [],
+              },
+            },
+          },
+        });
+        const tasks = new TaskRepository(db);
+        const pending = await tasks.createPending({
+          task_id: initialTaskId,
+          session_id: session.session_id,
+          full_prompt: 'already durably dispatching',
+          created_by: creator.user_id,
+          status: TaskStatus.CREATED,
+        });
+        await tasks.claimDispatchAndProjectSession(pending.task_id, TaskStatus.CREATED, {
+          status: TaskStatus.DISPATCHING,
+          started_at: new Date(NOW).toISOString(),
+          message_range: {
+            start_index: 0,
+            end_index: 1,
+            start_timestamp: new Date(NOW).toISOString(),
+          },
+        });
+
+        creatorLookup = vi
+          .spyOn(UsersRepository.prototype, 'findById')
+          .mockRejectedValue(new Error('durable recovery must not reload the creator'));
+        const { app, prompt } = createSchedulerApp(db);
+        await (
+          new SchedulerService(db, app, { tenantId: 'default' }) as unknown as {
+            tick(): Promise<unknown>;
+          }
+        ).tick();
+
+        expect(creatorLookup).not.toHaveBeenCalled();
+        expect(prompt).toHaveBeenCalledOnce();
+        expect(prompt.mock.calls[0][1].user).toBeUndefined();
+        expect(
+          await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
+        ).toBe(true);
+      } finally {
+        creatorLookup?.mockRestore();
+        nowSpy.mockRestore();
+      }
+    }
+  );
+
+  dbTest('recovers an admitted occurrence after its schedule is deleted', async ({ db }) => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    try {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-deleted-recovery-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        { agentic_tool: 'claude-code' }
+      );
+      const initialTaskId = generateId();
+      const session = await new SessionRepository(db).create({
+        session_id: generateId(),
+        branch_id: schedule.branch_id,
+        created_by: creator.user_id,
+        agentic_tool: 'claude-code',
+        status: 'idle',
+        scheduled_from_branch: true,
+        scheduled_run_at: NOW,
+        schedule_id: schedule.schedule_id,
+        custom_context: {
+          scheduled_run: {
+            rendered_prompt: 'prompt preserved before schedule deletion',
+            run_index: 1,
+            initial_task_id: initialTaskId,
+            schedule_config_snapshot: {
+              schedule_id: schedule.schedule_id,
+              cron: schedule.cron_expression,
+              timezone: 'UTC',
+              retention: schedule.retention,
+              allow_concurrent_runs: schedule.allow_concurrent_runs,
+              mcp_server_ids: [],
+            },
+          },
+        },
+      });
+      await new ScheduleRepository(db).delete(schedule.schedule_id);
+
+      expect((await new SessionRepository(db).findById(session.session_id))?.schedule_id).toBe(
+        undefined
+      );
+      const { app, prompt } = createSchedulerApp(db);
+      await (
+        new SchedulerService(db, app, { tenantId: 'default' }) as unknown as {
+          tick(): Promise<unknown>;
+        }
+      ).tick();
+
+      expect(prompt).toHaveBeenCalledOnce();
+      expect(prompt.mock.calls[0][0]).toMatchObject({
+        prompt: 'prompt preserved before schedule deletion',
+        idempotencyTaskId: initialTaskId,
+      });
+      expect(
+        await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
+      ).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  dbTest('five concurrent scheduler instances create one occurrence', async ({ db }) => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    try {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-five-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        { agentic_tool: 'claude-code' }
+      );
+      const { app, prompt, sessionEvent } = createSchedulerApp(db);
+      const schedulers = Array.from(
+        { length: 5 },
+        (_, index) =>
+          new SchedulerService(db, app, {
+            workIdentity: { instanceId: `daemon-${index}`, bootId: `boot-${index}` },
+          })
+      );
+
+      const sessions = await Promise.all(
+        schedulers.map((scheduler) =>
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        )
+      );
+
+      expect(new Set(sessions.map((session) => session.session_id)).size).toBe(1);
+      expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+        1
+      );
+      expect(new Set(prompt.mock.calls.map((call) => call[0].idempotencyTaskId)).size).toBe(1);
+      expect(sessionEvent.mock.calls.filter(([event]) => event === 'created')).toHaveLength(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  dbTest('cron and manual triggers in the same minute share one occurrence', async ({ db }) => {
+    const collisionNow = NOW + 30_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(collisionNow);
+    try {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-collision-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        { agentic_tool: 'claude-code' }
+      );
+      const { app } = createSchedulerApp(db);
+      const cron = new SchedulerService(db, app);
+      const manual = new SchedulerService(db, app);
+
+      await Promise.all([
+        (
+          cron as unknown as {
+            processSchedule(schedule: Schedule, now: number): Promise<void>;
+          }
+        ).processSchedule(schedule, collisionNow),
+        manual.executeScheduleNow({
+          scheduleId: schedule.schedule_id,
+          triggeredBy: creator.user_id,
+        }),
+      ]);
+
+      expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+        1
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  dbTest('allow_concurrent_runs=false treats incomplete initialization as busy', async ({ db }) => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    try {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-busy-init-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        { agentic_tool: 'claude-code' }
+      );
+      await new SessionRepository(db).create({
+        session_id: generateId(),
+        branch_id: schedule.branch_id,
+        created_by: creator.user_id,
+        agentic_tool: 'claude-code',
+        status: 'idle',
+        scheduled_from_branch: true,
+        scheduled_run_at: NOW - 60_000,
+        schedule_id: schedule.schedule_id,
+      });
+      const { app } = createSchedulerApp(db);
+
+      await expect(
+        new SchedulerService(db, app).executeScheduleNow({
+          scheduleId: schedule.schedule_id,
+          triggeredBy: creator.user_id,
+        })
+      ).rejects.toMatchObject({ code: 'schedule_busy' });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  dbTest(
+    'allow_concurrent_runs=false does not treat a completed no-task history row as busy',
+    async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          {
+            email: `scheduler-complete-history-${Math.random()}@example.com`,
+            name: 'Schedule creator',
+          },
+          { agentic_tool: 'claude-code' }
+        );
+        const sessions = new SessionRepository(db);
+        const historical = await sessions.create({
+          session_id: generateId(),
+          branch_id: schedule.branch_id,
+          created_by: creator.user_id,
+          agentic_tool: 'claude-code',
+          status: 'idle',
+          scheduled_from_branch: true,
+          scheduled_run_at: NOW - 60_000,
+          schedule_id: schedule.schedule_id,
+        });
+        await sessions.markScheduledInitializationComplete(historical.session_id);
+        const { app } = createSchedulerApp(db);
+
+        await expect(
+          new SchedulerService(db, app).executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).resolves.toBeDefined();
+        expect(await sessions.findByScheduleId(schedule.schedule_id)).toHaveLength(2);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    }
+  );
+
+  dbTest('retention defers active overflow occurrences until they are terminal', async ({ db }) => {
+    const { creator, schedule: createdSchedule } = await seedRunnableSchedule(
+      db,
+      {
+        email: `scheduler-retention-active-${Math.random()}@example.com`,
+        name: 'Schedule creator',
+      },
+      { agentic_tool: 'claude-code' }
+    );
+    const schedule = await new ScheduleRepository(db).update(createdSchedule.schedule_id, {
+      retention: 1,
+    });
+    const sessions = new SessionRepository(db);
+    const olderActive = await sessions.create({
+      session_id: generateId(),
+      branch_id: schedule.branch_id,
+      created_by: creator.user_id,
+      agentic_tool: 'claude-code',
+      status: SessionStatus.RUNNING,
+      scheduled_from_branch: true,
+      scheduled_run_at: NOW - 60_000,
+      schedule_id: schedule.schedule_id,
+    });
+    const newest = await sessions.create({
+      session_id: generateId(),
+      branch_id: schedule.branch_id,
+      created_by: creator.user_id,
+      agentic_tool: 'claude-code',
+      status: SessionStatus.COMPLETED,
+      scheduled_from_branch: true,
+      scheduled_run_at: NOW,
+      schedule_id: schedule.schedule_id,
+    });
+    await sessions.markScheduledInitializationComplete(olderActive.session_id);
+    await sessions.markScheduledInitializationComplete(newest.session_id);
+    const { app, removeSession } = createSchedulerApp(db);
+    const scheduler = new SchedulerService(db, app);
+
+    await (
+      scheduler as unknown as { enforceRetentionPolicy(schedule: Schedule): Promise<void> }
+    ).enforceRetentionPolicy(schedule);
+    expect(removeSession).not.toHaveBeenCalled();
+    expect(await sessions.findById(olderActive.session_id)).not.toBeNull();
+
+    await sessions.update(olderActive.session_id, { status: SessionStatus.COMPLETED });
+    await (
+      scheduler as unknown as { enforceRetentionPolicy(schedule: Schedule): Promise<void> }
+    ).enforceRetentionPolicy(schedule);
+    expect(removeSession).toHaveBeenCalledWith(olderActive.session_id, { provider: undefined });
+    expect(await sessions.findById(olderActive.session_id)).toBeNull();
+  });
+});
 
 describe('renderSchedulePrompt', () => {
   it('renders {{branch.*}} fields (canonical names)', () => {
@@ -345,7 +850,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
         configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
       }
     );
-    const { app, createSession, prompt } = createSchedulerApp(db);
+    const { app, prompt } = createSchedulerApp(db);
     const scheduler = new SchedulerService(db, app);
 
     await scheduler.executeScheduleNow({
@@ -353,14 +858,13 @@ describe('materializeScheduleAgenticToolConfig', () => {
       triggeredBy: creator.user_id,
     });
 
-    expect(createSession).toHaveBeenCalledOnce();
-    expect(createSession.mock.calls[0][0]).toMatchObject({
+    const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+    expect(created).toMatchObject({
       created_by: creator.user_id,
       agentic_tool: 'codex',
       agentic_tool_preset_id: undefined,
       model_config: { mode: 'exact', model: 'gpt-5.4' },
     });
-    expect(createSession.mock.calls[0][1]).toEqual({ _agenticConfigResolved: true });
     expect(prompt).toHaveBeenCalledOnce();
   });
 
@@ -397,15 +901,14 @@ describe('materializeScheduleAgenticToolConfig', () => {
           codex: { source: 'preset', preset_id: preset.preset_id },
         },
       });
-      const { app, createSession, prompt } = createSchedulerApp(db);
+      const { app, prompt } = createSchedulerApp(db);
 
       await new SchedulerService(db, app).executeScheduleNow({
         scheduleId: schedule.schedule_id,
         triggeredBy: creator.user_id,
       });
 
-      expect(createSession).toHaveBeenCalledOnce();
-      const created = createSession.mock.calls[0][0];
+      const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
       expect({
         agentic_tool_preset_id: created.agentic_tool_preset_id,
         permission_config: created.permission_config,
@@ -426,7 +929,6 @@ describe('materializeScheduleAgenticToolConfig', () => {
           updated_at: expect.any(String),
         },
       });
-      expect(createSession.mock.calls[0][1]).toEqual({ _agenticConfigResolved: true });
       expect(prompt).toHaveBeenCalledOnce();
     }
   );
@@ -452,7 +954,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
         configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
       }
     );
-    const { app, createSession } = createSchedulerApp(db);
+    const { app } = createSchedulerApp(db);
     const expected = resolveSessionDefaults({ agenticTool: 'codex', user: null });
 
     await new SchedulerService(db, app).executeScheduleNow({
@@ -460,14 +962,15 @@ describe('materializeScheduleAgenticToolConfig', () => {
       triggeredBy: creator.user_id,
     });
 
-    expect(createSession.mock.calls[0][0]).toMatchObject({
+    const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+    expect(created).toMatchObject({
       permission_config: expected.permission_config,
       model_config: {
         ...expected.model_config,
         updated_at: expect.any(String),
       },
     });
-    expect(createSession.mock.calls[0][0].model_config?.model).not.toBe('stale-user-model');
+    expect(created.model_config?.model).not.toBe('stale-user-model');
   });
 
   dbTest(
@@ -485,14 +988,14 @@ describe('materializeScheduleAgenticToolConfig', () => {
           model_config: { mode: 'exact', model: 'gpt-5.4' },
         }
       );
-      const { app, createSession, prompt } = createSchedulerApp(db);
+      const { app, prompt } = createSchedulerApp(db);
 
       await new SchedulerService(db, app).executeScheduleNow({
         scheduleId: schedule.schedule_id,
         triggeredBy: creator.user_id,
       });
-      expect(createSession).toHaveBeenCalledOnce();
-      expect(createSession.mock.calls[0][0].model_config?.model).not.toBe('gpt-5.4');
+      const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+      expect(created.model_config?.model).not.toBe('gpt-5.4');
       expect(prompt).toHaveBeenCalledOnce();
     }
   );
@@ -508,7 +1011,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
         },
         { agentic_tool: 'claude-code-cli' }
       );
-      const { app, createSession, prompt } = createSchedulerApp(db);
+      const { app, prompt } = createSchedulerApp(db);
 
       const run = new SchedulerService(db, app).executeScheduleNow({
         scheduleId: schedule.schedule_id,
@@ -519,7 +1022,9 @@ describe('materializeScheduleAgenticToolConfig', () => {
         name: 'ScheduleNotReadyError',
         code: 'schedule_agentic_tool_removed',
       } satisfies Partial<ScheduleNotReadyError>);
-      expect(createSession).not.toHaveBeenCalled();
+      expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+        0
+      );
       expect(prompt).not.toHaveBeenCalled();
     }
   );
@@ -535,7 +1040,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
         },
         { agentic_tool: 'claude-code-cli' }
       );
-      const { app, createSession, prompt } = createSchedulerApp(db);
+      const { app, prompt } = createSchedulerApp(db);
       const scheduler = new SchedulerService(db, app);
       const cronNow = NOW + 30_000;
 
@@ -554,7 +1059,9 @@ describe('materializeScheduleAgenticToolConfig', () => {
       expect(updated?.next_run_at).toBeGreaterThan(cronNow);
       expect(updated?.last_run_at).toBeUndefined();
       expect(updated?.last_run_session_id).toBeUndefined();
-      expect(createSession).not.toHaveBeenCalled();
+      expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+        0
+      );
       expect(prompt).not.toHaveBeenCalled();
     }
   );

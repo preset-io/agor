@@ -109,7 +109,7 @@ import { createKnowledgeVersionsService } from './services/knowledge-versions.js
 import { createLeaderboardService } from './services/leaderboard.js';
 import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPServersService } from './services/mcp-servers.js';
-import { createMessagesService } from './services/messages.js';
+import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
 import { createSchedulesService } from './services/schedules.js';
@@ -259,18 +259,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
 
   app.use('/messages', messagesService, {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'update',
-      'patch',
-      'remove',
-      'findBySession',
-      'findByTask',
-      'findByRange',
-      'createMany',
-    ],
+    methods: [...MESSAGES_SERVICE_TRANSPORT_METHODS],
     events: [
       'queued',
       'streaming:start',
@@ -752,10 +741,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     boardCommentsService: safeService('board-comments'),
   };
 }
-
-// ============================================================================
-// Execute Handler (spawns executor processes)
-// ============================================================================
 
 // ============================================================================
 // MCP Services Registration (large block extracted for readability)

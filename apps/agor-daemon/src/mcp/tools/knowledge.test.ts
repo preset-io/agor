@@ -100,6 +100,48 @@ function textResultJson(result: unknown): unknown {
   return JSON.parse(text);
 }
 
+describe('Knowledge MCP collection pagination', () => {
+  it('pages namespaces only after the service returns the authorized set', async () => {
+    const find = vi.fn(async () =>
+      Array.from({ length: 4 }, (_, index) => ({
+        namespace_id: `ns-${index}`,
+        slug: `space-${index}`,
+        display_name: `Space ${index}`,
+        kind: 'global',
+        archived: false,
+      }))
+    );
+    const tools = await captureKnowledgeTools({ 'kb/namespaces': { find } });
+
+    const result = textResultJson(
+      await tools.agor_kb_namespaces_list.handler?.({ limit: 2, offset: 2 })
+    ) as { total: number; data: Array<{ namespace_id: string }>; nextOffset: number | null };
+
+    expect(find).toHaveBeenCalledWith(expect.objectContaining({ query: { archived: false } }));
+    expect(result.total).toBe(4);
+    expect(result.data.map((namespace) => namespace.namespace_id)).toEqual(['ns-2', 'ns-3']);
+    expect(result.nextOffset).toBeNull();
+  });
+
+  it('applies history offset after document authorization', async () => {
+    const find = vi.fn(async () =>
+      Array.from({ length: 5 }, (_, index) => ({ version_id: `version-${index}` }))
+    );
+    const tools = await captureKnowledgeTools({ 'kb/versions': { find } });
+
+    const result = textResultJson(
+      await tools.agor_kb_history.handler?.({ documentId: 'doc-1', limit: 2, offset: 2 })
+    ) as { total: number; data: Array<{ version_id: string }>; nextOffset: number | null };
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ document_id: 'doc-1' }) })
+    );
+    expect(result.total).toBe(5);
+    expect(result.data.map((version) => version.version_id)).toEqual(['version-2', 'version-3']);
+    expect(result.nextOffset).toBe(4);
+  });
+});
+
 describe('Knowledge MCP input schemas', () => {
   it('rejects renamed branch_id instead of accepting it as an alias', async () => {
     const tools = await captureKnowledgeTools();
@@ -525,7 +567,8 @@ describe('Knowledge MCP input schemas', () => {
           namespace_slug: 'global',
           include_my_drafts: true,
           include_other_user_drafts: false,
-          limit: 100,
+          limit: 26,
+          offset: 0,
         }),
       })
     );
@@ -572,6 +615,7 @@ describe('Knowledge MCP input schemas', () => {
           ],
         },
       ],
+      pagination: { limit: 25, offset: 0, hasMore: false, nextOffset: null },
     });
     expect(JSON.stringify(result)).not.toContain('sensitive body');
     expect(JSON.stringify(result)).not.toContain('current_version');
