@@ -209,6 +209,7 @@ function makeGatewayHarness(args: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.mocked(materializeAgenticToolConfiguration).mockClear();
   vi.mocked(getBaseUrl).mockReset();
   vi.mocked(getBaseUrl).mockResolvedValue('https://agor.example.com');
@@ -279,247 +280,135 @@ describe('GatewayService user alignment operational logs', () => {
     name: sensitive.name,
   } as User;
 
-  function capturedOutput(...spies: Array<{ mock: { calls: unknown[][] } }>): string {
-    return spies
+  function resolveAlignedUser(service: GatewayService) {
+    return service as unknown as {
+      resolveAlignedUser(opts: {
+        platform: string;
+        externalId: string | undefined;
+        email: unknown;
+        userMap: Record<string, string> | undefined;
+      }): Promise<User | null>;
+    };
+  }
+
+  async function createAlignedMessage(
+    platform: 'Slack' | 'GitHub' | 'Shortcut',
+    matchedUser: User | null = null,
+    includeEmail = true
+  ) {
+    const channelType = platform.toLowerCase() as 'slack' | 'github' | 'shortcut';
+    const channel = {
+      ...slackChannel,
+      channel_type: channelType,
+      agor_user_id: null,
+      config: { [`align_${channelType}_users`]: true },
+    } as unknown as GatewayChannel;
+    const sendMessage = vi.fn(async () => 'sent');
+    if (channelType !== 'slack') {
+      vi.mocked(getConnector).mockReturnValue({ sendMessage } as never);
+    }
+    const { service } = makeGatewayHarness({
+      channel,
+      alignedUser: matchedUser,
+      connector: { sendMessage },
+    });
+    const metadata: Record<string, unknown> = {
+      ...(channelType === 'slack' ? { channel_type: 'im' } : { processing_comment_id: 42 }),
+      ...(channelType === 'slack' ? {} : { [`${channelType}_user`]: sensitive.externalId }),
+      ...(includeEmail ? { [`${channelType}_user_email`]: sensitive.email } : {}),
+    };
+    const result = await service.create({
+      channel_key: channel.channel_key,
+      thread_id: sensitive.threadId,
+      text: 'hello',
+      user_name: sensitive.slackUsername,
+      metadata,
+    });
+
+    return { result, sendMessage };
+  }
+
+  function expectNoSensitiveValues(...spies: Array<{ mock: { calls: unknown[][] } }>): void {
+    const output = spies
       .flatMap((spy) => spy.mock.calls)
       .flat()
       .join(' ');
-  }
-
-  function expectNoSensitiveValues(output: string): void {
     for (const value of Object.values(sensitive)) {
       expect(output).not.toContain(value);
     }
   }
 
-  it('logs a user_map success with only the provider, source, and Agor user short ID', async () => {
-    const { service } = makeGatewayHarness({ alignedUser });
+  it('logs exact user_map and email-fallback outcomes without external identities', async () => {
+    const { service, findByEmailForAlignment } = makeGatewayHarness({ alignedUser });
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const matched = await (
-      service as unknown as {
-        resolveAlignedUser(opts: {
-          platform: string;
-          externalId: string | undefined;
-          email: unknown;
-          userMap: Record<string, string> | undefined;
-        }): Promise<User | null>;
-      }
-    ).resolveAlignedUser({
+    const userMapMatched = await resolveAlignedUser(service).resolveAlignedUser({
       platform: 'GitHub',
       externalId: sensitive.externalId,
       email: undefined,
       userMap: { [sensitive.externalId]: sensitive.mappedEmail },
     });
-
-    expect(matched).toBe(alignedUser);
-    expect(log).toHaveBeenCalledWith(
-      `[gateway] GitHub user alignment succeeded: source=user_map agor_user=${shortId(alignedUser.user_id)}`
-    );
-    expectNoSensitiveValues(capturedOutput(log));
-    log.mockRestore();
-  });
-
-  it('logs a stale user_map and email fallback without either external identity', async () => {
-    const { service, findByEmailForAlignment } = makeGatewayHarness({ alignedUser });
     findByEmailForAlignment.mockResolvedValueOnce(null).mockResolvedValueOnce(alignedUser);
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-    const matched = await (
-      service as unknown as {
-        resolveAlignedUser(opts: {
-          platform: string;
-          externalId: string | undefined;
-          email: unknown;
-          userMap: Record<string, string> | undefined;
-        }): Promise<User | null>;
-      }
-    ).resolveAlignedUser({
+    const emailMatched = await resolveAlignedUser(service).resolveAlignedUser({
       platform: 'Shortcut',
       externalId: sensitive.externalId,
       email: sensitive.email,
       userMap: { [sensitive.externalId]: sensitive.mappedEmail },
     });
 
-    expect(matched).toBe(alignedUser);
-    expect(warn).toHaveBeenCalledWith(
-      '[gateway] Shortcut user alignment failed: source=user_map result=agor_user_not_found'
-    );
-    expect(log).toHaveBeenCalledWith(
-      `[gateway] Shortcut user alignment succeeded: source=email agor_user=${shortId(alignedUser.user_id)}`
-    );
-    expectNoSensitiveValues(capturedOutput(log, warn));
-    log.mockRestore();
-    warn.mockRestore();
+    expect([userMapMatched, emailMatched]).toEqual([alignedUser, alignedUser]);
+    expect(log.mock.calls).toEqual([
+      [
+        `[gateway] GitHub user alignment succeeded: source=user_map agor_user=${shortId(alignedUser.user_id)}`,
+      ],
+      [
+        `[gateway] Shortcut user alignment succeeded: source=email agor_user=${shortId(alignedUser.user_id)}`,
+      ],
+    ]);
+    expect(warn.mock.calls).toEqual([
+      ['[gateway] Shortcut user alignment failed: source=user_map result=agor_user_not_found'],
+    ]);
+    expectNoSensitiveValues(log, warn);
   });
 
   it('logs a Slack alignment success without email, name, username, or thread identity', async () => {
-    const channel = {
-      ...slackChannel,
-      agor_user_id: null,
-      config: { align_slack_users: true },
-    } as GatewayChannel;
-    const { service } = makeGatewayHarness({ channel, alignedUser, user: alignedUser });
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-
-    const result = await service.create({
-      channel_key: channel.channel_key,
-      thread_id: sensitive.threadId,
-      text: 'hello',
-      user_name: sensitive.slackUsername,
-      metadata: {
-        channel_type: 'im',
-        slack_user_email: sensitive.email,
-      },
-    });
+    const { result } = await createAlignedMessage('Slack', alignedUser);
 
     expect(result).toMatchObject({ success: true, created: true });
     expect(log).toHaveBeenCalledWith(
       `[gateway] Slack user alignment succeeded: agor_user=${shortId(alignedUser.user_id)}`
     );
-    expectNoSensitiveValues(capturedOutput(log));
-    log.mockRestore();
+    expectNoSensitiveValues(log);
   });
 
-  it('keeps the Slack account-miss message user-facing while logging only the outcome', async () => {
-    const channel = {
-      ...slackChannel,
-      agor_user_id: null,
-      config: { align_slack_users: true },
-    } as GatewayChannel;
-    const sendMessage = vi.fn(async () => 'sent');
-    const { service } = makeGatewayHarness({
-      channel,
-      alignedUser: null,
-      connector: { sendMessage },
-    });
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  it.each([
+    ['Slack', true, sensitive.email],
+    ['Slack', false, null],
+    ['GitHub', true, `@${sensitive.externalId}`],
+    ['Shortcut', true, null],
+  ] as const)(
+    '$0 rejection (identity email available: $1)',
+    async (platform, includeEmail, expectedContent) => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const { result, sendMessage } = await createAlignedMessage(platform, null, includeEmail);
 
-    const result = await service.create({
-      channel_key: channel.channel_key,
-      thread_id: sensitive.threadId,
-      text: 'hello',
-      user_name: sensitive.slackUsername,
-      metadata: {
-        channel_type: 'im',
-        slack_user_email: sensitive.email,
-      },
-    });
-
-    expect(result).toEqual({ success: false, sessionId: '', created: false });
-    expect(log).toHaveBeenCalledWith(
-      '[gateway] Slack user alignment failed: result=agor_user_not_found'
-    );
-    expectNoSensitiveValues(capturedOutput(log));
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: sensitive.threadId,
-        text: expect.stringContaining(sensitive.email),
-      })
-    );
-    log.mockRestore();
-  });
-
-  it('logs a fixed Slack identity-unavailable category without username or thread identity', async () => {
-    const channel = {
-      ...slackChannel,
-      agor_user_id: null,
-      config: { align_slack_users: true },
-    } as GatewayChannel;
-    const sendMessage = vi.fn(async () => 'sent');
-    const { service } = makeGatewayHarness({ channel, connector: { sendMessage } });
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-
-    const result = await service.create({
-      channel_key: channel.channel_key,
-      thread_id: sensitive.threadId,
-      text: 'hello',
-      user_name: sensitive.slackUsername,
-      metadata: { channel_type: 'im' },
-    });
-
-    expect(result).toEqual({ success: false, sessionId: '', created: false });
-    expect(log).toHaveBeenCalledWith(
-      '[gateway] Slack user alignment failed: result=identity_email_unavailable'
-    );
-    expectNoSensitiveValues(capturedOutput(log));
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ threadId: sensitive.threadId })
-    );
-    log.mockRestore();
-  });
-
-  it('keeps the GitHub rejection user-facing while logging only the fixed outcome', async () => {
-    const channel = {
-      ...slackChannel,
-      channel_type: 'github',
-      agor_user_id: null,
-      config: { align_github_users: true },
-    } as GatewayChannel;
-    const sendMessage = vi.fn(async () => 'sent');
-    vi.mocked(getConnector).mockReturnValue({ sendMessage } as never);
-    const { service } = makeGatewayHarness({ channel, alignedUser: null });
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-
-    const result = await service.create({
-      channel_key: channel.channel_key,
-      thread_id: sensitive.threadId,
-      text: 'hello',
-      metadata: {
-        github_user: sensitive.externalId,
-        github_user_email: sensitive.email,
-        processing_comment_id: 42,
-      },
-    });
-
-    expect(result).toEqual({ success: false, sessionId: '', created: false });
-    expect(log).toHaveBeenCalledWith(
-      '[gateway] GitHub user alignment failed: result=agor_user_not_found'
-    );
-    expectNoSensitiveValues(capturedOutput(log));
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: sensitive.threadId,
-        text: expect.stringContaining(`@${sensitive.externalId}`),
-      })
-    );
-    log.mockRestore();
-  });
-
-  it('keeps Shortcut routing fields out of its fixed alignment-failure log', async () => {
-    const channel = {
-      ...slackChannel,
-      channel_type: 'shortcut',
-      agor_user_id: null,
-      config: { align_shortcut_users: true },
-    } as GatewayChannel;
-    const sendMessage = vi.fn(async () => 'sent');
-    vi.mocked(getConnector).mockReturnValue({ sendMessage } as never);
-    const { service } = makeGatewayHarness({ channel, alignedUser: null });
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-
-    const result = await service.create({
-      channel_key: channel.channel_key,
-      thread_id: sensitive.threadId,
-      text: 'hello',
-      metadata: {
-        shortcut_user: sensitive.externalId,
-        shortcut_user_email: sensitive.email,
-        processing_comment_id: 42,
-      },
-    });
-
-    expect(result).toEqual({ success: false, sessionId: '', created: false });
-    expect(log).toHaveBeenCalledWith(
-      '[gateway] Shortcut user alignment failed: result=agor_user_not_found'
-    );
-    expectNoSensitiveValues(capturedOutput(log));
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ threadId: sensitive.threadId })
-    );
-    log.mockRestore();
-  });
+      expect(result).toEqual({ success: false, sessionId: '', created: false });
+      expect(log.mock.calls).toEqual([
+        [
+          `[gateway] ${platform} user alignment failed: result=${includeEmail ? 'agor_user_not_found' : 'identity_email_unavailable'}`,
+        ],
+      ]);
+      expectNoSensitiveValues(log);
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: sensitive.threadId,
+          ...(expectedContent ? { text: expect.stringContaining(expectedContent) } : {}),
+        })
+      );
+    }
+  );
 });
 
 describe('GatewayService multi-tenant process state', () => {
