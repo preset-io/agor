@@ -12,7 +12,14 @@
 
 import type { UUID } from './id';
 
-/** MCP catalog entry ID (branded UUID) */
+/**
+ * MCP catalog entry ID (branded UUID).
+ *
+ * Row identity, not server identity. A row deleted and re-created — which a
+ * registry withdrawal followed by a republication does — gets a fresh
+ * `generateId()`, so anything outside this table that needs to point at a
+ * catalog entry must reference `name`, the registry's stable natural key.
+ */
 export type MCPCatalogEntryID = UUID & { readonly __brand: 'MCPCatalogEntryID' };
 
 /**

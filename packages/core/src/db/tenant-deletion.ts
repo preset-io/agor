@@ -547,18 +547,27 @@ function assertDeclaredGlobalRelation(relation: CatalogRelation, qualifiedName: 
  * point *at* this table, and those name the global itself rather than a tenant
  * table, so they cannot be confused for one.
  */
-function assertGlobalReferencesNoTenantTable(
+export function assertGlobalReferencesNoTenantTable(
   relation: CatalogRelation,
-  liveTenantTables: ReadonlySet<string>
+  tenantRelationsByOid: ReadonlyMap<string, CatalogRelation>
 ): void {
   const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
+  // Resolved by oid rather than by reading the constraint definition. A
+  // rendered `REFERENCES` clause is schema-qualified whenever the target is not
+  // on the search_path, so matching its text against bare table names both
+  // misses `other.sessions` and cannot tell it apart from `public.sessions`.
+  // The oid is unambiguous and already in the contract.
   for (const constraint of relation.foreignKeyContract.split('\n')) {
     if (!constraint) continue;
-    const referenced = /REFERENCES\s+"?([A-Za-z0-9_]+)"?/i.exec(constraint)?.[1];
-    if (!referenced || referenced === relation.tableName) continue;
-    if (liveTenantTables.has(referenced)) {
+    const [, conrelid, confrelid] = constraint.split(':');
+    // The contract carries constraints pointing at this table as well as from
+    // it; only an outgoing reference puts tenant rows behind this one.
+    if (conrelid !== relation.relationId) continue;
+    if (confrelid === relation.relationId) continue;
+    const parent = tenantRelationsByOid.get(confrelid);
+    if (parent) {
       throw new TenantDeletionCatalogError(
-        `Refusing tenant deletion: ${qualifiedName} is declared global but references tenant-scoped ${referenced}`
+        `Refusing tenant deletion: ${qualifiedName} is declared global but references tenant-scoped ${parent.schemaName}.${parent.tableName}`
       );
     }
   }
@@ -632,8 +641,13 @@ async function auditLiveTenantCatalog(
   // judgeable once every tenant-contract table is known. The compiled schema is
   // checked for the same property, but only the live catalog sees a constraint
   // added out of band.
+  const tenantRelationsByOid = new Map(
+    relations
+      .filter((relation) => liveTenantTables.has(relation.tableName))
+      .map((relation) => [relation.relationId, relation] as const)
+  );
   for (const relation of declaredGlobals) {
-    assertGlobalReferencesNoTenantTable(relation, liveTenantTables);
+    assertGlobalReferencesNoTenantTable(relation, tenantRelationsByOid);
   }
 
   const uncovered = [...liveTenantTables].filter((name) => !planNames.has(name)).sort();

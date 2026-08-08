@@ -144,6 +144,7 @@ export const GLOBAL_TABLE_COLUMN_SOURCES = {
     probed_at: 'probe',
     auth_server_origin: 'probe',
     registry_status: 'registry',
+    last_registry_seen_at: 'computed-from-registry',
     data: 'composite',
   },
   // One key per table in GLOBAL_TABLES, spelled out rather than `Record<string,
@@ -206,7 +207,7 @@ interface ForeignKeyMeta {
   onDelete?: string;
 }
 
-interface TableMeta {
+export interface TableMeta {
   table: PgTable;
   columns: PgColumn[];
   foreignKeys: ForeignKeyMeta[];
@@ -272,13 +273,30 @@ export interface TableClassificationResult {
  * Classify every PostgreSQL table into direct / transitive / global, computing
  * the transitive set to a fixpoint over foreign-key chains.
  */
-export function classifyPostgresTables(): TableClassificationResult {
-  const metas = discoverTableMetas();
-
+export function classifyPostgresTables(
+  /**
+   * Override the discovered schema. Only tests pass this, to assert what the
+   * classifier does with a shape the real schema is guarded against ever having.
+   */
+  metas: ReadonlyMap<string, TableMeta> = discoverTableMetas()
+): TableClassificationResult {
   const global = new Set<string>();
   const direct = new Set<string>();
   for (const [name, meta] of metas) {
     if (GLOBAL_TABLES.has(name)) {
+      // Checked before the exemption is granted, not after. A declaration is
+      // not evidence: adding `tenant_id` to a table already named here would
+      // otherwise be classified global and drop out of the deletion plan
+      // silently, since every other guard accepts it — the column-source map
+      // takes any label, the manifest test compares names rather than sources,
+      // and the migration test reads one migration's text. The live-catalog
+      // audit does catch it, but only on Postgres at deletion time.
+      if (hasTenantColumn(meta)) {
+        throw new Error(
+          `${name} is declared global but has a ${TENANT_SCOPE_COLUMN} column; ` +
+            'a table holding tenant rows cannot be exempt from tenant deletion'
+        );
+      }
       global.add(name);
       continue;
     }

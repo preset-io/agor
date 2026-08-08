@@ -135,22 +135,52 @@ function withoutProbeMetadata(data: MCPCatalogEntryData): MCPCatalogEntryData {
 }
 
 /**
+ * Read capability tags back out of the materialized column.
+ *
+ * The blob holds the curated order and the column holds a delimited copy for
+ * searching. A list read projects the column and not the blob, so this is what
+ * lets a browse response carry capabilities at all.
+ */
+export function deserializeCapabilityTags(value: string | null): string[] | undefined {
+  if (!value) return undefined;
+  const tags = value.split(CAPABILITY_DELIMITER).filter(Boolean);
+  return tags.length > 0 ? tags : undefined;
+}
+
+/**
+ * Final tie-break, appended to every ordering.
+ *
+ * `lower(name)` alone is not a total order: the unique index is on
+ * case-sensitive `name`, so `Example/MCP` and `example/mcp` are distinct rows
+ * that compare equal. Two pages taken at different offsets can then repeat one
+ * and skip the other, because the database is free to order ties differently
+ * per query. The case-sensitive name settles almost every tie and the primary
+ * key settles the rest.
+ */
+const STABLE_TIE_BREAK: SQL[] = [
+  sql`${mcpCatalogEntries.name} ASC`,
+  asc(mcpCatalogEntries.catalog_entry_id),
+];
+
+/**
  * Order rows for a given sort key.
  *
  * `popularity_rank` is null for the thousands of uncurated registry rows, so
  * every ordering pushes nulls last with a portable CASE rather than `NULLS
- * LAST`, and breaks ties on `name` so pagination is stable.
+ * LAST`, and every ordering ends in {@link STABLE_TIE_BREAK} so pagination is
+ * deterministic.
  */
 function orderFor(sort: MCPCatalogSort | undefined): SQL[] {
   const rankedFirst = sql`CASE WHEN ${mcpCatalogEntries.popularity_rank} IS NULL THEN 1 ELSE 0 END`;
   switch (sort) {
     case 'name':
-      return [sql`lower(${mcpCatalogEntries.name}) ASC`];
+      return [sql`lower(${mcpCatalogEntries.name}) ASC`, ...STABLE_TIE_BREAK];
     case 'recently_updated':
       return [
         sql`CASE WHEN ${mcpCatalogEntries.registry_updated_at} IS NULL THEN 1 ELSE 0 END`,
         sql`${mcpCatalogEntries.registry_updated_at} DESC`,
         sql`lower(${mcpCatalogEntries.name}) ASC`,
+        ...STABLE_TIE_BREAK,
       ];
     // `relevance` has no server-side scoring yet; curated-then-popular is a
     // better default than registry insertion order, and matches `popularity`.
@@ -160,6 +190,7 @@ function orderFor(sort: MCPCatalogSort | undefined): SQL[] {
         rankedFirst,
         asc(mcpCatalogEntries.popularity_rank),
         sql`lower(${mcpCatalogEntries.name}) ASC`,
+        ...STABLE_TIE_BREAK,
       ];
   }
 }
@@ -231,7 +262,9 @@ export class MCPCatalogRepository {
 
       curated: Boolean(row.curated),
       category: (row.category as MCPCatalogEntry['category']) ?? undefined,
-      capabilities: data.capabilities,
+      // The blob keeps curated display order; a projected list row has only
+      // the delimited column, which is why the fallback exists at all.
+      capabilities: data.capabilities ?? deserializeCapabilityTags(row.capability_tags),
       benefit: row.benefit ?? undefined,
       starter_prompt: row.starter_prompt ?? undefined,
       permission_disclosure: row.permission_disclosure ?? undefined,
@@ -389,6 +422,7 @@ export class MCPCatalogRepository {
       repository_url: entry.repository_url ?? null,
       has_package: (entry.packages?.length ?? 0) > 0,
       registry_status: entry.registry_status ?? null,
+      last_registry_seen_at: now,
       updated_at: now,
     };
 
@@ -427,7 +461,19 @@ export class MCPCatalogRepository {
       : null;
     const incomingAt = entry.registry_updated_at?.getTime() ?? null;
     // Re-ingesting the same publication is the overwhelmingly common case.
-    if (storedAt !== null && incomingAt !== null && incomingAt <= storedAt) return 'unchanged';
+    if (storedAt !== null && incomingAt !== null && incomingAt <= storedAt) {
+      // Still an observation. Only `last_registry_seen_at` moves, so the fast
+      // path keeps its point — no merge, no blob rewrite — while a staleness
+      // sweep can still tell a live server from one the registry deleted
+      // outright, which is the case a walk has no other way to notice. One
+      // narrow update against a page fetch measured in seconds is not the cost
+      // worth optimising, and the per-row unit stays per-row.
+      await update(this.db, mcpCatalogEntries)
+        .set({ last_registry_seen_at: now })
+        .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
+        .run();
+      return 'unchanged';
+    }
 
     const existingData = existing.data ?? {};
     const shared = deriveSharedColumns(registrySide, existingData.curation ?? {});
@@ -606,6 +652,12 @@ export class MCPCatalogRepository {
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
       .run();
+  }
+
+  /** Observation timestamp for one row. Exposed for the ingestion tests. */
+  async rawSeenAt(name: string): Promise<Date | null> {
+    const row = await this.rawByName(name);
+    return row?.last_registry_seen_at ? new Date(row.last_registry_seen_at) : null;
   }
 
   /** Names of every row currently carrying a curation overlay. */

@@ -303,6 +303,11 @@ mcp_catalog:
 | `probe_budget` | `40` | Entries auth-probed per sync. `0` disables probing while leaving the mirror on. |
 | `registry_url` | official registry | Point at a private mirror. |
 
+Because the seed *reconciles* rather than merely applies, the catalog's contents
+are a function of the deployed binary: rolling back to an older release
+withdraws curation added since, until you roll forward again. That is intended,
+but it is not something to discover during an incident.
+
 The registry is far larger than one sync can walk, so each run resumes from
 where the previous one stopped and the probe sweep always gets a share of the
 run's time budget. Outbound probes only connect to public addresses: the

@@ -8,6 +8,7 @@ import {
   GLOBAL_BLOB_KEY_SOURCES,
   GLOBAL_TABLE_COLUMN_SOURCES,
   GLOBAL_TABLES,
+  type TableMeta,
   TENANT_SCOPE_COLUMN,
 } from './tenant-deletion-manifest';
 
@@ -195,5 +196,42 @@ describe('global tables and tenant references', () => {
         expect(scoped.has(parent), `${name} references tenant-scoped ${parent}`).toBe(false);
       }
     }
+  });
+});
+
+describe('a declared-global table that acquires a tenant column', () => {
+  /** The real schema is guarded against this, so the shape is built by hand. */
+  function metasWith(columnNames: string[]): ReadonlyMap<string, TableMeta> {
+    const real = classifyPostgresTables();
+    const globalName = real.global[0];
+    const table = Object.values(postgresSchema).find(
+      (value) => is(value, PgTable) && getTableConfig(value).name === globalName
+    ) as PgTable;
+    return new Map([
+      [
+        globalName,
+        {
+          table,
+          columns: columnNames.map((name) => ({ name })) as TableMeta['columns'],
+          foreignKeys: [],
+        },
+      ],
+    ]);
+  }
+
+  it('refuses to classify it global instead of silently exempting it', () => {
+    // The declaration is checked, not trusted. Granting the exemption first and
+    // testing the column afterwards would drop the table out of the deletion
+    // plan while every other guard still passed: a column-source label accepts
+    // any value, the manifest test compares names rather than sources, and the
+    // migration test reads the text of one migration.
+    expect(() => classifyPostgresTables(metasWith(['name', TENANT_SCOPE_COLUMN]))).toThrow(
+      /declared global but has a tenant_id column/
+    );
+  });
+
+  it('still classifies it global while it holds no tenant column', () => {
+    const { global } = classifyPostgresTables(metasWith(['name', 'title']));
+    expect(global).toEqual(['mcp_catalog_entries']);
   });
 });

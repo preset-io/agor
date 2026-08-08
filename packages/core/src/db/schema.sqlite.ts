@@ -1470,6 +1470,18 @@ export const mcpCatalogEntries = sqliteTable(
      */
     registry_status: text('registry_status'),
 
+    /**
+     * When a registry walk last returned this server.
+     *
+     * Stamped on every observation, including the `unchanged` fast path, so it
+     * answers "is this still published" rather than "when did this last
+     * change". A hard deletion leaves no record behind for a walk to notice, so
+     * a staleness sweep is the only way to reconcile one — and the column has to
+     * exist from the start, because adding it later leaves every row NULL and
+     * unable to distinguish "never observed" from "the registry dropped it".
+     */
+    last_registry_seen_at: t.timestamp('last_registry_seen_at'),
+
     data: t.json<MCPCatalogEntryData>('data').notNull(),
   },
   (table) => ({

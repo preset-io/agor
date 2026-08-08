@@ -561,6 +561,13 @@
       "when": 1786200000000,
       "tag": "0075_mcp_catalog_registry_status",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1786300000000,
+      "tag": "0076_mcp_catalog_last_seen",
+      "breakpoints": true
     }
   ]
 }

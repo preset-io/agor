@@ -118,6 +118,8 @@ export class MCPCatalogIngestionWorker {
   private running = false;
   private lastResult: IngestionResult | null = null;
   private lastError: string | null = null;
+  /** Last curation-seed failure, tracked apart from the registry sync's. */
+  private lastSeedError: string | null = null;
   /**
    * Where the next sync resumes.
    *
@@ -167,6 +169,16 @@ export class MCPCatalogIngestionWorker {
   }
 
   /**
+   * Last curation-seed failure, or null.
+   *
+   * Reported separately because the two halves fail independently: a malformed
+   * `curated.yaml` must not read as a registry-sync failure, or as success.
+   */
+  getLastSeedError(): string | null {
+    return this.lastSeedError;
+  }
+
+  /**
    * Reapply curation, then sync the registry.
    *
    * Curation runs first so a fresh install has recognizable, connectable cards
@@ -177,12 +189,22 @@ export class MCPCatalogIngestionWorker {
     if (this.running) return null;
     this.running = true;
     try {
-      const seeded = await seedCuratedCatalog(this.withSystemScope('mcp-catalog curation seed'), {
-        log: (message) => console.warn(`[mcp-catalog] ${message}`),
-      });
-      console.log(
-        `📚 MCP catalog curation applied (created: ${seeded.created}, updated: ${seeded.updated}, retired: ${seeded.retired}, failed: ${seeded.failed}, retirementFailures: ${seeded.retirementFailures})`
-      );
+      // Caught here rather than left to the outer handler: `loadCuratedCatalog`
+      // throws on any validation failure, and the registry sync below is a
+      // separate subsystem that a malformed `curated.yaml` has no business
+      // disabling for the cycle.
+      try {
+        const seeded = await seedCuratedCatalog(this.withSystemScope('mcp-catalog curation seed'), {
+          log: (message) => console.warn(`[mcp-catalog] ${message}`),
+        });
+        this.lastSeedError = null;
+        console.log(
+          `📚 MCP catalog curation applied (created: ${seeded.created}, updated: ${seeded.updated}, retired: ${seeded.retired}, failed: ${seeded.failed}, retirementFailures: ${seeded.retirementFailures})`
+        );
+      } catch (error) {
+        this.lastSeedError = error instanceof Error ? error.message : String(error);
+        console.error('[mcp-catalog] curation seed failed:', error);
+      }
 
       // Opt-in, so anything other than an explicit `true` means off. Testing
       // `=== false` would turn the sync on for a caller that constructed the

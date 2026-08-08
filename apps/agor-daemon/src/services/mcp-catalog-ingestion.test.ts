@@ -111,3 +111,31 @@ describe('sync interval bounds', () => {
     expect(timers).toEqual([MAX_TIMER_MS]);
   });
 });
+
+describe('curation seed failures', () => {
+  it('does not let a bad curated.yaml disable the registry sync', async () => {
+    // The seed and the sync are independent subsystems that happen to share a
+    // cycle; `loadCuratedCatalog` throws on any validation failure, and before
+    // this it aborted `runOnce` before the sync check was even reached.
+    const worker = new MCPCatalogIngestionWorker({} as never, { registrySyncEnabled: false });
+    const seedFailure = new Error('curated.yaml is malformed');
+    const scope = vi
+      .spyOn(
+        worker as unknown as { withSystemScope: (reason: string) => unknown },
+        'withSystemScope'
+      )
+      .mockImplementation((reason: string) => {
+        // Thrown from the seed phase rather than from a repository call, which
+        // `seedCuratedCatalog` catches per entry. The real trigger is
+        // `loadCuratedCatalog` rejecting a malformed file; both land here.
+        if (reason.includes('curation seed')) throw seedFailure;
+        return () => Promise.resolve(undefined);
+      });
+
+    await expect(worker.runOnce()).resolves.toBeNull();
+    expect(worker.getLastSeedError()).toBe('curated.yaml is malformed');
+    // The sync's own health is reported separately and is untouched by this.
+    expect(worker.getLastError()).toBeNull();
+    scope.mockRestore();
+  });
+});

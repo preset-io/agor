@@ -6,10 +6,16 @@
  */
 
 import type { Database } from '@agor/core/db';
-import type { MCPCatalogCurationUpsert } from '@agor/core/types';
+import type { MCPCatalogCapability, MCPCatalogCurationUpsert } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../test-helpers';
 import { MCPCatalogRepository, serializeCapabilityTags } from './mcp-catalog';
+
+/** The ORDER BY tail of a statement, or '' when it has none. */
+function orderByClause(sql: string): string {
+  const at = sql.toLowerCase().lastIndexOf('order by');
+  return at === -1 ? '' : sql.slice(at);
+}
 
 interface ExecutedStatement {
   sql: string;
@@ -897,5 +903,115 @@ describe('withdrawn servers and the browse read', () => {
     const hydrated = await repository.findByName('com.example/mcp');
     expect(hydrated?.remotes).toHaveLength(1);
     expect(hydrated?.packages).toHaveLength(1);
+  });
+});
+
+describe('browse reads over projected rows', () => {
+  const curated = (
+    name: string,
+    capabilities: MCPCatalogCapability[]
+  ): MCPCatalogCurationUpsert => ({
+    name,
+    category: 'dev-tools',
+    capabilities,
+    benefit: 'Benefit',
+    starter_prompt: 'Prompt',
+    permission_disclosure: 'Discloses things',
+    verified: true,
+  });
+
+  dbTest('keeps capabilities while still omitting the blob', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      remotes: [{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }],
+      packages: [{ registry_type: 'npm', identifier: 'example-mcp' }],
+    });
+    await repository.upsertCuration(curated('com.example/mcp', ['code-repos', 'issues']));
+
+    const [listed] = await repository.findAll({});
+
+    // Capabilities are what the browse surface filters and renders on, so a
+    // projection that drops them makes every card look uncategorised.
+    expect(listed.capabilities).toEqual(['code-repos', 'issues']);
+    // ...while the bulk of the row stays out of the page.
+    expect(listed.remotes).toBeUndefined();
+    expect(listed.packages).toBeUndefined();
+  });
+
+  dbTest('paginates deterministically across case-colliding names', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    // Distinct rows under the case-sensitive unique index that `lower(name)`
+    // cannot tell apart.
+    const names = ['Example/MCP', 'example/mcp', 'EXAMPLE/mcp', 'eXaMpLe/MCP'];
+    for (const name of names) await repository.upsertCuration(curated(name, ['code-repos']));
+
+    const recorder = recordStatements(db);
+    const pages: string[] = [];
+    for (let offset = 0; offset < names.length; offset += 2) {
+      const page = await repository.findAll({ sort: 'name', limit: 2, offset });
+      pages.push(...page.map((entry) => entry.name));
+    }
+    const executed = [...recorder.statements];
+    recorder.reset();
+
+    // Every page together must be exactly the row set, once each. SQLite happens
+    // to order these ties consistently, so this alone would pass without a total
+    // order; the ordering itself is asserted below.
+    expect(pages.slice().sort()).toEqual(names.slice().sort());
+    expect(new Set(pages).size).toBe(names.length);
+
+    // What actually makes paging deterministic: the database is free to order
+    // ties differently per query, so the tie-break has to be in the statement
+    // rather than left to whatever the engine happens to do.
+    const ordered = executed.map((statement) => orderByClause(statement.sql)).filter(Boolean);
+    expect(ordered.length).toBeGreaterThan(0);
+    // Asserted against the ORDER BY tail, not the whole statement: every one of
+    // these columns also appears in the projection, so matching the full text
+    // would pass with no tie-break at all.
+    for (const clause of ordered) expect(clause).toContain('"catalog_entry_id"');
+  });
+
+  dbTest('ends every sort mode in a total order', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertCuration(curated('a.example/one', ['code-repos']));
+
+    for (const sort of ['popularity', 'name', 'recently_updated', 'relevance'] as const) {
+      const recorder = recordStatements(db);
+      await repository.findAll({ sort, limit: 1 });
+      const ordering = recorder.statements
+        .map((statement) => orderByClause(statement.sql))
+        .find(Boolean);
+      recorder.reset();
+      // `lower(name)` is not unique — the index is case-sensitive — so without
+      // the primary key appended, two distinct rows can compare equal.
+      expect(ordering, `sort=${sort}`).toContain('"catalog_entry_id"');
+    }
+  });
+});
+
+describe('last_registry_seen_at', () => {
+  dbTest('advances on an unchanged re-observation', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    const published = new Date('2026-01-01T00:00:00.000Z');
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      registry_updated_at: published,
+    });
+    const first = (await repository.rawSeenAt('com.example/mcp')) as Date;
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Same publication, so the merge is skipped — but the observation is real.
+    expect(
+      await repository.upsertRegistryEntry({
+        name: 'com.example/mcp',
+        registry_updated_at: published,
+      })
+    ).toBe('unchanged');
+
+    const second = (await repository.rawSeenAt('com.example/mcp')) as Date;
+    // A hard deletion leaves nothing for a walk to notice, so "still published"
+    // has to be recorded on every observation, not only on change.
+    expect(second.getTime()).toBeGreaterThan(first.getTime());
   });
 });

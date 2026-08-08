@@ -625,6 +625,27 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     }
   });
 
+  it('refuses a global table whose foreign key reaches a tenant table', async () => {
+    // The reachable shape: both tables in `public`, which the hardened
+    // search_path renders unqualified.
+    await executeRaw(
+      db,
+      sql`ALTER TABLE "mcp_catalog_entries"
+            ADD COLUMN tdel_session_id varchar(36)
+            REFERENCES "sessions"(session_id)`
+    );
+    try {
+      await expect(deleteTenantData(db, `td-fk-${generateId()}`, { dryRun: true })).rejects.toThrow(
+        /declared global but references tenant-scoped public\.sessions/
+      );
+    } finally {
+      await executeRaw(
+        db,
+        sql`ALTER TABLE "mcp_catalog_entries" DROP COLUMN IF EXISTS tdel_session_id`
+      );
+    }
+  });
+
   it.skipIf(!postgresAdminUrl)('fails closed when live-catalog discovery is empty', async () => {
     const databaseName = `tdel_empty_${generateId().replaceAll('-', '').slice(0, 20)}`;
     const databaseUrl = new URL(postgresUrl!);
