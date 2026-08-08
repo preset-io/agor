@@ -15,13 +15,14 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   getRequiredSecretFields,
   isAgenticToolDefaultConfigurationReference,
   prefixToLikePattern,
 } from '@agor/core/types';
-import { and, asc, eq, gt, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database, SystemDatabase } from '../client';
 import {
@@ -118,7 +119,14 @@ export class GatewayListenerDiscoveryRepository {
       tenant_id: tenantColumn,
     })
       .from(gatewayChannels)
-      .where(and(eq(gatewayChannels.enabled, true), claimable, afterCondition))
+      .where(
+        and(
+          eq(gatewayChannels.enabled, true),
+          inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES]),
+          claimable,
+          afterCondition
+        )
+      )
       .orderBy(asc(tenantColumn), asc(gatewayChannels.id))
       .limit(limit)
       .all();

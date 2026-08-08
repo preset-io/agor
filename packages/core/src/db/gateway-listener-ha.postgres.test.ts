@@ -10,7 +10,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
-import type { GatewayChannelID, TenantID } from '../types';
+import type { ChannelType, GatewayChannelID, TenantID } from '../types';
 import { createDatabase, type Database } from './client';
 import { isPostgresDatabase, update } from './database-wrapper';
 import { initializeDatabase } from './migrate';
@@ -29,7 +29,11 @@ const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
 let branchUnique = (Date.now() % 1_000_000) + 7_000_000;
 
-async function seedChannel(db: Database, tenantId: TenantID) {
+async function seedChannel(
+  db: Database,
+  tenantId: TenantID,
+  options: { channelType?: ChannelType } = {}
+) {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     const user = await new UsersRepository(scoped).create({
       email: `${tenantId}-${generateId()}@example.com`,
@@ -53,16 +57,17 @@ async function seedChannel(db: Database, tenantId: TenantID) {
       path: `/tmp/${generateId()}`,
       created_by: user.user_id,
     });
+    const channelType = options.channelType ?? 'slack';
     const channel = await new GatewayChannelRepository(scoped).create({
       id: generateId() as GatewayChannelID,
       name: 'HA Slack',
-      channel_type: 'slack',
+      channel_type: channelType,
       created_by: user.user_id,
       agor_user_id: user.user_id,
       target_branch_id: branch.branch_id,
       channel_key: generateId(),
       enabled: true,
-      config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+      config: channelType === 'slack' ? { bot_token: 'xoxb-test', app_token: 'xapp-test' } : {},
     });
     return { channel, user, branch };
   });
@@ -224,6 +229,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
         })
       ).toBe(false);
 
+      expect(
+        await events.claim({
+          channelId: channel.id,
+          providerEventId: 'slack:event:Ev-1',
+          threadId: 'C1-1.0',
+          processingToken: 'new-owner',
+          leaseDurationMs: 120_000,
+          requireListenerClaim: true,
+        })
+      ).toMatchObject({ outcome: 'in_progress_elsewhere' });
+
       await expireInboundProcessing(scoped, first.event.id);
       const reclaimed = await events.claim({
         channelId: channel.id,
@@ -253,7 +269,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
           leaseDurationMs: 120_000,
           requireListenerClaim: true,
         })
-      ).toMatchObject({ outcome: 'duplicate' });
+      ).toMatchObject({ outcome: 'completed_duplicate' });
     });
   });
 
@@ -262,6 +278,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     const tenantB = `gateway-b-${generateId()}` as TenantID;
     const a = await seedChannel(db, tenantA);
     await seedChannel(db, tenantB);
+    const unsupported = await seedChannel(db, tenantA, { channelType: 'discord' });
 
     const refs = await runWithSystemDatabaseScope(
       db,
@@ -271,6 +288,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
       { capability: 'gateway_listener_discovery' }
     );
     expect(refs).toContainEqual({ channel_id: a.channel.id, tenant_id: tenantA });
+    expect(refs.some((ref) => ref.channel_id === unsupported.channel.id)).toBe(false);
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
       await new GatewayChannelRepository(scoped).claimListener({

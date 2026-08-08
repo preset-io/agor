@@ -37,6 +37,7 @@ import { dirname, join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import { executeRaw, isPostgresDatabase } from './database-wrapper';
+import { isDatabaseUniqueConstraintError } from './sanitize-error';
 import {
   assertManifestTablesMatchCatalog,
   filesDir,
@@ -144,16 +145,6 @@ async function classifyDatabase(
   });
 }
 
-/**
- * Detect a PostgreSQL unique/primary-key violation (SQLSTATE 23505) whether it
- * surfaces directly or wrapped as a `cause`.
- */
-function isUniqueViolation(error: unknown): boolean {
-  const code = (error as { code?: string } | null)?.code;
-  const causeCode = (error as { cause?: { code?: string } } | null)?.cause?.code;
-  return code === '23505' || causeCode === '23505';
-}
-
 /** Insert every archived table's rows in parent-first order inside one tx. */
 async function restoreDatabase(
   db: Database,
@@ -186,7 +177,7 @@ async function restoreDatabase(
       try {
         count = await insertTenantTableRows(scoped, table.name, lines, tenantId);
       } catch (error) {
-        if (isUniqueViolation(error)) {
+        if (isDatabaseUniqueConstraintError(error)) {
           // Row identifiers (UUID primary keys) are globally unique across a
           // runtime, not just within a tenant. A collision here means the
           // destination runtime already holds these ids — the usual cause is

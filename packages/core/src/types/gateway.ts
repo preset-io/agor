@@ -47,6 +47,13 @@ export type ChannelType =
   | 'teams'
   | 'shortcut';
 
+/** Providers with an explicitly audited PostgreSQL listener ownership contract. */
+export const DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES = [
+  'slack',
+  'github',
+  'shortcut',
+] as const satisfies readonly ChannelType[];
+
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';
 

@@ -123,12 +123,19 @@ function makeGatewayHarness(args: {
     branch_id: channel.target_branch_id,
     status: SessionStatus.IDLE,
   }));
+  const sessionsGet = vi.fn(async (sessionId: string) => ({
+    session_id: sessionId,
+    branch_id: channel.target_branch_id,
+    created_by: executionUser.user_id,
+    status: SessionStatus.IDLE,
+    custom_context: { gateway_source: { channel_id: channel.id } },
+  }));
   const setMCPServers = vi.fn(async () => undefined);
   const app = {
     service: (name: string) => {
       if (name === 'users') return { get: vi.fn(async () => executionUser) };
       if (name === 'sessions') {
-        return { create: sessionsCreate, setMCPServers };
+        return { create: sessionsCreate, get: sessionsGet, setMCPServers };
       }
       if (name === '/sessions/:id/prompt') return { create: promptCreate };
       throw new Error(`Unexpected service: ${name}`);
@@ -206,6 +213,7 @@ function makeGatewayHarness(args: {
     createUnscoped: create,
     promptCreate,
     sessionsCreate,
+    sessionsGet,
     setMCPServers,
     channelRepo,
     threadMapRepo,
@@ -974,7 +982,7 @@ describe('GatewayService durable listener delivery fences', () => {
         event: { id: eventId },
       })
       .mockResolvedValueOnce({
-        outcome: 'duplicate',
+        outcome: 'completed_duplicate',
         event: { id: eventId },
       });
     const complete = vi.fn(async () => true);
@@ -1042,6 +1050,71 @@ describe('GatewayService durable listener delivery fences', () => {
       metadata: { processing_comment_id: 42 },
     });
     expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it('does not acknowledge an occurrence still processing under a previous owner', async () => {
+    const service = new GatewayService(
+      { run: vi.fn() } as never,
+      { service: vi.fn(), get: vi.fn() } as never
+    );
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      inboundEventRepo: {
+        claim: vi.fn(async () => ({
+          outcome: 'in_progress_elsewhere',
+          event: { id: '01927f9d-0000-7000-8000-000000000099' },
+        })),
+      },
+    });
+    const create = vi.spyOn(service, 'create');
+    const prepareDelivery = vi.fn();
+    const channel = attachHiddenTenant(
+      { ...slackChannel, id: 'pending-channel' as never },
+      { tenant_id: 'tenant-a' }
+    );
+
+    await expect(
+      (
+        service as unknown as {
+          handleListenerInboundMessage: (...args: unknown[]) => Promise<void>;
+        }
+      ).handleListenerInboundMessage(
+        channel,
+        'tenant-a',
+        {
+          providerEventId: 'slack:event:pending',
+          threadId: 'C1-1.0',
+          text: 'retry before expiry',
+          userId: 'U1',
+          prepareDelivery,
+        },
+        { claim_token: 'new-owner' }
+      )
+    ).rejects.toThrow(/still being processed/i);
+    expect(prepareDelivery).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not hide non-unique Session creation failures behind idempotent recovery', async () => {
+    const { service, sessionsCreate, sessionsGet } = makeGatewayHarness({ existingMapping: null });
+    const original = new Error('model validation failed');
+    sessionsCreate.mockRejectedValueOnce(original);
+
+    await expect(
+      service.create({
+        channel_key: slackChannel.channel_key,
+        thread_id: 'C123-200.000000',
+        text: 'start',
+        idempotency_session_id: '01927f9d-0000-7000-8000-000000000010' as SessionID,
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '200.000000',
+        },
+      })
+    ).rejects.toBe(original);
+    expect(sessionsGet).not.toHaveBeenCalled();
   });
 
   it('fails closed before provider or Agor effects after listener loss', async () => {

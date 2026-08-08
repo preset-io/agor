@@ -26,6 +26,7 @@ import {
   generateId,
   getCurrentTenantId,
   getHiddenTenantId,
+  isDatabaseUniqueConstraintError,
   isPostgresDatabase,
   MCPServerRepository,
   MessagesRepository,
@@ -2393,11 +2394,18 @@ export class GatewayService {
       try {
         session = await sessionsService.create(sessionInput, { _agenticConfigResolved: true });
       } catch (error) {
-        if (!data.idempotency_session_id) throw error;
+        if (!data.idempotency_session_id || !isDatabaseUniqueConstraintError(error)) {
+          throw error;
+        }
         // A crash can leave the stable Session committed before the provider
         // occurrence is completed. Reuse it only when its immutable security
         // identity matches this channel; never adopt an arbitrary collision.
-        const prior = await sessionsService.get(data.idempotency_session_id, { user });
+        let prior: Session;
+        try {
+          prior = await sessionsService.get(data.idempotency_session_id, { user });
+        } catch {
+          throw error;
+        }
         const priorGatewaySource = prior.custom_context?.gateway_source as
           | Record<string, unknown>
           | undefined;
@@ -3539,7 +3547,12 @@ export class GatewayService {
               leaseDurationMs: GATEWAY_EVENT_PROCESSING_LEASE_MS,
               requireListenerClaim: true,
             });
-            if (admitted.outcome === 'duplicate') return;
+            if (admitted.outcome === 'completed_duplicate') return;
+            if (admitted.outcome === 'in_progress_elsewhere') {
+              throw new Error(
+                'Gateway inbound event is still being processed by the previous listener owner'
+              );
+            }
             if (admitted.outcome === 'listener_lost') {
               throw new Error('Gateway listener ownership lost before inbound admission');
             }

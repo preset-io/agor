@@ -37,7 +37,8 @@ export interface GatewayInboundEventClaimInput {
 
 export type GatewayInboundEventClaimResult =
   | { outcome: 'claimed'; event: GatewayInboundEvent }
-  | { outcome: 'duplicate'; event: GatewayInboundEvent }
+  | { outcome: 'completed_duplicate'; event: GatewayInboundEvent }
+  | { outcome: 'in_progress_elsewhere'; event: GatewayInboundEvent }
   | { outcome: 'listener_lost' };
 
 function rowToEvent(row: GatewayInboundEventRow): GatewayInboundEvent {
@@ -157,7 +158,7 @@ export class GatewayInboundEventRepository {
           );
         }
         if (row.status === 'completed') {
-          return { outcome: 'duplicate', event: rowToEvent(row) };
+          return { outcome: 'completed_duplicate', event: rowToEvent(row) };
         }
 
         // A provider retry delivered back to the same live owner is recovery
@@ -172,7 +173,7 @@ export class GatewayInboundEventRepository {
           return { outcome: 'claimed', event: rowToEvent(retried) };
         }
         if (new Date(row.processing_expires_at).getTime() > now.getTime()) {
-          return { outcome: 'duplicate', event: rowToEvent(row) };
+          return { outcome: 'in_progress_elsewhere', event: rowToEvent(row) };
         }
 
         const reclaimed = await update(txDb, gatewayInboundEvents)

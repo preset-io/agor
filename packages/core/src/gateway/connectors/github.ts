@@ -99,6 +99,15 @@ export function parseThreadId(threadId: string): { owner: string; repo: string; 
   };
 }
 
+/** Stable across repository renames and configured owner/repo casing changes. */
+export function githubIssueCommentProviderEventId(comment: {
+  id: number;
+  node_id?: string | null;
+}): string {
+  const stableCommentId = comment.node_id?.trim() || String(comment.id);
+  return `github:issue_comment:${stableCommentId}`;
+}
+
 /**
  * Check if text contains an @mention outside of code blocks.
  *
@@ -339,7 +348,7 @@ export class GitHubConnector implements GatewayConnector {
         }
 
         messages.push({
-          providerEventId: `github:issue_comment:${repo}:${comment.id}`,
+          providerEventId: githubIssueCommentProviderEventId(comment),
           threadId,
           text,
           userId: githubLogin ?? 'unknown',
