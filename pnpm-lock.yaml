@@ -141,10 +141,16 @@ importers:
       inquirer:
         specifier: ^12.10.0
         version: 12.10.0(@types/node@24.13.3)
+      proper-lockfile:
+        specifier: 4.1.2
+        version: 4.1.2
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
         version: 24.13.3
+      '@types/proper-lockfile':
+        specifier: 4.1.4
+        version: 4.1.4
       glob:
         specifier: ^11.1.0
         version: 11.1.0
@@ -836,6 +842,9 @@ importers:
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
+      proper-lockfile:
+        specifier: 4.1.2
+        version: 4.1.2
       simple-git:
         specifier: ^3.36.0
         version: 3.36.0(supports-color@8.1.1)
@@ -4883,6 +4892,9 @@ packages:
 
   '@types/prismjs@1.26.5':
     resolution: {integrity: sha512-AUZTa7hQ2KY5L7AmtSiqxlhWxb4ina0yd8hNbl4TWuqnv/pFP0nDMb3YrfSBf4hJVGLh2YEIBfKaBW/9UEl6IQ==}
+
+  '@types/proper-lockfile@4.1.4':
+    resolution: {integrity: sha512-uo2ABllncSqg9F1D4nugVl9v93RmjxF6LJzQLMLDdPaXCUIDPeOJ21Gbqi43xNKzBi/WQ0Q0dICqufzQbMjipQ==}
 
   '@types/qs@6.15.1':
     resolution: {integrity: sha512-GZHUBZR9hckSUhrxmp1nG6NwdpM9fCunJwyThLW1X3AyHgd9IlHb6VANpQQqDr2o/qQp6McZ3y/IA2rVzKzSbw==}
@@ -14828,6 +14840,10 @@ snapshots:
   '@types/normalize-package-data@2.4.4': {}
 
   '@types/prismjs@1.26.5': {}
+
+  '@types/proper-lockfile@4.1.4':
+    dependencies:
+      '@types/retry': 0.12.0
 
   '@types/qs@6.15.1': {}
 

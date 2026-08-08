@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { lock as acquireFileLock } from 'proper-lockfile';
 
 export {
   AGENTIC_TOOL_INTEGRATIONS,
@@ -49,111 +50,26 @@ export async function writeAgenticToolSelectionManifest(
 }
 
 /** Hold this deployment-local lock across selection and the complete reconciliation. */
-export async function acquireAgenticToolInstallLock(options?: {
-  /** Test-only race barrier; production callers must omit. */
-  afterStaleInspection?: () => Promise<void>;
-}): Promise<() => Promise<void>> {
+export async function acquireAgenticToolInstallLock(): Promise<() => Promise<void>> {
   const root = getAgenticToolsRoot();
   const lock = join(root, '.install.lock');
-  const token = randomUUID();
   await mkdir(root, { recursive: true, mode: 0o700 });
-  const createLock = async () => {
-    const candidate = join(root, `.install.candidate-${token}`);
-    await mkdir(candidate, { mode: 0o700 });
-    try {
-      await writeFile(
-        join(candidate, 'owner.json'),
-        `${JSON.stringify({ token, pid: process.pid, createdAt: new Date().toISOString() })}\n`,
-        { mode: 0o600 }
-      );
-      await rename(candidate, lock);
-    } finally {
-      await rm(candidate, { recursive: true, force: true });
-    }
-  };
-  for (;;) {
-    try {
-      await createLock();
-      break;
-    } catch (error) {
-      if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? ''))
-        throw error;
-    }
-    let ownerPid: number | undefined;
-    let observedIdentity: { dev: bigint; ino: bigint } | undefined;
-    try {
-      const observed = await stat(lock, { bigint: true });
-      observedIdentity = { dev: observed.dev, ino: observed.ino };
-      const owner = JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')) as {
-        pid?: unknown;
-      };
-      if (typeof owner.pid === 'number' && Number.isSafeInteger(owner.pid) && owner.pid > 0)
-        ownerPid = owner.pid;
-    } catch {
-      // Missing/corrupt owner metadata is an interrupted lock and may be reclaimed.
-    }
-    let ownerAlive = false;
-    if (ownerPid !== undefined) {
-      try {
-        process.kill(ownerPid, 0);
-        ownerAlive = true;
-      } catch (probeError) {
-        if ((probeError as NodeJS.ErrnoException).code === 'EPERM') ownerAlive = true;
-      }
-    }
-    if (ownerAlive)
+  try {
+    return await acquireFileLock(root, {
+      lockfilePath: lock,
+      realpath: false,
+      stale: 10_000,
+      update: 5_000,
+      retries: 0,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOCKED') {
       throw new Error(
-        `Another \`agor install\` is already updating agentic tools (PID ${ownerPid}). Try again when it finishes.`
+        'Another `agor install` is already updating agentic tools. Try again when it finishes.'
       );
-    await options?.afterStaleInspection?.();
-    const recovery = join(root, `.install.recovered-${randomUUID()}`);
-    let reclaimedObservedLock = false;
-    try {
-      await rename(lock, recovery);
-      const moved = await stat(recovery, { bigint: true });
-      reclaimedObservedLock =
-        observedIdentity !== undefined &&
-        moved.dev === observedIdentity.dev &&
-        moved.ino === observedIdentity.ino;
-      if (!reclaimedObservedLock) {
-        try {
-          await rename(recovery, lock);
-        } catch (restoreError) {
-          throw new Error(
-            `Agentic tool install lock changed during stale recovery and could not be restored: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`
-          );
-        }
-      }
-    } catch (renameError) {
-      if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw renameError;
-    } finally {
-      if (reclaimedObservedLock) await rm(recovery, { recursive: true, force: true });
     }
+    throw error;
   }
-  return async () => {
-    let ownerToken: unknown;
-    try {
-      ownerToken = JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')).token;
-    } catch {
-      return;
-    }
-    if (ownerToken !== token) return;
-    const released = join(root, `.install.released-${token}`);
-    try {
-      await rename(lock, released);
-      const releasedOwner = JSON.parse(await readFile(join(released, 'owner.json'), 'utf8')) as {
-        token?: unknown;
-      };
-      if (releasedOwner.token !== token) {
-        await rename(released, lock).catch(() => undefined);
-        return;
-      }
-      await rm(released, { recursive: true, force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  };
 }
 
 export function getAgenticToolInstallSlug(tool: InstallableAgenticTool): string {
