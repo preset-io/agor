@@ -241,4 +241,23 @@ describe('local selection persistence', () => {
     expect(JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')).pid).toBe(process.pid);
     await release();
   });
+
+  it('allows only one of two simultaneous stale-lock reclaimers to acquire', async () => {
+    const root = await createRoot();
+    const lock = join(root, '.install.lock');
+    await mkdir(lock);
+    await writeFile(join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_647 }));
+
+    const results = await Promise.allSettled([
+      acquireAgenticToolInstallLock(),
+      acquireAgenticToolInstallLock(),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const winner = results.find(
+      (result): result is PromiseFulfilledResult<() => Promise<void>> =>
+        result.status === 'fulfilled'
+    );
+    await winner?.value();
+  });
 });

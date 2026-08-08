@@ -52,19 +52,30 @@ export async function writeAgenticToolSelectionManifest(
 export async function acquireAgenticToolInstallLock(): Promise<() => Promise<void>> {
   const root = getAgenticToolsRoot();
   const lock = join(root, '.install.lock');
+  const token = randomUUID();
   await mkdir(root, { recursive: true, mode: 0o700 });
   const createLock = async () => {
-    await mkdir(lock, { mode: 0o700 });
-    await writeFile(
-      join(lock, 'owner.json'),
-      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
-      { mode: 0o600 }
-    );
+    const candidate = join(root, `.install.candidate-${token}`);
+    await mkdir(candidate, { mode: 0o700 });
+    try {
+      await writeFile(
+        join(candidate, 'owner.json'),
+        `${JSON.stringify({ token, pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+        { mode: 0o600 }
+      );
+      await rename(candidate, lock);
+    } finally {
+      await rm(candidate, { recursive: true, force: true });
+    }
   };
-  try {
-    await createLock();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  for (;;) {
+    try {
+      await createLock();
+      break;
+    } catch (error) {
+      if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? ''))
+        throw error;
+    }
     let ownerPid: number | undefined;
     try {
       const owner = JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')) as {
@@ -88,18 +99,39 @@ export async function acquireAgenticToolInstallLock(): Promise<() => Promise<voi
       throw new Error(
         `Another \`agor install\` is already updating agentic tools (PID ${ownerPid}). Try again when it finishes.`
       );
-    await rm(lock, { recursive: true, force: true });
+    const recovery = join(root, `.install.recovered-${randomUUID()}`);
     try {
-      await createLock();
-    } catch (retryError) {
-      if ((retryError as NodeJS.ErrnoException).code === 'EEXIST')
-        throw new Error(
-          'Another `agor install` acquired the lock while recovering an interrupted install. Try again when it finishes.'
-        );
-      throw retryError;
+      await rename(lock, recovery);
+    } catch (renameError) {
+      if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw renameError;
+    } finally {
+      await rm(recovery, { recursive: true, force: true });
     }
   }
-  return async () => rm(lock, { recursive: true, force: true });
+  return async () => {
+    let ownerToken: unknown;
+    try {
+      ownerToken = JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')).token;
+    } catch {
+      return;
+    }
+    if (ownerToken !== token) return;
+    const released = join(root, `.install.released-${token}`);
+    try {
+      await rename(lock, released);
+      const releasedOwner = JSON.parse(await readFile(join(released, 'owner.json'), 'utf8')) as {
+        token?: unknown;
+      };
+      if (releasedOwner.token !== token) {
+        await rename(released, lock).catch(() => undefined);
+        return;
+      }
+      await rm(released, { recursive: true, force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  };
 }
 
 export function getAgenticToolInstallSlug(tool: InstallableAgenticTool): string {
