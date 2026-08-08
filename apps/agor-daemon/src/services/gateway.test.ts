@@ -3,6 +3,7 @@ import { getBaseUrl } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   attachHiddenTenant,
+  createTenantScopedDatabaseProxy,
   GatewayListenerDiscoveryRepository,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
@@ -83,6 +84,42 @@ const slackChannel: GatewayChannel = {
   updated_at: '2026-06-22T00:00:00.000Z',
   last_message_at: null,
 } as unknown as GatewayChannel;
+
+function makeGuardedPostgresDatabase() {
+  const transactions: Array<{
+    execute: ReturnType<typeof vi.fn>;
+    marker: ReturnType<typeof vi.fn>;
+  }> = [];
+  const base = {
+    transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        // Tenant/system GUC setup and the tenant write-gate read both use
+        // execute(). Empty rows mean no active write gate.
+        execute: vi.fn(async () => []),
+        marker: vi.fn(() => undefined),
+      };
+      transactions.push(tx);
+      return work(tx);
+    }),
+    marker: vi.fn(() => undefined),
+  };
+  const db = createTenantScopedDatabaseProxy(base as never, {
+    requireScope: true,
+    label: 'guarded gateway test database',
+  });
+  const observations: Array<{ label: string; kind: string; tenantId?: string }> = [];
+  const touch = (label: string) => {
+    (db as unknown as { marker(): void }).marker();
+    const scope = getCurrentTenantDatabaseScope();
+    if (!scope) throw new Error(`Missing database scope while observing ${label}`);
+    observations.push({
+      label,
+      kind: scope.kind,
+      ...(scope.tenantId ? { tenantId: String(scope.tenantId) } : {}),
+    });
+  };
+  return { db, observations, touch, transactions };
+}
 
 function makeMapping(overrides: Partial<ThreadSessionMap> = {}): ThreadSessionMap {
   return {
@@ -919,6 +956,213 @@ describe('GatewayService Slack thread catch-up', () => {
 });
 
 describe('GatewayService durable listener delivery fences', () => {
+  it('uses short guarded tenant DB scopes while keeping provider startup outside transactions', async () => {
+    const { db, observations, touch, transactions } = makeGuardedPostgresDatabase();
+    expect(() => (db as unknown as { marker(): void }).marker()).toThrow(
+      /Missing tenant database scope/
+    );
+
+    const service = new GatewayService(db, { service: vi.fn(), get: vi.fn() } as never);
+    const channel = attachHiddenTenant(
+      {
+        ...slackChannel,
+        id: 'guarded-channel' as never,
+        config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+      },
+      { tenant_id: 'tenant-a' }
+    );
+    const candidateLease = {
+      channel_id: channel.id,
+      claim_token: 'candidate-owner',
+      generation: 2,
+      claimed_at: '2026-01-01T00:00:00.000Z',
+      lease_expires_at: '2026-01-01T00:00:30.000Z',
+      instance_id: 'daemon-a',
+      boot_id: 'boot-a',
+      checkpoint: null,
+    };
+    const renewedLease = {
+      ...candidateLease,
+      channel_id: 'renewed-channel' as never,
+      claim_token: 'renewed-owner',
+      generation: 4,
+    };
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      listenerDiscoveryTenantId: undefined,
+    });
+
+    const channelRepo = (
+      service as unknown as { channelRepo: Record<string, (...args: never[]) => unknown> }
+    ).channelRepo;
+    channelRepo.renewListener = vi.fn(async () => {
+      touch('renew');
+      return renewedLease;
+    });
+    channelRepo.findById = vi.fn(async () => {
+      touch('channel-find');
+      return channel;
+    });
+    channelRepo.claimListener = vi.fn(async () => {
+      touch('claim');
+      return { outcome: 'claimed', lease: candidateLease };
+    });
+    channelRepo.saveListenerCheckpoint = vi.fn(async () => {
+      touch('checkpoint');
+      return true;
+    });
+    channelRepo.listenerClaimIsCurrent = vi.fn(async () => {
+      touch('claim-current');
+      return true;
+    });
+    channelRepo.releaseListener = vi.fn(async () => {
+      touch('release');
+      return true;
+    });
+    (
+      service as unknown as { activeListenerLeases: Map<string, Record<string, unknown>> }
+    ).activeListenerLeases.set('tenant-b\0renewed-channel', {
+      ...renewedLease,
+      tenant_id: 'tenant-b',
+    });
+
+    const discovery = vi
+      .spyOn(GatewayListenerDiscoveryRepository.prototype, 'findEnabledTenantRefs')
+      .mockImplementation(async () => {
+        touch('system-discovery');
+        return [{ channel_id: channel.id, tenant_id: 'tenant-a' as never }];
+      });
+    const stopListening = vi.fn(async () => {
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      expect(getCurrentTenantId()).toBe('tenant-a');
+    });
+    const startListening = vi.fn(async (_callback, options) => {
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      expect(getCurrentTenantId()).toBe('tenant-a');
+      await options.saveCheckpoint?.({ cursor: 'next' });
+    });
+    vi.mocked(getConnector).mockReturnValue({
+      startListening,
+      stopListening,
+      sendMessage: vi.fn(async () => 'sent'),
+    });
+
+    try {
+      const found = await (
+        service as unknown as { reconcileListenersOnce(): Promise<number> }
+      ).reconcileListenersOnce();
+      expect(found).toBe(1);
+      await vi.waitFor(() => expect(startListening).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(
+          (service as unknown as { activeListeners: Map<string, unknown> }).activeListeners.has(
+            `tenant-a\0${channel.id}`
+          )
+        ).toBe(true)
+      );
+
+      expect(observations).toEqual(
+        expect.arrayContaining([
+          { label: 'renew', kind: 'tenant', tenantId: 'tenant-b' },
+          { label: 'system-discovery', kind: 'system' },
+          { label: 'channel-find', kind: 'tenant', tenantId: 'tenant-a' },
+          { label: 'claim', kind: 'tenant', tenantId: 'tenant-a' },
+          { label: 'checkpoint', kind: 'tenant', tenantId: 'tenant-a' },
+          { label: 'claim-current', kind: 'tenant', tenantId: 'tenant-a' },
+        ])
+      );
+      expect(transactions.length).toBeGreaterThanOrEqual(6);
+    } finally {
+      discovery.mockRestore();
+      await service.stopListeners();
+    }
+    expect(stopListening).toHaveBeenCalledOnce();
+    expect(observations).toContainEqual({
+      label: 'release',
+      kind: 'tenant',
+      tenantId: 'tenant-a',
+    });
+  });
+
+  it('uses guarded tenant DB units for durable inbound admission and completion', async () => {
+    const { db, observations, touch } = makeGuardedPostgresDatabase();
+    const service = new GatewayService(db, { service: vi.fn(), get: vi.fn() } as never);
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+    });
+    const eventId = '01927f9d-0000-7000-8000-000000000099';
+    const channel = attachHiddenTenant(
+      { ...slackChannel, id: 'guarded-inbound-channel' as never },
+      { tenant_id: 'tenant-a' }
+    );
+    const inboundEventRepo = (
+      service as unknown as { inboundEventRepo: Record<string, (...args: never[]) => unknown> }
+    ).inboundEventRepo;
+    inboundEventRepo.claim = vi.fn(async () => {
+      touch('event-claim');
+      return { outcome: 'claimed', event: { id: eventId, delivery_metadata: null } };
+    });
+    inboundEventRepo.recordDeliveryMetadata = vi.fn(async () => {
+      touch('event-metadata');
+      return true;
+    });
+    inboundEventRepo.complete = vi.fn(async () => {
+      touch('event-complete');
+      return true;
+    });
+    const channelRepo = (
+      service as unknown as { channelRepo: Record<string, (...args: never[]) => unknown> }
+    ).channelRepo;
+    channelRepo.listenerClaimIsCurrent = vi.fn(async () => {
+      touch('inbound-claim-current');
+      return true;
+    });
+    const create = vi.spyOn(service, 'create').mockImplementation(async () => {
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      expect(getCurrentTenantId()).toBe('tenant-a');
+      return {
+        success: true,
+        sessionId: '01927f9d-0000-7000-8000-000000000001',
+        created: true,
+        taskId: '01927f9d-0000-7000-8000-000000000002' as never,
+      };
+    });
+    const prepareDelivery = vi.fn(async () => {
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      expect(getCurrentTenantId()).toBe('tenant-a');
+      return { processing_comment_id: 42 };
+    });
+
+    await (
+      service as unknown as {
+        handleListenerInboundMessage: (...args: unknown[]) => Promise<void>;
+      }
+    ).handleListenerInboundMessage(
+      channel,
+      'tenant-a',
+      {
+        providerEventId: 'slack:event:guarded',
+        threadId: 'C1-1.0',
+        text: 'hello',
+        userId: 'U1',
+        prepareDelivery,
+      },
+      { claim_token: 'opaque-owner' }
+    );
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(prepareDelivery).toHaveBeenCalledOnce();
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        { label: 'event-claim', kind: 'tenant', tenantId: 'tenant-a' },
+        { label: 'event-metadata', kind: 'tenant', tenantId: 'tenant-a' },
+        { label: 'event-complete', kind: 'tenant', tenantId: 'tenant-a' },
+        { label: 'inbound-claim-current', kind: 'tenant', tenantId: 'tenant-a' },
+      ])
+    );
+    expect(observations.filter(({ label }) => label === 'inbound-claim-current')).toHaveLength(2);
+  });
+
   it('reconciles an already-admitted stable Task before rebuilding a different retry prompt', async () => {
     const eventId = '01927f9d-0000-7000-8000-000000000099';
     const taskId = '01927f9d-0000-7000-8000-000000000098';

@@ -757,6 +757,10 @@ export class GatewayService {
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
+    // Long-lived listener orchestration carries tenant identity without
+    // holding a transaction. Every repository field is therefore bound to a
+    // short per-method tenant unit of work here; provider/process/network work
+    // must remain outside those database scopes.
     this.channelRepo = bindRepositoryToTenantUnitOfWork(db, new GatewayChannelRepository(db));
     this.threadMapRepo = bindRepositoryToTenantUnitOfWork(db, new ThreadSessionMapRepository(db));
     this.outboundRepo = bindRepositoryToTenantUnitOfWork(
@@ -787,6 +791,15 @@ export class GatewayService {
 
   private listenerKey(tenantId: TenantID | string, channelId: string): string {
     return `${tenantId}\0${channelId}`;
+  }
+
+  /**
+   * Re-enter listener tenant identity only. Repository calls inside `work`
+   * open their own guarded RLS transactions through the constructor bindings;
+   * external provider work deliberately does not inherit a DB transaction.
+   */
+  private runWithListenerTenantIdentity<T>(tenantId: TenantID | string, work: () => T): T {
+    return runWithTenantContext(tenantId, work);
   }
 
   /**
@@ -3099,7 +3112,7 @@ export class GatewayService {
     // released: its provider transport gets a bounded stop while the new owner
     // may already contend safely behind the database fence.
     for (const [key, lease] of [...this.activeListenerLeases]) {
-      await runWithTenantContext(lease.tenant_id, async () => {
+      await this.runWithListenerTenantIdentity(lease.tenant_id, async () => {
         const renewed = await this.channelRepo.renewListener(
           lease.channel_id,
           lease.claim_token,
@@ -3114,7 +3127,7 @@ export class GatewayService {
     }
 
     const refs = this.listenerDiscoveryTenantId
-      ? await runWithTenantContext(this.listenerDiscoveryTenantId, async () => {
+      ? await this.runWithListenerTenantIdentity(this.listenerDiscoveryTenantId, async () => {
           const channels = await this.channelRepo.findEnabledListenerCandidates(
             GATEWAY_LISTENER_SCAN_BATCH,
             this.listenerDiscoveryCursor?.channel_id
@@ -3146,7 +3159,7 @@ export class GatewayService {
     };
 
     for (const ref of refs) {
-      await runWithTenantContext(ref.tenant_id, async () => {
+      await this.runWithListenerTenantIdentity(ref.tenant_id, async () => {
         const key = this.listenerKey(ref.tenant_id, ref.channel_id);
         if (this.activeListeners.has(key)) return;
         const channel = await this.channelRepo.findById(ref.channel_id);
@@ -3248,7 +3261,7 @@ export class GatewayService {
       const tenantId = ref.tenant_id;
 
       try {
-        await runWithTenantContext(tenantId, async () => {
+        await this.runWithListenerTenantIdentity(tenantId, async () => {
           const channel = await this.channelRepo.findById(ref.channel_id);
           if (!channel) {
             console.warn(
@@ -3433,7 +3446,7 @@ export class GatewayService {
 
         if (!connector.startListening) {
           if (lease) {
-            await runWithTenantContext(listenerTenantId, () =>
+            await this.runWithListenerTenantIdentity(listenerTenantId, () =>
               this.channelRepo.releaseListener(channel.id, lease!.claim_token)
             );
           }
@@ -3449,7 +3462,7 @@ export class GatewayService {
           ...(lease
             ? {
                 saveCheckpoint: (checkpoint: Record<string, unknown>) =>
-                  runWithTenantContext(listenerTenantId, () =>
+                  this.runWithListenerTenantIdentity(listenerTenantId, () =>
                     this.channelRepo.saveListenerCheckpoint(
                       channel.id,
                       lease!.claim_token,
@@ -3460,7 +3473,7 @@ export class GatewayService {
             : {}),
         });
         const leaseIsCurrent = lease
-          ? await runWithTenantContext(listenerTenantId, () =>
+          ? await this.runWithListenerTenantIdentity(listenerTenantId, () =>
               this.channelRepo.listenerClaimIsCurrent(channel.id, lease!.claim_token)
             )
           : true;
@@ -3478,7 +3491,7 @@ export class GatewayService {
             }
           }
           if (lease && stopped) {
-            await runWithTenantContext(listenerTenantId, () =>
+            await this.runWithListenerTenantIdentity(listenerTenantId, () =>
               this.channelRepo.releaseListener(channel.id, lease!.claim_token)
             ).catch(() => undefined);
           }
@@ -3504,7 +3517,7 @@ export class GatewayService {
           }
         }
         if (lease && stopped) {
-          await runWithTenantContext(listenerTenantId, () =>
+          await this.runWithListenerTenantIdentity(listenerTenantId, () =>
             this.channelRepo.releaseListener(channel.id, lease!.claim_token)
           ).catch(() => undefined);
         }
@@ -3527,7 +3540,7 @@ export class GatewayService {
     const current = prior
       .catch(() => undefined)
       .then(() =>
-        runWithTenantContext(tenantId, async () => {
+        this.runWithListenerTenantIdentity(tenantId, async () => {
           if (this.listenerDraining) throw new Error('Gateway listener is draining');
 
           let eventId: import('@agor/core/types').GatewayInboundEventID | undefined;
@@ -3651,7 +3664,7 @@ export class GatewayService {
       const separator = listenerKey.indexOf('\0');
       const tenantId = listenerKey.slice(0, separator);
       const channelId = listenerKey.slice(separator + 1);
-      const stopped = await runWithTenantContext(tenantId, () =>
+      const stopped = await this.runWithListenerTenantIdentity(tenantId, () =>
         this.stopChannelListener(channelId, { releaseClaim: false })
       );
       if (stopped) stoppedTransports.add(listenerKey);
@@ -3675,7 +3688,7 @@ export class GatewayService {
     if (callbacksDrained) {
       for (const [listenerKey, lease] of leases) {
         if (!stoppedTransports.has(listenerKey)) continue;
-        await runWithTenantContext(lease.tenant_id, () =>
+        await this.runWithListenerTenantIdentity(lease.tenant_id, () =>
           this.channelRepo.releaseListener(lease.channel_id, lease.claim_token)
         ).catch((error) => {
           console.warn(
