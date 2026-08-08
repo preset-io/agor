@@ -28,7 +28,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@cursor/sdk": "^1.0.23",
+    "@cursor/sdk": "^1.0.26",
     "@google/gemini-cli-core": "^0.40.0",
     "@google/genai": "^1.43.0",
     "@types/diff": "^6.0.0",

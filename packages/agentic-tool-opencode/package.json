@@ -56,14 +56,14 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^24.6.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.3",
-    "antd": "^6.5.0",
+    "antd": "^6.5.3",
     "concurrently": "^9.2.1",
     "jsdom": "^27.1.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tsup": "^8.5.1",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3",
@@ -71,8 +71,8 @@
   },
   "peerDependencies": {
     "@ant-design/icons": "^6.3.2",
-    "antd": "^6.5.0",
-    "react": "^19.2.7"
+    "antd": "^6.5.3",
+    "react": "^19.2.8"
   },
   "peerDependenciesMeta": {
     "@ant-design/icons": {
