@@ -2484,10 +2484,9 @@
   /* Neutralize the desktop transform — position comes from native scroll
    * instead — and let the track size itself to the (single) visible slide
    * rather than the desktop 400%. */
-  .showcaseTrack {
+  .showcaseViewport .showcaseTrack {
     width: 100%;
-    /* biome-ignore lint/complexity/noImportantStyles: phone layout must override the inline desktop carousel transform */
-    transform: none !important;
+    transform: none;
     transition: none;
   }
 
