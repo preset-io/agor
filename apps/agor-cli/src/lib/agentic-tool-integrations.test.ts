@@ -224,6 +224,21 @@ describe('local selection persistence', () => {
       'Another `agor install` is already updating agentic tools'
     );
     await release();
-    await expect(acquireAgenticToolInstallLock()).resolves.toBeTypeOf('function');
+    const releaseAgain = await acquireAgenticToolInstallLock();
+    await releaseAgain();
+  });
+
+  it('recovers a lock left by a dead process', async () => {
+    const root = await createRoot();
+    const lock = join(root, '.install.lock');
+    await mkdir(lock);
+    await writeFile(
+      join(lock, 'owner.json'),
+      JSON.stringify({ pid: 2_147_483_647, createdAt: '2020-01-01T00:00:00.000Z' })
+    );
+
+    const release = await acquireAgenticToolInstallLock();
+    expect(JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')).pid).toBe(process.pid);
+    await release();
   });
 });

@@ -1,9 +1,11 @@
 import {
   type InstallableAgenticTool,
+  InvalidAgenticToolSelectionManifestError,
   resolveAgenticToolSelectionPolicy,
   resolveManagedAgenticToolIntegration,
   resolveManagedAgenticToolVersion,
 } from '@agor/core/agentic-integrations';
+import type { AgorConfig } from '@agor/core/config';
 import { loadConfig } from '@agor/core/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -47,7 +49,7 @@ export default class Install extends Command {
   private async reconcile(sync: boolean): Promise<void> {
     const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
     const config = await loadConfig();
-    let policy = await resolveAgenticToolSelectionPolicy(config);
+    let policy = await resolveInstallSelectionPolicy(config, sync);
     if (policy.mode === 'local-managed' && sync && policy.source === 'missing-manifest') {
       this.error(
         'No locally managed agentic-tool selection exists. Run interactive `agor install` once to choose tools; no packages were changed. For Docker/Kubernetes, declare agentic_tools.installed in config.yaml.'
@@ -125,5 +127,20 @@ export default class Install extends Command {
     } catch {
       return false;
     }
+  }
+}
+
+export async function resolveInstallSelectionPolicy(config: AgorConfig, sync: boolean) {
+  try {
+    return await resolveAgenticToolSelectionPolicy(config);
+  } catch (error) {
+    if (!sync && error instanceof InvalidAgenticToolSelectionManifestError) {
+      return {
+        mode: 'local-managed',
+        selected: [] as InstallableAgenticTool[],
+        source: 'missing-manifest' as const,
+      };
+    }
+    throw error;
   }
 }

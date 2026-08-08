@@ -53,14 +53,51 @@ export async function acquireAgenticToolInstallLock(): Promise<() => Promise<voi
   const root = getAgenticToolsRoot();
   const lock = join(root, '.install.lock');
   await mkdir(root, { recursive: true, mode: 0o700 });
-  try {
+  const createLock = async () => {
     await mkdir(lock, { mode: 0o700 });
+    await writeFile(
+      join(lock, 'owner.json'),
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+      { mode: 0o600 }
+    );
+  };
+  try {
+    await createLock();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    let ownerPid: number | undefined;
+    try {
+      const owner = JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')) as {
+        pid?: unknown;
+      };
+      if (typeof owner.pid === 'number' && Number.isSafeInteger(owner.pid) && owner.pid > 0)
+        ownerPid = owner.pid;
+    } catch {
+      // Missing/corrupt owner metadata is an interrupted lock and may be reclaimed.
+    }
+    let ownerAlive = false;
+    if (ownerPid !== undefined) {
+      try {
+        process.kill(ownerPid, 0);
+        ownerAlive = true;
+      } catch (probeError) {
+        if ((probeError as NodeJS.ErrnoException).code === 'EPERM') ownerAlive = true;
+      }
+    }
+    if (ownerAlive)
       throw new Error(
-        'Another `agor install` is already updating agentic tools. Try again when it finishes.'
+        `Another \`agor install\` is already updating agentic tools (PID ${ownerPid}). Try again when it finishes.`
       );
-    throw error;
+    await rm(lock, { recursive: true, force: true });
+    try {
+      await createLock();
+    } catch (retryError) {
+      if ((retryError as NodeJS.ErrnoException).code === 'EEXIST')
+        throw new Error(
+          'Another `agor install` acquired the lock while recovering an interrupted install. Try again when it finishes.'
+        );
+      throw retryError;
+    }
   }
   return async () => rm(lock, { recursive: true, force: true });
 }
