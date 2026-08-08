@@ -36,6 +36,7 @@ import {
   type SocketIOOptions,
   tenantChannelName,
   tenantUserChannelName,
+  userRoomName,
 } from './socketio';
 
 // ---------------------------------------------------------------------------
@@ -199,8 +200,16 @@ function buildHarness(opts: Partial<SocketIOOptions> = {}) {
     ...opts,
   } as SocketIOOptions);
   config.callback(io as any);
+  openHarnesses.add(io);
   return { io, config, app };
 }
+
+const openHarnesses = new Set<FakeIO>();
+
+afterEach(() => {
+  for (const io of openHarnesses) io.engine.closeHandler?.();
+  openHarnesses.clear();
+});
 
 function connect(io: FakeIO, socket: FakeSocket) {
   io.sockets.sockets.set(socket.id, socket);
@@ -314,7 +323,7 @@ describe('Socket.IO lifecycle logging', () => {
     warnSpy.mockRestore();
   });
 
-  it('logs post-connect authentication once at info with only the short user ID', () => {
+  it('logs first authentication and identity changes but omits same-identity repeats', () => {
     const { app, io } = buildHarness();
     const socket = makeSocket('alice-sock');
     connect(io, socket);
@@ -325,16 +334,63 @@ describe('Socket.IO lifecycle logging', () => {
       { user: { user_id: ALICE, email: 'alice@example.com' } },
       { connection }
     );
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: ALICE, email: 'repeat@example.com' } },
+      { connection }
+    );
 
     expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(debugSpy.mock.calls.flat().join(' ')).not.toContain('re-authenticated');
     expect(logSpy).toHaveBeenCalledWith(
       'socket authenticated: alice-sock user:11111111aaaaaaaaaaaa1111'
     );
     expect(logSpy.mock.calls.flat().join(' ')).not.toContain('alice@example.com');
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('repeat@example.com');
+
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: BOB, email: 'bob@example.com' } },
+      { connection }
+    );
+
+    expect(logSpy).toHaveBeenCalledTimes(2);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'socket authenticated: alice-sock user:22222222bbbbbbbbbbbb2222'
+    );
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('bob@example.com');
+  });
+
+  it('keeps post-connect authenticated sockets out of unauthenticated disconnect metrics', () => {
+    vi.useFakeTimers();
+    const { app, io } = buildHarness();
+    const socket = makeSocket('post-connect-auth');
+    connect(io, socket);
+
+    const connection = {};
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.({ user: { user_id: ALICE } }, { connection });
+    socket.feathers = {};
+    debugSpy.mockClear();
+    logSpy.mockClear();
+    warnSpy.mockClear();
+
+    socket.handlers.get('disconnect')?.('ping timeout');
+
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(logSpy).toHaveBeenCalledWith(
+      '🔌 Socket.io disconnected: post-connect-auth (reason: ping timeout, remaining: 0)'
+    );
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
   });
 
   it('uses the same single authentication signal for handshake-authenticated users', async () => {
-    const { io } = buildHarness();
+    const { app, io } = buildHarness();
     const socket = makeSocket('handshake-sock');
     socket.handshake.auth = {
       token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '5m'),
@@ -347,6 +403,10 @@ describe('Socket.IO lifecycle logging', () => {
       });
     });
     connect(io, socket);
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: ALICE } },
+      { connection: socket.feathers }
+    );
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith(
@@ -354,6 +414,80 @@ describe('Socket.IO lifecycle logging', () => {
     );
     expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('joined user room'));
   });
+
+  it.each([
+    {
+      kind: 'full service',
+      user: {
+        user_id: 'executor-service',
+        email: 'executor@agor.internal',
+        role: 'service',
+        _isServiceAccount: true,
+      },
+      joinsUserRoom: true,
+    },
+    {
+      kind: 'terminal executor',
+      user: {
+        user_id: 'executor-service',
+        email: 'executor@agor.internal',
+        role: 'terminal-executor',
+        _isTerminalExecutor: true,
+        terminal_user_id: ALICE,
+      },
+      joinsUserRoom: false,
+    },
+  ])('logs post-connect $kind authentication as service', ({ user, joinsUserRoom }) => {
+    const { app, io } = buildHarness();
+    const socket = makeSocket('post-connect-service');
+    connect(io, socket);
+
+    const connection = {};
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.({ user }, { connection });
+
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(logSpy).toHaveBeenCalledWith('socket authenticated: post-connect-service service');
+    expect(socket.joined.has(userRoomName('executor-service'))).toBe(joinsUserRoom);
+  });
+
+  it.each([
+    { kind: 'full service', terminalUserId: undefined, joinsUserRoom: true },
+    { kind: 'terminal executor', terminalUserId: ALICE, joinsUserRoom: false },
+  ])(
+    'deduplicates handshake $kind authentication followed by the same service login',
+    async ({ terminalUserId, joinsUserRoom }) => {
+      const { app, io } = buildHarness();
+      const socket = makeSocket('handshake-service');
+      socket.handshake.auth = {
+        token: issueRuntimeToken(
+          {
+            sub: 'executor-service',
+            type: 'service',
+            ...(terminalUserId ? { terminal_user_id: terminalUserId } : {}),
+          },
+          'test-secret',
+          '5m'
+        ),
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        io.middlewares[0]?.(socket, (error?: Error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+      connect(io, socket);
+      (app as any).eventHandlers.get('login')?.(
+        { user: socket.feathers?.user },
+        { connection: socket.feathers }
+      );
+
+      expect(logSpy).toHaveBeenCalledOnce();
+      expect(logSpy).toHaveBeenCalledWith('socket authenticated: handshake-service service');
+      expect(socket.joined.has(userRoomName('executor-service'))).toBe(joinsUserRoom);
+    }
+  );
 
   it('emits an unconditional five-minute gauge and stops it when Engine.IO closes', () => {
     vi.useFakeTimers();
@@ -364,11 +498,15 @@ describe('Socket.IO lifecycle logging', () => {
 
     vi.advanceTimersByTime(5 * 60 * 1000 - 5_000);
     expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
 
     vi.advanceTimersByTime(5 * 60 * 1000);
     expect(logSpy).toHaveBeenCalledTimes(2);
-    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
 
     io.engine.closeHandler?.();
     vi.advanceTimersByTime(5 * 60 * 1000);
@@ -376,10 +514,11 @@ describe('Socket.IO lifecycle logging', () => {
   });
 
   it.each(['transport close', 'client namespace disconnect'])(
-    'demotes benign disconnect reason %s below info',
+    'keeps benign authenticated disconnect reason %s below info',
     (reason) => {
       const { io } = buildHarness();
       const socket = makeSocket('browser-sock');
+      asUser(socket, ALICE);
       connect(io, socket);
 
       socket.handlers.get('disconnect')?.(reason);
@@ -393,6 +532,8 @@ describe('Socket.IO lifecycle logging', () => {
     const { io } = buildHarness();
     const transportErrorSocket = makeSocket('transport-error');
     const pingTimeoutSocket = makeSocket('ping-timeout');
+    asUser(transportErrorSocket, ALICE);
+    asUser(pingTimeoutSocket, ALICE);
     connect(io, transportErrorSocket);
     connect(io, pingTimeoutSocket);
 
@@ -401,6 +542,72 @@ describe('Socket.IO lifecycle logging', () => {
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reason: transport error'));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('reason: ping timeout'));
+  });
+
+  it('aggregates sockets that disconnect before authentication and resets each interval', () => {
+    vi.useFakeTimers();
+    const { app, io } = buildHarness();
+    const firstAnonymousSocket = makeSocket('anonymous-1');
+    const secondAnonymousSocket = makeSocket('anonymous-2');
+    const previouslyAuthenticatedSocket = makeSocket('authenticated');
+
+    connect(io, firstAnonymousSocket);
+    connect(io, secondAnonymousSocket);
+    connect(io, previouslyAuthenticatedSocket);
+    const connection = {};
+    previouslyAuthenticatedSocket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.({ user: { user_id: ALICE } }, { connection });
+    previouslyAuthenticatedSocket.feathers = {};
+    debugSpy.mockClear();
+    logSpy.mockClear();
+    warnSpy.mockClear();
+
+    firstAnonymousSocket.handlers.get('disconnect')?.('ping timeout');
+    secondAnonymousSocket.handlers.get('disconnect')?.('client namespace disconnect');
+    previouslyAuthenticatedSocket.handlers.get('disconnect')?.('ping timeout');
+
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Socket.io disconnected: authenticated (reason: ping timeout')
+    );
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('anonymous-');
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=2'
+    );
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
+
+    io.engine.closeHandler?.();
+    const logCountAfterClose = logSpy.mock.calls.length;
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenCalledTimes(logCountAfterClose);
+  });
+
+  it('preserves transport-error warnings while aggregating unauthenticated disconnects', () => {
+    vi.useFakeTimers();
+    const { io } = buildHarness();
+    const socket = makeSocket('transport-error');
+    connect(io, socket);
+    debugSpy.mockClear();
+
+    socket.handlers.get('disconnect')?.('transport error');
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reason: transport error'));
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=1'
+    );
   });
 });
 

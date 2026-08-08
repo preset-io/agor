@@ -15,6 +15,7 @@ export interface TenantDatabaseScope {
 /** Narrow RLS capabilities available to explicit system database work. */
 export type SystemDatabaseCapability =
   | 'gateway_listener_discovery'
+  | 'knowledge_embedding_discovery'
   | 'scheduler_discovery'
   | 'task_queue_discovery'
   | 'task_runtime_discovery'

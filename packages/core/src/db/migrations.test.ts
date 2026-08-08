@@ -3,8 +3,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'vitest';
+import { pendingOfflineCutoverMigrations } from './migrate';
 
 describe('Postgres migrations', () => {
+  it('requires the Knowledge claim protocol migration to be an offline existing-db cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: ['0073_task_runtime_reconciliation'],
+        pending: ['0074_knowledge_embedding_claims'],
+      })
+    ).toEqual(['0074_knowledge_embedding_claims']);
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: [],
+        pending: ['0000_pretty_mac_gargan', '0074_knowledge_embedding_claims'],
+      })
+    ).toEqual([]);
+  });
+
   it('keeps Knowledge pgvector storage out of required base migrations', async () => {
     const migration = await readFile(
       new URL('../../drizzle/postgres/0043_kb_embeddings.sql', import.meta.url),

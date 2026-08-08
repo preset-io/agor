@@ -87,7 +87,7 @@ The deployment still supplies the underlying capability. Vector search requires 
 
 > **Upgrading from YAML-based semantic settings:** Before restarting Agor, record any values under `knowledge.semantic_search`, then remove the entire top-level `knowledge:` block from `config.yaml`. Agor rejects that removed configuration instead of silently applying one operator policy to every workspace. After startup, a workspace admin can re-enter the policy in **Knowledge → Settings → Semantic search**. Existing encrypted workspace embedding API keys remain stored and do not need to be copied into YAML.
 
-> **Multi-tenant indexer limitation:** In `required_from_auth` deployments, semantic policy and queued units are isolated correctly per workspace, but the singleton background indexer currently drains only the startup/bootstrap tenant. Other workspaces can safely configure semantic search and queue work, but automatic all-tenant queue discovery is still pending. Static/single-workspace deployments are unaffected.
+In `required_from_auth` deployments, every daemon scans bounded routing metadata across workspaces, then re-enters the selected workspace before reading content, credentials, settings, or vectors. PostgreSQL claims ensure that only one live generation owns a chunk even when several daemons discover it. Distributed scans cap one workspace at 8 chunks per provider batch and 32 candidates per scan; static/single-workspace PostgreSQL preserves the configured 1–128 batch size. SQLite remains text-search-only.
 
 ---
 

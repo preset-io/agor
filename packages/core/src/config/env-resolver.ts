@@ -89,6 +89,21 @@ export const ALLOWED_ENV_VARS = new Set([
 
   // Agor session context (safe for executor/sessions)
   'DAEMON_URL',
+
+  // Managed agentic tool runtime. These locate the version-aligned integration
+  // tree (~/.agor/agentic-tools/<version>/<tool>) that loadManagedAgenticToolSdk
+  // resolves against; they are host runtime metadata, identical for every
+  // tenant, and carry no credentials.
+  //
+  // They must be allowlisted, not merely forwarded: session executors are
+  // spawned with `preparedEnv` built by createUserProcessEnvironment(), which
+  // takes precedence over spawn-executor's own forwarding. Without them here
+  // the executor sees AGOR_MANAGED_AGENTIC_TOOLS unset, falls back to importing
+  // the vendor SDK by bare specifier, and every session fails with
+  // "Cannot find package '@openai/codex-sdk'".
+  'AGOR_VERSION',
+  'AGOR_AGENTIC_TOOLS_DIR',
+  'AGOR_MANAGED_AGENTIC_TOOLS',
 ]);
 
 /**

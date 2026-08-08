@@ -2136,6 +2136,16 @@ export const kbDocumentUnits = sqliteTable(
     embedding_dimensions: integer('embedding_dimensions'),
     embedding_hash: text('embedding_hash'),
     embedding_error: text('embedding_error'),
+    // Kept in schema parity with PostgreSQL. SQLite semantic vector indexing
+    // remains disabled, so these fields stay at their standalone defaults.
+    embedding_claim_token: text('embedding_claim_token'),
+    embedding_claim_generation: integer('embedding_claim_generation').notNull().default(0),
+    embedding_claimed_at: t.timestamp('embedding_claimed_at'),
+    embedding_claim_expires_at: t.timestamp('embedding_claim_expires_at'),
+    embedding_claim_instance_id: text('embedding_claim_instance_id'),
+    embedding_claim_boot_id: text('embedding_claim_boot_id'),
+    embedding_failure_count: integer('embedding_failure_count').notNull().default(0),
+    embedding_retry_at: t.timestamp('embedding_retry_at'),
     metadata: t.json<Record<string, unknown>>('metadata'),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
@@ -2149,6 +2159,11 @@ export const kbDocumentUnits = sqliteTable(
     ),
     contentHashIdx: index('kb_document_units_content_hash_idx').on(table.content_md5),
     embeddingStatusIdx: index('kb_document_units_embedding_status_idx').on(table.embedding_status),
+    embeddingWorkScanIdx: index('kb_document_units_embedding_work_scan_idx')
+      .on(table.created_at, table.unit_id)
+      .where(
+        sql`${table.content_text} IS NOT NULL AND ${table.embedding_status} IN ('pending', 'stale', 'error')`
+      ),
   })
 );
 

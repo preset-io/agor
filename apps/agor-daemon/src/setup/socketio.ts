@@ -344,12 +344,21 @@ export function createSocketIOConfig(
 
     // Track active connections for periodic operational metrics.
     let activeConnections = 0;
+    // Intentionally system-global: the aggregate keeps only a saturated count,
+    // never socket, user, tenant, channel, or client metadata.
+    let unauthenticatedDisconnects = 0;
+    // Weak per-socket state owns both auth-log dedupe and durable auth history.
+    const authenticatedIdentities = new WeakMap<Socket, string>();
 
-    const logAuthenticated = (socketId: string, userId?: string) => {
+    const logAuthenticated = (socket: Socket, userId?: string) => {
+      const identity = userId ? `user:${userId}` : 'service';
+      if (authenticatedIdentities.get(socket) === identity) return;
+      authenticatedIdentities.set(socket, identity);
+
       console.log(
         userId
-          ? `socket authenticated: ${socketId} user:${shortId(userId)}`
-          : `socket authenticated: ${socketId} service`
+          ? `socket authenticated: ${socket.id} user:${shortId(userId)}`
+          : `socket authenticated: ${socket.id} service`
       );
     };
 
@@ -436,7 +445,7 @@ export function createSocketIOConfig(
             (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
             if (fs.data) fs.data.tenant = tenant;
           }
-          logAuthenticated(socket.id);
+          logAuthenticated(socket);
           return next();
         }
 
@@ -457,7 +466,7 @@ export function createSocketIOConfig(
           if (fs.data) fs.data.tenant = tenant;
         }
 
-        logAuthenticated(socket.id, user.user_id);
+        logAuthenticated(socket, user.user_id);
         next();
       } catch (error) {
         console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
@@ -889,9 +898,19 @@ export function createSocketIOConfig(
       // Track disconnections
       socket.on('disconnect', (reason) => {
         activeConnections--;
+        const disconnectedBeforeAuthentication =
+          !authenticatedIdentities.has(socket) && !isAuthenticated(getSocketAuthState(socket));
+        if (disconnectedBeforeAuthentication) {
+          unauthenticatedDisconnects = Math.min(
+            unauthenticatedDisconnects + 1,
+            Number.MAX_SAFE_INTEGER
+          );
+        }
         const message = `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`;
         if (reason === 'transport error') {
           console.warn(message);
+        } else if (disconnectedBeforeAuthentication) {
+          return;
         } else if (reason === 'transport close' || reason === 'client namespace disconnect') {
           console.debug(message);
         } else {
@@ -913,14 +932,18 @@ export function createSocketIOConfig(
     // so we need to join the user room here when the login event fires.
     app.on('login', (authResult: unknown, context: { connection?: unknown; params?: unknown }) => {
       if (!context.connection) return;
-      const result = authResult as { user?: { user_id?: string } };
+      const result = authResult as {
+        user?: { user_id?: string; _isServiceAccount?: boolean };
+      };
       const userId = result.user?.user_id;
       if (!userId) return;
 
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
-          logAuthenticated(socket.id, userId);
+          const isService =
+            result.user?._isServiceAccount === true || isTerminalExecutorIdentity(result.user);
+          logAuthenticated(socket, isService ? undefined : userId);
           // Terminal-executor identities get no user room (see connection handler).
           if (!isTerminalExecutorIdentity(result.user)) {
             socket.join(userRoomName(userId));
@@ -934,7 +957,11 @@ export function createSocketIOConfig(
     // and periods with no connection churn remain observable.
     const metricsInterval = setInterval(
       () => {
-        console.log(`ws_active_connections=${activeConnections}`);
+        const disconnectedBeforeAuthentication = unauthenticatedDisconnects;
+        unauthenticatedDisconnects = 0;
+        console.log(
+          `ws_active_connections=${activeConnections} ws_unauthenticated_disconnects=${disconnectedBeforeAuthentication}`
+        );
       },
       5 * 60 * 1000
     );
