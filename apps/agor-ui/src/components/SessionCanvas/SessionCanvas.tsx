@@ -496,7 +496,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       // Prepend background_color as a CSS rule so it's at the same specificity as custom_css
       // and goes through the same sanitizer.
       const bgRule = hasUserBg ? `background: ${board?.background_color};\n` : '';
-      return sanitizeBoardCss(bgRule + (board?.custom_css || ''), `.${boardCssClass}`);
+      const scoped = sanitizeBoardCss(bgRule + (board?.custom_css || ''), `.${boardCssClass}`);
+      if (!scoped) return '';
+      // Respect the user's reduced-motion preference: neutralize any background
+      // animation the custom CSS introduces without touching the static look.
+      return `${scoped}\n\n@media (prefers-reduced-motion: reduce) {\n  .${boardCssClass} { animation: none !important; }\n}`;
     }, [board?.custom_css, board?.background_color, boardCssClass, hasUserStyling, hasUserBg]);
 
     // Board-scoped board objects: subscribe to only THIS board's bucket so
