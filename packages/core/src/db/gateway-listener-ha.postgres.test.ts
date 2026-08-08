@@ -291,6 +291,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     expect(refs.some((ref) => ref.channel_id === unsupported.channel.id)).toBe(false);
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+      const candidates = await new GatewayChannelRepository(scoped).findEnabledListenerCandidates(
+        100
+      );
+      expect(candidates.some((channel) => channel.id === a.channel.id)).toBe(true);
+      expect(candidates.some((channel) => channel.id === unsupported.channel.id)).toBe(false);
+
       await new GatewayChannelRepository(scoped).claimListener({
         channelId: a.channel.id,
         claimToken: 'tenant-a-owner',

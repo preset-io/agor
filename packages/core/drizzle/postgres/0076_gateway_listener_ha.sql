@@ -21,15 +21,15 @@ CREATE INDEX "gateway_channels_listener_discovery_idx" ON "gateway_channels" ("e
 CREATE TABLE "gateway_inbound_events" (
   "tenant_id" text DEFAULT 'default' NOT NULL,
   "id" varchar(36) PRIMARY KEY NOT NULL,
-  "gateway_channel_id" varchar(36) NOT NULL REFERENCES "gateway_channels"("id") ON DELETE CASCADE,
+  "gateway_channel_id" varchar(36) NOT NULL REFERENCES "gateway_channels"("id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   "provider_event_id" text NOT NULL,
   "thread_id" text NOT NULL,
   "delivery_metadata" jsonb,
   "status" text NOT NULL,
   "processing_token" text NOT NULL,
   "processing_expires_at" timestamp with time zone NOT NULL,
-  "session_id" varchar(36) REFERENCES "sessions"("session_id") ON DELETE SET NULL,
-  "task_id" varchar(36) REFERENCES "tasks"("task_id") ON DELETE SET NULL,
+  "session_id" varchar(36) REFERENCES "sessions"("session_id") ON DELETE SET NULL DEFERRABLE INITIALLY IMMEDIATE,
+  "task_id" varchar(36) REFERENCES "tasks"("task_id") ON DELETE SET NULL DEFERRABLE INITIALLY IMMEDIATE,
   "received_at" timestamp with time zone NOT NULL,
   "completed_at" timestamp with time zone
 );

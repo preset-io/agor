@@ -151,7 +151,7 @@ The legacy generic channel-key inbound endpoint has no provider-event identity,
 so it is available only on standalone SQLite and fails closed on PostgreSQL.
 
 Migrations `0066_gateway_listener_discovery` and
-`0076_gateway_listener_ha` installs the narrow discovery policy, lease columns,
+`0076_gateway_listener_ha` install the narrow discovery policy, lease columns,
 and tenant-RLS provider-event table. Apply normal Agor migrations before
 serving traffic with the upgraded daemon; no database role with `BYPASSRLS`
 and no superuser daemon connection is required.

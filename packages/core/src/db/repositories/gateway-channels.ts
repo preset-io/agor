@@ -478,11 +478,15 @@ export class GatewayChannelRepository
           lte(gatewayChannels.listener_lease_expires_at, sql`CURRENT_TIMESTAMP`)
         )
       : undefined;
+    const auditedProvider = isPostgresDatabase(this.db)
+      ? inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES])
+      : undefined;
     const rows = await select(this.db)
       .from(gatewayChannels)
       .where(
         and(
           eq(gatewayChannels.enabled, true),
+          auditedProvider,
           claimable,
           afterId ? gt(gatewayChannels.id, afterId) : undefined
         )
