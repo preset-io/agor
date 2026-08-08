@@ -22,7 +22,7 @@
     "check:pack": "npm pack --dry-run"
   },
   "dependencies": {
-    "@cursor/sdk": "1.0.23"
+    "@cursor/sdk": "1.0.26"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",

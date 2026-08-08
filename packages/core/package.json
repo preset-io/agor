@@ -450,7 +450,7 @@
     "@slack/types": "^2.22.0",
     "@slack/web-api": "^7.19.0",
     "bcryptjs": "^2.4.3",
-    "cron-parser": "^5.6.1",
+    "cron-parser": "^5.7.0",
     "cronstrue": "^3.24.0",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
