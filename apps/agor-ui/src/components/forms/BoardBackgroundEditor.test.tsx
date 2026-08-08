@@ -77,11 +77,45 @@ describe('BoardBackgroundEditor', () => {
     expect(captured?.getFieldValue('custom_css')).toBeFalsy();
   });
 
-  it('selecting a preset writes its exact CSS value to the form', () => {
-    render(<Harness signal="a" initialValues={{}} />);
+  it('selecting a preset writes its exact CSS value and clears animation CSS', () => {
+    render(<Harness signal="a" initialValues={{ custom_css: 'animation: spin 2s infinite;' }} />);
     fireEvent.click(screen.getByText('Preset'));
     fireEvent.click(screen.getByRole('button', { name: new RegExp(PRESET.label, 'i') }));
     expect(captured?.getFieldValue('background_color')).toBe(PRESET.value);
+    // Applying a preset is deliberate → drops layered animation CSS.
+    expect(captured?.getFieldValue('custom_css')).toBeFalsy();
+  });
+
+  it('entering Preset mode does NOT mutate stored values until a preset is applied', () => {
+    // Custom board with a gradient + animation. Merely clicking the Preset tab
+    // to browse must not destroy either field (regression from the earlier fix
+    // that cleared custom_css on tab-enter).
+    render(
+      <Harness
+        signal="a"
+        initialValues={{ background_color: CUSTOM_GRADIENT, custom_css: 'animation: x 2s;' }}
+      />
+    );
+    fireEvent.click(screen.getByText('Preset'));
+    expect(captured?.getFieldValue('background_color')).toBe(CUSTOM_GRADIENT);
+    expect(captured?.getFieldValue('custom_css')).toBe('animation: x 2s;');
+  });
+
+  it('remount with stored custom CSS opens in Custom mode (destroyOnHidden reopen)', () => {
+    // The modal uses destroyOnHidden, so reopening fully remounts the editor.
+    // A board that stored custom styling must reopen in Custom mode showing it.
+    const { unmount } = render(
+      <Harness signal="a" initialValues={{ background_color: CUSTOM_GRADIENT }} />
+    );
+    expect((screen.getByLabelText('Custom background CSS') as HTMLTextAreaElement).value).toBe(
+      CUSTOM_GRADIENT
+    );
+    unmount();
+    render(<Harness signal="a" initialValues={{ background_color: CUSTOM_GRADIENT }} />);
+    expect((screen.getByLabelText('Custom background CSS') as HTMLTextAreaElement).value).toBe(
+      CUSTOM_GRADIENT
+    );
+    expect(screen.queryByText(DEFAULT_TEXT)).not.toBeInTheDocument();
   });
 
   it('re-syncs its mode from freshly loaded values when the reset signal changes (reopen)', () => {

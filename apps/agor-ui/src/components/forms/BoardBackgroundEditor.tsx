@@ -98,26 +98,31 @@ export function BoardBackgroundEditor({ form, resetSignal }: BoardBackgroundEdit
   const selectMode = (next: BackgroundMode) => {
     setMode(next);
     if (next === 'default') {
+      // Explicit "use the themed default" — clear both stored fields.
       form.setFieldsValue({ background_color: undefined, custom_css: undefined });
-    } else if (next === 'preset') {
-      // Presets are pure backgrounds — drop any layered animation CSS so the
-      // "preset" state stays unambiguous and round-trips cleanly on reopen.
-      form.setFieldsValue({ custom_css: undefined });
+    } else if (next === 'preset' || next === 'custom') {
+      // Entering Preset or Custom must NOT mutate stored values — switching a
+      // tab to browse should never destroy the user's background or animation
+      // CSS. We only normalize a ColorPicker object into a hex string so the
+      // textarea/gallery can read it. A preset is applied only when the user
+      // actually clicks a thumbnail (see applyPreset).
       const asColor = form.getFieldValue('background_color');
-      if (asColor && typeof asColor !== 'string') {
-        form.setFieldsValue({ background_color: asColor.toHexString() });
-      }
-    } else if (next === 'custom') {
-      const asColor = form.getFieldValue('background_color');
-      if (asColor && typeof asColor !== 'string') {
+      if (asColor && typeof asColor !== 'string' && typeof asColor.toHexString === 'function') {
         form.setFieldsValue({ background_color: asColor.toHexString() });
       }
     }
   };
 
-  const bgIssues = validateBoardCss(bgString);
-  const cssIssues = validateBoardCss(customCss);
-  const allIssues = [...bgIssues, ...cssIssues];
+  // Applying a preset is a deliberate action: it sets the background and drops
+  // any layered animation CSS so the persisted state is an unambiguous preset
+  // that round-trips back to Preset mode on reopen.
+  const applyPreset = (value: string) => {
+    form.setFieldsValue({ background_color: value, custom_css: undefined });
+  };
+
+  // Dedupe so the same blocked-pattern warning from both fields renders once
+  // (and never produces duplicate React keys).
+  const allIssues = [...new Set([...validateBoardCss(bgString), ...validateBoardCss(customCss)])];
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -150,17 +155,13 @@ export function BoardBackgroundEditor({ form, resetSignal }: BoardBackgroundEdit
 
       {mode === 'default' && (
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          Uses the built-in theme-aware background — a sober, mostly-dark surface that adapts to
+          Uses the built-in theme-aware background — a sober, restrained surface that adapts to the
           light and dark themes. Nothing is stored on the board.
         </Typography.Text>
       )}
 
       {mode === 'preset' && (
-        <PresetGallery
-          selectedValue={bgString}
-          onSelect={(value) => form.setFieldsValue({ background_color: value })}
-          token={token}
-        />
+        <PresetGallery selectedValue={bgString} onSelect={applyPreset} token={token} />
       )}
 
       {mode === 'custom' && (

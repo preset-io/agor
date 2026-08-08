@@ -14,11 +14,3 @@ export const GOLD_SHIMMER_BOARD_BACKGROUND_PRESET = {
   label: 'Gold Shimmer',
   value: GOLD_SHIMMER_BOARD_BACKGROUND,
 } as const;
-
-/**
- * @deprecated Boards no longer persist a background at creation time. New
- * boards leave `background_color` unset and render the theme-aware default
- * (see `DEFAULT_BACKGROUNDS` in the UI). Retained only for backward-compatible
- * imports; prefer leaving `background_color` undefined to mean "default".
- */
-export const DEFAULT_BOARD_BACKGROUND = GOLD_SHIMMER_BOARD_BACKGROUND;

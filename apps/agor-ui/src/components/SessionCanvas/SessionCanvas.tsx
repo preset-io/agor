@@ -77,7 +77,7 @@ import {
 } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
 import { REACT_FLOW_DRAG_HANDLE_SELECTOR } from '../../utils/reactFlowDragClasses';
-import { sanitizeBoardCss } from '../../utils/sanitizeCss';
+import { buildScopedBoardCss } from '../../utils/sanitizeCss';
 import { isDarkTheme } from '../../utils/theme';
 import { AutocompleteTextarea } from '../AutocompleteTextarea/AutocompleteTextarea';
 import BranchCard from '../BranchCard';
@@ -479,29 +479,22 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
-    const hasCustomCss = Boolean(board?.custom_css?.trim());
-    const hasUserBg = Boolean(board?.background_color?.trim());
-    // Any user-provided styling goes through the sanitized <style> tag so that
-    // background_color can't bypass the sanitizer with url()/expression()/etc.
-    const hasUserStyling = hasCustomCss || hasUserBg;
 
-    // Only the trusted defaultBackground is applied inline; anything user-provided
-    // is sanitized and routed through the scoped <style> tag below.
-    const canvasBackground = hasUserStyling ? undefined : defaultBackground;
-
-    // Sanitize and scope custom CSS for this board (enables @keyframes, animations, etc.)
+    // Sanitize + scope any user styling through the shared pipeline so the
+    // canvas and the editor preview can never diverge. Returns '' when the
+    // board is on the default, in which case we apply the trusted inline
+    // themed default instead (user styling never touches an inline style).
     const boardCssClass = board?.board_id ? `board-css-${shortId(board.board_id)}` : '';
-    const scopedCustomCss = useMemo(() => {
-      if (!hasUserStyling) return '';
-      // Prepend background_color as a CSS rule so it's at the same specificity as custom_css
-      // and goes through the same sanitizer.
-      const bgRule = hasUserBg ? `background: ${board?.background_color};\n` : '';
-      const scoped = sanitizeBoardCss(bgRule + (board?.custom_css || ''), `.${boardCssClass}`);
-      if (!scoped) return '';
-      // Respect the user's reduced-motion preference: neutralize any background
-      // animation the custom CSS introduces without touching the static look.
-      return `${scoped}\n\n@media (prefers-reduced-motion: reduce) {\n  .${boardCssClass} { animation: none !important; }\n}`;
-    }, [board?.custom_css, board?.background_color, boardCssClass, hasUserStyling, hasUserBg]);
+    const scopedCustomCss = useMemo(
+      () =>
+        buildScopedBoardCss({
+          backgroundColor: board?.background_color,
+          customCss: board?.custom_css,
+          scopeClass: boardCssClass,
+        }),
+      [board?.custom_css, board?.background_color, boardCssClass]
+    );
+    const canvasBackground = scopedCustomCss ? undefined : defaultBackground;
 
     // Board-scoped board objects: subscribe to only THIS board's bucket so
     // other boards' object churn never re-renders the canvas. The factory is

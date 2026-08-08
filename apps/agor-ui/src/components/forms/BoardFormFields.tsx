@@ -9,6 +9,30 @@ import {
 } from '../permissions/RbacPermissionFields';
 import { BoardBackgroundEditor } from './BoardBackgroundEditor';
 
+/** A value carrying AntD's ColorPicker `toHexString()` serializer. */
+interface HexSerializable {
+  toHexString: () => string;
+}
+
+function hasToHexString(value: unknown): value is HexSerializable {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { toHexString?: unknown }).toHexString === 'function'
+  );
+}
+
+/**
+ * Normalize the form's `background_color` to the persisted wire value: a
+ * string as-is, an AntD ColorPicker value via `toHexString()`, or `null` when
+ * empty (so the backend clears the field rather than dropping `undefined`).
+ */
+function normalizeBackgroundColor(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() ? value : null;
+  if (hasToHexString(value)) return value.toHexString();
+  return null;
+}
+
 /**
  * Extract board form values from the form instance.
  * Uses getFieldsValue(true) to include values from collapsed/unmounted fields.
@@ -25,11 +49,10 @@ export function extractBoardFormValues(form: FormInstance): Partial<Board> {
     name: values.name,
     icon: values.icon || '📋',
     description: values.description,
-    background_color: bgColor
-      ? typeof bgColor === 'string'
-        ? bgColor
-        : bgColor.toHexString()
-      : null,
+    // background_color is usually a string (gradient/CSS/hex), but the
+    // ColorPicker yields an AntD AggregationColor. Only serialize via
+    // toHexString when it's actually present; otherwise clear the field.
+    background_color: normalizeBackgroundColor(bgColor),
     custom_css: values.custom_css || null,
     access_mode: values.access_mode || 'shared',
     default_others_can:

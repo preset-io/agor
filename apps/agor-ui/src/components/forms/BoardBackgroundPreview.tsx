@@ -3,8 +3,7 @@
 import { theme } from 'antd';
 import { useId, useMemo } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
-import { hasBackgroundValue, hasBoardStyling } from '../../utils/boardBackground';
-import { sanitizeBoardCss } from '../../utils/sanitizeCss';
+import { buildScopedBoardCss } from '../../utils/sanitizeCss';
 import { isDarkTheme } from '../../utils/theme';
 
 export interface BoardBackgroundPreviewProps {
@@ -44,20 +43,15 @@ export function BoardBackgroundPreview({
   const rawId = useId().replace(/[^a-zA-Z0-9]/g, '');
   const scopeClass = `board-preview-${rawId}`;
 
-  const styled = hasBoardStyling(backgroundColor, customCss);
-  const explicitBg = hasBackgroundValue(backgroundColor);
-
-  const scopedCss = useMemo(() => {
-    if (!styled) return '';
-    const bgRule = explicitBg ? `background: ${backgroundColor};\n` : '';
-    const scoped = sanitizeBoardCss(bgRule + (customCss || ''), `.${scopeClass}`);
-    if (!scoped) return '';
-    return `${scoped}\n@media (prefers-reduced-motion: reduce) { .${scopeClass} { animation: none !important; } }`;
-  }, [styled, explicitBg, backgroundColor, customCss, scopeClass]);
+  // Same sanitize + scope + reduced-motion pipeline as the canvas.
+  const scopedCss = useMemo(
+    () => buildScopedBoardCss({ backgroundColor, customCss, scopeClass }),
+    [backgroundColor, customCss, scopeClass]
+  );
 
   // When there is no explicit styling we render the trusted themed default
   // inline (never through the sanitizer), mirroring the canvas.
-  const inlineBackground = styled ? undefined : DEFAULT_BACKGROUNDS[isDark ? 'dark' : 'light'];
+  const inlineBackground = scopedCss ? undefined : DEFAULT_BACKGROUNDS[isDark ? 'dark' : 'light'];
 
   const scale = variant === 'thumbnail' ? 0.85 : 1;
 
@@ -76,10 +70,9 @@ export function BoardBackgroundPreview({
         background: inlineBackground,
       }}
     >
-      {scopedCss && (
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitizeBoardCss strips url()/expression()/@import/etc. and scopes to this instance
-        <style dangerouslySetInnerHTML={{ __html: scopedCss }} />
-      )}
+      {/* String child (not dangerouslySetInnerHTML) — React sets it as text
+          content, so sanitized CSS cannot terminate the <style> element. */}
+      {scopedCss && <style>{scopedCss}</style>}
       {showContent && (
         <div
           style={{

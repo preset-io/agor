@@ -76,7 +76,9 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
         }
         if (cancelled) return;
         if (ownerIds.length === 0 && fresh.created_by) ownerIds = [fresh.created_by];
-        setLoadedBoard(fresh);
+        // Populate the form BEFORE exposing loadedBoard so the background
+        // editor mounts against fully-initialized field values (rather than
+        // relying on render batching). loadedBoard is set last, below.
         form.resetFields();
         form.setFieldsValue({
           name: fresh.name,
@@ -94,6 +96,8 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
           board_group_grants: grants,
           custom_context: fresh.custom_context ? JSON.stringify(fresh.custom_context, null, 2) : '',
         });
+        // Expose the loaded board last: this is what un-gates the form render.
+        setLoadedBoard(fresh);
       } catch (error) {
         if (!cancelled) {
           const detail = error instanceof Error ? error.message : String(error);
