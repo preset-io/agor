@@ -1,11 +1,12 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export {
   AGENTIC_TOOL_INTEGRATIONS,
   getAgenticToolInstallDir,
+  getAgenticToolSelectionManifestPath,
   getAgenticToolsRoot,
   type InstallableAgenticTool,
   isInstallableAgenticTool,
@@ -15,6 +16,7 @@ export {
 import {
   AGENTIC_TOOL_INTEGRATIONS,
   getAgenticToolInstallDir,
+  getAgenticToolSelectionManifestPath,
   getAgenticToolsRoot,
   type InstallableAgenticTool,
   isInstallableAgenticTool,
@@ -23,6 +25,38 @@ import {
 export function normalizeAgenticToolName(value: string): InstallableAgenticTool | undefined {
   const normalized = value === 'claude' ? 'claude-code' : value;
   return isInstallableAgenticTool(normalized) ? normalized : undefined;
+}
+
+/** Deployment-owned, host-local selection; atomic, private, and serialized. */
+export async function writeAgenticToolSelectionManifest(
+  installed: readonly InstallableAgenticTool[]
+): Promise<void> {
+  const root = getAgenticToolsRoot();
+  const destination = getAgenticToolSelectionManifestPath();
+  const lock = join(root, '.selection.lock');
+  const temporary = join(root, `.selection-${randomUUID()}.tmp`);
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  try {
+    await mkdir(lock, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+      throw new Error(
+        'Another `agor install` is already updating agentic tools. Try again when it finishes.'
+      );
+    throw error;
+  }
+  try {
+    await writeFile(
+      temporary,
+      `${JSON.stringify({ schemaVersion: 1, installed: [...new Set(installed)] }, null, 2)}\n`,
+      { mode: 0o600 }
+    );
+    await chmod(temporary, 0o600);
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+    await rm(lock, { recursive: true, force: true });
+  }
 }
 
 export function getAgenticToolInstallSlug(tool: InstallableAgenticTool): string {

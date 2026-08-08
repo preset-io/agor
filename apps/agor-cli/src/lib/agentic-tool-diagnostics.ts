@@ -1,5 +1,6 @@
 import {
   AGENTIC_TOOL_INTEGRATIONS,
+  AGENTIC_TOOL_REPAIR_COMMAND,
   getAgenticToolInstallDir,
   type InstallableAgenticTool,
   resolveManagedAgenticToolIntegration,
@@ -32,7 +33,7 @@ async function diagnoseManagedIntegration(
       name: definition.displayName,
       kind: 'managed-integration',
       status: 'missing',
-      detail: 'Run: agor install',
+      detail: `Run: ${AGENTIC_TOOL_REPAIR_COMMAND}`,
       docsUrl: DOCS_BASE,
     };
   }
@@ -58,7 +59,7 @@ async function diagnoseManagedIntegration(
       kind: 'managed-integration',
       status: 'unusable',
       path: installDir,
-      detail: `${error instanceof Error ? error.message : String(error)}. Run: agor install`,
+      detail: `${error instanceof Error ? error.message : String(error)}. Run: ${AGENTIC_TOOL_REPAIR_COMMAND}`,
       docsUrl: DOCS_BASE,
     };
   }

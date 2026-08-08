@@ -1,4 +1,9 @@
-import { resolveManagedAgenticToolVersion } from '@agor/core/agentic-integrations';
+import {
+  AGENTIC_TOOL_INTEGRATIONS,
+  resolveAgenticToolSelectionPolicy,
+  resolveManagedAgenticToolVersion,
+} from '@agor/core/agentic-integrations';
+import { loadConfig } from '@agor/core/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
@@ -14,14 +19,32 @@ export default class Doctor extends Command {
     const agenticTools = await diagnoseAgenticTools(
       resolveManagedAgenticToolVersion(this.config.version) as string
     );
+    const policy = await resolveAgenticToolSelectionPolicy(await loadConfig());
     if (flags.json) {
-      this.log(JSON.stringify({ ok: true, agenticTools }, null, 2));
+      this.log(JSON.stringify({ ok: true, policy, agenticTools }, null, 2));
       return;
     }
     this.log(chalk.bold('Agor doctor\n'));
     this.log(`${chalk.green('✓')} Node.js ${process.version}`);
     this.log(`${chalk.green('✓')} Agor CLI is executable`);
     this.log('');
-    await this.config.runCommand('agentic-tools', []);
+    this.log(chalk.bold('Agentic tools'));
+    this.log(`  Policy: ${policy.mode}; source: ${policy.source}`);
+    const selected = new Set(policy.selected);
+    for (const item of agenticTools) {
+      const marker =
+        item.status === 'ready'
+          ? chalk.green('✓')
+          : selected.has(item.id)
+            ? chalk.red('✗')
+            : chalk.dim('○');
+      this.log(
+        `  ${marker} ${AGENTIC_TOOL_INTEGRATIONS[item.id].displayName}: ${item.status}${selected.has(item.id) ? ' (selected)' : ''}`
+      );
+      if (item.detail && selected.has(item.id)) this.log(chalk.dim(`      ${item.detail}`));
+    }
+    if (policy.source === 'missing-manifest')
+      this.log(chalk.yellow('\n  No local selection manifest. Run interactive `agor install`.'));
+    else this.log(chalk.dim('\n  Repair without changing selection: agor install --sync'));
   }
 }

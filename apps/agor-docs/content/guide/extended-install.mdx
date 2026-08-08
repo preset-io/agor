@@ -40,9 +40,11 @@ npm install -g agor-live@latest
 agor init
 ```
 
-During `agor init`, select the agentic tools this deployment supports. Init records that selection in
-the deployment-owned configuration and installs the packages. The original npm installation never
-downloads optional runtimes. You can skip everything and add tools later by editing the file:
+The original npm installation never downloads optional runtimes. On a local installation, run
+`agor install` and choose tools interactively. Agor records the choice in a private, host-local
+manifest beside the packages; it never rewrites `config.yaml`.
+
+For a declarative or headless deployment, explicitly configure the selection:
 
 ```yaml filename="~/.agor/config.yaml"
 agentic_tools:
@@ -51,7 +53,8 @@ agentic_tools:
     - codex
 ```
 
-Then run `agor install` to reconcile disk state.
+Then run `agor install --sync` to reconcile disk state noninteractively. An explicit `installed: []`
+is valid and removes all managed tools. Merely omitting the key selects local-managed mode.
 
 `agor install` uses your configured npm registry, proxy, authentication, and integrity verification,
 but installs into Agor's private runtime directory rather than changing global npm state. Installation
@@ -61,12 +64,12 @@ replace Claude, Codex, or other tools you may already use from your terminal.
 Inspect the managed integrations at any time:
 
 ```bash
-agor agentic-tools
 agor doctor
 ```
 
-The packaged daemon refuses to start when a configured integration is absent, corrupt, or from a
-different Agor version. Unconfigured tools are unavailable to tenants and do not block startup.
+The packaged daemon refuses to start when a selected integration is absent, corrupt, or from a
+different Agor version. An empty selection does not block startup; a missing local manifest produces
+an actionable warning. Unselected tools are unavailable to tenants.
 
 | Agentic tool | Configuration value | Managed package |
 | --- | --- | --- |
@@ -82,6 +85,7 @@ For automated images and CI, run the same noninteractive commands after installi
 ```bash
 npm install -g agor-live@latest
 agor init --non-interactive --agentic-tools claude,codex
+agor install --sync
 ```
 
 Set `AGOR_AGENTIC_TOOLS_DIR` when integrations must live in an administrator-provisioned shared
@@ -100,18 +104,18 @@ deployment-owned list and confirm the result:
 
 ```bash
 npm install -g agor-live@latest
-agor install
+agor install --sync
 agor doctor
 ```
 
-`agor install` is declarative and idempotent. It installs missing or invalid configured packages,
+`agor install --sync` is noninteractive and idempotent. It installs missing or invalid selected packages,
 removes current-version packages absent from `agentic_tools.installed`, deletes every older-version
 directory, and cleans interrupted staging/backup directories. There is currently no compatibility
 range or keep-old mode: every managed wrapper must exactly match `agor-live`.
 
-Upgraded configurations that do not yet contain `agentic_tools.installed` fail safely. Add the tools
-the deployment supports—or an explicit `installed: []` when it supports none—before running
-`agor install`; absence is never interpreted as permission to delete every existing package.
+On local upgrades where the YAML key and local manifest are both absent, `agor install --sync`
+fails without changing packages and directs the operator to interactive `agor install`. Docker and
+Kubernetes deployments should always declare `agentic_tools.installed` and use `--sync`.
 
 Microsoft Teams gateway support remains optional and separate from agentic tools:
 

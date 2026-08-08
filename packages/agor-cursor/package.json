@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/cursor",
-  "version": "0.24.2",
+  "version": "0.24.3",
   "description": "Version-aligned cursor agentic tool integration for Agor",
   "type": "module",
   "main": "./dist/index.js",

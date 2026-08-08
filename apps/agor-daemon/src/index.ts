@@ -170,7 +170,15 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Deployment package availability is instance-global. Validate it before
   // database or tenant initialization so no tenant can expand the daemon's
   // installed-code surface and a broken upgrade never starts listening.
-  await assertConfiguredAgenticToolsAligned(config);
+  const resolvedAgenticTools = await assertConfiguredAgenticToolsAligned(config);
+  if (resolvedAgenticTools) {
+    // In-memory projection only: config.yaml remains immutable while every
+    // service consumes the same deployment policy resolved at startup.
+    config = {
+      ...config,
+      agentic_tools: { ...config.agentic_tools, installed: [...resolvedAgenticTools] },
+    };
+  }
 
   const multiTenancy = resolveMultiTenancyConfig(config);
   console.log(

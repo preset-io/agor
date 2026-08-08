@@ -1734,5 +1734,19 @@
     "id": "DAEMON-FS-CAP-180",
     "symbol": "rm",
     "operation": "call:fs.rm@rewriteConfigFile#1"
+  },
+  {
+    "class": "A",
+    "file": "packages/core/src/agentic-integrations.ts",
+    "import": "node:fs/promises",
+    "local": "readFile",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Reads the deployment-owned, host-local agentic-tool selection manifest; only the local CLI can write it and tenant/API paths cannot influence its path.",
+    "reviewTarget": null,
+    "reviewDate": null,
+    "id": "DAEMON-FS-CAP-181",
+    "symbol": "readFile",
+    "operation": "call:readFile@readAgenticToolSelectionManifest#1"
   }
 ]

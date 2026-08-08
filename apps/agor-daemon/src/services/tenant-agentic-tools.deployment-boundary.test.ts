@@ -10,7 +10,7 @@ describe('tenant agentic tool deployment boundary', () => {
     );
 
     await expect(service.patch('codex', { enabled: true })).rejects.toThrow(
-      /operator must add it to config\.yaml agentic_tools\.installed and run agor install/
+      /unavailable under this deployment's agentic-tool policy/
     );
   });
 });

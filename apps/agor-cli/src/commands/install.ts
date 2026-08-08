@@ -1,11 +1,13 @@
 import {
   type InstallableAgenticTool,
+  resolveAgenticToolSelectionPolicy,
   resolveManagedAgenticToolIntegration,
   resolveManagedAgenticToolVersion,
 } from '@agor/core/agentic-integrations';
 import { loadConfig } from '@agor/core/config';
-import { Command } from '@oclif/core';
+import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import inquirer from 'inquirer';
 import {
   AGENTIC_TOOL_INTEGRATIONS,
   installManagedIntegration,
@@ -15,25 +17,57 @@ import {
   removeManagedAgorVersion,
   removeManagedInstallDebris,
   removeManagedIntegration,
+  writeAgenticToolSelectionManifest,
 } from '../lib/agentic-tool-integrations.js';
 
 export default class Install extends Command {
-  static description =
-    'Align agentic tool packages with config.yaml and remove unconfigured or stale installs';
-  static examples = ['<%= config.bin %> <%= command.id %>'];
+  static description = 'Configure or reconcile version-aligned agentic tool packages';
+  static examples = [
+    '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --sync',
+  ];
+  static flags = {
+    sync: Flags.boolean({
+      description: 'Reconcile noninteractively without changing the selection',
+      default: false,
+    }),
+  };
 
   async run(): Promise<void> {
-    await this.parse(Install);
+    const { flags } = await this.parse(Install);
     const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
     const config = await loadConfig();
-    const configured = config.agentic_tools?.installed;
-    if (!configured) {
+    let policy = await resolveAgenticToolSelectionPolicy(config);
+    if (policy.mode === 'local-managed' && flags.sync && policy.source === 'missing-manifest') {
       this.error(
-        'config.yaml does not declare agentic_tools.installed. Add the tools this deployment supports (or an explicit empty list), then rerun `agor install`. No packages were changed.'
+        'No locally managed agentic-tool selection exists. Run interactive `agor install` once to choose tools; no packages were changed. For Docker/Kubernetes, declare agentic_tools.installed in config.yaml.'
       );
     }
+    if (policy.mode === 'local-managed' && !flags.sync) {
+      const previouslySelected = new Set<InstallableAgenticTool>(
+        policy.selected as readonly InstallableAgenticTool[]
+      );
+      const { selected } = await inquirer.prompt<{ selected: InstallableAgenticTool[] }>([
+        {
+          type: 'checkbox',
+          name: 'selected',
+          message: 'Which agentic tools should this deployment support?',
+          choices: Object.entries(AGENTIC_TOOL_INTEGRATIONS).map(([value, definition]) => ({
+            name: `${definition.displayName} (${definition.packageName}@${agorVersion})`,
+            value,
+            checked: previouslySelected.has(value as InstallableAgenticTool),
+          })),
+        },
+      ]);
+      await writeAgenticToolSelectionManifest(selected);
+      policy = { mode: 'local-managed', selected, source: 'manifest' };
+    }
+    const configured: readonly InstallableAgenticTool[] = policy.selected;
 
     this.log(chalk.bold(`Agentic tool package alignment for Agor ${agorVersion}`));
+    this.log(
+      `Policy: ${policy.mode === 'declarative' ? 'declarative config.yaml' : 'locally managed manifest'}`
+    );
     this.log(
       configured.length > 0
         ? `Configured: ${configured.join(', ')}`

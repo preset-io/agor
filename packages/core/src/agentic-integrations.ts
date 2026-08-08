@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -48,6 +48,58 @@ export function isInstallableAgenticTool(value: string): value is InstallableAge
 
 export function getAgenticToolsRoot(): string {
   return process.env.AGOR_AGENTIC_TOOLS_DIR ?? join(homedir(), '.agor', 'agentic-tools');
+}
+
+export const AGENTIC_TOOL_SELECTION_MANIFEST = 'selection.json';
+export const AGENTIC_TOOL_REPAIR_COMMAND = 'agor install --sync';
+
+export type AgenticToolSelectionPolicy =
+  | { mode: 'declarative'; selected: InstallableAgenticTool[]; source: 'config.yaml' }
+  | { mode: 'local-managed'; selected: InstallableAgenticTool[]; source: 'manifest' }
+  | { mode: 'local-managed'; selected: []; source: 'missing-manifest' };
+
+export type AgenticToolSelectionManifest = {
+  schemaVersion: 1;
+  installed: InstallableAgenticTool[];
+};
+
+export function getAgenticToolSelectionManifestPath(): string {
+  return join(getAgenticToolsRoot(), AGENTIC_TOOL_SELECTION_MANIFEST);
+}
+
+export async function readAgenticToolSelectionManifest(): Promise<
+  AgenticToolSelectionManifest | undefined
+> {
+  try {
+    const value = JSON.parse(
+      await readFile(getAgenticToolSelectionManifestPath(), 'utf8')
+    ) as Partial<AgenticToolSelectionManifest>;
+    if (
+      value.schemaVersion !== 1 ||
+      !Array.isArray(value.installed) ||
+      !value.installed.every((tool) => typeof tool === 'string' && isInstallableAgenticTool(tool))
+    )
+      return undefined;
+    return {
+      schemaVersion: 1,
+      installed: [...new Set(value.installed)] as InstallableAgenticTool[],
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Single deployment policy resolver used by CLI, daemon, and service gates. */
+export async function resolveAgenticToolSelectionPolicy(config: {
+  agentic_tools?: { installed?: InstallableAgenticTool[] };
+}): Promise<AgenticToolSelectionPolicy> {
+  if (config.agentic_tools?.installed !== undefined) {
+    return { mode: 'declarative', selected: config.agentic_tools.installed, source: 'config.yaml' };
+  }
+  const manifest = await readAgenticToolSelectionManifest();
+  return manifest
+    ? { mode: 'local-managed', selected: manifest.installed, source: 'manifest' }
+    : { mode: 'local-managed', selected: [], source: 'missing-manifest' };
 }
 
 export function getAgenticToolInstallDir(
@@ -188,12 +240,12 @@ export async function loadManagedAgenticToolSdk<T>(tool: InstallableAgenticTool)
     integration = await resolveManagedAgenticToolIntegration<T>(tool, agorVersion);
   } catch {
     throw new Error(
-      `${definition.displayName} support is not installed for Agor ${agorVersion}. Add ${tool} to config.yaml agentic_tools.installed, then run: agor install`
+      `${definition.displayName} support is not installed for Agor ${agorVersion}. Run: ${AGENTIC_TOOL_REPAIR_COMMAND}`
     );
   }
   if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdk) {
     throw new Error(
-      `${definition.displayName} support does not match Agor ${agorVersion}. Run: agor install`
+      `${definition.displayName} support does not match Agor ${agorVersion}. Run: ${AGENTIC_TOOL_REPAIR_COMMAND}`
     );
   }
   return integration.sdk;

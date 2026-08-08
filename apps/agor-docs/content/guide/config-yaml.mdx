@@ -9,7 +9,7 @@ Change operator settings in the file (or its Helm/Terraform/Ansible/secret-manag
 restart the daemon. Settings needed before the database is reachable—database/bootstrap, tenant
 routing, filesystem, listener, executor, and security settings—belong here or in deployment env.
 
-The agentic-tool package set is also deployment-owned:
+The agentic-tool package set can be declaratively deployment-owned:
 
 ```yaml
 agentic_tools:
@@ -18,11 +18,15 @@ agentic_tools:
     - codex
 ```
 
-After editing this list, run `agor install`. It installs the exact matching package version, removes
+After editing this list, run `agor install --sync`. It installs the exact matching package version, removes
 unconfigured tools and packages from older Agor versions, and leaves `config.yaml` untouched. The
 packaged daemon fails before listening if any configured integration is missing or misaligned.
 Tenant administrators may disable an installed tool but cannot install packages or enable a tool
 absent from this deployment list.
+
+If `agentic_tools.installed` is absent, local CLI installs instead use a host-local managed manifest.
+Run interactive `agor install` to create or change it. The manifest is never exposed for mutation
+through API, UI, or MCP. Headless deployments should use an explicit YAML list, including `[]`.
 
 ## Environment precedence
 

@@ -34,7 +34,7 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 ### Breaking
 
 - **`config.yaml` is immutable after initialization** — daemon startup, telemetry, Docker entrypoints, upgrades, APIs, MCP, and UI flows no longer rewrite the deployment-owned YAML file. Configure stable JWT/master secrets with environment variables or YAML before startup. The mutating `agor config set/get/unset` commands are removed; `agor config --yaml` materializes the effective read-only configuration. Existing Docker environment overrides are resolved in memory instead of being written to YAML.
-- **Agentic tool packages are deployment-declared and strictly aligned** — configure the exact tool set under `agentic_tools.installed`, then run `agor install`. The command reconciles that set and removes stale/unconfigured packages by default; the packaged daemon refuses to start when configured integrations do not exactly match its version.
+- **Agentic tool installs now support declarative and local-managed policy** — explicit `agentic_tools.installed` remains immutable YAML authority; otherwise interactive `agor install` owns a private host-local manifest and `agor install --sync` reconciles it noninteractively. `agor doctor` is the sole read-only inspection surface. Empty selections start with a warning, while selected missing or misaligned packages fail with an exact repair command.
 
 ### Features
 
