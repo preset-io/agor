@@ -556,10 +556,10 @@
       "breakpoints": true
     },
     {
-      "idx": 72,
+      "idx": 75,
       "version": "7",
-      "when": 1786000000000,
-      "tag": "0072_mcp_catalog_registry_status",
+      "when": 1786200000000,
+      "tag": "0075_mcp_catalog_registry_status",
       "breakpoints": true
     }
   ]
