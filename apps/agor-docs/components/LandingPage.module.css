@@ -2486,6 +2486,7 @@
    * rather than the desktop 400%. */
   .showcaseTrack {
     width: 100%;
+    /* biome-ignore lint/complexity/noImportantStyles: phone layout must override the inline desktop carousel transform */
     transform: none !important;
     transition: none;
   }
