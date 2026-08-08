@@ -88,7 +88,10 @@ describe('MCP servers reaching OpenCode invocation config', () => {
       server(PLAIN),
     ]);
 
-    expect(Object.keys(config.mcp).join(' ')).not.toContain(sanitized(GATED));
+    const configured = Object.keys(config.mcp).join(' ');
+    expect(configured).not.toContain(sanitized(GATED));
+    // Positive control, as above: the config is not simply empty.
+    expect(configured).toContain(sanitized(PLAIN));
     expect(withheld).toEqual([GATED]);
   });
 

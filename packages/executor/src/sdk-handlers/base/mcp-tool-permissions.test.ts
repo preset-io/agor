@@ -74,8 +74,34 @@ describe('resolveMcpToolPermission', () => {
     expect(resolveMcpToolPermission(dotted, 'my_server__run_query')).toBe('deny');
   });
 
+  // The CLI rewrites BOTH halves of a namespaced name, so a tool advertised as
+  // `repo.create` is offered to the model as `mcp__gh__repo_create`. Keyed only
+  // on the raw form, the lookup misses — and a miss reads as "unconfigured",
+  // i.e. allow. The gate would be silently open on exactly the tool someone
+  // switched off.
+  it('matches tools whose names contain characters illegal in a tool name', () => {
+    const dotted = buildMcpToolPermissionIndex([
+      server('gh', { 'repo.create': 'deny', 'repo.read': 'allow' }),
+    ]);
+
+    expect(resolveMcpToolPermission(dotted, 'mcp__gh__repo_create')).toBe('deny');
+    // The raw form still resolves, so nothing that worked before regressed.
+    expect(resolveMcpToolPermission(dotted, 'mcp__gh__repo.create')).toBe('deny');
+    // An unrelated permission is not dragged along by the rewrite.
+    expect(resolveMcpToolPermission(dotted, 'mcp__gh__repo_read')).toBe('allow');
+  });
+
+  it('rewrites both halves at once', () => {
+    const both = buildMcpToolPermissionIndex([server('My.Server', { 'repo.create': 'deny' })]);
+
+    expect(resolveMcpToolPermission(both, 'mcp__My_Server__repo_create')).toBe('deny');
+  });
+
   it('never matches a bare tool name, so an unrelated tool cannot be denied by coincidence', () => {
     expect(resolveMcpToolPermission(index, 'create_pull_request')).toBeUndefined();
+    // Positive control: the same index does answer when the name is qualified,
+    // so the miss above is the rule and not an empty fixture.
+    expect(resolveMcpToolPermission(index, 'mcp__github__create_pull_request')).toBe('deny');
   });
 
   // "foo.bar" and "foo_bar" both rewrite to "foo_bar". Overwriting the shared

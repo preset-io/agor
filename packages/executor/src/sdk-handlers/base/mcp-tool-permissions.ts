@@ -38,18 +38,41 @@ export const EMPTY_MCP_TOOL_PERMISSION_INDEX: McpToolPermissionIndex = {
 };
 
 /**
- * SDKs rewrite server names into their own identifier alphabets before
- * embedding them in a tool name. Indexing the rewritten forms alongside the raw
- * one keeps lookups working for servers named e.g. "preset sdx" or "my.server".
+ * The alphabet SDKs rewrite names into before embedding them in a tool name.
  *
- * The alphabet is the tool-name one (`[a-zA-Z0-9_-]`), deliberately narrower
- * than any single SDK's: a character we leave in but the SDK rewrites would
- * make the index miss, and a miss reads as "unconfigured", i.e. allow. Codex
- * also lowercases, so that variant is indexed too.
+ * Deliberately narrower than any single SDK's: a character we leave in but the
+ * SDK rewrites would make a lookup miss, and a miss reads as "unconfigured",
+ * i.e. allow.
+ */
+function sanitizeToToolNameAlphabet(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/**
+ * Indexing the rewritten server forms alongside the raw one keeps lookups
+ * working for servers named e.g. "preset sdx" or "my.server". Codex also
+ * lowercases, so that variant is indexed too.
  */
 export function mcpToolNameAliasesForServer(name: string): string[] {
-  const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const sanitized = sanitizeToToolNameAlphabet(name);
   return [name, sanitized, sanitized.toLowerCase()];
+}
+
+/**
+ * Both halves of a namespaced tool name get rewritten, not just the server.
+ *
+ * `tool_permissions` is keyed on the bare name exactly as the MCP server
+ * advertises it, and a server is free to advertise `repo.create`. Claude builds
+ * `mcp__<rewritten server>__<rewritten tool>` and matches rules against that,
+ * so a permission stored under the raw key would never bind — the same silent
+ * fail-open the server half already guards against.
+ *
+ * No lowercase variant here: the rewrite that produces the name being matched
+ * preserves case, and folding it would let a `Foo` denial capture an unrelated
+ * `foo` on the same server.
+ */
+export function mcpToolNameAliasesForTool(name: string): string[] {
+  return [name, sanitizeToToolNameAlphabet(name)];
 }
 
 export function buildMcpToolPermissionIndex(servers: MCPServer[]): McpToolPermissionIndex {
@@ -59,19 +82,22 @@ export function buildMcpToolPermissionIndex(servers: MCPServer[]): McpToolPermis
     const configured = server.tool_permissions;
     if (!configured || Object.keys(configured).length === 0) continue;
 
-    for (const alias of new Set(mcpToolNameAliasesForServer(server.name))) {
+    for (const serverAlias of new Set(mcpToolNameAliasesForServer(server.name))) {
       // Two servers can share an alias ("foo.bar" and "foo_bar" both rewrite to
       // "foo_bar"). Overwriting would drop the first server's denials on the
-      // floor, so entries merge and the most restrictive value survives.
-      let tools = byServer.get(alias);
+      // floor, so entries merge and the most restrictive value survives. Tool
+      // aliases collide the same way and merge on the same rule.
+      let tools = byServer.get(serverAlias);
       if (!tools) {
         tools = new Map<string, ToolPermission>();
-        byServer.set(alias, tools);
+        byServer.set(serverAlias, tools);
       }
       for (const [toolName, permission] of Object.entries(configured)) {
-        const current = tools.get(toolName);
-        if (!current || RESTRICTIVENESS[permission] > RESTRICTIVENESS[current]) {
-          tools.set(toolName, permission);
+        for (const toolAlias of new Set(mcpToolNameAliasesForTool(toolName))) {
+          const current = tools.get(toolAlias);
+          if (!current || RESTRICTIVENESS[permission] > RESTRICTIVENESS[current]) {
+            tools.set(toolAlias, permission);
+          }
         }
       }
     }

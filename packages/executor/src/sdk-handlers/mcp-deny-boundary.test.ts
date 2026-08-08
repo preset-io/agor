@@ -103,6 +103,16 @@ describe('a denied MCP tool never reaches the server', () => {
       }
 
       expect(mcp.calls).toEqual([]);
+
+      // Positive control: the same fixture under a handler that CAN filter is
+      // admitted, so the withholding above is the gate and not a resolver that
+      // returns nothing.
+      const admitted = await getMcpServersForSession(
+        'session-a' as SessionID,
+        resolutionDeps(serverRow()),
+        { toolFiltering: 'exclude' }
+      );
+      expect(admitted.map(({ server }) => server.name)).toEqual([SERVER_NAME]);
     } finally {
       await mcp.close();
     }

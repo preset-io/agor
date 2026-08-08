@@ -555,6 +555,77 @@ describe('setupQuery - ask under bypassPermissions', () => {
 
     const options = vi.mocked(Claude.query).mock.calls[0][0].options;
     expect(options.disallowedTools).not.toContain(`mcp__${GATED_SERVER}__write_file`);
+    // Positive control: the server really was processed, so the absence above
+    // is the promptable path and not a fixture that produced no servers.
+    expect(Object.keys(options.mcpServers ?? {})).toContain(GATED_SERVER);
     expect(options.canUseTool).toBeTypeOf('function');
+  });
+});
+
+/**
+ * The CLI rewrites both halves of a namespaced name into `[a-zA-Z0-9_-]`, and
+ * matches rules against the rewritten form. A rule carrying the raw tool name
+ * binds to nothing, which reads as unconfigured — allow.
+ */
+describe('setupQuery - tool names the CLI has to rewrite', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(Claude.query).mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+    } as any);
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      {
+        server: {
+          mcp_server_id: 'gh-server',
+          name: 'My.Server',
+          transport: 'stdio',
+          command: 'noop',
+          scope: 'global',
+          source: 'user',
+          enabled: true,
+          tool_permissions: { 'repo.create': 'deny', repo_read: 'allow' },
+        },
+        source: 'global',
+      },
+    ] as any);
+  });
+
+  function deps(): QuerySetupDeps {
+    return {
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'test-session' as SessionID,
+          branch_id: 'test-branch' as BranchID,
+          mcp_token: 'token',
+        }),
+      } as any,
+      branchesRepo: { findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }) } as any,
+      messagesRepo: {} as any,
+      sessionMCPRepo: {} as any,
+      mcpServerRepo: {} as any,
+      permissionService: {} as any,
+      tasksService: {} as any,
+      messagesService: {} as any,
+      sessionsService: {} as any,
+      permissionLocks: new Map(),
+    };
+  }
+
+  it('denies under the rewritten tool name, not only the raw one', async () => {
+    await setupQuery('test-session' as SessionID, 'test prompt', deps(), {
+      taskId: 'test-task' as TaskID,
+      permissionMode: 'default',
+    });
+
+    const disallowed = vi.mocked(Claude.query).mock.calls[0][0].options.disallowedTools as string[];
+
+    // What the CLI actually offers the model, and therefore the only form that
+    // can bind: both halves rewritten.
+    expect(disallowed).toContain('mcp__My_Server__repo_create');
+    // The raw form stays listed too — a rule that matches nothing is inert.
+    expect(disallowed).toContain('mcp__My.Server__repo.create');
+    // An "allow" tool is not swept in by the rewrite.
+    expect(disallowed).not.toContain('mcp__My_Server__repo_read');
   });
 });

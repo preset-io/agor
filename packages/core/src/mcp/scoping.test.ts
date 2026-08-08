@@ -193,6 +193,11 @@ describe('getMcpServersForSession - tool_permissions admission gate', () => {
       const servers = await resolve(gatedServer(permission), { toolFiltering: 'none' });
 
       expect(servers).toEqual([]);
+      // Positive control: the same fixture is admitted by a handler that can
+      // filter, so the empty result is the gate and not a resolver that found
+      // nothing to begin with.
+      const admitted = await resolve(gatedServer(permission), { toolFiltering: 'exclude' });
+      expect(admitted).toHaveLength(1);
     }
   );
 

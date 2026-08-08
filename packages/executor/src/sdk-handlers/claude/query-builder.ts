@@ -44,6 +44,7 @@ import {
   buildMcpToolPermissionIndex,
   EMPTY_MCP_TOOL_PERMISSION_INDEX,
   mcpToolNameAliasesForServer,
+  mcpToolNameAliasesForTool,
 } from '../base/mcp-tool-permissions.js';
 import { createCanUseToolCallback } from '../base/permission-hooks.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
@@ -522,12 +523,14 @@ export async function setupQuery(
             ? (['deny'] as const)
             : PERMISSIONS_BLOCKED_WITHOUT_PROMPT;
           for (const tool of listMcpToolsWithPermission(server, blocked)) {
-            // The CLI rewrites a server name into the tool-name alphabet before
-            // it reaches a rule, so a name with punctuation would never match if
-            // only the raw form were listed. Both forms are emitted; a rule that
-            // matches nothing is inert.
-            for (const alias of new Set(mcpToolNameAliasesForServer(server.name))) {
-              deniedTools.push(`mcp__${alias}__${tool}`);
+            // The CLI rewrites BOTH halves into the tool-name alphabet before a
+            // name reaches a rule, so either half carrying punctuation would
+            // never match if only the raw form were listed. Every combination is
+            // emitted; a rule that matches nothing is inert.
+            for (const serverAlias of new Set(mcpToolNameAliasesForServer(server.name))) {
+              for (const toolAlias of new Set(mcpToolNameAliasesForTool(tool))) {
+                deniedTools.push(`mcp__${serverAlias}__${toolAlias}`);
+              }
             }
           }
         }
