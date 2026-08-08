@@ -9,6 +9,7 @@ import * as yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
+  createInitialConfig,
   ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
@@ -33,12 +34,12 @@ import {
   requireDaemonUser,
   requirePublicBaseUrl,
   resolveBranchStorageConfig,
+  resolveEffectiveConfig,
   resolveExecutionSecurityMode,
   resolveTeammateFrameworkRepoUrl,
-  saveConfig,
-  setConfigValue,
+  rewriteConfigForTests,
+  saveConfigForTests,
   unixUserModeRequiresUsername,
-  unsetConfigValue,
 } from './config-manager';
 import type { AgorConfig } from './types';
 
@@ -92,6 +93,22 @@ describe('getDefaultConfig', () => {
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
     expect(defaults.analytics?.enabled).toBe(false);
+  });
+});
+
+describe('resolveEffectiveConfig', () => {
+  it('materializes defaults and supported environment overrides without mutating input', () => {
+    const input: AgorConfig = { daemon: { host: 'yaml-host', port: 1234 } };
+    const resolved = resolveEffectiveConfig(input, {
+      PORT: '4321',
+      DAEMON_HOST: 'env-host',
+      AGOR_RBAC_ENABLED: 'true',
+      AGOR_UNIX_USER_MODE: 'delegated',
+    });
+    expect(resolved.daemon).toMatchObject({ host: 'env-host', port: 4321, mcpEnabled: true });
+    expect(resolved.execution).toMatchObject({ branch_rbac: true, unix_user_mode: 'delegated' });
+    expect(resolved.multi_tenancy?.mode).toBe('static');
+    expect(input).toEqual({ daemon: { host: 'yaml-host', port: 1234 } });
   });
 });
 
@@ -497,7 +514,7 @@ describe('loadConfig cache', () => {
     await writeConfigFile({ daemon: { port: 4000 } });
 
     const first = await loadConfig();
-    // Caller mutates the returned object (mimicking setConfigValue style).
+    // A caller mutates its private clone; the cached deployment input stays unchanged.
     first.daemon ??= {};
     first.daemon.port = 9999;
 
@@ -506,12 +523,12 @@ describe('loadConfig cache', () => {
     expect(second.daemon?.port).toBe(4000);
   });
 
-  it('saveConfig invalidates the cache so the next read returns the new value', async () => {
-    await saveConfig({ daemon: { port: 4000 } } as AgorConfig);
+  it('saveConfigForTests invalidates the cache so the next read returns the new value', async () => {
+    await saveConfigForTests({ daemon: { port: 4000 } } as AgorConfig);
     const before = await loadConfig();
     expect(before.daemon?.port).toBe(4000);
 
-    await saveConfig({ daemon: { port: 9999 } } as AgorConfig);
+    await saveConfigForTests({ daemon: { port: 9999 } } as AgorConfig);
     const after = await loadConfig();
     expect(after.daemon?.port).toBe(9999);
   });
@@ -801,7 +818,7 @@ describe('base URL resolution', () => {
   });
 });
 
-describe('saveConfig', () => {
+describe('saveConfigForTests', () => {
   let tempDir: string;
 
   beforeEach(async () => {
@@ -816,7 +833,7 @@ describe('saveConfig', () => {
 
   it('should save config to file', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const configPath = path.join(tempDir, '.agor', 'config.yaml');
     const content = await fs.readFile(configPath, 'utf-8');
@@ -827,7 +844,7 @@ describe('saveConfig', () => {
 
   it('should create .agor directory if it does not exist', async () => {
     const config = createMinimalConfig();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const agorDir = path.join(tempDir, '.agor');
     const stat = await fs.stat(agorDir);
@@ -838,15 +855,15 @@ describe('saveConfig', () => {
     const config1 = createConfigData({ daemon: { port: 3030 } });
     const config2 = createConfigData({ daemon: { port: 4040 } });
 
-    await saveConfig(config1);
-    await saveConfig(config2);
+    await saveConfigForTests(config1);
+    await saveConfigForTests(config2);
 
     const loaded = await loadConfig();
     expect(loaded.daemon?.port).toBe(4040);
   });
 
   it('should save empty config', async () => {
-    await saveConfig({});
+    await saveConfigForTests({});
 
     const loaded = await loadConfig();
     expect(loaded).toEqual({});
@@ -854,7 +871,7 @@ describe('saveConfig', () => {
 
   it('validates external launch login redirect before saving', async () => {
     await expect(
-      saveConfig({
+      saveConfigForTests({
         external_launch: {
           enabled: true,
           login_redirect_url: 'javascript:alert(1)',
@@ -865,7 +882,7 @@ describe('saveConfig', () => {
 
   it('should format YAML with proper indentation', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const configPath = path.join(tempDir, '.agor', 'config.yaml');
     const content = await fs.readFile(configPath, 'utf-8');
@@ -907,13 +924,32 @@ describe('initConfig', () => {
 
   it('should not overwrite existing config file', async () => {
     const customConfig = createConfigData();
-    await saveConfig(customConfig);
+    await saveConfigForTests(customConfig);
 
     await initConfig();
 
     const loaded = await loadConfig();
     expect(loaded).toMatchObject(customConfig);
     expect(loaded.daemon?.port).toBe(4000); // Custom value preserved
+  });
+
+  it('uses exclusive creation so concurrent initializers cannot race to overwrite', async () => {
+    const results = await Promise.allSettled([
+      createInitialConfig({ daemon: { port: 3001 } }),
+      createInitialConfig({ daemon: { port: 3002 } }),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect([3001, 3002]).toContain((await loadConfig()).daemon?.port);
+  });
+
+  it('preserves existing permission bits during an explicit atomic rewrite', async () => {
+    await createInitialConfig({ daemon: { port: 3001 } });
+    const configPath = getConfigPath();
+    await fs.chmod(configPath, 0o640);
+    await rewriteConfigForTests({ daemon: { port: 3002 } });
+    expect((await fs.stat(configPath)).mode & 0o777).toBe(0o640);
+    expect((await loadConfig()).daemon?.port).toBe(3002);
   });
 });
 
@@ -932,14 +968,14 @@ describe('getConfigValue', () => {
 
   it('should get nested config value', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const value = await getConfigValue('daemon.port');
     expect(value).toBe(4000);
   });
 
   it('should return default value when not set in user config', async () => {
-    await saveConfig({}); // Empty config
+    await saveConfigForTests({}); // Empty config
 
     const value = await getConfigValue('daemon.port');
     expect(value).toBe(3030); // Default value
@@ -950,7 +986,7 @@ describe('getConfigValue', () => {
       daemon: { port: 9999 }, // Custom port
       // Other sections use defaults
     };
-    await saveConfig(partialConfig);
+    await saveConfigForTests(partialConfig);
 
     const customValue = await getConfigValue('daemon.port');
     expect(customValue).toBe(9999);
@@ -958,14 +994,14 @@ describe('getConfigValue', () => {
   });
 
   it('should return undefined for non-existent keys', async () => {
-    await saveConfig({});
+    await saveConfigForTests({});
 
     const value = await getConfigValue('nonexistent.key');
     expect(value).toBeUndefined();
   });
 
   it('ignores retired settings from an existing config file', async () => {
-    await saveConfig({
+    await saveConfigForTests({
       daemon: { allowAnonymous: false, requireAuth: true },
       defaults: { board: 'legacy', agent: 'legacy-agent' },
       display: { tableStyle: 'ascii', colorOutput: false },
@@ -989,184 +1025,10 @@ describe('getConfigValue', () => {
     const config = createConfigData({
       ui: { port: 9090, host: 'localhost' },
     });
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const port = await getConfigValue('ui.port');
     expect(port).toBe(9090);
-  });
-});
-
-describe('setConfigValue', () => {
-  let tempDir: string;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-test-'));
-    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
-  });
-
-  it.each([
-    'daemon.allowAnonymous',
-    'daemon.requireAuth',
-    'display.tableStyle',
-    'display.colorOutput',
-    'display.shortIdLength',
-    'execution.managed_envs_minimum_role',
-    'branches.others_can_default',
-    'branches.others_fs_access_default',
-  ])('rejects newly setting retired key %s', async (key) => {
-    await expect(setConfigValue(key, 'legacy')).rejects.toThrow(/has been retired/);
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it('should set nested config value', async () => {
-    await saveConfig({});
-    await setConfigValue('daemon.port', 8888);
-
-    const value = await getConfigValue('daemon.port');
-    expect(value).toBe(8888);
-  });
-
-  it('rejects retired defaults and onboarding keys', async () => {
-    await expect(setConfigValue('onboarding.teammatePending', true)).rejects.toThrow(
-      /has been retired/
-    );
-    await expect(setConfigValue('defaults.board', 'custom-board')).rejects.toThrow(
-      /has been retired/
-    );
-  });
-
-  it('directs new framework repository writes to the canonical operator key', async () => {
-    await expect(
-      setConfigValue('onboarding.frameworkRepoUrl', 'https://example.test/framework.git')
-    ).rejects.toThrow(/set teammates\.framework_repo_url instead/);
-  });
-
-  it('should update existing value', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await setConfigValue('daemon.port', 7777);
-
-    const value = await getConfigValue('daemon.port');
-    expect(value).toBe(7777);
-  });
-
-  it('should handle boolean values', async () => {
-    await saveConfig({});
-    await setConfigValue('daemon.mcpEnabled', false);
-
-    const value = await getConfigValue('daemon.mcpEnabled');
-    expect(value).toBe(false);
-  });
-
-  it('should handle number values', async () => {
-    await saveConfig({});
-    await setConfigValue('ui.port', 9090);
-
-    const value = await getConfigValue('ui.port');
-    expect(value).toBe(9090);
-  });
-
-  it('should throw error for top-level keys', async () => {
-    await saveConfig({});
-
-    await expect(setConfigValue('topLevel', 'value')).rejects.toThrow(
-      'Top-level config keys not supported'
-    );
-  });
-
-  it('should throw error for deeply nested keys', async () => {
-    await saveConfig({});
-
-    await expect(setConfigValue('section.subsection.deep', 'value')).rejects.toThrow(
-      'Nested keys beyond one level not supported'
-    );
-  });
-
-  it('should preserve other sections when setting value', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await setConfigValue('daemon.port', 5555);
-
-    const loaded = await loadConfig();
-    expect(loaded.daemon?.port).toBe(5555);
-  });
-});
-
-describe('unsetConfigValue', () => {
-  let tempDir: string;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-test-'));
-    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it('should unset existing config value', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await unsetConfigValue('daemon.port');
-
-    const loaded = await loadConfig();
-    expect(loaded.daemon?.port).toBeUndefined();
-  });
-
-  it('should not error when unsetting non-existent key', async () => {
-    await saveConfig({});
-
-    await expect(unsetConfigValue('daemon.nonExistent')).resolves.not.toThrow();
-  });
-
-  it('should not error when unsetting from non-existent section', async () => {
-    await saveConfig({});
-
-    await expect(unsetConfigValue('onboarding.someUnknownKey')).resolves.not.toThrow();
-  });
-
-  it('should preserve other keys in same section', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await unsetConfigValue('daemon.port');
-
-    const loaded = await loadConfig();
-    expect(loaded.daemon?.port).toBeUndefined();
-    expect(loaded.daemon?.host).toBe('0.0.0.0'); // Preserved
-  });
-
-  it('should preserve other sections', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await unsetConfigValue('daemon.port');
-
-    const loaded = await loadConfig();
-    expect(loaded.ui).toEqual(config.ui);
-  });
-
-  it('should throw error for top-level keys', async () => {
-    await saveConfig({});
-
-    await expect(unsetConfigValue('topLevel')).rejects.toThrow(
-      'Top-level config keys not supported'
-    );
-  });
-
-  it('should handle unsetting deeply nested keys gracefully', async () => {
-    await saveConfig({});
-
-    // Should not throw, just no-op since only 2-level nesting is supported
-    await expect(unsetConfigValue('section.sub.deep')).resolves.not.toThrow();
   });
 });
 
@@ -1201,14 +1063,14 @@ describe('getDaemonUrl', () => {
 
   it('should construct URL from config', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://0.0.0.0:4000');
   });
 
   it('should use defaults when config is empty', async () => {
-    await saveConfig({});
+    await saveConfigForTests({});
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://localhost:3030');
@@ -1216,7 +1078,7 @@ describe('getDaemonUrl', () => {
 
   it('should prioritize PORT env var over config', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     process.env.PORT = '9999';
 
@@ -1225,7 +1087,7 @@ describe('getDaemonUrl', () => {
   });
 
   it('should parse PORT env var as number', async () => {
-    await saveConfig({});
+    await saveConfigForTests({});
     process.env.PORT = '8080';
 
     const url = await getDaemonUrl();
@@ -1234,7 +1096,7 @@ describe('getDaemonUrl', () => {
 
   it('should handle partial config with missing daemon section', async () => {
     const config: AgorConfig = {};
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://localhost:3030'); // Fallback to defaults
@@ -1245,7 +1107,7 @@ describe('getDaemonUrl', () => {
       daemon: { port: 5000 },
       // No host specified
     };
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://localhost:5000');
@@ -1256,7 +1118,7 @@ describe('getDaemonUrl', () => {
       daemon: { host: '192.168.1.1' },
       // No port specified
     };
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://192.168.1.1:3030');
@@ -1264,7 +1126,7 @@ describe('getDaemonUrl', () => {
 
   it('should prioritize DAEMON_URL env var over everything', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     process.env.DAEMON_URL = 'https://custom-daemon.example.com:8443';
 

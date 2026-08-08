@@ -555,10 +555,6 @@ async function ensureMasterSecret(config: AgorConfig): Promise<void> {
     case 'config':
       console.log('🔐 Using saved AGOR_MASTER_SECRET from config');
       break;
-    case 'generated':
-      console.log('🔐 Generated and saved AGOR_MASTER_SECRET for API key encryption');
-      console.log('   Secret stored in ~/.agor/config.yaml');
-      break;
   }
 }
 

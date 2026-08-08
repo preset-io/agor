@@ -622,12 +622,12 @@ When ongoing telemetry is enabled, Agor sends lightweight install and aggregate 
 
 Agor does **not** send prompts, messages, repo names or remotes, file paths, user emails or names, branch/session/task IDs, code, tool output, secrets, tokens, or raw custom model names.
 
-You can change the setting later:
+You can inspect the setting with `agor telemetry`. Change it in deployment-owned
+`config.yaml`, or use an environment override:
 
 ```bash
-agor telemetry on
-agor telemetry off
 agor telemetry
+AGOR_TELEMETRY=1 agor daemon start
 ```
 
 `DO_NOT_TRACK=1` and `AGOR_TELEMETRY=0` disable telemetry regardless of config.

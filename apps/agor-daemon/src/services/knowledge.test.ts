@@ -5,7 +5,7 @@ import {
   __resetConfigCacheForTests,
   type AgorConfig,
   loadConfig,
-  saveConfig,
+  saveConfigForTests,
 } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import {
@@ -86,7 +86,7 @@ async function withTempConfig<T>(config: AgorConfig, run: () => Promise<T>): Pro
   const spy = vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
   __resetConfigCacheForTests();
   try {
-    await saveConfig(config);
+    await saveConfigForTests(config);
     return await run();
   } finally {
     __resetConfigCacheForTests();

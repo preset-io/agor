@@ -1,8 +1,11 @@
 /**
  * Config Service
  *
- * Provides REST + WebSocket API for configuration management.
- * Wraps @agor/core/config functions for UI access.
+ * Narrow read-only runtime configuration resolver.
+ *
+ * This is not a config.yaml CRUD surface. It only resolves task-scoped
+ * user/tenant credentials for trusted executors; deployment configuration is
+ * operator-owned and immutable at runtime.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';

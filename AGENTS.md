@@ -498,11 +498,8 @@ Effort is configured per-session via `model_config.effort` and can be changed at
 Agor uses `~/.agor/config.yaml` for persistent configuration.
 
 ```bash
-# Set daemon port
-pnpm agor config set daemon.port 4000
-
-# Set UI port
-pnpm agor config set ui.port 5174
+# Edit ~/.agor/config.yaml explicitly, then inspect the resolved result
+pnpm agor config --yaml
 ```
 
 **Environment Variables:**

@@ -8,13 +8,11 @@ echo "🚀 Starting Agor production environment..."
 mkdir -p /home/agor/.agor
 sudo -n chown -R agor:agor /home/agor/.agor
 
-# Initialize database and configure daemon settings
+# Initialize database and create config only when absent
 # --skip-if-exists: Idempotent, won't overwrite existing database
-# --set-config: Always update daemon config (for Docker networking)
 echo "📦 Initializing Agor environment..."
 agor init \
   --skip-if-exists \
-  --set-config \
   --daemon-port "${DAEMON_PORT:-3030}" \
   --daemon-host "${DAEMON_HOST:-0.0.0.0}"
 

@@ -31,6 +31,10 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 ## Unreleased
 
+### Breaking
+
+- **`config.yaml` is immutable after initialization** — daemon startup, telemetry, Docker entrypoints, upgrades, APIs, MCP, and UI flows no longer rewrite the deployment-owned YAML file. Configure stable JWT/master secrets with environment variables or YAML before startup. The mutating `agor config set/get/unset` commands are removed; `agor config --yaml` materializes the effective read-only configuration. Existing Docker environment overrides are resolved in memory instead of being written to YAML.
+
 ### Features
 
 - **Version-aligned agentic tool installs** — keeps the base npm install lean and adds explicit `agor install <tool>` / `agor init` flows for isolated Claude, Codex, Copilot, Gemini, OpenCode, and Cursor integrations. ([#2201](https://github.com/preset-io/agor/pull/2201))

@@ -22,7 +22,6 @@ import {
   configureOpenSourceTelemetryLogger,
   loadOpenSourceTelemetryAgorVersion,
   openSourceTelemetryLogger,
-  pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
 import { patchConsole } from '@agor/core/utils/logger';
 import { UI_MOUNT_PATH } from '@agor/core/utils/url';
@@ -34,10 +33,10 @@ import {
   loadConfig,
   loadConfigFromFile,
   renderGitConfigParametersForLog,
+  resolveEffectiveConfig,
   resolveGitConfigParameters,
   resolveMultiTenancyConfig,
   resolveSecurity,
-  saveConfig,
 } from '@agor/core/config';
 import { generateId, getDatabaseUrl } from '@agor/core/db';
 import {
@@ -163,6 +162,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
 
+  // Deployment environment overrides are resolved in memory. Container and
+  // Kubernetes entrypoints must never materialize them back into config.yaml.
+  config = resolveEffectiveConfig(config);
+
   const multiTenancy = resolveMultiTenancyConfig(config);
   console.log(
     `🏢 Multi-tenancy: mode=${multiTenancy.mode} tenant=${multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : 'auth-resolved'}`
@@ -189,10 +192,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // plugins are optional dynamic imports and must never prevent daemon startup.
   await configureAnalyticsLogger(config);
   const envTelemetryConfig = ensureOpenSourceTelemetryEnvEnabledConfig(config);
-  if (envTelemetryConfig.changed) {
-    config = envTelemetryConfig.config;
-    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
-  }
+  if (envTelemetryConfig.changed) config = envTelemetryConfig.config;
   configureOpenSourceTelemetryLogger(config);
   if (config.telemetry?.enabled === undefined) {
     console.warn(
@@ -250,7 +250,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
   const DAEMON_PORT = envPort ?? config.daemon?.port ?? 3030;
-  const DAEMON_HOST = config.daemon?.host ?? 'localhost';
+  const DAEMON_HOST = process.env.DAEMON_HOST ?? config.daemon?.host ?? 'localhost';
 
   const envUiPort = process.env.UI_PORT ? Number.parseInt(process.env.UI_PORT, 10) : undefined;
   const UI_PORT = envUiPort || config.ui?.port || 5173;
@@ -563,11 +563,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     case 'config':
       console.log(`🔑 Loaded JWT secret from config (length=${jwtSecret.length})`);
       break;
-    case 'generated':
-      console.log(
-        `🔑 Generated and saved persistent JWT secret to config (length=${jwtSecret.length})`
-      );
-      break;
   }
 
   const socketIOConfig = createSocketIOConfig(app, {
@@ -653,17 +648,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       });
     }
     startOpenSourceTelemetryUsageSummaryInterval(db, { tenantId: multiTenancy.static_tenant_id });
-    config.telemetry = {
-      ...config.telemetry,
-      last_reported_version: TELEMETRY_AGOR_VERSION,
-      ...(daemonActive.shouldEmit ? { last_daemon_active_day: daemonActive.day } : {}),
-    };
-    saveConfig(pruneDefaultOpenSourceTelemetryDestination(config)).catch((error) => {
-      console.warn(
-        '[telemetry] failed to persist daemon telemetry state:',
-        error instanceof Error ? error.message : String(error)
-      );
-    });
   }
 
   // --------------------------------------------------------------------------

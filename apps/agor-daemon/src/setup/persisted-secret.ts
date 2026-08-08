@@ -7,8 +7,7 @@
  *
  *   1. Environment variable present     → use it; no FS touch
  *   2. Persisted value (already loaded) → use it
- *   3. config.yaml writable             → generate + persist
- *   4. None of the above                → fail-fast with concrete remediation
+ *   3. None of the above                → fail-fast with concrete remediation
  *
  * Failing-fast matters: rotating these secrets on every restart is silently
  * catastrophic (invalidates every issued token / corrupts every stored
@@ -21,8 +20,6 @@
  * See context/explorations/daemon-fs-decoupling.md §1.5 (H3) for the
  * rationale.
  */
-
-import { setConfigValue } from '@agor/core/config';
 
 export interface PersistedSecretSpec {
   /** Human-readable name for error messages (e.g. "JWT secret"). */
@@ -41,7 +38,7 @@ export interface PersistedSecretResult {
   /** The resolved secret value. */
   value: string;
   /** Where the value came from. Callers may use this to shape their logs. */
-  source: 'env' | 'config' | 'generated';
+  source: 'env' | 'config';
 }
 
 /**
@@ -62,21 +59,14 @@ export async function resolvePersistedSecret(
   if (spec.existing) {
     return { value: spec.existing, source: 'config' };
   }
-  const generated = spec.generate();
-  try {
-    await setConfigValue(spec.configKey, generated);
-  } catch (error) {
-    throw new Error(
-      [
-        `${spec.name} is required and config.yaml is not writable.`,
-        '',
-        `Set the ${spec.envVar} environment variable to a hex-encoded`,
-        '32-byte value (e.g. `openssl rand -hex 32`), or make',
-        '~/.agor/config.yaml writable so the daemon can persist one.',
-        '',
-        `Underlying error: ${error instanceof Error ? error.message : String(error)}`,
-      ].join('\n')
-    );
-  }
-  return { value: generated, source: 'generated' };
+  throw new Error(
+    [
+      `${spec.name} is required, but neither ${spec.envVar} nor ${spec.configKey} is configured.`,
+      '',
+      `Set ${spec.envVar} to a stable hex-encoded 32-byte value (for example,`,
+      '`openssl rand -hex 32`) using your deployment secret manager, or add the',
+      `${spec.configKey} value to config.yaml through your config-management workflow, then restart.`,
+      'The daemon will not generate or rewrite config.yaml at runtime.',
+    ].join('\n')
+  );
 }

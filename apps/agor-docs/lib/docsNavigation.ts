@@ -12,6 +12,7 @@ export const guideNavigation: Record<string, NavigationItem> = {
   'first-teammate': 'Your First AI Teammate',
   'getting-started': 'Getting Started',
   'extended-install': 'Extended Installation',
+  'config-yaml': 'Operator Configuration',
   '--- Features': {
     type: 'separator',
     title: 'Features',

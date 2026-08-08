@@ -5,11 +5,18 @@
  * Safe to run multiple times (idempotent).
  */
 
+import { randomBytes } from 'node:crypto';
 import { access, constants, mkdir, readdir, rm } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, saveConfig, setConfigValue } from '@agor/core/config';
+import {
+  type AgorConfig,
+  createInitialConfig,
+  getConfigPath,
+  getDefaultConfig,
+  loadConfig,
+} from '@agor/core/config';
 import {
   createDatabase,
   createUser,
@@ -38,6 +45,7 @@ import {
 } from '../lib/agentic-tool-integrations.js';
 
 export default class Init extends Command {
+  private initialDaemonConfig: NonNullable<AgorConfig['daemon']> = {};
   static description = 'Initialize Agor environment (creates ~/.agor/ and database)';
 
   static examples = [
@@ -87,6 +95,18 @@ export default class Init extends Command {
     } catch {
       return false;
     }
+  }
+
+  /** Init owns config creation until this command returns; no other flow may use this helper. */
+  private async persistDuringInitialCreation(config: AgorConfig): Promise<void> {
+    config.daemon = {
+      ...config.daemon,
+      ...this.initialDaemonConfig,
+      jwtSecret: config.daemon?.jwtSecret ?? randomBytes(32).toString('hex'),
+      masterSecret: config.daemon?.masterSecret ?? randomBytes(32).toString('hex'),
+    };
+    if (await this.pathExists(getConfigPath())) return;
+    await createInitialConfig(config);
   }
 
   private expandHome(path: string): string {
@@ -172,6 +192,15 @@ export default class Init extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Init);
+    this.initialDaemonConfig = {
+      host: flags['daemon-host'] ?? process.env.DAEMON_HOST ?? 'localhost',
+      ...((flags['daemon-port'] ?? process.env.DAEMON_PORT)
+        ? { port: Number(flags['daemon-port'] ?? process.env.DAEMON_PORT) }
+        : {}),
+      ...((flags['instance-label'] ?? process.env.INSTANCE_LABEL)
+        ? { instanceLabel: flags['instance-label'] ?? process.env.INSTANCE_LABEL }
+        : {}),
+    };
 
     this.log('✨ Initializing Agor...\n');
 
@@ -179,13 +208,18 @@ export default class Init extends Command {
     const baseDir = flags.local ? join(process.cwd(), '.agor') : join(homedir(), '.agor');
 
     // If --skip-if-exists and directory already exists, handle config and exit
-    if (flags['skip-if-exists'] && (await this.pathExists(baseDir))) {
+    if (
+      flags['skip-if-exists'] &&
+      (await this.pathExists(join(baseDir, 'agor.db'))) &&
+      (await this.pathExists(join(baseDir, 'config.yaml')))
+    ) {
       this.log(chalk.green('✓ Agor already initialized at: ') + chalk.cyan(baseDir));
 
       // If --set-config is enabled, update daemon config values (for Docker/deployment)
       if (flags['set-config']) {
-        await this.setDaemonConfig(flags);
-        this.log(chalk.green('✓ Daemon configuration updated'));
+        this.error(
+          '--set-config no longer rewrites an existing config.yaml. Edit the operator-owned file (or its ConfigMap/secret source) explicitly and restart Agor.'
+        );
       }
 
       await this.warnExistingInstallTelemetryUnconfigured();
@@ -404,7 +438,12 @@ export default class Init extends Command {
     if (!skipPrompts) {
       await this.promptTelemetrySetup();
     } else if (process.env.AGOR_TELEMETRY === undefined) {
-      await this.saveTelemetryPreference(false, false);
+      // Stamp a stable ID now so later opt-in never requires a config rewrite.
+      // Explicit hard opt-out intentionally omits it.
+      await this.saveTelemetryPreference(false, true);
+    }
+    if (!(await this.pathExists(getConfigPath()))) {
+      await this.persistDuringInitialCreation(getDefaultConfig());
     }
 
     // Success summary
@@ -552,7 +591,7 @@ export default class Init extends Command {
     if (instanceId) {
       config.telemetry.instance_id = instanceId;
     }
-    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
+    await this.persistDuringInitialCreation(pruneDefaultOpenSourceTelemetryDestination(config));
     return instanceId ?? null;
   }
 
@@ -635,13 +674,6 @@ export default class Init extends Command {
       },
     });
     await logger.flush();
-
-    const saved = await loadConfig();
-    saved.telemetry = {
-      ...saved.telemetry,
-      install_ping_sent_at: new Date().toISOString(),
-    };
-    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(saved));
   }
 
   /**
@@ -725,33 +757,5 @@ export default class Init extends Command {
     });
 
     this.log(`${chalk.green('   ✓')} Admin user created (${chalk.gray(email)})`);
-  }
-
-  /**
-   * Set daemon configuration from flags or environment variables
-   */
-  private async setDaemonConfig(flags: {
-    'daemon-port'?: number;
-    'daemon-host'?: string;
-    'instance-label'?: string;
-  }): Promise<void> {
-    // Get daemon port from flag or environment variable
-    const daemonPort = flags['daemon-port'] || process.env.DAEMON_PORT;
-    if (daemonPort) {
-      await setConfigValue('daemon.port', Number(daemonPort));
-      this.log(`${chalk.green('   ✓')} Set daemon.port = ${daemonPort}`);
-    }
-
-    // Get daemon host from flag or default
-    const daemonHost = flags['daemon-host'] || 'localhost';
-    await setConfigValue('daemon.host', daemonHost);
-    this.log(`${chalk.green('   ✓')} Set daemon.host = ${daemonHost}`);
-
-    // Get instance label from flag or environment variable
-    const instanceLabel = flags['instance-label'] || process.env.INSTANCE_LABEL;
-    if (instanceLabel) {
-      await setConfigValue('daemon.instanceLabel', instanceLabel);
-      this.log(`${chalk.green('   ✓')} Set daemon.instanceLabel = ${instanceLabel}`);
-    }
   }
 }
