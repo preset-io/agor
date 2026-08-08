@@ -477,3 +477,84 @@ describe('setupQuery - canUseTool registration', () => {
     expect(callArgs.options.canUseTool).toBeUndefined();
   });
 });
+
+/**
+ * `bypassPermissions` removes the approval channel, which leaves an `ask` tool
+ * unanswerable. It resolves to a refusal rather than to `allow`, so the mode is
+ * "stop asking me" for everything except the tools an operator explicitly asked
+ * to be prompted about.
+ */
+describe('setupQuery - ask under bypassPermissions', () => {
+  const GATED_SERVER = 'files';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(Claude.query).mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+    } as any);
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      {
+        server: {
+          mcp_server_id: 'files-server',
+          name: GATED_SERVER,
+          transport: 'stdio',
+          command: 'noop',
+          scope: 'global',
+          source: 'user',
+          enabled: true,
+          tool_permissions: { write_file: 'ask', read_file: 'allow' },
+        },
+        source: 'global',
+      },
+    ] as any);
+  });
+
+  function createDepsWithGatedServer(): QuerySetupDeps {
+    return {
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'test-session' as SessionID,
+          branch_id: 'test-branch' as BranchID,
+          mcp_token: 'token',
+        }),
+      } as any,
+      branchesRepo: {
+        findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
+      } as any,
+      messagesRepo: {} as any,
+      sessionMCPRepo: {} as any,
+      mcpServerRepo: {} as any,
+      permissionService: {} as any,
+      tasksService: {} as any,
+      messagesService: {} as any,
+      sessionsService: {} as any,
+      permissionLocks: new Map(),
+    };
+  }
+
+  it('hard-denies an "ask" tool when there is nowhere to ask', async () => {
+    await setupQuery('test-session' as SessionID, 'test prompt', createDepsWithGatedServer(), {
+      taskId: 'test-task' as TaskID,
+      permissionMode: 'bypassPermissions',
+    });
+
+    const options = vi.mocked(Claude.query).mock.calls[0][0].options;
+    // `disallowedTools` is mode-independent, so this holds even though bypass
+    // skips canUseTool and could skip hooks.
+    expect(options.disallowedTools).toContain(`mcp__${GATED_SERVER}__write_file`);
+    // An "allow" tool is untouched: the mode is not a blanket refusal.
+    expect(options.disallowedTools).not.toContain(`mcp__${GATED_SERVER}__read_file`);
+  });
+
+  it('leaves an "ask" tool promptable when an approval channel exists', async () => {
+    await setupQuery('test-session' as SessionID, 'test prompt', createDepsWithGatedServer(), {
+      taskId: 'test-task' as TaskID,
+      permissionMode: 'default',
+    });
+
+    const options = vi.mocked(Claude.query).mock.calls[0][0].options;
+    expect(options.disallowedTools).not.toContain(`mcp__${GATED_SERVER}__write_file`);
+    expect(options.canUseTool).toBeTypeOf('function');
+  });
+});

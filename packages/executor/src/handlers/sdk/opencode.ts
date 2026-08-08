@@ -32,7 +32,10 @@ import { PermissionService } from '../../permissions/permission-service.js';
 import { enrichContentBlocks } from '../../sdk-handlers/base/diff-enrichment.js';
 import { EMPTY_MCP_TOOL_PERMISSION_INDEX } from '../../sdk-handlers/base/mcp-tool-permissions.js';
 import { createCanUseToolCallback } from '../../sdk-handlers/base/permission-hooks.js';
-import { reportWithheldMcpServer } from '../../sdk-handlers/base/withheld-mcp-report.js';
+import {
+  collectWithheldMcpServers,
+  reportWithheldMcpServers,
+} from '../../sdk-handlers/base/withheld-mcp-report.js';
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks, settleTaskFailure } from './base-executor.js';
@@ -79,22 +82,29 @@ export async function executeOpenCodeTask(params: {
     const assistantMessageId = generateId() as MessageID;
     const permissionLocks = new Map<SessionID, Promise<void>>();
     const tool = new OpenCodeTool({
-      resolveMcpServers: (targetSessionId) =>
-        getMcpServersForSession(
+      resolveMcpServers: async (targetSessionId) => {
+        const reporter = collectWithheldMcpServers();
+        const servers = await getMcpServersForSession(
           targetSessionId,
           {
             sessionMCPRepo: repos.sessionMCP,
             mcpServerRepo: repos.mcpServers,
             mcpOAuthAuthHeadersRepo: repos.mcpOAuthAuthHeaders,
             forUserId: session.created_by,
-            onServerWithheld: (withheldServer, reason) =>
-              void reportWithheldMcpServer(client, targetSessionId, withheldServer.name, reason),
+            onServerWithheld: reporter.onServerWithheld,
           },
           // OpenCode's invocation config carries no per-tool filter, so a server
           // with gated tools cannot be honoured and is withheld whole. This is
           // the only enforcement point on this path.
           { toolFiltering: 'none' }
-        ),
+        );
+        await reportWithheldMcpServers(repos.messages, {
+          sessionId: targetSessionId,
+          taskId,
+          withheld: reporter.withheld,
+        });
+        return servers;
+      },
       getDaemonUrl,
       createPermissionCallback: (targetSessionId, targetTaskId) =>
         createCanUseToolCallback(targetSessionId, targetTaskId, {

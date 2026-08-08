@@ -1,38 +1,70 @@
 import { generateId } from '@agor/core';
-import type { MessageID, SessionID } from '@agor/core/types';
+import type { MCPServer, Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import type { AgorClient } from '../../services/feathers-client.js';
+import type { MessagesRepository } from '../../db/feathers-repositories.js';
+
+/** A server the admission gate refused to hand to a handler. */
+export interface WithheldMcpServer {
+  name: string;
+  reason: string;
+}
 
 /**
- * Put a withheld MCP server where an operator will see it.
+ * Collect withheld servers during scoping so they can be reported afterwards.
+ *
+ * `onServerWithheld` fires synchronously inside resolution, which is the wrong
+ * place to write a message: the index has to be read and used without another
+ * writer landing in between. Buffering keeps the callback synchronous and
+ * defers the writes to a single awaited point.
+ */
+export function collectWithheldMcpServers(): {
+  withheld: WithheldMcpServer[];
+  onServerWithheld: (server: MCPServer, reason: string) => void;
+} {
+  const withheld: WithheldMcpServer[] = [];
+  return {
+    withheld,
+    onServerWithheld: (server, reason) => {
+      withheld.push({ name: server.name, reason });
+    },
+  };
+}
+
+/**
+ * Put withheld MCP servers where an operator will see them.
  *
  * `tool_permissions` has no UI, so an executor log is the only trace that a
  * server was dropped — and from inside the session, a server that silently
  * disappears is indistinguishable from one that is broken.
+ *
+ * Written one at a time so each notice reads the index the previous one
+ * created, and awaited before the turn starts so they stay clear of the
+ * messages the turn itself writes.
  */
-export async function reportWithheldMcpServer(
-  client: AgorClient,
-  sessionId: SessionID,
-  serverName: string,
-  reason: string
+export async function reportWithheldMcpServers(
+  messagesRepo: MessagesRepository,
+  args: {
+    sessionId: SessionID;
+    taskId: TaskID;
+    withheld: readonly WithheldMcpServer[];
+  }
 ): Promise<void> {
-  try {
-    const existing = await client.service('messages').find({
-      query: { session_id: sessionId, $sort: { index: 1 } },
-    });
-    const messages = Array.isArray(existing) ? existing : existing.data;
-
-    await client.service('messages').create({
-      message_id: generateId() as MessageID,
-      session_id: sessionId,
-      type: 'system' as const,
-      role: MessageRole.SYSTEM,
-      index: messages.length,
-      timestamp: new Date().toISOString(),
-      content_preview: `MCP server "${serverName}" withheld by tool permissions`,
-      content: `MCP server "${serverName}" was withheld from this session: ${reason}`,
-    });
-  } catch (error) {
-    console.warn(`[MCP] Could not report withheld server "${serverName}":`, error);
+  for (const { name, reason } of args.withheld) {
+    try {
+      const message: Message = {
+        message_id: generateId() as MessageID,
+        session_id: args.sessionId,
+        task_id: args.taskId,
+        type: 'system',
+        role: MessageRole.SYSTEM,
+        index: await messagesRepo.countBySessionId(args.sessionId),
+        timestamp: new Date().toISOString(),
+        content_preview: `MCP server "${name}" withheld by tool permissions`,
+        content: `MCP server "${name}" was withheld from this session: ${reason}`,
+      };
+      await messagesRepo.create(message);
+    } catch (error) {
+      console.warn(`[MCP] Could not report withheld server "${name}":`, error);
+    }
   }
 }

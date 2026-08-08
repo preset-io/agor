@@ -11,10 +11,22 @@
 import type { MCPServer, ToolPermission } from '../types';
 
 /**
- * Permissions a handler with no interactive approval flow must refuse.
+ * Permissions that cannot be honoured without somewhere to put a prompt.
  *
- * Codex and Gemini run headless — there is no channel to surface a prompt on —
- * so `ask` degrades to a refusal there rather than silently becoming `allow`.
+ * `ask` is the only member that varies: it means "refuse unless a human can be
+ * asked", so wherever no one can be asked it collapses onto `deny`. Three
+ * distinct situations reach that same conclusion, and callers use this list for
+ * all three:
+ *
+ * - the handler is headless (Codex, Gemini — no prompt channel exists at all);
+ * - this turn has no approval channel, even on a handler that usually has one
+ *   (Claude under `bypassPermissions`, or a turn with no task to attribute a
+ *   request to);
+ * - the handler cannot filter tools, so the server is withheld whole rather
+ *   than attached with an unenforceable gate.
+ *
+ * In every case the alternative is silently becoming `allow`, which is the
+ * failure this control exists to prevent.
  */
 export const PERMISSIONS_BLOCKED_WITHOUT_PROMPT: readonly ToolPermission[] = ['deny', 'ask'];
 
