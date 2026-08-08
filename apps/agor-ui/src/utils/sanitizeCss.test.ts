@@ -46,6 +46,28 @@ describe('sanitizeBoardCss', () => {
     expect(out).toContain('/* blocked */');
   });
 
+  it('blocks tokens hidden behind CSS comments', () => {
+    // The browser treats the comment as a separator; our de-obfuscation strips
+    // it before matching so the blocklist still catches the reassembled token.
+    const out = sanitizeBoardCss('background: url/**/(http://evil/x);', SCOPE);
+    // No live url() token survives (the leftover URL text is inert, not fetched).
+    expect(out).not.toMatch(/url\s*\(/i);
+    expect(out).toContain('/* blocked */');
+  });
+
+  it('blocks tokens hidden behind CSS escapes', () => {
+    // "\75 rl(" is the CSS escape for "url(". Stripping backslashes prevents
+    // the parser from reassembling it into a live url() token (the leftover
+    // "rl(" is inert — the browser loads nothing from it).
+    const out = sanitizeBoardCss('background: \\75 rl(http://evil/x);', SCOPE);
+    expect(out).not.toMatch(/url\s*\(/i);
+    expect(out).not.toContain('\\');
+  });
+
+  it('reports comment-obfuscated blocked tokens via validateBoardCss', () => {
+    expect(validateBoardCss('background: @imp/**/ort url(x)').length).toBeGreaterThan(0);
+  });
+
   it('does not throw on malformed braces', () => {
     expect(() => sanitizeBoardCss('color: red } .evil { color: blue', SCOPE)).not.toThrow();
     expect(typeof sanitizeBoardCss('} } {{', SCOPE)).toBe('string');

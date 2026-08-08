@@ -27,6 +27,23 @@ const DANGEROUS_PATTERNS = [
 ];
 
 /**
+ * Neutralize obfuscation the browser's CSS parser would silently normalize
+ * away, so the lexical blocklist below can't be evaded by hiding a blocked
+ * token behind comments or escapes:
+ *
+ *   - `url/*x*​/(…)`      → comment acts as a separator to the parser
+ *   - `\75 rl(…)`         → CSS escape for `u`, reassembled by the parser
+ *
+ * Board backgrounds never legitimately need CSS comments or backslash escapes,
+ * so stripping both is safe and makes the subsequent pattern checks robust.
+ */
+function deobfuscateCss(css: string): string {
+  return css
+    .replace(/\/\*[\s\S]*?\*\//g, '') // strip CSS comments (incl. unterminated-safe)
+    .replace(/\\/g, ''); // strip CSS escape backslashes
+}
+
+/**
  * Check if a CSS string contains dangerous patterns.
  */
 function containsDangerousPattern(css: string): string | null {
@@ -79,8 +96,9 @@ function scopeSelectorList(selectorList: string, scopeSelector: string): string 
 export function sanitizeBoardCss(css: string | undefined, scopeSelector: string): string {
   if (!css?.trim()) return '';
 
-  // Check for dangerous patterns and strip them
-  let sanitized = css;
+  // Normalize away comment/escape obfuscation FIRST so blocked tokens can't be
+  // hidden from the pattern checks below.
+  let sanitized = deobfuscateCss(css);
   for (const pattern of DANGEROUS_PATTERNS) {
     pattern.lastIndex = 0;
     sanitized = sanitized.replace(pattern, '/* blocked */');
@@ -171,11 +189,14 @@ export function buildScopedBoardCss(params: {
 export function validateBoardCss(css: string | undefined): string[] {
   if (!css?.trim()) return [];
 
+  // Scan the de-obfuscated form so comment/escape-hidden tokens are still
+  // reported (matching what sanitizeBoardCss will strip).
+  const scanned = deobfuscateCss(css);
   const issues: string[] = [];
 
   for (const pattern of DANGEROUS_PATTERNS) {
     pattern.lastIndex = 0;
-    if (pattern.test(css)) {
+    if (pattern.test(scanned)) {
       const name = pattern.source.replace(/\\s\*\\\(/g, '()').replace(/\\s\*:/g, ':');
       issues.push(`Blocked pattern: ${name}`);
     }
