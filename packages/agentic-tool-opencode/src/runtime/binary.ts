@@ -94,7 +94,7 @@ export async function resolvePackagedOpenCodeBinary(): Promise<OpenCodeCommand> 
       return command;
     } catch (error) {
       throw new Error(
-        `OpenCode support is not usable for Agor ${agorVersion}: ${error instanceof Error ? error.message : String(error)}. Run: agor install opencode`
+        `OpenCode support is not usable for Agor ${agorVersion}: ${error instanceof Error ? error.message : String(error)}. Run: agor install`
       );
     }
   }

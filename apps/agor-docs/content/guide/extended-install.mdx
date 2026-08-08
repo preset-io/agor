@@ -109,6 +109,10 @@ removes current-version packages absent from `agentic_tools.installed`, deletes 
 directory, and cleans interrupted staging/backup directories. There is currently no compatibility
 range or keep-old mode: every managed wrapper must exactly match `agor-live`.
 
+Upgraded configurations that do not yet contain `agentic_tools.installed` fail safely. Add the tools
+the deployment supports—or an explicit `installed: []` when it supports none—before running
+`agor install`; absence is never interpreted as permission to delete every existing package.
+
 Microsoft Teams gateway support remains optional and separate from agentic tools:
 
 ```bash

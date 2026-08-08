@@ -1,6 +1,7 @@
 import {
   type InstallableAgenticTool,
   resolveManagedAgenticToolIntegration,
+  resolveManagedAgenticToolVersion,
 } from '@agor/core/agentic-integrations';
 import { loadConfig } from '@agor/core/config';
 import { Command } from '@oclif/core';
@@ -23,9 +24,14 @@ export default class Install extends Command {
 
   async run(): Promise<void> {
     await this.parse(Install);
-    const agorVersion = process.env.AGOR_INTEGRATION_VERSION ?? this.config.version;
+    const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
     const config = await loadConfig();
-    const configured = config.agentic_tools?.installed ?? [];
+    const configured = config.agentic_tools?.installed;
+    if (!configured) {
+      this.error(
+        'config.yaml does not declare agentic_tools.installed. Add the tools this deployment supports (or an explicit empty list), then rerun `agor install`. No packages were changed.'
+      );
+    }
 
     this.log(chalk.bold(`Agentic tool package alignment for Agor ${agorVersion}`));
     this.log(

@@ -1,4 +1,7 @@
-import { inspectManagedAgenticToolAlignment } from '@agor/core/agentic-integrations';
+import {
+  inspectManagedAgenticToolAlignment,
+  resolveManagedAgenticToolVersion,
+} from '@agor/core/agentic-integrations';
 import type { AgorConfig } from '@agor/core/config';
 
 /**
@@ -12,14 +15,19 @@ export async function assertConfiguredAgenticToolsAligned(
 ): Promise<void> {
   if (env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return;
 
-  const agorVersion = env.AGOR_VERSION;
+  const agorVersion = resolveManagedAgenticToolVersion(undefined, env);
   if (!agorVersion) {
     throw new Error(
       'Managed agentic tools are enabled, but AGOR_VERSION is unavailable. Reinstall the agor-live package.'
     );
   }
 
-  const configured = config.agentic_tools?.installed ?? [];
+  const configured = config.agentic_tools?.installed;
+  if (!configured) {
+    throw new Error(
+      'Managed agentic tools require an explicit config.yaml agentic_tools.installed list. Add the supported tools (or an explicit empty list), run `agor install`, and restart.'
+    );
+  }
   const state = await inspectManagedAgenticToolAlignment(configured, agorVersion);
   const invalid = state.filter((item) => item.status !== 'ready');
   if (invalid.length === 0) return;

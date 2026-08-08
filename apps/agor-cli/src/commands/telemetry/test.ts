@@ -23,9 +23,12 @@ export default class TelemetryTest extends Command {
 
     const config = await loadConfig();
     if (config.telemetry?.enabled !== true) {
-      this.error('Community telemetry is disabled. Run `agor telemetry on` first.', {
-        exit: 2,
-      });
+      this.error(
+        'Community telemetry is disabled. Set AGOR_TELEMETRY=1 or telemetry.enabled: true and restart first.',
+        {
+          exit: 2,
+        }
+      );
     }
 
     if (!config.telemetry.instance_id) {

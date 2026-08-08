@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/agentic-integrations', () => ({
   inspectManagedAgenticToolAlignment: vi.fn(),
+  resolveManagedAgenticToolVersion: (_fallback: string | undefined, env: NodeJS.ProcessEnv) =>
+    env.AGOR_VERSION ?? env.AGOR_INTEGRATION_VERSION,
 }));
 
 import { inspectManagedAgenticToolAlignment } from '@agor/core/agentic-integrations';
@@ -46,5 +48,15 @@ describe('assertConfiguredAgenticToolsAligned', () => {
         { AGOR_MANAGED_AGENTIC_TOOLS: '1', AGOR_VERSION: '0.24.1' }
       )
     ).rejects.toThrow(/Codex: missing or invalid[\s\S]*agor install/);
+  });
+
+  it('requires an explicit configured list for upgraded managed installs', async () => {
+    await expect(
+      assertConfiguredAgenticToolsAligned(
+        {},
+        { AGOR_MANAGED_AGENTIC_TOOLS: '1', AGOR_VERSION: '0.24.1' }
+      )
+    ).rejects.toThrow(/explicit config\.yaml agentic_tools\.installed list/);
+    expect(inspect).not.toHaveBeenCalled();
   });
 });

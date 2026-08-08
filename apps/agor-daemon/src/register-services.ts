@@ -10,6 +10,7 @@ import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon
 
 import {
   type AgorConfig,
+  isDeploymentAgenticToolAvailable,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
   resolveExecutionSecurityMode,
@@ -227,14 +228,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Core services: sessions, tasks, messages
   // ============================================================================
 
-  const deploymentAgenticTools =
-    process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1'
-      ? new Set(config.agentic_tools?.installed ?? [])
-      : null;
-  const sessionsService = createSessionsService(
-    db,
-    app,
-    deploymentAgenticTools
+  const sessionsService = createSessionsService(db, app, (tool) =>
+    isDeploymentAgenticToolAvailable(tool, config)
   ) as unknown as SessionsServiceImpl;
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],

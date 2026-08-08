@@ -238,10 +238,10 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private branchRepo: BranchRepository;
   private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
-  private deploymentTools: ReadonlySet<AgenticToolName> | null;
+  private deploymentAvailable: (tool: AgenticToolName) => boolean;
 
   private assertDeploymentToolConfigured(tool: AgenticToolName): void {
-    if (this.deploymentTools === null || this.deploymentTools.has(tool)) return;
+    if (this.deploymentAvailable(tool)) return;
     throw new BadRequest(
       `${tool} is not installed for this deployment. An operator must add it to config.yaml agentic_tools.installed and run agor install.`
     );
@@ -280,7 +280,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   constructor(
     db: TenantScopeAwareDatabase,
     app: Application,
-    deploymentTools: ReadonlySet<AgenticToolName> | null = null
+    deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
   ) {
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
@@ -295,7 +295,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     this.sessionRepo = sessionRepo;
     this.db = db;
-    this.deploymentTools = deploymentTools;
+    this.deploymentAvailable = deploymentAvailable;
     this.app = app;
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
     this.sessionRelationshipRepo = new SessionRelationshipRepository(db);
@@ -1580,7 +1580,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 export function createSessionsService(
   db: TenantScopeAwareDatabase,
   app: Application,
-  deploymentTools: ReadonlySet<AgenticToolName> | null = null
+  deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
 ): SessionsService {
-  return new SessionsService(db, app, deploymentTools);
+  return new SessionsService(db, app, deploymentAvailable);
 }

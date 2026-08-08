@@ -42,12 +42,23 @@ import {
   type InstallableAgenticTool,
   installManagedIntegration,
   normalizeAgenticToolName,
+  resolveManagedAgenticToolVersion,
 } from '../lib/agentic-tool-integrations.js';
+
+export function isFreshInitState(state: {
+  baseExists: boolean;
+  databaseExists: boolean;
+  reposExist: boolean;
+  branchesExist: boolean;
+}): boolean {
+  return !state.baseExists || (!state.databaseExists && !state.reposExist && !state.branchesExist);
+}
 
 export default class Init extends Command {
   private initialDaemonConfig: NonNullable<AgorConfig['daemon']> = {};
   private initialConfig: AgorConfig = getDefaultConfig();
   private requestedAgenticTools: InstallableAgenticTool[] | undefined;
+  private nonInteractive = false;
   static description = 'Initialize Agor environment (creates ~/.agor/ and database)';
 
   static examples = [
@@ -92,6 +103,10 @@ export default class Init extends Command {
       description:
         'Comma-separated agentic tools to configure and install during noninteractive initialization',
       required: false,
+    }),
+    'non-interactive': Flags.boolean({
+      description: 'Initialize missing state without prompts or deleting existing data',
+      default: false,
     }),
   };
 
@@ -199,6 +214,7 @@ export default class Init extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Init);
+    this.nonInteractive = flags['non-interactive'];
     const requestedTools = flags['agentic-tools'] ?? process.env.AGOR_AGENTIC_TOOLS;
     if (requestedTools !== undefined) {
       const names = requestedTools
@@ -261,9 +277,16 @@ export default class Init extends Command {
       const reposExist = await this.pathExists(reposDir);
       const branchesExist = await this.pathExists(branchesDir);
 
-      if (!alreadyExists) {
+      if (
+        isFreshInitState({
+          baseExists: alreadyExists,
+          databaseExists: dbExists,
+          reposExist,
+          branchesExist,
+        })
+      ) {
         // Fresh initialization
-        await this.performInit(baseDir, dbPath, flags.force);
+        await this.performInit(baseDir, dbPath, flags.force || this.nonInteractive);
         return;
       }
 
@@ -271,6 +294,12 @@ export default class Init extends Command {
       this.log(chalk.yellow('⚠  Agor is already initialized at: ') + chalk.cyan(baseDir));
       await this.warnExistingInstallTelemetryUnconfigured();
       this.log('');
+
+      if (this.nonInteractive) {
+        this.error(
+          'Refusing noninteractive re-initialization because existing data was found. Use --skip-if-exists for idempotent startup or run interactively to confirm destructive re-initialization.'
+        );
+      }
 
       // Gather information about what exists
       const dbStats = dbExists ? await this.getDbStats(dbPath) : null;
@@ -471,7 +500,7 @@ export default class Init extends Command {
       this.log(chalk.bold(`\nInstalling ${definition.displayName}…`));
       await installManagedIntegration(
         tool,
-        process.env.AGOR_INTEGRATION_VERSION ?? this.config.version
+        resolveManagedAgenticToolVersion(this.config.version) as string
       );
     }
     if (!(await this.pathExists(getConfigPath()))) {
@@ -491,7 +520,7 @@ export default class Init extends Command {
 
     this.log(chalk.bold('Agentic tools:'));
     const tools = await diagnoseAgenticTools(
-      process.env.AGOR_INTEGRATION_VERSION ?? this.config.version
+      resolveManagedAgenticToolVersion(this.config.version) as string
     );
     for (const tool of tools) {
       const marker = tool.status === 'ready' ? chalk.green('✓') : chalk.yellow('○');
@@ -564,7 +593,7 @@ export default class Init extends Command {
     if (this.requestedAgenticTools) return this.requestedAgenticTools;
     if (skipPrompts || process.env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return [];
 
-    const agorVersion = process.env.AGOR_INTEGRATION_VERSION ?? this.config.version;
+    const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
     this.log('');
     this.log(chalk.bold('Agentic tool packages'));
     this.log(
@@ -597,8 +626,11 @@ export default class Init extends Command {
           `   Agor will not send telemetry unless an admin enables it. Learn more: ${AGOR_TELEMETRY_DOCS_URL}`
         )
       );
-      this.log(chalk.gray('   To enable later: agor telemetry on'));
-      this.log(chalk.gray('   To keep it disabled: agor telemetry off'));
+      this.log(
+        chalk.gray(
+          '   Configure later with AGOR_TELEMETRY=1/0 or telemetry.enabled in config.yaml.'
+        )
+      );
     } catch {
       // Existing-install warning should never block init.
     }

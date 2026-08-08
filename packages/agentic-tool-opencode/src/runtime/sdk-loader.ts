@@ -19,9 +19,7 @@ export async function loadOpenCodeSdkV2(): Promise<OpenCodeSdkV2> {
     agorVersion
   );
   if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdkV2) {
-    throw new Error(
-      `OpenCode support does not match Agor ${agorVersion}. Run: agor install opencode`
-    );
+    throw new Error(`OpenCode support does not match Agor ${agorVersion}. Run: agor install`);
   }
   return integration.sdkV2 as OpenCodeSdkV2;
 }

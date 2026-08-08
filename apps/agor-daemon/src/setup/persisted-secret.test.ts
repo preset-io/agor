@@ -4,7 +4,7 @@
  * context/explorations/daemon-fs-decoupling.md §1.5 (H3).
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolvePersistedSecret } from './persisted-secret.js';
 
 const ENV_VAR = 'TEST_SECRET_FOR_PERSISTED_SECRET';
@@ -24,7 +24,6 @@ describe('resolvePersistedSecret', () => {
     } else {
       process.env[ENV_VAR] = originalEnv;
     }
-    vi.clearAllMocks();
   });
 
   it('prefers the env var when present (no disk touch)', async () => {
@@ -34,7 +33,6 @@ describe('resolvePersistedSecret', () => {
       envVar: ENV_VAR,
       existing: 'from-config-should-be-ignored',
       configKey: CONFIG_KEY,
-      generate: () => 'should-not-be-called',
     });
 
     expect(result).toEqual({ value: 'from-env', source: 'env' });
@@ -46,24 +44,20 @@ describe('resolvePersistedSecret', () => {
       envVar: ENV_VAR,
       existing: 'from-config',
       configKey: CONFIG_KEY,
-      generate: () => 'should-not-be-called',
     });
 
     expect(result).toEqual({ value: 'from-config', source: 'config' });
   });
 
   it('fails fast without generating or writing when neither source is configured', async () => {
-    const generate = vi.fn(() => 'fresh');
     await expect(
       resolvePersistedSecret({
         name: 'JWT secret',
         envVar: ENV_VAR,
         existing: undefined,
         configKey: CONFIG_KEY,
-        generate,
       })
     ).rejects.toThrow(/JWT secret.*required.*neither.*configured/s);
-    expect(generate).not.toHaveBeenCalled();
 
     // The error message MUST name both escape hatches so on-call doesn't
     // have to read code to recover.
@@ -73,7 +67,6 @@ describe('resolvePersistedSecret', () => {
         envVar: ENV_VAR,
         existing: undefined,
         configKey: CONFIG_KEY,
-        generate,
       })
     ).rejects.toThrow(new RegExp(`${ENV_VAR}.*config\\.yaml`, 's'));
   });

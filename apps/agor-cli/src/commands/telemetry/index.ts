@@ -19,10 +19,8 @@ export default class Telemetry extends Command {
     this.log(`Status: ${status}`);
     this.log(`Docs:   ${AGOR_TELEMETRY_DOCS_URL}`);
     this.log('');
-    this.log('Commands:');
-    this.log('  agor telemetry on');
-    this.log('  agor telemetry off');
-    this.log('  agor telemetry test');
+    this.log('Configure with AGOR_TELEMETRY=1/0 or telemetry.enabled in config.yaml.');
+    this.log('Test delivery with: agor telemetry test');
   }
 }
 

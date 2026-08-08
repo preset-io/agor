@@ -6,7 +6,7 @@ describe('tenant agentic tool deployment boundary', () => {
   it('rejects enabling a package the deployment operator did not configure', async () => {
     const service = new TenantAgenticToolSettingsService(
       {} as TenantScopeAwareDatabase,
-      new Set(['claude-code'])
+      (tool) => tool === 'claude-code'
     );
 
     await expect(service.patch('codex', { enabled: true })).rejects.toThrow(

@@ -9,6 +9,7 @@ export {
   getAgenticToolsRoot,
   type InstallableAgenticTool,
   isInstallableAgenticTool,
+  resolveManagedAgenticToolVersion,
 } from '@agor/core/agentic-integrations';
 
 import {
@@ -89,7 +90,9 @@ export async function listManagedAgorVersions(): Promise<string[]> {
   try {
     const entries = await readdir(getAgenticToolsRoot(), { withFileTypes: true });
     return entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .filter(
+        (entry) => entry.isDirectory() && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(entry.name)
+      )
       .map((entry) => entry.name)
       .sort(compareVersions);
   } catch {

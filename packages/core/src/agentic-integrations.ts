@@ -35,6 +35,13 @@ export const AGENTIC_TOOL_INTEGRATIONS = {
 
 export type InstallableAgenticTool = keyof typeof AGENTIC_TOOL_INTEGRATIONS;
 
+export function resolveManagedAgenticToolVersion(
+  fallback?: string,
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  return env.AGOR_VERSION ?? env.AGOR_INTEGRATION_VERSION ?? fallback;
+}
+
 export function isInstallableAgenticTool(value: string): value is InstallableAgenticTool {
   return Object.hasOwn(AGENTIC_TOOL_INTEGRATIONS, value);
 }
@@ -170,7 +177,6 @@ export async function inspectManagedAgenticToolAlignment(
  */
 export async function loadManagedAgenticToolSdk<T>(tool: InstallableAgenticTool): Promise<T> {
   const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
-  const installSlug = tool === 'claude-code' ? 'claude' : tool;
   if (process.env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') {
     return import(definition.vendorPackage) as Promise<T>;
   }
@@ -182,12 +188,12 @@ export async function loadManagedAgenticToolSdk<T>(tool: InstallableAgenticTool)
     integration = await resolveManagedAgenticToolIntegration<T>(tool, agorVersion);
   } catch {
     throw new Error(
-      `${definition.displayName} support is not installed for Agor ${agorVersion}. Run: agor install ${installSlug}`
+      `${definition.displayName} support is not installed for Agor ${agorVersion}. Add ${tool} to config.yaml agentic_tools.installed, then run: agor install`
     );
   }
   if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdk) {
     throw new Error(
-      `${definition.displayName} support does not match Agor ${agorVersion}. Run: agor install ${installSlug}`
+      `${definition.displayName} support does not match Agor ${agorVersion}. Run: agor install`
     );
   }
   return integration.sdk;

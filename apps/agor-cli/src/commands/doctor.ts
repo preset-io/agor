@@ -1,3 +1,4 @@
+import { resolveManagedAgenticToolVersion } from '@agor/core/agentic-integrations';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
@@ -11,7 +12,7 @@ export default class Doctor extends Command {
   async run(): Promise<void> {
     const { flags } = await this.parse(Doctor);
     const agenticTools = await diagnoseAgenticTools(
-      process.env.AGOR_INTEGRATION_VERSION ?? this.config.version
+      resolveManagedAgenticToolVersion(this.config.version) as string
     );
     if (flags.json) {
       this.log(JSON.stringify({ ok: true, agenticTools }, null, 2));

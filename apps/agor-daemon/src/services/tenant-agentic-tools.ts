@@ -1,4 +1,4 @@
-import type { AgorConfig } from '@agor/core/config';
+import { type AgorConfig, isDeploymentAgenticToolAvailable } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { AgenticToolPresetRepository, TenantAgenticToolSettingsRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
@@ -30,7 +30,7 @@ export class TenantAgenticToolSettingsService {
 
   constructor(
     db: TenantScopeAwareDatabase,
-    private deploymentTools: ReadonlySet<TenantAgenticToolName> | null = null
+    private deploymentAvailable: (tool: TenantAgenticToolName) => boolean = () => true
   ) {
     this.repository = new TenantAgenticToolSettingsRepository(db);
     this.presets = new AgenticToolPresetRepository(db);
@@ -38,7 +38,7 @@ export class TenantAgenticToolSettingsService {
 
   private async publicSettings(tool: TenantAgenticToolName): Promise<TenantAgenticToolSettings> {
     const stored = await this.repository.find(tool);
-    const deploymentEnabled = this.deploymentTools === null || this.deploymentTools.has(tool);
+    const deploymentEnabled = this.deploymentAvailable(tool);
     const connection: TenantAgenticToolSettings['connection'] = {};
     if (isProviderConnectionTool(tool)) {
       for (const field of TENANT_PROVIDER_CONNECTION_FIELDS[tool]) {
@@ -68,7 +68,7 @@ export class TenantAgenticToolSettingsService {
     params?: Params
   ): Promise<TenantAgenticToolSettings> {
     const tool = parseTool(id);
-    if (data.enabled === true && this.deploymentTools && !this.deploymentTools.has(tool)) {
+    if (data.enabled === true && !this.deploymentAvailable(tool)) {
       throw new BadRequest(
         `${tool} is not installed for this deployment. An operator must add it to config.yaml agentic_tools.installed and run agor install.`
       );
@@ -123,9 +123,7 @@ export function createTenantAgenticToolSettingsService(
   db: TenantScopeAwareDatabase,
   config?: AgorConfig
 ) {
-  const deploymentTools =
-    process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1'
-      ? new Set(config?.agentic_tools?.installed ?? [])
-      : null;
-  return new TenantAgenticToolSettingsService(db, deploymentTools);
+  return new TenantAgenticToolSettingsService(db, (tool) =>
+    isDeploymentAgenticToolAvailable(tool, config)
+  );
 }

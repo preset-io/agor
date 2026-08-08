@@ -531,19 +531,16 @@ export function runPostStartJob(name: string, job: () => Promise<void> | void): 
 // ---------------------------------------------------------------------------
 
 async function ensureMasterSecret(config: AgorConfig): Promise<void> {
-  // AGOR_MASTER_SECRET: env > existing config value > generate-and-persist >
-  // fail-fast. See setup/persisted-secret.ts and the doc §1.5 (H3).
+  // AGOR_MASTER_SECRET: env > existing config value > fail-fast.
   //
   // Same fail-fast reasoning as the JWT path: a fresh master secret on every
   // restart corrupts every stored encrypted API key.
-  const { randomBytes } = await import('node:crypto');
   const { resolvePersistedSecret } = await import('./setup/persisted-secret.js');
   const resolution = await resolvePersistedSecret({
     name: 'AGOR_MASTER_SECRET (API key encryption)',
     envVar: 'AGOR_MASTER_SECRET',
     existing: config.daemon?.masterSecret,
     configKey: 'daemon.masterSecret',
-    generate: () => randomBytes(32).toString('hex'),
   });
   // Side effect: downstream code (encrypted-creds resolver, etc.) reads this
   // off process.env, not off a parameter. Keep that contract.

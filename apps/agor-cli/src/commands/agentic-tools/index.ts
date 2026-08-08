@@ -1,3 +1,4 @@
+import { resolveManagedAgenticToolVersion } from '@agor/core/agentic-integrations';
 import { loadConfig } from '@agor/core/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -12,13 +13,11 @@ export default class AgenticTools extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(AgenticTools);
-    const diagnostics = await diagnoseAgenticTools(
-      process.env.AGOR_INTEGRATION_VERSION ?? this.config.version
-    );
+    const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
+    const diagnostics = await diagnoseAgenticTools(agorVersion);
     const config = await loadConfig();
     const configured = config.agentic_tools?.installed ?? [];
     const configuredSet = new Set(configured);
-    const agorVersion = process.env.AGOR_INTEGRATION_VERSION ?? this.config.version;
     const staleVersions = (await listManagedAgorVersions()).filter(
       (version) => version !== agorVersion
     );

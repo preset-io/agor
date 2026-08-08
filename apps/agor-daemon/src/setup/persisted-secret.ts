@@ -28,10 +28,8 @@ export interface PersistedSecretSpec {
   envVar: string;
   /** Pre-existing value loaded from config, if any. */
   existing: string | undefined;
-  /** Dotted config key to persist a freshly-generated value at. */
+  /** Dotted config key accepted as an operator-provided value. */
   configKey: string;
-  /** Generator for new secrets (CSPRNG hex/random — caller's choice). */
-  generate: () => string;
 }
 
 export interface PersistedSecretResult {
@@ -45,9 +43,7 @@ export interface PersistedSecretResult {
  * Resolve a persisted secret per the order above.
  *
  * Throws (with operator-actionable remediation) when no source is reachable.
- * The error always names both the environment-variable escape hatch and the
- * "make config.yaml writable" escape hatch, so on-call doesn't need to read
- * the code to recover.
+ * The error always names both operator-owned configuration sources.
  */
 export async function resolvePersistedSecret(
   spec: PersistedSecretSpec

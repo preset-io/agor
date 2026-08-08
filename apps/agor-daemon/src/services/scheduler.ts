@@ -42,6 +42,7 @@ import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config'
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   InvalidScheduleAgenticToolConfigError,
+  isDeploymentAgenticToolAvailable,
   isTenantAgenticToolEnabled,
   normalizePersistedScheduleAgenticToolConfig,
   unixUserModeRequiresUsername,
@@ -826,6 +827,9 @@ export class SchedulerService {
       );
     }
     const cfg = resolvedConfig.config;
+    if (!isDeploymentAgenticToolAvailable(resolvedConfig.activeTool)) {
+      throw new BadRequest(`${resolvedConfig.activeTool} is not installed for this deployment`);
+    }
     if (
       !(await this.withTenantDatabase(() =>
         isTenantAgenticToolEnabled(resolvedConfig.activeTool, this.db)

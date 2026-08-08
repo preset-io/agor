@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { isInstallableAgenticTool } from '../agentic-integrations';
+import type { AgenticToolName } from '../types';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import {
@@ -922,6 +923,17 @@ export function resolveEffectiveConfig(
 
 export function formatConfigYaml(config: AgorConfig): string {
   return yaml.dump(config, { indent: 2, lineWidth: 120, noRefs: true });
+}
+
+/** Instance-global package gate; tenant settings may narrow but never expand it. */
+export function isDeploymentAgenticToolAvailable(
+  tool: AgenticToolName,
+  config: AgorConfig = loadConfigSync(),
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  if (env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return true;
+  if (!isInstallableAgenticTool(tool)) return false;
+  return config.agentic_tools?.installed?.includes(tool) === true;
 }
 
 /**

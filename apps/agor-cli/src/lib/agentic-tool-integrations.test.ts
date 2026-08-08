@@ -81,6 +81,14 @@ describe('listManagedAgorVersions', () => {
 
     expect(await listManagedAgorVersions()).toEqual(['0.24.0']);
   });
+
+  it('ignores arbitrary operator directories that are not semver-managed roots', async () => {
+    const root = await createRoot();
+    await mkdir(join(root, 'shared-cache'), { recursive: true });
+    await mkdir(join(root, '0.24.0'), { recursive: true });
+
+    expect(await listManagedAgorVersions()).toEqual(['0.24.0']);
+  });
 });
 
 describe('listInstalledAgenticTools', () => {

@@ -3,16 +3,17 @@ set -e
 
 echo "🚀 Starting Agor production environment..."
 
-# Fix volume permissions (volumes may be created with wrong ownership)
-# Only chown .agor directory (not .ssh which is mounted read-only)
+# Create the state root if it is not a read-only mount. Never recursively chown
+# it: config.yaml may be an operator-owned read-only ConfigMap/secret mount.
 mkdir -p /home/agor/.agor
-sudo -n chown -R agor:agor /home/agor/.agor
+sudo -n chown agor:agor /home/agor/.agor 2>/dev/null || true
 
 # Initialize database and create config only when absent
 # --skip-if-exists: Idempotent, won't overwrite existing database
 echo "📦 Initializing Agor environment..."
 agor init \
   --skip-if-exists \
+  --non-interactive \
   --daemon-port "${DAEMON_PORT:-3030}" \
   --daemon-host "${DAEMON_HOST:-0.0.0.0}"
 
