@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -259,5 +259,37 @@ describe('local selection persistence', () => {
         result.status === 'fulfilled'
     );
     await winner?.value();
+  });
+
+  it('does not reclaim a live lock that replaces the stale lock after inspection', async () => {
+    const root = await createRoot();
+    const lock = join(root, '.install.lock');
+    const displacedStale = join(root, '.displaced-stale');
+    await mkdir(lock);
+    await writeFile(join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_647 }));
+
+    let inspected!: () => void;
+    const inspectionReached = new Promise<void>((resolve) => {
+      inspected = resolve;
+    });
+    let resume!: () => void;
+    const resumeRecovery = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const staleReclaimer = acquireAgenticToolInstallLock({
+      afterStaleInspection: async () => {
+        inspected();
+        await resumeRecovery;
+      },
+    });
+    await inspectionReached;
+    await rename(lock, displacedStale);
+    const releaseLiveLock = await acquireAgenticToolInstallLock();
+    resume();
+
+    await expect(staleReclaimer).rejects.toThrow('Another `agor install`');
+    expect(JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')).pid).toBe(process.pid);
+    await releaseLiveLock();
+    await rm(displacedStale, { recursive: true, force: true });
   });
 });

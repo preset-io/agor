@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export {
@@ -49,7 +49,10 @@ export async function writeAgenticToolSelectionManifest(
 }
 
 /** Hold this deployment-local lock across selection and the complete reconciliation. */
-export async function acquireAgenticToolInstallLock(): Promise<() => Promise<void>> {
+export async function acquireAgenticToolInstallLock(options?: {
+  /** Test-only race barrier; production callers must omit. */
+  afterStaleInspection?: () => Promise<void>;
+}): Promise<() => Promise<void>> {
   const root = getAgenticToolsRoot();
   const lock = join(root, '.install.lock');
   const token = randomUUID();
@@ -77,7 +80,10 @@ export async function acquireAgenticToolInstallLock(): Promise<() => Promise<voi
         throw error;
     }
     let ownerPid: number | undefined;
+    let observedIdentity: { dev: bigint; ino: bigint } | undefined;
     try {
+      const observed = await stat(lock, { bigint: true });
+      observedIdentity = { dev: observed.dev, ino: observed.ino };
       const owner = JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')) as {
         pid?: unknown;
       };
@@ -99,14 +105,30 @@ export async function acquireAgenticToolInstallLock(): Promise<() => Promise<voi
       throw new Error(
         `Another \`agor install\` is already updating agentic tools (PID ${ownerPid}). Try again when it finishes.`
       );
+    await options?.afterStaleInspection?.();
     const recovery = join(root, `.install.recovered-${randomUUID()}`);
+    let reclaimedObservedLock = false;
     try {
       await rename(lock, recovery);
+      const moved = await stat(recovery, { bigint: true });
+      reclaimedObservedLock =
+        observedIdentity !== undefined &&
+        moved.dev === observedIdentity.dev &&
+        moved.ino === observedIdentity.ino;
+      if (!reclaimedObservedLock) {
+        try {
+          await rename(recovery, lock);
+        } catch (restoreError) {
+          throw new Error(
+            `Agentic tool install lock changed during stale recovery and could not be restored: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`
+          );
+        }
+      }
     } catch (renameError) {
       if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') continue;
       throw renameError;
     } finally {
-      await rm(recovery, { recursive: true, force: true });
+      if (reclaimedObservedLock) await rm(recovery, { recursive: true, force: true });
     }
   }
   return async () => {
