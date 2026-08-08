@@ -208,12 +208,16 @@ async function buildCursorMcpServers(args: {
     };
   }
 
-  const serversWithSource = await getMcpServersForSession(args.sessionId, {
-    sessionMCPRepo: args.repos.sessionMCP,
-    mcpServerRepo: args.repos.mcpServers,
-    mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
-    forUserId: args.forUserId,
-  });
+  const serversWithSource = await getMcpServersForSession(
+    args.sessionId,
+    {
+      sessionMCPRepo: args.repos.sessionMCP,
+      mcpServerRepo: args.repos.mcpServers,
+      mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
+      forUserId: args.forUserId,
+    },
+    { toolFiltering: 'none' }
+  );
 
   for (const { server } of serversWithSource) {
     const name = claimMcpName(server.name, claimed);

@@ -7,6 +7,7 @@
  */
 
 import { generateId, shortId } from '@agor/core';
+import { AGOR_MCP_SERVER_NAME } from '@agor/core/mcp';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import {
   MessageRole,
@@ -22,6 +23,8 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from './index.js';
+import type { McpToolPermissionIndex } from './mcp-tool-permissions.js';
+import { mcpToolNameAliasesForServer, resolveMcpToolPermission } from './mcp-tool-permissions.js';
 
 /**
  * Create canUseTool callback for permission handling
@@ -42,6 +45,8 @@ export function createCanUseToolCallback(
     permissionLocks: Map<SessionID, Promise<void>>;
     mcpServerRepo: MCPServerRepository;
     sessionMCPRepo: SessionMCPServerRepository;
+    /** Per-tool `tool_permissions` from the session's resolved MCP servers. */
+    mcpToolPermissions: McpToolPermissionIndex;
   }
 ) {
   return async (
@@ -62,12 +67,30 @@ export function createCanUseToolCallback(
     // Auto-approve MCP tools only if they belong to an attached MCP server
     // MCP tool names follow pattern: mcp__<server_name>__<tool_name>
     if (toolName.startsWith('mcp__')) {
+      // Per-tool `tool_permissions` outrank every fast-path below: a denied tool
+      // must never reach the MCP server, and an `ask` tool must never be
+      // auto-approved just because its server is attached.
+      const configuredPermission = resolveMcpToolPermission(deps.mcpToolPermissions, toolName);
+
+      if (configuredPermission === 'deny') {
+        console.warn(`🛑 [canUseTool] MCP tool "${toolName}" denied by tool_permissions`);
+        return {
+          behavior: 'deny' as const,
+          message: `Tool "${toolName}" is denied by its MCP server's tool permissions.`,
+        };
+      }
+
       const parts = toolName.split('__');
-      if (parts.length >= 3) {
+      if (configuredPermission === 'ask') {
+        console.log(
+          `❓ [canUseTool] MCP tool "${toolName}" set to "ask" by tool_permissions, prompting user`
+        );
+        // Fall through to normal permission flow
+      } else if (parts.length >= 3) {
         const serverName = parts[1]; // Extract server name from mcp__<server_name>__<tool_name>
 
         // Built-in "agor" server is always auto-approved (it's added dynamically, not in DB)
-        if (serverName === 'agor') {
+        if (serverName === AGOR_MCP_SERVER_NAME) {
           console.log(
             `✅ [canUseTool] Auto-approving MCP tool: ${toolName} (built-in "agor" server)`
           );
@@ -87,7 +110,12 @@ export function createCanUseToolCallback(
 
         try {
           const attachedServers = await deps.sessionMCPRepo.listServers(sessionId, true);
-          const serverVerified = attachedServers.some((server) => server.name === serverName);
+          // `serverName` was split out of a tool name the SDK already rewrote,
+          // so a raw comparison misses every server whose name carries
+          // punctuation or spaces.
+          const serverVerified = attachedServers.some((server) =>
+            mcpToolNameAliasesForServer(server.name).includes(serverName)
+          );
 
           if (serverVerified) {
             console.log(

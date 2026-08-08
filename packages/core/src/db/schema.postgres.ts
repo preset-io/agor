@@ -1434,6 +1434,9 @@ export const mcpServers = pgTable(
             required?: boolean;
           }>;
         }>;
+
+        // Tool permissions configuration
+        tool_permissions?: Record<string, 'ask' | 'allow' | 'deny'>;
       }>()
       .notNull(),
   },

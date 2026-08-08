@@ -1152,6 +1152,9 @@ importers:
       '@google/genai':
         specifier: ^1.43.0
         version: 1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(supports-color@8.1.1)
+      '@modelcontextprotocol/sdk':
+        specifier: '>=1.29.0 <2'
+        version: 1.29.0(supports-color@8.1.1)(zod@4.4.3)
       '@openai/codex-sdk':
         specifier: ^0.144.0
         version: 0.144.0

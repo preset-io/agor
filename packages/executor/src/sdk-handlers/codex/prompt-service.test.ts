@@ -72,7 +72,10 @@ async function* streamMockEvents() {
 
 // Mock the Codex SDK to avoid spawning real Codex CLI processes
 vi.mock('./app-server-client.js', () => appServerMocks);
-vi.mock('@agor/core/mcp', () => mcpScopingMocks);
+vi.mock('@agor/core/mcp', async () => {
+  const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
+  return { ...actual, ...mcpScopingMocks };
+});
 vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => configMocks);
 
@@ -2119,7 +2122,9 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       expect.objectContaining({
         forUserId: '019e3700-user-user-user-user00000001',
-      })
+      }),
+      // Codex can drop individual tools but has no way to prompt.
+      { toolFiltering: 'exclude' }
     );
   });
 

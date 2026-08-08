@@ -18,7 +18,12 @@ import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 type PermissionMode = ClaudeSdk.PermissionMode;
 type Options = ClaudeSdk.Options;
 
-import { getMcpServersForSession } from '@agor/core/mcp';
+import {
+  AGOR_MCP_SERVER_NAME,
+  getMcpServersForSession,
+  listMcpToolsWithPermission,
+  PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+} from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -34,6 +39,12 @@ import type { PermissionService } from '../../permissions/permission-service.js'
 import type { MCPServersConfig, SessionID, TaskID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
+import { createMcpToolPermissionHook } from '../base/mcp-tool-permission-hook.js';
+import {
+  buildMcpToolPermissionIndex,
+  EMPTY_MCP_TOOL_PERMISSION_INDEX,
+  mcpToolNameAliasesForServer,
+} from '../base/mcp-tool-permissions.js';
 import { createCanUseToolCallback } from '../base/permission-hooks.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
@@ -260,32 +271,6 @@ export async function setupQuery(
     queryOptions.extraArgs = extraArgs;
   }
 
-  // Add canUseTool callback if permission service is available and taskId provided.
-  // This enables Agor's custom permission UI (WebSocket-based) when the SDK would
-  // show a prompt. Fires AFTER the SDK checks settings.json — respects user's
-  // existing Claude CLI permissions.
-  //
-  // Skip in bypassPermissions mode: the SDK skips canUseTool there anyway, and
-  // we no longer need a workaround to intercept AskUserQuestion (now disallowed).
-  if (
-    deps.permissionService &&
-    taskId &&
-    deps.sessionMCPRepo &&
-    deps.mcpServerRepo &&
-    effectivePermissionMode !== 'bypassPermissions'
-  ) {
-    queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
-      permissionService: deps.permissionService,
-      tasksService: deps.tasksService!,
-      messagesRepo: deps.messagesRepo!,
-      messagesService: deps.messagesService,
-      sessionsService: deps.sessionsService,
-      permissionLocks: deps.permissionLocks,
-      mcpServerRepo: deps.mcpServerRepo,
-      sessionMCPRepo: deps.sessionMCPRepo,
-    });
-  }
-
   // Add optional apiKey if provided
   // NOTE: Don't require API key - user may have used `claude login` (OAuth)
   // API keys are already resolved by base-executor with proper precedence (user → config → env)
@@ -428,26 +413,58 @@ export async function setupQuery(
     }
   }
 
+  // Whether this query will have a live approval channel back to the UI.
+  // Decided up front because MCP `tool_permissions` need it: an "ask" tool with
+  // nowhere to ask has to fail closed rather than silently become "allow".
+  const canPromptForPermission = Boolean(
+    deps.permissionService &&
+      taskId &&
+      deps.sessionMCPRepo &&
+      deps.mcpServerRepo &&
+      effectivePermissionMode !== 'bypassPermissions'
+  );
+
   // Fetch and configure MCP servers for this session
+  let mcpToolPermissions = EMPTY_MCP_TOOL_PERMISSION_INDEX;
   if (deps.sessionMCPRepo && deps.mcpServerRepo) {
     try {
       // Use shared MCP scoping utility
       // Pass forUserId to enable per-user OAuth token injection
-      const serversWithSource = await getMcpServersForSession(sessionId, {
-        sessionMCPRepo: deps.sessionMCPRepo,
-        mcpServerRepo: deps.mcpServerRepo,
-        mcpOAuthAuthHeadersRepo: deps.mcpOAuthAuthHeadersRepo,
-        forUserId: contextUserId,
+      const serversWithSource = await getMcpServersForSession(
+        sessionId,
+        {
+          sessionMCPRepo: deps.sessionMCPRepo,
+          mcpServerRepo: deps.mcpServerRepo,
+          mcpOAuthAuthHeadersRepo: deps.mcpOAuthAuthHeadersRepo,
+          forUserId: contextUserId,
+        },
+        { toolFiltering: 'exclude' }
+      );
+
+      // The built-in Agor server carries this session's daemon bearer token and
+      // is auto-approved by name in canUseTool. Drop any DB server claiming that
+      // name before anything reads the list, so it can neither be configured nor
+      // contribute permissions that would gate the genuine built-in's tools.
+      const attachableServers = serversWithSource.filter(({ server }) => {
+        if (server.name !== AGOR_MCP_SERVER_NAME) return true;
+        console.warn(
+          `   ⚠️  Skipping MCP server "${server.name}": reserved for the built-in Agor MCP server`
+        );
+        return false;
       });
 
-      if (serversWithSource.length > 0) {
+      mcpToolPermissions = buildMcpToolPermissionIndex(
+        attachableServers.map(({ server }) => server)
+      );
+
+      if (attachableServers.length > 0) {
         // Convert to SDK format
         const mcpConfig: MCPServersConfig = {};
-        const allowedTools: string[] = [];
+        const deniedTools: string[] = [];
         const missingAuthServers: string[] = [];
         const unresolvedAuthServers: string[] = [];
 
-        for (const { server } of serversWithSource) {
+        for (const { server } of attachableServers) {
           // Infer transport if missing (backwards compatibility)
           const transport = server.transport || (server.url ? 'sse' : 'stdio');
 
@@ -497,10 +514,20 @@ export async function setupQuery(
 
           mcpConfig[server.name] = serverConfig;
 
-          // Add tools to allowlist
-          if (server.tools) {
-            for (const tool of server.tools) {
-              allowedTools.push(tool.name);
+          // Denied tools are blocked at the SDK layer as well as in canUseTool,
+          // so the model is never even offered a tool the user switched off.
+          // Without an approval channel an "ask" tool is unanswerable, so it
+          // joins them rather than degrading to "allow".
+          const blocked = canPromptForPermission
+            ? (['deny'] as const)
+            : PERMISSIONS_BLOCKED_WITHOUT_PROMPT;
+          for (const tool of listMcpToolsWithPermission(server, blocked)) {
+            // The CLI rewrites a server name into the tool-name alphabet before
+            // it reaches a rule, so a name with punctuation would never match if
+            // only the raw form were listed. Both forms are emitted; a rule that
+            // matches nothing is inert.
+            for (const alias of new Set(mcpToolNameAliasesForServer(server.name))) {
+              deniedTools.push(`mcp__${alias}__${tool}`);
             }
           }
         }
@@ -522,14 +549,55 @@ export async function setupQuery(
               formatListForLog(unresolvedAuthServers, 3)
           );
         }
-        if (allowedTools.length > 0) {
-          queryOptions.allowedTools = allowedTools;
+        if (deniedTools.length > 0) {
+          queryOptions.disallowedTools = [
+            ...(queryOptions.disallowedTools as string[]),
+            ...deniedTools,
+          ];
         }
       }
     } catch (error) {
       console.warn('⚠️  Failed to fetch MCP servers for session:', error);
       // Continue without MCP servers - non-fatal error
     }
+  }
+
+  // PreToolUse runs ahead of settings.json rule matching, so this is what stops
+  // a stale persisted `allow` rule from skipping an `ask` gate entirely.
+  if (mcpToolPermissions.byServer.size > 0) {
+    queryOptions.hooks = {
+      ...(queryOptions.hooks as Record<string, unknown> | undefined),
+      PreToolUse: [
+        { hooks: [createMcpToolPermissionHook(mcpToolPermissions, canPromptForPermission)] },
+      ],
+    };
+  }
+
+  // Add canUseTool callback if permission service is available and taskId provided.
+  // This enables Agor's custom permission UI (WebSocket-based) when the SDK would
+  // show a prompt. Fires AFTER the SDK checks settings.json — respects user's
+  // existing Claude CLI permissions.
+  //
+  // Skip in bypassPermissions mode: the SDK skips canUseTool there anyway, and
+  // we no longer need a workaround to intercept AskUserQuestion (now disallowed).
+  if (
+    deps.permissionService &&
+    taskId &&
+    deps.sessionMCPRepo &&
+    deps.mcpServerRepo &&
+    effectivePermissionMode !== 'bypassPermissions'
+  ) {
+    queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
+      permissionService: deps.permissionService,
+      tasksService: deps.tasksService!,
+      messagesRepo: deps.messagesRepo!,
+      messagesService: deps.messagesService,
+      sessionsService: deps.sessionsService,
+      permissionLocks: deps.permissionLocks,
+      mcpServerRepo: deps.mcpServerRepo,
+      sessionMCPRepo: deps.sessionMCPRepo,
+      mcpToolPermissions,
+    });
   }
 
   // Wrap the string prompt in an AsyncIterable so the SDK treats this as a

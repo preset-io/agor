@@ -22,9 +22,10 @@ vi.mock('@agor/core/tools/mcp/jwt-auth', () => ({
 vi.mock('../../config.js', () => ({
   getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
 }));
-vi.mock('@agor/core/mcp', () => ({
-  getMcpServersForSession: vi.fn().mockResolvedValue([]),
-}));
+vi.mock('@agor/core/mcp', async () => {
+  const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
+  return { ...actual, getMcpServersForSession: vi.fn().mockResolvedValue([]) };
+});
 vi.mock('./models.js', () => ({
   DEFAULT_CLAUDE_MODEL: 'claude-sonnet-4-6',
 }));

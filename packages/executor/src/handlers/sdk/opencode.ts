@@ -30,7 +30,9 @@ import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { enrichContentBlocks } from '../../sdk-handlers/base/diff-enrichment.js';
+import { EMPTY_MCP_TOOL_PERMISSION_INDEX } from '../../sdk-handlers/base/mcp-tool-permissions.js';
 import { createCanUseToolCallback } from '../../sdk-handlers/base/permission-hooks.js';
+import { reportWithheldMcpServer } from '../../sdk-handlers/base/withheld-mcp-report.js';
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks, settleTaskFailure } from './base-executor.js';
@@ -78,12 +80,21 @@ export async function executeOpenCodeTask(params: {
     const permissionLocks = new Map<SessionID, Promise<void>>();
     const tool = new OpenCodeTool({
       resolveMcpServers: (targetSessionId) =>
-        getMcpServersForSession(targetSessionId, {
-          sessionMCPRepo: repos.sessionMCP,
-          mcpServerRepo: repos.mcpServers,
-          mcpOAuthAuthHeadersRepo: repos.mcpOAuthAuthHeaders,
-          forUserId: session.created_by,
-        }),
+        getMcpServersForSession(
+          targetSessionId,
+          {
+            sessionMCPRepo: repos.sessionMCP,
+            mcpServerRepo: repos.mcpServers,
+            mcpOAuthAuthHeadersRepo: repos.mcpOAuthAuthHeaders,
+            forUserId: session.created_by,
+            onServerWithheld: (withheldServer, reason) =>
+              void reportWithheldMcpServer(client, targetSessionId, withheldServer.name, reason),
+          },
+          // OpenCode's invocation config carries no per-tool filter, so a server
+          // with gated tools cannot be honoured and is withheld whole. This is
+          // the only enforcement point on this path.
+          { toolFiltering: 'none' }
+        ),
       getDaemonUrl,
       createPermissionCallback: (targetSessionId, targetTaskId) =>
         createCanUseToolCallback(targetSessionId, targetTaskId, {
@@ -95,6 +106,9 @@ export async function executeOpenCodeTask(params: {
           permissionLocks,
           mcpServerRepo: repos.mcpServers,
           sessionMCPRepo: repos.sessionMCP,
+          // Gated servers never reach this handler, so nothing here can be
+          // configured; the admission gate above already withheld them.
+          mcpToolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX,
         }),
       cancelPendingPermissions: (targetSessionId) =>
         permissionService.cancelPendingRequests(targetSessionId),

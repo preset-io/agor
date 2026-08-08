@@ -155,11 +155,15 @@ export class CopilotPromptService {
     const copilotMcpServers: Record<string, unknown> = {};
 
     // Fetch MCP servers for this session
-    const serversWithSource = await getMcpServersForSession(sessionId, {
-      sessionMCPRepo: this.sessionMCPServerRepo,
-      mcpServerRepo: this.mcpServerRepo,
-      mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
-    });
+    const serversWithSource = await getMcpServersForSession(
+      sessionId,
+      {
+        sessionMCPRepo: this.sessionMCPServerRepo,
+        mcpServerRepo: this.mcpServerRepo,
+        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+      },
+      { toolFiltering: 'none' }
+    );
 
     const mcpServers = serversWithSource.map((s) => s.server);
     console.log(`📊 [Copilot MCP] Found ${mcpServers.length} MCP server(s) for session`);
