@@ -181,7 +181,11 @@ jobs:
           cat > "$HOME/.agor/config.yaml" <<'EOF'
           daemon:
             port: 3030
+          agentic_tools:
+            installed: []
           EOF
+          export AGOR_JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          export AGOR_MASTER_SECRET=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
           BIN="$RUNNER_TEMP/smoke-install/node_modules/agor-live/bin"
           cd "$RUNNER_TEMP/smoke-install"
 
