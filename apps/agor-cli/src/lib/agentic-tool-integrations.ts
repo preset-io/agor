@@ -123,6 +123,19 @@ export async function listInstalledAgenticTools(
   return verified.filter((tool): tool is InstallableAgenticTool => tool !== undefined);
 }
 
+/** Known tool directories present for a version, including broken installs. */
+export async function listManagedToolDirectories(
+  agorVersion: string
+): Promise<InstallableAgenticTool[]> {
+  try {
+    return (await readdir(join(getAgenticToolsRoot(), agorVersion), { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && isInstallableAgenticTool(entry.name))
+      .map((entry) => entry.name as InstallableAgenticTool);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * The newest version older than `currentVersion` that still has tools installed,
  * i.e. the set a user had before upgrading Agor.
@@ -144,6 +157,33 @@ export async function findRestorableAgenticTools(currentVersion: string): Promis
 /** Remove a managed version directory wholesale. */
 export async function removeManagedAgorVersion(version: string): Promise<void> {
   await rm(join(getAgenticToolsRoot(), version), { recursive: true, force: true });
+}
+
+/** Remove one current-version integration that is no longer deployment-configured. */
+export async function removeManagedIntegration(
+  tool: InstallableAgenticTool,
+  version: string
+): Promise<void> {
+  await rm(getAgenticToolInstallDir(tool, version), { recursive: true, force: true });
+}
+
+/** Remove staging/backup debris left by an interrupted install. */
+export async function removeManagedInstallDebris(version: string): Promise<string[]> {
+  const parent = join(getAgenticToolsRoot(), version);
+  let entries: string[];
+  try {
+    entries = await readdir(parent);
+  } catch {
+    return [];
+  }
+  const debris = entries.filter(
+    (entry) =>
+      entry.startsWith('.') && (entry.includes('.staging-') || entry.includes('.previous-'))
+  );
+  await Promise.all(
+    debris.map((entry) => rm(join(parent, entry), { recursive: true, force: true }))
+  );
+  return debris;
 }
 
 function runNpmInstall(prefix: string, packageSpec: string): Promise<void> {

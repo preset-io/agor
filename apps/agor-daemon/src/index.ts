@@ -58,6 +58,7 @@ import { createRequireAuthHook } from './auth/require-auth.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
+import { assertConfiguredAgenticToolsAligned } from './setup/agentic-tool-alignment.js';
 import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
@@ -165,6 +166,11 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.
   config = resolveEffectiveConfig(config);
+
+  // Deployment package availability is instance-global. Validate it before
+  // database or tenant initialization so no tenant can expand the daemon's
+  // installed-code surface and a broken upgrade never starts listening.
+  await assertConfiguredAgenticToolsAligned(config);
 
   const multiTenancy = resolveMultiTenancyConfig(config);
   console.log(

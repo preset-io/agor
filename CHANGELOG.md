@@ -34,16 +34,19 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 ### Breaking
 
 - **`config.yaml` is immutable after initialization** — daemon startup, telemetry, Docker entrypoints, upgrades, APIs, MCP, and UI flows no longer rewrite the deployment-owned YAML file. Configure stable JWT/master secrets with environment variables or YAML before startup. The mutating `agor config set/get/unset` commands are removed; `agor config --yaml` materializes the effective read-only configuration. Existing Docker environment overrides are resolved in memory instead of being written to YAML.
+- **Agentic tool packages are deployment-declared and strictly aligned** — configure the exact tool set under `agentic_tools.installed`, then run `agor install`. The command reconciles that set and removes stale/unconfigured packages by default; the packaged daemon refuses to start when configured integrations do not exactly match its version.
 
 ### Features
 
-- **Version-aligned agentic tool installs** — keeps the base npm install lean and adds explicit `agor install <tool>` / `agor init` flows for isolated Claude, Codex, Copilot, Gemini, OpenCode, and Cursor integrations. ([#2201](https://github.com/preset-io/agor/pull/2201))
+- **Version-aligned agentic tool installs** — keeps the base npm install lean and adds init/config selection plus `agor install` reconciliation for isolated Claude, Codex, Copilot, Gemini, OpenCode, and Cursor integrations. ([#2201](https://github.com/preset-io/agor/pull/2201))
 
 ### Fixes
 
 - **Reliable cold-cache global installs** — removes deprecated transitive trees and bundled agent runtimes from `agor-live`, bundles selected high-fanout pure-JS dependencies, and adds package-content and low-file-descriptor installation checks. ([#2201](https://github.com/preset-io/agor/pull/2201))
 
 ### Chores
+
+- **Prepare agor-live 0.24.1** — bumps `agor-live`, `@agor-live/client`, and all six version-aligned agentic-tool integration packages together.
 
 - **Prepare agor-live 0.24.0** — bumps `agor-live`, `@agor-live/client`, and the version-aligned `@agor/*` integration packages together. ([#2201](https://github.com/preset-io/agor/pull/2201))
 

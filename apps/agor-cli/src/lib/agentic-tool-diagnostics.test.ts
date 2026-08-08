@@ -27,9 +27,7 @@ describe('agentic tool diagnostics', () => {
 
     expect(diagnostics).toHaveLength(6);
     expect(diagnostics.every((tool) => tool.status === 'missing')).toBe(true);
-    expect(diagnostics.find((tool) => tool.id === 'claude-code')?.detail).toBe(
-      'Run: agor install claude'
-    );
+    expect(diagnostics.find((tool) => tool.id === 'claude-code')?.detail).toBe('Run: agor install');
   });
 
   it('reports a corrupt managed integration as unusable', async () => {
@@ -52,6 +50,6 @@ describe('agentic tool diagnostics', () => {
     const codex = diagnostics.find((tool) => tool.id === 'codex');
 
     expect(codex).toMatchObject({ status: 'unusable', path: install });
-    expect(codex?.detail).toContain('agor install codex');
+    expect(codex?.detail).toContain('agor install');
   });
 });

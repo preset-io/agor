@@ -238,6 +238,14 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private branchRepo: BranchRepository;
   private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
+  private deploymentTools: ReadonlySet<AgenticToolName> | null;
+
+  private assertDeploymentToolConfigured(tool: AgenticToolName): void {
+    if (this.deploymentTools === null || this.deploymentTools.has(tool)) return;
+    throw new BadRequest(
+      `${tool} is not installed for this deployment. An operator must add it to config.yaml agentic_tools.installed and run agor install.`
+    );
+  }
 
   private assertSupportedModelConfig(
     agenticTool: Session['agentic_tool'],
@@ -269,7 +277,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     return policy.resolveCatalogFallback(catalog);
   }
 
-  constructor(db: TenantScopeAwareDatabase, app: Application) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    app: Application,
+    deploymentTools: ReadonlySet<AgenticToolName> | null = null
+  ) {
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
       id: 'session_id',
@@ -283,6 +295,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     this.sessionRepo = sessionRepo;
     this.db = db;
+    this.deploymentTools = deploymentTools;
     this.app = app;
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
     this.sessionRelationshipRepo = new SessionRelationshipRepository(db);
@@ -341,6 +354,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       return Promise.all(data.map((session) => this.create(session, params) as Promise<Session>));
     }
     const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
+    this.assertDeploymentToolConfigured(agenticTool);
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
       throw new BadRequest(`${agenticTool} is disabled for this workspace`);
     }
@@ -1342,6 +1356,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (patchedAgenticTool && !(await isTenantAgenticToolEnabled(patchedAgenticTool, this.db))) {
       throw new BadRequest(`${patchedAgenticTool} is disabled for this workspace`);
     }
+    if (patchedAgenticTool) this.assertDeploymentToolConfigured(patchedAgenticTool);
     // `agentic_tool` is immutable once a session has tasks. Multi-session and
     // array patches that touch it are already rejected above, so the single-id
     // path is the only one that can reach the actual mutation — enforce the
@@ -1564,7 +1579,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
  */
 export function createSessionsService(
   db: TenantScopeAwareDatabase,
-  app: Application
+  app: Application,
+  deploymentTools: ReadonlySet<AgenticToolName> | null = null
 ): SessionsService {
-  return new SessionsService(db, app);
+  return new SessionsService(db, app, deploymentTools);
 }

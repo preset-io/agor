@@ -65,6 +65,14 @@ export type ManagedAgenticToolIntegration<T = unknown> = {
   sdkV2?: unknown;
 };
 
+export type ManagedAgenticToolAlignment = {
+  tool: InstallableAgenticTool;
+  displayName: string;
+  expectedVersion: string;
+  status: 'ready' | 'missing-or-invalid';
+  detail?: string;
+};
+
 async function findInstalledPackageDirectory(
   fromEntry: string,
   packageName: string,
@@ -120,6 +128,40 @@ export async function resolveManagedAgenticToolIntegration<T>(
   const integrationEntry = await realpath(require.resolve(definition.packageName));
   await resolveManagedAgenticToolPackageDirectory(tool, agorVersion, definition.vendorPackage);
   return import(pathToFileURL(integrationEntry).href) as Promise<ManagedAgenticToolIntegration<T>>;
+}
+
+/** Inspect the deployment-configured integrations without mutating disk. */
+export async function inspectManagedAgenticToolAlignment(
+  tools: readonly InstallableAgenticTool[],
+  agorVersion: string
+): Promise<ManagedAgenticToolAlignment[]> {
+  return Promise.all(
+    tools.map(async (tool) => {
+      const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
+      try {
+        const integration = await resolveManagedAgenticToolIntegration(tool, agorVersion);
+        if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdk) {
+          throw new Error(
+            `integration reports ${integration.AGOR_INTEGRATION_VERSION ?? 'no version'}`
+          );
+        }
+        return {
+          tool,
+          displayName: definition.displayName,
+          expectedVersion: agorVersion,
+          status: 'ready' as const,
+        };
+      } catch (error) {
+        return {
+          tool,
+          displayName: definition.displayName,
+          expectedVersion: agorVersion,
+          status: 'missing-or-invalid' as const,
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+    })
+  );
 }
 
 /**

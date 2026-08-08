@@ -2,10 +2,17 @@
  * Agor Configuration Types
  */
 
+import type { InstallableAgenticTool } from '../agentic-integrations';
 import type { ManagedEnvExecutionMode } from '../environment/webhook';
 
 export type { ManagedEnvExecutionMode };
 export type ManagedEnvsExecutionMode = ManagedEnvExecutionMode;
+
+/** Deployment-owned agentic-tool package selection. */
+export interface AgorAgenticToolsSettings {
+  /** Integrations that must match the running Agor version exactly. */
+  installed?: InstallableAgenticTool[];
+}
 
 /**
  * Type for user-provided JSON data where structure is unknown or dynamic
@@ -986,6 +993,9 @@ export interface AgorUploadSettings {
  * Complete Agor configuration
  */
 export interface AgorConfig {
+  /** Deployment-owned agentic-tool package selection. */
+  agentic_tools?: AgorAgenticToolsSettings;
+
   /** Daemon settings */
   daemon?: AgorDaemonSettings;
 
@@ -1027,6 +1037,7 @@ export interface AgorConfig {
  * Valid config keys (includes nested keys with dot notation)
  */
 export type ConfigKey =
+  | `agentic_tools.${keyof AgorAgenticToolsSettings}`
   | `daemon.${keyof AgorDaemonSettings}`
   | `ui.${keyof AgorUISettings}`
   | `database.${keyof AgorDatabaseSettings}`

@@ -227,7 +227,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Core services: sessions, tasks, messages
   // ============================================================================
 
-  const sessionsService = createSessionsService(db, app) as unknown as SessionsServiceImpl;
+  const deploymentAgenticTools =
+    process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1'
+      ? new Set(config.agentic_tools?.installed ?? [])
+      : null;
+  const sessionsService = createSessionsService(
+    db,
+    app,
+    deploymentAgenticTools
+  ) as unknown as SessionsServiceImpl;
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
@@ -558,7 +566,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.use('/admin/local-actions', createLocalActionsService(createLocalDaemonHostOperations()));
   }
 
-  app.use('/agentic-tool-settings', createTenantAgenticToolSettingsService(db));
+  app.use('/agentic-tool-settings', createTenantAgenticToolSettingsService(db, config));
   app.service('/agentic-tool-settings').hooks({ before: { all: [ctx.requireAuth] } });
   app.use('/agentic-tool-presets', createAgenticToolPresetsService(db));
   app.service('/agentic-tool-presets').hooks({ before: { all: [ctx.requireAuth] } });

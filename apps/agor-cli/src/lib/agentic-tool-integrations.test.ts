@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -6,7 +6,10 @@ import {
   findRestorableAgenticTools,
   listInstalledAgenticTools,
   listManagedAgorVersions,
+  listManagedToolDirectories,
   removeManagedAgorVersion,
+  removeManagedInstallDebris,
+  removeManagedIntegration,
 } from './agentic-tool-integrations.js';
 
 const originalRoot = process.env.AGOR_AGENTIC_TOOLS_DIR;
@@ -111,6 +114,30 @@ describe('listInstalledAgenticTools', () => {
     await mkdir(join(root, '0.24.0', 'not-a-tool'), { recursive: true });
 
     expect(await listInstalledAgenticTools('0.24.0')).toEqual(['claude-code']);
+  });
+});
+
+describe('managed integration cleanup', () => {
+  it('lists and removes broken current-version tool directories', async () => {
+    const root = await createRoot();
+    await mkdir(join(root, '0.24.0', 'codex'), { recursive: true });
+
+    expect(await listManagedToolDirectories('0.24.0')).toEqual(['codex']);
+    await removeManagedIntegration('codex', '0.24.0');
+    await expect(access(join(root, '0.24.0', 'codex'))).rejects.toThrow();
+  });
+
+  it('removes interrupted staging and backup directories', async () => {
+    const root = await createRoot();
+    await mkdir(join(root, '0.24.0', '.codex.staging-one'), { recursive: true });
+    await mkdir(join(root, '0.24.0', '.codex.previous-two'), { recursive: true });
+    await mkdir(join(root, '0.24.0', 'codex'), { recursive: true });
+
+    expect((await removeManagedInstallDebris('0.24.0')).sort()).toEqual([
+      '.codex.previous-two',
+      '.codex.staging-one',
+    ]);
+    expect(await listManagedToolDirectories('0.24.0')).toEqual(['codex']);
   });
 });
 

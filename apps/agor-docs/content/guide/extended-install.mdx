@@ -40,15 +40,18 @@ npm install -g agor-live@latest
 agor init
 ```
 
-During `agor init`, select any agentic tools you want installed. The choice is explicit: the original
-npm installation never downloads optional runtimes, and initialization shows the selection before
-running npm. You can skip everything and add tools later:
+During `agor init`, select the agentic tools this deployment supports. Init records that selection in
+the deployment-owned configuration and installs the packages. The original npm installation never
+downloads optional runtimes. You can skip everything and add tools later by editing the file:
 
-```bash
-agor install claude
-agor install claude codex
-agor install gemini
+```yaml filename="~/.agor/config.yaml"
+agentic_tools:
+  installed:
+    - claude-code
+    - codex
 ```
+
+Then run `agor install` to reconcile disk state.
 
 `agor install` uses your configured npm registry, proxy, authentication, and integrity verification,
 but installs into Agor's private runtime directory rather than changing global npm state. Installation
@@ -62,23 +65,23 @@ agor agentic-tools
 agor doctor
 ```
 
-An absent integration does not prevent Agor from starting. Selecting that tool for a session produces
-an actionable error with the corresponding `agor install` command.
+The packaged daemon refuses to start when a configured integration is absent, corrupt, or from a
+different Agor version. Unconfigured tools are unavailable to tenants and do not block startup.
 
-| Agentic tool | Install command | Managed package |
+| Agentic tool | Configuration value | Managed package |
 | --- | --- | --- |
-| Claude Code | `agor install claude` | `@agor-live/claude` |
-| Codex | `agor install codex` | `@agor-live/codex` |
-| Gemini | `agor install gemini` | `@agor-live/gemini` |
-| GitHub Copilot | `agor install copilot` | `@agor-live/copilot` |
-| OpenCode | `agor install opencode` | `@agor-live/opencode` |
-| Cursor | `agor install cursor` | `@agor-live/cursor` |
+| Claude Code | `claude-code` | `@agor-live/claude` |
+| Codex | `codex` | `@agor-live/codex` |
+| Gemini | `gemini` | `@agor-live/gemini` |
+| GitHub Copilot | `copilot` | `@agor-live/copilot` |
+| OpenCode | `opencode` | `@agor-live/opencode` |
+| Cursor | `cursor` | `@agor-live/cursor` |
 
 For automated images and CI, run the same noninteractive commands after installing Agor:
 
 ```bash
 npm install -g agor-live@latest
-agor install claude codex
+agor init --agentic-tools claude,codex
 ```
 
 Set `AGOR_AGENTIC_TOOLS_DIR` when integrations must live in an administrator-provisioned shared
@@ -92,37 +95,19 @@ daemon and its executors run as different users.
 
 ### Upgrading
 
-Managed integrations are installed per Agor version, so upgrading Agor leaves the previous version's
-integrations behind and the new version starts with none. Reinstall the tools you use, naming them
-explicitly, and confirm the result:
+Managed integrations are installed per Agor version. After upgrading Agor, reconcile the
+deployment-owned list and confirm the result:
 
 ```bash
 npm install -g agor-live@latest
-agor install claude codex
+agor install
 agor doctor
 ```
 
-Naming the tools is the form to script against. It depends on nothing Agor recorded previously, so
-it behaves identically on a fresh machine, after skipping several versions, and in an
-immutable-infrastructure image built from scratch.
-
-On a machine that already had integrations installed, `--restore` reinstalls whatever the previous
-version had, as a convenience for interactive upgrades:
-
-```bash
-agor install --restore
-```
-
-On a machine with nothing installed it reports that there is nothing to restore and exits
-successfully, so it is safe to leave in an unattended script — but a fresh or rebuilt host has no
-previous version to read, so provisioning must still name its tools.
-
-Integrations from older versions are kept until you remove them. Reclaim that space with `--prune`,
-which deletes managed directories belonging to every version except the one you are running:
-
-```bash
-agor install --prune
-```
+`agor install` is declarative and idempotent. It installs missing or invalid configured packages,
+removes current-version packages absent from `agentic_tools.installed`, deletes every older-version
+directory, and cleans interrupted staging/backup directories. There is currently no compatibility
+range or keep-old mode: every managed wrapper must exactly match `agor-live`.
 
 Microsoft Teams gateway support remains optional and separate from agentic tools:
 

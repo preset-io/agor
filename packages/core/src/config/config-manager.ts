@@ -10,6 +10,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
+import { isInstallableAgenticTool } from '../agentic-integrations';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import {
@@ -273,6 +274,7 @@ function validateConfig(config: AgorConfig): void {
   }
 
   const knownTopLevelKeys = new Set([
+    'agentic_tools',
     'defaults',
     'display',
     'daemon',
@@ -305,6 +307,28 @@ function validateConfig(config: AgorConfig): void {
     }
   };
   const legacyConfig = config as LegacyConfig;
+  only(config.agentic_tools, 'agentic_tools', ['installed']);
+  if (config.agentic_tools?.installed !== undefined) {
+    if (!Array.isArray(config.agentic_tools.installed)) {
+      throw new Error("Config error: 'agentic_tools.installed' must be an array");
+    }
+    const unknown = config.agentic_tools.installed.filter(
+      (tool) => typeof tool !== 'string' || !isInstallableAgenticTool(tool)
+    );
+    if (unknown.length > 0) {
+      throw new Error(
+        `Config error: 'agentic_tools.installed' contains unsupported tool(s): ${unknown.join(', ')}`
+      );
+    }
+    const duplicates = config.agentic_tools.installed.filter(
+      (tool, index, tools) => tools.indexOf(tool) !== index
+    );
+    if (duplicates.length > 0) {
+      throw new Error(
+        `Config error: 'agentic_tools.installed' contains duplicate tool(s): ${[...new Set(duplicates)].join(', ')}`
+      );
+    }
+  }
   only(legacyConfig.defaults, 'defaults', RETIRED_CONFIG_KEYS.defaults);
   // Known upgrade-only keys remain loadable so the daemon can print its
   // dedicated deprecation guidance before ignoring them. `display` is not

@@ -4,10 +4,7 @@ import {
   type InstallableAgenticTool,
   resolveManagedAgenticToolIntegration,
 } from '@agor/core/agentic-integrations';
-import {
-  getAgenticToolInstallSlug,
-  readManagedIntegrationManifest,
-} from './agentic-tool-integrations.js';
+import { readManagedIntegrationManifest } from './agentic-tool-integrations.js';
 
 export type AgenticToolDiagnostic = {
   id: InstallableAgenticTool;
@@ -35,7 +32,7 @@ async function diagnoseManagedIntegration(
       name: definition.displayName,
       kind: 'managed-integration',
       status: 'missing',
-      detail: `Run: agor install ${getAgenticToolInstallSlug(tool)}`,
+      detail: 'Run: agor install',
       docsUrl: DOCS_BASE,
     };
   }
@@ -61,7 +58,7 @@ async function diagnoseManagedIntegration(
       kind: 'managed-integration',
       status: 'unusable',
       path: installDir,
-      detail: `${error instanceof Error ? error.message : String(error)}. Run: agor install ${getAgenticToolInstallSlug(tool)}`,
+      detail: `${error instanceof Error ? error.message : String(error)}. Run: agor install`,
       docsUrl: DOCS_BASE,
     };
   }

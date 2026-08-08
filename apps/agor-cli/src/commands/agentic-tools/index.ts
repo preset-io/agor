@@ -1,6 +1,8 @@
+import { loadConfig } from '@agor/core/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { diagnoseAgenticTools } from '../../lib/agentic-tool-diagnostics.js';
+import { listManagedAgorVersions } from '../../lib/agentic-tool-integrations.js';
 
 export default class AgenticTools extends Command {
   static description = 'Show which agentic tools are available to Agor';
@@ -13,8 +15,21 @@ export default class AgenticTools extends Command {
     const diagnostics = await diagnoseAgenticTools(
       process.env.AGOR_INTEGRATION_VERSION ?? this.config.version
     );
+    const config = await loadConfig();
+    const configured = config.agentic_tools?.installed ?? [];
+    const configuredSet = new Set(configured);
+    const agorVersion = process.env.AGOR_INTEGRATION_VERSION ?? this.config.version;
+    const staleVersions = (await listManagedAgorVersions()).filter(
+      (version) => version !== agorVersion
+    );
     if (flags.json) {
-      this.log(JSON.stringify({ agenticTools: diagnostics }, null, 2));
+      this.log(
+        JSON.stringify(
+          { agorVersion, configured, staleVersions, agenticTools: diagnostics },
+          null,
+          2
+        )
+      );
       return;
     }
     this.log(chalk.bold('Agentic tools\n'));
@@ -25,13 +40,20 @@ export default class AgenticTools extends Command {
           : item.status === 'missing'
             ? chalk.yellow('○')
             : chalk.red('✗');
-      this.log(`  ${marker} ${chalk.bold(item.name)}  ${item.status}`);
+      this.log(
+        `  ${marker} ${chalk.bold(item.name)}  ${item.status}  ${configuredSet.has(item.id) ? chalk.cyan('configured') : chalk.dim('unconfigured')}`
+      );
       if (item.version) this.log(chalk.dim(`      ${item.version}`));
       if (item.path) this.log(chalk.dim(`      ${item.path}`));
-      if (item.detail) this.log(chalk.red(`      ${item.detail}`));
-      if (item.status !== 'ready') this.log(chalk.dim(`      ${item.docsUrl}`));
+      if (item.detail && configuredSet.has(item.id)) this.log(chalk.red(`      ${item.detail}`));
+      if (item.status !== 'ready' && configuredSet.has(item.id)) {
+        this.log(chalk.dim(`      ${item.docsUrl}`));
+      }
+    }
+    if (staleVersions.length > 0) {
+      this.log(chalk.yellow(`\n  Stale Agor versions: ${staleVersions.join(', ')}`));
     }
     this.log('');
-    this.log(chalk.dim('Agor only requires the agentic tools you choose to use.'));
+    this.log(chalk.dim('Run `agor install` to align this state exactly with config.yaml.'));
   }
 }

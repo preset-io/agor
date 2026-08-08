@@ -9,6 +9,21 @@ Change operator settings in the file (or its Helm/Terraform/Ansible/secret-manag
 restart the daemon. Settings needed before the database is reachable—database/bootstrap, tenant
 routing, filesystem, listener, executor, and security settings—belong here or in deployment env.
 
+The agentic-tool package set is also deployment-owned:
+
+```yaml
+agentic_tools:
+  installed:
+    - claude-code
+    - codex
+```
+
+After editing this list, run `agor install`. It installs the exact matching package version, removes
+unconfigured tools and packages from older Agor versions, and leaves `config.yaml` untouched. The
+packaged daemon fails before listening if any configured integration is missing or misaligned.
+Tenant administrators may disable an installed tool but cannot install packages or enable a tool
+absent from this deployment list.
+
 ## Environment precedence
 
 Supported environment overrides still win over YAML. Important examples are `PORT`,
@@ -29,8 +44,8 @@ commands; edit the deployment-owned source explicitly.
 
 ## Ownership
 
-- **Deployment-global:** YAML/environment (database, tenancy, static tenant, listener, secrets,
-  filesystem, executor, security, global telemetry).
+- **Deployment-global:** YAML/environment (agentic-tool packages, database, tenancy, static tenant,
+  listener, secrets, filesystem, executor, security, global telemetry).
 - **Tenant-owned:** database-backed workspace settings such as agentic tools and Knowledge policy.
 - **User-owned:** database-backed preferences, credentials, and defaults.
 

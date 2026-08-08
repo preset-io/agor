@@ -268,6 +268,40 @@ describe('loadConfig', () => {
     await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: speculative_feature/);
   });
 
+  it('accepts a deployment-owned agentic tool package list', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { installed: ['claude-code', 'codex'] } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      agentic_tools: { installed: ['claude-code', 'codex'] },
+    });
+  });
+
+  it('rejects unsupported or duplicate configured agentic tools', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { installed: ['codex', 'codex'] } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/duplicate tool.*codex/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { installed: ['future-tool'] } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/unsupported tool.*future-tool/);
+  });
+
   it('rejects the removed proxies config surface as an unknown top-level key', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
