@@ -928,7 +928,7 @@ export function formatConfigYaml(config: AgorConfig): string {
 /** Instance-global package gate; tenant settings may narrow but never expand it. */
 export function isDeploymentAgenticToolAvailable(
   tool: AgenticToolName,
-  config: AgorConfig = loadConfigSync(),
+  config: AgorConfig,
   env: NodeJS.ProcessEnv = process.env
 ): boolean {
   if (env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return true;

@@ -800,7 +800,13 @@ function createExecuteHandler(
     params: any
   ) => {
     const tenantId = getCurrentTenantId();
-    const session = await prepareSessionForExecutorStart(db, sessionsService, sessionId, params);
+    const session = await prepareSessionForExecutorStart(
+      db,
+      sessionsService,
+      sessionId,
+      params,
+      config
+    );
     const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
     if (
       session.agentic_tool_preset_id &&

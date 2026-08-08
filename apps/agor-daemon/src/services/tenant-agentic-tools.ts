@@ -121,7 +121,7 @@ export class TenantAgenticToolSettingsService {
 
 export function createTenantAgenticToolSettingsService(
   db: TenantScopeAwareDatabase,
-  config?: AgorConfig
+  config: AgorConfig
 ) {
   return new TenantAgenticToolSettingsService(db, (tool) =>
     isDeploymentAgenticToolAvailable(tool, config)
