@@ -1,6 +1,7 @@
 {
   "name": "@agor/executor",
   "version": "0.1.0",
+  "private": true,
   "description": "Agor executor process - isolated execution environment",
   "license": "BUSL-1.1",
   "type": "module",

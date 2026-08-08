@@ -34,7 +34,7 @@ async function createFakeManagedClaude(version: string): Promise<string> {
   const packageDirectory = join(
     getAgenticToolInstallDir('claude-code', version),
     'node_modules',
-    '@agor',
+    '@agor-live',
     'claude'
   );
   const vendorDirectory = join(
@@ -47,7 +47,7 @@ async function createFakeManagedClaude(version: string): Promise<string> {
   await mkdir(vendorDirectory, { recursive: true });
   await writeFile(
     join(packageDirectory, 'package.json'),
-    JSON.stringify({ name: '@agor/claude', type: 'module', exports: './index.js' })
+    JSON.stringify({ name: '@agor-live/claude', type: 'module', exports: './index.js' })
   );
   await writeFile(
     join(vendorDirectory, 'package.json'),

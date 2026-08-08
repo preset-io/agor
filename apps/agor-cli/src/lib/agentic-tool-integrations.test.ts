@@ -83,21 +83,21 @@ describe('listManagedAgorVersions', () => {
 describe('listInstalledAgenticTools', () => {
   it('lists tools that have a verified manifest', async () => {
     const root = await createRoot();
-    await installFixture(root, '0.24.0', 'claude-code', '@agor/claude');
-    await installFixture(root, '0.24.0', 'codex', '@agor/codex');
+    await installFixture(root, '0.24.0', 'claude-code', '@agor-live/claude');
+    await installFixture(root, '0.24.0', 'codex', '@agor-live/codex');
 
     expect((await listInstalledAgenticTools('0.24.0')).sort()).toEqual(['claude-code', 'codex']);
   });
 
   it('skips directories whose manifest is missing or misaligned', async () => {
     const root = await createRoot();
-    await installFixture(root, '0.24.0', 'claude-code', '@agor/claude');
+    await installFixture(root, '0.24.0', 'claude-code', '@agor-live/claude');
     // A half-finished install: directory exists, no manifest.
     await mkdir(join(root, '0.24.0', 'codex'), { recursive: true });
     // A manifest that disagrees with the directory it lives in.
-    await installFixture(root, '0.24.0', 'gemini', '@agor/gemini', {
+    await installFixture(root, '0.24.0', 'gemini', '@agor-live/gemini', {
       agorVersion: '0.23.0',
-      packageName: '@agor/gemini',
+      packageName: '@agor-live/gemini',
       packageVersion: '0.23.0',
       installedAt: new Date().toISOString(),
     });
@@ -107,7 +107,7 @@ describe('listInstalledAgenticTools', () => {
 
   it('ignores directory names that are not known tools', async () => {
     const root = await createRoot();
-    await installFixture(root, '0.24.0', 'claude-code', '@agor/claude');
+    await installFixture(root, '0.24.0', 'claude-code', '@agor-live/claude');
     await mkdir(join(root, '0.24.0', 'not-a-tool'), { recursive: true });
 
     expect(await listInstalledAgenticTools('0.24.0')).toEqual(['claude-code']);
@@ -117,9 +117,9 @@ describe('listInstalledAgenticTools', () => {
 describe('findRestorableAgenticTools', () => {
   it('returns the newest older version that still has tools', async () => {
     const root = await createRoot();
-    await installFixture(root, '0.22.0', 'gemini', '@agor/gemini');
-    await installFixture(root, '0.23.0', 'claude-code', '@agor/claude');
-    await installFixture(root, '0.23.0', 'codex', '@agor/codex');
+    await installFixture(root, '0.22.0', 'gemini', '@agor-live/gemini');
+    await installFixture(root, '0.23.0', 'claude-code', '@agor-live/claude');
+    await installFixture(root, '0.23.0', 'codex', '@agor-live/codex');
 
     const restorable = await findRestorableAgenticTools('0.24.0');
 
@@ -129,7 +129,7 @@ describe('findRestorableAgenticTools', () => {
 
   it('skips older versions whose directories hold nothing usable', async () => {
     const root = await createRoot();
-    await installFixture(root, '0.22.0', 'gemini', '@agor/gemini');
+    await installFixture(root, '0.22.0', 'gemini', '@agor-live/gemini');
     await mkdir(join(root, '0.23.0', 'codex'), { recursive: true }); // no manifest
 
     expect((await findRestorableAgenticTools('0.24.0'))?.version).toBe('0.22.0');
@@ -137,8 +137,8 @@ describe('findRestorableAgenticTools', () => {
 
   it('never restores from the current or a newer version', async () => {
     const root = await createRoot();
-    await installFixture(root, '0.24.0', 'claude-code', '@agor/claude');
-    await installFixture(root, '0.25.0', 'codex', '@agor/codex');
+    await installFixture(root, '0.24.0', 'claude-code', '@agor-live/claude');
+    await installFixture(root, '0.25.0', 'codex', '@agor-live/codex');
 
     expect(await findRestorableAgenticTools('0.24.0')).toBeNull();
   });
@@ -153,8 +153,8 @@ describe('findRestorableAgenticTools', () => {
 describe('removeManagedAgorVersion', () => {
   it('removes a version directory and leaves the others intact', async () => {
     const root = await createRoot();
-    await installFixture(root, '0.23.0', 'claude-code', '@agor/claude');
-    await installFixture(root, '0.24.0', 'claude-code', '@agor/claude');
+    await installFixture(root, '0.23.0', 'claude-code', '@agor-live/claude');
+    await installFixture(root, '0.24.0', 'claude-code', '@agor-live/claude');
 
     await removeManagedAgorVersion('0.23.0');
 
@@ -163,7 +163,7 @@ describe('removeManagedAgorVersion', () => {
 
   it('is a no-op for a version that is not installed', async () => {
     const root = await createRoot();
-    await installFixture(root, '0.24.0', 'claude-code', '@agor/claude');
+    await installFixture(root, '0.24.0', 'claude-code', '@agor-live/claude');
 
     await expect(removeManagedAgorVersion('0.19.0')).resolves.toBeUndefined();
     expect(await listManagedAgorVersions()).toEqual(['0.24.0']);

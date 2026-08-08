@@ -6,27 +6,31 @@ import { pathToFileURL } from 'node:url';
 
 export const AGENTIC_TOOL_INTEGRATIONS = {
   'claude-code': {
-    packageName: '@agor/claude',
+    packageName: '@agor-live/claude',
     vendorPackage: '@anthropic-ai/claude-agent-sdk',
     displayName: 'Claude Code',
   },
-  codex: { packageName: '@agor/codex', vendorPackage: '@openai/codex-sdk', displayName: 'Codex' },
+  codex: {
+    packageName: '@agor-live/codex',
+    vendorPackage: '@openai/codex-sdk',
+    displayName: 'Codex',
+  },
   copilot: {
-    packageName: '@agor/copilot',
+    packageName: '@agor-live/copilot',
     vendorPackage: '@github/copilot-sdk',
     displayName: 'GitHub Copilot',
   },
   gemini: {
-    packageName: '@agor/gemini',
+    packageName: '@agor-live/gemini',
     vendorPackage: '@google/gemini-cli-core',
     displayName: 'Gemini',
   },
   opencode: {
-    packageName: '@agor/opencode',
+    packageName: '@agor-live/opencode',
     vendorPackage: '@opencode-ai/sdk',
     displayName: 'OpenCode',
   },
-  cursor: { packageName: '@agor/cursor', vendorPackage: '@cursor/sdk', displayName: 'Cursor' },
+  cursor: { packageName: '@agor-live/cursor', vendorPackage: '@cursor/sdk', displayName: 'Cursor' },
 } as const;
 
 export type InstallableAgenticTool = keyof typeof AGENTIC_TOOL_INTEGRATIONS;

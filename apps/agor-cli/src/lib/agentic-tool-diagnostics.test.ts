@@ -42,7 +42,7 @@ describe('agentic tool diagnostics', () => {
       join(install, 'agor-integration.json'),
       JSON.stringify({
         agorVersion: '0.24.0',
-        packageName: '@agor/codex',
+        packageName: '@agor-live/codex',
         packageVersion: '0.24.0',
         installedAt: new Date().toISOString(),
       })
