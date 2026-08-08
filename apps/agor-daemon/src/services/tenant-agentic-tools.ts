@@ -1,4 +1,7 @@
-import { type AgorConfig, isDeploymentAgenticToolAvailable } from '@agor/core/config';
+import {
+  type DeploymentAgenticToolPolicy,
+  isDeploymentAgenticToolAvailable,
+} from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { AgenticToolPresetRepository, TenantAgenticToolSettingsRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
@@ -121,9 +124,9 @@ export class TenantAgenticToolSettingsService {
 
 export function createTenantAgenticToolSettingsService(
   db: TenantScopeAwareDatabase,
-  config: AgorConfig
+  policy: DeploymentAgenticToolPolicy
 ) {
   return new TenantAgenticToolSettingsService(db, (tool) =>
-    isDeploymentAgenticToolAvailable(tool, config)
+    isDeploymentAgenticToolAvailable(tool, policy)
   );
 }

@@ -10,7 +10,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
-import { isInstallableAgenticTool } from '../agentic-integrations';
+import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agentic-integrations';
 import type { AgenticToolName } from '../types';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
@@ -925,15 +925,30 @@ export function formatConfigYaml(config: AgorConfig): string {
   return yaml.dump(config, { indent: 2, lineWidth: 120, noRefs: true });
 }
 
+export interface DeploymentAgenticToolPolicy {
+  managed: boolean;
+  installed: ReadonlySet<InstallableAgenticTool>;
+}
+
+/** Capture the instance-global package policy once during daemon startup. */
+export function resolveDeploymentAgenticToolPolicy(
+  config: AgorConfig,
+  env: NodeJS.ProcessEnv = process.env
+): DeploymentAgenticToolPolicy {
+  return {
+    managed: env.AGOR_MANAGED_AGENTIC_TOOLS === '1',
+    installed: new Set(config.agentic_tools?.installed ?? []),
+  };
+}
+
 /** Instance-global package gate; tenant settings may narrow but never expand it. */
 export function isDeploymentAgenticToolAvailable(
   tool: AgenticToolName,
-  config: AgorConfig,
-  env: NodeJS.ProcessEnv = process.env
+  policy: DeploymentAgenticToolPolicy
 ): boolean {
-  if (env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return true;
+  if (!policy.managed) return true;
   if (!isInstallableAgenticTool(tool)) return false;
-  return config.agentic_tools?.installed?.includes(tool) === true;
+  return policy.installed.has(tool);
 }
 
 /**

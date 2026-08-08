@@ -13,6 +13,7 @@ import {
   isDeploymentAgenticToolAvailable,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
+  resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
@@ -194,6 +195,7 @@ export interface RegisteredServices {
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
   const { db, app, config, jwtSecret, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
+  const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
 
   const _superadminOpts = { allowSuperadmin };
 
@@ -229,7 +231,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   const sessionsService = createSessionsService(db, app, (tool) =>
-    isDeploymentAgenticToolAvailable(tool, config)
+    isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
   ) as unknown as SessionsServiceImpl;
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
@@ -561,7 +563,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.use('/admin/local-actions', createLocalActionsService(createLocalDaemonHostOperations()));
   }
 
-  app.use('/agentic-tool-settings', createTenantAgenticToolSettingsService(db, config));
+  app.use(
+    '/agentic-tool-settings',
+    createTenantAgenticToolSettingsService(db, deploymentAgenticToolPolicy)
+  );
   app.service('/agentic-tool-settings').hooks({ before: { all: [ctx.requireAuth] } });
   app.use('/agentic-tool-presets', createAgenticToolPresetsService(db));
   app.service('/agentic-tool-presets').hooks({ before: { all: [ctx.requireAuth] } });
@@ -786,6 +791,7 @@ function createExecuteHandler(
   sessionTokenService: import('./services/session-token-service.js').SessionTokenService
 ) {
   const { db, app, config, daemonUrl } = ctx;
+  const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
 
   return async (
     sessionId: string,
@@ -805,7 +811,7 @@ function createExecuteHandler(
       sessionsService,
       sessionId,
       params,
-      config
+      deploymentAgenticToolPolicy
     );
     const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
     if (

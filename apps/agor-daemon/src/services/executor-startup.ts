@@ -1,5 +1,5 @@
 import {
-  type AgorConfig,
+  type DeploymentAgenticToolPolicy,
   isDeploymentAgenticToolAvailable,
   isTenantAgenticToolEnabled,
 } from '@agor/core/config';
@@ -25,7 +25,7 @@ export async function prepareSessionForExecutorStart(
   sessionsService: ExecutorStartupSessionsService,
   sessionId: string,
   params: AuthenticatedParams,
-  deploymentConfig: AgorConfig = {}
+  deploymentPolicy: DeploymentAgenticToolPolicy = { managed: false, installed: new Set() }
 ): Promise<ActiveExecutorSession> {
   const tenantId = getCurrentTenantId();
   if (!tenantId) throw new Error('Missing active tenant context for executor startup');
@@ -34,7 +34,7 @@ export async function prepareSessionForExecutorStart(
     const session = await sessionsService.get(sessionId, params);
     if (!session) throw new Error(`Session ${sessionId} not found`);
     const agenticTool = requireActiveAgenticTool(session.agentic_tool);
-    if (!isDeploymentAgenticToolAvailable(agenticTool, deploymentConfig)) {
+    if (!isDeploymentAgenticToolAvailable(agenticTool, deploymentPolicy)) {
       throw new Error(`${agenticTool} is not installed for this deployment`);
     }
     if (!(await isTenantAgenticToolEnabled(agenticTool, tenantDb))) {

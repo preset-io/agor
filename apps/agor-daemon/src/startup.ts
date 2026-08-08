@@ -7,9 +7,10 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { AgorConfig } from '@agor/core/config';
 import {
+  type AgorConfig,
   getAgorHome,
+  resolveDeploymentAgenticToolPolicy,
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
   resolveMultiTenancyConfig,
@@ -727,7 +728,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
   {
     const multiTenancy = resolveMultiTenancyConfig(config);
     schedulerService = new SchedulerService(db, app, {
-      deploymentConfig: config,
+      deploymentPolicy: resolveDeploymentAgenticToolPolicy(config),
       tickInterval: 30000, // 30 seconds
       gracePeriod: 120000, // 2 minutes
       unixUserMode: config.execution?.unix_user_mode ?? 'simple',

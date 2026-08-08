@@ -44,6 +44,8 @@ describe('headless admin bootstrap', () => {
 
   it('retains the explicit local force-init development convenience', () => {
     expect(shouldDeferAdminSetup(false, 'development')).toBe(false);
+    expect(shouldDeferAdminSetup(false, 'test')).toBe(false);
+    expect(shouldDeferAdminSetup(false, '')).toBe(true);
     expect(shouldDeferAdminSetup(false, 'production')).toBe(true);
   });
 });

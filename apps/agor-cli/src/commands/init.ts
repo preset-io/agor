@@ -62,7 +62,7 @@ export function createInstallTelemetryConfig(config: AgorConfig, instanceId: str
 }
 
 export function shouldDeferAdminSetup(nonInteractive: boolean, nodeEnv = process.env.NODE_ENV) {
-  return nonInteractive || nodeEnv === 'production';
+  return nonInteractive || (nodeEnv !== 'development' && nodeEnv !== 'test');
 }
 
 export default class Init extends Command {

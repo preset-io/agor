@@ -41,7 +41,7 @@
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
-  type AgorConfig,
+  type DeploymentAgenticToolPolicy,
   InvalidScheduleAgenticToolConfigError,
   isDeploymentAgenticToolAvailable,
   isTenantAgenticToolEnabled,
@@ -255,7 +255,7 @@ export class ScheduleNotReadyError extends Error {
 
 export interface SchedulerConfig {
   /** Immutable deployment configuration captured when the daemon starts. */
-  deploymentConfig?: AgorConfig;
+  deploymentPolicy?: DeploymentAgenticToolPolicy;
   /** Tick interval in milliseconds (default: 30000 = 30s) */
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
@@ -287,7 +287,7 @@ export interface SchedulerTestHooks {
 }
 
 interface ResolvedSchedulerConfig {
-  deploymentConfig: AgorConfig;
+  deploymentPolicy: DeploymentAgenticToolPolicy;
   tickInterval: number;
   gracePeriod: number;
   unixUserMode: UnixUserMode;
@@ -333,7 +333,7 @@ export class SchedulerService {
       );
     }
     this.config = {
-      deploymentConfig: config.deploymentConfig ?? {},
+      deploymentPolicy: config.deploymentPolicy ?? { managed: false, installed: new Set() },
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       unixUserMode: config.unixUserMode ?? 'simple',
@@ -833,7 +833,7 @@ export class SchedulerService {
     }
     const cfg = resolvedConfig.config;
     if (
-      !isDeploymentAgenticToolAvailable(resolvedConfig.activeTool, this.config.deploymentConfig)
+      !isDeploymentAgenticToolAvailable(resolvedConfig.activeTool, this.config.deploymentPolicy)
     ) {
       throw new BadRequest(`${resolvedConfig.activeTool} is not installed for this deployment`);
     }
