@@ -63,6 +63,15 @@ export type AgenticToolSelectionManifest = {
   installed: InstallableAgenticTool[];
 };
 
+export class InvalidAgenticToolSelectionManifestError extends Error {
+  constructor(detail: string) {
+    super(
+      `The local agentic-tool selection manifest is invalid or unreadable: ${detail}. Run interactive \`agor install\` to replace it.`
+    );
+    this.name = 'InvalidAgenticToolSelectionManifestError';
+  }
+}
+
 export function getAgenticToolSelectionManifestPath(): string {
   return join(getAgenticToolsRoot(), AGENTIC_TOOL_SELECTION_MANIFEST);
 }
@@ -79,13 +88,17 @@ export async function readAgenticToolSelectionManifest(): Promise<
       !Array.isArray(value.installed) ||
       !value.installed.every((tool) => typeof tool === 'string' && isInstallableAgenticTool(tool))
     )
-      return undefined;
+      throw new InvalidAgenticToolSelectionManifestError('unsupported schema or tool selection');
     return {
       schemaVersion: 1,
       installed: [...new Set(value.installed)] as InstallableAgenticTool[],
     };
-  } catch {
-    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (error instanceof InvalidAgenticToolSelectionManifestError) throw error;
+    throw new InvalidAgenticToolSelectionManifestError(
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }
 

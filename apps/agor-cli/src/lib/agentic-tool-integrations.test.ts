@@ -1,8 +1,9 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  acquireAgenticToolInstallLock,
   findRestorableAgenticTools,
   listInstalledAgenticTools,
   listManagedAgorVersions,
@@ -10,6 +11,7 @@ import {
   removeManagedAgorVersion,
   removeManagedInstallDebris,
   removeManagedIntegration,
+  writeAgenticToolSelectionManifest,
 } from './agentic-tool-integrations.js';
 
 const originalRoot = process.env.AGOR_AGENTIC_TOOLS_DIR;
@@ -202,5 +204,26 @@ describe('removeManagedAgorVersion', () => {
 
     await expect(removeManagedAgorVersion('0.19.0')).resolves.toBeUndefined();
     expect(await listManagedAgorVersions()).toEqual(['0.24.0']);
+  });
+});
+
+describe('local selection persistence', () => {
+  it('writes an atomic private manifest and rejects a concurrent install', async () => {
+    const root = await createRoot();
+    await writeAgenticToolSelectionManifest(['codex', 'codex']);
+    expect(JSON.parse(await readFile(join(root, 'selection.json'), 'utf8'))).toEqual({
+      schemaVersion: 1,
+      installed: ['codex'],
+    });
+    if (process.platform !== 'win32') {
+      expect((await stat(join(root, 'selection.json'))).mode & 0o777).toBe(0o600);
+    }
+
+    const release = await acquireAgenticToolInstallLock();
+    await expect(acquireAgenticToolInstallLock()).rejects.toThrow(
+      'Another `agor install` is already updating agentic tools'
+    );
+    await release();
+    await expect(acquireAgenticToolInstallLock()).resolves.toBeTypeOf('function');
   });
 });

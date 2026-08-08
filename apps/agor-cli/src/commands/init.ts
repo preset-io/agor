@@ -40,7 +40,6 @@ import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
 import {
   AGENTIC_TOOL_INTEGRATIONS,
   type InstallableAgenticTool,
-  installManagedIntegration,
   normalizeAgenticToolName,
   resolveManagedAgenticToolVersion,
 } from '../lib/agentic-tool-integrations.js';
@@ -493,18 +492,23 @@ export default class Init extends Command {
       // Explicit hard opt-out intentionally omits it.
       await this.saveTelemetryPreference(false, true);
     }
-    const selectedTools = await this.selectInitialAgenticTools(skipPrompts);
-    this.initialConfig.agentic_tools = { installed: selectedTools };
-    for (const tool of selectedTools) {
-      const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
-      this.log(chalk.bold(`\nInstalling ${definition.displayName}…`));
-      await installManagedIntegration(
-        tool,
-        resolveManagedAgenticToolVersion(this.config.version) as string
-      );
+    const configAlreadyExists = await this.pathExists(getConfigPath());
+    const useLocalManagedSelection =
+      !configAlreadyExists &&
+      !skipPrompts &&
+      process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1' &&
+      this.requestedAgenticTools === undefined;
+    if (!useLocalManagedSelection) {
+      const selectedTools = await this.selectInitialAgenticTools(skipPrompts);
+      this.initialConfig.agentic_tools = { installed: selectedTools };
+    } else {
+      delete this.initialConfig.agentic_tools;
     }
-    if (!(await this.pathExists(getConfigPath()))) {
+    if (!configAlreadyExists) {
       await this.persistDuringInitialCreation(this.initialConfig);
+    }
+    if (process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
+      await this.config.runCommand('install', useLocalManagedSelection ? [] : ['--sync']);
     }
 
     // Success summary
@@ -533,7 +537,7 @@ export default class Init extends Command {
     missingTools = missingTools.filter((tool) => configured.has(tool.id));
     if (missingTools.length > 0) {
       this.log(chalk.dim(`   ${missingTools.length} optional agentic tool(s) are not installed.`));
-      this.log(chalk.dim('   Repair the configured package set with: agor install'));
+      this.log(chalk.dim('   Repair the configured package set with: agor install --sync'));
       this.log(chalk.dim('   Recheck at any time with: agor doctor'));
     }
     this.log('');

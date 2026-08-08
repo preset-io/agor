@@ -33,18 +33,8 @@ export async function writeAgenticToolSelectionManifest(
 ): Promise<void> {
   const root = getAgenticToolsRoot();
   const destination = getAgenticToolSelectionManifestPath();
-  const lock = join(root, '.selection.lock');
   const temporary = join(root, `.selection-${randomUUID()}.tmp`);
   await mkdir(root, { recursive: true, mode: 0o700 });
-  try {
-    await mkdir(lock, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST')
-      throw new Error(
-        'Another `agor install` is already updating agentic tools. Try again when it finishes.'
-      );
-    throw error;
-  }
   try {
     await writeFile(
       temporary,
@@ -55,8 +45,24 @@ export async function writeAgenticToolSelectionManifest(
     await rename(temporary, destination);
   } finally {
     await rm(temporary, { force: true });
-    await rm(lock, { recursive: true, force: true });
   }
+}
+
+/** Hold this deployment-local lock across selection and the complete reconciliation. */
+export async function acquireAgenticToolInstallLock(): Promise<() => Promise<void>> {
+  const root = getAgenticToolsRoot();
+  const lock = join(root, '.install.lock');
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  try {
+    await mkdir(lock, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+      throw new Error(
+        'Another `agor install` is already updating agentic tools. Try again when it finishes.'
+      );
+    throw error;
+  }
+  return async () => rm(lock, { recursive: true, force: true });
 }
 
 export function getAgenticToolInstallSlug(tool: InstallableAgenticTool): string {

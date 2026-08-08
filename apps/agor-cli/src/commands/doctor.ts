@@ -7,6 +7,7 @@ import { loadConfig } from '@agor/core/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
+import { listManagedAgorVersions } from '../lib/agentic-tool-integrations.js';
 
 export default class Doctor extends Command {
   static description = 'Check this Agor installation and its agentic tools';
@@ -16,12 +17,14 @@ export default class Doctor extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Doctor);
-    const agenticTools = await diagnoseAgenticTools(
-      resolveManagedAgenticToolVersion(this.config.version) as string
+    const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
+    const agenticTools = await diagnoseAgenticTools(agorVersion);
+    const staleVersions = (await listManagedAgorVersions()).filter(
+      (version) => version !== agorVersion
     );
     const policy = await resolveAgenticToolSelectionPolicy(await loadConfig());
     if (flags.json) {
-      this.log(JSON.stringify({ ok: true, policy, agenticTools }, null, 2));
+      this.log(JSON.stringify({ ok: true, policy, staleVersions, agenticTools }, null, 2));
       return;
     }
     this.log(chalk.bold('Agor doctor\n'));
@@ -43,6 +46,8 @@ export default class Doctor extends Command {
       );
       if (item.detail && selected.has(item.id)) this.log(chalk.dim(`      ${item.detail}`));
     }
+    if (staleVersions.length > 0)
+      this.log(chalk.yellow(`\n  Stale Agor versions: ${staleVersions.join(', ')}`));
     if (policy.source === 'missing-manifest')
       this.log(chalk.yellow('\n  No local selection manifest. Run interactive `agor install`.'));
     else this.log(chalk.dim('\n  Repair without changing selection: agor install --sync'));

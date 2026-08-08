@@ -10,6 +10,7 @@ import chalk from 'chalk';
 import inquirer from 'inquirer';
 import {
   AGENTIC_TOOL_INTEGRATIONS,
+  acquireAgenticToolInstallLock,
   installManagedIntegration,
   listManagedAgorVersions,
   listManagedToolDirectories,
@@ -35,15 +36,24 @@ export default class Install extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Install);
+    const releaseLock = await acquireAgenticToolInstallLock();
+    try {
+      await this.reconcile(flags.sync);
+    } finally {
+      await releaseLock();
+    }
+  }
+
+  private async reconcile(sync: boolean): Promise<void> {
     const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
     const config = await loadConfig();
     let policy = await resolveAgenticToolSelectionPolicy(config);
-    if (policy.mode === 'local-managed' && flags.sync && policy.source === 'missing-manifest') {
+    if (policy.mode === 'local-managed' && sync && policy.source === 'missing-manifest') {
       this.error(
         'No locally managed agentic-tool selection exists. Run interactive `agor install` once to choose tools; no packages were changed. For Docker/Kubernetes, declare agentic_tools.installed in config.yaml.'
       );
     }
-    if (policy.mode === 'local-managed' && !flags.sync) {
+    if (policy.mode === 'local-managed' && !sync) {
       const previouslySelected = new Set<InstallableAgenticTool>(
         policy.selected as readonly InstallableAgenticTool[]
       );
