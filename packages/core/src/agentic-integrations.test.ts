@@ -111,7 +111,9 @@ describe('managed agentic tool loading', () => {
       await rm(vendorDirectory, { recursive: true });
       await symlink(outside, vendorDirectory, 'dir');
 
-      await expect(loadManagedAgenticToolSdk('claude-code')).rejects.toThrow('run: agor install');
+      await expect(loadManagedAgenticToolSdk('claude-code')).rejects.toThrow(
+        'Run: agor install --sync'
+      );
     }
   );
 
@@ -141,6 +143,8 @@ describe('managed agentic tool loading', () => {
     process.env.AGOR_MANAGED_AGENTIC_TOOLS = '1';
     process.env.AGOR_VERSION = '1.2.5';
 
-    await expect(loadManagedAgenticToolSdk('claude-code')).rejects.toThrow('run: agor install');
+    await expect(loadManagedAgenticToolSdk('claude-code')).rejects.toThrow(
+      'Run: agor install --sync'
+    );
   });
 });
