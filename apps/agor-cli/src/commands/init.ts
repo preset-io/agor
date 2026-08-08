@@ -54,6 +54,17 @@ export function isFreshInitState(state: {
   return !state.baseExists || (!state.databaseExists && !state.reposExist && !state.branchesExist);
 }
 
+export function createInstallTelemetryConfig(config: AgorConfig, instanceId: string): AgorConfig {
+  return {
+    ...config,
+    telemetry: { ...config.telemetry, enabled: true, instance_id: instanceId },
+  };
+}
+
+export function shouldDeferAdminSetup(nonInteractive: boolean, nodeEnv = process.env.NODE_ENV) {
+  return nonInteractive || nodeEnv === 'production';
+}
+
 export default class Init extends Command {
   private initialDaemonConfig: NonNullable<AgorConfig['daemon']> = {};
   private initialConfig: AgorConfig = getDefaultConfig();
@@ -90,10 +101,6 @@ export default class Init extends Command {
     'daemon-host': Flags.string({
       description: 'Daemon host (default: localhost)',
       required: false,
-    }),
-    'set-config': Flags.boolean({
-      description: 'Set daemon config values even if .agor already exists (for Docker/deployment)',
-      default: false,
     }),
     'instance-label': Flags.string({
       description: 'Instance label for deployment identification (e.g., "staging", "prod-us-east")',
@@ -252,13 +259,6 @@ export default class Init extends Command {
       (await this.pathExists(join(baseDir, 'config.yaml')))
     ) {
       this.log(chalk.green('✓ Agor already initialized at: ') + chalk.cyan(baseDir));
-
-      // If --set-config is enabled, update daemon config values (for Docker/deployment)
-      if (flags['set-config']) {
-        this.error(
-          '--set-config no longer rewrites an existing config.yaml. Edit the operator-owned file (or its ConfigMap/secret source) explicitly and restart Agor.'
-        );
-      }
 
       await this.warnExistingInstallTelemetryUnconfigured();
 
@@ -455,7 +455,7 @@ export default class Init extends Command {
       // creation to the daemon-owned first-run bootstrap. This avoids
       // partially failing after destructive re-initialization has already
       // recreated the database and seeded initial data.
-      if (process.env.NODE_ENV === 'production') {
+      if (shouldDeferAdminSetup(this.nonInteractive)) {
         this.log(`${chalk.green('   ✓')} Admin setup deferred to daemon first-run bootstrap`);
         this.log(
           chalk.dim(
@@ -721,8 +721,11 @@ export default class Init extends Command {
     const config = (await this.pathExists(getConfigPath()))
       ? await loadConfig()
       : this.initialConfig;
-    config.telemetry = { ...config.telemetry, enabled: true, instance_id: instanceId };
-    const logger = createOpenSourceTelemetryLogger(config);
+    // The one-time install ping needs telemetry enabled for this logger only.
+    // Never mutate initialConfig: it contains the user's persisted opt-in choice.
+    const logger = createOpenSourceTelemetryLogger(
+      createInstallTelemetryConfig(config, instanceId)
+    );
     logger.track({
       event: 'install.completed',
       properties: {
