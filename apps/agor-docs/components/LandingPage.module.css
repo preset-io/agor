@@ -2438,28 +2438,15 @@
   }
 }
 
-/* --- Scroll-locked surface carousel: phones with motion allowed. The tall
- * wrapper provides the scroll budget (~55dvh per card transition, heights set
- * inline in the TSX); this block swaps the pill explorer for the pinned
- * stage. Reduced-motion phones keep the pill explorer above. --- */
-@media (max-width: 720px) and (prefers-reduced-motion: no-preference) {
-  /* Showcase carousel pins too: 4 slides x 55dvh of scroll budget + the
-   * pinned screen itself. Keep the multiplier in sync with
-   * showcaseSlides.length. */
+/* --- Phone carousels: native side-swipe via CSS scroll-snap, not a pinned
+ * scroll-jack. Both tracks are normal-height, in-flow elements — flicking
+ * vertically scrolls straight past them like any other section; a horizontal
+ * flick within the frame swipes the cards. See the matching scroll-listener
+ * effects in LandingPage.tsx that keep status line/dots/video-gating in
+ * sync with wherever a swipe settles. --- */
+@media (max-width: 720px) {
   .showcaseSection {
-    height: 320dvh;
-    padding-top: 0;
-  }
-
-  .showcaseSticky {
-    position: sticky;
-    top: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    height: 100dvh;
-    padding-top: 56px;
-    overflow: hidden;
+    padding: 64px 24px 0;
   }
 
   /* Match the surface carousel's look: status line + dots instead of tab
@@ -2468,7 +2455,7 @@
     display: none;
   }
 
-  /* Scroll drives the carousels on phones — no click layer. */
+  /* Swipe drives the carousels on phones — no click layer. */
   .frameAdvance {
     display: none;
   }
@@ -2482,8 +2469,34 @@
     box-shadow: none;
   }
 
+  .showcaseViewport {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .showcaseViewport::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Neutralize the desktop transform — position comes from native scroll
+   * instead — and let the track size itself to the (single) visible slide
+   * rather than the desktop 400%. */
+  .showcaseTrack {
+    width: 100%;
+    transform: none !important;
+    transition: none;
+  }
+
   .showcaseSlide {
+    width: 100%;
+    flex: 0 0 100%;
+    min-height: 0;
     padding: 0;
+    scroll-snap-align: center;
+    background: none;
   }
 
   .slideVideoFrame {
@@ -2530,19 +2543,11 @@
 
   .surfaceScrolly {
     display: block;
-    position: relative;
     margin-top: 8px;
   }
 
   .scrollySticky {
-    position: sticky;
-    top: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    height: 100dvh;
-    padding: 76px 0 40px;
-    overflow: hidden;
+    padding: 0;
   }
 
   .scrollyStatus {
@@ -2568,13 +2573,25 @@
     text-transform: uppercase;
   }
 
+  /* .scrollyTrack is the scroll container itself (no separate viewport
+   * wrapper needed, unlike the showcase reel above). */
   .scrollyTrack {
     display: flex;
-    will-change: transform;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .scrollyTrack::-webkit-scrollbar {
+    display: none;
   }
 
   .scrollyCard {
-    flex-shrink: 0;
+    flex: 0 0 100%;
+    box-sizing: border-box;
+    scroll-snap-align: center;
     padding: 0 24px;
   }
 
