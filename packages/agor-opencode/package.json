@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.14.33",
-    "opencode-ai": "1.14.33"
+    "opencode-ai": "1.18.14"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
