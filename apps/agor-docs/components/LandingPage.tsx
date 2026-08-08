@@ -916,7 +916,11 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
                   the 25%/400% math in sync with showcaseSlides.length. */}
               <div
                 className={styles.showcaseTrack}
-                style={{ transform: `translateX(-${activeShot * 25}%)` }}
+                style={
+                  {
+                    '--showcase-transform': `translateX(-${activeShot * 25}%)`,
+                  } as CSSProperties
+                }
               >
                 {showcaseSlides.map((slide, index) => (
                   <div className={styles.showcaseSlide} key={slide.label}>
@@ -1125,10 +1129,12 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
             <div className={styles.showcaseViewport}>
               <div
                 className={styles.showcaseTrack}
-                style={{
-                  width: `${productPreviews.length * 100}%`,
-                  transform: `translateX(-${activeSurface * (100 / productPreviews.length)}%)`,
-                }}
+                style={
+                  {
+                    width: `${productPreviews.length * 100}%`,
+                    '--showcase-transform': `translateX(-${activeSurface * (100 / productPreviews.length)}%)`,
+                  } as CSSProperties
+                }
               >
                 {productPreviews.map((preview, index) => (
                   <div

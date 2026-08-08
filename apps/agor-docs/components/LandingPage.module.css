@@ -1342,6 +1342,7 @@
 .showcaseTrack {
   display: flex;
   width: 400%;
+  transform: var(--showcase-transform);
   transition: transform 0.55s cubic-bezier(0.65, 0, 0.35, 1);
 }
 
@@ -2486,8 +2487,7 @@
    * rather than the desktop 400%. */
   .showcaseTrack {
     width: 100%;
-    /* biome-ignore lint/complexity/noImportantStyles: phone layout must override the inline desktop carousel transform */
-    transform: none !important;
+    transform: none;
     transition: none;
   }
 
