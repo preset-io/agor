@@ -1868,6 +1868,17 @@ export const gatewayChannels = pgTable(
       { onDelete: 'restrict' }
     ),
     mcp_server_ids: t.json<string[]>('mcp_server_ids'),
+
+    // Durable ownership for long-lived provider listeners. Daemon identity is
+    // diagnostic; the opaque token + generation are the correctness fence.
+    listener_claim_token: text('listener_claim_token'),
+    listener_claimed_at: t.timestamp('listener_claimed_at'),
+    listener_lease_expires_at: t.timestamp('listener_lease_expires_at'),
+    listener_instance_id: text('listener_instance_id'),
+    listener_boot_id: text('listener_boot_id'),
+    listener_generation: integer('listener_generation').notNull().default(0),
+    listener_checkpoint: t.json<Record<string, unknown> | null>('listener_checkpoint'),
+    listener_checkpoint_updated_at: t.timestamp('listener_checkpoint_updated_at'),
   },
   (table) => ({
     tenantIdx: index('gateway_channels_tenant_id_idx').on(table.tenant_id),
@@ -1880,6 +1891,57 @@ export const gatewayChannels = pgTable(
       table.channel_key
     ),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
+    listenerLeaseIdx: index('gateway_channels_listener_lease_idx').on(
+      table.tenant_id,
+      table.enabled,
+      table.listener_lease_expires_at,
+      table.id
+    ),
+    listenerDiscoveryIdx: index('gateway_channels_listener_discovery_idx').on(
+      table.enabled,
+      table.tenant_id,
+      table.id
+    ),
+  })
+);
+
+/** Durable provider event identities; payload recovery remains provider-owned. */
+export const gatewayInboundEvents = pgTable(
+  'gateway_inbound_events',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    id: varchar('id', { length: 36 }).primaryKey(),
+    gateway_channel_id: varchar('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    provider_event_id: text('provider_event_id').notNull(),
+    thread_id: text('thread_id').notNull(),
+    delivery_metadata: t.json<Record<string, unknown> | null>('delivery_metadata'),
+    status: text('status', { enum: ['processing', 'completed'] }).notNull(),
+    processing_token: text('processing_token').notNull(),
+    processing_expires_at: t.timestamp('processing_expires_at').notNull(),
+    session_id: varchar('session_id', { length: 36 }).references(() => sessions.session_id, {
+      onDelete: 'set null',
+    }),
+    task_id: varchar('task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
+    received_at: t.timestamp('received_at').notNull(),
+    completed_at: t.timestamp('completed_at'),
+  },
+  (table) => ({
+    tenantIdx: index('gateway_inbound_events_tenant_id_idx').on(table.tenant_id),
+    providerEventUnique: uniqueIndex('gateway_inbound_events_tenant_provider_unique').on(
+      table.tenant_id,
+      table.gateway_channel_id,
+      table.provider_event_id
+    ),
+    recoveryIdx: index('gateway_inbound_events_recovery_idx').on(
+      table.tenant_id,
+      table.status,
+      table.processing_expires_at,
+      table.id
+    ),
   })
 );
 
@@ -2540,6 +2602,8 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
+export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;
+export type GatewayInboundEventInsert = typeof gatewayInboundEvents.$inferInsert;
 export type UploadRow = typeof uploads.$inferSelect;
 export type UploadInsert = typeof uploads.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;

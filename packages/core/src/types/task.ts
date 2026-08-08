@@ -1,5 +1,6 @@
 // src/types/task.ts
 import type { PersistedAgenticToolName } from './agentic-tool';
+import type { GatewayInboundEventID } from './gateway';
 import type { MessageID, SessionID, TaskID, UserID } from './id';
 import type { PersistedMessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
@@ -171,6 +172,10 @@ export interface TaskMetadata {
   widget_id?: MessageID;
   /** User who resolved the widget; Task execution remains session-owner attributed. */
   widget_resolved_by_user_id?: UserID;
+  /** Provider-event occurrence that durably admitted this gateway prompt. */
+  gateway_inbound_event_id?: GatewayInboundEventID;
+  /** Provider reply target captured for this gateway Task (for example an editable ack ID). */
+  gateway_reply_metadata?: Record<string, unknown>;
   /**
    * Durable identity of the Task's first transcript row. Internal
    * idempotent producers persist this alongside the Task so any daemon that

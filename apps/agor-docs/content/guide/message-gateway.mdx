@@ -104,26 +104,57 @@ The outbound routing is a lightweight after-hook on message creation. For sessio
 
 ### Multi-tenant listener lifecycle
 
-Static and single-tenant installations require no new configuration. Listener
-startup uses the configured static tenant exactly as before.
+Standalone SQLite installations require no new configuration and keep the
+historical process-local listener lifecycle.
 
-With `multi_tenancy.mode: required_from_auth`, the daemon restarts enabled
-gateway channels for every tenant after a daemon restart. Startup performs one
-narrow PostgreSQL discovery query that can return only enabled channel and
-tenant IDs. It then leaves system scope, reloads the full channel (including
-credentials) under that tenant's normal RLS scope, and starts the connector
-with an immutable tenant binding. Provider callbacks re-enter that captured
-tenant before reading mappings or creating sessions.
+> **Provider limit in PostgreSQL mode:** Slack, GitHub, and Shortcut listeners
+> support distributed ownership. Microsoft Teams currently depends on a local
+> Bot Framework port and in-memory conversation references, so Agor fails its
+> listener closed on PostgreSQL. Teams remains available only in standalone
+> SQLite until its ingress and reply-routing contract is redesigned.
 
-Listener instances and the outbound fast path are also tenant-qualified. A
-channel refresh in a tenant with no enabled channels cannot stop or suppress
-delivery for another tenant. Missing, stale, or inconsistent discovery
-metadata is skipped rather than falling back to the static tenant.
+On PostgreSQL, every daemon performs bounded recurring discovery. A durable,
+database-time lease on each gateway channel chooses one listener owner; daemon
+presence and Redis are not ownership signals. The owner renews a 30-second
+lease. A hard-dead owner becomes claimable after 30 seconds; discovery adds at
+most a 6-second jittered idle wait plus a bounded keyset pass (25 candidates per
+page, at most 250 ms between full pages) and provider connection time.
+Credential/config updates, disable, and delete revoke the old owner
+immediately. Provider callbacks, durable occurrence completion, and polling
+checkpoints are fenced by an opaque claim token. Graceful shutdown stops intake,
+waits up to five seconds for admitted callbacks, and releases only after both
+the transport and callbacks are drained; otherwise the lease expires normally.
 
-PostgreSQL migration `0066_gateway_listener_discovery` installs the narrowly
-named read policy used by this startup phase. Apply normal Agor migrations
-before serving traffic with the upgraded daemon; no database role with
-`BYPASSRLS` and no superuser daemon connection is required.
+Discovery returns only enabled channel and tenant IDs. The daemon then leaves
+system scope, reloads the full channel (including credentials) under that
+tenant's normal RLS scope, and starts the connector with an immutable tenant
+binding. Provider callbacks re-enter that captured tenant before reading
+mappings or creating sessions.
+
+Listener instances are tenant-qualified. PostgreSQL outbound routing does not
+use listener presence or a process-local channel cache as authority: any daemon
+that handles a durable Message reloads its mapping and fresh channel credentials
+inside the Message's tenant. A channel refresh in a tenant with no enabled
+channels cannot stop or suppress another tenant. Missing, stale, or inconsistent
+discovery metadata is skipped rather than falling back to the static tenant.
+
+Stable provider event IDs suppress duplicate Slack, GitHub, and Shortcut
+deliveries. Slack keys the logical message by workspace, conversation, and
+message timestamp so alternate Slack envelopes for the same message converge.
+GitHub and Shortcut polling watermarks are persisted behind the same owner
+fence, with a short overlap during takeover. Their create-comment APIs do not
+accept an idempotency key, so a crash after the provider accepts an
+acknowledgement but before Agor records it can still produce a duplicate
+acknowledgement; the Agor Session and Task remain deduplicated.
+
+The legacy generic channel-key inbound endpoint has no provider-event identity,
+so it is available only on standalone SQLite and fails closed on PostgreSQL.
+
+Migrations `0066_gateway_listener_discovery` and
+`0076_gateway_listener_ha` installs the narrow discovery policy, lease columns,
+and tenant-RLS provider-event table. Apply normal Agor migrations before
+serving traffic with the upgraded daemon; no database role with `BYPASSRLS`
+and no superuser daemon connection is required.
 
 ### Outbound branch binding
 
@@ -337,6 +368,13 @@ Follow-up mentions in the same Shortcut thread continue the existing session. Co
 
 ## Setting Up Microsoft Teams Integration
 
+> **PostgreSQL multi-daemon limitation:** Teams listener startup currently
+> fails closed on PostgreSQL. Its webhook server and proactive-reply
+> `ConversationReference` are process-local, so the connector cannot safely
+> support load-balanced replica ingress yet. Teams remains available in the
+> standalone SQLite deployment path. Use Slack, GitHub, or Shortcut for a
+> shared PostgreSQL daemon fleet until durable Teams ingress/routing lands.
+
 ### How It Works
 
 When you message Agor's bot in a 1:1 chat (or `@mention` it in a Teams channel), Agor receives the activity through a [Bot Framework](https://dev.botframework.com) webhook and creates a session. The session runs on the target branch, and the agent's response is posted back into the same conversation under the bot's identity.
@@ -425,7 +463,10 @@ interface OutboundPayload {
 interface GatewayConnector {
   readonly channelType: ChannelType;
   sendMessage(req: { threadId: string; text: string; blocks?: unknown[] }): Promise<string>;
-  startListening?(callback: (msg: InboundMessage) => void): Promise<void>;
+  startListening?(
+    callback: (msg: InboundMessage) => void | Promise<void>,
+    options?: GatewayListenerOptions
+  ): Promise<void>;
   stopListening?(): Promise<void>;
   formatMessage?(markdown: string): string | OutboundPayload;
 }

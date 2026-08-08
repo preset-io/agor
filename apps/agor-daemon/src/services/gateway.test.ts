@@ -46,13 +46,13 @@ vi.mock('@agor/core/config', async (importOriginal) => {
   };
 });
 
-vi.mock('../utils/gateway-attachments.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../utils/gateway-attachments.js')>();
-  return {
-    ...actual,
-    ingestInboundAttachments: vi.fn(),
-  };
-});
+vi.mock('../utils/gateway-attachments.js', () => ({
+  ingestInboundAttachments: vi.fn(),
+  buildPromptWithAttachments: vi.fn(
+    (text: string, attachments: Array<{ ref: string }>) =>
+      `${text}\n\n${attachments.map((attachment) => attachment.ref).join('\n')}`
+  ),
+}));
 
 const user: User = {
   user_id: 'user-1',
@@ -136,6 +136,10 @@ function makeGatewayHarness(args: {
   };
   const db = args.db ?? ({ run: vi.fn() } as unknown as TenantScopeAwareDatabase);
   const service = new GatewayService(db, app as never);
+  // The shared harness models the standalone listener path. Tests exercising
+  // PostgreSQL ownership opt in explicitly so connector selection never
+  // depends on how a minimal database double happens to be detected.
+  (service as unknown as { durableListenerOwnership: boolean }).durableListenerOwnership = false;
   const create = service.create.bind(service);
   service.create = (data) => {
     if (getCurrentTenantDatabaseScope()) return create(data);
@@ -154,6 +158,7 @@ function makeGatewayHarness(args: {
   const channelRepo = {
     findByKey: vi.fn(async () => channel),
     findById: vi.fn(async () => channel),
+    listenerClaimIsCurrent: vi.fn(async () => true),
     updateLastMessage: vi.fn(async () => undefined),
   };
   const threadMapRepo = {
@@ -412,6 +417,34 @@ describe('GatewayService user alignment operational logs', () => {
 });
 
 describe('GatewayService multi-tenant process state', () => {
+  it('does not use the local listener cache as PostgreSQL outbound authority', async () => {
+    const sendMessage = vi.fn(async () => 'sent-1');
+    const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
+    const channel = attachHiddenTenant({ ...slackChannel }, { tenant_id: 'tenant-a' });
+    const mapping = makeMapping({ channel_id: channel.id });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      channelRepo: {
+        findById: vi.fn(async () => channel),
+        updateLastMessage: vi.fn(async () => undefined),
+      },
+      threadMapRepo: {
+        findBySession: vi.fn(async () => mapping),
+        updateLastMessage: vi.fn(async () => undefined),
+        findById: vi.fn(async () => mapping),
+        updateMetadata: vi.fn(async () => undefined),
+      },
+    });
+    vi.mocked(getConnector).mockReturnValue({ sendMessage, channelType: 'slack' });
+
+    const result = await runWithTenantContext('tenant-a', () =>
+      service.routeMessage({ session_id: mapping.session_id, message: 'from another daemon' })
+    );
+
+    expect(result).toEqual({ routed: true, channelType: 'slack' });
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
   it("does not let one tenant's empty channel set suppress another tenant's delivery", async () => {
     const sendMessage = vi.fn(async () => 'sent-1');
     const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
@@ -874,6 +907,250 @@ describe('GatewayService Slack thread catch-up', () => {
     expect(promptCreate).not.toHaveBeenCalled();
     expect(sessionsCreate).not.toHaveBeenCalled();
     expect(threadMapRepo.updateLastMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayService durable listener delivery fences', () => {
+  it('reconciles an already-admitted stable Task before rebuilding a different retry prompt', async () => {
+    const eventId = '01927f9d-0000-7000-8000-000000000099';
+    const taskId = '01927f9d-0000-7000-8000-000000000098';
+    const mapping = makeMapping();
+    const { service, promptCreate, sessionsCreate } = makeGatewayHarness({
+      existingMapping: mapping,
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      taskRepo: {
+        findById: vi.fn(async () => ({
+          task_id: taskId,
+          session_id: mapping.session_id,
+          metadata: { gateway_inbound_event_id: eventId },
+        })),
+      },
+      sessionRepo: {
+        findById: vi.fn(async () => ({
+          session_id: mapping.session_id,
+          branch_id: slackChannel.target_branch_id,
+          custom_context: { gateway_source: { channel_id: slackChannel.id } },
+        })),
+      },
+    });
+
+    const result = await service.create({
+      channel_key: slackChannel.channel_key,
+      thread_id: mapping.thread_id,
+      text: 'retry text whose formatting may differ',
+      gateway_inbound_event_id: eventId as never,
+      idempotency_task_id: taskId as never,
+      idempotency_session_id: mapping.session_id,
+      listener_claim_token: 'opaque-owner',
+      listener_channel_id: slackChannel.id,
+      metadata: {
+        channel_type: 'channel',
+        slack_has_mention: true,
+      },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      sessionId: mapping.session_id,
+      created: false,
+      taskId,
+    });
+    expect(promptCreate).not.toHaveBeenCalled();
+    expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('prepares and routes one duplicate provider occurrence only once', async () => {
+    const service = new GatewayService(
+      { run: vi.fn() } as never,
+      { service: vi.fn(), get: vi.fn() } as never
+    );
+    const eventId = '01927f9d-0000-7000-8000-000000000099';
+    const claim = vi
+      .fn()
+      .mockResolvedValueOnce({
+        outcome: 'claimed',
+        event: { id: eventId },
+      })
+      .mockResolvedValueOnce({
+        outcome: 'duplicate',
+        event: { id: eventId },
+      });
+    const complete = vi.fn(async () => true);
+    const recordDeliveryMetadata = vi.fn(async () => true);
+    const listenerClaimIsCurrent = vi.fn(async () => true);
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      inboundEventRepo: { claim, complete, recordDeliveryMetadata },
+      channelRepo: { listenerClaimIsCurrent },
+    });
+    const create = vi.spyOn(service, 'create').mockResolvedValue({
+      success: true,
+      sessionId: '01927f9d-0000-7000-8000-000000000001',
+      created: true,
+      taskId: '01927f9d-0000-7000-8000-000000000002' as never,
+    });
+    const prepareDelivery = vi.fn(async () => ({ processing_comment_id: 42 }));
+    const channel = attachHiddenTenant(
+      { ...slackChannel, id: 'durable-channel' as never },
+      { tenant_id: 'tenant-durable' }
+    );
+    const lease = {
+      channel_id: channel.id,
+      claim_token: 'opaque-owner',
+      generation: 1,
+      claimed_at: '2026-01-01T00:00:00.000Z',
+      lease_expires_at: '2026-01-01T00:00:30.000Z',
+      instance_id: 'daemon-a',
+      boot_id: 'boot-a',
+      checkpoint: null,
+    };
+    const invoke = () =>
+      (
+        service as unknown as {
+          handleListenerInboundMessage: (
+            channel: GatewayChannel,
+            tenantId: string,
+            msg: Record<string, unknown>,
+            lease: typeof lease
+          ) => Promise<void>;
+        }
+      ).handleListenerInboundMessage(
+        channel,
+        'tenant-durable',
+        {
+          providerEventId: 'slack:event:Ev-1',
+          threadId: 'C1-1.0',
+          text: 'hello',
+          userId: 'U1',
+          prepareDelivery,
+        },
+        lease
+      );
+
+    await invoke();
+    await invoke();
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(prepareDelivery).toHaveBeenCalledOnce();
+    expect(recordDeliveryMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId, metadata: { processing_comment_id: 42 } })
+    );
+    expect(create.mock.calls[0][0]).toMatchObject({
+      gateway_inbound_event_id: eventId,
+      metadata: { processing_comment_id: 42 },
+    });
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed before provider or Agor effects after listener loss', async () => {
+    const service = new GatewayService(
+      { run: vi.fn() } as never,
+      { service: vi.fn(), get: vi.fn() } as never
+    );
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      inboundEventRepo: { claim: vi.fn(async () => ({ outcome: 'listener_lost' })) },
+    });
+    const create = vi.spyOn(service, 'create');
+    const prepareDelivery = vi.fn();
+    const channel = attachHiddenTenant(
+      { ...slackChannel, id: 'lost-channel' as never },
+      { tenant_id: 'tenant-a' }
+    );
+
+    await expect(
+      (
+        service as unknown as {
+          handleListenerInboundMessage: (...args: unknown[]) => Promise<void>;
+        }
+      ).handleListenerInboundMessage(
+        channel,
+        'tenant-a',
+        {
+          providerEventId: 'slack:event:lost',
+          threadId: 'C1-1.0',
+          text: 'stale',
+          userId: 'U1',
+          prepareDelivery,
+        },
+        { claim_token: 'stale-token' }
+      )
+    ).rejects.toThrow(/ownership lost/i);
+    expect(prepareDelivery).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('stops a transport before releasing its durable claim on graceful drain', async () => {
+    const service = new GatewayService(
+      { run: vi.fn() } as never,
+      { service: vi.fn(), get: vi.fn() } as never
+    );
+    const order: string[] = [];
+    const channelId = 'graceful-channel';
+    const key = `tenant-a\0${channelId}`;
+    (
+      service as unknown as { activeListeners: Map<string, Record<string, unknown>> }
+    ).activeListeners.set(key, {
+      stopListening: vi.fn(async () => {
+        order.push('transport-stopped');
+      }),
+    });
+    (
+      service as unknown as { activeListenerLeases: Map<string, Record<string, unknown>> }
+    ).activeListenerLeases.set(key, {
+      tenant_id: 'tenant-a',
+      channel_id: channelId,
+      claim_token: 'owner-token',
+    });
+    (service as unknown as { channelRepo: unknown }).channelRepo = {
+      releaseListener: vi.fn(async () => {
+        order.push('claim-released');
+        return true;
+      }),
+    };
+
+    await runWithTenantContext('tenant-a', () => service.stopChannelListener(channelId));
+    expect(order).toEqual(['transport-stopped', 'claim-released']);
+  });
+
+  it('keeps the claim until already-admitted callbacks drain during shutdown', async () => {
+    const service = new GatewayService(
+      { run: vi.fn() } as never,
+      { service: vi.fn(), get: vi.fn() } as never
+    );
+    const channelId = 'draining-channel';
+    const listenerKey = `tenant-a\0${channelId}`;
+    const stopListening = vi.fn(async () => undefined);
+    const releaseListener = vi.fn(async () => true);
+    let finishCallback!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      finishCallback = resolve;
+    });
+
+    (
+      service as unknown as { activeListeners: Map<string, Record<string, unknown>> }
+    ).activeListeners.set(listenerKey, { stopListening });
+    (
+      service as unknown as { activeListenerLeases: Map<string, Record<string, unknown>> }
+    ).activeListenerLeases.set(listenerKey, {
+      tenant_id: 'tenant-a',
+      channel_id: channelId,
+      claim_token: 'owner-token',
+    });
+    (
+      service as unknown as { inboundThreadQueues: Map<string, Promise<void>> }
+    ).inboundThreadQueues.set(`${listenerKey}\0thread-1`, inFlight);
+    (service as unknown as { channelRepo: unknown }).channelRepo = { releaseListener };
+
+    const stopping = service.stopListeners();
+    await vi.waitFor(() => expect(stopListening).toHaveBeenCalledOnce());
+    expect(releaseListener).not.toHaveBeenCalled();
+
+    finishCallback();
+    await stopping;
+    expect(releaseListener).toHaveBeenCalledWith(channelId, 'owner-token');
   });
 });
 

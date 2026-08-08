@@ -1799,6 +1799,17 @@ export const gatewayChannels = sqliteTable(
       { onDelete: 'restrict' }
     ),
     mcp_server_ids: t.json<string[]>('mcp_server_ids'),
+
+    // Present for schema parity and portability of standalone databases. The
+    // SQLite listener lifecycle remains process-local and does not use leases.
+    listener_claim_token: text('listener_claim_token'),
+    listener_claimed_at: t.timestamp('listener_claimed_at'),
+    listener_lease_expires_at: t.timestamp('listener_lease_expires_at'),
+    listener_instance_id: text('listener_instance_id'),
+    listener_boot_id: text('listener_boot_id'),
+    listener_generation: integer('listener_generation').notNull().default(0),
+    listener_checkpoint: t.json<Record<string, unknown> | null>('listener_checkpoint'),
+    listener_checkpoint_updated_at: t.timestamp('listener_checkpoint_updated_at'),
   },
   (table) => ({
     channelKeyIdx: index('idx_gateway_channel_key').on(table.channel_key),
@@ -1806,6 +1817,47 @@ export const gatewayChannels = sqliteTable(
       table.agentic_tool_preset_id
     ),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
+    listenerLeaseIdx: index('gateway_channels_listener_lease_idx').on(
+      table.enabled,
+      table.listener_lease_expires_at,
+      table.id
+    ),
+  })
+);
+
+/** Standalone parity for provider-event idempotency records. */
+export const gatewayInboundEvents = sqliteTable(
+  'gateway_inbound_events',
+  {
+    id: text('id', { length: 36 }).primaryKey(),
+    gateway_channel_id: text('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    provider_event_id: text('provider_event_id').notNull(),
+    thread_id: text('thread_id').notNull(),
+    delivery_metadata: t.json<Record<string, unknown> | null>('delivery_metadata'),
+    status: text('status', { enum: ['processing', 'completed'] }).notNull(),
+    processing_token: text('processing_token').notNull(),
+    processing_expires_at: t.timestamp('processing_expires_at').notNull(),
+    session_id: text('session_id', { length: 36 }).references(() => sessions.session_id, {
+      onDelete: 'set null',
+    }),
+    task_id: text('task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
+    received_at: t.timestamp('received_at').notNull(),
+    completed_at: t.timestamp('completed_at'),
+  },
+  (table) => ({
+    providerEventUnique: uniqueIndex('gateway_inbound_events_provider_unique').on(
+      table.gateway_channel_id,
+      table.provider_event_id
+    ),
+    recoveryIdx: index('gateway_inbound_events_recovery_idx').on(
+      table.status,
+      table.processing_expires_at,
+      table.id
+    ),
   })
 );
 
@@ -2430,6 +2482,8 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
+export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;
+export type GatewayInboundEventInsert = typeof gatewayInboundEvents.$inferInsert;
 export type UploadRow = typeof uploads.$inferSelect;
 export type UploadInsert = typeof uploads.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;

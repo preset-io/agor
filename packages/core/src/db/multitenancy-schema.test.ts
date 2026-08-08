@@ -37,6 +37,9 @@ function migrationTenantTables(): string[] {
   const executorTokenMigration = readRepoFile(
     'packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'
   );
+  const gatewayHaMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -45,6 +48,7 @@ function migrationTenantTables(): string[] {
         ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...uploadsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...executorTokenMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...gatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -58,6 +62,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
     readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -187,5 +192,16 @@ describe('Postgres multitenancy schema coverage', () => {
     );
     expect(migration).toContain('bool_or("enabled")');
     expect(migration.match(/CREATE UNIQUE INDEX/g)).toHaveLength(2);
+  });
+
+  it('keeps durable gateway listener authority independent of Redis', () => {
+    const sources = [
+      readRepoFile('packages/core/src/db/repositories/gateway-channels.ts'),
+      readRepoFile('packages/core/src/db/repositories/gateway-inbound-events.ts'),
+      readRepoFile('apps/agor-daemon/src/services/gateway.ts'),
+    ].join('\n');
+
+    expect(sources).not.toMatch(/from\s+['"][^'"]*redis/i);
+    expect(sources).not.toMatch(/ioredis|redlock/i);
   });
 });

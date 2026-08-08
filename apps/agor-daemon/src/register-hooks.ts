@@ -1844,7 +1844,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     if (channelId) {
       deferWithTenantContext(
         context.params,
-        () => gw.stopChannelListener(channelId),
+        async () => {
+          await gw.stopChannelListener(channelId);
+        },
         (err) => console.warn(`[gateway] Failed to stop listener for channel ${channelId}:`, err)
       );
     }
