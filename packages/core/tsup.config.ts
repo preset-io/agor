@@ -49,7 +49,7 @@ export default defineConfig({
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sessions/index': 'src/sessions/index.ts', // Session config defaults resolution
     'coordination/index': 'src/coordination/index.ts', // Pure distributed-work identity and delay mechanics
-    'sdk/index': 'src/sdk/index.ts', // Legacy always-bundled SDK re-exports (Claude, Codex)
+    'sdk/index': 'src/sdk/index.ts', // Type-only compatibility exports; runtimes use managed integrations
     'agentic-integrations': 'src/agentic-integrations.ts', // Managed agentic-tool package registry and loader
     'client/claude-system-suppression': 'src/client/claude-system-suppression.ts', // Browser-safe Claude system event suppression rules
     'tools/mcp/http-headers': 'src/tools/mcp/http-headers.ts', // MCP custom HTTP header utilities

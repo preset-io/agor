@@ -17,6 +17,48 @@ const failures = [];
 for (const dependency of forbiddenBaseDependencies) {
   if (base.dependencies?.[dependency]) failures.push(`agor-live must not depend on ${dependency}`);
 }
+
+// Published/runtime packages must not acquire an agent SDK except through its
+// exact-version integration wrapper. Source packages may retain them solely as
+// devDependencies for TypeScript and tests; those are absent from agor-live.
+const runtimeManifestAllowlist = new Set(
+  integrations.map((id) => `packages/agor-${id}/package.json`)
+);
+for (const parent of ['packages', 'apps']) {
+  for (const entry of await readdir(join(root, parent), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const relative = `${parent}/${entry.name}/package.json`;
+    let pkg;
+    try {
+      pkg = JSON.parse(await readFile(join(root, relative), 'utf8'));
+    } catch {
+      continue;
+    }
+    for (const dependency of forbiddenBaseDependencies) {
+      if (pkg.dependencies?.[dependency] && !runtimeManifestAllowlist.has(relative)) {
+        failures.push(
+          `${relative}: ${dependency} must be dev-only or owned by an integration wrapper`
+        );
+      }
+      if (pkg.optionalDependencies?.[dependency]) {
+        failures.push(
+          `${relative}: ${dependency} must not bypass agor install via optionalDependencies`
+        );
+      }
+    }
+  }
+}
+
+const coreSdk = await readFile(join(root, 'packages/core/src/sdk/index.ts'), 'utf8');
+if (
+  /export\s+\*\s+as\s+\w+\s+from\s+['"](?:@anthropic-ai\/claude-agent-sdk|@openai\/codex-sdk)['"]/.test(
+    coreSdk
+  )
+) {
+  failures.push(
+    'packages/core/src/sdk/index.ts must remain type-only; runtime SDKs use the managed loader'
+  );
+}
 for (const id of integrations) {
   const directory = join(root, `packages/agor-${id}`);
   const pkg = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'));

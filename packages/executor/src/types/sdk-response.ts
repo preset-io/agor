@@ -8,12 +8,10 @@
  * No transformations, no calculated fields - just pure SDK responses.
  */
 
-import type { Claude, Codex } from '@agor/core/sdk';
 import type { MessageID } from '@agor/core/types';
+import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ServerGeminiFinishedEvent } from '@google/gemini-cli-core';
-
-type SDKResultMessage = Claude.SDKResultMessage;
-type TurnCompletedEvent = Codex.TurnCompletedEvent;
+import type { TurnCompletedEvent } from '@openai/codex-sdk';
 
 // ============================================================================
 // Claude Code SDK Response (from Anthropic Claude Agent SDK)
