@@ -451,3 +451,53 @@ describe('createUserProcessEnvironment — git identity mirroring', () => {
     expect(env.GIT_AUTHOR_EMAIL).toBe('carol@example.com'); // mirrored from committer
   });
 });
+
+// Session executors are spawned with `preparedEnv` built by
+// createUserProcessEnvironment(), which takes precedence over spawn-executor's
+// own env forwarding. If the managed agentic tool vars are not allowlisted here
+// the executor runs with AGOR_MANAGED_AGENTIC_TOOLS unset, falls back to
+// importing the vendor SDK by bare specifier, and every session dies with
+// "Cannot find package '@openai/codex-sdk'".
+describe('createUserProcessEnvironment — managed agentic tool runtime', () => {
+  const MANAGED_VARS = {
+    AGOR_VERSION: '0.24.0',
+    AGOR_AGENTIC_TOOLS_DIR: '/opt/agor/agentic-tools',
+    AGOR_MANAGED_AGENTIC_TOOLS: '1',
+  } as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeAll(() => {
+    for (const [key, value] of Object.entries(MANAGED_VARS)) {
+      saved[key] = process.env[key];
+      process.env[key] = value;
+    }
+  });
+
+  afterAll(() => {
+    for (const key of Object.keys(MANAGED_VARS)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  dbTest('passes the managed integration runtime through to the executor', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {});
+
+    const env = await createUserProcessEnvironment(userId, db);
+
+    expect(env.AGOR_MANAGED_AGENTIC_TOOLS).toBe('1');
+    expect(env.AGOR_VERSION).toBe('0.24.0');
+    expect(env.AGOR_AGENTIC_TOOLS_DIR).toBe('/opt/agor/agentic-tools');
+  });
+
+  dbTest('still withholds internal secrets', async ({ db }) => {
+    process.env.AGOR_MASTER_SECRET = 'super-secret';
+    try {
+      const userId = await createUserWithEnv(db, {});
+      const env = await createUserProcessEnvironment(userId, db);
+      expect(env.AGOR_MASTER_SECRET).toBeUndefined();
+    } finally {
+      delete process.env.AGOR_MASTER_SECRET;
+    }
+  });
+});
