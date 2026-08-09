@@ -110,6 +110,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     sessionsService,
     terminalsService: null,
     distributedWorkIdentity: { instanceId: 'startup-test', bootId: 'startup-test-boot' },
+    taskRuntimePolicy: 'standalone',
     environmentHealthMonitorPolicy: 'standalone',
   } as unknown as StartupContext;
 
@@ -168,21 +169,32 @@ describe('startup tenant database scope', () => {
     ['daemon-a', 'boot-a'],
     ['daemon-b', 'boot-b'],
   ])(
-    'does not construct or initialize the environment monitor on HA replica %s',
+    'constructs and initializes the distributed environment monitor on HA replica %s',
     async (instanceId, bootId) => {
       const { ctx } = makeStartupContextWithGuardedDb();
       ctx.distributedWorkIdentity = { instanceId, bootId };
       ctx.taskRuntimePolicy = 'shared_postgres';
-      ctx.environmentHealthMonitorPolicy = 'disabled-ha';
-      const factory = vi.fn();
+      ctx.environmentHealthMonitorPolicy = 'shared_postgres';
+      ctx.environmentHealthMonitorSettings = {
+        scanIntervalMs: 5_000,
+        maxIdleIntervalMs: 30_000,
+        startupOffsetMaxMs: 3_000,
+        scanBatchSize: 32,
+        maxInFlight: 8,
+        httpTimeoutMs: 1_000,
+        claimLeaseMs: 15_000,
+        shutdownDrainTimeoutMs: 5_000,
+      };
+      const initialize = vi.fn(async () => undefined);
+      const cleanup = vi.fn();
+      const factory = vi.fn(() => ({ initialize, cleanup }));
 
       const monitor = createEnvironmentHealthMonitor(ctx, factory);
 
-      expect(monitor).toBeNull();
-      expect(factory).not.toHaveBeenCalled();
-      expect(initializeEnvironmentHealthMonitor(monitor)).toBe(false);
-      await Promise.resolve();
-      expect(factory).not.toHaveBeenCalled();
+      expect(monitor).not.toBeNull();
+      expect(factory).toHaveBeenCalledWith('shared_postgres', ctx.app, ctx);
+      expect(initializeEnvironmentHealthMonitor(monitor)).toBe(true);
+      await vi.waitFor(() => expect(initialize).toHaveBeenCalledOnce());
     }
   );
 
@@ -202,7 +214,7 @@ describe('startup tenant database scope', () => {
     await vi.waitFor(() => expect(initialize).toHaveBeenCalledOnce());
   });
 
-  it('refuses the environment monitor when a shared runtime caller supplies a stale policy', () => {
+  it('refuses the environment monitor when a shared runtime caller supplies a mismatched policy', () => {
     const { ctx } = makeStartupContextWithGuardedDb();
     ctx.taskRuntimePolicy = 'shared_postgres';
     ctx.environmentHealthMonitorPolicy = 'standalone';

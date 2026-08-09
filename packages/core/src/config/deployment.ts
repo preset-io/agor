@@ -1,3 +1,4 @@
+import { hasTenantSafeExecutorCredentialHome } from './executor-credential-storage';
 import type {
   AgorConfig,
   AgorDeploymentMode,
@@ -12,6 +13,15 @@ export const DEFAULT_REDIS_STARTUP_TIMEOUT_MS = 15_000;
 export const DEFAULT_REDIS_REQUEST_TIMEOUT_MS = 5_000;
 export const DEFAULT_REDIS_RECONNECT_BASE_DELAY_MS = 100;
 export const DEFAULT_REDIS_RECONNECT_MAX_DELAY_MS = 2_000;
+export const DEFAULT_ENVIRONMENT_HEALTH_SCAN_INTERVAL_MS = 5_000;
+export const DEFAULT_ENVIRONMENT_HEALTH_MAX_IDLE_INTERVAL_MS = 30_000;
+export const DEFAULT_ENVIRONMENT_HEALTH_STARTUP_OFFSET_MAX_MS = 3_000;
+export const DEFAULT_ENVIRONMENT_HEALTH_SCAN_BATCH_SIZE = 32;
+export const DEFAULT_ENVIRONMENT_HEALTH_MAX_IN_FLIGHT = 8;
+export const DEFAULT_ENVIRONMENT_HEALTH_HTTP_TIMEOUT_MS = 1_000;
+export const DEFAULT_ENVIRONMENT_HEALTH_CLAIM_LEASE_MS = 15_000;
+export const DEFAULT_ENVIRONMENT_HEALTH_SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
+export const MIN_ENVIRONMENT_HEALTH_CLAIM_MARGIN_MS = 5_000;
 
 export interface ResolvedRedisSettings {
   /** Kept private to the connection factory; never include this in logs or health output. */
@@ -28,6 +38,17 @@ export interface ResolvedExecutorStorageSettings {
   userHome: AgorExecutorUserHomeStorage;
   branchWorkspace: AgorExecutorBranchWorkspaceStorage;
   baseRepository: AgorExecutorBaseRepositoryStorage;
+}
+
+export interface ResolvedEnvironmentHealthMonitorSettings {
+  scanIntervalMs: number;
+  maxIdleIntervalMs: number;
+  startupOffsetMaxMs: number;
+  scanBatchSize: number;
+  maxInFlight: number;
+  httpTimeoutMs: number;
+  claimLeaseMs: number;
+  shutdownDrainTimeoutMs: number;
 }
 
 export type ResolvedDeploymentConfig =
@@ -53,10 +74,11 @@ export type ResolvedDeploymentConfig =
         processAffineAuth: false;
         gatewayListeners: true;
         gatewayOutboundExactlyOnce: false;
-        environmentHealthMonitor: false;
+        environmentHealthMonitor: true;
         artifactRuntimeIntrospection: false;
       };
       redis: ResolvedRedisSettings;
+      environmentHealthMonitor: ResolvedEnvironmentHealthMonitorSettings;
       executorStorage: ResolvedExecutorStorageSettings;
       topology:
         | { execution: 'shared-local'; sharedFilesystem: true; ingressAffinity: true }
@@ -76,6 +98,19 @@ function envInteger(env: DeploymentEnv, name: string): number | undefined {
   return parsed;
 }
 
+function envNonNegativeInteger(env: DeploymentEnv, name: string): number | undefined {
+  const value = env[name];
+  if (value === undefined || value === '') return undefined;
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`Config error: ${name} must be a non-negative integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`Config error: ${name} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
 function envBoolean(env: DeploymentEnv, name: string): boolean | undefined {
   const value = env[name];
   if (value === undefined || value === '') return undefined;
@@ -89,6 +124,84 @@ function positiveInteger(value: number, path: string): number {
     throw new Error(`Config error: ${path} must be a positive integer`);
   }
   return value;
+}
+
+export function resolveEnvironmentHealthMonitorSettings(
+  config: AgorConfig,
+  env: DeploymentEnv = process.env
+): ResolvedEnvironmentHealthMonitorSettings {
+  const raw = config.deployment?.ha?.environment_health_monitor;
+  const settings = {
+    scanIntervalMs:
+      envInteger(env, 'AGOR_HA_ENV_HEALTH_SCAN_INTERVAL_MS') ??
+      raw?.scan_interval_ms ??
+      DEFAULT_ENVIRONMENT_HEALTH_SCAN_INTERVAL_MS,
+    maxIdleIntervalMs:
+      envInteger(env, 'AGOR_HA_ENV_HEALTH_MAX_IDLE_INTERVAL_MS') ??
+      raw?.max_idle_interval_ms ??
+      DEFAULT_ENVIRONMENT_HEALTH_MAX_IDLE_INTERVAL_MS,
+    startupOffsetMaxMs:
+      envNonNegativeInteger(env, 'AGOR_HA_ENV_HEALTH_STARTUP_OFFSET_MAX_MS') ??
+      raw?.startup_offset_max_ms ??
+      DEFAULT_ENVIRONMENT_HEALTH_STARTUP_OFFSET_MAX_MS,
+    scanBatchSize:
+      envInteger(env, 'AGOR_HA_ENV_HEALTH_SCAN_BATCH_SIZE') ??
+      raw?.scan_batch_size ??
+      DEFAULT_ENVIRONMENT_HEALTH_SCAN_BATCH_SIZE,
+    maxInFlight:
+      envInteger(env, 'AGOR_HA_ENV_HEALTH_MAX_IN_FLIGHT') ??
+      raw?.max_in_flight ??
+      DEFAULT_ENVIRONMENT_HEALTH_MAX_IN_FLIGHT,
+    httpTimeoutMs:
+      envInteger(env, 'AGOR_HA_ENV_HEALTH_HTTP_TIMEOUT_MS') ??
+      raw?.http_timeout_ms ??
+      DEFAULT_ENVIRONMENT_HEALTH_HTTP_TIMEOUT_MS,
+    claimLeaseMs:
+      envInteger(env, 'AGOR_HA_ENV_HEALTH_CLAIM_LEASE_MS') ??
+      raw?.claim_lease_ms ??
+      DEFAULT_ENVIRONMENT_HEALTH_CLAIM_LEASE_MS,
+    shutdownDrainTimeoutMs:
+      envInteger(env, 'AGOR_HA_ENV_HEALTH_SHUTDOWN_DRAIN_TIMEOUT_MS') ??
+      raw?.shutdown_drain_timeout_ms ??
+      DEFAULT_ENVIRONMENT_HEALTH_SHUTDOWN_DRAIN_TIMEOUT_MS,
+  };
+  for (const [value, path] of [
+    [settings.scanIntervalMs, 'deployment.ha.environment_health_monitor.scan_interval_ms'],
+    [settings.maxIdleIntervalMs, 'deployment.ha.environment_health_monitor.max_idle_interval_ms'],
+    [settings.scanBatchSize, 'deployment.ha.environment_health_monitor.scan_batch_size'],
+    [settings.maxInFlight, 'deployment.ha.environment_health_monitor.max_in_flight'],
+    [settings.httpTimeoutMs, 'deployment.ha.environment_health_monitor.http_timeout_ms'],
+    [settings.claimLeaseMs, 'deployment.ha.environment_health_monitor.claim_lease_ms'],
+    [
+      settings.shutdownDrainTimeoutMs,
+      'deployment.ha.environment_health_monitor.shutdown_drain_timeout_ms',
+    ],
+  ] as const) {
+    positiveInteger(value, path);
+  }
+  if (!Number.isSafeInteger(settings.startupOffsetMaxMs) || settings.startupOffsetMaxMs < 0) {
+    throw new Error(
+      'Config error: deployment.ha.environment_health_monitor.startup_offset_max_ms must be a non-negative integer'
+    );
+  }
+  if (settings.maxIdleIntervalMs < settings.scanIntervalMs) {
+    throw new Error(
+      'Config error: environment health maximum idle interval cannot be below scan interval'
+    );
+  }
+  if (settings.maxInFlight > settings.scanBatchSize) {
+    throw new Error('Config error: environment health max in-flight cannot exceed scan batch size');
+  }
+  if (
+    settings.claimLeaseMs <
+    Math.max(settings.httpTimeoutMs, settings.scanIntervalMs) +
+      MIN_ENVIRONMENT_HEALTH_CLAIM_MARGIN_MS
+  ) {
+    throw new Error(
+      'Config error: environment health claim lease must leave at least 5000ms after its HTTP timeout and renewal interval'
+    );
+  }
+  return settings;
 }
 
 export function validateRedisUrl(raw: string): string {
@@ -177,6 +290,11 @@ export function resolveDeploymentConfig(
       'Config error: HA requires an explicitly supplied AGOR_MASTER_SECRET of at least 32 characters'
     );
   }
+  if (config.external_launch?.enabled !== true && !env.AGOR_ADMIN_PASSWORD) {
+    throw new Error(
+      'Config error: HA requires an explicitly supplied AGOR_ADMIN_PASSWORD for race-free first-run admin bootstrap'
+    );
+  }
   const executionTopology = (env.AGOR_HA_EXECUTION_TOPOLOGY ??
     config.deployment?.ha?.execution_topology) as 'shared-local' | 'external' | undefined;
   if (executionTopology !== 'shared-local' && executionTopology !== 'external') {
@@ -251,6 +369,12 @@ export function resolveDeploymentConfig(
       'Config error: HA requires explicit execution.executor_storage.user_home, branch_workspace, and base_repository guarantees'
     );
   }
+  const tenantSafeCredentialHome = hasTenantSafeExecutorCredentialHome(config);
+  if (!tenantSafeCredentialHome) {
+    throw new Error(
+      'Config error: HA auth-resolved execution requires execution.executor_storage.user_home: persistent-per-user'
+    );
+  }
   if (executionTopology === 'shared-local') {
     if (executorStorage.branch_workspace === 'replica-local') {
       throw new Error(
@@ -286,6 +410,7 @@ export function resolveDeploymentConfig(
   }
 
   const redis = config.deployment?.redis;
+  const environmentHealthMonitor = resolveEnvironmentHealthMonitorSettings(config, env);
   const url = validateRedisUrl(env.REDIS_URL ?? redis?.url ?? '');
   const keyPrefix = validateRedisKeyPrefix(env.AGOR_REDIS_KEY_PREFIX ?? redis?.key_prefix ?? '');
   const connectTimeoutMs = positiveInteger(
@@ -338,12 +463,13 @@ export function resolveDeploymentConfig(
       completionCallbackDurableAdmission: true,
       completionCallbackPreAdmissionRecovery: false,
       widgetResolutionDurableClaim: true,
-      codexCredentialFiles: executorStorage.user_home !== 'replica-local',
+      codexCredentialFiles:
+        executorStorage.user_home !== 'replica-local' && tenantSafeCredentialHome,
       codexDeviceAuth: false,
       processAffineAuth: false,
       gatewayListeners: true,
       gatewayOutboundExactlyOnce: false,
-      environmentHealthMonitor: false,
+      environmentHealthMonitor: true,
       artifactRuntimeIntrospection: false,
     },
     redis: {
@@ -355,6 +481,7 @@ export function resolveDeploymentConfig(
       reconnectBaseDelayMs,
       reconnectMaxDelayMs,
     },
+    environmentHealthMonitor,
     executorStorage: {
       userHome: executorStorage.user_home,
       branchWorkspace: executorStorage.branch_workspace,

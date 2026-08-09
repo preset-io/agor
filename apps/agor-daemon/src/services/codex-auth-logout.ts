@@ -20,13 +20,12 @@
  *   from the authenticated user, never from request data.
  * - Removal is idempotent; a genuine delete failure surfaces and does NOT clear
  *   the stored method (a login we couldn't remove keeps working).
- * - Refuses hosted multi-tenant mode, exactly like import/device: there the
- *   auth.json is the daemon's own server-global file, so a tenant user must not
- *   be able to delete it. (It is NOT gated on the tool-enabled check —
- *   cleaning up a login must stay possible even after Codex is disabled.)
+ * - Shared identity resolution refuses an auth-resolved tenant topology unless
+ *   the execution substrate guarantees a persistent-per-user home. Cleanup is
+ *   not gated on the tool-enabled check, so it remains possible after Codex is
+ *   disabled.
  */
 
-import { loadConfigSync } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -63,15 +62,6 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
 
       // Hosted multi-tenant mode is safe only when the external substrate
       // selects the same isolated home from trusted tenant/user identity for
-      // this helper and every later Task.
-      const config = loadConfigSync();
-      if (
-        config.multi_tenancy?.mode === 'required_from_auth' &&
-        config.execution?.executor_storage?.user_home !== 'persistent-per-user'
-      ) {
-        throw new BadRequest('Codex login management is unavailable in hosted multi-tenant mode.');
-      }
-
       const tenantId = getCurrentTenantId();
       if (!tenantId) throw new Error('Missing active tenant context for Codex auth logout');
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>

@@ -16,7 +16,11 @@
  *   ownership and 0600 permissions hold in insulated/strict modes.
  */
 
-import { loadConfigSync, unixUserModeRequiresUsername } from '@agor/core/config';
+import {
+  hasTenantSafeExecutorCredentialHome,
+  loadConfigSync,
+  unixUserModeRequiresUsername,
+} from '@agor/core/config';
 import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type { AgenticAuthMethods, AuthenticatedParams, User, UserID } from '@agor/core/types';
@@ -76,6 +80,16 @@ export async function resolveCodexUnixIdentity(
 ): Promise<CodexUnixIdentityResolution> {
   const config = loadConfigSync();
   const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
+
+  if (!hasTenantSafeExecutorCredentialHome(config)) {
+    return {
+      ok: false,
+      reason: 'unsupported-mode',
+      message:
+        'hosted multi-tenant Codex credentials require ' +
+        'execution.executor_storage.user_home: persistent-per-user.',
+    };
+  }
 
   // The operation itself runs through the executor template. Fail closed
   // unless that substrate promises the same isolated home for auth helpers

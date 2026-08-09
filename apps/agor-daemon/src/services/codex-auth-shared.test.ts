@@ -47,6 +47,23 @@ beforeEach(() => {
 });
 
 describe('resolveCodexUnixIdentity — delegated mode', () => {
+  it('rejects a shared credential home for auth-resolved tenancy before user lookup', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth' },
+      execution: {
+        unix_user_mode: 'simple',
+        executor_storage: { user_home: 'shared' },
+      },
+    } as never);
+
+    await expect(resolveCodexUnixIdentity(USER_ID, withTenantDatabase)).resolves.toEqual({
+      ok: false,
+      reason: 'unsupported-mode',
+      message: expect.stringContaining('persistent-per-user'),
+    });
+    expect(findById).not.toHaveBeenCalled();
+  });
+
   it('returns unsupported-mode for delegated + templated execution without any user lookup', async () => {
     loadConfigSyncMock.mockReturnValue({
       execution: {

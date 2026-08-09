@@ -304,7 +304,7 @@ export class TerminalsService {
     }
     this.readyExecutors.add(userId);
     this.settleReadyWaiters(userId, true);
-    this.app.io?.to(`user/${userId}/terminal`).emit('terminal:ready', { userId });
+    this.app.io?.local.to(`user/${userId}/terminal`).emit('terminal:ready', { userId });
   }
 
   /**
@@ -314,7 +314,7 @@ export class TerminalsService {
   handleExecutorError(userId: UserID, message?: string): void {
     this.readyExecutors.delete(userId);
     this.settleReadyWaiters(userId, false);
-    this.app.io?.to(`user/${userId}/terminal`).emit('terminal:error', { userId, message });
+    this.app.io?.local.to(`user/${userId}/terminal`).emit('terminal:error', { userId, message });
   }
 
   /** Settle and clear every pending readiness waiter for a user. */
@@ -365,7 +365,7 @@ export class TerminalsService {
     const { focusTabName, skipTabName } = opts;
     const channel = `user/${userId}/terminal`;
     if (focusTabName && focusTabName !== skipTabName) {
-      this.app.io?.to(channel).emit('terminal:tab', {
+      this.app.io?.local.to(channel).emit('terminal:tab', {
         userId,
         action: 'focus',
         tabName: focusTabName,
@@ -454,7 +454,7 @@ export class TerminalsService {
               );
               return;
             }
-            this.app.io?.to(channel).emit('terminal:tab', {
+            this.app.io?.local.to(channel).emit('terminal:tab', {
               userId,
               action: 'create',
               tabName: branchTabName,
@@ -464,7 +464,7 @@ export class TerminalsService {
               focusTabName: data.focusTabName,
               skipTabName: branchTabName,
             });
-            this.app.io?.to(channel).emit('terminal:redraw', { userId });
+            this.app.io?.local.to(channel).emit('terminal:redraw', { userId });
           });
 
           return {
@@ -480,7 +480,7 @@ export class TerminalsService {
 
       void this.awaitExecutorReady(userId).then((isReady) => {
         if (isReady) {
-          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
+          this.app.io?.local.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
         }
       });
 

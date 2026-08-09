@@ -1079,6 +1079,28 @@ export interface AgorHaTopologySettings {
   shared_filesystem?: boolean;
   /** The ingress keeps Engine.IO polling requests on one daemon. */
   ingress_affinity?: boolean;
+
+  /** PostgreSQL-coordinated managed-environment health observation worker. */
+  environment_health_monitor?: AgorHaEnvironmentHealthMonitorSettings;
+}
+
+export interface AgorHaEnvironmentHealthMonitorSettings {
+  /** Delay between active scans before idle backoff. Default: 5000. */
+  scan_interval_ms?: number;
+  /** Maximum idle discovery backoff. Default: 30000. */
+  max_idle_interval_ms?: number;
+  /** Per-replica randomized startup offset ceiling. Default: 3000. */
+  startup_offset_max_ms?: number;
+  /** Maximum routing references returned by one discovery page. Default: 32. */
+  scan_batch_size?: number;
+  /** Maximum concurrent HTTP observations on one daemon. Default: 8. */
+  max_in_flight?: number;
+  /** Per-request health endpoint timeout. Default: 1000. */
+  http_timeout_ms?: number;
+  /** Database observation lease. Must exceed HTTP timeout and renewal interval by 5000ms. Default: 15000. */
+  claim_lease_ms?: number;
+  /** Graceful shutdown drain bound. Default: 5000. */
+  shutdown_drain_timeout_ms?: number;
 }
 
 export interface AgorDeploymentSettings {

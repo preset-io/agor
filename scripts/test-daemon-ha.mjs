@@ -252,15 +252,11 @@ try {
   console.log('ok - browser origin is accepted consistently through HA ingress');
   for (const service of ['daemon-a', 'daemon-b']) {
     const startupLogs = dockerOutput('logs', '--no-color', service);
-    assert.match(
-      startupLogs,
-      /Environment health monitor disabled by constrained HA support profile/
-    );
-    assert.doesNotMatch(startupLogs, /Health Monitor initialized/);
+    assert.match(startupLogs, /\[distributed-work\.environment-health\] event="loop_started"/);
     assert.match(startupLogs, /Task runtime reconciler started .*policy: shared_postgres/);
     assert.match(startupLogs, /\[distributed-work\.task-queue\] event="loop_started"/);
   }
-  console.log('ok - neither HA replica constructed/started the unfenced environment monitor');
+  console.log('ok - both HA replicas activated distributed environment-health discovery');
   console.log('ok - both replicas activated shared runtime reconciliation and queue discovery');
 
   async function loginAdmin() {
@@ -324,7 +320,7 @@ try {
     assert.equal(health.deployment.capabilities.widgetResolutionDurableClaim, true);
     assert.equal(health.deployment.capabilities.gatewayListeners, true);
     assert.equal(health.deployment.capabilities.gatewayOutboundExactlyOnce, false);
-    assert.equal(health.deployment.capabilities.environmentHealthMonitor, false);
+    assert.equal(health.deployment.capabilities.environmentHealthMonitor, true);
     assert.equal(health.deployment.capabilities.codexCredentialFiles, true);
     assert.equal(health.deployment.capabilities.codexDeviceAuth, false);
     assert.equal(health.deployment.realtime.ready, true);
@@ -539,6 +535,9 @@ try {
     );
     await Promise.all([socketA, socketB].map((socket) => latestSocketAuthentication.get(socket)));
     await Promise.all([socketHealth(socketA), socketHealth(socketB)]);
+    const [rewatchA, rewatchB] = await Promise.all([watchBoard(socketA), watchBoard(socketB)]);
+    assert.deepEqual(rewatchA, { ok: true });
+    assert.deepEqual(rewatchB, { ok: true });
     console.log('ok - daemon kill/restart preserved new HTTP and Socket.IO reconnect');
 
     cleanupStoppedServices.add('redis');
@@ -549,12 +548,37 @@ try {
       waitFor(`${daemonA}/livez`, (r) => r.status === 200),
       waitFor(`${daemonB}/livez`, (r) => r.status === 200),
     ]);
+    const cursorCountBeforeOutagePacket = cursorCount;
+    socketA.emit('cursor-move', {
+      boardId: board.board_id,
+      x: 91,
+      y: 92,
+      timestamp: Date.now(),
+    });
+    await delay(EXACTLY_ONCE_SETTLE_MS);
+    assert.equal(cursorCount, cursorCountBeforeOutagePacket);
     startServiceOnly('redis');
     cleanupStoppedServices.delete('redis');
     await Promise.all([
       waitFor(`${daemonA}/readyz`, (r) => r.status === 200),
       waitFor(`${daemonB}/readyz`, (r) => r.status === 200),
     ]);
+    await delay(EXACTLY_ONCE_SETTLE_MS);
+    assert.equal(
+      cursorCount,
+      cursorCountBeforeOutagePacket,
+      'native packet emitted during Redis outage was replayed after recovery'
+    );
+    socketA.emit('cursor-move', {
+      boardId: board.board_id,
+      x: 93,
+      y: 94,
+      timestamp: Date.now(),
+    });
+    await waitUntil(
+      () => cursorCount === cursorCountBeforeOutagePacket + 1,
+      'fresh post-recovery cursor event'
+    );
     const recoveredEvents = [];
     socketB.on('boards created', (value) => recoveredEvents.push(value));
     const recoveredCreate = await fetch(`${daemonA}/boards`, {
@@ -571,7 +595,9 @@ try {
       recoveredEvents.map((value) => value.board_id),
       [recoveredBoard.board_id]
     );
-    console.log('ok - Redis outage failed readiness but preserved liveness, then recovered fanout');
+    console.log(
+      'ok - Redis outage failed readiness, dropped gap traffic without replay, and recovered fanout'
+    );
   }
 
   completed = true;

@@ -5,7 +5,18 @@ import {
   isRealtimeRelayEnvelope,
   RedisRealtimeRuntime,
   redisAdapterKey,
+  redisRealtimeClientOptions,
 } from './redis-realtime';
+
+const settings = {
+  url: 'redis://127.0.0.1:6379/0',
+  keyPrefix: 'unit-test',
+  connectTimeoutMs: 100,
+  startupTimeoutMs: 100,
+  requestTimeoutMs: 100,
+  reconnectBaseDelayMs: 10,
+  reconnectMaxDelayMs: 20,
+} satisfies ResolvedRedisSettings;
 
 describe('isRealtimeRelayEnvelope', () => {
   it('accepts the minimal versioned tenant envelope', () => {
@@ -49,6 +60,19 @@ it('isolates independent deployment namespaces', () => {
   expect(redisAdapterKey('prod-blue')).not.toBe(redisAdapterKey('prod-green'));
 });
 
+it('fails publisher commands during outages without weakening subscriber recovery', () => {
+  expect(redisRealtimeClientOptions(settings, 'publisher')).toMatchObject({
+    enableOfflineQueue: false,
+    autoResendUnfulfilledCommands: false,
+    maxRetriesPerRequest: 1,
+    autoResubscribe: false,
+  });
+  expect(redisRealtimeClientOptions(settings, 'subscriber')).toMatchObject({
+    autoResubscribe: true,
+    maxRetriesPerRequest: null,
+  });
+});
+
 it('listens for server-side Feathers relays on the adapter root namespace', async () => {
   let listener: ((value: unknown) => void) | undefined;
   const namespace = {
@@ -56,18 +80,7 @@ it('listens for server-side Feathers relays on the adapter root namespace', asyn
       if (event === FEATHERS_RELAY_EVENT) listener = handler;
     }),
   };
-  const runtime = new RedisRealtimeRuntime(
-    {
-      url: 'redis://127.0.0.1:6379/0',
-      keyPrefix: 'unit-test',
-      connectTimeoutMs: 100,
-      startupTimeoutMs: 100,
-      requestTimeoutMs: 100,
-      reconnectBaseDelayMs: 10,
-      reconnectMaxDelayMs: 20,
-    } satisfies ResolvedRedisSettings,
-    { instanceId: 'daemon-b', bootId: 'boot-b' }
-  );
+  const runtime = new RedisRealtimeRuntime(settings, { instanceId: 'daemon-b', bootId: 'boot-b' });
   runtime.attach({ of: vi.fn(() => namespace) } as never);
   const handler = vi.fn();
   runtime.setRelayHandler(handler);

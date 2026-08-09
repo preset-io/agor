@@ -23,6 +23,7 @@ import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedUser,
+  BoardID,
   CursorLeaveEvent,
   CursorMovedEvent,
   CursorMoveEvent,
@@ -34,6 +35,12 @@ import type { Server, ServerOptions, Socket } from 'socket.io';
 import { isExecutorSessionTokenPayload } from '../auth/executor-session-token.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import { isTerminalExecutorIdentity } from '../auth/terminal-executor-guard.js';
+import {
+  boardPresenceRoomName,
+  emitHaNativeSocketEvent,
+  tenantChannelName,
+  tenantUserChannelName,
+} from '../realtime/routing.js';
 import {
   executorTaskChannelName,
   joinExecutorTaskChannel,
@@ -75,7 +82,7 @@ interface FeathersSocket extends Socket {
     isService?: boolean;
     /** Terminal user scope for handshake-token service sockets (see SocketAuthState). */
     terminalUserId?: string;
-    currentBoardId?: string;
+    currentBoardId?: BoardID;
     /** Boards authorized through the Feathers boards.get hook on this socket. */
     authorizedBoardIds?: Set<string>;
     lastPresenceEmitAt?: number;
@@ -250,28 +257,6 @@ export function createTokenBucket(
  *
  * Centralized so the prefix can change in one place without drift.
  */
-export function userRoomName(tenantId: string, userId: string): string {
-  return `tenant:${tenantId}:user:${userId}`;
-}
-
-export function tenantChannelName(tenantId: string): string {
-  return `tenant:${tenantId}`;
-}
-
-export function tenantUserChannelName(tenantId: string, userId: string): string {
-  return `tenant:${tenantId}:user:${userId}`;
-}
-
-/**
- * Per-board room name for high-frequency collaborative cursor traffic.
- *
- * Only tabs actively viewing a board should join this room so cursor motion
- * doesn't fan out to the entire app.
- */
-export function boardPresenceRoomName(tenantId: string, boardId: string): string {
-  return `tenant:${tenantId}:board:${boardId}:presence`;
-}
-
 /**
  * Validate a terminal channel name and extract its target user_id.
  *
@@ -524,7 +509,7 @@ export function createSocketIOConfig(
         const tenantId = (socket as FeathersSocket).data.tenant?.tenant_id;
         if (tenantId) {
           socket.join(tenantChannelName(tenantId));
-          socket.join(userRoomName(tenantId, user.user_id));
+          socket.join(tenantUserChannelName(tenantId, user.user_id));
         }
         console.debug(
           `🏠 Socket ${socket.id} joined user room at connection: user:${shortId(user.user_id)}`
@@ -608,13 +593,15 @@ export function createSocketIOConfig(
         const previousBoardId = fs.data.currentBoardId;
 
         if (previousBoardId && previousBoardId !== data.boardId) {
-          socket.broadcast
-            .to(boardPresenceRoomName(tenantId, previousBoardId))
-            .emit('cursor-left', {
+          emitHaNativeSocketEvent(
+            socket.broadcast.to(boardPresenceRoomName(tenantId, previousBoardId)),
+            'cursor-left',
+            {
               userId,
               boardId: previousBoardId,
               timestamp: Date.now(),
-            });
+            }
+          );
         }
 
         const broadcastData: CursorMovedEvent = {
@@ -626,9 +613,11 @@ export function createSocketIOConfig(
         };
 
         // Broadcast cursor position only to tabs actively watching this board.
-        socket.broadcast
-          .to(boardPresenceRoomName(tenantId, data.boardId))
-          .emit('cursor-moved', broadcastData);
+        emitHaNativeSocketEvent(
+          socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)),
+          'cursor-moved',
+          broadcastData
+        );
 
         fs.data.currentBoardId = data.boardId;
 
@@ -643,7 +632,11 @@ export function createSocketIOConfig(
             boardId: data.boardId,
             timestamp: data.timestamp,
           };
-          socket.broadcast.to(tenantChannelName(tenantId)).emit('presence-updated', presenceData);
+          emitHaNativeSocketEvent(
+            socket.broadcast.to(tenantChannelName(tenantId)),
+            'presence-updated',
+            presenceData
+          );
           fs.data.lastPresenceEmitAt = data.timestamp;
         }
       });
@@ -657,11 +650,15 @@ export function createSocketIOConfig(
         if (!tenantId || !getSocketAuthState(socket).userId) return;
         if (!fs.data.authorizedBoardIds?.has(data.boardId)) return;
 
-        socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)).emit('cursor-left', {
-          userId,
-          boardId: data.boardId,
-          timestamp: Date.now(),
-        });
+        emitHaNativeSocketEvent(
+          socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)),
+          'cursor-left',
+          {
+            userId,
+            boardId: data.boardId,
+            timestamp: Date.now(),
+          }
+        );
 
         if (fs.data.currentBoardId === data.boardId) {
           delete fs.data.currentBoardId;
@@ -825,7 +822,9 @@ export function createSocketIOConfig(
         socket.join(channel);
         if (auth.isService && auth.terminalUserId === target) {
           const prev = activeTerminalExecutorByUser.get(target);
-          if (prev && prev !== socket.id) io.to(prev).emit('terminal:shutdown', { userId: target });
+          if (prev && prev !== socket.id) {
+            io.local.to(prev).emit('terminal:shutdown', { userId: target });
+          }
           activeTerminalExecutorByUser.set(target, socket.id);
         }
       });
@@ -879,7 +878,7 @@ export function createSocketIOConfig(
         // its own `user/<id>/terminal` channel to relay I/O, so `io.to` would
         // bounce every output frame straight back to the executor that just
         // produced it — a wasted round trip on the hottest path.
-        socket.to(channel).emit('terminal:output', data);
+        socket.local.to(channel).emit('terminal:output', data);
       });
 
       // Route terminal input from browser to executor.
@@ -899,7 +898,7 @@ export function createSocketIOConfig(
         // ever weakened.
         const channel = `user/${userId}/terminal`;
         const executor = activeTerminalExecutorByUser.get(userId);
-        io.to(executor ?? channel).emit('terminal:input', { userId, input: data.input });
+        io.local.to(executor ?? channel).emit('terminal:input', { userId, input: data.input });
       });
 
       // Route terminal resize events. Same auth model as terminal:input —
@@ -911,7 +910,7 @@ export function createSocketIOConfig(
         if (!userId) return;
         const channel = `user/${userId}/terminal`;
         const executor = activeTerminalExecutorByUser.get(userId);
-        io.to(executor ?? channel).emit('terminal:resize', {
+        io.local.to(executor ?? channel).emit('terminal:resize', {
           userId,
           cols: data.cols,
           rows: data.rows,
@@ -928,7 +927,7 @@ export function createSocketIOConfig(
         (data: { userId: string; action: string; tabName: string; cwd?: string }) => {
           if (!requireServiceForOwnUserId('terminal:tab', data?.userId)) return;
           const channel = `user/${data.userId}/terminal`;
-          io.to(channel).emit('terminal:tab', data);
+          io.local.to(channel).emit('terminal:tab', data);
         }
       );
 
@@ -938,7 +937,7 @@ export function createSocketIOConfig(
       socket.on('terminal:exit', (data: { userId: string; exitCode: number; signal?: number }) => {
         if (!requireServiceForOwnUserId('terminal:exit', data?.userId)) return;
         const channel = `user/${data.userId}/terminal`;
-        io.to(channel).emit('terminal:exit', data);
+        io.local.to(channel).emit('terminal:exit', data);
         console.log(`🖥️  Terminal exited for user ${data.userId}: code=${data.exitCode}`);
       });
 
@@ -1048,7 +1047,7 @@ export function createSocketIOConfig(
             const tenantId = tenant?.tenant_id;
             if (tenantId) {
               socket.join(tenantChannelName(tenantId));
-              socket.join(userRoomName(tenantId, userId));
+              socket.join(tenantUserChannelName(tenantId, userId));
             }
           }
           break;

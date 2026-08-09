@@ -397,6 +397,14 @@ credentials are rejected. Use a trusted orchestration service, and avoid secrets
 in query strings because rendered branch snapshots and infrastructure logs may
 expose them.
 
+In daemon HA mode, lifecycle actions remain webhook-only; Agor does not assign
+distributed ownership for Start, Stop, Restart, or Nuke. Health observation is
+separate: every replica scans active environments, while PostgreSQL admits only
+one live observation claim per branch and fences the result against lease expiry
+and lifecycle changes. A remote/webhook environment without `health` remains
+explicitly unobservable (`unknown`); Agor never treats another daemon's local
+process map as evidence that it is healthy.
+
 ---
 
 ## See also

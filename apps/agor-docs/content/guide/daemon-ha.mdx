@@ -42,6 +42,8 @@ executor invocation:
 for auth helpers, Tasks, replicas, and restarts. `persistent-per-branch` means the same durable
 working copy is mounted at the absolute `branch.path` recorded in PostgreSQL. Executor homes and
 branches may be separate volumes; they do not need to be one global shared filesystem.
+An auth-resolved HA deployment must use `persistent-per-user`; startup rejects a shared or
+replica-local credential home rather than allowing users or tenants to share CLI credentials.
 
 When `base_repository: unavailable`, native worktrees are invalid because their `.git` file points
 into the registered base repository's `.git/worktrees` metadata. Agor therefore requires
@@ -110,6 +112,10 @@ before expecting the checked-in development credential to bootstrap again.
 
 Keep generated secrets in a secret manager and rotate them as an all-replica operation. The example's unencrypted Redis connection stays on its private Compose network. Across a shared or untrusted network, use `rediss://`, certificate verification, Redis ACL authentication, private networking/firewalls, and credentials limited to the required Pub/Sub/control commands and deployment channels.
 
+HA startup requires an explicit `AGOR_ADMIN_PASSWORD` unless external-launch authentication owns
+bootstrap. Daemons never race through the standalone generated credential-file path. The password
+is consumed only when the first admin row is created; it does not reset an existing account.
+
 ## Configuration contract
 
 ```yaml
@@ -128,6 +134,15 @@ deployment:
     support_profile: constrained-active-active
     execution_topology: external # or shared-local
     ingress_affinity: true
+    environment_health_monitor:
+      scan_interval_ms: 5000
+      max_idle_interval_ms: 30000
+      startup_offset_max_ms: 3000
+      scan_batch_size: 32
+      max_in_flight: 8
+      http_timeout_ms: 1000
+      claim_lease_ms: 15000
+      shutdown_drain_timeout_ms: 5000
 execution:
   executor_command_template: 'cell launch --tenant {tenant_id} -- {command}'
   executor_storage:
@@ -160,7 +175,13 @@ topology requires an HTTP(S) `daemon.public_url` that the execution
 substrate can reach through the daemon fleet. Environment overrides include
 `AGOR_DEPLOYMENT_MODE`, `AGOR_HA_SUPPORT_PROFILE`, `AGOR_HA_EXECUTION_TOPOLOGY`,
 `AGOR_HA_SHARED_FILESYSTEM`, `AGOR_HA_INGRESS_AFFINITY`, `REDIS_URL`,
-`AGOR_REDIS_KEY_PREFIX`, and the `AGOR_REDIS_*_MS` timeout/backoff variables. Storage guarantees
+`AGOR_REDIS_KEY_PREFIX`, the `AGOR_REDIS_*_MS` timeout/backoff variables, and
+`AGOR_HA_ENV_HEALTH_SCAN_INTERVAL_MS`, `AGOR_HA_ENV_HEALTH_MAX_IDLE_INTERVAL_MS`,
+`AGOR_HA_ENV_HEALTH_STARTUP_OFFSET_MAX_MS`, `AGOR_HA_ENV_HEALTH_SCAN_BATCH_SIZE`,
+`AGOR_HA_ENV_HEALTH_MAX_IN_FLIGHT`, `AGOR_HA_ENV_HEALTH_HTTP_TIMEOUT_MS`,
+`AGOR_HA_ENV_HEALTH_CLAIM_LEASE_MS`, and
+`AGOR_HA_ENV_HEALTH_SHUTDOWN_DRAIN_TIMEOUT_MS`. The health claim lease
+must be at least five seconds longer than both the HTTP timeout and renewal scan interval. Storage guarantees
 remain YAML-only so an accidental environment toggle cannot claim that mounts exist.
 
 The Redis prefix separates deployments operationally. It is never tenant authorization.
@@ -169,12 +190,13 @@ The Redis prefix separates deployments operationally. It is never tenant authori
 
 | Event | `/livez` | `/readyz` | Behavior |
 | --- | --- | --- | --- |
-| Healthy | 200 | 200 | Both Redis clients are ready, the adapter is attached, and PostgreSQL answers. |
+| Healthy | 200 | 200 | Both Redis clients are ready, the adapter is attached, PostgreSQL answers, and the environment observation worker's coordination scan succeeds. |
 | Redis unavailable at boot | no listener | no listener | HA startup fails; the daemon never degrades into an isolated standalone fanout node. |
-| Redis/adapter lost after boot | 200 | 503 | The process stays live for diagnosis but must leave ingress rotation. Already-committed PostgreSQL writes remain durable; notifications during the gap are not replayed. |
+| Redis/adapter lost after boot | 200 | 503 | The process stays live for diagnosis but must leave ingress rotation. Already-committed PostgreSQL writes remain durable. The publisher disables its offline queue and unfulfilled-command replay, so notifications during the gap fail promptly and are not replayed. The subscriber reconnects and resubscribes. |
 | Redis recovers | 200 | 200 after pub/sub are ready | ioredis reconnects with capped exponential jitter and restores subscriptions. Clients refetch durable state. |
 | One daemon exits | survivor 200 | survivor 200 | Existing sockets on the failed daemon reconnect through ingress. New REST requests use the survivor. |
 | PostgreSQL unavailable | 200 | 503 | Fleet is live but unavailable for application traffic and durable authority checks fail closed. |
+| Environment coordination scan fails | 200 | 503 until a scan succeeds | No new observations are trusted while the PostgreSQL claim path is unavailable. App endpoint outcomes follow the observation rules below and do not fail daemon readiness. |
 | Graceful shutdown | 200 until exit | 503 as drain begins | Readiness drops before workers/sockets drain; Redis clients close with a bounded quit/disconnect fallback. |
 
 Realtime events are at-most-once notifications across an outage window. Exactly-once durable mutation, work claims, task identity, and gateway occurrence admission are PostgreSQL concerns.
@@ -191,6 +213,28 @@ Realtime events are at-most-once notifications across an outage window. Exactly-
 
 No current product cross-replica notification requests client broadcast acknowledgements. Feathers method callbacks terminate on the daemon that handled the method. The adapter supports broadcast acknowledgements, but any future product event using them needs explicit multi-replica tests before support is claimed.
 
+### Managed-environment observation semantics
+
+Each active `starting` or `running` branch is eligible for bounded periodic discovery. One replica
+retains and renews its PostgreSQL lease; after owner death, another replica can take over only after
+database-time expiry. Every result commit locks and rereads the branch and rejects an expired or
+replaced token, changed lifecycle generation, inactive status, or archived row. No database
+transaction remains open during the HTTP request.
+
+- A healthy `starting` observation promotes the environment to `running`.
+- A reachable non-success response is recorded as `unhealthy`. A network error or timeout during
+  `starting` preserves the existing startup grace behavior; the same failure during `running` is
+  recorded as `unhealthy`, without changing the lifecycle status.
+- A missing health URL is recorded as `unknown`. A URL rejected by the health-check security policy
+  is recorded as `unhealthy`. URLs and embedded credentials are not logged by the worker.
+- Branch events only wake discovery early. Periodic scans recover missed events and newly eligible
+  rows.
+- A coordination failure makes `/readyz` return 503. The loop retries with bounded jitter/backoff;
+  the first successful scan restores readiness. Endpoint health results never change daemon
+  readiness.
+- Graceful shutdown stops new discovery, aborts HTTP work, drains within the configured bound, and
+  conditionally releases current tokens when time remains. Otherwise lease expiry is authoritative.
+
 ## Current support matrix
 
 | Capability | Constrained HA status |
@@ -206,30 +250,30 @@ No current product cross-replica notification requests client broadcast acknowle
 | Gateway listeners | Slack, GitHub, and Shortcut supported on PostgreSQL with leases and occurrence fencing. Teams and unimplemented providers fail closed. The legacy generic inbound channel-key route is not a durable HA ingress. Provider-side acknowledgement/send crash gaps remain documented at-least-once windows. |
 | Feathers events and native tenant/user/board rooms | Supported through the audited relay/adapter paths. Auth-resolved multi-tenant operations still need end-to-end certification. |
 | Web terminal | Startup-blocked; PTY ownership and bytes remain process-affine. |
-| Managed environments | Local commands are startup-blocked; use webhook-only. The legacy unfenced environment HealthMonitor is not constructed in HA and authenticated health reports `environmentHealthMonitor: false`. External webhook execution and its own monitoring plane must provide the production behavior. |
+| Managed environments | Lifecycle control remains webhook-only: this slice does not distribute Start/Stop/Restart/Nuke ownership. Health observation runs on every replica with bounded discovery and one PostgreSQL lease/token per branch. The result write rechecks DB-time lease expiry, opaque token, active status, archive state, tenant, and lifecycle generation. Missing health URLs are recorded as `unknown`; Agor does not infer remote health from another replica's process map. Authenticated health reports `environmentHealthMonitor: true`. |
 | MCP OAuth/callback and OAuth-capable MCP discovery, GitHub install state, Codex device auth, OpenCode OAuth/native auth | Blocked as process-affine credential/state flows. Codex device attempts still live in one daemon's timer/Map. |
-| Codex auth-file check/import/logout | Enabled only when `executor_storage.user_home` is `shared` or `persistent-per-user`; the operation runs through the executor and Redis never carries the file/tokens. The Compose profile uses one shared simple-mode Unix home; Cloud must use tenant/user-isolated persistent homes. |
+| Codex auth-file check/import/logout | Enabled with a consistent executor home: static-tenancy Compose may use its intentional shared simple-mode identity, while auth-resolved deployments require `persistent-per-user`. The operation runs through the executor and Redis never carries the file/tokens. |
 | Synchronous Artifact runtime introspection | Blocked; per-viewer wait/query state is process-local and may be secret-derived. Durable Artifact metadata remains available. |
 | External launch | Stateless calls remain available, but credentials/results are excluded from Redis and deployment-specific execution/auth behavior still requires operator validation. |
 
 ## Rollout and rollback checklist
 
 1. Back up PostgreSQL and any shared-local workspace volume.
-2. Apply all migrations before admitting new-version daemons. Use an all-at-once cohort replacement; old executor tokens without authority rows fail closed.
+2. Apply all migrations before admitting new-version daemons. Migration `0077_environment_health_ha` adds branch observation leases/generations and the narrow discovery policy. Use an all-at-once cohort replacement; old daemons do not understand the new capability contract.
 3. Provision private Redis with health monitoring, ACL/TLS/network controls, and a unique prefix. Do not rely on Redis for persistence/replay.
 4. Distribute identical stable config and secrets. Set stable `AGOR_DAEMON_INSTANCE_ID` values for diagnostics only.
 5. Choose and verify `shared-local` or `external`; declare the executor storage contract from actual mounts, and do not set `shared_filesystem` merely because HA is enabled. Before using `base_repository: unavailable`, inventory historical branches for worktree rows.
 6. Verify `/socket.io/` polling-to-WebSocket affinity and REST distribution separately.
 7. Configure `/readyz` for traffic removal and `/livez` for process restart decisions.
-8. Confirm an authenticated Feathers `health.find` on every replica reports `mode: ha`, `supportProfile: constrained-active-active`, the expected fine-grained capability booleans, distinct instance/boot diagnostics, and ready Redis clients. In particular, do not interpret `completionCallbackDurableAdmission: true` as pre-admission recovery or `gatewayListeners: true` as outbound exactly-once; the corresponding negative capability flags remain visible. `codexCredentialFiles` reflects the declared home consistency while `codexDeviceAuth` remains false. `environmentHealthMonitor: false` confirms that the legacy unfenced monitor is absent. The public HTTP `GET /health` intentionally exposes only the configured instance label and dependency summary.
+8. Confirm an authenticated Feathers `health.find` on every replica reports `mode: ha`, `supportProfile: constrained-active-active`, the expected fine-grained capability booleans, distinct instance/boot diagnostics, and ready Redis clients. In particular, do not interpret `completionCallbackDurableAdmission: true` as pre-admission recovery or `gatewayListeners: true` as outbound exactly-once; the corresponding negative capability flags remain visible. `codexCredentialFiles` reflects the declared home consistency while `codexDeviceAuth` remains false. `environmentHealthMonitor: true` confirms that the fenced observer is advertised. The public HTTP `GET /health` intentionally exposes only the configured instance label and dependency summary.
 9. Exercise daemon loss, Redis loss/recovery, cross-replica authorized delivery, and negative authorization tests before production traffic.
 10. Validate only the gateway providers and task permission modes you plan to enable; “daemon starts” is not full product HA certification.
 
-To roll back, stop the HA cohort, remove all but one daemon from ingress, set `deployment.mode: standalone`, and restart that daemon against PostgreSQL. `REDIS_URL` may stay present because standalone ignores it. Do not rotate shared secrets or switch database engines during an emergency rollback. Process-affine features should be re-enabled only after the all-at-once transition is complete.
+To roll back, stop the HA cohort, remove all but one daemon from ingress, set `deployment.mode: standalone`, and restart that daemon against PostgreSQL. The added columns and policy are backward-compatible and may remain; rolling the migration back requires dropping the discovery policy/index and seven coordination columns only after every new daemon is stopped. `REDIS_URL` may stay present because standalone ignores it. Do not rotate shared secrets or switch database engines during an emergency rollback.
 
 ## Opt-in integration harness
 
-The repository harness is intentionally not part of the default test run. Against only the checked-in HA Compose project it proves two ready identities, absence of the environment HealthMonitor on both replicas, activation of shared Task queue/reconciler loops, REST distribution, an actual `429` from the single-ingress sensitive-route limiter, stateless MCP initialization plus stateful rejection, polling upgrade affinity, authorized Feathers and native-room delivery with a bounded duplicate-observation window, anonymous denial, the split Codex contract (auth-file import admitted, device polling blocked), authenticated daemon reconnect/restart, and Redis readiness/liveness loss and recovery. Cleanup runs in `finally`, restores stopped branch services, and removes any created API key or board after both success and assertion failure.
+The repository harness is intentionally not part of the default test run. Against only the checked-in HA Compose project it proves two ready identities and activation of the distributed environment-health loop on both replicas (not occurrence-level fencing), activation of shared Task queue/reconciler loops, REST distribution, an actual `429` from the single-ingress sensitive-route limiter, stateless MCP initialization plus stateful rejection, polling upgrade affinity, authorized Feathers and native-room delivery with a bounded duplicate-observation window, anonymous denial, the split Codex contract (auth-file import admitted, device polling blocked), authenticated daemon reconnect/restart, and Redis readiness/liveness loss and recovery. PostgreSQL two-worker tests prove the environment ownership/fencing semantics. Cleanup runs in `finally`, restores stopped branch services, and removes any created API key or board after both success and assertion failure.
 
 ```bash
 export COMPOSE_PROJECT_NAME=agor-ha-integration

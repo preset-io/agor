@@ -579,9 +579,31 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         insertData.updated_at = new Date(current.updated_at);
       }
 
+      // Any eligibility/lifecycle change invalidates an observation that may
+      // currently be outside the database performing HTTP. The result writer
+      // also compares this generation, so clearing the token is not the only
+      // fence. Health observations use their dedicated repository and never
+      // enter this generic update path.
+      const currentStatus = current.environment_instance?.status;
+      const mergedStatus = merged.environment_instance?.status;
+      const invalidatesEnvironmentObservation =
+        currentStatus !== mergedStatus ||
+        current.health_check_url !== merged.health_check_url ||
+        Boolean(current.archived) !== Boolean(merged.archived);
+      const environmentCoordinationUpdate = invalidatesEnvironmentObservation
+        ? {
+            environment_generation: sql`${branches.environment_generation} + 1`,
+            environment_health_claim_token: null,
+            environment_health_claimed_at: null,
+            environment_health_claim_expires_at: null,
+            environment_health_claim_instance_id: null,
+            environment_health_claim_boot_id: null,
+          }
+        : {};
+
       // STEP 4: Write merged branch (within same transaction)
       const row = await update(txAsDb(tx), branches)
-        .set(insertData)
+        .set({ ...insertData, ...environmentCoordinationUpdate })
         .where(eq(branches.branch_id, current.branch_id))
         .returning()
         .one();

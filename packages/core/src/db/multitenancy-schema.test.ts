@@ -102,6 +102,15 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).not.toContain('WITH CHECK');
   });
 
+  it('limits environment health discovery to active non-archived routing rows', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0077_environment_health_ha.sql');
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('"archived" = false');
+    expect(migration).toContain("IN ('starting', 'running')");
+    expect(migration).toContain("= 'environment_health_discovery'");
+    expect(migration).not.toContain('WITH CHECK');
+  });
+
   it('limits upload maintenance discovery to expired rows and an explicit capability', () => {
     const migration = readRepoFile('packages/core/drizzle/postgres/0069_upload_maintenance.sql');
 

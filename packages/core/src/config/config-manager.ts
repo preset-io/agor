@@ -352,7 +352,22 @@ function validateConfig(config: AgorConfig): void {
     'execution_topology',
     'shared_filesystem',
     'ingress_affinity',
+    'environment_health_monitor',
   ]);
+  only(
+    config.deployment?.ha?.environment_health_monitor,
+    'deployment.ha.environment_health_monitor',
+    [
+      'scan_interval_ms',
+      'max_idle_interval_ms',
+      'startup_offset_max_ms',
+      'scan_batch_size',
+      'max_in_flight',
+      'http_timeout_ms',
+      'claim_lease_ms',
+      'shutdown_drain_timeout_ms',
+    ]
+  );
   if (
     config.deployment?.mode !== undefined &&
     config.deployment.mode !== 'standalone' &&
