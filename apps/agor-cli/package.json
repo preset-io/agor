@@ -23,7 +23,7 @@
     "@oclif/plugin-help": "^6.2.56",
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",
-    "inquirer": "^12.10.0",
+    "inquirer": "^14.0.2",
     "proper-lockfile": "4.1.2"
   },
   "devDependencies": {
