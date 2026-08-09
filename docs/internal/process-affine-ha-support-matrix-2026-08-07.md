@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 
-**Status:** superseded by the constrained HA activation integrated on 2026-08-09; retained as the detailed process-affine audit
+**Status:** superseded by the constrained HA activation integrated on 2026-08-09; retained as the detailed process-affine audit. The built-in MCP endpoint is now stateless.
 
 **Base:** `8d5d9ed3` plus the uncommitted Redis/realtime HA integration
 
@@ -43,7 +43,8 @@ The implemented contract is therefore:
 - bridge Feathers publications through Socket.IO `serverSideEmit`, then rerun
   tenant/RBAC publication on every receiving replica; native rooms remain
   separately tenant-qualified and authorized;
-- disable web terminals, stateful MCP, transient browser OAuth/setup flows,
+- keep the built-in stateless MCP endpoint enabled while disabling web terminals,
+  transient browser OAuth/setup flows,
   OpenCode native-state OAuth, and Codex device auth. Slack, GitHub, and
   Shortcut gateway listeners are now enabled through the merged PostgreSQL
   lease/occurrence fences; Teams and unimplemented providers fail closed;
@@ -233,13 +234,12 @@ the first activation branch.
 
 | Item                         | Current state and authorization                                                                                                                                                                                                                                                                                                                                                                        | Classification          | Exact owner-death behavior                                                                                                                                                            | Initial HA disposition                                                                                                                                                                                                                                                            |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stateless MCP POST           | A transport/server is built per POST and closed after the response (`apps/agor-daemon/src/mcp/server.ts:816-836`). Every request authenticates a personal API key in the resolved tenant or a signed tenant/user/Session MCP JWT, then enters tenant scope (`mcp/server.ts:491-688`).                                                                                                                  | **R**, safely stateless | In-flight request fails if its daemon dies; a new request can go to any replica.                                                                                                      | Supported with shared PostgreSQL, stable signing secret, and identical config. Mutating tools retain their own PostgreSQL idempotency/lease requirements.                                                                                                                         |
-| Stateful Streamable HTTP MCP | SDK server, transport, mutable context, immutable tenant/user/optional Agor Session, last-used time, and TTL timer live in a local Map, max 100/30-minute TTL (`mcp/server.ts:387-442`). Follow-ups look up `Mcp-Session-Id` only in that Map (`mcp/server.ts:690-706`). Each request rechecks tenant, user, immutable Session binding, fresh user role, and Session access (`mcp/server.ts:707-768`). | **A+D**; not **R**      | A follow-up that reaches another replica, or any follow-up after owner death, receives 404 “Session not found.” SSE/transport state is not in PostgreSQL and cannot be reconstructed. | In initial HA reject stateful initialize/GET/DELETE and advertise stateless POST only. A later lossy option may deterministically route by `Mcp-Session-Id` and require clients to reinitialize on owner death; zero-loss failover requires a protocol-aware redesign, not Redis. |
+| Stateless MCP POST           | The v2 protocol handler constructs and closes a request-local server/transport for modern JSON and legacy request-scoped responses. Every request authenticates a personal API key in the resolved tenant or a signed tenant/user/Session MCP JWT, then enters tenant scope. A legacy `Mcp-Session-Id` is validated as input syntax and discarded before protocol handling.                                                                                                                  | **R**, safely stateless | In-flight request fails if its daemon dies; a new request can go to any replica.                                                                                                      | Supported with shared PostgreSQL, stable signing secret, and identical config. Mutating tools retain their own PostgreSQL idempotency/lease requirements.                                                                                                                         |
 | MCP session JWT cache        | Module-local cache stores a reusable signed token keyed by tenant/Session/user (`mcp/tokens.ts:104-149,221-268`). Validation verifies signature, `tid/uid/sub/jti/exp`, then reloads Session existence inside signed tenant scope (`mcp/tokens.ts:284-369`).                                                                                                                                           | **L+R**                 | Cache disappears; existing signed tokens remain valid at peers with the same secret and PostgreSQL. A new token can be minted.                                                        | Supported. Never copy cached bearer tokens to Redis.                                                                                                                                                                                                                              |
 
-Polling affinity answers only Engine.IO's transport requirement. It cannot route
-MCP because MCP ownership is keyed by the `Mcp-Session-Id` header, not an
-Engine.IO cookie, and it cannot survive owner death.
+Polling affinity answers only Engine.IO's transport requirement. Built-in MCP
+has no transport owner: every POST reconstructs authenticated request context,
+and legacy `Mcp-Session-Id` values do not affect routing.
 
 ## OAuth, device, installation, and launch state
 
@@ -299,7 +299,6 @@ installing the adapter.
 | One Engine.IO socket, including upgrade          | **Yes**, for transport correctness while the connection lives.                 | Sticky cookie/source routing; reconnect may choose another replica.                                                      |
 | Browser ↔ terminal executor ↔ `terminals.create` | **No.** These are independent connections and a service request.               | Disable initially, or tenant/user lease plus deterministic application owner routing.                                    |
 | Task executor heartbeat/Stop                     | **No owner routing should be required.**                                       | The PostgreSQL token authority lets any daemon validate and read/write durable Task state. Realtime is optional latency. |
-| Stateful MCP                                     | **No.** It is keyed by `Mcp-Session-Id`, not Engine.IO.                        | Disable initially, or deterministic header-based owner routing with explicit reinitialize-on-owner-loss contract.        |
 | OAuth/GitHub third-party callback                | **No.** Redirects need not carry the originating affinity cookie.              | Shared atomic PostgreSQL state or disable.                                                                               |
 | OpenCode code/cancel handle                      | **No.**                                                                        | Per-namespace lease/fence plus deterministic live-owner routing, or disable.                                             |
 | Artifact runtime query response                  | Usually **no**; the browser POST is independent of the original agent request. | Owner-bearing opaque request routing, or best-effort timeout/retry.                                                      |
@@ -322,7 +321,7 @@ called initially supported is:
 6. stateless HTTP/REST, stateless MCP POST, durable scheduled/queued Task
    admission, and Task execution using PostgreSQL-backed executor credentials;
 7. noninteractive Task permission modes until durable permission replay lands;
-8. web terminal, stateful MCP, transient OAuth/setup/device flows, OpenCode
+8. web terminal, transient OAuth/setup/device flows, OpenCode
    native-state mutation, and synchronous artifact runtime introspection disabled;
    only Slack/GitHub/Shortcut gateway listeners enabled behind their PostgreSQL
    lease/occurrence fences with startup validation or explicit unsupported errors.
@@ -370,9 +369,10 @@ Ordered by activation dependency, not estimated size:
    tenant/user lease + generation fence, deterministic owner routing, remote
    socket targeting, readiness/adoption redesign, duplicate retirement, and
    lease-expiry kill tests. Decide whether PTY payload may traverse Redis.
-6. **Stateless-only MCP HA gate (P1) — implemented in this integration.** Reject stateful initialization and
-   follow-up methods in HA; publish the supported client contract. A later
-   branch may add deterministic lossy ownership, but not shared SDK objects.
+6. **Stateless MCP contract (complete).** The built-in endpoint serves modern
+   per-request JSON and stateless legacy request-scoped responses, issues no
+   `Mcp-Session-Id`, and returns 405 for GET/DELETE. It needs no HA-mode gate,
+   transport owner, shared SDK object, sticky route, or Redis transport state.
 7. **Transient callback state (P1/P2).** PostgreSQL one-shot GitHub state first;
    then an encrypted MCP OAuth attempt state machine with explicit ambiguous
    exchange outcome. Remove/tenant-key the origin-only OAuth token cache and
@@ -402,9 +402,9 @@ above owns its explicit PostgreSQL state machine and fence.
   branch scope to exactly match a forced-RLS PostgreSQL authority row. Task
   control membership remains local by design, while the HA relay re-authorizes
   the event against the receiving replica's tenant/task channel.
-- Stateful MCP has the strongest existing binding in this audit: immutable
-  tenant+user+optional Session plus fresh per-request auth/access recheck. Its
-  problem is ownership/liveness, not authorization.
+- Built-in MCP retains no transport authority. Each POST reconstructs trusted
+  tenant+user+optional Session context and performs fresh authentication and
+  access checks; a legacy `Mcp-Session-Id` on POST is ignored, never trusted.
 - Terminal auth/process ownership remains unsupported. Native user/presence
   rooms are now tenant-qualified, but no PTY bytes are admitted to Redis.
 - OAuth/GitHub callback state is an authentication capability. Store it under a
@@ -423,14 +423,14 @@ above owns its explicit PostgreSQL state machine and fence.
 
 ## Settled activation decisions
 
-1. The initial profile disables web terminal, stateful MCP, interactive
+1. The initial profile disables web terminal, interactive
    permission prompts, MCP/GitHub OAuth setup, Codex device auth, OpenCode
    auth/native mutation, and synchronous Artifact runtime introspection.
 2. Executors whose substrate survives the launcher may reconnect through peers;
    an in-flight unacknowledged mutation remains explicitly ambiguous/at-most-once
    unless its domain adds a durable operation identity. Shared-local workspace
    sharing alone is not a process-survival guarantee.
-3. Stateful MCP continuity is not advertised; stateless POST remains supported.
+3. Built-in MCP is stateless-only; no transport continuity is advertised.
 4. Production ingress must provide Engine.IO affinity and fleet abuse controls;
    Redis remains fanout-only.
 5. Redis may see ephemeral ordinary authorized payloads, including transcript

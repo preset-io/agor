@@ -9,7 +9,7 @@
  * and support progressive detail levels and annotation filtering.
  */
 
-import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/server';
 
 export interface ToolEntry {
   name: string;

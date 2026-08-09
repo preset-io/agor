@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { resolveSessionId } from '../resolve-ids.js';
 import { mcpListLimit, mcpOffset, mcpOptionalId, mcpPageResult, mcpRequiredId } from '../schema.js';
