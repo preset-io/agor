@@ -67,6 +67,11 @@ async function expireClaim(db: Database, tenantId: TenantID, branchId: BranchID)
   );
 }
 
+interface TestPostgresClient {
+  (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
+  begin<T>(callback: (sqlClient: TestPostgresClient) => Promise<T>): Promise<T>;
+}
+
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
   'environment health HA coordination (PostgreSQL)',
   () => {
@@ -168,6 +173,55 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         ).toEqual({ outcome: 'stale' });
         expect(await health.release(branch.branch_id, winner.claim.claim_token)).toBe(false);
       });
+    });
+
+    it('uses post-lock database time to reject a commit that expires while waiting', async () => {
+      const tenantId = `env-lock-time-${generateId()}` as TenantID;
+      const branch = await seedBranch(dbA, tenantId);
+      const claim = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new EnvironmentHealthRepository(scoped).claim({
+          branchId: branch.branch_id,
+          claimToken: 'expires-behind-lock',
+          leaseDurationMs: 300,
+          identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+        })
+      );
+      if (claim.outcome !== 'claimed') throw new Error('Expected claim');
+
+      let lockedResolve: (() => void) | undefined;
+      let unlockResolve: (() => void) | undefined;
+      const locked = new Promise<void>((resolve) => {
+        lockedResolve = resolve;
+      });
+      const unlock = new Promise<void>((resolve) => {
+        unlockResolve = resolve;
+      });
+      const client = (dbB as unknown as { $client: TestPostgresClient }).$client;
+      const lockWork = client.begin(async (sqlClient) => {
+        await sqlClient`SELECT set_config('agor.tenant_id', ${tenantId}, true)`;
+        await sqlClient`SELECT branch_id FROM branches WHERE branch_id = ${branch.branch_id} FOR UPDATE`;
+        lockedResolve?.();
+        await unlock;
+      });
+      await locked;
+
+      const waitingCommit = runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new EnvironmentHealthRepository(scoped).commit({
+          branchId: branch.branch_id,
+          claimToken: claim.claim.claim_token,
+          environmentGeneration: claim.claim.environment_generation,
+          observation: {
+            status: 'healthy',
+            message: 'must expire behind lock',
+            recordWhileStarting: true,
+          },
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      unlockResolve?.();
+      await lockWork;
+
+      await expect(waitingCommit).resolves.toEqual({ outcome: 'stale' });
     });
 
     it('fences lifecycle changes and preserves starting/running health semantics', async () => {

@@ -135,7 +135,10 @@ export class EnvironmentHealthRepository {
 
   private async mutationNow(txDb: Database, branchId: BranchID): Promise<Date> {
     if (!isPostgresDatabase(this.db)) return new Date();
-    const row = await select(txDb, { value: sql<Date>`CURRENT_TIMESTAMP` })
+    // CURRENT_TIMESTAMP is fixed at transaction start in PostgreSQL. These
+    // transactions may wait on the branch row lock, so use wall-clock database
+    // time after lock acquisition for lease/cooldown fencing.
+    const row = await select(txDb, { value: sql<Date>`clock_timestamp()` })
       .from(branches)
       .where(eq(branches.branch_id, branchId))
       .one();
