@@ -83,6 +83,7 @@ import {
   oauth21TokenCache,
   persistOAuthToken,
 } from './oauth-cache.js';
+import { tenantChannelName, tenantUserChannelName } from './realtime/routing.js';
 import { createAgenticToolPresetsService } from './services/agentic-tool-presets.js';
 import { createArtifactsService } from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
@@ -145,7 +146,6 @@ import { createTenantAgenticToolSettingsService } from './services/tenant-agenti
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
-import { tenantChannelName, userRoomName } from './setup/socketio.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
@@ -1504,9 +1504,11 @@ async function registerMCPServices(
     if (app.io) {
       const payload = { authUrl: context.authorizationUrl };
       if (opts.socketId) {
-        app.io.to(opts.socketId).emit('oauth:open_browser', payload);
+        app.io.local.to(opts.socketId).emit('oauth:open_browser', payload);
       } else if (flowTenantId && opts.userId) {
-        app.io.to(userRoomName(flowTenantId, opts.userId)).emit('oauth:open_browser', payload);
+        app.io.local
+          .to(tenantUserChannelName(flowTenantId, opts.userId))
+          .emit('oauth:open_browser', payload);
       } else {
         console.warn('[OAuth] no tenant-scoped recipient for oauth:open_browser; skipping emit');
       }
@@ -1641,13 +1643,15 @@ async function registerMCPServices(
           //   4. Otherwise log + skip; the UI will catch up on its next
           //      `mcp-servers` fetch.
           if (oauthEvent.oauth_mode === 'per_user' && pendingFlow.userId && pendingFlow.tenantId) {
-            app.io
-              .to(userRoomName(pendingFlow.tenantId, pendingFlow.userId))
+            app.io.local
+              .to(tenantUserChannelName(pendingFlow.tenantId, pendingFlow.userId))
               .emit('oauth:completed', oauthEvent);
           } else if (oauthEvent.oauth_mode === 'shared' && pendingFlow.tenantId) {
-            app.io.to(tenantChannelName(pendingFlow.tenantId)).emit('oauth:completed', oauthEvent);
+            app.io.local
+              .to(tenantChannelName(pendingFlow.tenantId))
+              .emit('oauth:completed', oauthEvent);
           } else if (pendingFlow.socketId) {
-            app.io.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);
+            app.io.local.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);
           } else {
             console.warn(
               `[OAuth Callback] per_user flow ${state} has no userId or socketId — skipping oauth:completed emit (UI will catch up on next mcp-servers find)`
@@ -2299,8 +2303,8 @@ async function registerMCPServices(
       if (result.success && params?.user?.user_id) {
         const tenantId = tenantIdFromParams(params);
         if (tenantId) {
-          app.io
-            .to(userRoomName(tenantId, params.user.user_id))
+          app.io.local
+            .to(tenantUserChannelName(tenantId, params.user.user_id))
             .emit('oauth:disconnected', { mcp_server_id: data.mcp_server_id });
         }
       }

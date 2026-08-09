@@ -6,6 +6,7 @@ import {
 import type { Branch, BranchPermissionLevel, Session, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { HA_NATIVE_SOCKET_EVENT_INVENTORY } from '../realtime/routing';
 import type {
   RealtimeAccessBranchRepository,
   RealtimeAccessSessionRepository,
@@ -13,7 +14,6 @@ import type {
 import {
   configureRealtimePublish,
   executorTaskChannelName,
-  HA_NATIVE_SOCKET_EVENT_INVENTORY,
   leaveAllSessionStreamChannels,
   markConnectionSessionStreamsAware,
   REDIS_FEATHERS_DENIED_PATHS,

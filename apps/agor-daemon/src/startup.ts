@@ -10,6 +10,7 @@ import path from 'node:path';
 import {
   type AgorConfig,
   getAgorHome,
+  type ResolvedEnvironmentHealthMonitorSettings,
   resolveDeploymentAgenticToolPolicy,
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
@@ -28,6 +29,7 @@ import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@ag
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { containAllTrackedExecutors } from './executor-tracking.js';
+import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
@@ -85,21 +87,24 @@ export interface StartupContext {
     import('./realtime/redis-realtime.js').RedisRealtimeRuntime,
     'beginDrain' | 'close'
   >;
-  /**
-   * The environment monitor performs unfenced probes and writes. It remains
-   * enabled for the historical standalone topology and is explicitly absent
-   * from the constrained HA profile.
-   */
+  /** Environment observation ownership policy; aligned with Task runtime naming. */
   environmentHealthMonitorPolicy: EnvironmentHealthMonitorPolicy;
+  /** Required worker tuning resolved and validated by the HA deployment config. */
+  environmentHealthMonitorSettings?: ResolvedEnvironmentHealthMonitorSettings;
 }
 
 export type TaskRuntimePolicy = 'standalone' | 'shared_postgres';
-export type EnvironmentHealthMonitorPolicy = 'standalone' | 'disabled-ha';
+export type EnvironmentHealthMonitorPolicy = 'standalone' | 'shared_postgres';
 
-type EnvironmentHealthMonitor = Pick<HealthMonitor, 'initialize' | 'cleanup'>;
+type EnvironmentHealthMonitor = {
+  initialize: () => Promise<void> | void;
+  cleanup: () => Promise<void> | void;
+  isReady?: () => boolean;
+};
 type EnvironmentHealthMonitorFactory = (
+  policy: EnvironmentHealthMonitorPolicy,
   app: Application,
-  options: ConstructorParameters<typeof HealthMonitor>[1]
+  ctx: StartupContext
 ) => EnvironmentHealthMonitor;
 
 /**
@@ -118,29 +123,34 @@ export function shouldReconnectSocketClientsOnShutdown(policy: TaskRuntimePolicy
 }
 
 /**
- * Construction boundary for the unfenced environment monitor. Keeping the
- * policy check outside the constructor is load-bearing: HA replicas must not
- * register listeners, schedule scans, or write environment health at all.
+ * Construction boundary for standalone timers versus PostgreSQL-coordinated
+ * all-daemon observation. A mismatched Task/environment policy fails closed.
  */
 export function createEnvironmentHealthMonitor(
   ctx: StartupContext,
-  factory: EnvironmentHealthMonitorFactory = (app, options) => new HealthMonitor(app, options)
+  factory: EnvironmentHealthMonitorFactory = (policy, app, startupCtx) => {
+    if (policy === 'standalone') {
+      const multiTenancy = resolveMultiTenancyConfig(startupCtx.config);
+      return new HealthMonitor(app, {
+        defaultParams: startupTenantParams(startupCtx.config),
+        db: startupCtx.db,
+        tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
+        requireTenantParams: multiTenancy.mode !== 'static',
+      });
+    }
+    if (!startupCtx.environmentHealthMonitorSettings) {
+      throw new Error('Distributed environment health monitor settings are required');
+    }
+    return new DistributedHealthMonitor(app, startupCtx.db, {
+      workIdentity: startupCtx.distributedWorkIdentity,
+      ...startupCtx.environmentHealthMonitorSettings,
+    });
+  }
 ): EnvironmentHealthMonitor | null {
-  // The shared Task policy is itself an HA invariant. Refuse construction even
-  // if a programmatic caller accidentally supplies a mismatched monitor policy.
-  if (
-    ctx.taskRuntimePolicy === 'shared_postgres' ||
-    ctx.environmentHealthMonitorPolicy === 'disabled-ha'
-  ) {
+  if (ctx.taskRuntimePolicy !== ctx.environmentHealthMonitorPolicy) {
     return null;
   }
-  const multiTenancy = resolveMultiTenancyConfig(ctx.config);
-  return factory(ctx.app, {
-    defaultParams: startupTenantParams(ctx.config),
-    db: ctx.db,
-    tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
-    requireTenantParams: multiTenancy.mode !== 'static',
-  });
+  return factory(ctx.environmentHealthMonitorPolicy, ctx.app, ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -653,15 +663,14 @@ export async function startup(ctx: StartupContext): Promise<void> {
     );
   }
 
-  // 2. Register standalone Health Monitor listeners before serving requests.
-  // The constrained HA profile has no distributed monitor ownership/fence, so
-  // it does not even construct the monitor. Managed environment control is
-  // already webhook-only in that profile.
+  // 2. Construct the topology-specific environment observer before serving.
+  // HA still gates lifecycle control to webhooks; this worker observes only.
   const startupMultiTenancy = resolveMultiTenancyConfig(config);
   const healthMonitor = createEnvironmentHealthMonitor(ctx);
   if (!healthMonitor) {
-    console.log('[startup] Environment health monitor disabled by constrained HA support profile');
+    throw new Error('Environment health monitor policy does not match the Task runtime policy');
   }
+  app.set('environmentHealthMonitor', healthMonitor);
 
   // 3. Validate/generate master secret for API key encryption
   await ensureMasterSecret(config);
@@ -844,7 +853,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
     try {
       // Clean up health monitor
-      healthMonitor?.cleanup();
+      await healthMonitor?.cleanup();
 
       // Stop Task runtime discovery before closing services.
       taskRuntimeReconciler?.stop();

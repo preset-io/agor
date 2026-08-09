@@ -30,7 +30,7 @@
  * to any agent/LLM context. Callers act only on their own credentials.
  */
 
-import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
+import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -395,15 +395,6 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
     async create(_data: unknown, params?: AuthenticatedParams): Promise<CodexDeviceAuthStatus> {
       const { authUser, userId, tenantId, key } = await requireContext(params);
 
-      const config = loadConfigSync();
-      if (
-        config.multi_tenancy?.mode === 'required_from_auth' &&
-        config.execution?.executor_storage?.user_home !== 'persistent-per-user'
-      ) {
-        throw new BadRequest(
-          'Codex subscription login in hosted multi-tenant mode requires execution.executor_storage.user_home: persistent-per-user.'
-        );
-      }
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
       if (

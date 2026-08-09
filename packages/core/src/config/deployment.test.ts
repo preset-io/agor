@@ -5,6 +5,7 @@ import type { AgorConfig } from './types';
 const secrets = {
   AGOR_JWT_SECRET: 'j'.repeat(32),
   AGOR_MASTER_SECRET: 'm'.repeat(32),
+  AGOR_ADMIN_PASSWORD: 'bootstrap-admin-password',
 };
 
 const haConfig: AgorConfig = {
@@ -47,7 +48,7 @@ describe('resolveDeploymentConfig', () => {
         interactivePermissions: false,
         gatewayListeners: true,
         gatewayOutboundExactlyOnce: false,
-        environmentHealthMonitor: false,
+        environmentHealthMonitor: true,
         statelessMcp: true,
         statefulMcp: false,
         completionCallbackDurableAdmission: true,
@@ -61,6 +62,11 @@ describe('resolveDeploymentConfig', () => {
         keyPrefix: 'prod-blue',
         reconnectBaseDelayMs: 100,
         reconnectMaxDelayMs: 2000,
+      },
+      environmentHealthMonitor: {
+        scanIntervalMs: 5000,
+        httpTimeoutMs: 1000,
+        claimLeaseMs: 15000,
       },
       executorStorage: {
         userHome: 'shared',
@@ -109,6 +115,7 @@ describe('resolveDeploymentConfig', () => {
     [{ ...haConfig, database: { dialect: 'sqlite' } }, secrets, 'requires PostgreSQL'],
     [haConfig, { ...secrets, AGOR_JWT_SECRET: undefined }, 'AGOR_JWT_SECRET'],
     [haConfig, { ...secrets, AGOR_MASTER_SECRET: undefined }, 'AGOR_MASTER_SECRET'],
+    [haConfig, { ...secrets, AGOR_ADMIN_PASSWORD: undefined }, 'AGOR_ADMIN_PASSWORD'],
     [
       {
         ...haConfig,
@@ -119,6 +126,15 @@ describe('resolveDeploymentConfig', () => {
     ],
   ] as const)('fails unsafe HA config: %s', (config, env, message) => {
     expect(() => resolveDeploymentConfig(config, env)).toThrow(message);
+  });
+
+  it('does not require a local admin password when external launch owns bootstrap', () => {
+    expect(
+      resolveDeploymentConfig(
+        { ...haConfig, external_launch: { enabled: true } },
+        { ...secrets, AGOR_ADMIN_PASSWORD: undefined }
+      )
+    ).toMatchObject({ mode: 'ha' });
   });
 
   it('fails closed when requested PostgreSQL does not match the daemon runtime URL', () => {
@@ -144,6 +160,58 @@ describe('resolveDeploymentConfig', () => {
         secrets
       )
     ).toThrow('maximum reconnect delay');
+  });
+
+  it('rejects an environment health lease without the required HTTP/write margin', () => {
+    expect(() =>
+      resolveDeploymentConfig(
+        {
+          ...haConfig,
+          deployment: {
+            ...haConfig.deployment,
+            ha: {
+              ...haConfig.deployment?.ha,
+              environment_health_monitor: {
+                http_timeout_ms: 10_000,
+                claim_lease_ms: 14_999,
+              },
+            },
+          },
+        },
+        secrets
+      )
+    ).toThrow('leave at least 5000ms');
+  });
+
+  it('rejects an environment health discovery page above the repository limit', () => {
+    expect(() =>
+      resolveDeploymentConfig(haConfig, {
+        ...secrets,
+        AGOR_HA_ENV_HEALTH_SCAN_BATCH_SIZE: '1001',
+      })
+    ).toThrow('scan batch size cannot exceed 1000');
+  });
+
+  it('allows disabling the distributed monitor startup offset through the environment', () => {
+    const deployment = resolveDeploymentConfig(haConfig, {
+      ...secrets,
+      AGOR_HA_ENV_HEALTH_STARTUP_OFFSET_MAX_MS: '0',
+    });
+    expect(deployment.mode).toBe('ha');
+    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
+    expect(deployment.environmentHealthMonitor.startupOffsetMaxMs).toBe(0);
+  });
+
+  it('does not tie a one-observation lease to the polling interval', () => {
+    expect(() =>
+      resolveDeploymentConfig(haConfig, {
+        ...secrets,
+        AGOR_HA_ENV_HEALTH_SCAN_INTERVAL_MS: '300000',
+        AGOR_HA_ENV_HEALTH_MAX_IDLE_INTERVAL_MS: '300000',
+        AGOR_HA_ENV_HEALTH_HTTP_TIMEOUT_MS: '1000',
+        AGOR_HA_ENV_HEALTH_CLAIM_LEASE_MS: '6000',
+      })
+    ).not.toThrow();
   });
 
   it('supports an external executor topology without a daemon workspace mount', () => {
@@ -182,6 +250,39 @@ describe('resolveDeploymentConfig', () => {
         baseRepository: 'unavailable',
       },
     });
+  });
+
+  it('rejects an auth-resolved HA topology with a shared credential home', () => {
+    expect(() =>
+      resolveDeploymentConfig(
+        {
+          ...haConfig,
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        },
+        secrets
+      )
+    ).toThrow('auth-resolved execution requires execution.executor_storage.user_home');
+  });
+
+  it('admits auth-resolved HA only with a persistent per-user credential home', () => {
+    const deployment = resolveDeploymentConfig(
+      {
+        ...haConfig,
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        execution: {
+          ...haConfig.execution,
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            branch_workspace: 'shared',
+            base_repository: 'shared',
+          },
+        },
+      },
+      secrets
+    );
+    expect(deployment.mode).toBe('ha');
+    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
+    expect(deployment.capabilities.codexCredentialFiles).toBe(true);
   });
 
   it('rejects HA when the executor storage contract is omitted', () => {

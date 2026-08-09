@@ -12,16 +12,13 @@ import {
   MAX_REALTIME_RELAY_BYTES,
   type RealtimeRelayEnvelope,
 } from '../realtime/redis-realtime.js';
+import { tenantChannelName } from '../realtime/routing.js';
 import { isSuperAdmin } from './branch-authorization.js';
 import {
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
 } from './realtime-access-cache.js';
-
-function tenantChannelName(tenantId: string): string {
-  return `tenant:${tenantId}`;
-}
 
 /**
  * Per-session channel that carries only the high-frequency streaming events
@@ -212,14 +209,6 @@ export const REDIS_FEATHERS_DENIED_PATHS = new Set([
   'opencode-auth',
   'terminals',
 ]);
-
-/** Native Socket.IO packets that may cross Redis in the constrained profile. */
-export const HA_NATIVE_SOCKET_EVENT_INVENTORY = [
-  'cursor-moved',
-  'cursor-left',
-  'presence-updated',
-  'repo:cloneError',
-] as const;
 
 function mayEnterRedisRelay(path: string, event: string): boolean {
   if (REDIS_FEATHERS_DENIED_PATHS.has(path)) return false;

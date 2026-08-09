@@ -4363,11 +4363,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // Liveness (/livez) and readiness (/readyz) probes — see health/routes.ts.
-  registerHealthProbeRoutes(
-    app,
-    db,
-    realtimeRuntime ? [{ name: 'redis', isReady: () => realtimeRuntime.isReady() }] : []
-  );
+  registerHealthProbeRoutes(app, db, [
+    ...(realtimeRuntime ? [{ name: 'redis', isReady: () => realtimeRuntime.isReady() }] : []),
+    ...(deployment.mode === 'ha'
+      ? [
+          {
+            name: 'environment-health-monitor',
+            isReady: () => {
+              const monitor = app.get('environmentHealthMonitor') as
+                | { isReady?: () => boolean }
+                | undefined;
+              return monitor?.isReady?.() === true;
+            },
+          },
+        ]
+      : []),
+  ]);
 
   // ============================================================================
   // MCP routes

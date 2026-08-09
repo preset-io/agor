@@ -769,7 +769,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     // runtime workers replica-independent. Interactive permission modes remain
     // separately fail-closed until durable decision replay exists.
     taskRuntimePolicy: deployment.mode === 'ha' ? 'shared_postgres' : 'standalone',
-    environmentHealthMonitorPolicy: deployment.mode === 'ha' ? 'disabled-ha' : 'standalone',
+    environmentHealthMonitorPolicy: deployment.mode === 'ha' ? 'shared_postgres' : 'standalone',
+    environmentHealthMonitorSettings:
+      deployment.mode === 'ha' ? deployment.environmentHealthMonitor : undefined,
     realtimeRuntime,
   });
 }

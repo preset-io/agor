@@ -47,7 +47,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import { tenantChannelName } from '../setup/socketio.js';
+import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
@@ -363,7 +363,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
               const branchHint = data.default_branch
                 ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
                 : '';
-              io.to(tenantChannelName(tenantId)).emit('repo:cloneError', {
+              emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
                 slug,
                 url: remoteUrl,
                 error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,

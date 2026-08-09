@@ -533,6 +533,13 @@
       "when": 1786150200000,
       "tag": "0076_gateway_listener_ha",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1786320000000,
+      "tag": "0077_environment_health_ha",
+      "breakpoints": true
     }
   ]
 }

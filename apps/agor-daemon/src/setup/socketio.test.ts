@@ -25,18 +25,19 @@ import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
-import { executorTaskChannelName } from '../utils/realtime-publish';
 import {
   boardPresenceRoomName,
+  tenantChannelName,
+  tenantUserChannelName,
+} from '../realtime/routing';
+import { executorTaskChannelName } from '../utils/realtime-publish';
+import {
   configureChannels,
   createSocketIOConfig,
   createTokenBucket,
   getSocketAuthState,
   parseTerminalChannel,
   type SocketIOOptions,
-  tenantChannelName,
-  tenantUserChannelName,
-  userRoomName,
 } from './socketio';
 
 // ---------------------------------------------------------------------------
@@ -65,6 +66,9 @@ interface FakeSocket {
   // socket.to(room) — broadcasts to a room EXCLUDING this socket. Mirrors the
   // real socket.io semantics used by the terminal:output relay.
   to: (channel: string) => { emit: (event: string, data: unknown) => void };
+  readonly local: {
+    to: (channel: string) => { emit: (event: string, data: unknown) => void };
+  };
 }
 
 interface FakeIO {
@@ -81,6 +85,7 @@ interface FakeIO {
   on(event: string, fn: any): void;
   use(fn: any): void;
   to(channel: string): { emit: (event: string, data: unknown) => void };
+  readonly local: Pick<FakeIO, 'to'>;
 }
 
 function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
@@ -126,6 +131,9 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
         deliverToRoom(io, channel, event, data, id);
       },
     }),
+    get local() {
+      return { to: this.to };
+    },
   };
   return socket;
 }
@@ -170,6 +178,9 @@ function makeIO(): FakeIO {
     },
     use(fn) {
       this.middlewares.push(fn);
+    },
+    get local() {
+      return this;
     },
     to(channel: string) {
       return {
@@ -411,7 +422,7 @@ describe('Socket.IO lifecycle logging', () => {
     );
 
     expect(socket.joined).toContain(tenantChannelName('tenant-a'));
-    expect(socket.joined).toContain(userRoomName('tenant-a', ALICE));
+    expect(socket.joined).toContain(tenantUserChannelName('tenant-a', ALICE));
     expect([...socket.joined]).not.toContain(`user:${ALICE}`);
   });
 
@@ -530,7 +541,7 @@ describe('Socket.IO lifecycle logging', () => {
     socket.data.currentBoardId = 'board-1';
     socket.data.authorizedBoardIds = new Set(['board-1']);
     socket.joined.add(tenantChannelName('tenant-a'));
-    socket.joined.add(userRoomName('tenant-a', ALICE));
+    socket.joined.add(tenantUserChannelName('tenant-a', ALICE));
     socket.joined.add(boardPresenceRoomName('tenant-a', 'board-1'));
     connect(io, socket);
 

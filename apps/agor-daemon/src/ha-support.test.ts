@@ -31,10 +31,11 @@ describe('constrained HA support profile', () => {
       processAffineAuth: false as const,
       gatewayListeners: true as const,
       gatewayOutboundExactlyOnce: false as const,
-      environmentHealthMonitor: false as const,
+      environmentHealthMonitor: true as const,
       artifactRuntimeIntrospection: false as const,
     },
     redis: {} as never,
+    environmentHealthMonitor: {} as never,
     executorStorage: {
       userHome: 'shared' as const,
       branchWorkspace: 'shared' as const,

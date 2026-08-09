@@ -681,6 +681,19 @@ export const branches = sqliteTable(
     // References a key under repo.environment.variants. Null for pre-v2 branches.
     environment_variant: text('environment_variant'),
 
+    // Durable health-observation coordination. Standalone does not use these
+    // fields, but the mirror keeps branch persistence dialect-consistent.
+    environment_generation: integer('environment_generation').notNull().default(0),
+    environment_health_claim_token: text('environment_health_claim_token'),
+    environment_health_claimed_at: t.timestamp('environment_health_claimed_at'),
+    environment_health_claim_expires_at: t.timestamp('environment_health_claim_expires_at'),
+    environment_health_next_observation_at: t.timestamp('environment_health_next_observation_at'),
+    environment_health_claim_instance_id: text('environment_health_claim_instance_id'),
+    environment_health_claim_boot_id: text('environment_health_claim_boot_id'),
+    environment_health_claim_generation: integer('environment_health_claim_generation')
+      .notNull()
+      .default(0),
+
     // Board relationship (nullable - branches can exist without boards)
     board_id: text('board_id', { length: 36 }).references((): AnySQLiteColumn => boards.board_id, {
       onDelete: 'set null', // If board is deleted, branch remains but loses board association
@@ -796,6 +809,11 @@ export const branches = sqliteTable(
     boardIdx: index('branches_board_idx').on(table.board_id),
     createdIdx: index('branches_created_idx').on(table.created_at),
     updatedIdx: index('branches_updated_idx').on(table.updated_at),
+    environmentHealthLeaseIdx: index('branches_environment_health_lease_idx').on(
+      table.archived,
+      table.environment_health_claim_expires_at,
+      table.branch_id
+    ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
   })

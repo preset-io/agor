@@ -1,6 +1,6 @@
 import type { ResolvedRedisSettings } from '@agor/core/config';
 import { createAdapter } from '@socket.io/redis-adapter';
-import Redis from 'ioredis';
+import Redis, { type RedisOptions } from 'ioredis';
 import type { Namespace, Server } from 'socket.io';
 
 export const FEATHERS_RELAY_EVENT = 'agor:feathers-publication:v1';
@@ -60,6 +60,45 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   });
 }
 
+export function redisRealtimeClientOptions(
+  settings: ResolvedRedisSettings,
+  role: 'publisher' | 'subscriber'
+): RedisOptions {
+  const retryStrategy = (times: number) => {
+    const exponential = Math.min(
+      settings.reconnectMaxDelayMs,
+      settings.reconnectBaseDelayMs * 2 ** Math.min(times - 1, 10)
+    );
+    // Jitter prevents all replicas reconnecting on the same boundary.
+    return Math.max(1, Math.floor(exponential * (0.75 + Math.random() * 0.5)));
+  };
+  const common: RedisOptions = {
+    lazyConnect: true,
+    connectTimeout: settings.connectTimeoutMs,
+    enableReadyCheck: true,
+    retryStrategy,
+  };
+  if (role === 'publisher') {
+    return {
+      ...common,
+      // Socket.IO ignores the Promise returned by publish(). Never retain a
+      // packet across an outage: fail it promptly instead of replaying stale
+      // cursor/presence/native traffic after Redis recovers.
+      enableOfflineQueue: false,
+      autoResendUnfulfilledCommands: false,
+      maxRetriesPerRequest: 1,
+      autoResubscribe: false,
+    };
+  }
+  return {
+    ...common,
+    // Subscriber state is safe to reconstruct; retain ioredis resubscription
+    // behavior independently from the publisher's fail-fast command policy.
+    autoResubscribe: true,
+    maxRetriesPerRequest: null,
+  };
+}
+
 /** Owns the two Redis clients and the Socket.IO adapter for one daemon boot. */
 export class RedisRealtimeRuntime {
   private readonly pubClient: Redis;
@@ -74,24 +113,18 @@ export class RedisRealtimeRuntime {
     private readonly settings: ResolvedRedisSettings,
     private readonly diagnostics: { instanceId: string; bootId: string }
   ) {
-    const retryStrategy = (times: number) => {
-      const exponential = Math.min(
-        settings.reconnectMaxDelayMs,
-        settings.reconnectBaseDelayMs * 2 ** Math.min(times - 1, 10)
-      );
-      // Jitter prevents all replicas reconnecting on the same boundary.
-      return Math.max(1, Math.floor(exponential * (0.75 + Math.random() * 0.5)));
-    };
-    const common = {
-      lazyConnect: true,
-      connectTimeout: settings.connectTimeoutMs,
-      enableReadyCheck: true,
-      autoResubscribe: true,
-      maxRetriesPerRequest: null as null,
-      retryStrategy,
-    };
-    this.pubClient = new Redis(settings.url, common);
-    this.subClient = new Redis(settings.url, common);
+    this.pubClient = new Redis(settings.url, redisRealtimeClientOptions(settings, 'publisher'));
+    this.subClient = new Redis(settings.url, redisRealtimeClientOptions(settings, 'subscriber'));
+    // @socket.io/redis-adapter intentionally does not await ordinary publish
+    // calls. Attach a rejection observer so fail-fast outage errors cannot
+    // surface as unhandled rejections; callers that do await still receive the
+    // original rejected Promise.
+    const publish = this.pubClient.publish.bind(this.pubClient);
+    this.pubClient.publish = ((...args: unknown[]) => {
+      const command = (publish as (...values: unknown[]) => Promise<number>)(...args);
+      void command.catch(() => undefined);
+      return command;
+    }) as Redis['publish'];
     this.pubClient.on('error', (error) => safeRedisError('publisher connection error', error));
     this.subClient.on('error', (error) => safeRedisError('subscriber connection error', error));
   }
