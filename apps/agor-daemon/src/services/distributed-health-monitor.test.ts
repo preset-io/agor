@@ -48,6 +48,18 @@ describe('DistributedHealthMonitor loop contract', () => {
       () =>
         new DistributedHealthMonitor(app as never, {} as never, options({ scanBatchSize: 1_001 }))
     ).toThrow('cannot exceed 1000');
+    expect(
+      () =>
+        new DistributedHealthMonitor(
+          app as never,
+          {} as never,
+          options({
+            scanIntervalMs: 300_000,
+            maxIdleIntervalMs: 300_000,
+            claimLeaseMs: 6_000,
+          })
+        )
+    ).not.toThrow();
   });
 
   it('treats branch events as wake hints and removes listeners/timers on shutdown', async () => {
@@ -60,6 +72,7 @@ describe('DistributedHealthMonitor loop contract', () => {
       committed: 0,
       failures: 0,
       saturated: false,
+      traversalCompleted: false,
     });
 
     await monitor.initialize();

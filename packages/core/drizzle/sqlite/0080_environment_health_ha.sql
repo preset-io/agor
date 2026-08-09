@@ -6,6 +6,8 @@ ALTER TABLE `branches` ADD `environment_health_claimed_at` integer;
 --> statement-breakpoint
 ALTER TABLE `branches` ADD `environment_health_claim_expires_at` integer;
 --> statement-breakpoint
+ALTER TABLE `branches` ADD `environment_health_next_observation_at` integer;
+--> statement-breakpoint
 ALTER TABLE `branches` ADD `environment_health_claim_instance_id` text;
 --> statement-breakpoint
 ALTER TABLE `branches` ADD `environment_health_claim_boot_id` text;

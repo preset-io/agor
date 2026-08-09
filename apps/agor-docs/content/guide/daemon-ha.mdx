@@ -181,7 +181,7 @@ substrate can reach through the daemon fleet. Environment overrides include
 `AGOR_HA_ENV_HEALTH_MAX_IN_FLIGHT`, `AGOR_HA_ENV_HEALTH_HTTP_TIMEOUT_MS`,
 `AGOR_HA_ENV_HEALTH_CLAIM_LEASE_MS`, and
 `AGOR_HA_ENV_HEALTH_SHUTDOWN_DRAIN_TIMEOUT_MS`. The health claim lease
-must be at least five seconds longer than both the HTTP timeout and renewal scan interval. Storage guarantees
+must be at least five seconds longer than the HTTP timeout. Storage guarantees
 remain YAML-only so an accidental environment toggle cannot claim that mounts exist.
 
 The Redis prefix separates deployments operationally. It is never tenant authorization.
@@ -216,10 +216,12 @@ No current product cross-replica notification requests client broadcast acknowle
 ### Managed-environment observation semantics
 
 Each active `starting` or `running` branch is eligible for bounded periodic discovery. One replica
-retains and renews its PostgreSQL lease; after owner death, another replica can take over only after
-database-time expiry. Every result commit locks and rereads the branch and rejects an expired or
-replaced token, changed lifecycle generation, inactive status, or archived row. No database
-transaction remains open during the HTTP request.
+holds a PostgreSQL lease for one observation. Releasing a completed observation writes a durable
+database-time cooldown, so another replica cannot multiply the configured polling cadence. If an
+owner dies without releasing, another replica can take over after database-time lease expiry even
+when a prior cooldown exists. Every result commit locks and rereads the branch and rejects an
+expired or replaced token, changed lifecycle generation, inactive status, or archived row. No
+database transaction remains open during the HTTP request.
 
 - A healthy `starting` observation promotes the environment to `running`.
 - A reachable non-success response is recorded as `unhealthy`. A network error or timeout during

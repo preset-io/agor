@@ -721,6 +721,7 @@ export const branches = pgTable(
     environment_health_claim_token: text('environment_health_claim_token'),
     environment_health_claimed_at: t.timestamp('environment_health_claimed_at'),
     environment_health_claim_expires_at: t.timestamp('environment_health_claim_expires_at'),
+    environment_health_next_observation_at: t.timestamp('environment_health_next_observation_at'),
     environment_health_claim_instance_id: text('environment_health_claim_instance_id'),
     environment_health_claim_boot_id: text('environment_health_claim_boot_id'),
     environment_health_claim_generation: integer('environment_health_claim_generation')

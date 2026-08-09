@@ -1097,7 +1097,7 @@ export interface AgorHaEnvironmentHealthMonitorSettings {
   max_in_flight?: number;
   /** Per-request health endpoint timeout. Default: 1000. */
   http_timeout_ms?: number;
-  /** Database observation lease. Must exceed HTTP timeout and renewal interval by 5000ms. Default: 15000. */
+  /** One-observation database lease. Must exceed HTTP timeout by 5000ms. Default: 15000. */
   claim_lease_ms?: number;
   /** Graceful shutdown drain bound. Default: 5000. */
   shutdown_drain_timeout_ms?: number;

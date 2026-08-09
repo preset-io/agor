@@ -196,13 +196,9 @@ export function resolveEnvironmentHealthMonitorSettings(
   if (settings.scanBatchSize > MAX_ENVIRONMENT_HEALTH_SCAN_BATCH_SIZE) {
     throw new Error('Config error: environment health scan batch size cannot exceed 1000');
   }
-  if (
-    settings.claimLeaseMs <
-    Math.max(settings.httpTimeoutMs, settings.scanIntervalMs) +
-      MIN_ENVIRONMENT_HEALTH_CLAIM_MARGIN_MS
-  ) {
+  if (settings.claimLeaseMs < settings.httpTimeoutMs + MIN_ENVIRONMENT_HEALTH_CLAIM_MARGIN_MS) {
     throw new Error(
-      'Config error: environment health claim lease must leave at least 5000ms after its HTTP timeout and renewal interval'
+      'Config error: environment health claim lease must leave at least 5000ms after its HTTP timeout'
     );
   }
   return settings;

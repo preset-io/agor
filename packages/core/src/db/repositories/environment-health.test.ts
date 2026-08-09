@@ -153,4 +153,28 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
       claim: { environment_generation: old.claim.environment_generation + 1 },
     });
   });
+
+  dbTest('enforces a durable cooldown after a completed observation', async ({ db }) => {
+    const branch = await seedStartingBranch(db);
+    const health = new EnvironmentHealthRepository(db);
+    const first = await health.claim({
+      branchId: branch.branch_id,
+      claimToken: 'first-periodic-observation',
+      leaseDurationMs: 30_000,
+      identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+    });
+    if (first.outcome !== 'claimed') throw new Error('Expected initial claim');
+
+    await expect(health.release(branch.branch_id, first.claim.claim_token, 30_000)).resolves.toBe(
+      true
+    );
+    await expect(
+      health.claim({
+        branchId: branch.branch_id,
+        claimToken: 'too-early-observation',
+        leaseDurationMs: 30_000,
+        identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
+      })
+    ).resolves.toMatchObject({ outcome: 'not_due' });
+  });
 });

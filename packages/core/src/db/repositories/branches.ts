@@ -601,6 +601,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
             environment_health_claim_token: null,
             environment_health_claimed_at: null,
             environment_health_claim_expires_at: null,
+            environment_health_next_observation_at: null,
             environment_health_claim_instance_id: null,
             environment_health_claim_boot_id: null,
           }

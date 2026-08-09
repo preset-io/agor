@@ -8,6 +8,8 @@ ALTER TABLE "branches" ADD COLUMN "environment_health_claimed_at" timestamp with
 --> statement-breakpoint
 ALTER TABLE "branches" ADD COLUMN "environment_health_claim_expires_at" timestamp with time zone;
 --> statement-breakpoint
+ALTER TABLE "branches" ADD COLUMN "environment_health_next_observation_at" timestamp with time zone;
+--> statement-breakpoint
 ALTER TABLE "branches" ADD COLUMN "environment_health_claim_instance_id" text;
 --> statement-breakpoint
 ALTER TABLE "branches" ADD COLUMN "environment_health_claim_boot_id" text;

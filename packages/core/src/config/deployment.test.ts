@@ -202,6 +202,18 @@ describe('resolveDeploymentConfig', () => {
     expect(deployment.environmentHealthMonitor.startupOffsetMaxMs).toBe(0);
   });
 
+  it('does not tie a one-observation lease to the polling interval', () => {
+    expect(() =>
+      resolveDeploymentConfig(haConfig, {
+        ...secrets,
+        AGOR_HA_ENV_HEALTH_SCAN_INTERVAL_MS: '300000',
+        AGOR_HA_ENV_HEALTH_MAX_IDLE_INTERVAL_MS: '300000',
+        AGOR_HA_ENV_HEALTH_HTTP_TIMEOUT_MS: '1000',
+        AGOR_HA_ENV_HEALTH_CLAIM_LEASE_MS: '6000',
+      })
+    ).not.toThrow();
+  });
+
   it('supports an external executor topology without a daemon workspace mount', () => {
     const external = {
       ...haConfig,

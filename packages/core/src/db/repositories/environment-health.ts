@@ -37,6 +37,7 @@ export interface EnvironmentHealthClaim {
 export type EnvironmentHealthClaimResult =
   | { outcome: 'claimed'; claim: EnvironmentHealthClaim }
   | { outcome: 'held'; lease_expires_at: string | null }
+  | { outcome: 'not_due'; next_observation_at: string }
   | { outcome: 'unavailable' };
 
 export interface EnvironmentHealthObservation {
@@ -174,6 +175,19 @@ export class EnvironmentHealthRepository {
             lease_expires_at: new Date(row.environment_health_claim_expires_at).toISOString(),
           };
         }
+        // A cleared token means the previous observation completed and set a
+        // fleet-wide cooldown. An expired token means its owner died, so
+        // takeover is admitted after lease expiry regardless of the cooldown.
+        if (
+          !row.environment_health_claim_token &&
+          row.environment_health_next_observation_at &&
+          new Date(row.environment_health_next_observation_at).getTime() > now.getTime()
+        ) {
+          return {
+            outcome: 'not_due',
+            next_observation_at: new Date(row.environment_health_next_observation_at).toISOString(),
+          };
+        }
 
         const claimGeneration = row.environment_health_claim_generation + 1;
         const expiresAt = new Date(now.getTime() + input.leaseDurationMs);
@@ -299,8 +313,8 @@ export class EnvironmentHealthRepository {
 
   /**
    * Revalidates status, lifecycle generation, token, and DB-time expiry while
-   * holding the row lock, then writes the observation. The worker retains and
-   * renews the resource lease across observations; lifecycle updates revoke it.
+   * holding the row lock, then writes the observation. The worker releases the
+   * one-observation claim into a durable cooldown; lifecycle updates revoke it.
    */
   async commit(input: {
     branchId: BranchID;
@@ -381,22 +395,50 @@ export class EnvironmentHealthRepository {
     );
   }
 
-  async release(branchId: BranchID, claimToken: string): Promise<boolean> {
-    const result = await update(this.db, branches)
-      .set({
-        environment_health_claim_token: null,
-        environment_health_claimed_at: null,
-        environment_health_claim_expires_at: null,
-        environment_health_claim_instance_id: null,
-        environment_health_claim_boot_id: null,
-      })
-      .where(
-        and(
-          eq(branches.branch_id, branchId),
-          eq(branches.environment_health_claim_token, claimToken)
-        )
-      )
-      .run();
-    return result.rowsAffected > 0;
+  async release(
+    branchId: BranchID,
+    claimToken: string,
+    nextObservationDelayMs?: number
+  ): Promise<boolean> {
+    if (
+      nextObservationDelayMs !== undefined &&
+      (!Number.isSafeInteger(nextObservationDelayMs) || nextObservationDelayMs <= 0)
+    ) {
+      throw new RepositoryError('Environment health observation cooldown must be positive');
+    }
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, branches, eq(branches.branch_id, branchId));
+        const row = await select(txDb).from(branches).where(eq(branches.branch_id, branchId)).one();
+        if (!row || row.environment_health_claim_token !== claimToken) return false;
+        const now =
+          nextObservationDelayMs === undefined ? undefined : await this.mutationNow(txDb, branchId);
+        const result = await update(txDb, branches)
+          .set({
+            environment_health_claim_token: null,
+            environment_health_claimed_at: null,
+            environment_health_claim_expires_at: null,
+            environment_health_claim_instance_id: null,
+            environment_health_claim_boot_id: null,
+            ...(now && nextObservationDelayMs
+              ? {
+                  environment_health_next_observation_at: new Date(
+                    now.getTime() + nextObservationDelayMs
+                  ),
+                }
+              : {}),
+          })
+          .where(
+            and(
+              eq(branches.branch_id, branchId),
+              eq(branches.environment_health_claim_token, claimToken)
+            )
+          )
+          .run();
+        return result.rowsAffected > 0;
+      },
+      { sqliteImmediate: true }
+    );
   }
 }

@@ -51,12 +51,20 @@ export interface DistributedHealthMonitorStats {
   committed: number;
   failures: number;
   saturated: boolean;
+  traversalCompleted: boolean;
 }
 
 const MIN_CLAIM_WRITE_MARGIN_MS = 5_000;
 
 function emptyStats(): DistributedHealthMonitorStats {
-  return { candidates: 0, claimed: 0, committed: 0, failures: 0, saturated: false };
+  return {
+    candidates: 0,
+    claimed: 0,
+    committed: 0,
+    failures: 0,
+    saturated: false,
+    traversalCompleted: false,
+  };
 }
 
 function tenantParams(tenantId: TenantID | string) {
@@ -128,12 +136,9 @@ export class DistributedHealthMonitor {
     if (options.scanBatchSize > 1_000) {
       throw new Error('Distributed environment health scan batch size cannot exceed 1000');
     }
-    if (
-      options.claimLeaseMs <
-      Math.max(options.httpTimeoutMs, options.scanIntervalMs) + MIN_CLAIM_WRITE_MARGIN_MS
-    ) {
+    if (options.claimLeaseMs < options.httpTimeoutMs + MIN_CLAIM_WRITE_MARGIN_MS) {
       throw new Error(
-        'Distributed environment health claim lease must leave at least 5000ms after its HTTP timeout and renewal interval'
+        'Distributed environment health claim lease must leave at least 5000ms after its HTTP timeout'
       );
     }
   }
@@ -223,7 +228,10 @@ export class DistributedHealthMonitor {
       stats = await this.tick();
       this.coordinationReady = true;
       if (!stats.saturated) {
-        this.idleRounds = stats.claimed === 0 && stats.failures === 0 ? this.idleRounds + 1 : 0;
+        this.idleRounds =
+          stats.claimed === 0 && stats.failures === 0 && !stats.traversalCompleted
+            ? this.idleRounds + 1
+            : 0;
       }
     } catch (error) {
       this.coordinationReady = false;
@@ -238,7 +246,7 @@ export class DistributedHealthMonitor {
     }
     const delay = stats.saturated
       ? jitterDelay(150, 2 / 3, this.random())
-      : stats.claimed > 0 || stats.failures > 0
+      : stats.claimed > 0 || stats.failures > 0 || stats.traversalCompleted
         ? jitterDelay(this.options.scanIntervalMs, 0.2, this.random())
         : boundedBackoffDelay(
             this.idleRounds,
@@ -284,15 +292,21 @@ export class DistributedHealthMonitor {
     if (this.shutdownRequested) return emptyStats();
     const stats = emptyStats();
 
+    const hadCursor = this.cursor !== undefined;
     const refs = await this.discover();
     if (refs.length === 0) {
       this.cursor = undefined;
+      stats.traversalCompleted = hadCursor;
       return stats;
     }
     const last = refs.at(-1)!;
-    this.cursor = { tenant_id: last.tenant_id, branch_id: last.branch_id };
+    const hasAnotherPage = refs.length >= this.options.scanBatchSize;
+    this.cursor = hasAnotherPage
+      ? { tenant_id: last.tenant_id, branch_id: last.branch_id }
+      : undefined;
     stats.candidates = refs.length;
-    stats.saturated = refs.length >= this.options.scanBatchSize;
+    stats.saturated = hasAnotherPage;
+    stats.traversalCompleted = !hasAnotherPage;
 
     for (
       let index = 0;
@@ -363,15 +377,21 @@ export class DistributedHealthMonitor {
       const controller = new AbortController();
       const work = this.performClaimedObservation(tenantId, branch, claim, controller);
       this.inFlight.set(resourceKey, { controller, work });
+      let observationCompleted = false;
       try {
         const observationCommitted = await work;
+        observationCompleted = observationCommitted;
         return { claimed: 1, committed: observationCommitted ? 1 : 0, failed: 0 };
       } finally {
         // Claims are one observation wide. Paging therefore never accumulates
         // retained ownership or re-probes early pages; token equality makes a
         // best-effort release safe after takeover/lifecycle invalidation.
         await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
-          new EnvironmentHealthRepository(scopedDb).release(branchId, claim.claim_token)
+          new EnvironmentHealthRepository(scopedDb).release(
+            branchId,
+            claim.claim_token,
+            observationCompleted ? this.options.scanIntervalMs : undefined
+          )
         ).catch(() => undefined);
         this.inFlight.delete(resourceKey);
         const active = this.activeClaims.get(resourceKey);
