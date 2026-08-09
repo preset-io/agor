@@ -45,6 +45,22 @@ describe('executor Codex auth dispatch', () => {
     });
   });
 
+  it('routes external auth helpers by trusted user and reported Unix identity', async () => {
+    runMock.mockResolvedValue({ success: true, data: { status: 'deleted' } });
+    await deleteCodexAuthViaExecutor(null, {
+      reportedUnixUser: 'alice',
+      userId: '019fda98-8206-7eb5-8e77-f95d6c8cd6c1',
+    });
+
+    expect(runMock.mock.calls[0]?.[1]).toMatchObject({
+      asUser: null,
+      templateVariables: {
+        unix_user: 'alice',
+        user_id: '019fda98-8206-7eb5-8e77-f95d6c8cd6c1',
+      },
+    });
+  });
+
   it('dispatches idempotent deletion and throws a secret-free failure', async () => {
     runMock.mockResolvedValueOnce({ success: true, data: { status: 'deleted' } });
     await deleteCodexAuthViaExecutor('alice');

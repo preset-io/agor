@@ -4,9 +4,12 @@ import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   cleanupOrphanStatuses,
+  createEnvironmentHealthMonitor,
+  initializeEnvironmentHealthMonitor,
   prepareTaskRuntimeStartup,
   type StartupContext,
   shouldContainLocalExecutorsOnShutdown,
+  shouldReconnectSocketClientsOnShutdown,
 } from './startup.js';
 
 interface StartupFixtures {
@@ -107,6 +110,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     sessionsService,
     terminalsService: null,
     distributedWorkIdentity: { instanceId: 'startup-test', bootId: 'startup-test-boot' },
+    environmentHealthMonitorPolicy: 'standalone',
   } as unknown as StartupContext;
 
   return { ctx, baseDb, tasksService, sessionsService };
@@ -139,6 +143,11 @@ describe('startup tenant database scope', () => {
     expect(shouldContainLocalExecutorsOnShutdown('shared_postgres')).toBe(false);
   });
 
+  it('preserves terminal socket disconnects in standalone and reconnects only in HA', () => {
+    expect(shouldReconnectSocketClientsOnShutdown('standalone')).toBe(false);
+    expect(shouldReconnectSocketClientsOnShutdown('shared_postgres')).toBe(true);
+  });
+
   it('leaves healthy Tasks, Sessions, and queued work untouched in shared PostgreSQL mode', async () => {
     const { ctx, tasksService, sessionsService } = makeStartupContextWithGuardedDb({
       orphanedTasks: [makeTask({ status: TaskStatus.RUNNING })],
@@ -153,6 +162,54 @@ describe('startup tenant database scope', () => {
     expect(tasksService.settleTermination).not.toHaveBeenCalled();
     expect(sessionsService.find).not.toHaveBeenCalled();
     expect(sessionsService.patch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['daemon-a', 'boot-a'],
+    ['daemon-b', 'boot-b'],
+  ])(
+    'does not construct or initialize the environment monitor on HA replica %s',
+    async (instanceId, bootId) => {
+      const { ctx } = makeStartupContextWithGuardedDb();
+      ctx.distributedWorkIdentity = { instanceId, bootId };
+      ctx.taskRuntimePolicy = 'shared_postgres';
+      ctx.environmentHealthMonitorPolicy = 'disabled-ha';
+      const factory = vi.fn();
+
+      const monitor = createEnvironmentHealthMonitor(ctx, factory);
+
+      expect(monitor).toBeNull();
+      expect(factory).not.toHaveBeenCalled();
+      expect(initializeEnvironmentHealthMonitor(monitor)).toBe(false);
+      await Promise.resolve();
+      expect(factory).not.toHaveBeenCalled();
+    }
+  );
+
+  it('preserves environment monitor construction and initialization in standalone', async () => {
+    const { ctx } = makeStartupContextWithGuardedDb();
+    ctx.taskRuntimePolicy = 'standalone';
+    ctx.environmentHealthMonitorPolicy = 'standalone';
+    const initialize = vi.fn(async () => undefined);
+    const cleanup = vi.fn();
+    const factory = vi.fn(() => ({ initialize, cleanup }));
+
+    const monitor = createEnvironmentHealthMonitor(ctx, factory);
+
+    expect(monitor).not.toBeNull();
+    expect(factory).toHaveBeenCalledOnce();
+    expect(initializeEnvironmentHealthMonitor(monitor)).toBe(true);
+    await vi.waitFor(() => expect(initialize).toHaveBeenCalledOnce());
+  });
+
+  it('refuses the environment monitor when a shared runtime caller supplies a stale policy', () => {
+    const { ctx } = makeStartupContextWithGuardedDb();
+    ctx.taskRuntimePolicy = 'shared_postgres';
+    ctx.environmentHealthMonitorPolicy = 'standalone';
+    const factory = vi.fn();
+
+    expect(createEnvironmentHealthMonitor(ctx, factory)).toBeNull();
+    expect(factory).not.toHaveBeenCalled();
   });
 
   it('runs orphan cleanup inside an explicit startup tenant DB scope', async () => {

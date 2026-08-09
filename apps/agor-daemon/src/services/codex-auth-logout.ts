@@ -61,10 +61,14 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
       }
       const userId = authUser.user_id as UserID;
 
-      // Refuse hosted multi-tenant mode, like import/device: there the Codex
-      // auth.json is the daemon's server-global file, so no tenant user may
-      // delete it via this endpoint.
-      if (loadConfigSync().multi_tenancy?.mode === 'required_from_auth') {
+      // Hosted multi-tenant mode is safe only when the external substrate
+      // selects the same isolated home from trusted tenant/user identity for
+      // this helper and every later Task.
+      const config = loadConfigSync();
+      if (
+        config.multi_tenancy?.mode === 'required_from_auth' &&
+        config.execution?.executor_storage?.user_home !== 'persistent-per-user'
+      ) {
         throw new BadRequest('Codex login management is unavailable in hosted multi-tenant mode.');
       }
 
@@ -85,7 +89,10 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
       // do NOT clear the method in that case so a login we couldn't remove keeps
       // working. Log the error class only — never token bytes.
       try {
-        await deleteCodexAuthViaExecutor(identity.unixUser);
+        await deleteCodexAuthViaExecutor(identity.unixUser, {
+          reportedUnixUser: identity.reportedUnixUser,
+          userId: identity.userId,
+        });
       } catch (err) {
         console.error(
           `[CodexAuth] Failed to delete auth.json${

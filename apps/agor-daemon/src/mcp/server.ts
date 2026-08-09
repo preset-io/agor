@@ -373,7 +373,7 @@ export function setupMCPRoutes(
   db: TenantScopeAwareDatabase,
   toolSearchEnabled = true,
   config: Pick<AgorConfig, 'multi_tenancy'> = { multi_tenancy: undefined },
-  testOptions: { statefulTransportMax?: number } = {}
+  testOptions: { statefulTransportMax?: number; statelessOnly?: boolean } = {}
 ): void {
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
@@ -692,6 +692,16 @@ export function setupMCPRoutes(
           Array.isArray(mcpSessionHeader) ? mcpSessionHeader[0] : mcpSessionHeader
         );
 
+        if (testOptions.statelessOnly && (req.method !== 'POST' || mcpSessionId)) {
+          return res.status(503).json({
+            ...jsonRpcError(
+              req,
+              -32004,
+              'Stateful MCP transports are unavailable in HA support profile constrained-active-active'
+            ),
+          });
+        }
+
         if (req.method === 'GET' || req.method === 'DELETE' || mcpSessionId) {
           if (!mcpSessionId) {
             return res.status(400).json({
@@ -769,7 +779,7 @@ export function setupMCPRoutes(
           return;
         }
 
-        if (req.method === 'POST' && isInitializeRequest(req.body)) {
+        if (!testOptions.statelessOnly && req.method === 'POST' && isInitializeRequest(req.body)) {
           evictOldestStatefulTransportIfNeeded();
 
           const mcpServer = createMcpServer(mcpContext, toolSearchEnabled);

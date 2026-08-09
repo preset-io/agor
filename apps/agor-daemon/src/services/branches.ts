@@ -11,6 +11,7 @@ import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
+  ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   getBranchesDir,
   loadConfig,
@@ -682,6 +683,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
       if (!Number.isInteger(withDefaults.clone_depth) || withDefaults.clone_depth <= 0) {
         throw new BadRequest('clone_depth must be a positive integer when set.');
+      }
+      try {
+        ensureBranchCloneDepthAllowed(withDefaults.clone_depth);
+      } catch (error) {
+        throw new BadRequest(error instanceof Error ? error.message : String(error));
       }
     }
     // Persist the effective mode so the executor never reconstructs a

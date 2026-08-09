@@ -186,8 +186,17 @@ export async function bootstrapFirstRunAdmin(
   let createdAdmin = false;
 
   if (existingUsers.length === 0) {
-    admin = await createAdmin();
-    createdAdmin = true;
+    try {
+      admin = await createAdmin();
+      createdAdmin = true;
+    } catch (error) {
+      // Another daemon may have observed the same empty tenant and completed
+      // its insert while this factory was hashing/inserting. Converge on that
+      // now-existing user instead of forcing the losing replica to restart.
+      // If no user appeared, preserve the original factory failure verbatim.
+      admin = await findFallbackAdmin(db);
+      if (!admin) throw error;
+    }
   } else {
     admin = await findFallbackAdmin(db);
   }

@@ -12,6 +12,7 @@ import {
   type AgorConfig,
   isUnixImpersonationEnabled,
   loadConfig,
+  type ResolvedDeploymentConfig,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
   resolveMultiTenancyDatabaseDialect,
@@ -96,9 +97,11 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
+import { rejectInConstrainedHa } from './ha-support.js';
 import { classifyMissingCredentialFailure } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
+import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
@@ -397,6 +400,8 @@ export interface RegisterHooksContext {
   branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
+  realtimeRelay?: Pick<RedisRealtimeRuntime, 'relay' | 'setRelayHandler'>;
+  deployment: ResolvedDeploymentConfig;
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
@@ -481,6 +486,29 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'terminals',
 ] as const;
 
+/**
+ * Service endpoints whose implementation retains process-local credentials,
+ * provider handshakes, or native runtime state. Keep this inventory exported
+ * so the constrained HA fail-closed boundary has direct regression coverage.
+ * `mcp-servers/discover` is included because an OAuth-protected probe can start
+ * the same pending PKCE/callback flow as the explicit OAuth endpoints.
+ */
+export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
+  ['mcp-servers/discover', 'mcpOAuth'],
+  ['mcp-servers/oauth-auth-headers', 'mcpOAuth'],
+  ['mcp-servers/oauth-complete', 'mcpOAuth'],
+  ['mcp-servers/oauth-disconnect', 'mcpOAuth'],
+  ['mcp-servers/oauth-refresh', 'mcpOAuth'],
+  ['mcp-servers/oauth-start', 'mcpOAuth'],
+  ['mcp-servers/oauth-status', 'mcpOAuth'],
+  ['mcp-servers/test-oauth', 'mcpOAuth'],
+  ['codex-auth/device', 'codexDeviceAuth'],
+  ['codex-auth/import', 'codexAuth'],
+  ['codex-auth/logout', 'codexAuth'],
+  ['opencode-auth', 'openCodeAuth'],
+  ['opencode-models', 'openCodeAuth'],
+] as const satisfies ReadonlyArray<readonly [string, Parameters<typeof rejectInConstrainedHa>[1]]>;
+
 const taskFieldSet = (...fields: (keyof Task)[]) => new Set<string>(fields);
 
 const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
@@ -562,6 +590,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     branchRepository,
     usersRepository,
     sessionsRepository,
+    realtimeRelay,
+    deployment,
   } = ctx;
 
   // Used by classifyMissingCredentialFailure to look up the acting user for
@@ -576,6 +606,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       return undefined;
     }
   };
+
+  if (deployment.mode === 'ha') {
+    for (const [path, feature] of CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES) {
+      safeService(path)?.hooks({ before: { all: [rejectInConstrainedHa(deployment, feature)] } });
+    }
+  }
 
   const multiTenancy = resolveMultiTenancyConfig(config);
   const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
@@ -2508,6 +2544,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     accessCache: realtimeAccessCache,
     allowSuperadmin: superadminOpts.allowSuperadmin,
     multiTenancy,
+    realtimeRelay,
   });
 
   // ============================================================================

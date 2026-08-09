@@ -9,6 +9,7 @@
 import { Transform } from 'node:stream';
 import {
   type AgorConfig,
+  type ResolvedDeploymentConfig,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
@@ -94,6 +95,7 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
+import { haUnavailable, isConstrainedHa } from './ha-support.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -268,6 +270,12 @@ export interface RegisterRoutesContext {
    * Used by /health to surface the effective policy to admin users.
    */
   resolvedSecurity: import('@agor/core/config').ResolvedSecurity;
+  realtimeRuntime?: Pick<
+    import('./realtime/redis-realtime.js').RedisRealtimeRuntime,
+    'health' | 'isReady'
+  >;
+  distributedWorkIdentity: import('@agor/core/coordination').DistributedWorkIdentity;
+  deployment: ResolvedDeploymentConfig;
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
@@ -325,6 +333,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     DAEMON_VERSION,
     DAEMON_BUILD_INFO,
     resolvedSecurity,
+    realtimeRuntime,
+    distributedWorkIdentity,
+    deployment,
     sessionsService,
     messagesService,
     boardsService,
@@ -828,11 +839,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const forkedSession = await sessionsService.fork(id, data, params);
         console.log(`✅ Fork created: ${shortId(forkedSession.session_id)}`);
 
-        console.log('📡 [FORK] Manually broadcasting created event to all clients');
-
-        if (app.io) {
-          app.io.emit('sessions created', forkedSession);
-        }
+        // fork() persists through an internal service call, so emit the
+        // standard event explicitly with its tenant/auth context. A raw
+        // app.io.emit would bypass Feathers publication authorization and, in
+        // HA, the Redis adapter would fan it out cluster-wide.
+        emitServiceEvent(app, {
+          path: 'sessions',
+          event: 'created',
+          data: forkedSession,
+          params,
+          id: forkedSession.session_id,
+        });
 
         return forkedSession;
       },
@@ -854,11 +871,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const spawnedSession = await sessionsService.spawn(id, data, params);
         console.log(`✅ Spawn created: ${shortId(spawnedSession.session_id)}`);
 
-        console.log('📡 [SPAWN] Manually broadcasting created event to all clients');
-
-        if (app.io) {
-          app.io.emit('sessions created', spawnedSession);
-        }
+        emitServiceEvent(app, {
+          path: 'sessions',
+          event: 'created',
+          data: spawnedSession,
+          params,
+          id: spawnedSession.session_id,
+        });
 
         return spawnedSession;
       },
@@ -2910,6 +2929,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/sessions/:id/permission-decision',
     {
       async create(data: PermissionDecision, params: RouteParams) {
+        if (isConstrainedHa(deployment)) throw haUnavailable('interactivePermissions');
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         if (!data.requestId) throw new Error('requestId required');
@@ -4190,7 +4210,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
       const dbProbe = await probeDatabase(db);
       const publicResponse = {
-        status: healthStatus(dbProbe),
+        status:
+          healthStatus(dbProbe) === 'ok' && (!realtimeRuntime || realtimeRuntime.isReady())
+            ? 'ok'
+            : 'degraded',
         db: publicHealthDb(dbProbe),
         timestamp: Date.now(),
         version: DAEMON_VERSION,
@@ -4208,6 +4231,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           label: config.daemon?.instanceLabel,
           description: config.daemon?.instanceDescription,
         },
+        realtime: realtimeRuntime
+          ? { required: true, ready: realtimeRuntime.isReady() }
+          : { required: false, ready: true },
         features: {
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),
           // Web terminal availability: UI should hide terminal buttons when false.
@@ -4283,6 +4309,26 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             managedEnvsExecutionMode:
               config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,
           },
+          deployment: {
+            mode: deployment.mode,
+            ...(deployment.mode === 'ha'
+              ? {
+                  // @agor/core's source owns these fields. The daemon package's
+                  // no-build typecheck can temporarily see the previous core
+                  // dist declaration while watch mode catches up.
+                  supportProfile: (deployment as typeof deployment & { supportProfile: string })
+                    .supportProfile,
+                  capabilities: (
+                    deployment as typeof deployment & {
+                      capabilities: Record<string, boolean>;
+                    }
+                  ).capabilities,
+                }
+              : {}),
+            instanceId: distributedWorkIdentity.instanceId,
+            bootId: distributedWorkIdentity.bootId,
+            realtime: realtimeRuntime?.health() ?? { required: false, ready: true },
+          },
           // Resolved security posture — admins can confirm in Settings → About
           // which CSP/CORS policy the daemon booted with, without tailing logs
           // or reading response headers by hand. Keep the shape tight: the
@@ -4317,7 +4363,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // Liveness (/livez) and readiness (/readyz) probes — see health/routes.ts.
-  registerHealthProbeRoutes(app, db);
+  registerHealthProbeRoutes(
+    app,
+    db,
+    realtimeRuntime ? [{ name: 'redis', isReady: () => realtimeRuntime.isReady() }] : []
+  );
 
   // ============================================================================
   // MCP routes
@@ -4326,7 +4376,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   if (config.daemon?.mcpEnabled !== false) {
     const { setupMCPRoutes } = await import('./mcp/server.js');
     const toolSearchEnabled = config.daemon?.mcpToolSearch !== false;
-    setupMCPRoutes(app, db, toolSearchEnabled, config);
+    setupMCPRoutes(app, db, toolSearchEnabled, config, {
+      statelessOnly: isConstrainedHa(deployment),
+    });
     console.log(
       `✅ MCP server enabled at POST /mcp${toolSearchEnabled ? ' (tool search mode)' : ''}`
     );

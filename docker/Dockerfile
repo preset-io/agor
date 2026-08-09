@@ -244,13 +244,15 @@ USER root
 
 # The one thing we keep from the builder: the self-contained agor-live tree.
 # Copied to the SAME path so its internal (relative) symlinks stay valid.
-COPY --from=source-builder /opt/agor-live /opt/agor-live
+COPY --chown=agor:agor --from=source-builder /opt/agor-live /opt/agor-live
 
 # Put the bins on PATH (shebang: #!/usr/bin/env node); they resolve deps + dist
-# entirely within /opt/agor-live.
+# entirely within /opt/agor-live. pnpm deploy preserves a restrictive workspace
+# umask in some environments, so explicitly make the scripts readable as well
+# as executable by the unprivileged runtime user.
 RUN ln -sf /opt/agor-live/bin/agor.js /usr/local/bin/agor \
   && ln -sf /opt/agor-live/bin/agor-daemon.js /usr/local/bin/agor-daemon \
-  && chmod +x /opt/agor-live/bin/agor.js /opt/agor-live/bin/agor-daemon.js
+  && chmod a+rx /opt/agor-live/bin/agor.js /opt/agor-live/bin/agor-daemon.js
 
 # Reuse the production entrypoint (agor init → db migrate → exec agor-daemon).
 COPY docker/docker-entrypoint-prod.sh /usr/local/bin/

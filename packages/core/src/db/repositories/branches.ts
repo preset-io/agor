@@ -565,6 +565,14 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         created_at: current.created_at, // Never change created timestamp
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
+      // A materialization error describes only the failed filesystem state.
+      // Clear it atomically with every explicit transition away from failed
+      // so a successful retry/unarchive cannot remain visually poisoned by
+      // the previous attempt. undefined cannot express deletion through
+      // deepMerge because it intentionally means preserve.
+      if (updates.filesystem_status !== undefined && updates.filesystem_status !== 'failed') {
+        delete merged.error_message;
+      }
 
       const insertData = this.branchToInsert(merged);
       if (options?.preserveUpdatedAt) {

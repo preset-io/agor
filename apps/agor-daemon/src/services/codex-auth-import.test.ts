@@ -104,6 +104,24 @@ describe('codex-auth-import', () => {
     expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
   });
 
+  it('admits hosted auth-file import with persistent per-user executor homes', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth' },
+      execution: {
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          branch_workspace: 'persistent-per-branch',
+          base_repository: 'unavailable',
+        },
+      },
+    } as never);
+    const { app } = makeApp();
+
+    await expect(
+      service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)
+    ).resolves.toMatchObject({ status: 'authenticated' });
+  });
+
   it('rejects when codex is disabled for the workspace', async () => {
     isTenantAgenticToolEnabledMock.mockResolvedValue(false);
     const { app } = makeApp();
@@ -176,7 +194,10 @@ describe('codex-auth-import', () => {
     const { app } = makeApp();
     const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
     expect(result.status).toBe('authenticated');
-    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(expect.any(String), 'alice');
+    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(expect.any(String), 'alice', {
+      reportedUnixUser: 'alice',
+      userId: 'user-1',
+    });
   });
 
   it('strict mode without a unix_username rejects before writing', async () => {
@@ -198,6 +219,13 @@ describe('codex-auth-import', () => {
     const { app } = makeApp();
     const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
     expect(result.status).toBe('authenticated');
-    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(expect.any(String), 'agor_executor');
+    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'agor_executor',
+      {
+        reportedUnixUser: 'agor_executor',
+        userId: 'user-1',
+      }
+    );
   });
 });

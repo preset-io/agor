@@ -1,12 +1,9 @@
 /**
  * Regression tests for `resolveCodexUnixIdentity()` mode handling.
  *
- * Delegated + templated execution must resolve to `unsupported-mode` WITHOUT
- * looking up the user or touching any credential path: the auth.json Codex
- * reads lives in the execution substrate's per-user home, so daemon-side
- * import/verify/logout would silently share one daemon-home file across
- * users and never reach the executor. Delegated WITHOUT a template keeps the
- * simple-mode behavior (daemon home) but still requires a unix_username.
+ * Delegated + templated execution requires an explicit persistent-per-user
+ * home guarantee. Delegated WITHOUT a template keeps the simple-mode local
+ * process behavior but still requires a unix_username.
  */
 import { loadConfigSync } from '@agor/core/config';
 import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
@@ -80,7 +77,12 @@ describe('resolveCodexUnixIdentity — delegated mode', () => {
 
     // No impersonation in delegated mode — auth.json lives in the daemon
     // user's home, exactly like simple mode.
-    expect(result).toEqual({ ok: true, unixUser: null });
+    expect(result).toEqual({
+      ok: true,
+      unixUser: null,
+      reportedUnixUser: 'alice',
+      userId: USER_ID,
+    });
   });
 
   it('returns missing-username for delegated without a template when the user has no unix_username', async () => {
@@ -108,7 +110,34 @@ describe('resolveCodexUnixIdentity — delegated mode', () => {
 
     const result = await resolveCodexUnixIdentity(USER_ID, withTenantDatabase);
 
-    expect(result).toEqual({ ok: true, unixUser: null });
+    expect(result).toEqual({
+      ok: true,
+      unixUser: null,
+      reportedUnixUser: null,
+      userId: USER_ID,
+    });
     expect(findById).not.toHaveBeenCalled();
+  });
+
+  it('routes delegated templated auth through a persistent per-user home', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_command_template: 'launcher --user-id {user_id} -- agor-executor --stdin',
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          branch_workspace: 'persistent-per-branch',
+          base_repository: 'unavailable',
+        },
+      },
+    } as never);
+    findById.mockResolvedValue({ user_id: USER_ID, unix_username: 'alice' });
+
+    await expect(resolveCodexUnixIdentity(USER_ID, withTenantDatabase)).resolves.toEqual({
+      ok: true,
+      unixUser: null,
+      reportedUnixUser: 'alice',
+      userId: USER_ID,
+    });
   });
 });

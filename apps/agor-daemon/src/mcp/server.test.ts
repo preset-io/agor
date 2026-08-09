@@ -491,6 +491,51 @@ describe('POST /mcp with personal API keys', () => {
     return { resp, parsed };
   }
 
+  it('uses stateless initialization and rejects session affinity in constrained HA', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer(
+      { users: { get: getUser } },
+      async (baseUrl) => {
+        const initialize = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            'Content-Type': 'application/json',
+            'X-API-Key': 'agor_sk_valid',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 100,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2025-03-26',
+              capabilities: {},
+              clientInfo: { name: 'vitest', version: '1.0.0' },
+            },
+          }),
+        });
+        expect(initialize.status).toBe(200);
+        expect(initialize.headers.get('mcp-session-id')).toBeNull();
+        await initialize.text();
+
+        const stateful = await fetch(`${baseUrl}/mcp`, {
+          method: 'GET',
+          headers: { 'X-API-Key': 'agor_sk_valid', 'Mcp-Session-Id': 'process-local' },
+        });
+        expect(stateful.status).toBe(503);
+        expect((await stateful.json()).error?.message).toMatch(/constrained-active-active/);
+      },
+      undefined,
+      { statelessOnly: true }
+    );
+  });
+
   it('debugs routine stateful MCP transport expiry without warning', async () => {
     await mockPersonalApiKeyUser();
     const getUser = vi.fn(async () => ({

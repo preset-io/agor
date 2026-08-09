@@ -50,11 +50,12 @@ interface FakeSocket {
   handshake: { auth?: { token?: string }; headers?: Record<string, string> };
   connected: boolean;
   joined: Set<string>;
+  readonly rooms: Set<string>;
   left: Set<string>;
   /** Events actually delivered TO this socket (models room fanout). */
   received: Array<{ event: string; data: unknown }>;
-  handlers: Map<string, (...args: any[]) => void>;
-  on(event: string, fn: (...args: any[]) => void): void;
+  handlers: Map<string, (...args: any[]) => any>;
+  on(event: string, fn: (...args: any[]) => any): void;
   join(channel: string): void;
   leave(channel: string): void;
   broadcast: {
@@ -83,13 +84,16 @@ interface FakeIO {
 }
 
 function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
-  const handlers = new Map<string, (...args: any[]) => void>();
-  return {
+  const handlers = new Map<string, (...args: any[]) => any>();
+  const socket: FakeSocket = {
     id,
     data: {},
     handshake: { auth: {}, headers: {} },
     connected: true,
     joined: new Set(),
+    get rooms() {
+      return new Set([id, ...this.joined]);
+    },
     left: new Set(),
     received: [],
     handlers,
@@ -101,6 +105,7 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
     },
     leave(channel) {
       this.left.add(channel);
+      this.joined.delete(channel);
     },
     broadcast: {
       emit: (event: string, data: unknown) => {
@@ -109,6 +114,7 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
       to: (channel: string) => ({
         emit: (event: string, data: unknown) => {
           io?.emitted.push({ channel, event, data });
+          deliverToRoom(io, channel, event, data, id);
         },
       }),
     },
@@ -121,6 +127,7 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
       },
     }),
   };
+  return socket;
 }
 
 /**
@@ -222,6 +229,7 @@ const BOB = '22222222-bbbb-bbbb-bbbb-222222222222';
 
 function asUser(socket: FakeSocket, userId: string) {
   socket.feathers = { user: { user_id: userId } };
+  socket.data.tenant = { tenant_id: 'default', source: 'static' };
 }
 /**
  * Simulate a socket that presented a service token in the initial handshake.
@@ -389,6 +397,24 @@ describe('Socket.IO lifecycle logging', () => {
     );
   });
 
+  it('joins post-connect browser auth only to tenant-scoped raw rooms', () => {
+    const { app, io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const socket = makeSocket('alice-sock');
+    connect(io, socket);
+    const connection = {};
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: ALICE } },
+      { connection, params: {} }
+    );
+
+    expect(socket.joined).toContain(tenantChannelName('tenant-a'));
+    expect(socket.joined).toContain(userRoomName('tenant-a', ALICE));
+    expect([...socket.joined]).not.toContain(`user:${ALICE}`);
+  });
+
   it('uses the same single authentication signal for handshake-authenticated users', async () => {
     const { app, io } = buildHarness();
     const socket = makeSocket('handshake-sock');
@@ -424,7 +450,7 @@ describe('Socket.IO lifecycle logging', () => {
         role: 'service',
         _isServiceAccount: true,
       },
-      joinsUserRoom: true,
+      joinsUserRoom: false,
     },
     {
       kind: 'terminal executor',
@@ -448,11 +474,13 @@ describe('Socket.IO lifecycle logging', () => {
 
     expect(logSpy).toHaveBeenCalledOnce();
     expect(logSpy).toHaveBeenCalledWith('socket authenticated: post-connect-service service');
-    expect(socket.joined.has(userRoomName('executor-service'))).toBe(joinsUserRoom);
+    expect([...socket.joined].some((room) => room.includes('executor-service'))).toBe(
+      joinsUserRoom
+    );
   });
 
   it.each([
-    { kind: 'full service', terminalUserId: undefined, joinsUserRoom: true },
+    { kind: 'full service', terminalUserId: undefined, joinsUserRoom: false },
     { kind: 'terminal executor', terminalUserId: ALICE, joinsUserRoom: false },
   ])(
     'deduplicates handshake $kind authentication followed by the same service login',
@@ -485,9 +513,37 @@ describe('Socket.IO lifecycle logging', () => {
 
       expect(logSpy).toHaveBeenCalledOnce();
       expect(logSpy).toHaveBeenCalledWith('socket authenticated: handshake-service service');
-      expect(socket.joined.has(userRoomName('executor-service'))).toBe(joinsUserRoom);
+      expect([...socket.joined].some((room) => room.includes('executor-service'))).toBe(
+        joinsUserRoom
+      );
     }
   );
+
+  it('revokes prior raw tenant and board rooms when authentication is replaced by service', () => {
+    const { app, io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const socket = makeSocket('replacement-sock');
+    const connection = {};
+    socket.feathers = connection;
+    socket.data.tenant = { tenant_id: 'tenant-a', source: 'static' };
+    socket.data.currentBoardId = 'board-1';
+    socket.data.authorizedBoardIds = new Set(['board-1']);
+    socket.joined.add(tenantChannelName('tenant-a'));
+    socket.joined.add(userRoomName('tenant-a', ALICE));
+    socket.joined.add(boardPresenceRoomName('tenant-a', 'board-1'));
+    connect(io, socket);
+
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: 'executor-service', _isServiceAccount: true } },
+      { connection }
+    );
+
+    expect([...socket.joined].filter((room) => room.startsWith('tenant:'))).toEqual([]);
+    expect(socket.data.authorizedBoardIds).toEqual(new Set());
+    expect(socket.data.currentBoardId).toBeUndefined();
+    expect(socket.data.tenant).toBeUndefined();
+  });
 
   it('emits an unconditional five-minute gauge and stops it when Engine.IO closes', () => {
     vi.useFakeTimers();
@@ -615,7 +671,11 @@ describe('getSocketAuthState', () => {
   it('reports user auth when feathers.user.user_id is present', () => {
     const s = makeSocket();
     asUser(s, ALICE);
-    expect(getSocketAuthState(s as any)).toEqual({ userId: ALICE, isService: false });
+    expect(getSocketAuthState(s as any)).toEqual({
+      userId: ALICE,
+      isService: false,
+      tenant: { tenant_id: 'default', source: 'static' },
+    });
   });
   it('reports service auth for handshake-tagged sockets (socket.data.isService)', () => {
     const s = makeSocket();
@@ -1169,24 +1229,52 @@ describe('terminal:* handler authorization', () => {
   });
 
   describe('cursor presence routing', () => {
-    it('joins and leaves board presence rooms explicitly', () => {
+    it('does not deliver the same board id across tenant rooms', async () => {
       const { io } = buildHarness();
-      const s = makeSocket('alice-sock', io);
-      asUser(s, ALICE);
-      connect(io, s);
+      const tenantA = makeSocket('tenant-a', io);
+      const tenantB = makeSocket('tenant-b', io);
+      asUser(tenantA, ALICE);
+      asUser(tenantB, BOB);
+      tenantA.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+      tenantB.data.tenant = { tenant_id: 'tenant-b', source: 'auth_claim' };
+      connect(io, tenantA);
+      connect(io, tenantB);
+      await tenantA.handlers.get('presence:watch-board')?.('shared-board-id');
+      await tenantB.handlers.get('presence:watch-board')?.('shared-board-id');
 
-      s.handlers.get('presence:watch-board')?.('board-1');
-      expect(s.joined.has(boardPresenceRoomName('board-1'))).toBe(true);
+      tenantA.handlers.get('cursor-move')?.({
+        boardId: 'shared-board-id',
+        x: 1,
+        y: 2,
+        timestamp: 1,
+      });
 
-      s.handlers.get('presence:unwatch-board')?.('board-1');
-      expect(s.left.has(boardPresenceRoomName('board-1'))).toBe(true);
+      expect(tenantB.received).not.toContainEqual(
+        expect.objectContaining({ event: 'cursor-moved' })
+      );
+      expect(tenantA.joined).toContain(boardPresenceRoomName('tenant-a', 'shared-board-id'));
+      expect(tenantB.joined).toContain(boardPresenceRoomName('tenant-b', 'shared-board-id'));
     });
 
-    it('routes cursor-moved only to the active board room and emits a lightweight global presence update', () => {
+    it('joins and leaves board presence rooms explicitly', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock', io);
       asUser(s, ALICE);
       connect(io, s);
+
+      await s.handlers.get('presence:watch-board')?.('board-1');
+      expect(s.joined.has(boardPresenceRoomName('default', 'board-1'))).toBe(true);
+
+      s.handlers.get('presence:unwatch-board')?.('board-1');
+      expect(s.left.has(boardPresenceRoomName('default', 'board-1'))).toBe(true);
+    });
+
+    it('routes cursor-moved only to the active board room and emits a lightweight global presence update', async () => {
+      const { io } = buildHarness();
+      const s = makeSocket('alice-sock', io);
+      asUser(s, ALICE);
+      connect(io, s);
+      await s.handlers.get('presence:watch-board')?.('board-1');
 
       s.handlers.get('cursor-move')?.({
         boardId: 'board-1',
@@ -1196,7 +1284,7 @@ describe('terminal:* handler authorization', () => {
       });
 
       expect(io.emitted).toContainEqual({
-        channel: boardPresenceRoomName('board-1'),
+        channel: boardPresenceRoomName('default', 'board-1'),
         event: 'cursor-moved',
         data: {
           userId: ALICE,
@@ -1208,7 +1296,7 @@ describe('terminal:* handler authorization', () => {
       });
 
       expect(io.emitted).toContainEqual({
-        channel: '*',
+        channel: tenantChannelName('default'),
         event: 'presence-updated',
         data: {
           userId: ALICE,
@@ -1218,11 +1306,12 @@ describe('terminal:* handler authorization', () => {
       });
     });
 
-    it('coalesces global presence updates but still streams per-board cursor movement', () => {
+    it('coalesces global presence updates but still streams per-board cursor movement', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock', io);
       asUser(s, ALICE);
       connect(io, s);
+      await s.handlers.get('presence:watch-board')?.('board-1');
 
       s.handlers.get('cursor-move')?.({
         boardId: 'board-1',
@@ -1238,12 +1327,16 @@ describe('terminal:* handler authorization', () => {
       });
 
       expect(
-        io.emitted.filter((entry) => entry.event === 'presence-updated' && entry.channel === '*')
+        io.emitted.filter(
+          (entry) =>
+            entry.event === 'presence-updated' && entry.channel === tenantChannelName('default')
+        )
       ).toHaveLength(1);
       expect(
         io.emitted.filter(
           (entry) =>
-            entry.event === 'cursor-moved' && entry.channel === boardPresenceRoomName('board-1')
+            entry.event === 'cursor-moved' &&
+            entry.channel === boardPresenceRoomName('default', 'board-1')
         )
       ).toHaveLength(2);
     });
@@ -1257,16 +1350,16 @@ describe('presence/cursor exclude the terminal-executor identity', () => {
     asServiceForUser(s, ALICE);
     connect(io, s);
     s.handlers.get('presence:watch-board')?.('board-1');
-    expect(s.joined.has(boardPresenceRoomName('board-1'))).toBe(false);
+    expect(s.joined.has(boardPresenceRoomName('default', 'board-1'))).toBe(false);
   });
 
-  it('DOES join a normal authenticated user to a board presence room', () => {
+  it('DOES join a normal authenticated user to a board presence room', async () => {
     const { io } = buildHarness();
     const s = makeSocket('alice-sock');
     asUser(s, ALICE);
     connect(io, s);
-    s.handlers.get('presence:watch-board')?.('board-1');
-    expect(s.joined.has(boardPresenceRoomName('board-1'))).toBe(true);
+    await s.handlers.get('presence:watch-board')?.('board-1');
+    expect(s.joined.has(boardPresenceRoomName('default', 'board-1'))).toBe(true);
   });
 
   it('drops cursor-move / cursor-leave from a terminal-executor socket (no broadcast)', () => {
@@ -1279,13 +1372,60 @@ describe('presence/cursor exclude the terminal-executor identity', () => {
     expect(io.emitted).toEqual([]);
   });
 
-  it('still broadcasts cursor-move from a normal user', () => {
+  it('still broadcasts cursor-move from a normal user', async () => {
     const { io } = buildHarness();
     const s = makeSocket('alice-sock', io);
     asUser(s, ALICE);
     connect(io, s);
+    await s.handlers.get('presence:watch-board')?.('board-1');
     s.handlers.get('cursor-move')?.({ boardId: 'board-1', x: 1, y: 2, timestamp: 1 });
     expect(io.emitted.some((e) => e.event === 'cursor-moved')).toBe(true);
+  });
+
+  it('does not grant or emit to a board rejected by Feathers authorization', async () => {
+    const { app, io } = buildHarness();
+    (app as any).service = (path: string) =>
+      path === 'boards'
+        ? { get: vi.fn(async () => Promise.reject(new Error('forbidden'))) }
+        : { get: vi.fn(async (id: string) => ({ user_id: id })) };
+    const s = makeSocket('alice-sock', io);
+    asUser(s, ALICE);
+    connect(io, s);
+
+    await s.handlers.get('presence:watch-board')?.('private-board');
+    s.handlers.get('cursor-move')?.({
+      boardId: 'private-board',
+      x: 1,
+      y: 2,
+      timestamp: 1,
+    });
+
+    expect(s.joined.has(boardPresenceRoomName('default', 'private-board'))).toBe(false);
+    expect(io.emitted).toEqual([]);
+  });
+
+  it('does not restore a board room when logout races an in-flight authorization', async () => {
+    const { app, io } = buildHarness();
+    let resolveBoard!: (value: { board_id: string }) => void;
+    const boardLookup = new Promise<{ board_id: string }>((resolve) => {
+      resolveBoard = resolve;
+    });
+    (app as any).service = (path: string) =>
+      path === 'boards'
+        ? { get: vi.fn(async () => boardLookup) }
+        : { get: vi.fn(async (id: string) => ({ user_id: id })) };
+    const s = makeSocket('alice-sock', io);
+    asUser(s, ALICE);
+    connect(io, s);
+    const acknowledge = vi.fn();
+
+    const watch = s.handlers.get('presence:watch-board')?.('board-1', acknowledge);
+    (app as any).eventHandlers.get('logout')?.({}, { connection: s.feathers });
+    resolveBoard({ board_id: 'board-1' });
+    await watch;
+
+    expect(s.joined.has(boardPresenceRoomName('default', 'board-1'))).toBe(false);
+    expect(acknowledge).toHaveBeenCalledWith({ ok: false });
   });
 });
 
@@ -1504,8 +1644,60 @@ describe('configureChannels tenant isolation', () => {
     expect(leaves.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
   });
 
+  it('revokes prior tenant and session-stream channels before replacing authentication', () => {
+    const { app, handlers, joins, leaves } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    });
+    const connection = { data: {} } as any;
+    const login = (tenantId: string, userId: string) =>
+      handlers.get('login')?.(
+        {
+          user: { user_id: userId },
+          authentication: { payload: { tenant_id: tenantId } },
+        },
+        { connection }
+      );
+
+    login('tenant-a', ALICE);
+    joins.set('session-stream:session-a', [connection]);
+    login('tenant-b', BOB);
+
+    expect(leaves.get(tenantChannelName('tenant-a'))).toEqual([connection]);
+    expect(leaves.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
+    expect(leaves.get('session-stream:session-a')).toEqual([connection]);
+    expect(joins.get(tenantChannelName('tenant-b'))).toEqual([connection]);
+    expect(joins.get(tenantUserChannelName('tenant-b', BOB))).toEqual([connection]);
+    expect(connection.tenant).toEqual({ tenant_id: 'tenant-b', source: 'auth_claim' });
+  });
+
+  it('revokes prior broadcast channels when authentication changes to a terminal executor', () => {
+    const { app, handlers, joins, leaves } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const connection = { data: {} } as any;
+
+    handlers.get('login')?.({ user: { user_id: ALICE }, authentication: {} }, { connection });
+    handlers.get('login')?.(
+      { user: { user_id: 'executor-service', _isTerminalExecutor: true } },
+      { connection }
+    );
+
+    expect(joins.get(tenantChannelName('tenant-a'))).toEqual([connection]);
+    expect(leaves.get('authenticated')).toEqual([connection, connection]);
+    expect(leaves.get(tenantChannelName('tenant-a'))).toEqual([connection]);
+    expect(leaves.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
+    expect(connection.tenant).toBeUndefined();
+    expect(connection.data.tenant).toBeUndefined();
+  });
+
   it('leaves tenant-scoped channels on logout', () => {
-    const { app, handlers, leaves } = makeChannelHarness();
+    const { app, handlers, joins, leaves } = makeChannelHarness();
     configureChannels(app, {
       multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
     });
@@ -1513,6 +1705,9 @@ describe('configureChannels tenant isolation', () => {
       data: { tenant: { tenant_id: 'tenant-a', source: 'static' } },
       feathers: { user: { user_id: ALICE } },
     } as any;
+    // These channels exist only after an authenticated join in real Feathers.
+    joins.set(tenantChannelName('tenant-a'), [connection]);
+    joins.set(tenantUserChannelName('tenant-a', ALICE), [connection]);
 
     handlers.get('logout')?.({}, { connection });
 

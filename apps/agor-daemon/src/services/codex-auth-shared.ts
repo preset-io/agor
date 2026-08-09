@@ -43,7 +43,15 @@ interface UsersServiceLike {
 }
 
 export type CodexUnixIdentityResolution =
-  | { ok: true; unixUser: string | null }
+  | {
+      ok: true;
+      /** Local sudo identity; null for simple/delegated external execution. */
+      unixUser: string | null;
+      /** Identity reported to an external executor launcher. */
+      reportedUnixUser: string | null;
+      /** Stable trusted identity for persistent-per-user storage selection. */
+      userId: UserID;
+    }
   | {
       ok: false;
       reason: 'missing-username' | 'resolve-failed' | 'unsupported-mode';
@@ -54,9 +62,8 @@ export type CodexUnixIdentityResolution =
  * Resolve the Unix account whose `~/.codex/auth.json` Codex will actually read
  * for this user: the daemon user (simple, and delegated WITHOUT an executor
  * command template), the shared executor user (insulated), or the caller's own
- * Unix account (strict). Delegated WITH a command template resolves to
- * `unsupported-mode`: the credential lives in the execution substrate's
- * per-user home, which the daemon cannot reach.
+ * Unix account (strict). Delegated templated execution additionally requires
+ * an explicit persistent-per-user executor-home guarantee.
  *
  * Returns a discriminated result rather than throwing so callers with
  * different failure semantics (the import endpoint rejects, the check-auth
@@ -70,20 +77,21 @@ export async function resolveCodexUnixIdentity(
   const config = loadConfigSync();
   const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
 
-  // Delegated + templated execution: the executor's home (and therefore the
-  // auth.json Codex actually reads) lives in the execution substrate's
-  // per-user mount, not on the daemon host. Touching the daemon-home file
-  // here would silently share one credential file across users AND never
-  // reach the executor — reject explicitly until substrate-aware credential
-  // routing exists.
-  if (mode === 'delegated' && config.execution?.executor_command_template) {
+  // The operation itself runs through the executor template. Fail closed
+  // unless that substrate promises the same isolated home for auth helpers
+  // and later Tasks for the trusted user identity.
+  if (
+    mode === 'delegated' &&
+    config.execution?.executor_command_template &&
+    config.execution?.executor_storage?.user_home !== 'persistent-per-user'
+  ) {
     return {
       ok: false,
       reason: 'unsupported-mode',
       message:
         'In delegated Unix user mode with templated execution, Codex credentials live in the ' +
-        "execution substrate's per-user home — the daemon cannot import, verify, or remove them. " +
-        'Sign in to Codex from a branch terminal or from within a session instead.',
+        "execution substrate's per-user home, but execution.executor_storage.user_home does not " +
+        'guarantee persistent-per-user routing. Configure that contract or use an API key.',
     };
   }
 
@@ -121,7 +129,19 @@ export async function resolveCodexUnixIdentity(
       executorUnixUser: config.execution?.executor_unix_user,
     });
     validateResolvedUnixUser(mode, resolved.unixUser);
-    return { ok: true, unixUser: resolved.unixUser };
+    if (!userId) {
+      return {
+        ok: false,
+        reason: 'resolve-failed',
+        message: 'Codex credential routing requires an authenticated user identity.',
+      };
+    }
+    return {
+      ok: true,
+      unixUser: resolved.unixUser,
+      reportedUnixUser: resolved.reportedUnixUser,
+      userId,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -142,14 +162,18 @@ export async function persistVerifiedCodexAuth(options: {
   app: AppLike;
   normalized: string;
   targetUnixUser: string | null;
+  reportedUnixUser: string | null;
   userId: UserID;
   authUser: NonNullable<AuthenticatedParams['user']>;
 }): Promise<CodexAuthSummary> {
-  const { app, normalized, targetUnixUser, userId, authUser } = options;
+  const { app, normalized, targetUnixUser, reportedUnixUser, userId, authUser } = options;
 
   let summary: CodexAuthSummary;
   try {
-    summary = await writeCodexAuthViaExecutor(normalized, targetUnixUser);
+    summary = await writeCodexAuthViaExecutor(normalized, targetUnixUser, {
+      reportedUnixUser,
+      userId,
+    });
   } catch (err) {
     // The error may carry sudo/bash stderr; log a class-level summary only
     // so token material (or its absence) never reaches daemon logs.

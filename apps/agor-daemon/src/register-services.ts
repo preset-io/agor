@@ -12,6 +12,7 @@ import {
   type AgorConfig,
   isDeploymentAgenticToolAvailable,
   PublicBaseUrlNotConfiguredError,
+  type ResolvedDeploymentConfig,
   requirePublicBaseUrl,
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
@@ -66,6 +67,7 @@ import {
   retainExecutorContainmentFence,
   trackExecutorProcess,
 } from './executor-tracking.js';
+import { assertHaTaskPermissionSupported, isConstrainedHa } from './ha-support.js';
 import { shouldRegisterLocalHostOperations } from './host/availability.js';
 import { createLocalDaemonHostOperations } from './host/local/local-daemon-host-operations.js';
 import { registerOpenCodeServices } from './integrations/opencode/index.js';
@@ -143,7 +145,7 @@ import { createTenantAgenticToolSettingsService } from './services/tenant-agenti
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
-import { userRoomName } from './setup/socketio.js';
+import { tenantChannelName, userRoomName } from './setup/socketio.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
@@ -172,6 +174,7 @@ export interface RegisterServicesContext {
   branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
+  deployment: ResolvedDeploymentConfig;
 }
 
 /**
@@ -366,18 +369,24 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ['created','updated','patched','removed'], so without this it
   // fires locally on the server's EventEmitter and never reaches any
   // socket. See queryArtifactRuntime in services/artifacts.ts.
-  app.use('/artifacts', createArtifactsService(db, app), {
-    events: ['agor-query'],
-    methods: [
-      'find',
-      'get',
-      'create',
-      'patch',
-      'remove',
-      'publishFromExecutor',
-      'validateFromExecutor',
-    ],
-  });
+  app.use(
+    '/artifacts',
+    createArtifactsService(db, app, {
+      runtimeIntrospectionEnabled: !isConstrainedHa(ctx.deployment),
+    }),
+    {
+      events: ['agor-query'],
+      methods: [
+        'find',
+        'get',
+        'create',
+        'patch',
+        'remove',
+        'publishFromExecutor',
+        'validateFromExecutor',
+      ],
+    }
+  );
   app.use('/board-comments', createBoardCommentsService(db));
 
   // ============================================================================
@@ -502,7 +511,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // The OAuth callback middleware is registered in boot.ts; here we set the handler
   {
     const mcpResult = await registerMCPServices(ctx, sessionsService);
-    oauthCallbackHandler = mcpResult.oauthCallbackHandler;
+    oauthCallbackHandler = isConstrainedHa(ctx.deployment)
+      ? (_req, res) => {
+          res.status(503).json({
+            code: 'HA_FEATURE_UNSUPPORTED',
+            feature: 'mcpOAuth',
+            message:
+              'MCP OAuth callbacks are unavailable in HA support profile constrained-active-active',
+          });
+        }
+      : mcpResult.oauthCallbackHandler;
   }
 
   // ============================================================================
@@ -551,7 +569,13 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     });
 
     const uiUrl = ctx.bundledUiAvailable ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
-    registerGitHubAppSetupRoutes(app, { uiUrl, daemonUrl, db, config: ctx.config });
+    registerGitHubAppSetupRoutes(app, {
+      uiUrl,
+      daemonUrl,
+      db,
+      config: ctx.config,
+      setupEnabled: !isConstrainedHa(ctx.deployment),
+    });
   }
 
   // ============================================================================
@@ -817,6 +841,10 @@ function createExecuteHandler(
       params,
       deploymentAgenticToolPolicy
     );
+    assertHaTaskPermissionSupported(ctx.deployment, {
+      session,
+      requestedMode: data.permissionMode,
+    });
     const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
     if (
       session.agentic_tool_preset_id &&
@@ -1047,6 +1075,8 @@ function createExecuteHandler(
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
+        branch_id: session.branch_id,
+        user_id: userId,
         // Mode-resolved identity for the execution substrate: the sudo user in
         // insulated/strict, the session's unix_username in delegated (no sudo),
         // and unset in simple. Supersedes the interim
@@ -1469,13 +1499,16 @@ async function registerMCPServices(
       tokenResolve,
       tokenReject,
     });
+    const flowTenantId = pendingOAuthFlows.get(context.state)?.tenantId;
 
     if (app.io) {
       const payload = { authUrl: context.authorizationUrl };
       if (opts.socketId) {
         app.io.to(opts.socketId).emit('oauth:open_browser', payload);
+      } else if (flowTenantId && opts.userId) {
+        app.io.to(userRoomName(flowTenantId, opts.userId)).emit('oauth:open_browser', payload);
       } else {
-        app.io.emit('oauth:open_browser', payload);
+        console.warn('[OAuth] no tenant-scoped recipient for oauth:open_browser; skipping emit');
       }
     }
 
@@ -1607,10 +1640,12 @@ async function registerMCPServices(
           //      for normal flows but keeps single-tab UX working).
           //   4. Otherwise log + skip; the UI will catch up on its next
           //      `mcp-servers` fetch.
-          if (oauthEvent.oauth_mode === 'per_user' && pendingFlow.userId) {
-            app.io.to(userRoomName(pendingFlow.userId)).emit('oauth:completed', oauthEvent);
-          } else if (oauthEvent.oauth_mode === 'shared') {
-            app.io.emit('oauth:completed', oauthEvent);
+          if (oauthEvent.oauth_mode === 'per_user' && pendingFlow.userId && pendingFlow.tenantId) {
+            app.io
+              .to(userRoomName(pendingFlow.tenantId, pendingFlow.userId))
+              .emit('oauth:completed', oauthEvent);
+          } else if (oauthEvent.oauth_mode === 'shared' && pendingFlow.tenantId) {
+            app.io.to(tenantChannelName(pendingFlow.tenantId)).emit('oauth:completed', oauthEvent);
           } else if (pendingFlow.socketId) {
             app.io.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);
           } else {
@@ -2262,9 +2297,12 @@ async function registerMCPServices(
       // Notify all of the user's tabs so the UI can flip pills to "needs auth"
       // immediately — mirrors the additive `oauth:completed` event.
       if (result.success && params?.user?.user_id) {
-        app.io
-          .to(userRoomName(params.user.user_id))
-          .emit('oauth:disconnected', { mcp_server_id: data.mcp_server_id });
+        const tenantId = tenantIdFromParams(params);
+        if (tenantId) {
+          app.io
+            .to(userRoomName(tenantId, params.user.user_id))
+            .emit('oauth:disconnected', { mcp_server_id: data.mcp_server_id });
+        }
       }
 
       return result;

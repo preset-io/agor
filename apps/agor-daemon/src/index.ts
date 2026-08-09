@@ -33,6 +33,7 @@ import {
   loadConfig,
   loadConfigFromFile,
   renderGitConfigParametersForLog,
+  resolveDeploymentConfig,
   resolveEffectiveConfig,
   resolveGitConfigParameters,
   resolveMultiTenancyConfig,
@@ -55,6 +56,7 @@ import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { scopeExecutorRuntimeAuth } from './auth/executor-runtime-scope.js';
 import { createRequireAuthHook } from './auth/require-auth.js';
+import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
@@ -180,6 +182,12 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     };
   }
 
+  // HA is an explicit, validated topology boundary. REDIS_URL alone never
+  // changes standalone behavior. Resolve this after immutable environment
+  // projection so every startup consumer observes one effective snapshot.
+  const deployment = resolveDeploymentConfig(config, process.env, DB_PATH);
+  console.log(`🌐 Deployment mode: ${deployment.mode}`);
+
   const multiTenancy = resolveMultiTenancyConfig(config);
   console.log(
     `🏢 Multi-tenancy: mode=${multiTenancy.mode} tenant=${multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : 'auth-resolved'}`
@@ -301,6 +309,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     },
     generateBootId: generateId,
   });
+  const realtimeRuntime =
+    deployment.mode === 'ha'
+      ? new RedisRealtimeRuntime(deployment.redis, distributedWorkIdentity)
+      : undefined;
 
   // Configure how many reverse proxies we trust in front of the daemon.
   // Default 0 = ignore X-Forwarded-* entirely (so a client cannot spoof their
@@ -576,6 +588,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       break;
   }
 
+  // HA is unavailable without Redis. Establish both adapter clients before
+  // constructing Socket.IO or accepting any HTTP traffic.
+  await realtimeRuntime?.connect();
+
   const socketIOConfig = createSocketIOConfig(app, {
     corsOrigin,
     jwtSecret,
@@ -589,7 +605,11 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     // welcome event on every connect (and reconnect), so UI tabs can detect
     // FE/BE drift after a deploy without waiting for the next /health poll.
     buildInfo: DAEMON_BUILD_INFO,
+    workIdentity: distributedWorkIdentity,
     multiTenancy,
+    ...(realtimeRuntime
+      ? { adapter: realtimeRuntime.adapter, onServerCreated: (io) => realtimeRuntime.attach(io) }
+      : {}),
   });
   app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
   configureChannels(app, { multiTenancy });
@@ -676,6 +696,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     branchRbacEnabled,
     allowSuperadmin,
     requireAuth,
+    deployment,
   });
 
   // --------------------------------------------------------------------------
@@ -695,6 +716,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     branchRepository: services.branchRepository,
     usersRepository: services.usersRepository,
     sessionsRepository: services.sessionsRepository,
+    realtimeRelay: realtimeRuntime,
+    deployment,
   });
 
   // --------------------------------------------------------------------------
@@ -714,6 +737,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     DAEMON_VERSION,
     DAEMON_BUILD_INFO,
     resolvedSecurity,
+    realtimeRuntime,
+    distributedWorkIdentity,
+    deployment,
     sessionsService: services.sessionsService,
     messagesService: services.messagesService,
     boardsService: services.boardsService,
@@ -739,9 +765,11 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
     distributedWorkIdentity,
-    // Explicit compatibility boundary until daemon HA configuration lands.
-    // Shared PostgreSQL deployments must opt into `shared_postgres` rather
-    // than silently changing standalone restart semantics.
-    taskRuntimePolicy: 'standalone',
+    // PostgreSQL leases/claims and executor-token authority make the merged
+    // runtime workers replica-independent. Interactive permission modes remain
+    // separately fail-closed until durable decision replay exists.
+    taskRuntimePolicy: deployment.mode === 'ha' ? 'shared_postgres' : 'standalone',
+    environmentHealthMonitorPolicy: deployment.mode === 'ha' ? 'disabled-ha' : 'standalone',
+    realtimeRuntime,
   });
 }

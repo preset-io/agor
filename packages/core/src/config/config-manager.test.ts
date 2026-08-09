@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
   createInitialConfig,
+  ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
@@ -1489,6 +1490,7 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     expect(resolved).toEqual({
       defaultMode: 'worktree',
       allowedModes: ['worktree', 'clone'],
+      allowShallowClones: true,
     });
   });
 
@@ -1564,5 +1566,21 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     // v0.20+ default allows both — operators have to opt out to forbid clone.
     expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
     expect(() => ensureBranchStorageModeAllowed('clone')).not.toThrow();
+  });
+
+  it('can require full clone-mode branches', async () => {
+    await writeConfig({
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['clone'],
+          allow_shallow_clones: false,
+        },
+      },
+    });
+
+    expect(resolveBranchStorageConfig().allowShallowClones).toBe(false);
+    expect(() => ensureBranchCloneDepthAllowed(undefined)).not.toThrow();
+    expect(() => ensureBranchCloneDepthAllowed(1)).toThrow(/full clone/);
   });
 });

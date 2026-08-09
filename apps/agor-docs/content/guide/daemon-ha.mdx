@@ -1,0 +1,247 @@
+---
+title: Daemon High Availability
+description: Run the constrained active-active daemon topology with PostgreSQL, Redis fanout, and sticky Socket.IO ingress.
+---
+
+# Daemon high availability
+
+Agor daemon HA is an **explicit, constrained deployment mode**. Independently started daemon replicas share PostgreSQL as the durable state and coordination plane and Redis as the Socket.IO/Feathers notification plane. Redis is not a task lock, tenant authority, or durable event log.
+
+The accepted profile is `constrained-active-active`. Adding `REDIS_URL` to a standalone daemon does nothing: HA activates only with `deployment.mode: ha` (or `AGOR_DEPLOYMENT_MODE=ha`) and fails startup unless every required assertion passes.
+
+> The checked-in runnable variant is static single-tenant. Realtime publication is tenant-qualified and has adversarial cross-tenant contract tests, but `required_from_auth` multi-tenant HA is not yet operationally certified.
+
+## Required topology
+
+Every replica needs:
+
+- the same PostgreSQL database and completed HA migrations;
+- the same private Redis deployment and a deployment-unique Redis prefix;
+- identical, explicitly supplied `AGOR_JWT_SECRET` and `AGOR_MASTER_SECRET` values (32+ characters);
+- Engine.IO session affinity at ingress while polling remains enabled;
+- `execution.allow_web_terminal: false`;
+- `execution.managed_envs_execution_mode: webhook-only`; and
+- one explicit execution topology.
+
+### Executor storage contract
+
+`shared_filesystem` is **not a blanket requirement for every HA or Agor Cloud deployment**. It is an assertion tied to `execution_topology`:
+
+- `shared-local`: either daemon may launch a local executor against a branch working copy, so the working-copy/repository paths must exist at the same path on both daemon containers. The Compose smoke stack mounts `agor-ha-user-home` at `/home/agor` for CLI-native credential files and a nested, stable `agor-ha-home` at `/home/agor/.agor` for registered repositories and branch workspaces. Keeping the historical Agor volume name also preserves the correspondence between PostgreSQL absolute paths and files across variant upgrades. These volumes preserve files, not the executor process: this topology does not by itself guarantee that an executor survives loss of its container. `shared_filesystem: true` is required.
+- `external`: daemon pods do not own tenant workspaces. `execution.executor_command_template` sends work to the external execution substrate. `shared_filesystem` must be false/omitted. This is the intended Cloud shape.
+
+HA also requires an explicit `execution.executor_storage` contract. These values do not create
+volumes or mounts; they tell Agor what the launcher or Compose topology guarantees for every
+executor invocation:
+
+- `user_home`: `replica-local`, `shared`, or `persistent-per-user`;
+- `branch_workspace`: `replica-local`, `shared`, or `persistent-per-branch`; and
+- `base_repository`: `replica-local`, `shared`, or `unavailable`.
+
+`persistent-per-user` means the same isolated home is selected from trusted tenant/user identity
+for auth helpers, Tasks, replicas, and restarts. `persistent-per-branch` means the same durable
+working copy is mounted at the absolute `branch.path` recorded in PostgreSQL. Executor homes and
+branches may be separate volumes; they do not need to be one global shared filesystem.
+
+When `base_repository: unavailable`, native worktrees are invalid because their `.git` file points
+into the registered base repository's `.git/worktrees` metadata. Agor therefore requires
+clone-only branch policy. A clone-mode branch carries its own `.git` directory and can be mounted
+without the base checkout. Requiring full rather than shallow clones is a separate policy.
+
+PostgreSQL already owns repo/branch metadata and most coordination, but local worktrees, agent runtime homes, and tools that inspect a working directory are still a filesystem tail. The flag prevents a two-daemon deployment from claiming safe local execution when only one replica can see those paths. `config.yaml` is separately mounted read-only in the example because current bootstrap treats an existing config as immutable.
+
+## How sticky Socket.IO ingress works
+
+A persisted WebSocket is an open TCP connection terminated by one daemon through the proxy. The proxy does not copy live connection state to another daemon. Redis lets either daemon deliver packets to clients attached to the other daemon.
+
+Before WebSocket upgrade, Engine.IO may use multiple HTTP polling requests with one session ID. All `/socket.io/` requests for that logical connection must therefore reach the same daemon. The example nginx configuration uses consistent client-IP hashing for `/socket.io/`, forwards upgrade headers, and sets a 120-second proxy timeout (above Agor's 85-second heartbeat window). Ordinary HTTP/REST uses a separate round-robin upstream and is not sticky.
+
+If a daemon dies, its existing sockets close; their Engine.IO session IDs do not migrate. Socket.IO/Feathers clients reconnect and reauthenticate to a healthy daemon, then refetch PostgreSQL-backed state. The Redis adapter does not provide connection-state recovery or missed-event replay.
+
+For Agor Cloud, configure the platform load balancer or ingress so that:
+
+1. `/socket.io/` supports polling and WebSocket upgrades;
+2. affinity is cookie-, connection-, or source-based for the whole Engine.IO session (cookie affinity is preferable when many clients share one NAT address);
+3. idle/read timeouts exceed 85 seconds;
+4. only ready pods receive new sessions; and
+5. ordinary REST routes remain free to balance across ready pods; and
+6. authentication, refresh, and external-launch abuse limits are enforced at a shared edge/WAF layer rather than multiplied per daemon.
+
+The Compose IP hash is deliberately minimal and testable, not a recommendation for large NAT-heavy fleets.
+
+> **Compose readiness limitation:** Docker health checks gate the example's initial nginx startup, but open-source nginx does not continuously consume later Docker health-state changes for its static upstream list. It can passively fail over after a connection error, but `/readyz: 503` alone does not remove a still-listening daemon from this smoke ingress. Production ingress/orchestration must actively route only to ready replicas as required above.
+
+## Runnable Compose smoke variant
+
+`docker-compose.ha.yml` uses explicitly named `daemon-a` and `daemon-b`, PostgreSQL, fanout-only Redis (RDB and AOF disabled), a one-shot migration service, and nginx. It does not use `deploy.replicas`. Because the example has exactly one nginx ingress, nginx also provides a coarse shared per-IP limiter for authentication/refresh/launch paths and logs the selected upstream. That limiter proves the fleet choke-point topology; it is not a credential-aware production quota and would not be shared across multiple nginx replicas.
+
+```bash
+export AGOR_REDIS_KEY_PREFIX=my-company-production
+export AGOR_JWT_SECRET="$(openssl rand -hex 32)"
+export AGOR_MASTER_SECRET="$(openssl rand -hex 32)"
+export AGOR_ADMIN_PASSWORD="$(openssl rand -base64 24)"
+export HA_PORT=3030
+export AGOR_HA_PUBLIC_ORIGIN=http://localhost:3030
+
+docker compose -f docker-compose.ha.yml -p agor-ha up -d --build
+docker compose -f docker-compose.ha.yml -p agor-ha ps
+curl -fsS http://localhost:3030/livez
+curl -fsS http://localhost:3030/readyz
+docker compose -f docker-compose.ha.yml -p agor-ha logs --tail=150 daemon-a daemon-b redis ingress
+```
+
+`AGOR_HA_PUBLIC_ORIGIN` must be the exact scheme, host, and port that browsers use for the
+ingress. The Compose file applies it as both the daemon public base URL and the credentialed CORS
+origin on every replica. The checked-in `.agor.yml` `ha` variant renders this value from Agor's
+host address and branch port automatically.
+
+The Agor-managed `ha` variant is intentionally a disposable development environment and uses the
+same `admin@agor.live` / `admin` login as the other development variants. The Compose file enables
+that weak credential only through an explicit development-only gate and runs with
+`NODE_ENV=development`; the daemon refuses the gate under `NODE_ENV=production`. Do not expose
+this smoke stack to an untrusted network or copy that gate into a production deployment. Direct
+Compose use should omit the gate, run in production mode, and provide a strong generated
+`AGOR_ADMIN_PASSWORD` as shown above.
+
+Compose volumes survive `up` and ordinary Agor environment stop/start operations. In particular,
+`AGOR_ADMIN_PASSWORD` is bootstrap-only: changing it after the users table exists does not reset
+the admin password. Use the existing password or explicitly nuke the disposable smoke environment
+before expecting the checked-in development credential to bootstrap again.
+
+Keep generated secrets in a secret manager and rotate them as an all-replica operation. The example's unencrypted Redis connection stays on its private Compose network. Across a shared or untrusted network, use `rediss://`, certificate verification, Redis ACL authentication, private networking/firewalls, and credentials limited to the required Pub/Sub/control commands and deployment channels.
+
+## Configuration contract
+
+```yaml
+deployment:
+  mode: ha
+  redis:
+    # Prefer REDIS_URL when credentials are present.
+    url: rediss://redis.internal:6380/0
+    key_prefix: my-company-production
+    connect_timeout_ms: 5000
+    startup_timeout_ms: 15000
+    request_timeout_ms: 5000
+    reconnect_base_delay_ms: 100
+    reconnect_max_delay_ms: 2000
+  ha:
+    support_profile: constrained-active-active
+    execution_topology: external # or shared-local
+    ingress_affinity: true
+execution:
+  executor_command_template: 'cell launch --tenant {tenant_id} -- {command}'
+  executor_storage:
+    user_home: persistent-per-user
+    branch_workspace: persistent-per-branch
+    base_repository: unavailable
+  branch_storage:
+    default_mode: clone
+    allowed_modes: [clone]
+    allow_shallow_clones: false
+  allow_web_terminal: false
+  managed_envs_execution_mode: webhook-only
+database:
+  dialect: postgresql
+daemon:
+  # Required for external executors to call/reconnect through the daemon fleet.
+  public_url: https://agor-daemon.internal.example
+```
+
+For `shared-local`, replace the external template with `shared_filesystem: true` and declare the
+actual storage guarantees; its executor callback defaults to the local daemon. The Compose smoke
+stack declares all three surfaces `shared`: `agor-ha-user-home` mounts `/home/agor`, while the
+historical `agor-ha-home` is nested at `/home/agor/.agor` so PostgreSQL workspace paths remain
+valid across upgrades. Short-lived auth-file helpers and Tasks on either daemon therefore see the
+same CLI and Agor workspace state. This is one shared
+Unix execution identity, not per-user isolation. Codex import/logout may use it with the same
+simple-mode credential-sharing caveat as standalone; the process-local device-code poller remains
+gated. External
+topology requires an HTTP(S) `daemon.public_url` that the execution
+substrate can reach through the daemon fleet. Environment overrides include
+`AGOR_DEPLOYMENT_MODE`, `AGOR_HA_SUPPORT_PROFILE`, `AGOR_HA_EXECUTION_TOPOLOGY`,
+`AGOR_HA_SHARED_FILESYSTEM`, `AGOR_HA_INGRESS_AFFINITY`, `REDIS_URL`,
+`AGOR_REDIS_KEY_PREFIX`, and the `AGOR_REDIS_*_MS` timeout/backoff variables. Storage guarantees
+remain YAML-only so an accidental environment toggle cannot claim that mounts exist.
+
+The Redis prefix separates deployments operationally. It is never tenant authorization.
+
+## Health and failure semantics
+
+| Event | `/livez` | `/readyz` | Behavior |
+| --- | --- | --- | --- |
+| Healthy | 200 | 200 | Both Redis clients are ready, the adapter is attached, and PostgreSQL answers. |
+| Redis unavailable at boot | no listener | no listener | HA startup fails; the daemon never degrades into an isolated standalone fanout node. |
+| Redis/adapter lost after boot | 200 | 503 | The process stays live for diagnosis but must leave ingress rotation. Already-committed PostgreSQL writes remain durable; notifications during the gap are not replayed. |
+| Redis recovers | 200 | 200 after pub/sub are ready | ioredis reconnects with capped exponential jitter and restores subscriptions. Clients refetch durable state. |
+| One daemon exits | survivor 200 | survivor 200 | Existing sockets on the failed daemon reconnect through ingress. New REST requests use the survivor. |
+| PostgreSQL unavailable | 200 | 503 | Fleet is live but unavailable for application traffic and durable authority checks fail closed. |
+| Graceful shutdown | 200 until exit | 503 as drain begins | Readiness drops before workers/sockets drain; Redis clients close with a bounded quit/disconnect fallback. |
+
+Realtime events are at-most-once notifications across an outage window. Exactly-once durable mutation, work claims, task identity, and gateway occurrence admission are PostgreSQL concerns.
+
+## Security and event inventory
+
+- The maintained `@socket.io/redis-adapter` carries complete Socket.IO packets across trusted Redis Pub/Sub. Redis traffic is neither signed nor encrypted by the adapter.
+- Feathers channel membership is process-local and is not replicated by the adapter. Agor sends a bounded JSON relay envelope (`tenantId`, service path/event metadata, dispatched payload) with `serverSideEmit`. Each receiving daemon reruns tenant and branch/user publication logic against its own connections before entering the Feathers dispatcher.
+- Authentication, refresh, raw session-token/API-key resolution, external-launch credentials, MCP OAuth/token endpoints, Codex/OpenCode auth, terminals, and secret-derived Artifact query results are denied from the Feathers Redis relay. After-hooks' redacted `dispatch` value is relayed instead of an unredacted service result.
+- Native cross-replica packets in this profile are `cursor-moved`, `cursor-left`, `presence-updated`, and tenant-scoped `repo:cloneError`. `server-info` is socket-local. OAuth packets are behind unsupported HA flows; terminal PTY traffic is disabled and must never enter Redis.
+- Ordinary authorized Feathers data, including transcript/message streaming, may traverse the private Redis plane. Do not deliberately place bearer/API/executor/MCP/terminal tokens, OAuth/PKCE/device credentials, GitHub setup state, external-launch credentials, Artifact grants/environment, or secret-derived results in realtime payloads.
+- Board-presence joins call the authenticated Feathers `boards.get` path before joining a tenant-qualified native room. Authentication replacement/logout revokes prior tenant/user/board room membership.
+- Per-socket and daemon-local HTTP rate limits are process-local best effort, not a fleet security quota. The single-ingress Compose limiter is a coarse topology proof. Production must enforce security-sensitive quotas at a shared edge/WAF or durable authority layer.
+
+No current product cross-replica notification requests client broadcast acknowledgements. Feathers method callbacks terminate on the daemon that handled the method. The adapter supports broadcast acknowledgements, but any future product event using them needs explicit multi-replica tests before support is claimed.
+
+## Current support matrix
+
+| Capability | Constrained HA status |
+| --- | --- |
+| Stateless REST and stateless MCP | Supported, subject to normal auth/tenant policy. Stateful MCP session IDs, GET, and DELETE fail closed. |
+| Executor-session JWTs | Supported on PostgreSQL through durable SHA-256 fingerprint/JTI authority, exact claim matching, revocation, expiry, and use counts. SQLite remains process-local and cannot boot HA. |
+| Task run/prompt | Supported only for modes proven not to create a local permission waiter: Claude `bypassPermissions`; Copilot `bypassPermissions`/`allow-all`; Gemini `yolo`; Codex approval policy `never`; current autonomous Cursor SDK. OpenCode and other interactive modes fail with `503 HA_FEATURE_UNSUPPORTED`. In-flight executor handoff additionally requires an executor substrate that survives the owner daemon and a callback URL routed to the fleet; the checked-in Compose smoke stack does not prove that handoff. |
+| Executor storage | HA startup requires explicit user-home, branch-workspace, and base-repository assertions. `base_repository: unavailable` requires clone-only creation policy. Auditing historical active worktree rows and replacing the current physical base-repo clone during remote-repo registration remain Cloud rollout prerequisites. |
+| Permission decisions | Unsupported until durable decision read-after-gap/replay exists. |
+| Session queue, scheduler, task-runtime reconciler | Supported on PostgreSQL with all-daemon discovery and database claims/fences; no leader election. |
+| Completion callbacks and widgets | Once a callback's deterministic queued Task is admitted, peer queue workers converge on one dispatch claim. Widget submit/dismiss uses a durable opaque `pending -> resolving` claim before side effects. A daemon death after source Task completion but before callback Task admission is not yet durably replayed; health reports `completionCallbackPreAdmissionRecovery: false`. Ambiguous widget side effects remain `resolving` and are not automatically replayed. |
+| Knowledge embedding indexer | Supported with PostgreSQL claims/fences; it is a no-op unless semantic indexing is configured. |
+| Gateway listeners | Slack, GitHub, and Shortcut supported on PostgreSQL with leases and occurrence fencing. Teams and unimplemented providers fail closed. The legacy generic inbound channel-key route is not a durable HA ingress. Provider-side acknowledgement/send crash gaps remain documented at-least-once windows. |
+| Feathers events and native tenant/user/board rooms | Supported through the audited relay/adapter paths. Auth-resolved multi-tenant operations still need end-to-end certification. |
+| Web terminal | Startup-blocked; PTY ownership and bytes remain process-affine. |
+| Managed environments | Local commands are startup-blocked; use webhook-only. The legacy unfenced environment HealthMonitor is not constructed in HA and authenticated health reports `environmentHealthMonitor: false`. External webhook execution and its own monitoring plane must provide the production behavior. |
+| MCP OAuth/callback and OAuth-capable MCP discovery, GitHub install state, Codex device auth, OpenCode OAuth/native auth | Blocked as process-affine credential/state flows. Codex device attempts still live in one daemon's timer/Map. |
+| Codex auth-file check/import/logout | Enabled only when `executor_storage.user_home` is `shared` or `persistent-per-user`; the operation runs through the executor and Redis never carries the file/tokens. The Compose profile uses one shared simple-mode Unix home; Cloud must use tenant/user-isolated persistent homes. |
+| Synchronous Artifact runtime introspection | Blocked; per-viewer wait/query state is process-local and may be secret-derived. Durable Artifact metadata remains available. |
+| External launch | Stateless calls remain available, but credentials/results are excluded from Redis and deployment-specific execution/auth behavior still requires operator validation. |
+
+## Rollout and rollback checklist
+
+1. Back up PostgreSQL and any shared-local workspace volume.
+2. Apply all migrations before admitting new-version daemons. Use an all-at-once cohort replacement; old executor tokens without authority rows fail closed.
+3. Provision private Redis with health monitoring, ACL/TLS/network controls, and a unique prefix. Do not rely on Redis for persistence/replay.
+4. Distribute identical stable config and secrets. Set stable `AGOR_DAEMON_INSTANCE_ID` values for diagnostics only.
+5. Choose and verify `shared-local` or `external`; declare the executor storage contract from actual mounts, and do not set `shared_filesystem` merely because HA is enabled. Before using `base_repository: unavailable`, inventory historical branches for worktree rows.
+6. Verify `/socket.io/` polling-to-WebSocket affinity and REST distribution separately.
+7. Configure `/readyz` for traffic removal and `/livez` for process restart decisions.
+8. Confirm an authenticated Feathers `health.find` on every replica reports `mode: ha`, `supportProfile: constrained-active-active`, the expected fine-grained capability booleans, distinct instance/boot diagnostics, and ready Redis clients. In particular, do not interpret `completionCallbackDurableAdmission: true` as pre-admission recovery or `gatewayListeners: true` as outbound exactly-once; the corresponding negative capability flags remain visible. `codexCredentialFiles` reflects the declared home consistency while `codexDeviceAuth` remains false. `environmentHealthMonitor: false` confirms that the legacy unfenced monitor is absent. The public HTTP `GET /health` intentionally exposes only the configured instance label and dependency summary.
+9. Exercise daemon loss, Redis loss/recovery, cross-replica authorized delivery, and negative authorization tests before production traffic.
+10. Validate only the gateway providers and task permission modes you plan to enable; “daemon starts” is not full product HA certification.
+
+To roll back, stop the HA cohort, remove all but one daemon from ingress, set `deployment.mode: standalone`, and restart that daemon against PostgreSQL. `REDIS_URL` may stay present because standalone ignores it. Do not rotate shared secrets or switch database engines during an emergency rollback. Process-affine features should be re-enabled only after the all-at-once transition is complete.
+
+## Opt-in integration harness
+
+The repository harness is intentionally not part of the default test run. Against only the checked-in HA Compose project it proves two ready identities, absence of the environment HealthMonitor on both replicas, activation of shared Task queue/reconciler loops, REST distribution, an actual `429` from the single-ingress sensitive-route limiter, stateless MCP initialization plus stateful rejection, polling upgrade affinity, authorized Feathers and native-room delivery with a bounded duplicate-observation window, anonymous denial, the split Codex contract (auth-file import admitted, device polling blocked), authenticated daemon reconnect/restart, and Redis readiness/liveness loss and recovery. Cleanup runs in `finally`, restores stopped branch services, and removes any created API key or board after both success and assertion failure.
+
+```bash
+export COMPOSE_PROJECT_NAME=agor-ha-integration
+export AGOR_REDIS_KEY_PREFIX=agor-ha-integration
+export AGOR_JWT_SECRET='replace-with-32-plus-stable-characters'
+export AGOR_MASTER_SECRET='replace-with-32-plus-stable-characters'
+export AGOR_ADMIN_PASSWORD='replace-with-a-bootstrap-password'
+export AGOR_HA_PUBLIC_ORIGIN=http://localhost:3030
+export AGOR_HA_INTEGRATION=1
+export AGOR_HA_INTEGRATION_START=1
+export AGOR_HA_INTEGRATION_FAILURES=1
+pnpm test:ha:docker
+```
+
+The source image intentionally contains no authenticated provider CLI/runtime, so the live harness does not fake an agent Task. PostgreSQL-gated daemon tests instead construct two queue workers/Task services on independent PostgreSQL clients, elect one dispatch intent for one admitted Task, exercise executor-token authentication/reconnect/revocation/bounded use through two Feathers apps backed by independent PostgreSQL clients, and exercise two reconcilers. Passing this harness is a transport/deployment smoke result, not a claim that the shared-local container preserves an in-flight executor, auth-resolved multi-tenancy, every gateway provider, every task permission mode, or the blocked process-affine features are HA-safe.

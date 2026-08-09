@@ -142,34 +142,47 @@ describe('executor token Feathers authentication contract', () => {
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
   'SessionTokenService authority (PostgreSQL)',
   () => {
-    let rawDb: RawDatabase;
-    let db: TenantScopeAwareDatabase;
+    let rawDbA: RawDatabase;
+    let rawDbB: RawDatabase;
+    let dbA: TenantScopeAwareDatabase;
+    let dbB: TenantScopeAwareDatabase;
     let now: Date;
     let daemonA: SessionTokenService;
     let daemonB: SessionTokenService;
 
     beforeAll(async () => {
-      rawDb = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
-      await initializeDatabase(rawDb);
-      if (!isPostgresDatabase(rawDb)) throw new Error('PostgreSQL test requires PostgreSQL');
-      db = createTenantScopedDatabaseProxy(rawDb, {
+      rawDbA = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      rawDbB = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      await initializeDatabase(rawDbA);
+      if (!isPostgresDatabase(rawDbA) || !isPostgresDatabase(rawDbB)) {
+        throw new Error('PostgreSQL test requires PostgreSQL');
+      }
+      dbA = createTenantScopedDatabaseProxy(rawDbA, {
         requireScope: true,
-        label: 'executor session token integration test',
+        label: 'executor session token daemon A integration test',
+      });
+      dbB = createTenantScopedDatabaseProxy(rawDbB, {
+        requireScope: true,
+        label: 'executor session token daemon B integration test',
       });
       now = new Date();
-      daemonA = makeService(db, () => now);
-      daemonB = makeService(db, () => now);
+      daemonA = makeService(dbA, () => now);
+      daemonB = makeService(dbB, () => now);
     });
 
     afterAll(async () => {
       daemonA?.close();
       daemonB?.close();
-      await (rawDb as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
+      await Promise.all(
+        [rawDbA, rawDbB].map((database) =>
+          (database as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end()
+        )
+      );
     });
 
     it('issues on daemon A and authenticates fresh Feathers connections on daemon B', async () => {
       const tenantId = `executor-token-peer-${randomUUID()}`;
-      const token = await runWithTenantDatabaseScope(db, tenantId, () =>
+      const token = await runWithTenantDatabaseScope(dbA, tenantId, () =>
         daemonA.generateToken('session-peer', 'user-peer', {
           taskId: 'task-peer',
           branchId: 'branch-peer',
@@ -220,7 +233,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           ?.accessToken
       ).toBe('string');
 
-      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      await runWithTenantDatabaseScope(dbB, tenantId, async (scoped) => {
         const result = await (
           scoped as unknown as { execute(query: unknown): Promise<unknown[]> }
         ).execute(
@@ -238,10 +251,83 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
+    it('enforces reconnect, peer revocation, and bounded use through two Feathers apps', async () => {
+      const tenantId = `executor-token-two-app-${randomUUID()}`;
+      const authenticationA = makeExecutorAuthenticationService(daemonA);
+      const authenticationB = makeExecutorAuthenticationService(daemonB);
+      expect(authenticationA).not.toBe(authenticationB);
+      expect((rawDbA as RawDatabase & { $client: unknown }).$client).not.toBe(
+        (rawDbB as RawDatabase & { $client: unknown }).$client
+      );
+      const backendIds = await Promise.all(
+        [dbA, dbB].map((database) =>
+          runWithTenantDatabaseScope(database, tenantId, async (scoped) => {
+            const result = await (
+              scoped as unknown as {
+                execute(query: unknown): Promise<Array<{ backend_pid: number }>>;
+              }
+            ).execute(sql`SELECT pg_backend_pid() AS backend_pid`);
+            return result[0]?.backend_pid;
+          })
+        )
+      );
+      expect(backendIds[0]).toEqual(expect.any(Number));
+      expect(backendIds[1]).toEqual(expect.any(Number));
+      expect(backendIds[0]).not.toBe(backendIds[1]);
+
+      const reconnectableToken = await runWithTenantDatabaseScope(dbA, tenantId, () =>
+        daemonA.generateToken('session-two-app', 'user-two-app', {
+          taskId: 'task-two-app',
+          branchId: 'branch-two-app',
+          maxUses: -1,
+        })
+      );
+
+      for (let connectionNumber = 0; connectionNumber < 2; connectionNumber += 1) {
+        const connection: Record<string, unknown> = {};
+        await expect(
+          authenticationB.create(
+            { strategy: 'jwt', accessToken: reconnectableToken },
+            { connection }
+          )
+        ).resolves.toMatchObject({
+          session_id: 'session-two-app',
+          task_id: 'task-two-app',
+          user: { user_id: 'user-two-app' },
+        });
+        expect(connection).toHaveProperty('authentication.strategy', 'jwt');
+      }
+
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, () => daemonA.revokeToken(reconnectableToken))
+      ).resolves.toBe(true);
+      await expect(
+        authenticationB.create(
+          { strategy: 'jwt', accessToken: reconnectableToken },
+          { connection: {} }
+        )
+      ).rejects.toThrow();
+
+      const oneUseToken = await runWithTenantDatabaseScope(dbA, tenantId, () =>
+        daemonA.generateToken('session-one-use', 'user-two-app', {
+          taskId: 'task-one-use',
+          branchId: 'branch-two-app',
+          maxUses: 1,
+        })
+      );
+      const claims = await Promise.allSettled(
+        [authenticationA, authenticationB].map((authentication) =>
+          authentication.create({ strategy: 'jwt', accessToken: oneUseToken }, { connection: {} })
+        )
+      );
+      expect(claims.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+      expect(claims.filter(({ status }) => status === 'rejected')).toHaveLength(1);
+    });
+
     it('commits authority independently before an enclosing domain transaction returns', async () => {
       const tenantId = `executor-token-commit-${randomUUID()}`;
 
-      await runWithTenantDatabaseScope(db, tenantId, async () => {
+      await runWithTenantDatabaseScope(dbA, tenantId, async () => {
         const token = await daemonA.generateToken('session-commit', 'user-commit', {
           taskId: 'task-commit',
           branchId: 'branch-commit',
@@ -266,7 +352,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
     it('allows exactly one competing bounded-use claim across daemons', async () => {
       const tenantId = `executor-token-race-${randomUUID()}`;
-      const token = await runWithTenantDatabaseScope(db, tenantId, () =>
+      const token = await runWithTenantDatabaseScope(dbA, tenantId, () =>
         daemonA.generateToken('session-race', 'user-race', {
           taskId: 'task-race',
           branchId: 'branch-race',
@@ -291,7 +377,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
     it('does not consume a bounded use for wrong user or resource scope', async () => {
       const tenantId = `executor-token-scope-${randomUUID()}`;
-      const token = await runWithTenantDatabaseScope(db, tenantId, () =>
+      const token = await runWithTenantDatabaseScope(dbA, tenantId, () =>
         daemonA.generateToken('session-scope', 'user-scope', {
           taskId: 'task-scope',
           branchId: 'branch-scope',
@@ -324,7 +410,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
     it('propagates revocation across daemons even while the JWT signature remains valid', async () => {
       const tenantId = `executor-token-revoke-${randomUUID()}`;
-      const token = await runWithTenantDatabaseScope(db, tenantId, () =>
+      const token = await runWithTenantDatabaseScope(dbA, tenantId, () =>
         daemonA.generateToken('session-revoke', 'user-revoke', { maxUses: -1 })
       );
       await expect(daemonB.validateToken(token, { tenantId })).resolves.toMatchObject({
@@ -332,7 +418,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
 
       await expect(
-        runWithTenantDatabaseScope(db, tenantId, () => daemonA.revokeToken(token))
+        runWithTenantDatabaseScope(dbA, tenantId, () => daemonA.revokeToken(token))
       ).resolves.toBe(true);
       expect(
         jwt.verify(token, jwtSecret, { issuer: 'agor', audience: 'https://agor.dev' })
@@ -358,7 +444,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         jwtSecret,
         { algorithm: 'HS256' }
       );
-      await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+      await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
         new ExecutorSessionTokenAuthorityRepository(scoped).issue({
           tenantId,
           tokenFingerprint: fingerprint(token),
@@ -383,7 +469,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     it('blocks cross-tenant replay at both service and PostgreSQL RLS boundaries', async () => {
       const tenantA = `executor-token-tenant-a-${randomUUID()}`;
       const tenantB = `executor-token-tenant-b-${randomUUID()}`;
-      const token = await runWithTenantDatabaseScope(db, tenantA, () =>
+      const token = await runWithTenantDatabaseScope(dbA, tenantA, () =>
         daemonA.generateToken('session-tenant', 'user-tenant', {
           taskId: 'task-tenant',
           branchId: 'branch-tenant',
@@ -392,16 +478,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
 
       await expect(
-        runWithTenantDatabaseScope(db, tenantB, () => daemonB.validateToken(token))
+        runWithTenantDatabaseScope(dbB, tenantB, () => daemonB.validateToken(token))
       ).resolves.toBeNull();
       await expect(
-        runWithTenantDatabaseScope(db, tenantB, () => daemonB.revokeToken(token))
+        runWithTenantDatabaseScope(dbB, tenantB, () => daemonB.revokeToken(token))
       ).resolves.toBe(false);
 
       // This deliberately supplies tenant A's exact authority key while the DB
       // is scoped to tenant B. It would return the row if FORCE RLS were
       // removed, so this is negative proof rather than two positive examples.
-      await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      await runWithTenantDatabaseScope(dbB, tenantB, async (scoped) => {
         const crossTenant = await new ExecutorSessionTokenAuthorityRepository(
           scoped
         ).validateAndConsume({
@@ -429,7 +515,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const oldRevokedFingerprint = fingerprint(`old-revoked-${randomUUID()}`);
       const wallNow = new Date();
 
-      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
         const repository = new ExecutorSessionTokenAuthorityRepository(scoped);
         await repository.issue({
           tenantId,
@@ -485,7 +571,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       await expect(daemonA.cleanupExpiredTokens(wallNow)).resolves.toBeGreaterThanOrEqual(2);
 
-      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      await runWithTenantDatabaseScope(dbB, tenantId, async (scoped) => {
         const result = await executeRaw(
           scoped,
           sql`

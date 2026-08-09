@@ -1141,6 +1141,22 @@ describe('substituteTemplateVariables', () => {
     expect(result).toBe('launch --user agor_alice');
   });
 
+  it('substitutes a trusted {user_id} used for identity-scoped storage', async () => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+    const userId = '019fda98-8206-7eb5-8e77-f95d6c8cd6c1';
+
+    expect(substituteTemplateVariables('launch --user-id {user_id}', { user_id: userId })).toBe(
+      `launch --user-id ${userId}`
+    );
+  });
+
+  it('refuses a path-shaped {user_id}', async () => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+    expect(() =>
+      substituteTemplateVariables('launch --user-id {user_id}', { user_id: '../other-user' })
+    ).toThrow('{user_id} value is not a valid Agor user UUID');
+  });
+
   it.each([
     { name: 'shell metacharacters', value: 'alice; rm -rf /' },
     { name: 'path traversal', value: '../other-tenant' },

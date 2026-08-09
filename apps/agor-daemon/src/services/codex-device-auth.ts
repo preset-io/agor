@@ -228,6 +228,7 @@ interface DeviceAuthAttempt {
   tenantId: TenantID | string;
   authUser: NonNullable<AuthenticatedParams['user']>;
   targetUnixUser: string | null;
+  reportedUnixUser: string | null;
   phase: CodexDeviceAuthStatus['phase'];
   deviceAuthId: string;
   userCode: string;
@@ -332,6 +333,7 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
           app,
           normalized: buildDeviceAuthJson(tokens),
           targetUnixUser: attempt.targetUnixUser,
+          reportedUnixUser: attempt.reportedUnixUser,
           userId: attempt.userId,
           authUser: attempt.authUser,
         })
@@ -394,9 +396,12 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
       const { authUser, userId, tenantId, key } = await requireContext(params);
 
       const config = loadConfigSync();
-      if (config.multi_tenancy?.mode === 'required_from_auth') {
+      if (
+        config.multi_tenancy?.mode === 'required_from_auth' &&
+        config.execution?.executor_storage?.user_home !== 'persistent-per-user'
+      ) {
         throw new BadRequest(
-          'Codex subscription login is unavailable in hosted multi-tenant mode — use an OpenAI API key instead.'
+          'Codex subscription login in hosted multi-tenant mode requires execution.executor_storage.user_home: persistent-per-user.'
         );
       }
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
@@ -428,6 +433,7 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         tenantId,
         authUser,
         targetUnixUser: identity.unixUser,
+        reportedUnixUser: identity.reportedUnixUser,
         phase: 'pending',
         deviceAuthId: '',
         userCode: '',

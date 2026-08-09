@@ -46,9 +46,12 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
       const userId = authUser.user_id as UserID;
 
       const config = loadConfigSync();
-      if (config.multi_tenancy?.mode === 'required_from_auth') {
+      if (
+        config.multi_tenancy?.mode === 'required_from_auth' &&
+        config.execution?.executor_storage?.user_home !== 'persistent-per-user'
+      ) {
         throw new BadRequest(
-          'Codex subscription login is unavailable in hosted multi-tenant mode — use an OpenAI API key instead.'
+          'Codex subscription login in hosted multi-tenant mode requires execution.executor_storage.user_home: persistent-per-user.'
         );
       }
 
@@ -77,6 +80,7 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
         app,
         normalized: parsed.normalized,
         targetUnixUser: identity.unixUser,
+        reportedUnixUser: identity.reportedUnixUser,
         userId,
         authUser,
       });

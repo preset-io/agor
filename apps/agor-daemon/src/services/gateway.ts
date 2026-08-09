@@ -3068,6 +3068,9 @@ export class GatewayService {
     if (this.listenerTimer || this.listenerScanRunning) return;
     this.listenerStopped = false;
     this.listenerDraining = false;
+    console.log(
+      `[distributed-work.gateway-listener] event="loop_started" instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} scan_batch_size=${GATEWAY_LISTENER_SCAN_BATCH}`
+    );
     // Preserve prompt startup while spreading each daemon's next contention
     // pass over the renewal window.
     await this.runListenerScanLoop(false);
@@ -3699,6 +3702,9 @@ export class GatewayService {
       }
     }
     this.activeChannelTenants.clear();
+    console.log(
+      `[distributed-work.gateway-listener] event="loop_stopped" instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} callbacks_drained=${callbacksDrained}`
+    );
   }
 }
 

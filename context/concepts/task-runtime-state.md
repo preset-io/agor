@@ -230,15 +230,19 @@ as `stopped`, but records that termination was not verified. This last release
 exists only in explicit `standalone` compatibility mode; shared PostgreSQL
 startup never treats another replica's work as orphaned.
 
-An abrupt local-launcher-daemon loss is not absence proof. The detached
-executor may reconnect through another daemon. If it does not, a non-owner can
+An abrupt local-launcher-daemon loss is not absence proof. If its execution
+substrate survives the launcher and callbacks route to the fleet, the detached
+executor may reconnect through another daemon. Shared workspace storage alone
+does not guarantee that process survival. If it does not reconnect, a non-owner can
 resume the durable request after the owner grace/lease, but without an
 authoritative handle it must leave containment unverified.
 
 Standalone graceful shutdown preserves historical local executor
-containment. Shared-replica shutdown instead leaves detached executors alive
-for peer reconnect/heartbeat handoff: killing them and discarding the only
-process-local evidence would make verified absence unrecoverable.
+containment. Shared-replica shutdown instead avoids intentionally killing
+detached executors so an independently surviving substrate can reconnect and
+resume heartbeat through a peer. Shared-local/container deployment does not
+guarantee that survival; the policy only avoids destroying the process and the
+sole process-local evidence itself.
 
 ## Task truth and session projection
 
