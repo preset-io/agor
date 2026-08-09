@@ -7,7 +7,6 @@ export const HA_CONSTRAINED_PROFILE = 'constrained-active-active' as const;
 
 export const HA_UNSUPPORTED_FEATURES = {
   interactivePermissions: 'interactive permission modes without durable decision replay',
-  statefulMcp: 'stateful MCP transports',
   mcpOAuth: 'MCP OAuth flows',
   githubInstall: 'GitHub App installation state',
   codexAuth: 'Codex credential-file import/logout without a consistent executor user home',

@@ -314,7 +314,6 @@ try {
     assert.equal(health.deployment.capabilities.taskRuntimeReconciliation, true);
     assert.equal(health.deployment.capabilities.knowledgeEmbeddingIndexer, true);
     assert.equal(health.deployment.capabilities.statelessMcp, true);
-    assert.equal(health.deployment.capabilities.statefulMcp, false);
     assert.equal(health.deployment.capabilities.completionCallbackDurableAdmission, true);
     assert.equal(health.deployment.capabilities.completionCallbackPreAdmissionRecovery, false);
     assert.equal(health.deployment.capabilities.widgetResolutionDurableClaim, true);
@@ -412,15 +411,15 @@ try {
     assert.equal(initialize.headers.get('mcp-session-id'), null);
     assert.match(await initialize.text(), /protocolVersion/);
   }
-  const rejectedStatefulMcp = await fetch(`${ingress}/mcp`, {
+  const rejectedGet = await fetch(`${ingress}/mcp`, {
     method: 'GET',
     headers: {
       'X-API-Key': apiKeyResult.rawKey,
       'Mcp-Session-Id': 'process-affine-session',
     },
   });
-  assert.equal(rejectedStatefulMcp.status, 503);
-  assert.match(JSON.stringify(await rejectedStatefulMcp.json()), /constrained-active-active/);
+  assert.equal(rejectedGet.status, 405);
+  assert.equal(rejectedGet.headers.get('allow'), 'POST');
   const apiKeyRemove = await fetch(`${ingress}/api/v1/user/api-keys/${apiKeyResult.key.id}`, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${accessToken}` },
@@ -428,7 +427,7 @@ try {
   assert.equal(apiKeyRemove.status, 200, `personal API key cleanup failed: ${apiKeyRemove.status}`);
   await apiKeyRemove.text();
   cleanupApiKeyId = undefined;
-  console.log('ok - stateless MCP crosses load-balanced ingress; stateful transport fails closed');
+  console.log('ok - stateless MCP crosses load-balanced ingress; GET is method-not-allowed');
 
   const anonymousSocket = io(daemonB, { transports: ['websocket'], reconnection: false });
   cleanupSockets.add(anonymousSocket);

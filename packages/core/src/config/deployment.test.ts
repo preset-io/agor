@@ -50,7 +50,6 @@ describe('resolveDeploymentConfig', () => {
         gatewayOutboundExactlyOnce: false,
         environmentHealthMonitor: true,
         statelessMcp: true,
-        statefulMcp: false,
         completionCallbackDurableAdmission: true,
         completionCallbackPreAdmissionRecovery: false,
         widgetResolutionDurableClaim: true,

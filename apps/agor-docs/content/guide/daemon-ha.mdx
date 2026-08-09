@@ -241,7 +241,7 @@ database transaction remains open during the HTTP request.
 
 | Capability | Constrained HA status |
 | --- | --- |
-| Stateless REST and stateless MCP | Supported, subject to normal auth/tenant policy. Stateful MCP session IDs, GET, and DELETE fail closed. |
+| Stateless REST and stateless MCP | Supported, subject to normal auth/tenant policy. Legacy `Mcp-Session-Id` values are ignored on POST; GET and DELETE return 405. |
 | Executor-session JWTs | Supported on PostgreSQL through durable SHA-256 fingerprint/JTI authority, exact claim matching, revocation, expiry, and use counts. SQLite remains process-local and cannot boot HA. |
 | Task run/prompt | Supported only for modes proven not to create a local permission waiter: Claude `bypassPermissions`; Copilot `bypassPermissions`/`allow-all`; Gemini `yolo`; Codex approval policy `never`; current autonomous Cursor SDK. OpenCode and other interactive modes fail with `503 HA_FEATURE_UNSUPPORTED`. In-flight executor handoff additionally requires an executor substrate that survives the owner daemon and a callback URL routed to the fleet; the checked-in Compose smoke stack does not prove that handoff. |
 | Executor storage | HA startup requires explicit user-home, branch-workspace, and base-repository assertions. `base_repository: unavailable` requires clone-only creation policy. Auditing historical active worktree rows and replacing the current physical base-repo clone during remote-repo registration remain Cloud rollout prerequisites. |
