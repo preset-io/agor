@@ -44,6 +44,10 @@ describe('DistributedHealthMonitor loop contract', () => {
     expect(
       () => new DistributedHealthMonitor(app as never, {} as never, options({ maxInFlight: 33 }))
     ).toThrow('cannot exceed scan batch size');
+    expect(
+      () =>
+        new DistributedHealthMonitor(app as never, {} as never, options({ scanBatchSize: 1_001 }))
+    ).toThrow('cannot exceed 1000');
   });
 
   it('treats branch events as wake hints and removes listeners/timers on shutdown', async () => {
@@ -91,5 +95,102 @@ describe('DistributedHealthMonitor loop contract', () => {
     expect(monitor.isReady()).toBe(true);
     expect(discover).toHaveBeenCalledTimes(2);
     await monitor.cleanup();
+  });
+
+  it('visits multi-tenant discovery pages once without re-probing earlier pages', async () => {
+    const { app } = makeApp();
+    const pages = [
+      [
+        { tenant_id: 'tenant-a', branch_id: 'branch-a' },
+        { tenant_id: 'tenant-b', branch_id: 'branch-b' },
+      ],
+      [
+        { tenant_id: 'tenant-c', branch_id: 'branch-c' },
+        { tenant_id: 'tenant-d', branch_id: 'branch-d' },
+      ],
+      [],
+    ];
+    const discover = vi.fn(async () => pages.shift() ?? []);
+    const monitor = new DistributedHealthMonitor(
+      app as never,
+      {} as never,
+      options({ scanBatchSize: 2, maxInFlight: 1, discover: discover as never })
+    );
+    const observed: string[] = [];
+    vi.spyOn(
+      monitor as unknown as {
+        observeClaim: (
+          tenantId: string,
+          branchId: string
+        ) => Promise<{
+          claimed: number;
+          committed: number;
+          failed: number;
+        }>;
+      },
+      'observeClaim'
+    ).mockImplementation(async (tenantId, branchId) => {
+      observed.push(`${tenantId}/${branchId}`);
+      return { claimed: 1, committed: 1, failed: 0 };
+    });
+
+    await monitor.checkOnce();
+    await monitor.checkOnce();
+    await monitor.checkOnce();
+
+    expect(observed).toEqual([
+      'tenant-a/branch-a',
+      'tenant-b/branch-b',
+      'tenant-c/branch-c',
+      'tenant-d/branch-d',
+    ]);
+  });
+
+  it('awaits sibling observations and isolates a candidate failure', async () => {
+    const { app } = makeApp();
+    let finishSibling: (() => void) | undefined;
+    const monitor = new DistributedHealthMonitor(
+      app as never,
+      {} as never,
+      options({
+        scanBatchSize: 2,
+        maxInFlight: 2,
+        discover: async () => [
+          { tenant_id: 'tenant-a' as never, branch_id: 'branch-a' as never },
+          { tenant_id: 'tenant-b' as never, branch_id: 'branch-b' as never },
+        ],
+      })
+    );
+    vi.spyOn(
+      monitor as unknown as {
+        observeClaim: (
+          tenantId: string,
+          branchId: string
+        ) => Promise<{
+          claimed: number;
+          committed: number;
+          failed: number;
+        }>;
+      },
+      'observeClaim'
+    ).mockImplementation(async (_tenantId, branchId) => {
+      if (branchId === 'branch-a') throw new Error('candidate failed');
+      await new Promise<void>((resolve) => {
+        finishSibling = resolve;
+      });
+      return { claimed: 1, committed: 1, failed: 0 };
+    });
+
+    const scan = monitor.checkOnce();
+    await vi.waitFor(() => expect(finishSibling).toBeTypeOf('function'));
+    let settled = false;
+    void scan.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finishSibling?.();
+
+    await expect(scan).resolves.toMatchObject({ committed: 1, failures: 1 });
   });
 });

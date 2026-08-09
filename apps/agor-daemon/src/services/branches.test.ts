@@ -294,23 +294,27 @@ describe('BranchesService environment start async behavior', () => {
     } as never);
 
     const environmentUpdates: Array<Record<string, unknown>> = [];
-    vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
-      environmentUpdates.push(update as Record<string, unknown>);
-      currentEnvironment = {
-        ...currentEnvironment,
-        ...update,
-      };
-      return {
-        ...branch,
-        environment_instance: currentEnvironment,
-      } as never;
-    });
+    const lifecycleOptions: Array<unknown> = [];
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update, _params, internalOptions) => {
+        environmentUpdates.push(update as Record<string, unknown>);
+        lifecycleOptions.push(internalOptions);
+        currentEnvironment = {
+          ...currentEnvironment,
+          ...update,
+        };
+        return {
+          ...branch,
+          environment_instance: currentEnvironment,
+        } as never;
+      }
+    );
 
-    return { service, branch, environmentUpdates };
+    return { service, branch, environmentUpdates, lifecycleOptions };
   }
 
   it('returns after dispatching shell start commands to the executor', async () => {
-    const { service, branch, environmentUpdates } = createStartHarness();
+    const { service, branch, environmentUpdates, lifecycleOptions } = createStartHarness();
 
     const result = await Promise.race([
       runInTestTenantScope(() => service.startEnvironment(branch.branch_id)),
@@ -350,6 +354,19 @@ describe('BranchesService environment start async behavior', () => {
         }),
       ])
     );
+    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
+  });
+
+  it('marks a repeated starting request as a fresh lifecycle boundary', async () => {
+    const { service, branch, lifecycleOptions } = createStartHarness();
+    vi.spyOn(service, 'get').mockResolvedValue({
+      ...branch,
+      environment_instance: { status: 'starting' },
+    } as never);
+
+    await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
+
+    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
   });
 
   it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {

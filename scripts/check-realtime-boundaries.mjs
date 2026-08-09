@@ -15,10 +15,16 @@ function sourceFiles(dir) {
   });
 }
 
-function isPotentialClusterBroadcast(receiver) {
+function isPotentialClusterBroadcast(receiver, aliases) {
   const text = receiver.getText();
   return (
-    text.includes('.to(') || text.includes('.broadcast') || text === 'io' || text.endsWith('.io')
+    text.includes('.to(') ||
+    text.includes('.in(') ||
+    text.includes('.of(') ||
+    text.includes('.broadcast') ||
+    text === 'io' ||
+    text.endsWith('.io') ||
+    (ts.isIdentifier(receiver) && aliases.has(receiver.text))
   );
 }
 
@@ -31,6 +37,29 @@ for (const file of sourceFiles(SOURCE_ROOT)) {
     true,
     ts.ScriptKind.TS
   );
+  // Resolve simple aliases so `const room = io.to(...); room.emit(...)` and
+  // namespace aliases cannot bypass the boundary check. Iterate to a fixpoint
+  // to cover alias chains without requiring a full TypeScript program.
+  const clusterAliases = new Set(['io']);
+  let aliasesChanged = true;
+  while (aliasesChanged) {
+    aliasesChanged = false;
+    function collectAliases(node) {
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer &&
+        isPotentialClusterBroadcast(node.initializer, clusterAliases) &&
+        !node.initializer.getText().includes('.local') &&
+        !clusterAliases.has(node.name.text)
+      ) {
+        clusterAliases.add(node.name.text);
+        aliasesChanged = true;
+      }
+      ts.forEachChild(node, collectAliases);
+    }
+    collectAliases(source);
+  }
   function visit(node) {
     if (
       ts.isCallExpression(node) &&
@@ -39,7 +68,10 @@ for (const file of sourceFiles(SOURCE_ROOT)) {
     ) {
       const receiver = node.expression.expression;
       const receiverText = receiver.getText();
-      if (isPotentialClusterBroadcast(receiver) && !receiverText.includes('.local')) {
+      if (
+        isPotentialClusterBroadcast(receiver, clusterAliases) &&
+        !receiverText.includes('.local')
+      ) {
         const position = source.getLineAndCharacterOfPosition(node.getStart(source));
         violations.push(
           `${relative(ROOT, file)}:${position.line + 1}:${position.character + 1} raw room/global Socket.IO emit must use .local or emitHaNativeSocketEvent()`

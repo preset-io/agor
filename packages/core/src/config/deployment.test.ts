@@ -183,6 +183,15 @@ describe('resolveDeploymentConfig', () => {
     ).toThrow('leave at least 5000ms');
   });
 
+  it('rejects an environment health discovery page above the repository limit', () => {
+    expect(() =>
+      resolveDeploymentConfig(haConfig, {
+        ...secrets,
+        AGOR_HA_ENV_HEALTH_SCAN_BATCH_SIZE: '1001',
+      })
+    ).toThrow('scan batch size cannot exceed 1000');
+  });
+
   it('allows disabling the distributed monitor startup offset through the environment', () => {
     const deployment = resolveDeploymentConfig(haConfig, {
       ...secrets,

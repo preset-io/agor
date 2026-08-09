@@ -839,12 +839,11 @@ export const branches = pgTable(
     boardIdx: index('branches_board_idx').on(table.board_id),
     createdIdx: index('branches_created_idx').on(table.created_at),
     updatedIdx: index('branches_updated_idx').on(table.updated_at),
-    environmentHealthLeaseIdx: index('branches_environment_health_lease_idx').on(
-      table.archived,
-      table.tenant_id,
-      table.environment_health_claim_expires_at,
-      table.branch_id
-    ),
+    environmentHealthDiscoveryIdx: index('branches_environment_health_discovery_idx')
+      .on(table.tenant_id, table.branch_id)
+      .where(
+        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running')`
+      ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
   })

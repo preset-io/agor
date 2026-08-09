@@ -125,6 +125,9 @@ export class DistributedHealthMonitor {
         'Distributed environment health maximum in-flight cannot exceed scan batch size'
       );
     }
+    if (options.scanBatchSize > 1_000) {
+      throw new Error('Distributed environment health scan batch size cannot exceed 1000');
+    }
     if (
       options.claimLeaseMs <
       Math.max(options.httpTimeoutMs, options.scanIntervalMs) + MIN_CLAIM_WRITE_MARGIN_MS
@@ -281,25 +284,6 @@ export class DistributedHealthMonitor {
     if (this.shutdownRequested) return emptyStats();
     const stats = emptyStats();
 
-    // Renew and observe current owners before paging discovery so a saturated
-    // fleet cannot starve leases already performing periodic observations.
-    const owned = [...this.activeClaims.values()];
-    for (
-      let index = 0;
-      index < owned.length && !this.shutdownRequested;
-      index += this.options.maxInFlight
-    ) {
-      const results = await Promise.all(
-        owned
-          .slice(index, index + this.options.maxInFlight)
-          .map(({ tenantId, claim }) => this.observeClaim(tenantId, claim.branch_id, claim))
-      );
-      for (const result of results) {
-        stats.claimed += result.claimed;
-        stats.committed += result.committed;
-      }
-    }
-
     const refs = await this.discover();
     if (refs.length === 0) {
       this.cursor = undefined;
@@ -316,18 +300,22 @@ export class DistributedHealthMonitor {
       index += this.options.maxInFlight
     ) {
       const chunk = refs.slice(index, index + this.options.maxInFlight);
-      const results = await Promise.all(
-        chunk.map((ref) => {
-          const key = this.claimKey(ref.tenant_id, ref.branch_id);
-          return this.activeClaims.has(key)
-            ? Promise.resolve({ claimed: 0, committed: 0, failed: 0 })
-            : this.observeClaim(ref.tenant_id, ref.branch_id);
-        })
+      // Await every child even when one tenant/endpoint fails. Otherwise the
+      // next wake can overlap work whose parent iteration already rejected.
+      const results = await Promise.allSettled(
+        chunk.map((ref) => this.observeClaim(ref.tenant_id, ref.branch_id))
       );
       for (const result of results) {
-        stats.claimed += result.claimed;
-        stats.committed += result.committed;
-        stats.failures += result.failed;
+        if (result.status === 'fulfilled') {
+          stats.claimed += result.value.claimed;
+          stats.committed += result.value.committed;
+          stats.failures += result.value.failed;
+        } else {
+          stats.failures += 1;
+          console.warn(
+            `[distributed-work.environment-health] event=observation_failed instance_id=${JSON.stringify(this.options.workIdentity.instanceId)} boot_id=${JSON.stringify(this.options.workIdentity.bootId)} error=${JSON.stringify(result.reason instanceof Error ? result.reason.message : String(result.reason))}`
+          );
+        }
       }
     }
     return stats;
@@ -337,52 +325,57 @@ export class DistributedHealthMonitor {
     return `${tenantId}\0${branchId}`;
   }
 
-  private async observeClaim(
-    tenantId: TenantID,
-    branchId: BranchID,
-    ownedClaim?: EnvironmentHealthClaim
-  ) {
+  private async observeClaim(tenantId: TenantID, branchId: BranchID) {
     if (this.shutdownRequested) return { claimed: 0, committed: 0, failed: 0 };
+    const resourceKey = this.claimKey(tenantId, branchId);
+    // Wakes are hints and may race shutdown/iteration boundaries. Never admit
+    // a second local request for the same resource, even under the same token.
+    if (this.activeClaims.has(resourceKey) || this.inFlight.has(resourceKey)) {
+      return { claimed: 0, committed: 0, failed: 0 };
+    }
     return runWithTenantContext(tenantId, async () => {
       const branch = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
         new BranchRepository(scopedDb).findById(branchId)
       );
       if (!branch) {
-        if (ownedClaim) this.activeClaims.delete(this.claimKey(tenantId, branchId));
         return { claimed: 0, committed: 0, failed: 0 };
       }
       const rowTenantId = getHiddenTenantId(branch);
       if (rowTenantId && rowTenantId !== tenantId) {
         throw new Error(`Environment health tenant mismatch for branch ${branchId}`);
       }
-      let claim = ownedClaim;
-      if (!claim) {
-        const claimToken = this.generateClaimToken();
-        const claimResult = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
-          new EnvironmentHealthRepository(scopedDb).claim({
-            branchId,
-            claimToken,
-            leaseDurationMs: this.options.claimLeaseMs,
-            identity: this.options.workIdentity,
-          })
-        );
-        if (claimResult.outcome !== 'claimed') return { claimed: 0, committed: 0, failed: 0 };
-        claim = claimResult.claim;
-        this.activeClaims.set(this.claimKey(tenantId, branchId), { tenantId, claim });
-        console.log(
-          `[distributed-work.environment-health] event=observation_claimed instance_id=${JSON.stringify(this.options.workIdentity.instanceId)} boot_id=${JSON.stringify(this.options.workIdentity.bootId)} tenant_id=${JSON.stringify(tenantId)} branch_id=${JSON.stringify(branchId)} claim_generation=${claim.claim_generation} environment_generation=${claim.environment_generation}`
-        );
-      }
+      const claimToken = this.generateClaimToken();
+      const claimResult = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
+        new EnvironmentHealthRepository(scopedDb).claim({
+          branchId,
+          claimToken,
+          leaseDurationMs: this.options.claimLeaseMs,
+          identity: this.options.workIdentity,
+        })
+      );
+      if (claimResult.outcome !== 'claimed') return { claimed: 0, committed: 0, failed: 0 };
+      const claim = claimResult.claim;
+      this.activeClaims.set(resourceKey, { tenantId, claim });
+      console.log(
+        `[distributed-work.environment-health] event=observation_claimed instance_id=${JSON.stringify(this.options.workIdentity.instanceId)} boot_id=${JSON.stringify(this.options.workIdentity.bootId)} tenant_id=${JSON.stringify(tenantId)} branch_id=${JSON.stringify(branchId)} claim_generation=${claim.claim_generation} environment_generation=${claim.environment_generation}`
+      );
 
       const controller = new AbortController();
-      const key = `${tenantId}\0${branchId}\0${claim.claim_token}`;
       const work = this.performClaimedObservation(tenantId, branch, claim, controller);
-      this.inFlight.set(key, { controller, work });
+      this.inFlight.set(resourceKey, { controller, work });
       try {
         const observationCommitted = await work;
         return { claimed: 1, committed: observationCommitted ? 1 : 0, failed: 0 };
       } finally {
-        this.inFlight.delete(key);
+        // Claims are one observation wide. Paging therefore never accumulates
+        // retained ownership or re-probes early pages; token equality makes a
+        // best-effort release safe after takeover/lifecycle invalidation.
+        await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
+          new EnvironmentHealthRepository(scopedDb).release(branchId, claim.claim_token)
+        ).catch(() => undefined);
+        this.inFlight.delete(resourceKey);
+        const active = this.activeClaims.get(resourceKey);
+        if (active?.claim.claim_token === claim.claim_token) this.activeClaims.delete(resourceKey);
       }
     });
   }
@@ -393,63 +386,51 @@ export class DistributedHealthMonitor {
     claim: EnvironmentHealthClaim,
     controller: AbortController
   ): Promise<boolean> {
-    let committed = false;
-    try {
-      const renewed = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
-        new EnvironmentHealthRepository(scopedDb).renew({
-          branchId: branch.branch_id,
-          claimToken: claim.claim_token,
-          environmentGeneration: claim.environment_generation,
-          leaseDurationMs: this.options.claimLeaseMs,
-        })
+    const renewed = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
+      new EnvironmentHealthRepository(scopedDb).renew({
+        branchId: branch.branch_id,
+        claimToken: claim.claim_token,
+        environmentGeneration: claim.environment_generation,
+        leaseDurationMs: this.options.claimLeaseMs,
+      })
+    );
+    if (!renewed || this.shutdownRequested) {
+      this.activeClaims.delete(this.claimKey(tenantId, branch.branch_id));
+      return false;
+    }
+    this.activeClaims.set(this.claimKey(tenantId, branch.branch_id), {
+      tenantId,
+      claim: renewed,
+    });
+    const observation = await this.fetchObservation(branch, controller);
+    if (!observation || this.shutdownRequested) return false;
+    const result = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
+      new EnvironmentHealthRepository(scopedDb).commit({
+        branchId: branch.branch_id,
+        claimToken: claim.claim_token,
+        environmentGeneration: claim.environment_generation,
+        observation,
+      })
+    );
+    if (result.outcome !== 'committed') {
+      this.activeClaims.delete(this.claimKey(tenantId, branch.branch_id));
+      return false;
+    }
+    if (result.stateChanged) {
+      const current = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
+        new BranchRepository(scopedDb).findById(branch.branch_id)
       );
-      if (!renewed || this.shutdownRequested) {
-        this.activeClaims.delete(this.claimKey(tenantId, branch.branch_id));
-        return false;
-      }
-      this.activeClaims.set(this.claimKey(tenantId, branch.branch_id), {
-        tenantId,
-        claim: renewed,
-      });
-      const observation = await this.fetchObservation(branch, controller);
-      if (!observation || this.shutdownRequested) return false;
-      const result = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
-        new EnvironmentHealthRepository(scopedDb).commit({
-          branchId: branch.branch_id,
-          claimToken: claim.claim_token,
-          environmentGeneration: claim.environment_generation,
-          observation,
-        })
-      );
-      if (result.outcome !== 'committed') {
-        this.activeClaims.delete(this.claimKey(tenantId, branch.branch_id));
-        return false;
-      }
-      committed = true;
-      if (result.stateChanged) {
-        const current = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
-          new BranchRepository(scopedDb).findById(branch.branch_id)
-        );
-        if (current) {
-          emitServiceEvent(this.app, {
-            path: 'branches',
-            event: 'patched',
-            data: current,
-            params: tenantParams(tenantId),
-            id: branch.branch_id,
-          });
-        }
-      }
-      return true;
-    } finally {
-      if (!committed && this.shutdownRequested) {
-        // Token equality makes this safe after lifecycle invalidation/takeover.
-        await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
-          new EnvironmentHealthRepository(scopedDb).release(branch.branch_id, claim.claim_token)
-        ).catch(() => undefined);
-        this.activeClaims.delete(this.claimKey(tenantId, branch.branch_id));
+      if (current) {
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'patched',
+          data: current,
+          params: tenantParams(tenantId),
+          id: branch.branch_id,
+        });
       }
     }
+    return true;
   }
 
   private async fetchObservation(
@@ -534,12 +515,9 @@ export class DistributedHealthMonitor {
       }),
     ]);
     if (timeout) clearTimeout(timeout);
-    const inFlightTokens = new Set(
-      [...this.inFlight.keys()].map((key) => key.slice(key.lastIndexOf('\0') + 1))
-    );
-    const releasableClaims = [...this.activeClaims.values()].filter(
-      ({ claim }) => drained || !inFlightTokens.has(claim.claim_token)
-    );
+    // If draining timed out, outbound work may still commit under its token;
+    // leave those claims for expiry rather than releasing beneath live work.
+    const releasableClaims = drained ? [...this.activeClaims.values()] : [];
     const releaseBudgetMs = Math.max(0, shutdownDeadline - Date.now());
     if (releaseBudgetMs > 0 && releasableClaims.length > 0) {
       const releaseWork = Promise.allSettled(

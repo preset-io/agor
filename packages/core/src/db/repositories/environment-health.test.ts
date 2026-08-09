@@ -109,4 +109,48 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
       claim: { environment_generation: old.claim.environment_generation + 2 },
     });
   });
+
+  dbTest('invalidates an in-flight result for a starting to starting retry', async ({ db }) => {
+    const branch = await seedStartingBranch(db);
+    const branches = new BranchRepository(db);
+    const health = new EnvironmentHealthRepository(db);
+    const old = await health.claim({
+      branchId: branch.branch_id,
+      claimToken: 'old-start-attempt',
+      leaseDurationMs: 30_000,
+      identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+    });
+    if (old.outcome !== 'claimed') throw new Error('Expected initial claim');
+
+    await branches.update(
+      branch.branch_id,
+      {
+        environment_instance: {
+          status: 'starting',
+          process: { started_at: '2026-08-09T18:00:00.000Z' },
+        },
+      },
+      { invalidateEnvironmentObservation: true }
+    );
+
+    await expect(
+      health.commit({
+        branchId: branch.branch_id,
+        claimToken: old.claim.claim_token,
+        environmentGeneration: old.claim.environment_generation,
+        observation: { status: 'healthy', message: 'late HTTP 200', recordWhileStarting: true },
+      })
+    ).resolves.toEqual({ outcome: 'stale' });
+    await expect(
+      health.claim({
+        branchId: branch.branch_id,
+        claimToken: 'new-start-attempt',
+        leaseDurationMs: 30_000,
+        identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
+      })
+    ).resolves.toMatchObject({
+      outcome: 'claimed',
+      claim: { environment_generation: old.claim.environment_generation + 1 },
+    });
+  });
 });

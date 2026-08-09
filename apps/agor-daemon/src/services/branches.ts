@@ -1849,7 +1849,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           environmentUpdate?: BranchEnvironmentUpdate;
         },
     environmentUpdateOrParams?: BranchEnvironmentUpdate | BranchParams,
-    params?: BranchParams
+    params?: BranchParams,
+    internalOptions?: { beginLifecycle?: boolean }
   ): Promise<BranchWithZoneAndSessions> {
     const isRpcEnvelope = typeof idOrData === 'object';
     const id = isRpcEnvelope ? (idOrData.branch_id ?? idOrData.branchId) : idOrData;
@@ -1893,7 +1894,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       existing.environment_instance,
       updatedEnvironment
     );
-    if (!hasPersistedChange) {
+    if (!hasPersistedChange && !internalOptions?.beginLifecycle) {
       return existing;
     }
 
@@ -1922,7 +1923,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Observation-only persistence deliberately bypasses Feathers publication.
     // It also preserves branch.updated_at so health bookkeeping does not affect
     // branch ordering or modification semantics every five seconds.
-    if (!hasChanged) {
+    if (!hasChanged && !internalOptions?.beginLifecycle) {
       return this.withTenantDatabase(resolvedParams, () =>
         this.branchRepo.update(
           id,
@@ -1932,16 +1933,28 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
     }
 
-    const branch = await this.withTenantDatabase(resolvedParams, () =>
-      this.patch(
-        id,
-        {
-          environment_instance: updatedEnvironment,
-          updated_at: new Date().toISOString(),
-        },
-        resolvedParams
-      )
-    );
+    const branch = internalOptions?.beginLifecycle
+      ? await this.withTenantDatabase(resolvedParams, async () => {
+          await this.branchRepo.update(
+            id,
+            {
+              environment_instance: updatedEnvironment,
+              updated_at: new Date().toISOString(),
+            },
+            { invalidateEnvironmentObservation: true }
+          );
+          return this.get(id, resolvedParams);
+        })
+      : await this.withTenantDatabase(resolvedParams, () =>
+          this.patch(
+            id,
+            {
+              environment_instance: updatedEnvironment,
+              updated_at: new Date().toISOString(),
+            },
+            resolvedParams
+          )
+        );
 
     // this.patch() calls the raw implementation and bypasses Feathers event
     // dispatch, so the patched event is not automatically emitted. Emit it
@@ -1993,7 +2006,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         last_health_check: undefined,
         last_error: undefined,
       },
-      params
+      params,
+      { beginLifecycle: true }
     );
 
     try {

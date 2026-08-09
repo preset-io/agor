@@ -17,6 +17,7 @@ export const DEFAULT_ENVIRONMENT_HEALTH_SCAN_INTERVAL_MS = 5_000;
 export const DEFAULT_ENVIRONMENT_HEALTH_MAX_IDLE_INTERVAL_MS = 30_000;
 export const DEFAULT_ENVIRONMENT_HEALTH_STARTUP_OFFSET_MAX_MS = 3_000;
 export const DEFAULT_ENVIRONMENT_HEALTH_SCAN_BATCH_SIZE = 32;
+export const MAX_ENVIRONMENT_HEALTH_SCAN_BATCH_SIZE = 1_000;
 export const DEFAULT_ENVIRONMENT_HEALTH_MAX_IN_FLIGHT = 8;
 export const DEFAULT_ENVIRONMENT_HEALTH_HTTP_TIMEOUT_MS = 1_000;
 export const DEFAULT_ENVIRONMENT_HEALTH_CLAIM_LEASE_MS = 15_000;
@@ -191,6 +192,9 @@ export function resolveEnvironmentHealthMonitorSettings(
   }
   if (settings.maxInFlight > settings.scanBatchSize) {
     throw new Error('Config error: environment health max in-flight cannot exceed scan batch size');
+  }
+  if (settings.scanBatchSize > MAX_ENVIRONMENT_HEALTH_SCAN_BATCH_SIZE) {
+    throw new Error('Config error: environment health scan batch size cannot exceed 1000');
   }
   if (
     settings.claimLeaseMs <

@@ -14,7 +14,9 @@ ALTER TABLE "branches" ADD COLUMN "environment_health_claim_boot_id" text;
 --> statement-breakpoint
 ALTER TABLE "branches" ADD COLUMN "environment_health_claim_generation" integer DEFAULT 0 NOT NULL;
 --> statement-breakpoint
-CREATE INDEX "branches_environment_health_lease_idx" ON "branches" ("archived","tenant_id","environment_health_claim_expires_at","branch_id");
+CREATE INDEX "branches_environment_health_discovery_idx" ON "branches" ("tenant_id","branch_id")
+  WHERE "archived" = false
+    AND ("data"->'environment_instance'->>'status') IN ('starting', 'running');
 --> statement-breakpoint
 DROP POLICY IF EXISTS "environment_health_discovery" ON "branches";
 --> statement-breakpoint

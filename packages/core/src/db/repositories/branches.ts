@@ -524,7 +524,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async update(
     id: string,
     updates: Partial<Branch>,
-    options?: { preserveUpdatedAt?: boolean }
+    options?: {
+      preserveUpdatedAt?: boolean;
+      /** Explicit lifecycle boundary, including starting -> starting retries. */
+      invalidateEnvironmentObservation?: boolean;
+    }
   ): Promise<Branch> {
     // STEP 1: Read current branch (outside transaction for short ID resolution)
     const existing = await this.findById(id);
@@ -587,6 +591,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       const currentStatus = current.environment_instance?.status;
       const mergedStatus = merged.environment_instance?.status;
       const invalidatesEnvironmentObservation =
+        options?.invalidateEnvironmentObservation === true ||
         currentStatus !== mergedStatus ||
         current.health_check_url !== merged.health_check_url ||
         Boolean(current.archived) !== Boolean(merged.archived);
