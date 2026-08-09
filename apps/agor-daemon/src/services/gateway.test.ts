@@ -17,6 +17,7 @@ import { SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
+import { SessionsService } from './sessions.js';
 
 vi.mock('@agor/agentic-tools/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/agentic-tools/config')>();
@@ -146,6 +147,7 @@ function makeGatewayHarness(args: {
   db?: TenantScopeAwareDatabase;
   user?: User;
   alignedUser?: User | null;
+  setMCPServers?: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
 }) {
   const channel = args.channel ?? slackChannel;
   const executionUser = args.user ?? user;
@@ -167,7 +169,7 @@ function makeGatewayHarness(args: {
     status: SessionStatus.IDLE,
     custom_context: { gateway_source: { channel_id: channel.id } },
   }));
-  const setMCPServers = vi.fn(async () => undefined);
+  const setMCPServers = args.setMCPServers ?? vi.fn(async () => undefined);
   const app = {
     service: (name: string) => {
       if (name === 'users') return { get: vi.fn(async () => executionUser) };
@@ -1537,6 +1539,74 @@ describe('GatewayService MCP resolution', () => {
     } else {
       expect(setMCPServers).toHaveBeenCalledWith('sess-new', expectedMcpIds, 'gateway');
     }
+  });
+
+  it('attaches gateway MCP defaults through the real guarded SessionsService boundary', async () => {
+    const { db, observations, touch } = makeGuardedPostgresDatabase();
+    const emitted = vi.fn(() => {
+      expect(getCurrentTenantId()).toBe('tenant-channel');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+    });
+    const sessionsService = new SessionsService(db, {
+      service: (name: string) => {
+        if (name === 'session-mcp-servers') return { emit: emitted };
+        throw new Error(`Unexpected SessionsService dependency: ${name}`);
+      },
+    } as never);
+    const sessionMCPRepo = (
+      sessionsService as unknown as {
+        sessionMCPRepo: Record<string, (...args: never[]) => unknown>;
+      }
+    ).sessionMCPRepo;
+    const addServer = vi.fn(async () => {
+      touch('session-mcp-add');
+    });
+    sessionMCPRepo.addServer = addServer;
+    const setMCPServers = vi.spyOn(sessionsService, 'setMCPServers');
+    const executionUser = {
+      ...user,
+      default_mcp_server_ids: [userDefaultMcpId],
+    } as unknown as User;
+    const { service, createUnscoped } = makeGatewayHarness({
+      db,
+      user: executionUser,
+      existingMapping: null,
+      setMCPServers: sessionsService.setMCPServers.bind(sessionsService),
+      connector: {
+        fetchThreadHistory: vi.fn(async () => ({ has_more: false, messages: [] })),
+        sendMessage: vi.fn(async () => '100.000001'),
+      },
+    });
+    (
+      service as unknown as {
+        mcpServerRepo: { findById: (id: string) => Promise<Record<string, unknown>> };
+      }
+    ).mcpServerRepo = {
+      findById: vi.fn(async () => ({ auth: { type: 'none' } })),
+    };
+
+    await runWithTenantContext('tenant-channel', () =>
+      createUnscoped({
+        channel_key: slackChannel.channel_key,
+        thread_id: 'C123-100.000000',
+        text: 'start',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '100.000000',
+        },
+      })
+    );
+
+    expect(setMCPServers).toHaveBeenCalledWith('sess-new', [userDefaultMcpId], 'gateway');
+    expect(addServer).toHaveBeenCalledWith('sess-new', userDefaultMcpId);
+    expect(observations).toContainEqual({
+      label: 'session-mcp-add',
+      kind: 'tenant',
+      tenantId: 'tenant-channel',
+    });
+    expect(emitted).toHaveBeenCalledOnce();
   });
 });
 

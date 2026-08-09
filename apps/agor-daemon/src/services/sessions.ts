@@ -17,6 +17,7 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   SessionEnvSelectionRepository,
@@ -297,7 +298,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     this.db = db;
     this.deploymentAvailable = deploymentAvailable;
     this.app = app;
-    this.sessionMCPRepo = new SessionMCPServerRepository(db);
+    // Custom service-to-service methods such as setMCPServers() can run with
+    // tenant identity but without a request-scoped database transaction. Bind
+    // this repository to short per-method units so those paths remain RLS-safe
+    // without extending a transaction across session/provider orchestration.
+    this.sessionMCPRepo = bindRepositoryToTenantUnitOfWork(db, new SessionMCPServerRepository(db));
     this.sessionRelationshipRepo = new SessionRelationshipRepository(db);
     this.sessionEnvSelectionRepo = new SessionEnvSelectionRepository(db);
     this.branchRepo = new BranchRepository(db);
