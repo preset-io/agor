@@ -66,8 +66,8 @@ describe('Postgres migrations', () => {
     );
 
     for (const [journal, expectedTag, expectedIndex] of [
-      [postgresJournal, '0079_github_install_state', 79],
-      [sqliteJournal, '0082_github_install_state', 82],
+      [postgresJournal, '0082_github_install_state', 82],
+      [sqliteJournal, '0085_github_install_state', 85],
     ] as const) {
       const entry = journal.entries.at(-1);
       const predecessor = journal.entries.at(-2);
