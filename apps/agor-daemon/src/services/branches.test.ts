@@ -1622,6 +1622,45 @@ describe('BranchesService managed environment control authorization', () => {
     expect(getSpy).not.toHaveBeenCalled();
   });
 
+  // The DESTRUCTIVE verbs were previously untested here — only start/stop and
+  // checkHealth were covered. `nuke` deletes the environment outright, and
+  // `sync` force-pushes a scratch ref and `git reset --hard`s the remote working
+  // tree, so an unauthorised caller reaching either is a real loss-of-work path.
+  it('denies non-owner members before nuking an environment', async () => {
+    const { service, getSpy } = createAuthHarness('session');
+
+    await expect(service.nukeEnvironment(branchId, paramsFor(otherId, 'member'))).rejects.toThrow(
+      /'all' branch permission or admin access/
+    );
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('denies non-owner members before syncing an environment', async () => {
+    const { service, getSpy } = createAuthHarness('session');
+
+    await expect(service.syncEnvironment(branchId, paramsFor(otherId, 'member'))).rejects.toThrow(
+      /'all' branch permission or admin access/
+    );
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('denies a view-tier user every environment control verb', async () => {
+    for (const verb of [
+      'startEnvironment',
+      'stopEnvironment',
+      'nukeEnvironment',
+      'syncEnvironment',
+    ] as const) {
+      const { service, getSpy } = createAuthHarness('view');
+      await expect(
+        (service as unknown as Record<typeof verb, (i: BranchID, p: unknown) => Promise<unknown>>)[
+          verb
+        ](branchId, paramsFor(otherId, 'member'))
+      ).rejects.toThrow(/'all' branch permission or admin access/);
+      expect(getSpy, `${verb} loaded the branch despite denial`).not.toHaveBeenCalled();
+    }
+  });
+
   it('allows users with effective all permission through the control gate', async () => {
     const { service } = createAuthHarness('all');
 
