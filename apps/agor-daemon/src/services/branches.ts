@@ -59,7 +59,7 @@ import {
   isTeammate,
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
-import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
+import { isAllowedFactProbeUrl, isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
@@ -2459,7 +2459,24 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // source feeds the same probe below, which is the real readiness signal:
     // during a long first build the probe fails and the env stays `starting`;
     // once the app answers it transitions to `running`.
-    const factsHealthUrl = branch.environment_instance?.facts?.health;
+    // A fact-sourced probe URL is UNTRUSTED input: it is parsed from a lifecycle
+    // command's stdout, so whoever controls that script chooses the address the
+    // daemon will GET every few seconds — with the status reflected back into
+    // last_health_check.message. Validate it with the stricter rule that also
+    // rejects loopback/private/internal destinations, rather than the permissive
+    // one used for the admin-rendered health_check_url (local environments
+    // legitimately probe localhost, so that path must stay permissive).
+    const rawFactsHealthUrl = branch.environment_instance?.facts?.health;
+    let factsHealthUrl: string | undefined;
+    if (rawFactsHealthUrl) {
+      if (isAllowedFactProbeUrl(rawFactsHealthUrl)) {
+        factsHealthUrl = rawFactsHealthUrl;
+      } else {
+        console.warn(
+          `⚠️ ${branch.name}: ignoring health fact pointing at a disallowed destination (${rawFactsHealthUrl})`
+        );
+      }
+    }
     const effectiveHealthUrl = branch.health_check_url || factsHealthUrl;
 
     // No probe available at all (neither a frozen URL nor a health fact).

@@ -605,3 +605,66 @@ export function isAllowedHealthCheckUrl(urlString: string): boolean {
 
   return true;
 }
+
+/**
+ * Validates a probe URL that came from an UNTRUSTED source.
+ *
+ * `isAllowedHealthCheckUrl` deliberately allows loopback and private addresses,
+ * because a branch's `health_check_url` is rendered from the repo's own
+ * `.agor.yml` template at branch-creation time and local environments
+ * legitimately probe `http://localhost:<port>`.
+ *
+ * A probe URL taken from an `AGOR_FACT health=...` line does NOT have that
+ * provenance: it is parsed from a lifecycle command's STDOUT, so anyone able to
+ * influence that script can choose the address. The daemon then GETs it every
+ * few seconds and reflects the status into `last_health_check.message`
+ * ("HTTP 200", "HTTP 404 Not Found"), which is a blind SSRF with a status
+ * oracle — enough to sweep internal services from the daemon's network
+ * position, including the daemon's own API and a Docker socket on 2375.
+ *
+ * So fact-sourced URLs additionally lose loopback, private and internal-looking
+ * destinations.
+ *
+ * LIMITATION: this inspects the literal host only. A hostname that RESOLVES to
+ * a private address (DNS rebinding) is not caught here; blocking that requires
+ * resolving and pinning the address at request time, which this synchronous
+ * validator cannot do.
+ */
+export function isAllowedFactProbeUrl(urlString: string): boolean {
+  if (!isAllowedHealthCheckUrl(urlString)) return false;
+
+  let url: URL;
+  try {
+    url = new URL(normalizeOptionalHttpUrl(urlString, 'health_fact_url') as string);
+  } catch {
+    return false;
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  // URL keeps IPv6 literals bracketed; strip for comparison.
+  const host =
+    hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+
+  // Loopback
+  if (host === 'localhost' || host === '::1' || host === '0.0.0.0' || host === '::') return false;
+  if (/^127\./.test(host)) return false;
+
+  // RFC1918 private ranges
+  if (/^10\./.test(host)) return false;
+  if (/^192\.168\./.test(host)) return false;
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)) return false;
+
+  // Carrier-grade NAT and IPv6 unique-local / link-local
+  if (/^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./.test(host)) return false;
+  if (/^f[cd][0-9a-f]{2}:/.test(host)) return false;
+  if (/^fe80:/.test(host)) return false;
+
+  // Internal-looking names. Bare single-label hosts ("vault", "postgres") only
+  // resolve on an internal network, so they are treated the same way.
+  if (host.endsWith('.internal') || host.endsWith('.local') || host.endsWith('.localhost')) {
+    return false;
+  }
+  if (!host.includes('.')) return false;
+
+  return true;
+}
