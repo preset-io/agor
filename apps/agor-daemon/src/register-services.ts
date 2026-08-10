@@ -595,7 +595,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       daemonUrl,
       db,
       config: ctx.config,
-      setupEnabled: !isConstrainedHa(ctx.deployment),
     });
   }
 

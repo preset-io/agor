@@ -44,16 +44,17 @@ describe('buildTenantInsertOrder', () => {
     }
   });
 
-  it('deletes but never exports transient authorities or deployment-bound OAuth grants', () => {
+  it('deletes but never exports transient authorities or deployment-bound grants', () => {
     const nonPortable = nonPortableTenantTableNames();
     expect(nonPortable).toEqual([
       'executor_session_token_authorities',
+      'github_install_states',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
     ]);
-    for (const table of nonPortable) {
-      expect(buildTenantDeletionManifest().map((entry) => entry.name)).toContain(table);
-      expect(buildTenantInsertOrder().map((entry) => entry.name)).not.toContain(table);
+    for (const tableName of nonPortable) {
+      expect(buildTenantDeletionManifest().map((entry) => entry.name)).toContain(tableName);
+      expect(buildTenantInsertOrder().map((entry) => entry.name)).not.toContain(tableName);
     }
   });
 });

@@ -460,6 +460,29 @@ export const executorSessionTokenAuthorities = pgTable(
 );
 
 /**
+ * Short-lived GitHub App installation setup authority.
+ *
+ * The browser-visible state bearer is never persisted. `state_hash` is a
+ * SHA-256 exact-lookup fingerprint of a 256-bit random value. The row retains
+ * the trusted tenant/admin/intent binding established by the authenticated
+ * initiation request so any daemon can atomically consume the callback.
+ */
+export const githubInstallStates = pgTable(
+  'github_install_states',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    state_hash: varchar('state_hash', { length: 64 }).primaryKey(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    intent: text('intent').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+  },
+  (table) => ({
+    expiresIdx: index('github_install_states_expires_idx').on(table.expires_at),
+  })
+);
+
+/**
  * Messages table - Conversation messages within sessions
  *
  * Stores individual messages (user, assistant, system) for full conversation replay.
@@ -2796,6 +2819,8 @@ export type TaskInsert = typeof tasks.$inferInsert;
 export type ExecutorSessionTokenAuthorityRow = typeof executorSessionTokenAuthorities.$inferSelect;
 export type ExecutorSessionTokenAuthorityInsert =
   typeof executorSessionTokenAuthorities.$inferInsert;
+export type GitHubInstallStateRow = typeof githubInstallStates.$inferSelect;
+export type GitHubInstallStateInsert = typeof githubInstallStates.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
 export type BoardRow = typeof boards.$inferSelect;

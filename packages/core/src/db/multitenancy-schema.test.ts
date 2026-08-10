@@ -43,6 +43,9 @@ function migrationTenantTables(): string[] {
   const mcpOauthMigration = readRepoFile(
     'packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'
   );
+  const githubInstallStateMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0082_github_install_state.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -53,6 +56,7 @@ function migrationTenantTables(): string[] {
         ...executorTokenMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...gatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...mcpOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...githubInstallStateMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -68,6 +72,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -214,6 +219,18 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain('"finished_at" <= CURRENT_TIMESTAMP - INTERVAL \'24 hours\'');
   });
 
+  it('limits GitHub install callback discovery and cleanup to explicit capabilities', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql');
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain("= 'github_install_state_callback'");
+    expect(migration).toContain("= 'github_install_state_maintenance'");
+    expect(migration).toContain('"expires_at" <= CURRENT_TIMESTAMP');
+    expect(migration).not.toMatch(
+      /CREATE POLICY "github_install_state_(?:callback_discovery|maintenance)"[\s\S]*WITH CHECK/
+    );
+  });
+
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {
     const migration = readRepoFile('packages/core/drizzle/postgres/0071_scheduler_ha_indexes.sql');
 
@@ -263,5 +280,15 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toMatch(
       /CREATE POLICY "mcp_catalog_ingestion_write"[\s\S]*?USING \(current_setting\('agor\.system_scope', true\) = 'mcp_catalog_ingestion'\)[\s\S]*?WITH CHECK \(current_setting\('agor\.system_scope', true\) = 'mcp_catalog_ingestion'\)/
     );
+  });
+
+  it('keeps GitHub install state authority out of Redis', () => {
+    const sources = [
+      readRepoFile('packages/core/src/db/repositories/github-install-states.ts'),
+      readRepoFile('apps/agor-daemon/src/services/github-install-state.ts'),
+    ].join('\n');
+
+    expect(sources).not.toMatch(/from\s+['"][^'"]*redis/i);
+    expect(sources).not.toMatch(/ioredis|redlock|publish\(|subscribe\(/i);
   });
 });

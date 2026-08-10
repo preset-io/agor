@@ -192,6 +192,22 @@ async function seedNonPortableOAuthGrant(
   return serverId;
 }
 
+async function seedNonPortableGitHubInstallState(db: Database, tenantId: string): Promise<void> {
+  const stateHash = generateId().replaceAll('-', '').repeat(2);
+  await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    await insert(scoped, pg.githubInstallStates)
+      .values({
+        tenant_id: tenantId,
+        state_hash: stateHash,
+        user_id: 'tenant-portability-test-user',
+        intent: 'github-app-install',
+        created_at: new Date(),
+        expires_at: new Date(Date.now() + 60_000),
+      })
+      .run();
+  });
+}
+
 async function seedBoardBranchCycle(
   db: Database,
   tenantId: string
@@ -685,7 +701,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     await deleteTenantData(db, occupied);
   });
 
-  it('models non-portable token authority explicitly and treats it as destination occupancy', async () => {
+  it('models non-portable transient authorities explicitly and treats them as destination occupancy', async () => {
     const source = `tpnp-src-${generateId()}`;
     const occupied = `tpnp-dst-${generateId()}`;
     await seedTenant(db, source);
@@ -697,6 +713,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       'executor_session_token_authorities',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
+      'github_install_states',
     ]);
     expect(manifest.database.identity.tenantTables).not.toContain(
       'executor_session_token_authorities'
@@ -712,10 +729,15 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'user_mcp_oauth_tokens'
     );
+    expect(manifest.database.identity.tenantTables).not.toContain('github_install_states');
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'github_install_states'
+    );
 
     // A destination containing only non-portable authority is not empty. An
     // import must never retain that bearer policy beside newly restored rows.
     await seedNonPortableExecutorAuthority(db, occupied);
+    await seedNonPortableGitHubInstallState(db, occupied);
     await expect(importTenant(db, { archivePath: archive, tenantId: occupied })).rejects.toThrow(
       /destination database is not empty/i
     );

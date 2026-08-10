@@ -19,6 +19,7 @@ export * from './executor-session-token-authorities';
 export * from './gateway-channels';
 export * from './gateway-inbound-events';
 export * from './gateway-outbound-messages';
+export * from './github-install-states';
 export * from './groups';
 export * from './knowledge';
 export * from './knowledge-embedding-work';
