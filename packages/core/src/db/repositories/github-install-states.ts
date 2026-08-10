@@ -7,7 +7,7 @@
  * callback gains no general tenant database capability.
  */
 
-import { and, asc, eq, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, lte, sql } from 'drizzle-orm';
 import type { Database, SystemDatabase } from '../client';
 import { executeRaw, isPostgresDatabase, select } from '../database-wrapper';
 import { sanitizeDbError } from '../sanitize-error';
@@ -204,9 +204,12 @@ export class GitHubInstallStateDiscoveryRepository {
     }
   }
 
-  async findExpiredTenantIds(limit = 1_000): Promise<string[]> {
+  async findExpiredTenantIds(limit = 1_000, afterTenantId?: string): Promise<string[]> {
     if (!Number.isInteger(limit) || limit <= 0 || limit > MAX_DISCOVERY_TENANTS) {
       throw new RepositoryError('GitHub install state cleanup limit is invalid');
+    }
+    if (afterTenantId !== undefined && !afterTenantId) {
+      throw new RepositoryError('GitHub install state cleanup cursor is invalid');
     }
     try {
       const tenantColumn = (
@@ -217,7 +220,14 @@ export class GitHubInstallStateDiscoveryRepository {
       }
       const rows = await select(this.db, { tenant_id: tenantColumn })
         .from(githubInstallStates)
-        .where(lte(githubInstallStates.expires_at, sql`CURRENT_TIMESTAMP`))
+        .where(
+          afterTenantId === undefined
+            ? lte(githubInstallStates.expires_at, sql`CURRENT_TIMESTAMP`)
+            : and(
+                lte(githubInstallStates.expires_at, sql`CURRENT_TIMESTAMP`),
+                gt(tenantColumn, afterTenantId)
+              )
+        )
         .groupBy(tenantColumn)
         .orderBy(asc(tenantColumn))
         .limit(limit)

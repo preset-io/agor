@@ -513,9 +513,7 @@ export function registerGitHubAppSetupRoutes(
   app.get('/api/github/setup/callback', handleSetupCallback(opts.uiUrl, installStates));
   app.get('/api/github/installations', handleListInstallations(app, opts.db, opts.config));
 
-  console.log(
-    '[github-app-setup] Routes registered: setup=enabled, installations=enabled'
-  );
+  console.log('[github-app-setup] Routes registered: setup=enabled, installations=enabled');
   return installStates;
 }
 

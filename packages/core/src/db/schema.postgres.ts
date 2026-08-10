@@ -470,7 +470,7 @@ export const executorSessionTokenAuthorities = pgTable(
 export const githubInstallStates = pgTable(
   'github_install_states',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
+    tenant_id: text('tenant_id').notNull(),
     state_hash: varchar('state_hash', { length: 64 }).primaryKey(),
     user_id: varchar('user_id', { length: 36 }).notNull(),
     intent: text('intent').notNull(),

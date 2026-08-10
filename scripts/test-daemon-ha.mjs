@@ -296,6 +296,50 @@ try {
   assert.equal(typeof accessToken, 'string');
   cleanupAccessToken = accessToken;
 
+  const issueInstallState = async (base) => {
+    const response = await fetch(`${base}/api/github/setup/state`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    assert.equal(response.status, 200, `GitHub install state issue failed: ${response.status}`);
+    const body = await response.json();
+    assert.match(body.state, /^[a-f0-9]{64}$/);
+    return body.state;
+  };
+
+  // Issue through one daemon and consume through the peer's registered HTTP
+  // route. A replay routed back to the issuer must fail after the shared atomic
+  // delete commits.
+  const peerState = await issueInstallState(daemonA);
+  const peerCallback = await fetch(
+    `${daemonB}/api/github/setup/callback?installation_id=4242&state=${encodeURIComponent(peerState)}`
+  );
+  assert.equal(peerCallback.status, 200);
+  assert.match(await peerCallback.text(), /unverified installation ID/i);
+  const peerReplay = await fetch(
+    `${daemonA}/api/github/setup/callback?installation_id=4242&state=${encodeURIComponent(peerState)}`
+  );
+  assert.equal(peerReplay.status, 400);
+  await peerReplay.text();
+  console.log('ok - GitHub install state issues on one daemon and consumes once on its peer');
+
+  // Exercise both state-bearing ingress paths, then prove nginx's access log
+  // omits the complete request target rather than retaining the raw bearer.
+  const ingressState = await issueInstallState(ingress);
+  const setupPage = await fetch(
+    `${ingress}/api/github/setup/new?name=Agor&state=${encodeURIComponent(ingressState)}`
+  );
+  assert.equal(setupPage.status, 200);
+  await setupPage.text();
+  const ingressCallback = await fetch(
+    `${ingress}/api/github/setup/callback?installation_id=4343&state=${encodeURIComponent(ingressState)}`
+  );
+  assert.equal(ingressCallback.status, 200);
+  await ingressCallback.text();
+  const ingressLogs = dockerOutput('logs', '--no-color', 'ingress');
+  assert(!ingressLogs.includes(ingressState), 'nginx access logs retained raw GitHub setup state');
+  console.log('ok - HA ingress access logs redact GitHub setup query state');
+
   const socketA = await connectAuthenticated(daemonA, accessToken);
   const socketB = await connectAuthenticated(daemonB, accessToken);
   cleanupSockets.add(socketA);
@@ -317,6 +361,7 @@ try {
     assert.equal(health.deployment.capabilities.completionCallbackDurableAdmission, true);
     assert.equal(health.deployment.capabilities.completionCallbackPreAdmissionRecovery, false);
     assert.equal(health.deployment.capabilities.widgetResolutionDurableClaim, true);
+    assert.equal(health.deployment.capabilities.githubInstall, true);
     assert.equal(health.deployment.capabilities.gatewayListeners, true);
     assert.equal(health.deployment.capabilities.gatewayOutboundExactlyOnce, false);
     assert.equal(health.deployment.capabilities.environmentHealthMonitor, true);

@@ -1,7 +1,7 @@
 -- HA-safe GitHub App setup state. Only SHA-256 of the 256-bit random browser
 -- bearer is persisted; the raw state remains outside PostgreSQL and Redis.
 CREATE TABLE "github_install_states" (
-	"tenant_id" text DEFAULT 'default' NOT NULL,
+	"tenant_id" text NOT NULL,
 	"state_hash" varchar(64) PRIMARY KEY NOT NULL,
 	"user_id" varchar(36) NOT NULL,
 	"intent" text NOT NULL,
@@ -18,10 +18,10 @@ ALTER TABLE "github_install_states" FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
 CREATE POLICY "tenant_isolation_github_install_states" ON "github_install_states"
 	USING (
-		"tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')
+		"tenant_id" = NULLIF(current_setting('agor.tenant_id', true), '')
 	)
 	WITH CHECK (
-		"tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')
+		"tenant_id" = NULLIF(current_setting('agor.tenant_id', true), '')
 	);
 --> statement-breakpoint
 -- The unauthenticated GitHub redirect knows only the high-entropy state. This

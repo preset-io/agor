@@ -70,6 +70,8 @@ export interface GitHubInstallStateServiceDependencies {
   db?: TenantScopeAwareDatabase;
   /** Test seam. Supplying a store selects shared-authority semantics. */
   sharedStore?: SharedInstallStateStore;
+  /** Test seam for exercising bounded cleanup pagination. */
+  cleanupTenantLimit?: number;
   now?: () => Date;
   startCleanupTimer?: boolean;
 }
@@ -79,7 +81,12 @@ function hashInstallState(rawState: string): string {
 }
 
 class PostgreSQLInstallStateStore implements SharedInstallStateStore {
-  constructor(private readonly db: TenantScopeAwareDatabase) {}
+  private cleanupAfterTenantId?: string;
+
+  constructor(
+    private readonly db: TenantScopeAwareDatabase,
+    private readonly cleanupTenantLimit = CLEANUP_TENANT_LIMIT
+  ) {}
 
   async issue(input: GitHubInstallStateIssue): Promise<void> {
     // Commit the authority row before its raw bearer leaves the initiation
@@ -130,7 +137,8 @@ class PostgreSQLInstallStateStore implements SharedInstallStateStore {
           'GitHub install state expiry discovery',
           (systemDb) =>
             new GitHubInstallStateDiscoveryRepository(systemDb).findExpiredTenantIds(
-              CLEANUP_TENANT_LIMIT
+              this.cleanupTenantLimit,
+              this.cleanupAfterTenantId
             ),
           { capability: 'github_install_state_maintenance' }
         )
@@ -155,6 +163,12 @@ class PostgreSQLInstallStateStore implements SharedInstallStateStore {
         throw error;
       }
     }
+    // Advance across bounded pages between timer ticks. Without a durable
+    // cursor in this process-local cleanup hint, a full first page of gated
+    // tenants would permanently starve lexically later expired rows. A short
+    // final page completes the sweep and wraps the next pass to the beginning.
+    this.cleanupAfterTenantId =
+      tenantIds.length === this.cleanupTenantLimit ? tenantIds.at(-1) : undefined;
     return purged;
   }
 }
@@ -170,7 +184,7 @@ export class GitHubInstallStateService {
     this.sharedStore =
       dependencies.sharedStore ??
       (dependencies.db && isPostgresDatabaseHandle(dependencies.db)
-        ? new PostgreSQLInstallStateStore(dependencies.db)
+        ? new PostgreSQLInstallStateStore(dependencies.db, dependencies.cleanupTenantLimit)
         : undefined);
     // The composition root always supplies its database. Keep direct
     // standalone/test construction compatible, but never let an explicitly

@@ -5,6 +5,12 @@ import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'vitest';
 import { pendingOfflineCutoverMigrations } from './migrate';
 
+interface JournalEntry {
+  idx: number;
+  tag: string;
+  when: number;
+}
+
 describe('Postgres migrations', () => {
   it('requires the Knowledge claim protocol migration to be an offline existing-db cutover', () => {
     expect(
@@ -49,6 +55,25 @@ describe('Postgres migrations', () => {
         pending: ['0000_pretty_mac_gargan', '0082_github_install_state'],
       })
     ).toEqual([]);
+  });
+
+  it('assigns GitHub install state unique post-HA migration watermarks', async () => {
+    const [postgresJournal, sqliteJournal] = await Promise.all(
+      [
+        new URL('../../drizzle/postgres/meta/_journal.json', import.meta.url),
+        new URL('../../drizzle/sqlite/meta/_journal.json', import.meta.url),
+      ].map(async (url) => JSON.parse(await readFile(url, 'utf8')) as { entries: JournalEntry[] })
+    );
+
+    for (const [journal, expectedTag, expectedIndex] of [
+      [postgresJournal, '0079_github_install_state', 79],
+      [sqliteJournal, '0082_github_install_state', 82],
+    ] as const) {
+      const entry = journal.entries.at(-1);
+      const predecessor = journal.entries.at(-2);
+      expect(entry).toMatchObject({ idx: expectedIndex, tag: expectedTag });
+      expect(entry?.when).toBeGreaterThan(predecessor?.when ?? 0);
+    }
   });
 
   it('keeps Knowledge pgvector storage out of required base migrations', async () => {
@@ -139,6 +164,11 @@ describe('Postgres migrations', () => {
     expect(migration).toContain('"user_id" varchar(36) NOT NULL');
     expect(migration).toContain('"intent" text NOT NULL');
     expect(migration).toContain('ALTER TABLE "github_install_states" FORCE ROW LEVEL SECURITY');
+    expect(migration).toContain(
+      "\"tenant_id\" = NULLIF(current_setting('agor.tenant_id', true), '')"
+    );
+    expect(migration).not.toContain("COALESCE(NULLIF(current_setting('agor.tenant_id'");
+    expect(migration).not.toContain('"tenant_id" text DEFAULT');
     expect(migration).toContain(
       'CREATE INDEX "github_install_states_expires_idx"\n\tON "github_install_states" ("expires_at")'
     );
