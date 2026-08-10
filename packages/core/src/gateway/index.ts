@@ -53,6 +53,11 @@ export {
 export type { GatewayContext } from './context';
 export { formatGatewayContext } from './context';
 export {
+  GatewayListenerError,
+  type GatewayListenerFailureKind,
+  gatewayListenerFailure,
+} from './listener-error';
+export {
   formatGatewayFollowUpRoutingMessage,
   formatGatewayMarkdownSessionReference,
   formatGatewaySessionCreatedMessage,

@@ -31,6 +31,7 @@ import type {
   GatewayListenerOptions,
   InboundMessage,
 } from '../connector';
+import { GatewayListenerError } from '../listener-error';
 import { addToRingBuffer, escapeRegex } from './shared';
 
 // ============================================================================
@@ -431,10 +432,11 @@ export class GitHubConnector implements GatewayConnector {
       console.log(
         `[github] Authenticated as installation ${this.config.installation_id} on ${(installation.account && 'login' in installation.account ? installation.account.login : undefined) ?? 'unknown'}`
       );
-    } catch (error) {
-      console.error('[github] Failed to validate installation:', error);
-      throw new Error(
-        'GitHub App authentication failed — check app_id, private_key, and installation_id'
+    } catch {
+      throw new GatewayListenerError(
+        'github_credentials_invalid',
+        'permanent',
+        'Verify the GitHub App id, private key, installation id, and installation access.'
       );
     }
 

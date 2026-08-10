@@ -48,6 +48,7 @@ import type {
   GatewayListenerOptions,
   InboundMessage,
 } from '../connector';
+import { GatewayListenerError } from '../listener-error';
 import { addToRingBuffer, escapeRegex } from './shared';
 
 // ============================================================================
@@ -374,9 +375,12 @@ export class ShortcutConnector implements GatewayConnector {
     try {
       me = await this.request<ShortcutMember>('/member');
       console.log(`[shortcut] Authenticated (token member ${me.id})`);
-    } catch (error) {
-      console.error('[shortcut] Failed to validate api_token:', error);
-      throw new Error('Shortcut authentication failed — check api_token');
+    } catch {
+      throw new GatewayListenerError(
+        'shortcut_token_invalid',
+        'permanent',
+        'Replace the Shortcut API token and verify workspace access.'
+      );
     }
 
     // Mention target: explicit override, else the token owner.
