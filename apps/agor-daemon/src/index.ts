@@ -630,6 +630,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     requireTenantScope: multiTenancy.mode === 'required_from_auth',
     skipFirstRunAdminBootstrap: config.external_launch?.enabled === true,
+    // Wire database.postgresql.pool from config.yaml through to the PG client.
+    // (The URL itself may come from env/DATABASE_URL; the pool never was, so
+    // config.yaml pool sizing was previously ignored.) PostgreSQL only.
+    pool: config.database?.postgresql?.pool,
   });
   configureUploadStagingStoreFromConfig(config, undefined, db);
 

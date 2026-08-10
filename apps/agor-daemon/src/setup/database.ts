@@ -110,6 +110,12 @@ export async function initializeDatabase(
     tenantId?: TenantID | string;
     requireTenantScope?: boolean;
     skipFirstRunAdminBootstrap?: boolean;
+    /**
+     * PostgreSQL connection pool settings (from database.postgresql.pool).
+     * Forwarded to the client so operators can size the pool from config.yaml;
+     * omitted keys fall back to the client defaults. PostgreSQL only.
+     */
+    pool?: { min?: number; max?: number; idleTimeout?: number };
   } = {}
 ): Promise<DatabaseInitResult> {
   const dialect = detectDialectFromUrl(dbPath) ?? getDatabaseDialect();
@@ -119,7 +125,7 @@ export async function initializeDatabase(
   await ensureDatabaseDirectory(dbPath);
 
   // Create database with foreign keys enabled
-  const db = await createDatabaseAsync({ url: dbPath });
+  const db = await createDatabaseAsync({ url: dbPath, pool: options.pool });
   const scopedDb = createTenantScopedDatabaseProxy(db, {
     requireScope: options.requireTenantScope === true,
     label: 'daemon database',
