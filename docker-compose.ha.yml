@@ -33,7 +33,7 @@ x-daemon-common: &daemon-common
   build:
     context: .
     dockerfile: docker/Dockerfile
-    target: production-source
+    target: production-source-ha
     args:
       AGOR_BUILD_SHA: ${AGOR_BUILD_SHA:-dev}
   environment: *daemon-environment
@@ -46,7 +46,6 @@ x-daemon-common: &daemon-common
     # Nested Docker mounts are intentional. This is not per-user isolation.
     - agor-ha-user-home:/home/agor
     - agor-ha-home:/home/agor/.agor
-    - ./docker/ha/config.yaml:/home/agor/.agor/config.yaml:ro
   restart: unless-stopped
   healthcheck:
     test:
@@ -95,10 +94,7 @@ services:
 
   migrate:
     <<: *daemon-common
-    entrypoint: ['/bin/sh', '-ec']
-    command:
-      - >-
-        agor db migrate --yes --offline-cutover
+    command: ['agor', 'db', 'migrate', '--yes', '--offline-cutover']
     restart: 'no'
     healthcheck:
       disable: true
@@ -108,7 +104,7 @@ services:
 
   daemon-a:
     <<: *daemon-common
-    entrypoint: ['agor-daemon']
+    command: ['agor-daemon']
     environment:
       <<: *daemon-environment
       AGOR_DAEMON_INSTANCE_ID: daemon-a
@@ -123,7 +119,7 @@ services:
 
   daemon-b:
     <<: *daemon-common
-    entrypoint: ['agor-daemon']
+    command: ['agor-daemon']
     environment:
       <<: *daemon-environment
       AGOR_DAEMON_INSTANCE_ID: daemon-b

@@ -263,3 +263,25 @@ USER agor
 
 EXPOSE ${DAEMON_PORT:-3030}
 ENTRYPOINT ["docker-entrypoint-prod.sh"]
+
+# ============================================================================
+# Stage 4c: Production-from-source HA smoke runtime
+# ============================================================================
+# Branch worktrees can be protected by host ACLs that the container's `agor`
+# user cannot read through a bind mount. Bake the non-secret HA configuration
+# into the image instead, then materialize it atomically into the shared Agor
+# home at container startup. Secrets remain runtime environment variables.
+FROM production-source AS production-source-ha
+
+USER root
+COPY docker/ha/config.yaml /tmp/agor-ha-config.yaml
+COPY docker/ha/docker-entrypoint.sh /tmp/agor-ha-entrypoint
+# COPY can preserve restrictive worktree ACLs, including on an implicitly
+# created parent directory. `install` creates clean files and permissions.
+RUN install -d -o root -g root -m 0755 /etc/agor \
+  && install -o root -g root -m 0444 /tmp/agor-ha-config.yaml /etc/agor/ha-config.yaml \
+  && install -o root -g root -m 0555 /tmp/agor-ha-entrypoint /usr/local/bin/agor-ha-entrypoint \
+  && rm /tmp/agor-ha-config.yaml /tmp/agor-ha-entrypoint
+USER agor
+
+ENTRYPOINT ["/usr/local/bin/agor-ha-entrypoint"]
