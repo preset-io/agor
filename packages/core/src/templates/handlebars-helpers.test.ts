@@ -1070,6 +1070,10 @@ NAME={{replace (uppercase branch.name) "-" "_"}}
           ip_address: '',
         },
         custom: { foo: 'bar' },
+        // Facts reported by a lifecycle command, exposed as {{env.*}}. Always
+        // present (empty before the environment has started) so a template
+        // referencing {{env.url}} renders '' rather than throwing.
+        env: {},
       });
     });
 

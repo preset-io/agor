@@ -650,7 +650,7 @@ describe('BranchRepository.findAll', () => {
 
 describe('BranchRepository.findActiveEnvironmentRefs', () => {
   dbTest(
-    'returns routing refs for running and starting branch environments only',
+    'returns routing refs for running, starting and error branch environments',
     async ({ db }) => {
       const repoRepo = new RepoRepository(db);
       const branchRepo = new BranchRepository(db);
@@ -681,7 +681,10 @@ describe('BranchRepository.findActiveEnvironmentRefs', () => {
           environment_instance: { status: 'stopped' },
         })
       );
-      await branchRepo.create(
+      // `error` is monitorable on purpose: an environment demoted for failing
+      // its health probe has to keep being polled, otherwise it can never be
+      // observed recovering and the red state becomes permanent.
+      const errored = await branchRepo.create(
         createBranchData({
           repo_id: repo.repo_id as UUID,
           name: 'env-error',
@@ -700,7 +703,7 @@ describe('BranchRepository.findActiveEnvironmentRefs', () => {
       const refs = await branchRepo.findActiveEnvironmentRefs();
       const branchIds = refs.map((ref) => ref.branch_id).sort();
 
-      expect(branchIds).toEqual([running.branch_id, starting.branch_id].sort());
+      expect(branchIds).toEqual([running.branch_id, starting.branch_id, errored.branch_id].sort());
     }
   );
 });

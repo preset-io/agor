@@ -1951,12 +1951,27 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       ...environmentUpdate,
     } as EnvironmentInstance;
 
+    // Normalize a requested clear to an explicit `null`, NOT a deleted key.
+    //
+    // This object is persisted via `patch`, and the repository deep-merges it
+    // into the stored branch: the merge iterates the SOURCE keys, so a key that
+    // is absent is PRESERVED from the existing row, while `null` is the
+    // explicit clear sentinel (see deepMerge in repositories/merge-utils.ts).
+    // Deleting the key therefore did the exact opposite of clearing it —
+    // silently, for every clearable field. Observed live: after `stop`
+    // (which passes `process: undefined`) the environment kept its previous
+    // `process` with a dead pid, and `facts` documented as "cleared on nuke"
+    // never actually cleared, so a deleted Codespace's URL stayed on the branch.
+    //
+    // `undefined` from an in-process caller and `null` from an executor
+    // callback (which crosses a JSON boundary that drops undefined) both mean
+    // "clear", and both must reach the repository as `null`.
     for (const key of BRANCH_ENVIRONMENT_CLEARABLE_FIELDS) {
       if (
         Object.hasOwn(environmentUpdate, key) &&
         (environmentUpdate[key] === undefined || environmentUpdate[key] === null)
       ) {
-        delete updatedEnvironment[key];
+        (updatedEnvironment as Record<string, unknown>)[key] = null;
       }
     }
 
@@ -2906,8 +2921,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const requestedVariant = data?.variant ?? env.default;
     const currentVariant = branch.environment_variant;
+    const variantChanged = requestedVariant !== currentVariant;
 
-    if (requestedVariant !== currentVariant) {
+    if (variantChanged) {
       // Refuse to swap variants while the env is live. The current process
       // was started with the old command strings; replacing them out from
       // under it would leave us unable to stop/restart cleanly. This guard
@@ -2938,7 +2954,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // Re-rendering while the environment is running resolves {{env.*}} to
         // the facts it reported (e.g. a Codespace URL that only exists after
         // start). Undefined for a never-started branch → {{env.url}} renders ''.
-        facts: branch.environment_instance?.facts,
+        //
+        // On a variant SWITCH the old facts describe the other variant's
+        // environment, so they must not leak into the new variant's templates —
+        // otherwise `app: "{{env.url}}"` on the incoming variant renders the
+        // outgoing one's address.
+        facts: variantChanged ? undefined : branch.environment_instance?.facts,
       },
       requestedVariant
     );
@@ -2953,6 +2974,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       health: snapshot.health,
       app: snapshot.app,
     });
+
+    // Drop the outgoing variant's runtime observations. `facts` and the
+    // `access_urls` derived from them describe the environment the OTHER
+    // variant started, and nothing regenerates them until the new variant is
+    // started — so leaving them behind means a `local` branch keeps serving a
+    // Codespace link in the UI, and any variant that defines no health URL
+    // falls through to the stale `health` fact and probes a foreign
+    // environment. Safe to do here: switching variants is already refused
+    // while the environment is running or starting.
+    if (variantChanged && branch.environment_instance) {
+      await this.updateEnvironment(id, { facts: null, access_urls: null }, params);
+    }
 
     return await this.withTenantDatabase(params, () =>
       this.patch(

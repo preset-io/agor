@@ -789,8 +789,12 @@ describe('BranchesService environment start async behavior', () => {
       | Record<string, unknown>
       | undefined;
     expect(patchedEnvironment).toMatchObject({ status: 'stopped' });
-    expect(patchedEnvironment).not.toHaveProperty('process');
-    expect(patchedEnvironment).not.toHaveProperty('last_health_check');
+    // Must be an explicit null, NOT an absent key: the repository DEEP-MERGES
+    // environment_instance, and a key missing from the source is preserved from
+    // the stored row (repositories/merge-utils.ts). Asserting absence here used
+    // to pass while the field silently survived in the database.
+    expect(patchedEnvironment?.process).toBeNull();
+    expect(patchedEnvironment?.last_health_check).toBeNull();
     expect(patchSpy).toHaveBeenCalledWith(
       branch.branch_id,
       expect.objectContaining({
@@ -886,9 +890,11 @@ describe('BranchesService environment start async behavior', () => {
       | Record<string, unknown>
       | undefined;
     expect(patchedEnvironment).toMatchObject({ status: 'starting' });
-    expect(patchedEnvironment).not.toHaveProperty('process');
-    expect(patchedEnvironment).not.toHaveProperty('last_error');
-    expect(patchedEnvironment).not.toHaveProperty('last_command');
+    // Explicit nulls, not absent keys — see the deep-merge note above. A dead
+    // `process` surviving a stop was the live symptom of getting this wrong.
+    expect(patchedEnvironment?.process).toBeNull();
+    expect(patchedEnvironment?.last_error).toBeNull();
+    expect(patchedEnvironment?.last_command).toBeNull();
   });
 });
 
@@ -2583,5 +2589,161 @@ describe('BranchesService no-probe startup exit', () => {
     const result = await service.checkHealth(branch.branch_id);
 
     expect(result.environment_instance?.status).toBe('running');
+  });
+});
+
+describe('BranchesService.renderEnvironment variant-switch fact hygiene', () => {
+  /**
+   * `facts` are produced BY a variant's lifecycle command, and `access_urls` is
+   * derived from the reserved `url` fact. After switching variants they
+   * describe a DIFFERENT environment, and nothing regenerates them until the
+   * new variant is started.
+   *
+   * Observed live: a branch switched codespaces -> local kept
+   * `access_urls: [Codespace URL]` (the link the UI surfaces) and kept a
+   * `health` fact that `checkHealth` falls back to whenever the active variant
+   * defines no health URL — probing a foreign environment.
+   */
+  const CODESPACE_URL = 'https://cs-abc-8088.app.github.dev';
+
+  const harness = (opts: { current: string; requested: string }) => {
+    const reposGet = vi.fn(async () => ({
+      repo_id: 'repo-1',
+      slug: 'org/repo',
+      environment: {
+        version: 2,
+        default: 'local',
+        variants: {
+          local: { start: 'echo local', stop: 'echo stop', app: 'http://localhost:8088' },
+          // mirrors the real codespaces variant: no health, app from a fact
+          remote: { start: 'echo remote', stop: 'echo stop', app: '{{env.url}}' },
+        },
+      },
+    }));
+    const app = {
+      sessionTokenService: { generateToken: vi.fn(async () => 'executor-token') },
+      service(path: string) {
+        if (path === 'repos') return { get: reposGet };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: 'wt-1',
+      repo_id: 'repo-1',
+      name: 'wt-1',
+      path: '/tmp/wt-1',
+      branch_unique_id: 1,
+      environment_variant: opts.current,
+      environment_instance: {
+        status: 'stopped',
+        facts: { url: CODESPACE_URL, health: `${CODESPACE_URL}/health` },
+        access_urls: [{ name: 'App', url: CODESPACE_URL }],
+      },
+    } as never);
+    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockResolvedValue({} as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue({} as never);
+    return { service, updateEnvironment, patchSpy };
+  };
+
+  it('clears facts and access_urls when the variant changes', async () => {
+    const { service, updateEnvironment } = harness({ current: 'remote', requested: 'local' });
+
+    await service.renderEnvironment('wt-1' as BranchID, { variant: 'local' });
+
+    expect(updateEnvironment).toHaveBeenCalledWith(
+      'wt-1',
+      { facts: null, access_urls: null },
+      undefined
+    );
+  });
+
+  it('does NOT clear them when re-rendering the SAME variant', async () => {
+    const { service, updateEnvironment } = harness({ current: 'remote', requested: 'remote' });
+
+    // Re-rendering a live remote variant must keep resolving {{env.*}} from the
+    // facts that variant reported — clearing here would break the app URL.
+    await service.renderEnvironment('wt-1' as BranchID, { variant: 'remote' });
+
+    expect(updateEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('does not leak the old variant facts into the new variant templates', async () => {
+    const { service, patchSpy } = harness({ current: 'local', requested: 'remote' });
+
+    await service.renderEnvironment('wt-1' as BranchID, { variant: 'remote' });
+
+    // `remote` renders app from `{{env.url}}`. The only facts on the branch
+    // belong to the outgoing variant, so this must NOT resolve to them.
+    const patched = patchSpy.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(patched.app_url ?? '').not.toContain('cs-abc-8088');
+  });
+});
+
+describe('BranchesService.updateEnvironment clear semantics', () => {
+  /**
+   * The persisted environment_instance is DEEP-MERGED by the repository: the
+   * merge walks the source keys, so an absent key is preserved from the stored
+   * row and `null` is the explicit clear sentinel (repositories/merge-utils.ts).
+   *
+   * Deleting a clearable key therefore did the opposite of clearing it. Seen
+   * live: after `stop` (which passes `process: undefined`) the branch kept its
+   * previous `process` with a dead pid, and `facts` — documented as "cleared on
+   * nuke" — never cleared, leaving a deleted Codespace's URL on the branch.
+   */
+  const harness = () => {
+    const { service } = createServiceHarness();
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: 'wt-1',
+      repo_id: 'repo-1',
+      name: 'wt-1',
+      environment_instance: {
+        status: 'running',
+        process: { pid: 4242, started_at: '2026-08-10T10:00:00.000Z' },
+        facts: { url: 'https://cs-abc-8088.app.github.dev' },
+        access_urls: [{ name: 'App', url: 'https://cs-abc-8088.app.github.dev' }],
+      },
+    } as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue({} as never);
+    return { service, patchSpy };
+  };
+
+  const persistedEnv = (patchSpy: ReturnType<typeof vi.spyOn>) => {
+    const data = patchSpy.mock.calls[0]?.[1] as
+      | { environment_instance?: Record<string, unknown> }
+      | undefined;
+    return data?.environment_instance ?? {};
+  };
+
+  it('persists an explicit null for a field cleared with undefined (in-process caller)', async () => {
+    const { service, patchSpy } = harness();
+
+    await service.updateEnvironment('wt-1' as BranchID, { status: 'stopped', process: undefined });
+
+    const env = persistedEnv(patchSpy);
+    // A deleted key would be preserved by the deep merge — the dead pid would survive.
+    expect(Object.hasOwn(env, 'process')).toBe(true);
+    expect(env.process).toBeNull();
+  });
+
+  it('persists an explicit null for a field cleared with null (executor callback)', async () => {
+    const { service, patchSpy } = harness();
+
+    await service.updateEnvironment('wt-1' as BranchID, { facts: null, access_urls: null });
+
+    const env = persistedEnv(patchSpy);
+    expect(env.facts).toBeNull();
+    expect(env.access_urls).toBeNull();
+  });
+
+  it('leaves untouched fields alone', async () => {
+    const { service, patchSpy } = harness();
+
+    await service.updateEnvironment('wt-1' as BranchID, { status: 'stopped' });
+
+    const env = persistedEnv(patchSpy);
+    expect(env.facts).toEqual({ url: 'https://cs-abc-8088.app.github.dev' });
+    expect(env.status).toBe('stopped');
   });
 });

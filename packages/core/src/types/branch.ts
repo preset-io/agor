@@ -543,7 +543,9 @@ export interface BranchEnvironmentInstance {
    * `access_urls` after start, which is what surfaces `app: "{{env.url}}"`.
    *
    * Persisted (a cache of the last command's report), not authoritative — a
-   * later command may refresh or clear it. Cleared on nuke.
+   * later command may refresh or clear it. Cleared on nuke, and on a variant
+   * switch: facts are produced BY a specific variant's lifecycle command and
+   * describe a different environment once the variant changes.
    */
   facts?: Record<string, string>;
 }
@@ -555,6 +557,9 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'last_command',
   'logs',
   'facts',
+  // Derived from the reserved `url` fact, so it goes stale in exactly the same
+  // situations facts do and has to be clearable alongside them.
+  'access_urls',
 ] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
 
 export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARABLE_FIELDS)[number];
