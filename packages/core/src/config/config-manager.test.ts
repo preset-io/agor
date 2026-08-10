@@ -111,6 +111,36 @@ describe('resolveEffectiveConfig', () => {
     expect(resolved.multi_tenancy?.mode).toBe('static');
     expect(input).toEqual({ daemon: { host: 'yaml-host', port: 1234 } });
   });
+
+  it('keeps Unix executor impersonation opt-in while preserving explicit overrides', () => {
+    expect(
+      resolveEffectiveConfig(
+        {},
+        {
+          AGOR_USE_EXECUTOR: 'false',
+          AGOR_EXECUTOR_USERNAME: '',
+        }
+      ).execution?.executor_unix_user
+    ).toBeUndefined();
+    expect(
+      resolveEffectiveConfig(
+        {},
+        {
+          AGOR_USE_EXECUTOR: 'true',
+          AGOR_EXECUTOR_USERNAME: '',
+        }
+      ).execution?.executor_unix_user
+    ).toBe('agor_executor');
+    expect(
+      resolveEffectiveConfig(
+        {},
+        {
+          AGOR_USE_EXECUTOR: 'false',
+          AGOR_EXECUTOR_USERNAME: 'custom-runner',
+        }
+      ).execution?.executor_unix_user
+    ).toBe('custom-runner');
+  });
 });
 
 describe('resolveTeammateFrameworkRepoUrl', () => {
