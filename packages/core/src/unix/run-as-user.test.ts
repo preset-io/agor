@@ -112,6 +112,15 @@ describe('run-as-user', () => {
         expect(result.args[5]).toContain("node 'script.js'");
       });
 
+      it('rejects invalid env names before building the inline shell command', () => {
+        expect(() =>
+          buildSpawnArgs('node', ['executor.js'], {
+            asUser: 'alice',
+            env: { 'INVALID-NAME': 'value' },
+          })
+        ).toThrow('buildSpawnArgs: invalid env var name: "INVALID-NAME"');
+      });
+
       it('ignores env vars when not impersonating', () => {
         const result = buildSpawnArgs('node', ['script.js'], {
           env: { NODE_ENV: 'test' },

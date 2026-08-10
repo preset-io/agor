@@ -253,6 +253,13 @@ export function buildSpawnArgs(
     throw new Error(`buildSpawnArgs: invalid Unix username: ${JSON.stringify(asUser)}`);
   }
 
+  const envEntries = Object.entries(env ?? {});
+  for (const [key] of envEntries) {
+    if (!isValidEnvVarName(key)) {
+      throw new Error(`buildSpawnArgs: invalid env var name: ${JSON.stringify(key)}`);
+    }
+  }
+
   // Prefer env-file sourcing: secrets stay out of argv entirely.
   if (envFilePath) {
     // Structural validation only. The path is passed as a positional argv
@@ -273,13 +280,6 @@ export function buildSpawnArgs(
       throw new Error(
         `buildSpawnArgs: envFilePath contains control characters: ${JSON.stringify(envFilePath)}`
       );
-    }
-
-    const envEntries = Object.entries(env ?? {});
-    for (const [key] of envEntries) {
-      if (!isValidEnvVarName(key)) {
-        throw new Error(`buildSpawnArgs: invalid env var name: ${JSON.stringify(key)}`);
-      }
     }
 
     if (shell) {
