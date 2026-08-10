@@ -1,5 +1,5 @@
 import { NotFound } from '@agor/core/feathers';
-import type { Message, SessionID, TaskID } from '@agor/core/types';
+import type { BranchPermissionLevel, Message, SessionID, TaskID } from '@agor/core/types';
 import { PermissionScope, PermissionStatus, ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -30,8 +30,21 @@ function permissionMessage(status = PermissionStatus.PENDING): Message {
   } as Message;
 }
 
-function harness(message = permissionMessage()) {
-  const sessions = { get: vi.fn().mockResolvedValue({ session_id: SESSION_ID }) };
+function harness(
+  message = permissionMessage(),
+  options: {
+    branchRbacEnabled?: boolean;
+    branchPermission?: BranchPermissionLevel;
+    sessionCreatedBy?: string;
+  } = {}
+) {
+  const sessions = {
+    get: vi.fn().mockResolvedValue({
+      session_id: SESSION_ID,
+      branch_id: 'branch-a',
+      created_by: options.sessionCreatedBy ?? 'user-a',
+    }),
+  };
   const messages = {
     findByTask: vi.fn().mockResolvedValue([message]),
     emit: vi.fn(),
@@ -49,7 +62,21 @@ function harness(message = permissionMessage()) {
     tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
     user: { user_id: 'user-a', role: ROLES.MEMBER },
   } as never;
-  return { app, messages, params, sessions };
+  const branchRepository = {
+    findById: vi.fn().mockResolvedValue({
+      branch_id: 'branch-a',
+      name: 'Branch A',
+      others_can: options.branchPermission ?? 'prompt',
+    }),
+    isOwner: vi.fn().mockResolvedValue(false),
+    resolveUserPermission: vi.fn().mockResolvedValue(options.branchPermission ?? 'prompt'),
+  };
+  const authorization = {
+    branchRbacEnabled: options.branchRbacEnabled ?? false,
+    branchRepository,
+    allowSuperadmin: true,
+  } as never;
+  return { app, authorization, branchRepository, messages, params, sessions };
 }
 
 function submission(
@@ -69,10 +96,16 @@ function submission(
 
 describe('deliverPermissionDecision', () => {
   it('keeps standalone delivery retryable and lets the executor commit the outcome', async () => {
-    const { app, messages, params, sessions } = harness();
+    const { app, authorization, messages, params, sessions } = harness();
 
     await expect(
-      deliverPermissionDecision({ app, sessionId: SESSION_ID, data: submission(), params })
+      deliverPermissionDecision({
+        app,
+        sessionId: SESSION_ID,
+        data: submission(),
+        params,
+        authorization,
+      })
     ).resolves.toEqual({ success: true });
 
     expect(sessions.get).toHaveBeenCalledWith(SESSION_ID, params);
@@ -101,21 +134,35 @@ describe('deliverPermissionDecision', () => {
   });
 
   it('fails closed before lookup or delivery when the hooked Session read denies access', async () => {
-    const { app, messages, params, sessions } = harness();
+    const { app, authorization, messages, params, sessions } = harness();
     sessions.get.mockRejectedValue(new NotFound('Session not found'));
 
     await expect(
-      deliverPermissionDecision({ app, sessionId: SESSION_ID, data: submission(), params })
+      deliverPermissionDecision({
+        app,
+        sessionId: SESSION_ID,
+        data: submission(),
+        params,
+        authorization,
+      })
     ).rejects.toThrow('Session not found');
     expect(messages.findByTask).not.toHaveBeenCalled();
     expect(messages.emit).not.toHaveBeenCalled();
   });
 
   it('does not redeliver after the executor has committed the Message outcome', async () => {
-    const { app, messages, params } = harness(permissionMessage(PermissionStatus.APPROVED));
+    const { app, authorization, messages, params } = harness(
+      permissionMessage(PermissionStatus.APPROVED)
+    );
 
     await expect(
-      deliverPermissionDecision({ app, sessionId: SESSION_ID, data: submission(), params })
+      deliverPermissionDecision({
+        app,
+        sessionId: SESSION_ID,
+        data: submission(),
+        params,
+        authorization,
+      })
     ).resolves.toEqual({
       success: false,
       alreadyResolved: true,
@@ -126,7 +173,7 @@ describe('deliverPermissionDecision', () => {
   });
 
   it('does not let a changed client Task selector authorize the persisted request', async () => {
-    const { app, messages, params } = harness();
+    const { app, authorization, messages, params } = harness();
     messages.findByTask.mockResolvedValue([]);
 
     await expect(
@@ -135,13 +182,14 @@ describe('deliverPermissionDecision', () => {
         sessionId: SESSION_ID,
         data: submission({ taskId: '00000000-0000-7000-8000-000000000099' as TaskID }),
         params,
+        authorization,
       })
     ).rejects.toThrow('not found');
     expect(messages.emit).not.toHaveBeenCalled();
   });
 
   it('rejects a forged persistent scope instead of widening the one-shot grant', async () => {
-    const { app, messages, params } = harness();
+    const { app, authorization, messages, params } = harness();
 
     await expect(
       deliverPermissionDecision({
@@ -149,8 +197,65 @@ describe('deliverPermissionDecision', () => {
         sessionId: SESSION_ID,
         data: submission({ remember: true, scope: 'session' as PermissionScope }),
         params,
+        authorization,
       })
     ).rejects.toThrow('valid scope');
+    expect(messages.emit).not.toHaveBeenCalled();
+  });
+
+  it('denies a view-only collaborator before delivering an execution decision', async () => {
+    const { app, authorization, messages, params } = harness(permissionMessage(), {
+      branchRbacEnabled: true,
+      branchPermission: 'view',
+      sessionCreatedBy: 'user-b',
+    });
+
+    await expect(
+      deliverPermissionDecision({
+        app,
+        sessionId: SESSION_ID,
+        data: submission(),
+        params,
+        authorization,
+      })
+    ).rejects.toThrow("'view' permission");
+    expect(messages.findByTask).not.toHaveBeenCalled();
+    expect(messages.emit).not.toHaveBeenCalled();
+  });
+
+  it('allows session-tier users to decide permissions only for their own Session', async () => {
+    const { app, authorization, messages, params } = harness(permissionMessage(), {
+      branchRbacEnabled: true,
+      branchPermission: 'session',
+      sessionCreatedBy: 'user-a',
+    });
+
+    await expect(
+      deliverPermissionDecision({
+        app,
+        sessionId: SESSION_ID,
+        data: submission(),
+        params,
+        authorization,
+      })
+    ).resolves.toEqual({ success: true });
+    expect(messages.emit).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a permission Message whose nested and canonical Task bindings differ', async () => {
+    const message = permissionMessage();
+    (message.content as { task_id: string }).task_id = '00000000-0000-7000-8000-000000000099';
+    const { app, authorization, messages, params } = harness(message);
+
+    await expect(
+      deliverPermissionDecision({
+        app,
+        sessionId: SESSION_ID,
+        data: submission(),
+        params,
+        authorization,
+      })
+    ).rejects.toThrow('Task binding is inconsistent');
     expect(messages.emit).not.toHaveBeenCalled();
   });
 });

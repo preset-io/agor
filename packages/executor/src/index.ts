@@ -160,6 +160,7 @@ export class AgorExecutor {
       const event = data as {
         requestId: string;
         taskId: string;
+        sessionId: string;
         allow: boolean;
         reason?: string;
         remember: boolean;
@@ -168,7 +169,7 @@ export class AgorExecutor {
       };
       console.log('[executor] Received permission_resolved event:', event);
 
-      if (event.taskId === this.config.taskId) {
+      if (event.taskId === this.config.taskId && event.sessionId === this.config.sessionId) {
         this.recordPulse('sdk_started', 'permission.resolved');
         // Forward to global permission manager
         globalPermissionManager.resolvePermission({

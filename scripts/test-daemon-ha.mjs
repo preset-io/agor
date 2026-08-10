@@ -308,7 +308,7 @@ try {
     assert.equal(health.deployment.supportProfile, 'constrained-active-active');
     assert.equal(health.deployment.capabilities.taskExecution, true);
     assert.equal(health.deployment.capabilities.executorTokenAuthority, true);
-    assert.equal(health.deployment.capabilities.interactivePermissions, false);
+    assert.equal(health.deployment.capabilities.agorManagedInteractivePermissions, true);
     assert.equal(health.deployment.capabilities.scheduler, true);
     assert.equal(health.deployment.capabilities.sessionQueue, true);
     assert.equal(health.deployment.capabilities.taskRuntimeReconciliation, true);
@@ -435,7 +435,7 @@ try {
   const health = await socketHealth(socketA);
   assert.equal(health.deployment.supportProfile, 'constrained-active-active');
   assert.equal(health.deployment.capabilities.taskExecution, true);
-  assert.equal(health.deployment.capabilities.interactivePermissions, false);
+  assert.equal(health.deployment.capabilities.agorManagedInteractivePermissions, true);
   console.log('ok - authenticated health exposes constrained support capabilities');
   const boardEvents = [];
   const anonymousBoardEvents = [];

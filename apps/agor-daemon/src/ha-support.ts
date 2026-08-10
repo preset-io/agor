@@ -6,7 +6,7 @@ import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 export const HA_CONSTRAINED_PROFILE = 'constrained-active-active' as const;
 
 export const HA_UNSUPPORTED_FEATURES = {
-  interactivePermissions:
+  providerNativeInteractivePermissions:
     'provider-native interactive permission modes without Agor realtime decision routing',
   mcpOAuth: 'MCP OAuth flows',
   githubInstall: 'GitHub App installation state',
@@ -101,6 +101,6 @@ export function assertHaTaskPermissionSupported(
     !hasAgorRealtimeDecisionHandler &&
     !isHaNonInteractivePermission(options)
   ) {
-    throw haUnavailable('interactivePermissions');
+    throw haUnavailable('providerNativeInteractivePermissions');
   }
 }

@@ -237,6 +237,16 @@ describe('AgorExecutor watchdog handoff', () => {
     listeners.get('messages:permission_resolved')?.({
       requestId: 'request-other',
       taskId: 'task-other',
+      sessionId: 'session-1',
+      allow: true,
+      remember: false,
+      scope: 'once',
+      decidedBy: 'user-a',
+    });
+    listeners.get('messages:permission_resolved')?.({
+      requestId: 'request-wrong-session',
+      taskId: 'task-1',
+      sessionId: 'session-other',
       allow: true,
       remember: false,
       scope: 'once',
@@ -245,6 +255,7 @@ describe('AgorExecutor watchdog handoff', () => {
     listeners.get('messages:permission_resolved')?.({
       requestId: 'request-1',
       taskId: 'task-1',
+      sessionId: 'session-1',
       allow: true,
       reason: 'Approved by user',
       remember: false,

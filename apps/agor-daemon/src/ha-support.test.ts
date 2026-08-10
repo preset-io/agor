@@ -16,7 +16,7 @@ describe('constrained HA support profile', () => {
     capabilities: {
       taskExecution: true as const,
       executorTokenAuthority: true as const,
-      interactivePermissions: true as const,
+      agorManagedInteractivePermissions: true as const,
       scheduler: true as const,
       sessionQueue: true as const,
       taskRuntimeReconciliation: true as const,
@@ -48,12 +48,12 @@ describe('constrained HA support profile', () => {
   };
 
   it('keeps unsupported provider-native prompts behind an explicit stable feature code', () => {
-    expect(() => rejectInConstrainedHa(ha, 'interactivePermissions')({} as HookContext)).toThrow(
-      /provider-native interactive permission modes/
-    );
-    expect(haUnavailable('interactivePermissions').data).toMatchObject({
+    expect(() =>
+      rejectInConstrainedHa(ha, 'providerNativeInteractivePermissions')({} as HookContext)
+    ).toThrow(/provider-native interactive permission modes/);
+    expect(haUnavailable('providerNativeInteractivePermissions').data).toMatchObject({
       code: 'HA_FEATURE_UNSUPPORTED',
-      feature: 'interactivePermissions',
+      feature: 'providerNativeInteractivePermissions',
       support_profile: 'constrained-active-active',
     });
   });
@@ -114,7 +114,7 @@ describe('constrained HA support profile', () => {
 
   it('keeps the audited process-affine inventory explicit', () => {
     expect(Object.keys(HA_UNSUPPORTED_FEATURES)).toEqual([
-      'interactivePermissions',
+      'providerNativeInteractivePermissions',
       'mcpOAuth',
       'githubInstall',
       'codexAuth',
@@ -140,8 +140,8 @@ describe('constrained HA support profile', () => {
 
   it('does not change standalone behavior', () => {
     const context = {} as HookContext;
-    expect(rejectInConstrainedHa({ mode: 'standalone' }, 'interactivePermissions')(context)).toBe(
-      context
-    );
+    expect(
+      rejectInConstrainedHa({ mode: 'standalone' }, 'providerNativeInteractivePermissions')(context)
+    ).toBe(context);
   });
 });

@@ -101,6 +101,7 @@ import { rejectInConstrainedHa } from './ha-support.js';
 import { classifyMissingCredentialFailure } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
+import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
@@ -971,6 +972,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const protectWidgetMessageWrites = protectExternalWidgetMessageWrites((messageId) =>
     messagesService.findByIdForScopeCheck(messageId as MessageID)
   );
+  const protectPermissionMessageWrites = protectExternalPermissionMessageWrites((messageId) =>
+    messagesService.findByIdForScopeCheck(messageId as MessageID)
+  );
 
   app.service('messages').hooks({
     before: {
@@ -994,6 +998,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create messages'),
         protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
         ...(branchRbacEnabled
           ? [
               resolveSessionContext(),
@@ -1013,7 +1018,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           AGENTIC_TOOL_DISPLAY_NAMES
         ),
       ],
-      update: [protectWidgetMessageWrites],
+      update: [protectWidgetMessageWrites, protectPermissionMessageWrites],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),
         ...(branchRbacEnabled
@@ -1025,6 +1030,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
         protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete messages'),
@@ -1037,6 +1043,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
         protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
       ],
     },
     after: {

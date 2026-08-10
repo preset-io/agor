@@ -45,7 +45,7 @@ describe('resolveDeploymentConfig', () => {
       capabilities: {
         taskExecution: true,
         executorTokenAuthority: true,
-        interactivePermissions: true,
+        agorManagedInteractivePermissions: true,
         gatewayListeners: true,
         gatewayOutboundExactlyOnce: false,
         environmentHealthMonitor: true,

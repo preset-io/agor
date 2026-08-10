@@ -105,6 +105,7 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { assertExternalPermissionMessageCreateAllowed } from './permissions/permission-message-boundary.js';
 import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
@@ -725,6 +726,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       async create(data: unknown, params: RouteParams) {
         assertExternalWidgetMessageCreateAllowed(data);
+        assertExternalPermissionMessageCreateAllowed(data);
         return messagesService.createMany(data as Message[]);
       },
     },
@@ -2928,6 +2930,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionId: id as SessionID,
           data,
           params,
+          authorization: {
+            branchRbacEnabled,
+            branchRepository,
+            allowSuperadmin: superadminOpts.allowSuperadmin,
+          },
         });
       },
     },

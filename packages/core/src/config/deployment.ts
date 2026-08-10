@@ -61,7 +61,7 @@ export type ResolvedDeploymentConfig =
         taskExecution: true;
         executorTokenAuthority: true;
         /** Live-executor delivery with retryable UI; not durable decision replay. */
-        interactivePermissions: true;
+        agorManagedInteractivePermissions: true;
         scheduler: true;
         sessionQueue: true;
         taskRuntimeReconciliation: true;
@@ -453,7 +453,7 @@ export function resolveDeploymentConfig(
     capabilities: {
       taskExecution: true,
       executorTokenAuthority: true,
-      interactivePermissions: true,
+      agorManagedInteractivePermissions: true,
       scheduler: true,
       sessionQueue: true,
       taskRuntimeReconciliation: true,
