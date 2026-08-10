@@ -711,9 +711,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     const manifest = await readManifest(archive);
     expect(manifest.database.identity.nonPortableTenantTables).toEqual([
       'executor_session_token_authorities',
+      'github_install_states',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
-      'github_install_states',
     ]);
     expect(manifest.database.identity.tenantTables).not.toContain(
       'executor_session_token_authorities'

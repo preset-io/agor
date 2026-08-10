@@ -348,14 +348,18 @@ try {
     cleanupStoppedServices.add('daemon-a');
     cleanupStoppedServices.add('daemon-b');
     docker('stop', 'daemon-a', 'daemon-b');
-    const failedCallback = await fetch(
-      `${ingress}/api/github/setup/callback?installation_id=4444&state=${encodeURIComponent(failedUpstreamState)}`
-    );
-    assert(
-      [502, 504].includes(failedCallback.status),
-      `expected an upstream failure, received ${failedCallback.status}`
-    );
-    await failedCallback.text();
+    // Express accepts case variants, so nginx must apply the same sensitive
+    // boundary to both the canonical path and a mixed-case spelling.
+    for (const callbackPath of ['/api/github/setup/callback', '/API/GITHUB/SETUP/CALLBACK']) {
+      const failedCallback = await fetch(
+        `${ingress}${callbackPath}?installation_id=4444&state=${encodeURIComponent(failedUpstreamState)}`
+      );
+      assert(
+        [502, 504].includes(failedCallback.status),
+        `expected an upstream failure for ${callbackPath}, received ${failedCallback.status}`
+      );
+      await failedCallback.text();
+    }
     const failedIngressLogs = dockerOutput('logs', '--no-color', 'ingress');
     assert(
       !failedIngressLogs.includes(failedUpstreamState),
