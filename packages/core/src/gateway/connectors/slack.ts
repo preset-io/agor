@@ -1902,11 +1902,30 @@ export class SlackConnector implements GatewayConnector {
       // Precompile regex patterns for performance
       botMentionPattern = new RegExp(`<@${this.botUserId}>`);
       botMentionReplacePattern = new RegExp(`<@${this.botUserId}>\\s*`, 'g');
-    } catch {
+    } catch (error) {
+      const code = extractSlackErrorDetail(error).code;
+      if (
+        code &&
+        [
+          'invalid_auth',
+          'not_authed',
+          'token_revoked',
+          'token_expired',
+          'account_inactive',
+          'missing_scope',
+          'no_permission',
+        ].includes(code)
+      ) {
+        throw new GatewayListenerError(
+          'slack_bot_token_invalid',
+          'permanent',
+          'Replace the Slack bot token and verify the required bot scopes.'
+        );
+      }
       throw new GatewayListenerError(
-        'slack_bot_token_invalid',
-        'permanent',
-        'Replace the Slack bot token and verify the required bot scopes.'
+        'slack_api_unavailable',
+        'transient',
+        'Slack is unavailable; Agor will retry automatically.'
       );
     }
 

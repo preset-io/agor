@@ -1,4 +1,4 @@
-export type GatewayListenerFailureKind = 'permanent' | 'transient' | 'lifecycle';
+export type GatewayListenerFailureKind = 'permanent' | 'transient';
 
 /** Safe, provider-neutral startup failure consumed by the daemon listener supervisor. */
 export class GatewayListenerError extends Error {
