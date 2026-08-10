@@ -294,7 +294,7 @@ export interface AgorDatabaseSettings {
     /** Connection pool settings */
     pool?: {
       min?: number; // Default: 2
-      max?: number; // Default: 25
+      max?: number; // Default: 10
       idleTimeout?: number; // Default: 30000ms
     };
 

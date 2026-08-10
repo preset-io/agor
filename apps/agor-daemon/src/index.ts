@@ -630,10 +630,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     requireTenantScope: multiTenancy.mode === 'required_from_auth',
     skipFirstRunAdminBootstrap: config.external_launch?.enabled === true,
-    // Wire database.postgresql.pool from config.yaml through to the PG client.
-    // (The URL itself may come from env/DATABASE_URL; the pool never was, so
-    // config.yaml pool sizing was previously ignored.) PostgreSQL only.
-    pool: config.database?.postgresql?.pool,
+    // The URL may come from DATABASE_URL, but operators still need to size the
+    // per-replica pool from config.yaml. Keep this deliberately limited to max:
+    // the public idleTimeout setting is documented in milliseconds while the
+    // postgres.js client boundary uses seconds, and `min` is not implemented.
+    pool: config.database?.postgresql?.pool?.max
+      ? { max: config.database.postgresql.pool.max }
+      : undefined,
   });
   configureUploadStagingStoreFromConfig(config, undefined, db);
 

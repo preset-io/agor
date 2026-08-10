@@ -209,13 +209,7 @@ function createPostgresDatabase(config: DbConfig): PostgresJsDatabase<typeof pos
     // reads sslmode from the connection URL (e.g. ?sslmode=require). When present (even as
     // undefined), it overrides URL-based SSL detection.
     const options: postgres.Options<Record<string, postgres.PostgresType>> = {
-      // Default raised from 10 → 25: the daemon wraps each service call (incl.
-      // after-hooks) in a single tenant-scoped transaction, so a connection is
-      // held for the whole request lifecycle. On a shared multi-user instance
-      // 10 slots exhaust under bursty load and DB-backed requests queue up to
-      // their timeout while Postgres itself sits nearly idle. Override via
-      // database.postgresql.pool.max.
-      max: config.pool?.max || 25,
+      max: config.pool?.max || 10,
       idle_timeout: config.pool?.idleTimeout || 30,
       // Recycle connections after 5 minutes so the pool doesn't hold onto
       // connections that the server-side proxy has silently closed.

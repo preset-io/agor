@@ -2,7 +2,7 @@
  * Capability-driven secret resolution.
  *
  * Shared between JWT secret (`apps/agor-daemon/src/index.ts`) and
- * `AGOR_MASTER_SECRET` (`apps/agor-daemon/src/startup.ts`). Resolution
+ * `AGOR_MASTER_SECRET` (`apps/agor-daemon/src/setup/master-secret.ts`). Resolution
  * order:
  *
  *   1. Environment variable present     → use it; no FS touch
