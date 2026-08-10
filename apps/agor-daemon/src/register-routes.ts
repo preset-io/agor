@@ -2842,35 +2842,25 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
+    const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
+      sessionsService.get(sessionId, params)
+    );
+    const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, params);
+
+    if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
+      return;
+    }
+
     const userId = nextTask.metadata?.queued_by_user_id ?? nextTask.created_by;
     const userRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
     const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
-
     const taskParams: RouteParams = queuedByUser
-      ? ({
-          ...params,
-          user: queuedByUser,
-        } as RouteParams)
+      ? ({ ...params, user: queuedByUser } as RouteParams)
       : params;
 
     console.log(
-      `📬 Processing queued task ${shortId(nextTask.task_id)} ` +
-        `(position ${nextTask.queue_position}) ` +
-        `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
+      `[task-queue] event=drain_started session_id=${JSON.stringify(sessionId)} task_id=${JSON.stringify(nextTask.task_id)} queue_position=${nextTask.queue_position ?? 'null'}`
     );
-
-    const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
-      sessionsService.get(sessionId, taskParams)
-    );
-    const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
-
-    if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
-      console.log(
-        `⏸️  [Queue] Session ${shortId(sessionId)} is ${session.status}, task ${shortId(nextTask.task_id)} waiting in queue ` +
-          `(will be processed when session becomes IDLE via patch hook)`
-      );
-      return;
-    }
 
     // Re-read the task — defend against the case where it was already drained
     // by a concurrent caller, or removed by an admin via DELETE /tasks/:id.
@@ -2910,7 +2900,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
     console.log(
-      `✅ Queue head ${shortId(admitted.task_id)} observed as ${admitted.status} for session ${shortId(sessionId)}`
+      `[task-queue] event=dispatched session_id=${JSON.stringify(sessionId)} task_id=${JSON.stringify(admitted.task_id)} status=${JSON.stringify(admitted.status)}`
     );
   }
 
