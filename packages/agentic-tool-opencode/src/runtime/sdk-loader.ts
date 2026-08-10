@@ -6,7 +6,11 @@ import {
 export type OpenCodeSdk = typeof import('@opencode-ai/sdk');
 export type OpenCodeSdkV2 = typeof import('@opencode-ai/sdk/v2');
 
-export function loadOpenCodeSdk(): Promise<OpenCodeSdk> {
+export async function loadOpenCodeSdk(): Promise<OpenCodeSdk> {
+  // Source checkouts install the SDK in this package's dependency scope. Keep
+  // the import here so pnpm/Node resolve it from agentic-tool-opencode rather
+  // than from @agor/core, which intentionally does not ship vendor runtimes.
+  if (process.env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return import('@opencode-ai/sdk');
   return loadManagedAgenticToolSdk<OpenCodeSdk>('opencode');
 }
 
