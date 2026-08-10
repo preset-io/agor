@@ -518,10 +518,14 @@ cleanup pagination past gated tenants. Migration/static coverage proves unique
 `0078`/`0081` history, no raw-state column, no implicit default-tenant RLS,
 non-portable deletion semantics, and no Redis dependency. The opt-in HA Compose
 harness also exercises peer callback consumption and proves nginx logs omit the
-raw query bearer. Final validation passes `pnpm check`, 65 focused core tests,
-57 focused daemon tests, all 96 PostgreSQL tests across 19 files (including 9
-GitHub-state tests as a `NOSUPERUSER`/`NOBYPASSRLS` role), the PostgreSQL runner
-interruption harness, and the opt-in two-daemon HA Docker integration.
+raw query bearer both on successful routes and while both upstreams are down.
+The sensitive route retains the redacted access-log status/timing signal and
+suppresses nginx's fixed-format upstream error log, which otherwise includes
+the complete still-valid request target. Final validation passes `pnpm check`,
+65 focused core tests, 57 focused daemon tests, all 96 PostgreSQL tests across
+19 files (including 9 GitHub-state tests as a `NOSUPERUSER`/`NOBYPASSRLS`
+role), the PostgreSQL runner interruption harness, and the opt-in two-daemon HA
+Docker integration including the upstream-failure regression.
 
 The successor Redis/realtime integration and live two-daemon evidence are in
 `docs/internal/daemon-ha-redis-realtime-2026-08-07.md`; this document remains
