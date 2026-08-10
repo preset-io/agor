@@ -281,6 +281,14 @@ export interface MCPCatalogFilters {
    * drop withdrawn servers without naming every state that is still live.
    */
   exclude_registry_status?: string;
+  /**
+   * Match any one of several probe verdicts.
+   *
+   * "Not known to need an account" spans two verdicts — probed open, and never
+   * probed — and a single-value filter cannot say that. Callers that mean a set
+   * pass one; the singular field stays for callers that mean exactly one.
+   */
+  probed_auth_types?: MCPCatalogProbedAuthType[];
   names?: string[];
   sort?: MCPCatalogSort;
   limit?: number;

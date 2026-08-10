@@ -54,6 +54,7 @@ export type MCPCatalogParams = QueryParams<{
   curated?: boolean;
   has_remote?: boolean;
   probed_auth_type?: MCPCatalogProbedAuthType;
+  probed_auth_types?: MCPCatalogProbedAuthType[];
   sort?: MCPCatalogSort;
 }> &
   AuthenticatedParams;
@@ -85,6 +86,9 @@ export class MCPCatalogService {
     if (typeof query.has_remote === 'boolean') filters.has_remote = query.has_remote;
     if (typeof query.probed_auth_type === 'string') {
       filters.probed_auth_type = query.probed_auth_type as MCPCatalogProbedAuthType;
+    }
+    if (Array.isArray(query.probed_auth_types)) {
+      filters.probed_auth_types = query.probed_auth_types as MCPCatalogProbedAuthType[];
     }
     if (typeof query.sort === 'string') filters.sort = query.sort as MCPCatalogSort;
     // Withdrawn servers are excluded unless a caller asks for a specific state.

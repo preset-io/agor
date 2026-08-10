@@ -16,6 +16,7 @@
 import type { MCPCatalogCategory, MCPCatalogEntry, MCPCatalogSort } from '@agor/core/types';
 import type { AgorClient, FindResult } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { CONNECTABLE_PROBE_VERDICTS } from './catalogPresentation';
 
 /** The catalog service always paginates; an array is only a defensive fallback. */
 function asPage(result: FindResult<MCPCatalogEntry>): { data: MCPCatalogEntry[]; total: number } {
@@ -73,7 +74,7 @@ function buildQuery(filters: CatalogFilterState, page: number): Record<string, u
     ...(filters.category ? { category: filters.category } : {}),
     ...(filters.capability ? { capability: filters.capability } : {}),
     ...(filters.reviewedOnly ? { curated: true } : {}),
-    ...(filters.connectableOnly ? { probed_auth_type: 'none' } : {}),
+    ...(filters.connectableOnly ? { probed_auth_types: CONNECTABLE_PROBE_VERDICTS } : {}),
     sort: filters.sort,
     $limit: CATALOG_PAGE_SIZE,
     $skip: (page - 1) * CATALOG_PAGE_SIZE,

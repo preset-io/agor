@@ -295,6 +295,14 @@ export const mcpCatalogQuerySchema = Type.Intersect(
       probed_auth_type: Type.Optional(
         Type.Union(MCP_CATALOG_PROBED_AUTH_TYPES.map((value) => Type.Literal(value)))
       ),
+      // The plural has to be named here too: `removeAdditional: 'all'` would
+      // otherwise strip it silently and the filter would reach SQL as no filter
+      // at all, which is how a control ends up looking like it works.
+      probed_auth_types: Type.Optional(
+        Type.Array(Type.Union(MCP_CATALOG_PROBED_AUTH_TYPES.map((value) => Type.Literal(value))), {
+          maxItems: MCP_CATALOG_PROBED_AUTH_TYPES.length,
+        })
+      ),
       // Asking for a lifecycle state by name opts out of the default exclusion
       // of withdrawn servers, so it has to survive validation rather than be
       // stripped as an unknown key.

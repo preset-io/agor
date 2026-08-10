@@ -56,13 +56,14 @@ function makeClient(): AgorClient {
         find: async ({ query }: { query: Record<string, unknown> }) => {
           catalogQueries.push(query);
           if (catalogFindError) throw catalogFindError;
-          // The unfiltered size probe asks for a single row.
-          const filtered =
-            typeof query.search === 'string'
-              ? catalogRows.filter((row) =>
-                  row.name.toLowerCase().includes(String(query.search).toLowerCase())
-                )
-              : catalogRows;
+          const verdicts = query.probed_auth_types as string[] | undefined;
+          const filtered = catalogRows
+            .filter((row) =>
+              typeof query.search === 'string'
+                ? row.name.toLowerCase().includes(String(query.search).toLowerCase())
+                : true
+            )
+            .filter((row) => (verdicts ? verdicts.includes(row.probed_auth_type) : true));
           return { total: filtered.length, limit: 24, skip: 0, data: filtered };
         },
       };
@@ -204,15 +205,39 @@ describe('catalog browsing', () => {
     expect(catalogQueries.some((query) => query.curated === true)).toBe(true);
   });
 
-  it('filters to servers that need no account', async () => {
+  it('keeps unprobed servers when hiding account-only ones', async () => {
+    // A stock install has never run a registry sync, so every curated row is
+    // `unknown`. A filter that demanded `none` could only ever return nothing,
+    // while the cards beside it called those same entries connectable.
+    catalogRows = [
+      { ...DEEPWIKI, probed_auth_type: 'unknown' },
+      { ...LINEAR, probed_auth_type: 'unknown' },
+    ];
     renderTab();
     await screen.findByRole('button', { name: 'Open DeepWiki' });
 
-    fireEvent.click(screen.getByRole('switch', { name: /need no account/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
+
+    expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
+  });
+
+  it('drops servers known to need an account', async () => {
+    catalogRows = [
+      { ...DEEPWIKI, probed_auth_type: 'unknown' },
+      { ...LINEAR, probed_auth_type: 'oauth' },
+    ];
+    renderTab();
+    await screen.findByRole('button', { name: 'Open Linear' });
+
+    fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
 
     await waitFor(() =>
-      expect(catalogQueries.some((query) => query.probed_auth_type === 'none')).toBe(true)
+      expect(screen.queryByRole('button', { name: 'Open Linear' })).not.toBeInTheDocument()
     );
+    expect(screen.getByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    expect(catalogQueries.at(-1)?.probed_auth_types).toEqual(['none', 'unknown']);
   });
 
   it('debounces search into one server-side query', async () => {
