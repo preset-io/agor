@@ -116,6 +116,28 @@ describe('safe OAuth outbound URL policy', () => {
     ).rejects.toThrow('Secret-bearing OAuth requests cannot redirect');
   });
 
+  it('never forwards caller headers across redirect origins', async () => {
+    let redirectedRequestHeaders: http.IncomingHttpHeaders | undefined;
+    const target = await listen((request, response) => {
+      redirectedRequestHeaders = request.headers;
+      response.writeHead(200);
+      response.end('must not be reached');
+    });
+    const source = await listen((_request, response) => {
+      response.writeHead(302, { location: `${target.url}/redirect-target` });
+      response.end();
+    });
+
+    await expect(
+      safeOutboundFetch(source.url, {
+        headers: { Accept: 'application/json', 'X-API-Key': 'must-not-cross-origins' },
+        redirect: 'follow',
+        allowLocalhostHttp: true,
+      })
+    ).rejects.toThrow('Cross-origin OAuth redirects cannot forward caller headers');
+    expect(redirectedRequestHeaders).toBeUndefined();
+  });
+
   it('bounds response bodies before parsing provider-controlled content', async () => {
     const { url } = await listen((_request, response) => {
       response.writeHead(200);

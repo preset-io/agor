@@ -28,6 +28,7 @@ import { sanitizeDbError } from '../sanitize-error';
 // This repository is intentionally PostgreSQL-only. Import the concrete table
 // rather than the dialect union so tenant_id remains part of the static type.
 import { mcpOauthPendingFlows } from '../schema.postgres';
+import { getCurrentTenantDatabaseScope } from '../tenant-context';
 import { RepositoryError } from './base';
 
 const SHA256_HEX = /^[a-f0-9]{64}$/;
@@ -49,6 +50,11 @@ export interface MCPOAuthPendingFlowCreate {
   /** Relative lifetime applied against the PostgreSQL clock at insert time. */
   ttlMs: number;
 }
+
+export type MCPOAuthGrantSubject = Pick<
+  MCPOAuthPendingFlowCreate,
+  'tenantId' | 'mcpServerId' | 'oauthMode' | 'subjectUserId'
+>;
 
 export interface MCPOAuthPendingFlowRecord {
   tenantId: string;
@@ -170,9 +176,35 @@ export class MCPOAuthPendingFlowRepository {
     }
   }
 
-  /** Allocate a deployment-wide monotonically increasing grant attempt fence. */
-  async allocateGrantGeneration(): Promise<number> {
+  private async lockGrantSubject(subject: MCPOAuthGrantSubject): Promise<void> {
+    const scope = getCurrentTenantDatabaseScope();
+    if (scope?.kind !== 'tenant' || scope.db !== this.db || scope.tenantId !== subject.tenantId) {
+      throw new RepositoryError('MCP OAuth grant-subject lock requires its tenant transaction');
+    }
+    await executeRaw(
+      this.db,
+      sql`SELECT pg_advisory_xact_lock(
+        hashtextextended(
+          ${[
+            subject.tenantId,
+            subject.mcpServerId,
+            subject.oauthMode,
+            subject.subjectUserId ?? '<shared>',
+          ].join('\u001f')},
+          0
+        )
+      )`
+    );
+  }
+
+  /**
+   * Serialize a grant subject before allocating its deployment-wide attempt
+   * generation. The caller's tenant transaction retains this xact lock while
+   * it seals exchange material and inserts the attempt through create().
+   */
+  async allocateGrantGeneration(subject: MCPOAuthGrantSubject): Promise<number> {
     try {
+      await this.lockGrantSubject(subject);
       const result = await executeRaw(
         this.db,
         sql`SELECT nextval('mcp_oauth_grant_generation_seq') AS generation`
@@ -213,20 +245,7 @@ export class MCPOAuthPendingFlowRepository {
       // Serialize the update+insert pair per grant subject. Partial unique
       // indexes remain the final invariant; this lock makes simultaneous
       // starts deterministic rather than returning a uniqueness race.
-      await executeRaw(
-        this.db,
-        sql`SELECT pg_advisory_xact_lock(
-          hashtextextended(
-            ${[
-              input.tenantId,
-              input.mcpServerId,
-              input.oauthMode,
-              input.subjectUserId ?? '<shared>',
-            ].join('\u001f')},
-            0
-          )
-        )`
-      );
+      await this.lockGrantSubject(input);
       // Latest attempt wins for a grant subject. An older exchange may already
       // have consumed a provider code, so it becomes ambiguous rather than
       // replayable. No terminal row retains sealed material.

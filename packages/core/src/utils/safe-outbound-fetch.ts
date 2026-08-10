@@ -185,6 +185,10 @@ function requestBody(body: unknown): string | Uint8Array | undefined {
   throw new UnsafeOutboundUrlError('Unsupported outbound OAuth request body');
 }
 
+function hasCallerHeaders(headers: RequestInit['headers']): boolean {
+  return !new Headers(headers).keys().next().done;
+}
+
 async function requestOnce(
   url: URL,
   options: SafeOutboundFetchOptions,
@@ -287,6 +291,7 @@ export async function safeOutboundFetch(
   const timer = setTimeout(() => deadline.abort(outboundTimeoutError()), timeoutMs);
   try {
     let url = new URL(input);
+    const callerHeadersPresent = hasCallerHeaders(options.headers);
     const redirectMode = options.redirect ?? 'error';
     const maxRedirects = options.maxRedirects ?? 3;
     for (let hop = 0; ; hop += 1) {
@@ -297,11 +302,22 @@ export async function safeOutboundFetch(
       }
       const location = response.headers.get('location');
       if (!location) throw new UnsafeOutboundUrlError('Outbound OAuth redirect is invalid');
-      url = new URL(location, url);
+      const redirectUrl = new URL(location, url);
       // Metadata fetches are GET. Secret-bearing POST endpoints use redirect:error.
       if ((options.method ?? 'GET').toUpperCase() !== 'GET') {
         throw new UnsafeOutboundUrlError('Secret-bearing OAuth requests cannot redirect');
       }
+      // Custom MCP headers may be API keys even when their names are not
+      // standardized. Unlike ambient fetch headers, they must never cross an
+      // origin boundary. Same-origin redirects retain the caller's contract;
+      // headerless metadata discovery may continue to a separately hosted
+      // public origin after the normal destination checks run on the next hop.
+      if (callerHeadersPresent && redirectUrl.origin !== url.origin) {
+        throw new UnsafeOutboundUrlError(
+          'Cross-origin OAuth redirects cannot forward caller headers'
+        );
+      }
+      url = redirectUrl;
     }
   } finally {
     clearTimeout(timer);

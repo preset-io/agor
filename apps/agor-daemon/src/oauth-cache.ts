@@ -45,9 +45,9 @@ export async function persistOAuthToken(
     /** client_secret used for the grant (absent for public clients). */
     clientSecret?: string;
     /**
-     * Token endpoint discovered/used for this grant. Persisted back onto the
-     * server config when it was previously blank so later refreshes do not
-     * have to guess from the MCP resource URL.
+     * Token endpoint discovered/used for this grant. Standalone SQLite grants
+     * retain it on the grant row so later refreshes do not have to guess from
+     * the MCP resource URL or mutate server configuration.
      */
     tokenEndpoint?: SaveTokenInput['tokenEndpoint'];
     resourceUri?: SaveTokenInput['resourceUri'];

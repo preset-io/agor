@@ -110,9 +110,15 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     }
 
     async function nextGeneration(db: TenantScopeAwareDatabase, tenantId: string) {
-      return runWithTenantDatabaseScope(db, tenantId, (scoped) =>
-        new MCPOAuthPendingFlowRepository(scoped).allocateGrantGeneration()
-      );
+      return runWithTenantDatabaseScope(db, tenantId, (scoped) => {
+        const repository = new MCPOAuthPendingFlowRepository(scoped);
+        return repository.allocateGrantGeneration({
+          tenantId,
+          mcpServerId: 'refresh-test-generation-subject' as MCPServerID,
+          oauthMode: 'shared',
+          subjectUserId: null,
+        });
+      });
     }
 
     async function seed(label: string, tokenEndpoint: string): Promise<Seed> {
@@ -138,9 +144,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             oauth_token_url: tokenEndpoint,
           },
         });
-        const generation = await new MCPOAuthPendingFlowRepository(
-          scoped
-        ).allocateGrantGeneration();
+        const generation = await new MCPOAuthPendingFlowRepository(scoped).allocateGrantGeneration({
+          tenantId,
+          mcpServerId: server.mcp_server_id as MCPServerID,
+          oauthMode: 'per_user',
+          subjectUserId: user.user_id as UserID,
+        });
         await new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
           user.user_id as UserID,
           server.mcp_server_id as MCPServerID,

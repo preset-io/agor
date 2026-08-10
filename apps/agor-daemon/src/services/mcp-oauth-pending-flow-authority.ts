@@ -112,7 +112,16 @@ export class MCPOAuthPendingFlowAuthority {
     const attemptId = generateId() as MCPOAuthAttemptID;
     await runWithTenantDatabaseScope(this.db, input.tenantId, async (scoped) => {
       const repository = new MCPOAuthPendingFlowRepository(scoped);
-      const grantGeneration = await repository.allocateGrantGeneration();
+      const subjectUserId = input.oauthMode === 'per_user' ? input.userId : null;
+      // Allocation acquires the per-subject transaction lock first. The
+      // tenant scope keeps that lock through sealing and create(), so a lower
+      // generation can never insert after and supersede a higher generation.
+      const grantGeneration = await repository.allocateGrantGeneration({
+        tenantId: input.tenantId,
+        mcpServerId: input.mcpServerId,
+        oauthMode: input.oauthMode,
+        subjectUserId,
+      });
       const material: MCPOAuthPendingFlowSealedMaterial = {
         version: 2,
         attemptId,
@@ -155,7 +164,7 @@ export class MCPOAuthPendingFlowAuthority {
         userId: input.userId,
         mcpServerId: input.mcpServerId,
         oauthMode: input.oauthMode,
-        subjectUserId: input.oauthMode === 'per_user' ? input.userId : null,
+        subjectUserId,
         grantGeneration,
         configFingerprintVersion: 1,
         configFingerprint: input.configFingerprint,

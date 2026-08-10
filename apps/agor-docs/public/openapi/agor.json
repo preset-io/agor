@@ -330,6 +330,11 @@
         "additionalProperties": true,
         "description": "Schema for oauth-statusList. See @agor-live/client for the authoritative TypeScript type."
       },
+      "oauth-attempt-status": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Schema for oauth-attempt-status. See @agor-live/client for the authoritative TypeScript type."
+      },
       "oauth-auth-headers": {
         "type": "object",
         "additionalProperties": true,
@@ -5979,6 +5984,46 @@
         },
         "description": "Retrieves a list of all resources from the service.",
         "summary": "Retrieves a list of all resources from the service",
+        "tags": ["mcp-servers"],
+        "security": []
+      }
+    },
+    "/mcp-servers/oauth-attempt-status/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID of oauth-attempt-status to return",
+            "schema": {
+              "type": "integer"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/oauth-attempt-status"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "404": {
+            "description": "not found"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Retrieves a single resource with the given id from the service.",
+        "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["mcp-servers"],
         "security": []
       }

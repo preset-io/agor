@@ -511,6 +511,88 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
+    it('holds the subject lock from generation allocation through attempt insertion', async () => {
+      const bound = await seed('generation-allocation-lock');
+      const firstAttempt = crypto.randomUUID() as never;
+      const firstState = `first-${crypto.randomUUID()}`;
+      const secondContext = flowContext(`second-${crypto.randomUUID()}`);
+      let releaseFirst!: () => void;
+      const holdFirst = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let reportFirstGeneration!: (generation: number) => void;
+      const firstGenerationAllocated = new Promise<number>((resolve) => {
+        reportFirstGeneration = resolve;
+      });
+
+      const firstCreation = runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
+        const repository = new MCPOAuthPendingFlowRepository(scoped);
+        const subject = {
+          tenantId: bound.tenantId,
+          mcpServerId: bound.serverId,
+          oauthMode: 'per_user' as const,
+          subjectUserId: bound.userId,
+        };
+        const generation = await repository.allocateGrantGeneration(subject);
+        reportFirstGeneration(generation);
+        await holdFirst;
+        await repository.create({
+          ...subject,
+          attemptId: firstAttempt,
+          stateHash: fingerprintMCPOAuthState(firstState),
+          userId: bound.userId,
+          grantGeneration: generation,
+          configFingerprintVersion: 1,
+          configFingerprint: 'a'.repeat(64),
+          envelopeVersion: 1,
+          sealedMaterial: 'agor-mcp-oauth:v1:pending-exchange:test',
+          ttlMs: 60_000,
+        });
+        return generation;
+      });
+      const firstGeneration = await firstGenerationAllocated;
+
+      let secondSettled = false;
+      const secondCreation = authorityB
+        .create({
+          context: secondContext,
+          ...bound,
+          mcpServerId: bound.serverId,
+          oauthMode: 'per_user',
+          configFingerprint: 'b'.repeat(64),
+        })
+        .finally(() => {
+          secondSettled = true;
+        });
+
+      try {
+        // Daemon B must wait before nextval rather than allocate a higher
+        // generation and insert it ahead of daemon A's paused lower one.
+        await new Promise((resolve) => setTimeout(resolve, 75));
+        expect(secondSettled).toBe(false);
+      } finally {
+        releaseFirst();
+      }
+
+      const [committedFirstGeneration, secondAttempt] = await Promise.all([
+        firstCreation,
+        secondCreation,
+      ]);
+      expect(committedFirstGeneration).toBe(firstGeneration);
+      const [firstFlow, secondFlow] = await Promise.all([
+        authorityA.getForUser(bound.tenantId, bound.userId, firstAttempt),
+        authorityB.getForUser(bound.tenantId, bound.userId, secondAttempt),
+      ]);
+      expect(firstFlow).toMatchObject({
+        grantGeneration: firstGeneration,
+        status: 'failed',
+        isCurrent: false,
+        failureCode: 'superseded_by_newer_attempt',
+      });
+      expect(secondFlow).toMatchObject({ status: 'pending', isCurrent: true });
+      expect(secondFlow!.grantGeneration).toBeGreaterThan(firstGeneration);
+    });
+
     it('can start a newer flow after a terminal attempt without losing its tombstone', async () => {
       const bound = await seed('after-terminal');
       const firstContext = flowContext(`first-${crypto.randomUUID()}`);
