@@ -33,6 +33,7 @@ import {
   loadConfig,
   loadConfigFromFile,
   renderGitConfigParametersForLog,
+  resolveDeploymentConfig,
   resolveEffectiveConfig,
   resolveGitConfigParameters,
   resolveMultiTenancyConfig,
@@ -55,6 +56,7 @@ import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { scopeExecutorRuntimeAuth } from './auth/executor-runtime-scope.js';
 import { createRequireAuthHook } from './auth/require-auth.js';
+import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
@@ -80,10 +82,7 @@ import { registerAllWidgets } from './widgets/index.js';
 
 // Load daemon version at startup
 const DAEMON_VERSION = await loadDaemonVersion(import.meta.url);
-const TELEMETRY_AGOR_VERSION = await loadOpenSourceTelemetryAgorVersion(
-  DAEMON_VERSION,
-  import.meta.url
-);
+const AGOR_VERSION = await loadOpenSourceTelemetryAgorVersion(DAEMON_VERSION, import.meta.url);
 
 // Resolve build SHA (env > .build-info file > git > 'dev'). UI tabs capture
 // this on first connect and prompt a refresh if a later handshake disagrees.
@@ -179,6 +178,12 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       agentic_tools: { ...config.agentic_tools, installed: [...resolvedAgenticTools] },
     };
   }
+
+  // HA is an explicit, validated topology boundary. REDIS_URL alone never
+  // changes standalone behavior. Resolve this after immutable environment
+  // projection so every startup consumer observes one effective snapshot.
+  const deployment = resolveDeploymentConfig(config, process.env, DB_PATH);
+  console.log(`🌐 Deployment mode: ${deployment.mode}`);
 
   const multiTenancy = resolveMultiTenancyConfig(config);
   console.log(
@@ -301,6 +306,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     },
     generateBootId: generateId,
   });
+  const realtimeRuntime =
+    deployment.mode === 'ha'
+      ? new RedisRealtimeRuntime(deployment.redis, distributedWorkIdentity)
+      : undefined;
 
   // Configure how many reverse proxies we trust in front of the daemon.
   // Default 0 = ignore X-Forwarded-* entirely (so a client cannot spoof their
@@ -576,6 +585,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       break;
   }
 
+  // HA is unavailable without Redis. Establish both adapter clients before
+  // constructing Socket.IO or accepting any HTTP traffic.
+  await realtimeRuntime?.connect();
+
   const socketIOConfig = createSocketIOConfig(app, {
     corsOrigin,
     jwtSecret,
@@ -589,7 +602,11 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     // welcome event on every connect (and reconnect), so UI tabs can detect
     // FE/BE drift after a deploy without waiting for the next /health poll.
     buildInfo: DAEMON_BUILD_INFO,
+    workIdentity: distributedWorkIdentity,
     multiTenancy,
+    ...(realtimeRuntime
+      ? { adapter: realtimeRuntime.adapter, onServerCreated: (io) => realtimeRuntime.attach(io) }
+      : {}),
   });
   app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
   configureChannels(app, { multiTenancy });
@@ -617,7 +634,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
   if (openSourceTelemetryLogger.isEnabled()) {
     const startupTelemetryProperties = {
-      agor_version: TELEMETRY_AGOR_VERSION,
+      agor_version: AGOR_VERSION,
       deployment_kind: process.env.KUBERNETES_SERVICE_HOST
         ? 'k8s'
         : process.env.container || process.env.AGOR_DOCKER
@@ -648,13 +665,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
     if (
       config.telemetry?.last_reported_version &&
-      config.telemetry.last_reported_version !== TELEMETRY_AGOR_VERSION
+      config.telemetry.last_reported_version !== AGOR_VERSION
     ) {
       openSourceTelemetryLogger.track({
         event: 'daemon.upgraded',
         properties: {
           from_version: config.telemetry.last_reported_version,
-          to_version: TELEMETRY_AGOR_VERSION,
+          to_version: AGOR_VERSION,
         },
       });
     }
@@ -676,6 +693,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     branchRbacEnabled,
     allowSuperadmin,
     requireAuth,
+    deployment,
   });
 
   // --------------------------------------------------------------------------
@@ -695,6 +713,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     branchRepository: services.branchRepository,
     usersRepository: services.usersRepository,
     sessionsRepository: services.sessionsRepository,
+    realtimeRelay: realtimeRuntime,
+    deployment,
   });
 
   // --------------------------------------------------------------------------
@@ -712,8 +732,12 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     DB_PATH,
     DAEMON_PORT,
     DAEMON_VERSION,
+    AGOR_VERSION,
     DAEMON_BUILD_INFO,
     resolvedSecurity,
+    realtimeRuntime,
+    distributedWorkIdentity,
+    deployment,
     sessionsService: services.sessionsService,
     messagesService: services.messagesService,
     boardsService: services.boardsService,
@@ -739,9 +763,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
     distributedWorkIdentity,
-    // Explicit compatibility boundary until daemon HA configuration lands.
-    // Shared PostgreSQL deployments must opt into `shared_postgres` rather
-    // than silently changing standalone restart semantics.
-    taskRuntimePolicy: 'standalone',
+    // PostgreSQL leases/claims and executor-token authority make the merged
+    // runtime workers replica-independent. Interactive permission modes remain
+    // separately fail-closed until durable decision replay exists.
+    taskRuntimePolicy: deployment.mode === 'ha' ? 'shared_postgres' : 'standalone',
+    environmentHealthMonitorPolicy: deployment.mode === 'ha' ? 'shared_postgres' : 'standalone',
+    environmentHealthMonitorSettings:
+      deployment.mode === 'ha' ? deployment.environmentHealthMonitor : undefined,
+    realtimeRuntime,
   });
 }

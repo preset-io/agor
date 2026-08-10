@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
   createInitialConfig,
+  ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
@@ -109,6 +110,36 @@ describe('resolveEffectiveConfig', () => {
     expect(resolved.execution).toMatchObject({ branch_rbac: true, unix_user_mode: 'delegated' });
     expect(resolved.multi_tenancy?.mode).toBe('static');
     expect(input).toEqual({ daemon: { host: 'yaml-host', port: 1234 } });
+  });
+
+  it('keeps Unix executor impersonation opt-in while preserving explicit overrides', () => {
+    expect(
+      resolveEffectiveConfig(
+        {},
+        {
+          AGOR_USE_EXECUTOR: 'false',
+          AGOR_EXECUTOR_USERNAME: '',
+        }
+      ).execution?.executor_unix_user
+    ).toBeUndefined();
+    expect(
+      resolveEffectiveConfig(
+        {},
+        {
+          AGOR_USE_EXECUTOR: 'true',
+          AGOR_EXECUTOR_USERNAME: '',
+        }
+      ).execution?.executor_unix_user
+    ).toBe('agor_executor');
+    expect(
+      resolveEffectiveConfig(
+        {},
+        {
+          AGOR_USE_EXECUTOR: 'false',
+          AGOR_EXECUTOR_USERNAME: 'custom-runner',
+        }
+      ).execution?.executor_unix_user
+    ).toBe('custom-runner');
   });
 });
 
@@ -1489,6 +1520,7 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     expect(resolved).toEqual({
       defaultMode: 'worktree',
       allowedModes: ['worktree', 'clone'],
+      allowShallowClones: true,
     });
   });
 
@@ -1564,5 +1596,21 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     // v0.20+ default allows both — operators have to opt out to forbid clone.
     expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
     expect(() => ensureBranchStorageModeAllowed('clone')).not.toThrow();
+  });
+
+  it('can require full clone-mode branches', async () => {
+    await writeConfig({
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['clone'],
+          allow_shallow_clones: false,
+        },
+      },
+    });
+
+    expect(resolveBranchStorageConfig().allowShallowClones).toBe(false);
+    expect(() => ensureBranchCloneDepthAllowed(undefined)).not.toThrow();
+    expect(() => ensureBranchCloneDepthAllowed(1)).toThrow(/full clone/);
   });
 });

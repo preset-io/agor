@@ -1,10 +1,37 @@
+import http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveMCPAuthHeaders } from './jwt-auth';
+import { UnsafeOutboundUrlError } from '../../utils/safe-outbound-fetch';
+import { clearAllJWTTokens, fetchJWTToken, resolveMCPAuthHeaders } from './jwt-auth';
 import { __seedAuthCodeTokenCacheForTests, clearAuthCodeTokenCache } from './oauth-mcp-transport';
 
-describe('resolveMCPAuthHeaders OAuth authority', () => {
-  afterEach(() => clearAuthCodeTokenCache());
+const servers: http.Server[] = [];
 
+async function listen(handler: http.RequestListener): Promise<string> {
+  const server = http.createServer(handler);
+  servers.push(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+  return `http://127.0.0.1:${address.port}`;
+}
+
+afterEach(async () => {
+  clearAuthCodeTokenCache();
+  clearAllJWTTokens();
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        })
+    )
+  );
+});
+
+describe('resolveMCPAuthHeaders OAuth authority', () => {
   it('never reads an origin-only browser OAuth cache entry', async () => {
     __seedAuthCodeTokenCacheForTests(
       'https://mcp.example.test/.well-known/oauth-protected-resource',
@@ -27,5 +54,93 @@ describe('resolveMCPAuthHeaders OAuth authority', () => {
         'https://mcp.example.test/tools'
       )
     ).resolves.toEqual({ Authorization: 'Bearer bound-token' });
+  });
+});
+
+describe('JWT discovery authentication outbound policy', () => {
+  const credentials = { api_token: 'client', api_secret: 'secret' };
+
+  it.each([
+    'https://127.0.0.1/token',
+    'https://10.0.0.8/token',
+    'https://169.254.169.254/latest/meta-data',
+    'http://example.com/token',
+  ])('rejects loopback, private, metadata, and non-HTTPS destination %s', async (api_url) => {
+    await expect(
+      fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: false, cache: false })
+    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+  });
+
+  it('allows the narrow loopback development exception only when explicit', async () => {
+    const api_url = await listen((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"access_token":"development-token"}');
+    });
+
+    await expect(
+      fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: false, cache: false })
+    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+    await expect(
+      fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
+    ).resolves.toBe('development-token');
+  });
+
+  it('never follows a token POST redirect, including toward metadata', async () => {
+    const api_url = await listen((_request, response) => {
+      response.writeHead(307, { location: 'http://169.254.169.254/latest/meta-data' });
+      response.end();
+    });
+
+    await expect(
+      fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
+    ).rejects.toThrow('redirect is not allowed');
+  });
+
+  it('bounds provider responses before parsing', async () => {
+    const api_url = await listen((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('x'.repeat(300 * 1024));
+    });
+
+    await expect(
+      fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
+    ).rejects.toThrow('response is too large');
+  });
+
+  it('does not expose a provider response body in errors', async () => {
+    const api_url = await listen((_request, response) => {
+      response.writeHead(401, { 'content-type': 'application/json' });
+      response.end('{"access_token":"internal-response-secret","error_description":"secret"}');
+    });
+
+    const error = await fetchJWTToken(
+      { api_url, ...credentials },
+      { allowLocalhostHttp: true, cache: false }
+    ).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('JWT token fetch failed (provider_rejected, status=401)');
+    expect((error as Error).message).not.toContain('internal-response-secret');
+    expect((error as Error).message).not.toContain('error_description');
+  });
+
+  it('partitions the standalone cache by trusted namespace', async () => {
+    let requests = 0;
+    const api_url = await listen((_request, response) => {
+      requests += 1;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(`{"access_token":"token-${requests}"}`);
+    });
+
+    const first = await fetchJWTToken(
+      { api_url, ...credentials },
+      { allowLocalhostHttp: true, cacheNamespace: 'tenant-a:server:user', cache: true }
+    );
+    const second = await fetchJWTToken(
+      { api_url, ...credentials },
+      { allowLocalhostHttp: true, cacheNamespace: 'tenant-b:server:user', cache: true }
+    );
+    expect(first).toBe('token-1');
+    expect(second).toBe('token-2');
+    expect(requests).toBe(2);
   });
 });

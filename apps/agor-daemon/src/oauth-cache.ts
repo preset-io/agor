@@ -6,7 +6,7 @@
  * tenant/user/server grant to another lookup for the same MCP origin.
  */
 
-import { UserMCPOAuthTokenRepository } from '@agor/core/db';
+import { type TenantScopeAwareDatabase, UserMCPOAuthTokenRepository } from '@agor/core/db';
 import { resolveTokenExpiry } from '@agor/core/tools/mcp/oauth-token-expiry';
 import type { MCPServerID, UserID } from '@agor/core/types';
 
@@ -29,8 +29,7 @@ import type { MCPServerID, UserID } from '@agor/core/types';
  * Shared by both the callback handler and the manual oauth-complete service.
  */
 export async function persistOAuthToken(
-  // biome-ignore lint/suspicious/noExplicitAny: db type is complex (Drizzle instance), callers always pass the correct value
-  db: any,
+  db: TenantScopeAwareDatabase,
   tokenResponse: { access_token: string; expires_in?: number; refresh_token?: string },
   pendingFlow: {
     mcpServerId?: string;

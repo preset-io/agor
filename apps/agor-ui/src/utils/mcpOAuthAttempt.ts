@@ -1,21 +1,13 @@
+import type {
+  MCPOAuthAttemptResult,
+  MCPOAuthAttemptStatus,
+  MCPOAuthRefreshResult,
+  MCPOAuthStatusResult,
+} from '@agor/core/types';
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { agorStore } from '@/store/agorStore';
 
-export type MCPOAuthAttemptStatus =
-  | 'pending'
-  | 'exchanging'
-  | 'succeeded'
-  | 'failed'
-  | 'ambiguous'
-  | 'expired'
-  | 'not_found';
-
-export interface MCPOAuthAttemptResult {
-  status: MCPOAuthAttemptStatus;
-  mcp_server_id?: string;
-  oauth_mode?: 'per_user' | 'shared';
-  failure_code?: string;
-}
+export type { MCPOAuthAttemptResult, MCPOAuthAttemptStatus, MCPOAuthRefreshResult };
 
 const sleep = (milliseconds: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -75,7 +67,7 @@ export async function refetchMCPOAuthDurableState(
     client.service('mcp-servers/oauth-status').find(),
     client.service('mcp-servers').get(mcpServerId),
   ]);
-  const ids = (status as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
+  const ids = (status as Partial<MCPOAuthStatusResult>)?.authenticated_server_ids ?? [];
   const server = fresh as MCPServer;
   agorStore.getState().applyMaps((prev) => {
     const mcpServerById = new Map(prev.mcpServerById);
@@ -86,4 +78,32 @@ export async function refetchMCPOAuthDurableState(
       mcpServerById,
     };
   });
+}
+
+/**
+ * A refresh may rotate or delete a grant before the HTTP response reaches the
+ * browser. Always refetch both durable authorities, on success, provider
+ * rejection, or request failure; local response handling is UX only.
+ */
+export async function refreshAndRefetchMCPOAuthGrant(
+  client: AgorClient,
+  mcpServerId: string
+): Promise<MCPOAuthRefreshResult> {
+  let result: MCPOAuthRefreshResult | undefined;
+  let refreshError: unknown;
+  try {
+    result = (await client.service('mcp-servers/oauth-refresh').create({
+      mcp_server_id: mcpServerId,
+    })) as MCPOAuthRefreshResult;
+  } catch (error) {
+    refreshError = error;
+  }
+
+  try {
+    await refetchMCPOAuthDurableState(client, mcpServerId);
+  } catch (refetchError) {
+    if (!refreshError) throw refetchError;
+  }
+  if (refreshError) throw refreshError;
+  return result!;
 }

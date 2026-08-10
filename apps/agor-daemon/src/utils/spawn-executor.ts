@@ -104,6 +104,8 @@ export interface ExecutorTemplateVariables {
   unix_user_gid?: number;
   session_id?: string;
   branch_id?: string;
+  /** Trusted Agor user UUID used by external launchers for identity-scoped storage. */
+  user_id?: string;
   log_level?: string;
   executor_type?: string;
   /**
@@ -247,6 +249,14 @@ export function substituteTemplateVariables(
       'executor_command_template {unix_user} value is not a valid Unix username; refusing to execute'
     );
   }
+  if (
+    variables.user_id !== undefined &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(variables.user_id)
+  ) {
+    throw new Error(
+      'executor_command_template {user_id} value is not a valid Agor user UUID; refusing to execute'
+    );
+  }
 
   let result = template;
 
@@ -258,6 +268,7 @@ export function substituteTemplateVariables(
     unix_user_gid: variables.unix_user_gid,
     session_id: variables.session_id,
     branch_id: variables.branch_id,
+    user_id: variables.user_id,
     log_level: variables.log_level,
     executor_type: variables.executor_type,
     tenant_id: variables.tenant_id,

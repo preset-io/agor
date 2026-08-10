@@ -28,6 +28,7 @@ export function resolveUiBranchStorageConfig(
       ? requestedDefault
       : nonEmptyAllowedModes[0],
     allowedModes: nonEmptyAllowedModes,
+    allowShallowClones: config?.allowShallowClones ?? true,
   };
 }
 

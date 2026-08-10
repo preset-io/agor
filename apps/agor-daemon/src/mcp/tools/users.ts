@@ -1,5 +1,5 @@
 import { ROLES, type User } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { mcpOptionalString, mcpRequiredId, mcpRequiredString } from '../schema.js';
 import type { McpContext } from '../server.js';

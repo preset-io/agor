@@ -2,7 +2,12 @@
 
 import { getCurrentTenantId, isPostgresDatabaseHandle, runWithTenantDatabaseScope } from '../../db';
 import type { Database, TenantScopeAwareDatabase } from '../../db/client';
-import { MCPServerRepository, UserMCPOAuthTokenRepository } from '../../db/repositories';
+import {
+  type MCPOAuthRefreshVersion,
+  MCPServerRepository,
+  type UserMCPOAuthToken,
+  UserMCPOAuthTokenRepository,
+} from '../../db/repositories';
 import type { MCPServerID, UserID } from '../../types';
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { inferOAuthTokenUrl } from './oauth-auth';
@@ -49,6 +54,14 @@ export class AmbiguousRefreshError extends Error {
   constructor(message = 'OAuth refresh outcome is ambiguous; reconnect safely') {
     super(message);
     this.name = 'AmbiguousRefreshError';
+  }
+}
+
+export class FailedRefreshError extends Error {
+  readonly code = 'failed_refresh';
+  constructor(message = 'The observed OAuth refresh failed; retry or reconnect safely') {
+    super(message);
+    this.name = 'FailedRefreshError';
   }
 }
 
@@ -160,6 +173,12 @@ export interface RefreshAndPersistDeps {
   tenantId?: string;
   userId: UserID | null;
   mcpServerId: MCPServerID;
+  /**
+   * Version read by the caller when it decided a PostgreSQL refresh was
+   * needed. Required at runtime for PostgreSQL so a delayed caller cannot
+   * refresh a peer's newly rotated token.
+   */
+  observedRefreshVersion?: MCPOAuthRefreshVersion;
   onInvalidGrant?: (info: { userId: UserID | null; mcpServerId: MCPServerID }) => void;
   /** Internal test/development seam; daemon PostgreSQL callers leave this false. */
   allowLocalhostHttpDevelopment?: boolean;
@@ -188,32 +207,66 @@ function notifyInvalidGrant(deps: RefreshAndPersistDeps): void {
   }
 }
 
-async function observeCommittedRefresh(deps: RefreshAndPersistDeps): Promise<string> {
+async function observeCommittedRefresh(
+  deps: RefreshAndPersistDeps,
+  expected: MCPOAuthRefreshVersion
+): Promise<string> {
   const deadline = Date.now() + REFRESH_OBSERVE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const token = await tenantWork(deps, (db) =>
       new UserMCPOAuthTokenRepository(db).getToken(deps.userId, deps.mcpServerId)
     );
     if (!token) throw new InvalidGrantError();
-    if (token.refresh_status === 'idle') return token.oauth_access_token;
     if (token.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
+    if (token.refresh_status === 'idle') {
+      // A newer authorization replaced the old grant atomically and is valid
+      // independently of the old refresh attempt.
+      if (token.grant_generation !== expected.grantGeneration) {
+        return token.oauth_access_token;
+      }
+      if (token.refresh_success_generation >= expected.refreshGeneration) {
+        return token.oauth_access_token;
+      }
+      // `idle` alone is not success: a known provider rejection releases the
+      // claim for retry while deliberately leaving success generation behind.
+      throw new FailedRefreshError();
+    }
     await new Promise((resolve) => setTimeout(resolve, REFRESH_OBSERVE_INTERVAL_MS));
   }
   throw new AmbiguousRefreshError('OAuth refresh owner did not commit before the wait timeout');
 }
 
+async function settleObservedRefresh(
+  deps: RefreshAndPersistDeps,
+  token: UserMCPOAuthToken | null
+): Promise<string> {
+  if (!token) throw new InvalidGrantError();
+  if (token.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
+  if (token.refresh_status === 'refreshing') {
+    return observeCommittedRefresh(deps, {
+      grantGeneration: token.grant_generation,
+      refreshGeneration: token.refresh_generation,
+    });
+  }
+  if (!token.oauth_refresh_token) throw new MissingRefreshTokenError();
+  if (token.refresh_success_generation < token.refresh_generation) {
+    throw new FailedRefreshError();
+  }
+  // A stale caller lost its expected-version CAS to a successfully refreshed
+  // row or to a newer atomic grant replacement. It must observe, not exchange.
+  return token.oauth_access_token;
+}
+
 async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
+  const expected = deps.observedRefreshVersion;
+  if (!expected) {
+    throw new Error('PostgreSQL MCP OAuth refresh requires an observed grant version');
+  }
   const claim = await tenantWork(deps, (db) =>
-    new UserMCPOAuthTokenRepository(db).claimRefresh(deps.userId, deps.mcpServerId)
+    new UserMCPOAuthTokenRepository(db).claimRefresh(deps.userId, deps.mcpServerId, expected)
   );
   if (claim.outcome === 'observed') {
-    if (!claim.token) throw new MissingRefreshTokenError();
-    if (claim.token.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
-    if (claim.token.refresh_status === 'refreshing') return observeCommittedRefresh(deps);
-    if (!claim.token.oauth_refresh_token) throw new MissingRefreshTokenError();
-    // A concurrent replacement may have made the token fresh between the
-    // caller's initial read and claim. Observe it instead of issuing I/O.
-    return claim.token.oauth_access_token;
+    return settleObservedRefresh(deps, claim.token);
   }
 
   const row = claim.token;
@@ -262,7 +315,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
         }
       )
     );
-    if (!committed) return observeCommittedRefresh(deps);
+    if (!committed) return observeCommittedRefresh(deps, fence);
     console.log('[MCP OAuth Refresh] refresh_succeeded category=committed');
     return result.access_token;
   } catch (error) {
@@ -274,7 +327,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
           fence
         )
       );
-      if (!deleted) return observeCommittedRefresh(deps);
+      if (!deleted) return observeCommittedRefresh(deps, fence);
       console.warn('[MCP OAuth Refresh] refresh_failed category=invalid_grant');
       notifyInvalidGrant(deps);
       throw error;

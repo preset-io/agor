@@ -14,7 +14,7 @@ import {
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { ContentBlock } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveSessionId, resolveTaskId } from '../resolve-ids.js';

@@ -43,6 +43,21 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to. Real-time updates appear instantly for everyone watching the board.
 
+### Progressive tool discovery
+
+When `mcp_tool_search` is enabled (the default), `tools/list` intentionally
+returns only three stable facade tools:
+
+- `agor_search_tools` browses domains or searches concise tool summaries.
+- `agor_get_tool_details` returns the exact schema for one selected tool.
+- `agor_execute_tool` invokes the selected domain tool with validated arguments.
+
+The MCP `2026-07-28` revision adds `server/discover` for protocol capabilities
+and standard cache hints for tool lists. It does **not** replace Agor's semantic
+catalog search, domain filters, annotation filters, or detail-on-demand flow.
+Agor keeps those features while using the standard discovery response and
+private 60-second cache hints for its deterministic visible catalog.
+
 ## Self-Aware Agents Inside Agor
 
 When you launch a session in Agor, the SDK config includes the internal MCP server automatically:
@@ -157,6 +172,38 @@ JWT, tenant, user, and session context are attached automatically. **From an
 external client**, you configure the endpoint and personal API key yourself,
 and session context is absent unless you add it.
 
+### Built-in transport contract
+
+Agor's built-in endpoint uses the stable TypeScript MCP SDK v2 in a dual-era,
+stateless request/response configuration:
+
+- Modern `2026-07-28` clients use the handshake-free per-request metadata
+  contract. They may call `server/discover`; ordinary RPC results are bounded
+  JSON and include standard cache hints where required.
+- Initialization-era clients through `2025-11-25` continue to use
+  `initialize` and `notifications/initialized`. The compatibility path may
+  return one bounded, request-scoped SSE response for a legacy request. It does
+  not create or retain a transport session.
+- Neither era receives `Mcp-Session-Id`. Agor does not retain a transport Map
+  or timer, open a standalone server event stream, or send transport-level
+  progress, logging, subscription, or tool-list-change notifications.
+- Authenticated `GET /mcp` and `DELETE /mcp` return `405 Method Not Allowed`
+  (requests still pass the normal authentication boundary first). Streamable
+  HTTP clients may optimistically try `GET`; compatible clients treat `405` as
+  the server declining that optional stream.
+- Authentication, trusted tenant identity, current user data, and optional
+  `X-Agor-Session-Id` access are reconstructed and authorized on every request.
+
+This contract applies only to Agor's built-in endpoint. MCP servers that users
+configure under **Settings → MCP Servers** remain separate external services;
+Agor still passes their configured stdio, Streamable HTTP, or legacy SSE
+transports directly to the selected executor.
+
+Version selection is protocol-driven rather than an Agor-specific client
+switch. V2 clients can probe with `server/discover` and select the modern era;
+older clients send `initialize` and are served by the stateless compatibility
+arm. Both paths use the same authenticated server factory and tool definitions.
+
 ### Smoke test and troubleshooting
 
 Ask the client to call `agor_search_tools` with no arguments, then
@@ -198,11 +245,10 @@ In hosted `required_from_auth` deployments:
 - If more than one tenant signal is present, all signals must agree. Missing or
   conflicting identity fails closed before tenant-owned authentication data is
   queried.
-- Streamable HTTP sessions retain their initialize-time tenant, user, and
-  optional Agor-session bindings. Every later GET, POST, or DELETE request is
-  re-authenticated. Tenant and user identity must still match; an optional
-  Agor-session binding may be omitted and reused, but cannot be added or
-  replaced, and is re-authorized before each request.
+- The built-in endpoint retains no transport context. Every POST resolves the
+  tenant, authenticates and reloads the user, and authorizes any optional Agor
+  Session independently. An `Mcp-Session-Id` is never a source of identity or
+  authority.
 
 Tenant identity is ambient for the MCP operation, but it does not hold a
 database transaction open. Individual service and repository calls use short

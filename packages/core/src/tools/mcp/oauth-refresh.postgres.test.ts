@@ -20,7 +20,12 @@ import {
   userMcpOauthTokens,
 } from '../../db';
 import type { MCPServerID, UserID } from '../../types';
-import { AmbiguousRefreshError, refreshAndPersistToken } from './oauth-refresh';
+import {
+  AmbiguousRefreshError,
+  FailedRefreshError,
+  OAuthRefreshExchangeError,
+  refreshAndPersistToken,
+} from './oauth-refresh';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -200,6 +205,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       return generation;
     }
 
+    function initialRefreshVersion(seed: Seed) {
+      return { grantGeneration: seed.generation, refreshGeneration: 0 };
+    }
+
     it('allows one daemon to rotate while a peer observes the committed result', async () => {
       const tokenProvider = await provider(async (body, response) => {
         expect(body.get('grant_type')).toBe('refresh_token');
@@ -223,6 +232,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           tenantId: bound.tenantId,
           userId: bound.userId,
           mcpServerId: bound.serverId,
+          observedRefreshVersion: initialRefreshVersion(bound),
           allowLocalhostHttpDevelopment: true,
         }),
         refreshAndPersistToken({
@@ -230,6 +240,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           tenantId: bound.tenantId,
           userId: bound.userId,
           mcpServerId: bound.serverId,
+          observedRefreshVersion: initialRefreshVersion(bound),
           allowLocalhostHttpDevelopment: true,
         }),
       ]);
@@ -244,6 +255,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauth_refresh_token: 'rotated-refresh-1',
         refresh_status: 'idle',
         refresh_generation: 1,
+        refresh_success_generation: 1,
       });
 
       const rawStored = await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
@@ -264,6 +276,101 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ).toBe(true);
     });
 
+    it('makes a delayed stale caller observe the committed rotation instead of refreshing twice', async () => {
+      const tokenProvider = await provider((_body, response) => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            access_token: 'delayed-rotation-access',
+            refresh_token: 'delayed-rotation-refresh',
+            expires_in: 3600,
+          })
+        );
+      });
+      const bound = await seed('delayed-claim', tokenProvider.url);
+      const staleVersion = initialRefreshVersion(bound);
+
+      await expect(
+        refreshAndPersistToken({
+          db: dbA,
+          tenantId: bound.tenantId,
+          userId: bound.userId,
+          mcpServerId: bound.serverId,
+          observedRefreshVersion: staleVersion,
+          allowLocalhostHttpDevelopment: true,
+        })
+      ).resolves.toBe('delayed-rotation-access');
+
+      // Daemon B made its decision from the old row but did not reach the CAS
+      // until after daemon A committed. It must not consume the rotated token.
+      await expect(
+        refreshAndPersistToken({
+          db: dbB,
+          tenantId: bound.tenantId,
+          userId: bound.userId,
+          mcpServerId: bound.serverId,
+          observedRefreshVersion: staleVersion,
+          allowLocalhostHttpDevelopment: true,
+        })
+      ).resolves.toBe('delayed-rotation-access');
+      expect(tokenProvider.calls()).toBe(1);
+    });
+
+    it('does not let an observer mistake a rejected owner exchange for success', async () => {
+      let requestArrived!: () => void;
+      const arrived = new Promise<void>((resolve) => {
+        requestArrived = resolve;
+      });
+      let releaseResponse!: () => void;
+      const release = new Promise<void>((resolve) => {
+        releaseResponse = resolve;
+      });
+      const tokenProvider = await provider(async (_body, response) => {
+        requestArrived();
+        await release;
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'temporarily_unavailable' }));
+      });
+      const bound = await seed('rejected-observer', tokenProvider.url);
+      const observed = initialRefreshVersion(bound);
+      const owner = refreshAndPersistToken({
+        db: dbA,
+        tenantId: bound.tenantId,
+        userId: bound.userId,
+        mcpServerId: bound.serverId,
+        observedRefreshVersion: observed,
+        allowLocalhostHttpDevelopment: true,
+      });
+      await arrived;
+      const observer = refreshAndPersistToken({
+        db: dbB,
+        tenantId: bound.tenantId,
+        userId: bound.userId,
+        mcpServerId: bound.serverId,
+        observedRefreshVersion: observed,
+        allowLocalhostHttpDevelopment: true,
+      });
+      releaseResponse();
+
+      const [ownerResult, observerResult] = await Promise.allSettled([owner, observer]);
+      expect(ownerResult.status).toBe('rejected');
+      expect((ownerResult as PromiseRejectedResult).reason).toBeInstanceOf(
+        OAuthRefreshExchangeError
+      );
+      expect(observerResult.status).toBe('rejected');
+      expect((observerResult as PromiseRejectedResult).reason).toBeInstanceOf(FailedRefreshError);
+      expect(tokenProvider.calls()).toBe(1);
+
+      const current = await runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
+        new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(bound.userId, bound.serverId)
+      );
+      expect(current).toMatchObject({
+        refresh_status: 'idle',
+        refresh_generation: 1,
+        refresh_success_generation: 0,
+      });
+    });
+
     it('marks a stale refresh owner ambiguous and never replays its rotating token', async () => {
       const tokenProvider = await provider((_body, response) => {
         response.writeHead(500);
@@ -273,7 +380,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const claimed = await runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
         new UserMCPOAuthTokenRepository(scoped, masterSecret).claimRefresh(
           bound.userId,
-          bound.serverId
+          bound.serverId,
+          initialRefreshVersion(bound)
         )
       );
       expect(claimed.outcome).toBe('claimed');
@@ -292,6 +400,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           tenantId: bound.tenantId,
           userId: bound.userId,
           mcpServerId: bound.serverId,
+          observedRefreshVersion: initialRefreshVersion(bound),
           allowLocalhostHttpDevelopment: true,
         })
       ).rejects.toBeInstanceOf(AmbiguousRefreshError);
@@ -320,6 +429,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         tenantId: bound.tenantId,
         userId: bound.userId,
         mcpServerId: bound.serverId,
+        observedRefreshVersion: initialRefreshVersion(bound),
         onInvalidGrant: invalidGrantNotice,
         allowLocalhostHttpDevelopment: true,
       });

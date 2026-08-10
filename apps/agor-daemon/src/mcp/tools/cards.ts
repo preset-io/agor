@@ -1,6 +1,6 @@
 import { BoardObjectRepository } from '@agor/core/db';
 import type { Card, ZoneBoardObject } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { CardsService } from '../../services/cards.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';

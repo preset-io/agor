@@ -12,6 +12,7 @@ import {
   type AgorConfig,
   isDeploymentAgenticToolAvailable,
   PublicBaseUrlNotConfiguredError,
+  type ResolvedDeploymentConfig,
   requirePublicBaseUrl,
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
@@ -44,6 +45,10 @@ import {
 import type { Application } from '@agor/core/feathers';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
+  OAuthFlowContext,
+  OAuthTokenResponse,
+} from '@agor/core/tools/mcp/oauth-mcp-transport';
+import type {
   AuthenticatedParams,
   HookContext,
   MCPAuth,
@@ -72,6 +77,7 @@ import {
   retainExecutorContainmentFence,
   trackExecutorProcess,
 } from './executor-tracking.js';
+import { assertHaTaskPermissionSupported, isConstrainedHa } from './ha-support.js';
 import { shouldRegisterLocalHostOperations } from './host/availability.js';
 import { createLocalDaemonHostOperations } from './host/local/local-daemon-host-operations.js';
 import { registerOpenCodeServices } from './integrations/opencode/index.js';
@@ -81,6 +87,11 @@ import {
 } from './integrations/opencode/native-state-coordinator.js';
 import { runInOAuthTenantScope, runInOAuthTenantWriteScope } from './oauth-auth-helpers.js';
 import { persistOAuthToken } from './oauth-cache.js';
+import {
+  emitHaNativeSocketEvent,
+  tenantChannelName,
+  tenantUserChannelName,
+} from './realtime/routing.js';
 import { createAgenticToolPresetsService } from './services/agentic-tool-presets.js';
 import { createArtifactsService } from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
@@ -128,6 +139,10 @@ import { createKnowledgeVersionsService } from './services/knowledge-versions.js
 import { createLeaderboardService } from './services/leaderboard.js';
 import { createLocalActionsService } from './services/local-actions.js';
 import {
+  classifyMCPOAuthCompletionFailure,
+  OAuthFlowAuthorizationChangedError,
+} from './services/mcp-oauth-exchange-classification.js';
+import {
   fingerprintMCPOAuthGrantConfiguration,
   hasMCPOAuthRelevantServerConfigurationChanged,
   isMCPOAuthGrantBoundToServer,
@@ -151,7 +166,6 @@ import { createTenantAgenticToolSettingsService } from './services/tenant-agenti
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
-import { tenantChannelName, tenantUserChannelName } from './setup/socketio.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
@@ -180,6 +194,7 @@ export interface RegisterServicesContext {
   branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
+  deployment: ResolvedDeploymentConfig;
 }
 
 /**
@@ -374,18 +389,24 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ['created','updated','patched','removed'], so without this it
   // fires locally on the server's EventEmitter and never reaches any
   // socket. See queryArtifactRuntime in services/artifacts.ts.
-  app.use('/artifacts', createArtifactsService(db, app), {
-    events: ['agor-query'],
-    methods: [
-      'find',
-      'get',
-      'create',
-      'patch',
-      'remove',
-      'publishFromExecutor',
-      'validateFromExecutor',
-    ],
-  });
+  app.use(
+    '/artifacts',
+    createArtifactsService(db, app, {
+      runtimeIntrospectionEnabled: !isConstrainedHa(ctx.deployment),
+    }),
+    {
+      events: ['agor-query'],
+      methods: [
+        'find',
+        'get',
+        'create',
+        'patch',
+        'remove',
+        'publishFromExecutor',
+        'validateFromExecutor',
+      ],
+    }
+  );
   app.use('/board-comments', createBoardCommentsService(db));
 
   // ============================================================================
@@ -510,7 +531,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // The OAuth callback middleware is registered in boot.ts; here we set the handler
   {
     const mcpResult = await registerMCPServices(ctx, sessionsService);
-    oauthCallbackHandler = mcpResult.oauthCallbackHandler;
+    oauthCallbackHandler = isConstrainedHa(ctx.deployment)
+      ? (_req, res) => {
+          res.status(503).json({
+            code: 'HA_FEATURE_UNSUPPORTED',
+            feature: 'mcpOAuth',
+            message:
+              'MCP OAuth callbacks are unavailable in HA support profile constrained-active-active',
+          });
+        }
+      : mcpResult.oauthCallbackHandler;
   }
 
   // ============================================================================
@@ -559,7 +589,13 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     });
 
     const uiUrl = ctx.bundledUiAvailable ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
-    registerGitHubAppSetupRoutes(app, { uiUrl, daemonUrl, db, config: ctx.config });
+    registerGitHubAppSetupRoutes(app, {
+      uiUrl,
+      daemonUrl,
+      db,
+      config: ctx.config,
+      setupEnabled: !isConstrainedHa(ctx.deployment),
+    });
   }
 
   // ============================================================================
@@ -825,6 +861,10 @@ function createExecuteHandler(
       params,
       deploymentAgenticToolPolicy
     );
+    assertHaTaskPermissionSupported(ctx.deployment, {
+      session,
+      requestedMode: data.permissionMode,
+    });
     const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
     if (
       session.agentic_tool_preset_id &&
@@ -1055,6 +1095,8 @@ function createExecuteHandler(
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
+        branch_id: session.branch_id,
+        user_id: userId,
         // Mode-resolved identity for the execution substrate: the sudo user in
         // insulated/strict, the session's unix_username in delegated (no sudo),
         // and unset in simple. Supersedes the interim
@@ -1268,30 +1310,9 @@ async function registerMCPServices(
 <body><div class="card"><div class="icon">${icon}</div><p>${safeMessage}</p></div></body></html>`;
   }
 
-  type OAuthTokenResponse = {
-    access_token: string;
-    token_type?: string;
-    expires_in?: number;
-    refresh_token?: string;
-  };
-
   type PendingOAuthFlow = {
     attemptId: MCPOAuthAttemptID;
-    context: {
-      metadataUrl: string;
-      resourceUri: string;
-      issuer: string;
-      authorizationEndpoint: string;
-      tokenEndpoint: string;
-      redirectUri: string;
-      pkceVerifier: string;
-      clientId: string;
-      clientSecret?: string;
-      state: string;
-      authorizationUrl: string;
-      compatibilityMode: 'strict' | 'legacy';
-      allowLocalhostHttp: boolean;
-    };
+    context: OAuthFlowContext;
     mcpServerId?: string;
     userId?: string;
     oauthMode?: 'per_user' | 'shared';
@@ -1666,7 +1687,7 @@ async function registerMCPServices(
       // return the URL before their callback arrives. Target the exact
       // authenticated initiating socket only — never a user/tenant/global
       // room — and keep durable status as the completion authority.
-      app.io.to(opts.socketId).emit('oauth:open_browser', {
+      app.io.local.to(opts.socketId).emit('oauth:open_browser', {
         authUrl: context.authorizationUrl,
         attempt_id: attemptId,
       });
@@ -1738,13 +1759,6 @@ async function registerMCPServices(
     (params as (AuthenticatedParams & { tenant?: { tenant_id?: string } }) | undefined)?.tenant
       ?.tenant_id ?? getCurrentTenantId();
 
-  class OAuthPreExchangeValidationError extends Error {
-    constructor(readonly afterProviderExchange = false) {
-      super('MCP OAuth authorization must be restarted');
-      this.name = 'OAuthPreExchangeValidationError';
-    }
-  }
-
   const assertDurableFlowStillAuthorized = async (
     pendingFlow: PendingOAuthFlow,
     afterProviderExchange = false
@@ -1789,7 +1803,7 @@ async function registerMCPServices(
         }
       });
     } catch {
-      throw new OAuthPreExchangeValidationError(afterProviderExchange);
+      throw new OAuthFlowAuthorizationChangedError(afterProviderExchange);
     }
   };
 
@@ -1897,11 +1911,11 @@ async function registerMCPServices(
         event.oauth_mode === 'per_user' && pendingFlow.userId
           ? tenantUserChannelName(pendingFlow.tenantId, pendingFlow.userId)
           : tenantChannelName(pendingFlow.tenantId);
-      app.io.to(room).emit('oauth:completed', event);
+      emitHaNativeSocketEvent(app.io.to(room), 'oauth:completed', event);
     } else if (pendingFlow.socketId) {
       // Standalone defensive fallback: exact originating socket only. Never
       // globally broadcast OAuth attempt metadata or authorization URLs.
-      app.io.to(pendingFlow.socketId).emit('oauth:completed', event);
+      app.io.local.to(pendingFlow.socketId).emit('oauth:completed', event);
     }
   };
 
@@ -2032,33 +2046,21 @@ async function registerMCPServices(
         console.log('[OAuth Callback] Flow completed successfully');
         res.send(oauthResultPage(true, 'OAuth authentication successful! You can close this tab.'));
       } catch (innerErr) {
-        const { OAuthCodeExchangeError } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
-        const ambiguous =
-          !(innerErr instanceof OAuthCodeExchangeError) &&
-          !(innerErr instanceof OAuthPreExchangeValidationError && !innerErr.afterProviderExchange)
-            ? true
-            : innerErr instanceof OAuthCodeExchangeError && innerErr.ambiguous === true;
+        const classification = classifyMCPOAuthCompletionFailure(innerErr);
+        const { ambiguous } = classification;
         if (pendingFlow.durableRecord) {
           try {
             await durableOAuthFlows!.finish(
               pendingFlow.durableRecord,
-              ambiguous ? 'ambiguous' : 'failed',
-              ambiguous
-                ? 'exchange_outcome_ambiguous'
-                : innerErr instanceof OAuthPreExchangeValidationError
-                  ? 'authorization_changed'
-                  : 'provider_rejected'
+              classification.status,
+              classification.failureCode
             );
           } catch {
             // The durable row remains exchanging and maintenance will age it
             // to ambiguous. Never claim the authorization code is replayable.
           }
         } else {
-          markLocalOAuthAttempt(
-            pendingFlow,
-            ambiguous ? 'ambiguous' : 'failed',
-            ambiguous ? 'exchange_outcome_ambiguous' : 'provider_rejected'
-          );
+          markLocalOAuthAttempt(pendingFlow, classification.status, classification.failureCode);
         }
         emitOAuthCompletion(pendingFlow, false);
         pendingFlow.tokenReject?.(
@@ -2813,21 +2815,9 @@ async function registerMCPServices(
         return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
       } catch (error) {
         if (pendingFlow) {
-          const { OAuthCodeExchangeError } = await import(
-            '@agor/core/tools/mcp/oauth-mcp-transport'
-          );
-          const ambiguous =
-            !(error instanceof OAuthCodeExchangeError) &&
-            !(error instanceof OAuthPreExchangeValidationError && !error.afterProviderExchange)
-              ? true
-              : error instanceof OAuthCodeExchangeError && error.ambiguous === true;
-          completionStatus = ambiguous ? 'ambiguous' : 'failed';
-          const failureCode =
-            error instanceof OAuthPreExchangeValidationError
-              ? 'authorization_changed'
-              : error instanceof OAuthCodeExchangeError
-                ? error.failureCode
-                : 'exchange_outcome_ambiguous';
+          const classification = classifyMCPOAuthCompletionFailure(error);
+          const { ambiguous, failureCode } = classification;
+          completionStatus = classification.status;
           if (pendingFlow.durableRecord) {
             try {
               await durableOAuthFlows!.finish(
@@ -2887,7 +2877,9 @@ async function registerMCPServices(
           result.oauthMode === 'shared'
             ? tenantChannelName(tenantId)
             : tenantUserChannelName(tenantId, params.user.user_id);
-        app.io.to(room).emit('oauth:disconnected', { mcp_server_id: data.mcp_server_id });
+        emitHaNativeSocketEvent(app.io.to(room), 'oauth:disconnected', {
+          mcp_server_id: data.mcp_server_id as MCPServerID,
+        });
       }
 
       return result;
@@ -2912,6 +2904,7 @@ async function registerMCPServices(
         const serverRepo = new MCPServerRepository(db);
         for (const token of tokens) {
           if (token.oauth_token_expires_at && token.oauth_token_expires_at <= now) continue;
+          if (token.refresh_status === 'ambiguous') continue;
           if (isPostgresDatabaseHandle(db)) {
             const server = await serverRepo.findById(token.mcp_server_id);
             if (
@@ -3139,6 +3132,10 @@ async function registerMCPServices(
                   tenantId,
                   userId: tokenUserId,
                   mcpServerId: serverId as MCPServerID,
+                  observedRefreshVersion: {
+                    grantGeneration: row.grant_generation,
+                    refreshGeneration: row.refresh_generation,
+                  },
                 });
                 headers[serverId] = { authorization: `Bearer ${observed}` };
               } catch {
@@ -3155,6 +3152,10 @@ async function registerMCPServices(
                   tenantId,
                   userId: tokenUserId,
                   mcpServerId: serverId as MCPServerID,
+                  observedRefreshVersion: {
+                    grantGeneration: row.grant_generation,
+                    refreshGeneration: row.refresh_generation,
+                  },
                 });
               } catch (refreshErr) {
                 if (refreshErr instanceof InvalidGrantError) {
@@ -3234,6 +3235,7 @@ async function registerMCPServices(
         MissingTokenEndpointError,
         MissingClientIdError,
         AmbiguousRefreshError,
+        FailedRefreshError,
       } = await import('@agor/core/tools/mcp/oauth-refresh');
 
       try {
@@ -3254,6 +3256,9 @@ async function registerMCPServices(
         }
         const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
 
+        let observedRefreshVersion:
+          | { grantGeneration: number; refreshGeneration: number }
+          | undefined;
         if (isPostgresDatabaseHandle(db)) {
           const currentGrant = await runInOAuthTenantScope(db, tenantId, () =>
             new UserMCPOAuthTokenRepository(db).getToken(tokenUserId, serverId as MCPServerID)
@@ -3274,6 +3279,10 @@ async function registerMCPServices(
             }
             return { success: false, error: 'needs_reauth' };
           }
+          observedRefreshVersion = {
+            grantGeneration: currentGrant.grant_generation,
+            refreshGeneration: currentGrant.refresh_generation,
+          };
         }
 
         await refreshAndPersistToken({
@@ -3281,6 +3290,7 @@ async function registerMCPServices(
           tenantId,
           userId: tokenUserId,
           mcpServerId: serverId as MCPServerID,
+          observedRefreshVersion,
         });
 
         const fresh = await runInOAuthTenantScope(db, tenantId, () =>
@@ -3296,7 +3306,8 @@ async function registerMCPServices(
         if (
           err instanceof InvalidGrantError ||
           err instanceof MissingRefreshTokenError ||
-          err instanceof AmbiguousRefreshError
+          err instanceof AmbiguousRefreshError ||
+          err instanceof FailedRefreshError
         ) {
           return { success: false, error: 'needs_reauth' };
         }
@@ -3540,10 +3551,8 @@ async function registerMCPServices(
 
         let authHeaders = await resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url, {
           allowLocalhostHttp: !durableOAuthFlows,
-          oauthCacheNamespace: [tenantId ?? '<standalone>', serverId ?? '<unsaved>', userId].join(
-            ':'
-          ),
-          disableOAuthTokenCache: !!durableOAuthFlows,
+          cacheNamespace: [tenantId ?? '<standalone>', serverId ?? '<unsaved>', userId].join(':'),
+          disableProcessTokenCache: !!durableOAuthFlows,
         });
 
         const probeAndAcquireOAuthToken = async (mcpUrl: string): Promise<string | undefined> => {

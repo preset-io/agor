@@ -10,6 +10,7 @@ import path from 'node:path';
 import {
   type AgorConfig,
   getAgorHome,
+  type ResolvedEnvironmentHealthMonitorSettings,
   resolveDeploymentAgenticToolPolicy,
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
@@ -28,6 +29,7 @@ import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@ag
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { containAllTrackedExecutors } from './executor-tracking.js';
+import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
@@ -80,17 +82,75 @@ export interface StartupContext {
    * state as replica-independent.
    */
   taskRuntimePolicy: TaskRuntimePolicy;
+  /** Required Redis/Socket.IO lifecycle in explicit HA mode. */
+  realtimeRuntime?: Pick<
+    import('./realtime/redis-realtime.js').RedisRealtimeRuntime,
+    'beginDrain' | 'close'
+  >;
+  /** Environment observation ownership policy; aligned with Task runtime naming. */
+  environmentHealthMonitorPolicy: EnvironmentHealthMonitorPolicy;
+  /** Required worker tuning resolved and validated by the HA deployment config. */
+  environmentHealthMonitorSettings?: ResolvedEnvironmentHealthMonitorSettings;
 }
 
 export type TaskRuntimePolicy = 'standalone' | 'shared_postgres';
+export type EnvironmentHealthMonitorPolicy = 'standalone' | 'shared_postgres';
+
+type EnvironmentHealthMonitor = {
+  initialize: () => Promise<void> | void;
+  cleanup: () => Promise<void> | void;
+  isReady?: () => boolean;
+};
+type EnvironmentHealthMonitorFactory = (
+  policy: EnvironmentHealthMonitorPolicy,
+  app: Application,
+  ctx: StartupContext
+) => EnvironmentHealthMonitor;
 
 /**
  * Standalone shutdown preserves the historical containment contract. Shared
- * replicas must leave detached executors alive: killing them and then losing
- * the process-local evidence would force another replica to claim uncertainty.
+ * replicas must not intentionally contain detached executors: killing them and
+ * then losing the process-local evidence would force another replica to claim
+ * uncertainty. Actual survival still depends on the execution substrate.
  */
 export function shouldContainLocalExecutorsOnShutdown(policy: TaskRuntimePolicy): boolean {
   return policy === 'standalone';
+}
+
+/** Preserve standalone's terminal Socket.IO disconnect while HA invites failover reconnect. */
+export function shouldReconnectSocketClientsOnShutdown(policy: TaskRuntimePolicy): boolean {
+  return policy === 'shared_postgres';
+}
+
+/**
+ * Construction boundary for standalone timers versus PostgreSQL-coordinated
+ * all-daemon observation. A mismatched Task/environment policy fails closed.
+ */
+export function createEnvironmentHealthMonitor(
+  ctx: StartupContext,
+  factory: EnvironmentHealthMonitorFactory = (policy, app, startupCtx) => {
+    if (policy === 'standalone') {
+      const multiTenancy = resolveMultiTenancyConfig(startupCtx.config);
+      return new HealthMonitor(app, {
+        defaultParams: startupTenantParams(startupCtx.config),
+        db: startupCtx.db,
+        tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
+        requireTenantParams: multiTenancy.mode !== 'static',
+      });
+    }
+    if (!startupCtx.environmentHealthMonitorSettings) {
+      throw new Error('Distributed environment health monitor settings are required');
+    }
+    return new DistributedHealthMonitor(app, startupCtx.db, {
+      workIdentity: startupCtx.distributedWorkIdentity,
+      ...startupCtx.environmentHealthMonitorSettings,
+    });
+  }
+): EnvironmentHealthMonitor | null {
+  if (ctx.taskRuntimePolicy !== ctx.environmentHealthMonitorPolicy) {
+    return null;
+  }
+  return factory(ctx.environmentHealthMonitorPolicy, ctx.app, ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +587,15 @@ export function runPostStartJob(name: string, job: () => Promise<void> | void): 
     });
 }
 
+/** Schedule the initial scan only when the monitor exists for this topology. */
+export function initializeEnvironmentHealthMonitor(
+  monitor: EnvironmentHealthMonitor | null
+): boolean {
+  if (!monitor) return false;
+  runPostStartJob('health-monitor-initialize', () => monitor.initialize());
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Master secret
 // ---------------------------------------------------------------------------
@@ -568,7 +637,7 @@ async function ensureMasterSecret(config: AgorConfig): Promise<void> {
 export async function prepareTaskRuntimeStartup(
   ctx: StartupContext
 ): Promise<OrphanCleanupResult | null> {
-  if (ctx.taskRuntimePolicy === 'shared_postgres') return null;
+  if (ctx.taskRuntimePolicy !== 'standalone') return null;
   return cleanupOrphanStatuses(ctx);
 }
 
@@ -588,22 +657,20 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // behind its explicit policy. A shared PostgreSQL replica starting is not
   // evidence that any Task, Session, queue item, or executor is orphaned.
   const orphanCleanupResult = await prepareTaskRuntimeStartup(ctx);
-  if (ctx.taskRuntimePolicy === 'shared_postgres') {
+  if (ctx.taskRuntimePolicy !== 'standalone') {
     console.log(
       '[startup] shared PostgreSQL task runtime: startup cleanup and restart notices disabled'
     );
   }
 
-  // 2. Register Health Monitor listeners before serving requests. The initial
-  // full scan of already-running environments is deferred until after listen.
+  // 2. Construct the topology-specific environment observer before serving.
+  // HA still gates lifecycle control to webhooks; this worker observes only.
   const startupMultiTenancy = resolveMultiTenancyConfig(config);
-  const healthMonitor = new HealthMonitor(app, {
-    defaultParams: startupTenantParams(config),
-    db,
-    tenantId:
-      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
-    requireTenantParams: startupMultiTenancy.mode !== 'static',
-  });
+  const healthMonitor = createEnvironmentHealthMonitor(ctx);
+  if (!healthMonitor) {
+    throw new Error('Environment health monitor policy does not match the Task runtime policy');
+  }
+  app.set('environmentHealthMonitor', healthMonitor);
 
   // 3. Validate/generate master secret for API key encryption
   await ensureMasterSecret(config);
@@ -619,7 +686,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     `   health=/health auth=required services=/sessions,/tasks,/messages,/boards,/repos,/mcp-servers,/users`
   );
 
-  runPostStartJob('health-monitor-initialize', () => healthMonitor.initialize());
+  initializeEnvironmentHealthMonitor(healthMonitor);
   if (orphanCleanupResult) {
     runPostStartJob('daemon-restart-notices', () => injectRestartNotices(ctx, orphanCleanupResult));
   }
@@ -701,15 +768,11 @@ export async function startup(ctx: StartupContext): Promise<void> {
     dispatchConnectTimeoutMs: resolveDispatchConnectTimeoutMs(config.execution),
   });
   taskRuntimeReconciler.start();
-  if (heartbeatConfig.enabled) {
-    console.log(
-      `💓 Task runtime reconciler started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms, policy: ${ctx.taskRuntimePolicy})`
-    );
-  } else {
-    console.log(
-      `💓 Task runtime reconciler started with heartbeat expiry disabled (policy: ${ctx.taskRuntimePolicy})`
-    );
-  }
+  console.log(
+    heartbeatConfig.enabled
+      ? `💓 Task runtime reconciler started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms, policy: ${ctx.taskRuntimePolicy})`
+      : `💓 Task runtime reconciler started with heartbeat expiry disabled (policy: ${ctx.taskRuntimePolicy})`
+  );
 
   // 6. Start the all-daemon durable Session queue scanner. Discovery is
   // bounded and may overlap freely; the database dispatch claim, not this
@@ -724,30 +787,28 @@ export async function startup(ctx: StartupContext): Promise<void> {
   sessionQueueWorker.start();
 
   // 7. Start scheduler service (background worker)
-  let schedulerService: SchedulerService | null = null;
-  {
-    const multiTenancy = resolveMultiTenancyConfig(config);
-    schedulerService = new SchedulerService(db, app, {
-      deploymentPolicy: resolveDeploymentAgenticToolPolicy(config),
-      tickInterval: 30000, // 30 seconds
-      gracePeriod: 120000, // 2 minutes
-      unixUserMode: config.execution?.unix_user_mode ?? 'simple',
-      // Static mode keeps the historical single-tenant scope. Auth-resolved
-      // multi-tenant mode leaves this undefined so the scheduler discovers due
-      // schedule tenant metadata at the DB boundary on each tick.
-      tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
-      workIdentity: ctx.distributedWorkIdentity,
-    });
-    app.set('scheduler', schedulerService);
-    schedulerService.start();
-  }
+  const schedulerMultiTenancy = resolveMultiTenancyConfig(config);
+  const schedulerService = new SchedulerService(db, app, {
+    deploymentPolicy: resolveDeploymentAgenticToolPolicy(config),
+    tickInterval: 30000, // 30 seconds
+    gracePeriod: 120000, // 2 minutes
+    unixUserMode: config.execution?.unix_user_mode ?? 'simple',
+    // Static mode keeps the historical single-tenant scope. Auth-resolved
+    // multi-tenant mode leaves this undefined so the scheduler discovers due
+    // schedule tenant metadata at the DB boundary on each tick.
+    tenantId:
+      schedulerMultiTenancy.mode === 'static' ? schedulerMultiTenancy.static_tenant_id : undefined,
+    workIdentity: ctx.distributedWorkIdentity,
+  });
+  app.set('scheduler', schedulerService);
+  schedulerService.start();
 
   // 8. Start Knowledge embedding indexer (no-op unless semantic search is configured)
-  let knowledgeEmbeddingIndexer: KnowledgeEmbeddingIndexer | null = null;
-  knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
+  const knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
     tenantId:
       startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
-    distributedMode: startupMultiTenancy.mode !== 'static',
+    distributedMode:
+      ctx.taskRuntimePolicy === 'shared_postgres' || startupMultiTenancy.mode !== 'static',
     workIdentity: ctx.distributedWorkIdentity,
   });
   knowledgeEmbeddingIndexer.start();
@@ -773,6 +834,10 @@ export async function startup(ctx: StartupContext): Promise<void> {
   const shutdown = async (signal: string) => {
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
 
+    // Fail readiness before waiting on any worker drain so ingress stops
+    // assigning new HTTP/Engine.IO sessions immediately.
+    ctx.realtimeRuntime?.beginDrain();
+
     // Refuse new cost-bearing claims before any other shutdown work can wait.
     // stop() also aborts the local provider wait and drains its active DB step.
     if (knowledgeEmbeddingIndexer) {
@@ -788,23 +853,25 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
     try {
       // Clean up health monitor
-      healthMonitor.cleanup();
+      await healthMonitor?.cleanup();
 
       // Stop Task runtime discovery before closing services.
-      taskRuntimeReconciler.stop();
+      taskRuntimeReconciler?.stop();
 
       // Stop durable Session queue discovery. Any in-flight database claim is
       // still safe; stop only prevents the next local scan.
-      sessionQueueWorker.stop();
+      sessionQueueWorker?.stop();
 
       if (shouldContainLocalExecutorsOnShutdown(ctx.taskRuntimePolicy)) {
         // Preserve the historical standalone shutdown contract.
         await containAllTrackedExecutors(app);
-      } else {
+      } else if (ctx.taskRuntimePolicy === 'shared_postgres') {
         // A shared replica cannot discard verified process-local evidence
-        // after killing an executor. Detached runtimes remain alive and may
-        // reconnect/heartbeat through another interchangeable daemon.
-        console.log('🔁 Leaving detached executors running for shared-daemon handoff');
+        // by intentionally killing an executor. A runtime may reconnect only
+        // when the configured execution substrate independently survives.
+        console.log(
+          '🔁 Skipping local executor containment for shared-daemon handoff (substrate survival required)'
+        );
       }
 
       // Clean up terminal sessions
@@ -828,9 +895,19 @@ export async function startup(ctx: StartupContext): Promise<void> {
       const socketServer = getSocketServer();
       if (socketServer) {
         console.log('🔌 Closing Socket.io and HTTP server...');
-        // Disconnect all active clients first
-        socketServer.disconnectSockets();
-        // Give sockets a moment to disconnect
+        if (shouldReconnectSocketClientsOnShutdown(ctx.taskRuntimePolicy)) {
+          // In HA, close Engine.IO transports instead of issuing a Socket.IO
+          // namespace disconnect. A namespace disconnect tells clients not to
+          // reconnect; a transport close lets them retry another healthy
+          // replica through ingress.
+          for (const socket of socketServer.sockets.sockets.values()) {
+            socket.conn.close();
+          }
+        } else {
+          // Preserve the historical standalone shutdown contract.
+          socketServer.disconnectSockets();
+        }
+        // Give transports a moment to close.
         await new Promise<void>((resolve) => setTimeout(resolve, 100));
         // Now close the server with a timeout
         await new Promise<void>((resolve) => {
@@ -858,6 +935,11 @@ export async function startup(ctx: StartupContext): Promise<void> {
             }
           });
         });
+      }
+
+      if (ctx.realtimeRuntime) {
+        console.log('🔌 Closing Redis realtime clients...');
+        await ctx.realtimeRuntime.close();
       }
 
       process.exit(0);

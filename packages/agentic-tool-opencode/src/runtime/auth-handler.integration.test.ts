@@ -1,5 +1,5 @@
 import { inspect } from 'node:util';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const runtime = vi.hoisted(() => ({
   clients: [] as Array<Record<string, unknown>>,
@@ -108,6 +108,9 @@ function client(
 }
 
 beforeEach(() => {
+  // These integration tests exercise the source-checkout SDK path regardless
+  // of whether their parent Agor executor is itself a managed installation.
+  vi.stubEnv('AGOR_MANAGED_AGENTIC_TOOLS', '0');
   vi.clearAllMocks();
   runtime.clients = [];
   runtime.readAuthFile.mockResolvedValue('{}');
@@ -120,6 +123,10 @@ beforeEach(() => {
     },
     close: runtime.close,
   }));
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('opencode.auth executor command', () => {

@@ -435,8 +435,11 @@ export class HealthMonitor {
     }
 
     if (!this.db) return findRefs();
-    return runWithSystemDatabaseScope(this.db, 'health monitor active environment discovery', () =>
-      findRefs()
+    return runWithSystemDatabaseScope(
+      this.db,
+      'health monitor active environment discovery',
+      () => findRefs(),
+      { capability: 'environment_health_discovery' }
     );
   }
 

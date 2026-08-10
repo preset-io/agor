@@ -715,6 +715,20 @@ export const branches = pgTable(
     // References a key under repo.environment.variants. Null for pre-v2 branches.
     environment_variant: text('environment_variant'),
 
+    // PostgreSQL is the correctness authority for HA environment health
+    // observations. Instance/boot IDs are diagnostic; the opaque token and
+    // lifecycle generation fence every result mutation.
+    environment_generation: integer('environment_generation').notNull().default(0),
+    environment_health_claim_token: text('environment_health_claim_token'),
+    environment_health_claimed_at: t.timestamp('environment_health_claimed_at'),
+    environment_health_claim_expires_at: t.timestamp('environment_health_claim_expires_at'),
+    environment_health_next_observation_at: t.timestamp('environment_health_next_observation_at'),
+    environment_health_claim_instance_id: text('environment_health_claim_instance_id'),
+    environment_health_claim_boot_id: text('environment_health_claim_boot_id'),
+    environment_health_claim_generation: integer('environment_health_claim_generation')
+      .notNull()
+      .default(0),
+
     // Board relationship (nullable - branches can exist without boards)
     board_id: varchar('board_id', { length: 36 }).references((): AnyPgColumn => boards.board_id, {
       onDelete: 'set null', // If board is deleted, branch remains but loses board association
@@ -827,6 +841,11 @@ export const branches = pgTable(
     boardIdx: index('branches_board_idx').on(table.board_id),
     createdIdx: index('branches_created_idx').on(table.created_at),
     updatedIdx: index('branches_updated_idx').on(table.updated_at),
+    environmentHealthDiscoveryIdx: index('branches_environment_health_discovery_idx')
+      .on(table.tenant_id, table.branch_id)
+      .where(
+        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running')`
+      ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
   })
@@ -1696,6 +1715,11 @@ export const userMcpOauthTokens = pgTable(
     oauth_redirect_uri: text('oauth_redirect_uri'),
     refresh_status: text('refresh_status').notNull().default('idle'),
     refresh_generation: bigint('refresh_generation', { mode: 'number' }).notNull().default(0),
+    // Highest refresh generation whose rotated token committed successfully.
+    // An idle row with success < generation records a known failed attempt.
+    refresh_success_generation: bigint('refresh_success_generation', { mode: 'number' })
+      .notNull()
+      .default(0),
     refresh_claim_id: varchar('refresh_claim_id', { length: 36 }),
     refresh_claimed_at: t.timestamp('refresh_claimed_at'),
     created_at: t.timestamp('created_at').notNull(),

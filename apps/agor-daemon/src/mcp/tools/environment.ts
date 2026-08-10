@@ -1,5 +1,5 @@
 import type { BranchID } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BranchesServiceImpl, ReposServiceImpl } from '../../declarations.js';
 import { mcpOptionalString, mcpRequiredId } from '../schema.js';

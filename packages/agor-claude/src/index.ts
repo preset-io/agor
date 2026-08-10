@@ -1,4 +1,4 @@
 /** Agor-managed, release-aligned claude integration. */
-export const AGOR_INTEGRATION_VERSION = '0.24.3';
+export const AGOR_INTEGRATION_VERSION = '0.24.4';
 export const VENDOR_PACKAGE = '@anthropic-ai/claude-agent-sdk';
 export * as sdk from '@anthropic-ai/claude-agent-sdk';

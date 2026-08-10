@@ -5,7 +5,9 @@
  * Tokens are cached for 15 minutes to avoid excessive API calls.
  */
 
+import { createHash } from 'node:crypto';
 import type { MCPAuth } from '../../types/mcp';
+import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
 
 interface JWTConfig {
@@ -16,8 +18,18 @@ interface JWTConfig {
 }
 
 interface CachedToken {
+  apiUrl: string;
   token: string;
   expiresAt: number;
+}
+
+export interface JWTTokenFetchOptions {
+  /** Exact loopback HTTP exception for standalone development only. */
+  allowLocalhostHttp?: boolean;
+  /** Trusted tenant/server/user namespace for the process-local compatibility cache. */
+  cacheNamespace?: string;
+  /** PostgreSQL/hosted callers disable process-local bearer caching. */
+  cache?: boolean;
 }
 
 // Cache tokens per unique credential set to avoid cross-tenant leakage
@@ -26,8 +38,18 @@ const tokenCache = new Map<string, CachedToken>();
 // Token validity duration: 15 minutes (in milliseconds)
 const TOKEN_TTL_MS = 15 * 60 * 1000;
 
-function getCacheKey(config: JWTConfig): string {
-  return `${config.api_url}::${config.api_token}::${config.api_secret}`;
+function getCacheKey(config: JWTConfig, namespace: string): string {
+  // Do not retain credentials in a Map key, heap snapshot, or diagnostic dump.
+  return createHash('sha256')
+    .update('agor:mcp-jwt-cache:v1\0')
+    .update(namespace)
+    .update('\0')
+    .update(config.api_url)
+    .update('\0')
+    .update(config.api_token)
+    .update('\0')
+    .update(config.api_secret)
+    .digest('hex');
 }
 
 /**
@@ -37,19 +59,27 @@ function getCacheKey(config: JWTConfig): string {
  * @returns The access token string
  * @throws Error if token fetch fails
  */
-export async function fetchJWTToken(config: JWTConfig): Promise<string> {
+export async function fetchJWTToken(
+  config: JWTConfig,
+  options: JWTTokenFetchOptions = {}
+): Promise<string> {
   const { api_url, api_token, api_secret } = config;
-  const cacheKey = getCacheKey(config);
+  const shouldCache = options.cache !== false;
+  const cacheKey = getCacheKey(config, options.cacheNamespace ?? '<standalone>');
 
   // Check cache first
-  const cached = tokenCache.get(cacheKey);
+  const cached = shouldCache ? tokenCache.get(cacheKey) : undefined;
   if (cached && cached.expiresAt > Date.now()) {
     return cached.token;
   }
 
   // Fetch new token
-  const response = await fetch(api_url, {
+  const response = await safeOutboundFetch(api_url, {
     method: 'POST',
+    redirect: 'error',
+    timeoutMs: 15_000,
+    maxResponseBytes: 256 * 1024,
+    allowLocalhostHttp: options.allowLocalhostHttp ?? true,
     headers: {
       'Content-Type': 'application/json',
     },
@@ -60,16 +90,17 @@ export async function fetchJWTToken(config: JWTConfig): Promise<string> {
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `JWT token fetch failed: ${response.status} ${response.statusText} - ${errorText}`
-    );
+    // Provider bodies frequently contain secrets or reflected internal data.
+    // Emit only a stable category and status.
+    throw new Error(`JWT token fetch failed (provider_rejected, status=${response.status})`);
   }
 
-  const data = (await response.json()) as {
-    access_token?: string;
-    payload?: { access_token?: string };
-  };
+  let data: { access_token?: string; payload?: { access_token?: string } };
+  try {
+    data = (await response.json()) as typeof data;
+  } catch {
+    throw new Error('JWT token fetch failed (invalid_response)');
+  }
 
   // Handle different response formats
   const token = data.access_token || data.payload?.access_token;
@@ -78,10 +109,13 @@ export async function fetchJWTToken(config: JWTConfig): Promise<string> {
   }
 
   // Cache the token
-  tokenCache.set(cacheKey, {
-    token,
-    expiresAt: Date.now() + TOKEN_TTL_MS,
-  });
+  if (shouldCache) {
+    tokenCache.set(cacheKey, {
+      apiUrl: api_url,
+      token,
+      expiresAt: Date.now() + TOKEN_TTL_MS,
+    });
+  }
 
   return token;
 }
@@ -92,8 +126,8 @@ export async function fetchJWTToken(config: JWTConfig): Promise<string> {
  * @param api_url - The API URL to clear from cache
  */
 export function clearJWTToken(api_url: string): void {
-  for (const key of tokenCache.keys()) {
-    if (key.startsWith(`${api_url}::`)) {
+  for (const [key, value] of tokenCache.entries()) {
+    if (value.apiUrl === api_url) {
       tokenCache.delete(key);
     }
   }
@@ -146,8 +180,8 @@ export async function resolveMCPAuthHeaders(
   mcpUrl?: string,
   options: {
     allowLocalhostHttp?: boolean;
-    oauthCacheNamespace?: string;
-    disableOAuthTokenCache?: boolean;
+    cacheNamespace?: string;
+    disableProcessTokenCache?: boolean;
   } = {}
 ): Promise<Record<string, string> | undefined> {
   if (!auth || auth.type === 'none') {
@@ -171,12 +205,19 @@ export async function resolveMCPAuthHeaders(
       return undefined;
     }
 
-    const token = await fetchJWTToken({
-      api_url,
-      api_token,
-      api_secret,
-      insecure: auth.insecure,
-    });
+    const token = await fetchJWTToken(
+      {
+        api_url,
+        api_token,
+        api_secret,
+        insecure: auth.insecure,
+      },
+      {
+        allowLocalhostHttp: options.allowLocalhostHttp ?? true,
+        cacheNamespace: options.cacheNamespace,
+        cache: options.disableProcessTokenCache !== true,
+      }
+    );
 
     return {
       Authorization: `Bearer ${token}`,
@@ -226,8 +267,8 @@ export async function resolveMCPAuthHeaders(
         // Direct core/executor use is the standalone compatibility path.
         // PostgreSQL daemon callers explicitly pass false and disable caching.
         allowLocalhostHttp: options.allowLocalhostHttp ?? true,
-        cacheNamespace: options.oauthCacheNamespace,
-        cache: options.disableOAuthTokenCache !== true,
+        cacheNamespace: options.cacheNamespace,
+        cache: options.disableProcessTokenCache !== true,
       });
 
       return {

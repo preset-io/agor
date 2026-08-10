@@ -180,11 +180,16 @@ describe('logFirstRunAdminBootstrap', () => {
 describe('runFirstRunAdminBootstrap — capability-driven password resolution', () => {
   let tempDir: string;
   let originalEnv: string | undefined;
+  let originalAllowDevelopmentDefault: string | undefined;
+  let originalNodeEnv: string | undefined;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-bootstrap-'));
     originalEnv = process.env.AGOR_ADMIN_PASSWORD;
+    originalAllowDevelopmentDefault = process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN;
+    originalNodeEnv = process.env.NODE_ENV;
     delete process.env.AGOR_ADMIN_PASSWORD;
+    delete process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN;
   });
 
   afterEach(async () => {
@@ -193,6 +198,16 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
       delete process.env.AGOR_ADMIN_PASSWORD;
     } else {
       process.env.AGOR_ADMIN_PASSWORD = originalEnv;
+    }
+    if (originalAllowDevelopmentDefault === undefined) {
+      delete process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN;
+    } else {
+      process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN = originalAllowDevelopmentDefault;
+    }
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
     }
     vi.clearAllMocks();
   });
@@ -249,6 +264,39 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
     await expect(
       runFirstRunAdminBootstrap({} as unknown as never, { credentialsBaseDir: tempDir })
     ).rejects.toThrow(/legacy fixed default password/);
+  });
+
+  it('allows the fixed default only behind the explicit development gate', async () => {
+    process.env.NODE_ENV = 'development';
+    process.env.AGOR_ADMIN_PASSWORD = 'admin';
+    process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN = 'true';
+
+    const { bootstrapFirstRunAdmin, createUser } = await loadMocks();
+    bootstrapFirstRunAdmin.mockImplementation(
+      async (_db: unknown, factory: () => Promise<unknown>) => ({
+        createdAdmin: true,
+        admin: await factory(),
+        reattributedCount: 0,
+      })
+    );
+    createUser.mockResolvedValue({ user_id: 'u1', email: 'admin@agor.live' });
+
+    await runFirstRunAdminBootstrap({} as unknown as never, { credentialsBaseDir: tempDir });
+
+    expect(createUser).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ password: 'admin', must_change_password: false })
+    );
+  });
+
+  it('refuses the development-default gate in production', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AGOR_ADMIN_PASSWORD = 'admin';
+    process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN = 'true';
+
+    await expect(
+      runFirstRunAdminBootstrap({} as unknown as never, { credentialsBaseDir: tempDir })
+    ).rejects.toThrow(/development-only.*NODE_ENV=production/);
   });
 
   it('falls back to file-based generation when AGOR_ADMIN_PASSWORD is absent', async () => {

@@ -465,6 +465,7 @@ export interface AgorExecutionSettings {
    * - {unix_user_gid} - Target Unix GID (for fsGroup)
    * - {session_id} - Session ID (if available)
    * - {branch_id} - Branch ID (if available)
+   * - {user_id} - Trusted authenticated Agor user UUID (if available)
    * - {tenant_id} - Trusted ambient tenant ID (shell-escaped; fails if unavailable)
    *
    * The template command receives JSON payload via stdin and should pipe it
@@ -498,6 +499,16 @@ export interface AgorExecutionSettings {
    * ```
    */
   executor_command_template?: string;
+
+  /**
+   * Filesystem guarantees provided to every executor invocation.
+   *
+   * This is an operator assertion about the execution substrate, not a mount
+   * instruction interpreted by the daemon. It applies to templated executors
+   * even when the daemon itself is standalone; HA consumes it to fail unsafe
+   * topology combinations at startup.
+   */
+  executor_storage?: AgorExecutorStorageSettings;
 
   /** A nonzero template launcher may still have submitted remote work. Default: false. */
   executor_command_nonzero_may_have_dispatched?: boolean;
@@ -585,6 +596,7 @@ export const DEFAULT_BRANCH_STORAGE_MODE: BranchStorageMode = 'worktree';
 export interface ResolvedBranchStorageConfig {
   defaultMode: BranchStorageMode;
   allowedModes: readonly BranchStorageMode[];
+  allowShallowClones: boolean;
 }
 
 /**
@@ -607,6 +619,39 @@ export interface AgorBranchStorageSettings {
    * — both modes selectable from the UI / MCP tool out of the box.
    */
   allowed_modes?: BranchStorageMode[];
+
+  /**
+   * Whether callers may request a positive `clone_depth`. Defaults to true
+   * for backwards compatibility. Set false when every clone-mode branch must
+   * carry complete history.
+   */
+  allow_shallow_clones?: boolean;
+}
+
+/** Consistency of the effective user's home across executor invocations. */
+export type AgorExecutorUserHomeStorage = 'replica-local' | 'shared' | 'persistent-per-user';
+
+/** Consistency and isolation of branch working copies across executors. */
+export type AgorExecutorBranchWorkspaceStorage =
+  | 'replica-local'
+  | 'shared'
+  | 'persistent-per-branch';
+
+/** Availability of the registered repository's base checkout to executors. */
+export type AgorExecutorBaseRepositoryStorage = 'replica-local' | 'shared' | 'unavailable';
+
+/**
+ * Declarative execution-substrate storage contract.
+ *
+ * `persistent-per-user` is keyed by trusted tenant/user identity and is the
+ * only mode suitable for user credential homes in a multi-tenant external
+ * executor fleet. `persistent-per-branch` similarly means any invocation for
+ * a branch sees the same durable working copy at the DB-recorded path.
+ */
+export interface AgorExecutorStorageSettings {
+  user_home?: AgorExecutorUserHomeStorage;
+  branch_workspace?: AgorExecutorBranchWorkspaceStorage;
+  base_repository?: AgorExecutorBaseRepositoryStorage;
 }
 
 /**
@@ -989,12 +1034,91 @@ export interface AgorUploadSettings {
   max_file_size_mb?: number;
 }
 
+/** Explicit daemon deployment topology. HA is never inferred from Redis. */
+export type AgorDeploymentMode = 'standalone' | 'ha';
+
+/**
+ * Deliberately constrained first active-active support envelope. This is an
+ * operator acknowledgement, not a claim that every Agor surface is movable.
+ */
+export type AgorHaSupportProfile = 'constrained-active-active';
+
+/** How tenant workspace operations reach their filesystem authority in HA. */
+export type AgorHaExecutionTopology = 'shared-local' | 'external';
+
+/** Redis fanout settings used only when {@link AgorDeploymentSettings.mode} is `ha`. */
+export interface AgorRedisSettings {
+  /** redis:// or rediss:// URL. Prefer an environment override for credentials. */
+  url?: string;
+  /** Deployment-unique operational namespace (not an authorization boundary). */
+  key_prefix?: string;
+  /** TCP/TLS connect timeout. Default: 5000. */
+  connect_timeout_ms?: number;
+  /** Total startup window for both pub/sub clients. Default: 15000. */
+  startup_timeout_ms?: number;
+  /** Socket.IO adapter inter-server request timeout. Default: 5000. */
+  request_timeout_ms?: number;
+  /** Initial reconnect delay. Default: 100. */
+  reconnect_base_delay_ms?: number;
+  /** Maximum reconnect delay. Default: 2000. */
+  reconnect_max_delay_ms?: number;
+}
+
+/** Operator assertions required for the first supported HA topology. */
+export interface AgorHaTopologySettings {
+  /** Required explicit acknowledgement of the constrained initial HA surface. */
+  support_profile?: AgorHaSupportProfile;
+  /**
+   * `shared-local` runs executor commands beside each daemon and therefore
+   * requires identical workspace paths. `external` routes them through an
+   * explicitly configured executor command template and requires no tenant
+   * filesystem mount in daemon pods.
+   */
+  execution_topology?: AgorHaExecutionTopology;
+  /** Required only for `shared-local`; not a general HA/Cloud requirement. */
+  shared_filesystem?: boolean;
+  /** The ingress keeps Engine.IO polling requests on one daemon. */
+  ingress_affinity?: boolean;
+
+  /** PostgreSQL-coordinated managed-environment health observation worker. */
+  environment_health_monitor?: AgorHaEnvironmentHealthMonitorSettings;
+}
+
+export interface AgorHaEnvironmentHealthMonitorSettings {
+  /** Delay between active scans before idle backoff. Default: 5000. */
+  scan_interval_ms?: number;
+  /** Maximum idle discovery backoff. Default: 30000. */
+  max_idle_interval_ms?: number;
+  /** Per-replica randomized startup offset ceiling. Default: 3000. */
+  startup_offset_max_ms?: number;
+  /** Maximum routing references returned by one discovery page. Default: 32. */
+  scan_batch_size?: number;
+  /** Maximum concurrent HTTP observations on one daemon. Default: 8. */
+  max_in_flight?: number;
+  /** Per-request health endpoint timeout. Default: 1000. */
+  http_timeout_ms?: number;
+  /** One-observation database lease. Must exceed HTTP timeout by 5000ms. Default: 15000. */
+  claim_lease_ms?: number;
+  /** Graceful shutdown drain bound. Default: 5000. */
+  shutdown_drain_timeout_ms?: number;
+}
+
+export interface AgorDeploymentSettings {
+  /** Defaults to standalone. REDIS_URL alone never changes this value. */
+  mode?: AgorDeploymentMode;
+  redis?: AgorRedisSettings;
+  ha?: AgorHaTopologySettings;
+}
+
 /**
  * Complete Agor configuration
  */
 export interface AgorConfig {
   /** Deployment-owned agentic-tool package selection. */
   agentic_tools?: AgorAgenticToolsSettings;
+
+  /** Explicit standalone or multi-daemon topology. */
+  deployment?: AgorDeploymentSettings;
 
   /** Daemon settings */
   daemon?: AgorDaemonSettings;
@@ -1038,6 +1162,7 @@ export interface AgorConfig {
  */
 export type ConfigKey =
   | `agentic_tools.${keyof AgorAgenticToolsSettings}`
+  | `deployment.${keyof AgorDeploymentSettings}`
   | `daemon.${keyof AgorDaemonSettings}`
   | `ui.${keyof AgorUISettings}`
   | `database.${keyof AgorDatabaseSettings}`

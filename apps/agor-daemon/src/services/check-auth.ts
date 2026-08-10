@@ -265,7 +265,10 @@ async function probeCodexAuthFile(
     return unknown('Could not resolve the Unix account that holds the Codex login.');
   }
 
-  const inspection = await inspectCodexAuthViaExecutor(identity.unixUser);
+  const inspection = await inspectCodexAuthViaExecutor(identity.unixUser, {
+    reportedUnixUser: identity.reportedUnixUser,
+    userId: identity.userId,
+  });
   if (!inspection.ok) {
     // Only a genuinely absent file proves "no login". Permission/sudo/
     // transport failures mean we could not LOOK, which must never surface as

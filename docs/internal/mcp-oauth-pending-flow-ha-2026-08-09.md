@@ -16,9 +16,12 @@ uses PostgreSQL and requests/callbacks can land on different daemons.
 | Access/refresh token and grant client credentials | Tenant/server/credential-subject grant         | OAuth-specific AES-GCM envelopes in `user_mcp_oauth_tokens` | Never stored                                                            |
 | Completion notification                           | Tenant-qualified UX hint                       | Native Socket.IO room                                       | Fanout is allowed only after tenant room isolation; never authoritative |
 
-The pending table is **non-portable tenant state**. Tenant deletion removes it,
-but export/import omits it: restoring an in-flight external capability is not a
-valid migration operation.
+The pending and grant tables are **non-portable tenant state**. Tenant deletion
+removes them, but export/import omits them: restoring an in-flight external
+capability is unsafe, and grant ciphertext is bound through AAD to the source
+tenant/server/generation and deployment master secret. Re-home and
+cross-deployment imports restore MCP server configuration but require OAuth
+reauthorization.
 
 Standalone/SQLite keeps the process-local Map as its authority. It now consumes
 an attempt before provider exchange and exposes the same non-replayable
@@ -196,7 +199,7 @@ or database error detail.
    grants are also encrypted, changing the secret makes existing grants
    unreadable and requires an explicit reconnect plan; it also affects other
    credentials protected by the deployment master secret.
-2. Stop every daemon and take a database backup. Migration `0077` is an
+2. Stop every daemon and take a database backup. Migration `0078` is an
    enforced offline cutover: normal startup and ordinary migration runs refuse
    it on an existing PostgreSQL database. Run
    `agor db migrate --offline-cutover`. It deletes legacy OAuth grant rows

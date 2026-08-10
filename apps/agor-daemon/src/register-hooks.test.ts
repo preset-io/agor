@@ -22,6 +22,7 @@ import { type HookContext, TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 
 import {
+  CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
@@ -252,6 +253,7 @@ describe('tenant-owned service registration', () => {
       branchRepository: {} as RegisterHooksContext['branchRepository'],
       usersRepository: {} as RegisterHooksContext['usersRepository'],
       sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
     });
 
     return registrations;
@@ -325,6 +327,13 @@ describe('tenant-owned service registration', () => {
     expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toEqual(
       expect.arrayContaining(['mcp-servers/oauth-auth-headers', 'mcp-servers/oauth-refresh'])
     );
+  });
+
+  it('fails closed for discovery that can enter the process-local MCP OAuth flow in HA', () => {
+    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
+      'mcp-servers/discover',
+      'mcpOAuth',
+    ]);
   });
 
   it('wraps Knowledge policy and indexing admin services in tenant database scope', () => {

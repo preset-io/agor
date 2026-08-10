@@ -31,6 +31,26 @@ export type MCPOAuthPendingFlowStatus =
   | 'ambiguous'
   | 'expired';
 
+/** Authenticated durable-attempt read DTO; `not_found` avoids leaking rows. */
+export type MCPOAuthAttemptStatus = MCPOAuthPendingFlowStatus | 'not_found';
+
+export interface MCPOAuthAttemptResult {
+  status: MCPOAuthAttemptStatus;
+  mcp_server_id?: MCPServerID;
+  oauth_mode?: MCPOAuthMode;
+  failure_code?: string;
+}
+
+export interface MCPOAuthStatusResult {
+  authenticated_server_ids: MCPServerID[];
+}
+
+export interface MCPOAuthRefreshResult {
+  success: boolean;
+  expires_at?: number;
+  error?: string;
+}
+
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
 

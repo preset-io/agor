@@ -23,6 +23,8 @@ ALTER TABLE `user_mcp_oauth_tokens` ADD COLUMN `refresh_status` text DEFAULT 'id
 --> statement-breakpoint
 ALTER TABLE `user_mcp_oauth_tokens` ADD COLUMN `refresh_generation` integer DEFAULT 0 NOT NULL;
 --> statement-breakpoint
+ALTER TABLE `user_mcp_oauth_tokens` ADD COLUMN `refresh_success_generation` integer DEFAULT 0 NOT NULL;
+--> statement-breakpoint
 ALTER TABLE `user_mcp_oauth_tokens` ADD COLUMN `refresh_claim_id` text;
 --> statement-breakpoint
 ALTER TABLE `user_mcp_oauth_tokens` ADD COLUMN `refresh_claimed_at` integer;

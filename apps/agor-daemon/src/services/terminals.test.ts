@@ -99,6 +99,9 @@ function makeApp() {
     on: vi.fn(),
     io: {
       to: vi.fn(() => ({ emit })),
+      local: {
+        to: vi.fn(() => ({ emit })),
+      },
     },
   };
 }
@@ -325,7 +328,7 @@ describe('TerminalsService readiness ack gating', () => {
     const service = new TerminalsService(app as never, {} as never, { reconnectDiscoveryMs: 0 });
 
     service.handleExecutorReady(params.user.user_id as never);
-    expect(app.io.to).toHaveBeenCalledWith(`user/${params.user.user_id}/terminal`);
+    expect(app.io.local.to).toHaveBeenCalledWith(`user/${params.user.user_id}/terminal`);
     expect(app.emit).toHaveBeenCalledWith('terminal:ready', { userId: params.user.user_id });
 
     service.handleExecutorError(params.user.user_id as never, 'spawn failed');

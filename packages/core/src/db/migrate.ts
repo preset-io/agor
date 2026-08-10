@@ -21,11 +21,11 @@
 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { and, eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { migrate as migrateSQLite } from 'drizzle-orm/libsql/migrator';
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator';
 import type { Database } from './client';
-import { insert, isPostgresDatabase, isSQLiteDatabase, select } from './database-wrapper';
+import { insert, isPostgresDatabase, isSQLiteDatabase } from './database-wrapper';
 import { sanitizeDbError } from './sanitize-error';
 import { boards } from './schema';
 import { getCurrentTenantId } from './tenant-scope';
@@ -45,7 +45,7 @@ export class MigrationError extends Error {
 
 const OFFLINE_CUTOVER_MIGRATIONS = new Set([
   '0074_knowledge_embedding_claims',
-  '0077_mcp_oauth_pending_flows',
+  '0078_mcp_oauth_pending_flows',
 ]);
 
 export interface RunMigrationsOptions {
@@ -363,43 +363,30 @@ export async function seedInitialData(db: Database, createdBy?: string): Promise
     const now = new Date();
     const owner = createdBy ?? LEGACY_ANONYMOUS_OWNER_ID;
 
-    // 1. Check if default board exists in the active tenant (by slug to avoid duplicates).
+    // Insert atomically instead of using a read-then-write check. Multiple HA
+    // daemons can reach first-run seeding together, and the unique tenant/slug
+    // constraint is the correctness fence for that race.
     const tenantId = getCurrentTenantId();
-    const tenantPredicate =
-      isPostgresDatabase(db) && tenantId
-        ? eq((boards as never as { tenant_id: never }).tenant_id, tenantId)
-        : undefined;
-    const existingBoard = await select(db)
-      .from(boards)
-      .where(
-        tenantPredicate
-          ? and(eq(boards.slug, 'default'), tenantPredicate)
-          : eq(boards.slug, 'default')
-      )
-      .one();
+    const result = await insert(db, boards)
+      .values({
+        board_id: generateId(),
+        name: 'Main Board',
+        slug: 'default',
+        created_at: now,
+        updated_at: now,
+        created_by: owner,
+        data: {
+          description: 'Main board for all sessions',
+          sessions: [],
+          color: '#1677ff',
+          icon: '⭐',
+        },
+        ...(isPostgresDatabase(db) && tenantId ? { tenant_id: String(tenantId) } : {}),
+      })
+      .onConflictDoNothing()
+      .run();
 
-    if (!existingBoard) {
-      // Create default board
-      const boardId = generateId();
-
-      await insert(db, boards)
-        .values({
-          board_id: boardId,
-          name: 'Main Board',
-          slug: 'default',
-          created_at: now,
-          updated_at: now,
-          created_by: owner,
-          data: {
-            description: 'Main board for all sessions',
-            sessions: [],
-            color: '#1677ff',
-            icon: '⭐',
-          },
-          ...(isPostgresDatabase(db) && tenantId ? { tenant_id: String(tenantId) } : {}),
-        })
-        .run();
-
+    if (result.rowsAffected > 0) {
       console.log('✅ Main Board created');
     }
   } catch (error) {

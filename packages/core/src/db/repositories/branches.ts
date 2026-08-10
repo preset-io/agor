@@ -524,7 +524,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async update(
     id: string,
     updates: Partial<Branch>,
-    options?: { preserveUpdatedAt?: boolean }
+    options?: {
+      preserveUpdatedAt?: boolean;
+      /** Explicit lifecycle boundary, including starting -> starting retries. */
+      invalidateEnvironmentObservation?: boolean;
+    }
   ): Promise<Branch> {
     // STEP 1: Read current branch (outside transaction for short ID resolution)
     const existing = await this.findById(id);
@@ -565,15 +569,47 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         created_at: current.created_at, // Never change created timestamp
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
+      // A materialization error describes only the failed filesystem state.
+      // Clear it atomically with every explicit transition away from failed
+      // so a successful retry/unarchive cannot remain visually poisoned by
+      // the previous attempt. undefined cannot express deletion through
+      // deepMerge because it intentionally means preserve.
+      if (updates.filesystem_status !== undefined && updates.filesystem_status !== 'failed') {
+        delete merged.error_message;
+      }
 
       const insertData = this.branchToInsert(merged);
       if (options?.preserveUpdatedAt) {
         insertData.updated_at = new Date(current.updated_at);
       }
 
+      // Any eligibility/lifecycle change invalidates an observation that may
+      // currently be outside the database performing HTTP. The result writer
+      // also compares this generation, so clearing the token is not the only
+      // fence. Health observations use their dedicated repository and never
+      // enter this generic update path.
+      const currentStatus = current.environment_instance?.status;
+      const mergedStatus = merged.environment_instance?.status;
+      const invalidatesEnvironmentObservation =
+        options?.invalidateEnvironmentObservation === true ||
+        currentStatus !== mergedStatus ||
+        current.health_check_url !== merged.health_check_url ||
+        Boolean(current.archived) !== Boolean(merged.archived);
+      const environmentCoordinationUpdate = invalidatesEnvironmentObservation
+        ? {
+            environment_generation: sql`${branches.environment_generation} + 1`,
+            environment_health_claim_token: null,
+            environment_health_claimed_at: null,
+            environment_health_claim_expires_at: null,
+            environment_health_next_observation_at: null,
+            environment_health_claim_instance_id: null,
+            environment_health_claim_boot_id: null,
+          }
+        : {};
+
       // STEP 4: Write merged branch (within same transaction)
       const row = await update(txAsDb(tx), branches)
-        .set(insertData)
+        .set({ ...insertData, ...environmentCoordinationUpdate })
         .where(eq(branches.branch_id, current.branch_id))
         .returning()
         .one();

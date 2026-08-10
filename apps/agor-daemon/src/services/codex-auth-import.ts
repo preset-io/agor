@@ -17,7 +17,7 @@
  *   derived from the authenticated user, never from request data.
  */
 
-import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
+import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -45,13 +45,6 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
       }
       const userId = authUser.user_id as UserID;
 
-      const config = loadConfigSync();
-      if (config.multi_tenancy?.mode === 'required_from_auth') {
-        throw new BadRequest(
-          'Codex subscription login is unavailable in hosted multi-tenant mode — use an OpenAI API key instead.'
-        );
-      }
-
       const tenantId = getCurrentTenantId();
       if (!tenantId) throw new Error('Missing active tenant context for Codex auth import');
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
@@ -77,6 +70,7 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
         app,
         normalized: parsed.normalized,
         targetUnixUser: identity.unixUser,
+        reportedUnixUser: identity.reportedUnixUser,
         userId,
         authUser,
       });

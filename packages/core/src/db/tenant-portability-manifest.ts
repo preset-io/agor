@@ -34,10 +34,14 @@ import { IMPERATIVE_TENANT_TABLES } from './tenant-imperative-tables';
  * Tenant-owned runtime authority that must be deleted with the tenant but must
  * never be exported/imported. Restoring an unexpired token-authority row could
  * reactivate a bearer JWT when source and destination share signing secrets.
+ * OAuth grants are also deployment- and tenant-bound ciphertext: their AAD,
+ * master secret, configuration fingerprint, and generation sequence cannot be
+ * made portable by rewriting only tenant_id. Imports require reauthorization.
  */
 export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
   'executor_session_token_authorities',
   'mcp_oauth_pending_flows',
+  'user_mcp_oauth_tokens',
 ]);
 
 function portableDeletionManifest() {

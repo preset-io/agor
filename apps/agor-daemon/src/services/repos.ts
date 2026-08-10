@@ -11,6 +11,7 @@
 
 import path from 'node:path';
 import {
+  ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
   getBranchesDir,
@@ -46,6 +47,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
@@ -333,6 +335,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       {
         logPrefix: `[clone ${slug}]`,
         asUser, // Run as resolved user (fresh groups via sudo -u)
+        templateVariables: {
+          user_id: userId,
+        },
         onExit: (code) => {
           if (code !== 0 && code !== null) {
             // Broadcast clone failure to all connected clients (the existing
@@ -340,9 +345,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             console.error(
               `[clone ${slug}] Clone failed with exit code ${code}, broadcasting error`
             );
-            const io = (app as unknown as { io?: { emit: (event: string, data: unknown) => void } })
-              .io;
-            if (io) {
+            const io = (
+              app as unknown as {
+                io?: {
+                  to: (room: string) => { emit: (event: string, data: unknown) => void };
+                };
+              }
+            ).io;
+            if (io && tenantId) {
               // Include the pinned branch in the message so an operator who
               // typo'd the Default Branch can self-diagnose. `git clone
               // --branch <X>` failure is one of the most common reasons a
@@ -353,12 +363,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
               const branchHint = data.default_branch
                 ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
                 : '';
-              io.emit('repo:cloneError', {
+              emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
                 slug,
                 url: remoteUrl,
                 error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
                 repo_id: repoId,
               });
+            } else if (io) {
+              // Never fall back to a global raw Socket.IO broadcast. The
+              // durable repos.patched event below remains the source of truth.
+              console.warn(`[clone ${slug}] Missing tenant scope; skipping clone-error toast`);
             }
 
             // Safety net: if the executor crashed before it could patch the
@@ -671,6 +685,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             `Omit to make a full clone, or pass a positive int for --depth.`
         );
       }
+      ensureBranchCloneDepthAllowed(cloneDepth);
     }
     // Auth hooks (`requireMinimumRole`) guarantee `params.user` exists by
     // the time we get here. The identity is forwarded so executor-local Git
@@ -938,6 +953,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         {
           logPrefix: `[ReposService.createBranch ${data.name}]`,
           asUser, // Run as lifecycle identity with fresh supplemental groups
+          templateVariables: {
+            branch_id: branch.branch_id,
+            user_id: userId,
+          },
         }
       );
     } catch (error) {

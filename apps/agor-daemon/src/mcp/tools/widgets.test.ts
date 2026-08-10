@@ -15,7 +15,7 @@
  */
 
 import type { MessageID } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../utils/append-system-message.js', () => ({

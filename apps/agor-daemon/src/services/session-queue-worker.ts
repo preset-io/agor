@@ -53,13 +53,21 @@ export class SessionQueueWorker {
   start(): void {
     if (this.timer || this.running) return;
     this.stopped = false;
-    this.schedule(initialWorkOffset(30_000, this.random()));
+    const initialDelayMs = initialWorkOffset(30_000, this.random());
+    console.log(
+      `[distributed-work.task-queue] event="loop_started" instance_id=${JSON.stringify(this.options.workIdentity.instanceId)} boot_id=${JSON.stringify(this.options.workIdentity.bootId)} scan_batch_size=${this.scanBatchSize} initial_delay_ms=${initialDelayMs}`
+    );
+    this.schedule(initialDelayMs);
   }
 
   stop(): void {
+    if (this.stopped) return;
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    console.log(
+      `[distributed-work.task-queue] event="loop_stopped" instance_id=${JSON.stringify(this.options.workIdentity.instanceId)} boot_id=${JSON.stringify(this.options.workIdentity.bootId)}`
+    );
   }
 
   private schedule(delayMs: number): void {

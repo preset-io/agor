@@ -6,6 +6,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import {
   oauthAttemptFailureMessage,
   refetchMCPOAuthDurableState,
+  refreshAndRefetchMCPOAuthGrant,
   waitForMCPOAuthAttempt,
 } from '../../utils/mcpOAuthAttempt';
 import { useThemedMessage } from '../../utils/message';
@@ -121,13 +122,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
     if (!client || refreshing) return;
     setRefreshing(true);
     try {
-      const result = (await client.service('mcp-servers/oauth-refresh').create({
-        mcp_server_id: server.mcp_server_id,
-      })) as {
-        success: boolean;
-        expires_at?: number;
-        error?: string;
-      };
+      const result = await refreshAndRefetchMCPOAuthGrant(client, server.mcp_server_id);
 
       if (result.success) {
         setExpiresAtOverride(result.expires_at);
@@ -137,6 +132,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
             : `${server.display_name || server.name} refreshed`
         );
       } else if (result.error === 'needs_reauth' || result.error === 'missing_client_id') {
+        setExpiresAtOverride(undefined);
         showWarning(formatRefreshError(result.error));
         // Fall through to full OAuth flow so the user can re-auth in one click.
         await handleOAuthClick();

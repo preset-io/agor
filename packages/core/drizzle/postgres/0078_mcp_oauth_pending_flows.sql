@@ -4,7 +4,7 @@
 -- client credentials, and endpoints are stored only in sealed_material.
 SET LOCAL lock_timeout = '3s';
 --> statement-breakpoint
--- Protocol-breaking cutover: pre-0077 grant rows contain plaintext secrets and
+-- Protocol-breaking cutover: pre-0078 grant rows contain plaintext secrets and
 -- have neither configuration nor refresh fences. They cannot safely coexist
 -- with the HA authority, so operators must drain daemons and users reauthorize.
 DELETE FROM "user_mcp_oauth_tokens";
@@ -21,6 +21,7 @@ ALTER TABLE "user_mcp_oauth_tokens"
 	ADD COLUMN "oauth_redirect_uri" text,
 	ADD COLUMN "refresh_status" text DEFAULT 'idle' NOT NULL,
 	ADD COLUMN "refresh_generation" bigint DEFAULT 0 NOT NULL,
+	ADD COLUMN "refresh_success_generation" bigint DEFAULT 0 NOT NULL,
 	ADD COLUMN "refresh_claim_id" varchar(36),
 	ADD COLUMN "refresh_claimed_at" timestamp with time zone;
 --> statement-breakpoint

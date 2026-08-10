@@ -40,6 +40,7 @@ import {
   discoverResourceMetadataUrl,
   getAuthCodeTokenCacheStats,
   isOAuthRequired,
+  OAuthCallbackValidationError,
   OAuthCodeExchangeError,
   parseOAuthCallback,
   resolveMCPOAuthDiscovery,
@@ -184,6 +185,37 @@ describe('completeMCPOAuthFlow token exchange', () => {
     expect(failure).toBeInstanceOf(OAuthCodeExchangeError);
     expect(failure).toMatchObject({ ambiguous: false, failureCode: 'provider_rejected' });
   });
+
+  it.each([
+    ['wrong state', 'wrong-state', 'https://provider.example.test', 'callback_state_mismatch'],
+    ['missing issuer', 'state', undefined, 'callback_issuer_missing'],
+    [
+      'mismatched issuer',
+      'state',
+      'https://other-provider.example.test',
+      'callback_issuer_mismatch',
+    ],
+  ] as const)(
+    'classifies strict %s as known pre-exchange failure without token I/O',
+    async (_label, state, issuer, failureCode) => {
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy as unknown as typeof fetch;
+      const failure = await completeMCPOAuthFlow(
+        { ...context, compatibilityMode: 'strict' },
+        'single-use-code',
+        state,
+        { cacheToken: false, issuer }
+      ).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(OAuthCallbackValidationError);
+      expect(failure).toMatchObject({
+        ambiguous: false,
+        afterProviderExchange: false,
+        failureCode,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([
     ['network outcome', () => Promise.reject(new Error('connection reset'))],
@@ -1036,7 +1068,7 @@ describe('strict current MCP OAuth profile', () => {
         cacheToken: false,
         issuer: 'https://other-issuer.example.com',
       })
-    ).rejects.toThrow('Authorization response issuer mismatch');
+    ).rejects.toMatchObject({ failureCode: 'callback_issuer_mismatch', ambiguous: false });
 
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ access_token: 'bound-token' }), {

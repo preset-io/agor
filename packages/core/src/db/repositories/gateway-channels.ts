@@ -14,16 +14,16 @@ import type {
   TenantID,
   UUID,
 } from '@agor/core/types';
+import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { generateId } from '../../lib/ids';
+import { isAgenticToolDefaultConfigurationReference } from '../../types/agentic-tool-preset';
 import {
   DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   getRequiredSecretFields,
-  isAgenticToolDefaultConfigurationReference,
-  prefixToLikePattern,
-} from '@agor/core/types';
-import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
-import { generateId } from '../../lib/ids';
+} from '../../types/gateway';
+import { prefixToLikePattern } from '../../types/id';
 import type { Database, SystemDatabase } from '../client';
 import {
   deleteFrom,

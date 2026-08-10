@@ -1,20 +1,10 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import type { DispatchableTool } from '../register-tool-proxy.js';
+import { ToolDispatcher } from '../register-tool-proxy.js';
 import { mcpPositiveIntWithDefault, mcpRequiredString } from '../schema.js';
 import { coerceJsonRecord, textResult } from '../server.js';
 import { ToolRegistry } from '../tool-registry.js';
-
-/**
- * Registered tool entry from the SDK's internal _registeredTools map.
- * Cast required because this is a private SDK field.
- */
-interface RegisteredTool {
-  enabled: boolean;
-  inputSchema?: {
-    safeParse: (data: unknown) => { success: boolean; data?: unknown; error?: unknown };
-  };
-  handler: (args: unknown, extra: unknown) => Promise<unknown>;
-}
 
 const DISCOVERY_HINT =
   'Discover tool names with agor_search_tools (call with no args for domains, or with { "query": "sessions" }). Get an exact schema with agor_get_tool_details({ "tool_name": "..." }).';
@@ -35,7 +25,7 @@ const DISCOVERY_HINT =
  */
 function resolveToolArgs(
   proxyArgs: Record<string, unknown>,
-  tool: RegisteredTool,
+  tool: DispatchableTool,
   toolName: string
 ): Record<string, unknown> {
   // Defense-in-depth: coerce stringified arguments even if Zod preprocess
@@ -99,7 +89,11 @@ function resolveProxyToolName(args: Record<string, unknown>): string {
   return toolName;
 }
 
-export function registerSearchTools(server: McpServer, registry: ToolRegistry): void {
+export function registerSearchTools(
+  server: McpServer,
+  registry: ToolRegistry,
+  dispatcher = new ToolDispatcher()
+): void {
   server.registerTool(
     'agor_search_tools',
     {
@@ -250,18 +244,14 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
         })
         .passthrough(),
     },
-    async (args) => {
+    async (args, requestContext) => {
       const proxyArgs = args as Record<string, unknown>;
       let toolName: string | undefined;
 
       try {
         toolName = resolveProxyToolName(proxyArgs);
 
-        const registeredTools = (
-          server as unknown as { _registeredTools: Record<string, RegisteredTool> }
-        )._registeredTools;
-
-        const tool = registeredTools[toolName];
+        const tool = dispatcher.get(toolName);
         if (!tool) {
           return {
             content: [
@@ -279,7 +269,7 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
         }
 
         const toolArgs = resolveToolArgs(proxyArgs, tool, toolName);
-        const result = await tool.handler(toolArgs, {});
+        const result = await tool.handler(toolArgs, requestContext);
         return result as { content: Array<{ type: 'text'; text: string }> };
       } catch (error) {
         return {

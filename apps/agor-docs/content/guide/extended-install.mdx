@@ -176,7 +176,7 @@ If pgvector is missing or the Agor DB user cannot enable it, semantic search ret
 
 ### PostgreSQL offline-cutover migrations
 
-Migrations `0074_knowledge_embedding_claims` and `0077_mcp_oauth_pending_flows` change distributed ownership/state protocols. Existing PostgreSQL installations must apply either pending migration as a **stop-the-world cutover**. Rolling old and new daemons against the same database is not supported.
+Migrations `0074_knowledge_embedding_claims` and `0078_mcp_oauth_pending_flows` change distributed ownership/state protocols. Existing PostgreSQL installations must apply either pending migration as a **stop-the-world cutover**. Rolling old and new daemons against the same database is not supported.
 
 1. Stop every Agor daemon connected to the database.
 2. From the new release, run:
@@ -189,7 +189,9 @@ Migrations `0074_knowledge_embedding_claims` and `0077_mcp_oauth_pending_flows` 
 
 Normal daemon startup and `agor db migrate --yes` deliberately refuse these migrations on an existing PostgreSQL database unless `--offline-cutover` is present. The flag is an operator acknowledgement; it cannot verify that another host has stopped. Fresh installations and SQLite databases do not require this cutover.
 
-Migration `0077` deletes existing MCP OAuth grant rows because the old plaintext, unfenced rows are not compatible with active-active callback and rotating-refresh ownership. Users must reconnect MCP OAuth after the upgrade. Take a backup before the cutover. A rollback to an older daemon requires restoring the pre-cutover backup; do not run an older cohort against the new OAuth schema.
+Migration `0078` deletes existing MCP OAuth grant rows because the old plaintext, unfenced rows are not compatible with active-active callback and rotating-refresh ownership. Users must reconnect MCP OAuth after the upgrade. Take a backup before the cutover. A rollback to an older daemon requires restoring the pre-cutover backup; do not run an older cohort against the new OAuth schema.
+
+Tenant archives deliberately omit MCP OAuth grants. The encrypted grant envelope is bound to the source tenant ID, server, generation, and deployment master secret, so importing or re-homing a tenant restores the MCP server configuration but requires users to reconnect OAuth. Pending OAuth attempts and executor token authorities are likewise non-portable.
 
 ---
 

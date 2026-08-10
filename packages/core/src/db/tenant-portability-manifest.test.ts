@@ -44,9 +44,13 @@ describe('buildTenantInsertOrder', () => {
     }
   });
 
-  it('deletes but never exports transient token and OAuth flow authority', () => {
+  it('deletes but never exports transient authorities or deployment-bound OAuth grants', () => {
     const nonPortable = nonPortableTenantTableNames();
-    expect(nonPortable).toEqual(['executor_session_token_authorities', 'mcp_oauth_pending_flows']);
+    expect(nonPortable).toEqual([
+      'executor_session_token_authorities',
+      'mcp_oauth_pending_flows',
+      'user_mcp_oauth_tokens',
+    ]);
     for (const table of nonPortable) {
       expect(buildTenantDeletionManifest().map((entry) => entry.name)).toContain(table);
       expect(buildTenantInsertOrder().map((entry) => entry.name)).not.toContain(table);
@@ -57,7 +61,7 @@ describe('buildTenantInsertOrder', () => {
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    expect(foreignKeys).toHaveLength(96);
+    expect(foreignKeys).toHaveLength(92);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -75,24 +79,9 @@ describe('tenantPortabilityForeignKeys', () => {
     }
   });
 
-  it('binds portable MCP OAuth grants to same-tenant users and servers', () => {
-    expect(tenantPortabilityForeignKeys()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          childTable: 'user_mcp_oauth_tokens',
-          childColumns: ['tenant_id', 'user_id'],
-          parentTable: 'users',
-          parentColumns: ['tenant_id', 'user_id'],
-          onDelete: 'cascade',
-        }),
-        expect.objectContaining({
-          childTable: 'user_mcp_oauth_tokens',
-          childColumns: ['tenant_id', 'mcp_server_id'],
-          parentTable: 'mcp_servers',
-          parentColumns: ['tenant_id', 'mcp_server_id'],
-          onDelete: 'cascade',
-        }),
-      ])
+  it('does not classify deployment-bound MCP OAuth grant relations as movable', () => {
+    expect(tenantPortabilityForeignKeys()).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ childTable: 'user_mcp_oauth_tokens' })])
     );
   });
 

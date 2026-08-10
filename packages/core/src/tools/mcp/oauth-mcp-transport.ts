@@ -89,6 +89,26 @@ export class OAuthCodeExchangeError extends Error {
   }
 }
 
+/**
+ * Known authorization-response validation failure before token-endpoint I/O.
+ * The provider code has not been submitted, so callers must persist `failed`,
+ * never the non-replayable `ambiguous` exchange outcome.
+ */
+export class OAuthCallbackValidationError extends Error {
+  readonly ambiguous = false;
+  readonly afterProviderExchange = false;
+
+  constructor(
+    readonly failureCode:
+      | 'callback_state_mismatch'
+      | 'callback_issuer_missing'
+      | 'callback_issuer_mismatch'
+  ) {
+    super(`OAuth callback validation failed (${failureCode})`);
+    this.name = 'OAuthCallbackValidationError';
+  }
+}
+
 // Buffer before expiry to avoid using soon-to-expire tokens
 const EXPIRY_BUFFER_SECONDS = 60;
 
@@ -1592,10 +1612,13 @@ export async function completeMCPOAuthFlow(
 
   // Verify state to prevent CSRF
   if (state !== context.state) {
-    throw new Error('State mismatch - possible CSRF attack');
+    throw new OAuthCallbackValidationError('callback_state_mismatch');
+  }
+  if (context.compatibilityMode === 'strict' && options.issuer == null) {
+    throw new OAuthCallbackValidationError('callback_issuer_missing');
   }
   if (context.compatibilityMode === 'strict' && options.issuer !== context.issuer) {
-    throw new Error('Authorization response issuer mismatch');
+    throw new OAuthCallbackValidationError('callback_issuer_mismatch');
   }
 
   // Exchange code for token

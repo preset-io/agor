@@ -151,10 +151,10 @@ export async function handleGitManagedCredentialsReconcile(
     for (const repo of repos.filter((item) => item.repo_type === 'remote')) {
       if (!options.dryRun && repo.local_path)
         findings += (await scrubGitConfigRemoteCredentials(repo.local_path)).findings.length;
-      const branches = await fetchAll('branches', {
-        repo_id: repo.repo_id,
-        archived: { $in: [true, false] },
-      });
+      // Omitting `archived` intentionally returns both active and archived
+      // branches. The public branch query contract accepts an exact boolean,
+      // not a Feathers `$in` operator for this field.
+      const branches = await fetchAll('branches', { repo_id: repo.repo_id });
       for (const branch of branches) {
         if (!options.dryRun && branch.path)
           findings += (await scrubGitConfigRemoteCredentials(branch.path)).findings.length;

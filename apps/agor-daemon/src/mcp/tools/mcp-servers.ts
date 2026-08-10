@@ -8,7 +8,7 @@ import type {
   MCPServer,
   UpdateMCPServerInput,
 } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
 import {

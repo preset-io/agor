@@ -36,4 +36,14 @@ describe('immutable config.yaml boundary', () => {
       );
     expect(offenders).toEqual([]);
   });
+
+  it('development Compose leaves Unix executor impersonation opt-in', () => {
+    const compose = readFileSync(resolve(sourceRoot, '../../../docker-compose.yml'), 'utf8');
+
+    expect(compose).toMatch(/AGOR_USE_EXECUTOR=\$\{AGOR_USE_EXECUTOR:-false\}/);
+    expect(compose).toMatch(/AGOR_EXECUTOR_USERNAME=\$\{AGOR_EXECUTOR_USERNAME:-\}/);
+    expect(compose).not.toMatch(
+      /AGOR_EXECUTOR_USERNAME=\$\{AGOR_EXECUTOR_USERNAME:-agor_executor\}/
+    );
+  });
 });

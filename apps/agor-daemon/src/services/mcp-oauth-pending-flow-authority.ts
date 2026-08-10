@@ -20,6 +20,7 @@ import {
   sealMCPOAuthSecret,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import type { OAuthFlowContext } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type {
   MCPOAuthAttemptID,
   MCPOAuthMode,
@@ -30,21 +31,7 @@ import type {
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
 
-export interface DurableMCPOAuthFlowContext {
-  metadataUrl: string;
-  resourceUri: string;
-  issuer: string;
-  authorizationEndpoint: string;
-  tokenEndpoint: string;
-  redirectUri: string;
-  pkceVerifier: string;
-  clientId: string;
-  clientSecret?: string;
-  state: string;
-  authorizationUrl: string;
-  compatibilityMode: 'strict' | 'legacy';
-  allowLocalhostHttp: boolean;
-}
+export type DurableMCPOAuthFlowContext = OAuthFlowContext;
 
 export interface DurableMCPOAuthFlowCreate {
   context: DurableMCPOAuthFlowContext;

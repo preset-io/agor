@@ -463,15 +463,29 @@ export function registerGitHubAppSetupRoutes(
     daemonUrl: string;
     db: TenantScopeAwareDatabase;
     config: AgorConfig;
+    setupEnabled?: boolean;
   }
 ): void {
-  app.post('/api/github/setup/state', handleIssueState(app, opts.config));
-  app.get('/api/github/setup/new', handleNewApp(opts.uiUrl, opts.daemonUrl));
-  app.get('/api/github/setup/callback', handleSetupCallback(opts.uiUrl));
+  if (opts.setupEnabled === false) {
+    const unavailable = (_req: express.Request, res: express.Response) =>
+      res.status(503).json({
+        code: 'HA_FEATURE_UNSUPPORTED',
+        feature: 'githubInstall',
+        message:
+          'GitHub App installation state is unavailable in HA support profile constrained-active-active',
+      });
+    app.post('/api/github/setup/state', unavailable);
+    app.get('/api/github/setup/new', unavailable);
+    app.get('/api/github/setup/callback', unavailable);
+  } else {
+    app.post('/api/github/setup/state', handleIssueState(app, opts.config));
+    app.get('/api/github/setup/new', handleNewApp(opts.uiUrl, opts.daemonUrl));
+    app.get('/api/github/setup/callback', handleSetupCallback(opts.uiUrl));
+  }
   app.get('/api/github/installations', handleListInstallations(app, opts.db, opts.config));
 
   console.log(
-    '[github-app-setup] Routes registered: POST /state, GET /setup/new, /setup/callback, /installations'
+    `[github-app-setup] Routes registered: setup=${opts.setupEnabled === false ? 'disabled' : 'enabled'}, installations=enabled`
   );
 }
 

@@ -147,10 +147,11 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
-      # Executor Unix user isolation (set AGOR_USE_EXECUTOR=true to enable)
-      # When enabled, executors run as separate Unix user via sudo
+      # Executor Unix user isolation (set AGOR_USE_EXECUTOR=true to enable).
+      # An explicit username remains an override; otherwise executor mode falls
+      # back to agor_executor in the effective-config resolver.
       - AGOR_USE_EXECUTOR=${AGOR_USE_EXECUTOR:-false}
-      - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-agor_executor}
+      - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-}
 
       # Branch RBAC + Unix isolation tier (resolved in memory; config.yaml is
       # never rewritten). Both are optional.

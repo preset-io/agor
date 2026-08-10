@@ -14,6 +14,7 @@ import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agenti
 import type { AgenticToolName } from '../types';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
+import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
 import {
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
@@ -279,6 +280,7 @@ function validateConfig(config: AgorConfig): void {
     'defaults',
     'display',
     'daemon',
+    'deployment',
     'ui',
     'database',
     'external_launch',
@@ -335,6 +337,85 @@ function validateConfig(config: AgorConfig): void {
   // dedicated deprecation guidance before ignoring them. `display` is not
   // part of AgorConfig anymore: all three settings were retired.
   only(legacyConfig.display, 'display', RETIRED_CONFIG_KEYS.display);
+  only(config.deployment, 'deployment', ['mode', 'redis', 'ha']);
+  only(config.deployment?.redis, 'deployment.redis', [
+    'url',
+    'key_prefix',
+    'connect_timeout_ms',
+    'startup_timeout_ms',
+    'request_timeout_ms',
+    'reconnect_base_delay_ms',
+    'reconnect_max_delay_ms',
+  ]);
+  only(config.deployment?.ha, 'deployment.ha', [
+    'support_profile',
+    'execution_topology',
+    'shared_filesystem',
+    'ingress_affinity',
+    'environment_health_monitor',
+  ]);
+  only(
+    config.deployment?.ha?.environment_health_monitor,
+    'deployment.ha.environment_health_monitor',
+    [
+      'scan_interval_ms',
+      'max_idle_interval_ms',
+      'startup_offset_max_ms',
+      'scan_batch_size',
+      'max_in_flight',
+      'http_timeout_ms',
+      'claim_lease_ms',
+      'shutdown_drain_timeout_ms',
+    ]
+  );
+  if (
+    config.deployment?.mode !== undefined &&
+    config.deployment.mode !== 'standalone' &&
+    config.deployment.mode !== 'ha'
+  ) {
+    throw new Error('Config error: deployment.mode must be one of: standalone, ha');
+  }
+  if (
+    config.deployment?.ha?.support_profile !== undefined &&
+    config.deployment.ha.support_profile !== 'constrained-active-active'
+  ) {
+    throw new Error(
+      'Config error: deployment.ha.support_profile must be constrained-active-active'
+    );
+  }
+  if (
+    config.deployment?.ha?.execution_topology !== undefined &&
+    config.deployment.ha.execution_topology !== 'shared-local' &&
+    config.deployment.ha.execution_topology !== 'external'
+  ) {
+    throw new Error(
+      'Config error: deployment.ha.execution_topology must be shared-local or external'
+    );
+  }
+  if (config.deployment?.redis?.url !== undefined) {
+    validateRedisUrl(config.deployment.redis.url);
+  }
+  if (config.deployment?.redis?.key_prefix !== undefined) {
+    validateRedisKeyPrefix(config.deployment.redis.key_prefix);
+  }
+  for (const key of [
+    'connect_timeout_ms',
+    'startup_timeout_ms',
+    'request_timeout_ms',
+    'reconnect_base_delay_ms',
+    'reconnect_max_delay_ms',
+  ] as const) {
+    const value = config.deployment?.redis?.[key];
+    if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+      throw new Error(`Config error: deployment.redis.${key} must be a positive integer`);
+    }
+  }
+  for (const key of ['shared_filesystem', 'ingress_affinity'] as const) {
+    const value = config.deployment?.ha?.[key];
+    if (value !== undefined && typeof value !== 'boolean') {
+      throw new Error(`Config error: deployment.ha.${key} must be a boolean`);
+    }
+  }
   only(config.daemon, 'daemon', [
     'port',
     'host',
@@ -445,6 +526,7 @@ function validateConfig(config: AgorConfig): void {
     'daemon_writes_user_message',
     'permission_timeout_ms',
     'executor_command_template',
+    'executor_storage',
     'executor_command_nonzero_may_have_dispatched',
     'required_user_env_vars',
     ...RETIRED_CONFIG_KEYS.execution,
@@ -474,7 +556,51 @@ function validateConfig(config: AgorConfig): void {
   only(config.execution?.branch_storage, 'execution.branch_storage', [
     'default_mode',
     'allowed_modes',
+    'allow_shallow_clones',
   ]);
+  only(config.execution?.executor_storage, 'execution.executor_storage', [
+    'user_home',
+    'branch_workspace',
+    'base_repository',
+  ]);
+  if (
+    config.execution?.executor_storage?.user_home !== undefined &&
+    !['replica-local', 'shared', 'persistent-per-user'].includes(
+      config.execution.executor_storage.user_home
+    )
+  ) {
+    throw new Error(
+      'Config error: execution.executor_storage.user_home must be replica-local, shared, or persistent-per-user'
+    );
+  }
+  if (
+    config.execution?.executor_storage?.branch_workspace !== undefined &&
+    !['replica-local', 'shared', 'persistent-per-branch'].includes(
+      config.execution.executor_storage.branch_workspace
+    )
+  ) {
+    throw new Error(
+      'Config error: execution.executor_storage.branch_workspace must be replica-local, shared, or persistent-per-branch'
+    );
+  }
+  if (
+    config.execution?.executor_storage?.base_repository !== undefined &&
+    !['replica-local', 'shared', 'unavailable'].includes(
+      config.execution.executor_storage.base_repository
+    )
+  ) {
+    throw new Error(
+      'Config error: execution.executor_storage.base_repository must be replica-local, shared, or unavailable'
+    );
+  }
+  if (
+    config.execution?.branch_storage?.allow_shallow_clones !== undefined &&
+    typeof config.execution.branch_storage.allow_shallow_clones !== 'boolean'
+  ) {
+    throw new Error(
+      'Config error: execution.branch_storage.allow_shallow_clones must be a boolean'
+    );
+  }
   only(config.security, 'security', ['csp', 'cors', 'git_config_parameters']);
   only(config.security?.csp, 'security.csp', [
     'extras',
@@ -1461,7 +1587,11 @@ export function resolveBranchStorageConfig(): ResolvedBranchStorageConfig {
   // back to the first allowed mode so we never hand out a default that the
   // gate would immediately reject.
   const defaultMode = allowed.includes(requestedDefault) ? requestedDefault : allowed[0];
-  return { defaultMode, allowedModes: allowed };
+  return {
+    defaultMode,
+    allowedModes: allowed,
+    allowShallowClones: raw?.allow_shallow_clones ?? true,
+  };
 }
 
 /**
@@ -1476,6 +1606,16 @@ export function ensureBranchStorageModeAllowed(mode: import('./types').BranchSto
       `storage_mode='${mode}' is not enabled on this Agor instance. ` +
         `Enable it by adding '${mode}' to execution.branch_storage.allowed_modes ` +
         `in ~/.agor/config.yaml. Currently allowed: ${allowedModes.map((m) => `'${m}'`).join(', ')}.`
+    );
+  }
+}
+
+/** Reject shallow branch clones when the operator requires complete history. */
+export function ensureBranchCloneDepthAllowed(cloneDepth: number | undefined): void {
+  if (cloneDepth === undefined) return;
+  if (!resolveBranchStorageConfig().allowShallowClones) {
+    throw new Error(
+      'clone_depth is unavailable on this Agor instance because execution.branch_storage.allow_shallow_clones is false. Omit clone_depth to create a full clone.'
     );
   }
 }

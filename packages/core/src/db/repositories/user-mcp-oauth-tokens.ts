@@ -53,6 +53,7 @@ export interface UserMCPOAuthToken {
   oauth_redirect_uri?: string;
   refresh_status: 'idle' | 'refreshing' | 'ambiguous';
   refresh_generation: number;
+  refresh_success_generation: number;
   refresh_claim_id?: string;
   refresh_claimed_at?: Date;
   created_at: Date;
@@ -109,6 +110,11 @@ export type MCPOAuthRefreshClaimResult =
       grantGeneration: number;
     }
   | { outcome: 'observed'; token: UserMCPOAuthToken | null };
+
+export interface MCPOAuthRefreshVersion {
+  grantGeneration: number;
+  refreshGeneration: number;
+}
 
 function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
@@ -177,6 +183,7 @@ function rowToToken(
     oauth_redirect_uri: raw.oauth_redirect_uri ? String(raw.oauth_redirect_uri) : undefined,
     refresh_status: (raw.refresh_status ?? 'idle') as UserMCPOAuthToken['refresh_status'],
     refresh_generation: Number(raw.refresh_generation ?? 0),
+    refresh_success_generation: Number(raw.refresh_success_generation ?? 0),
     refresh_claim_id: raw.refresh_claim_id ? String(raw.refresh_claim_id) : undefined,
     refresh_claimed_at: raw.refresh_claimed_at
       ? new Date(raw.refresh_claimed_at as string | number | Date)
@@ -385,6 +392,8 @@ export class UserMCPOAuthTokenRepository {
                   oauth_token_endpoint: binding.tokenEndpoint,
                   oauth_redirect_uri: binding.redirectUri,
                   refresh_status: 'idle',
+                  refresh_generation: 0,
+                  refresh_success_generation: 0,
                   refresh_claim_id: null,
                   refresh_claimed_at: null,
                 }
@@ -428,6 +437,7 @@ export class UserMCPOAuthTokenRepository {
           oauth_redirect_uri: binding?.redirectUri,
           refresh_status: 'idle',
           refresh_generation: 0,
+          refresh_success_generation: 0,
           ...(tenantId ? { tenant_id: tenantId } : {}),
           created_at: now,
         };
@@ -451,7 +461,8 @@ export class UserMCPOAuthTokenRepository {
    */
   async claimRefresh(
     userId: UserID | null,
-    serverId: MCPServerID
+    serverId: MCPServerID,
+    expected: MCPOAuthRefreshVersion
   ): Promise<MCPOAuthRefreshClaimResult> {
     if (!this.postgres) {
       return { outcome: 'observed', token: await this.getToken(userId, serverId) };
@@ -484,6 +495,8 @@ export class UserMCPOAuthTokenRepository {
               updated_at = CURRENT_TIMESTAMP
           WHERE mcp_server_id = ${serverId}
             AND ${userPredicate}
+            AND grant_generation = ${expected.grantGeneration}
+            AND refresh_generation = ${expected.refreshGeneration}
             AND refresh_status = 'idle'
             AND oauth_refresh_token IS NOT NULL
           RETURNING *
@@ -537,6 +550,7 @@ export class UserMCPOAuthTokenRepository {
         SET oauth_access_token = ${sealedAccess},
             oauth_token_expires_at = ${expiresAt},
             refresh_status = 'idle',
+            refresh_success_generation = ${claim.refreshGeneration},
             refresh_claim_id = NULL,
             refresh_claimed_at = NULL,
             updated_at = CURRENT_TIMESTAMP

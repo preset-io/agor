@@ -61,6 +61,7 @@ function tokenFor(fingerprint: string): UserMCPOAuthToken {
     grant_binding_fingerprint: fingerprint,
     refresh_status: 'idle',
     refresh_generation: 0,
+    refresh_success_generation: 0,
     created_at: new Date(0),
   };
 }

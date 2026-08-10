@@ -41,7 +41,7 @@ function migrationTenantTables(): string[] {
     'packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'
   );
   const mcpOauthMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0077_mcp_oauth_pending_flows.sql'
+    'packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -67,7 +67,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0077_mcp_oauth_pending_flows.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -104,6 +104,15 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain('"enabled" = true');
     expect(migration).toContain("current_setting('agor.system_scope', true)");
     expect(migration).toContain("= 'gateway_listener_discovery'");
+    expect(migration).not.toContain('WITH CHECK');
+  });
+
+  it('limits environment health discovery to active non-archived routing rows', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0077_environment_health_ha.sql');
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('"archived" = false');
+    expect(migration).toContain("IN ('starting', 'running')");
+    expect(migration).toContain("= 'environment_health_discovery'");
     expect(migration).not.toContain('WITH CHECK');
   });
 
@@ -190,7 +199,7 @@ describe('Postgres multitenancy schema coverage', () => {
 
   it('binds OAuth callback RLS to one exact fingerprint and narrows maintenance to due rows', () => {
     const migration = readRepoFile(
-      'packages/core/drizzle/postgres/0077_mcp_oauth_pending_flows.sql'
+      'packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'
     );
 
     expect(migration).toContain('FORCE ROW LEVEL SECURITY');

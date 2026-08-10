@@ -25,13 +25,13 @@ describe('Postgres migrations', () => {
     expect(
       pendingOfflineCutoverMigrations({
         applied: ['0076_executor_session_token_session_binding'],
-        pending: ['0077_mcp_oauth_pending_flows'],
+        pending: ['0078_mcp_oauth_pending_flows'],
       })
-    ).toEqual(['0077_mcp_oauth_pending_flows']);
+    ).toEqual(['0078_mcp_oauth_pending_flows']);
     expect(
       pendingOfflineCutoverMigrations({
         applied: [],
-        pending: ['0000_pretty_mac_gargan', '0077_mcp_oauth_pending_flows'],
+        pending: ['0000_pretty_mac_gargan', '0078_mcp_oauth_pending_flows'],
       })
     ).toEqual([]);
   });
@@ -85,7 +85,7 @@ describe('Postgres migrations', () => {
 
   it('stores MCP OAuth pending flow capabilities without raw codes or tokens', async () => {
     const migration = await readFile(
-      new URL('../../drizzle/postgres/0077_mcp_oauth_pending_flows.sql', import.meta.url),
+      new URL('../../drizzle/postgres/0078_mcp_oauth_pending_flows.sql', import.meta.url),
       'utf8'
     );
 
@@ -103,6 +103,7 @@ describe('Postgres migrations', () => {
     expect(migration).toContain('DELETE FROM "user_mcp_oauth_tokens"');
     expect(migration).toContain('"grant_binding_fingerprint" varchar(64)');
     expect(migration).toContain('"refresh_generation" bigint');
+    expect(migration).toContain('"refresh_success_generation" bigint');
     expect(migration).toContain('"oauth_metadata_uri" text');
     expect(migration).toContain('"user_mcp_oauth_tokens_tenant_user_fk"');
     expect(migration).toContain('"user_mcp_oauth_tokens_tenant_server_fk"');
@@ -148,7 +149,7 @@ describe('MCP OAuth pending-flow migrations', () => {
 
     try {
       const migration = await readFile(
-        new URL('../../drizzle/sqlite/0080_mcp_oauth_pending_flows.sql', import.meta.url),
+        new URL('../../drizzle/sqlite/0081_mcp_oauth_pending_flows.sql', import.meta.url),
         'utf8'
       );
       await client.execute('PRAGMA foreign_keys = OFF');
@@ -187,6 +188,7 @@ describe('MCP OAuth pending-flow migrations', () => {
       expect(tokenColumnNames).toContain('grant_binding_fingerprint');
       expect(tokenColumnNames).toContain('oauth_metadata_uri');
       expect(tokenColumnNames).toContain('refresh_generation');
+      expect(tokenColumnNames).toContain('refresh_success_generation');
 
       const tableSql = await client.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'mcp_oauth_pending_flows'"

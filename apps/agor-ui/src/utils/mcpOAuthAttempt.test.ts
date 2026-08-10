@@ -3,6 +3,7 @@ import { agorStore } from '@/store/agorStore';
 import {
   oauthAttemptFailureMessage,
   refetchMCPOAuthDurableState,
+  refreshAndRefetchMCPOAuthGrant,
   waitForMCPOAuthAttempt,
 } from './mcpOAuthAttempt';
 
@@ -54,5 +55,60 @@ describe('waitForMCPOAuthAttempt', () => {
       name: 'durable',
       auth: { oauth_access_token: 'hydrated' },
     });
+  });
+
+  it('refetches deleted durable grant state before returning needs_reauth', async () => {
+    const create = vi.fn().mockResolvedValue({ success: false, error: 'needs_reauth' });
+    const find = vi.fn().mockResolvedValue({ authenticated_server_ids: [] });
+    const get = vi.fn().mockResolvedValue({
+      mcp_server_id: 'server-1',
+      name: 'disconnected',
+      transport: 'http',
+      auth: { type: 'oauth' },
+    });
+    const services = {
+      'mcp-servers/oauth-refresh': { create },
+      'mcp-servers/oauth-status': { find },
+      'mcp-servers': { get },
+    };
+    const client = {
+      service: vi.fn((path: keyof typeof services) => services[path]),
+    } as never;
+
+    await expect(refreshAndRefetchMCPOAuthGrant(client, 'server-1')).resolves.toEqual({
+      success: false,
+      error: 'needs_reauth',
+    });
+    expect(create).toHaveBeenCalledWith({ mcp_server_id: 'server-1' });
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith('server-1');
+    expect(agorStore.getState().userAuthenticatedMcpServerIds).toEqual(new Set());
+    expect(agorStore.getState().mcpServerById.get('server-1')).toMatchObject({
+      auth: { type: 'oauth' },
+    });
+  });
+
+  it('still refetches durable state when the refresh request outcome is unknown', async () => {
+    const createError = new Error('connection closed');
+    const create = vi.fn().mockRejectedValue(createError);
+    const find = vi.fn().mockResolvedValue({ authenticated_server_ids: [] });
+    const get = vi.fn().mockResolvedValue({
+      mcp_server_id: 'server-1',
+      name: 'durable-after-error',
+      transport: 'http',
+      auth: { type: 'oauth' },
+    });
+    const services = {
+      'mcp-servers/oauth-refresh': { create },
+      'mcp-servers/oauth-status': { find },
+      'mcp-servers': { get },
+    };
+    const client = {
+      service: vi.fn((path: keyof typeof services) => services[path]),
+    } as never;
+
+    await expect(refreshAndRefetchMCPOAuthGrant(client, 'server-1')).rejects.toBe(createError);
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });
