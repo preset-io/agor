@@ -37,9 +37,9 @@ export interface DispatchableTool {
  * Request-local dispatch table for the progressive-discovery facade.
  *
  * The SDK intentionally keeps its registered-tool map private. Keeping our
- * own table avoids depending on that implementation detail and lets search
- * mode expose exactly three MCP tools while its domain operations remain
- * ordinary, authorization-wrapped Agor operations behind agor_execute_tool.
+ * own table avoids depending on that implementation detail and gives
+ * agor_execute_tool ordinary, authorization-wrapped Agor operations to call.
+ * Native SDK registration independently preserves direct tools/call support.
  */
 export class ToolDispatcher {
   private readonly tools = new Map<string, DispatchableTool>();
@@ -73,14 +73,10 @@ export function wrapRegisterTool(
   return proxy;
 }
 
-/** Capture registrations for internal dispatch, optionally exposing them as direct MCP tools too. */
-export function toolDispatcherProxy(
-  server: McpServer,
-  dispatcher: ToolDispatcher,
-  exposeDirectTools: boolean
-): McpServer {
+/** Capture registrations for the discovery facade while preserving native direct calls. */
+export function toolDispatcherProxy(server: McpServer, dispatcher: ToolDispatcher): McpServer {
   return wrapRegisterTool(server, (register, name, config, handler) => {
     dispatcher.register(name, config, handler);
-    return exposeDirectTools ? register(name, config, handler) : undefined;
+    return register(name, config, handler);
   });
 }

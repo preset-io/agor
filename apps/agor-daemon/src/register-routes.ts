@@ -259,6 +259,8 @@ export interface RegisterRoutesContext {
   DB_PATH: string;
   DAEMON_PORT: number;
   DAEMON_VERSION: string;
+  /** User-facing agor-live release version advertised by protocol surfaces. */
+  AGOR_VERSION: string;
   /**
    * Resolved build info (sha + builtAt). Surfaced on /health so the UI can
    * detect FE/BE drift after a deploy. The SHA is the canonical version
@@ -331,6 +333,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     DB_PATH,
     DAEMON_PORT: _DAEMON_PORT,
     DAEMON_VERSION,
+    AGOR_VERSION,
     DAEMON_BUILD_INFO,
     resolvedSecurity,
     realtimeRuntime,
@@ -4387,7 +4390,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   if (config.daemon?.mcpEnabled !== false) {
     const { setupMCPRoutes } = await import('./mcp/server.js');
     const toolSearchEnabled = config.daemon?.mcpToolSearch !== false;
-    setupMCPRoutes(app, db, toolSearchEnabled, config);
+    setupMCPRoutes(app, db, toolSearchEnabled, config, { serverVersion: AGOR_VERSION });
     console.log(
       `✅ MCP server enabled at POST /mcp${toolSearchEnabled ? ' (tool search mode)' : ''}`
     );

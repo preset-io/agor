@@ -82,10 +82,7 @@ import { registerAllWidgets } from './widgets/index.js';
 
 // Load daemon version at startup
 const DAEMON_VERSION = await loadDaemonVersion(import.meta.url);
-const TELEMETRY_AGOR_VERSION = await loadOpenSourceTelemetryAgorVersion(
-  DAEMON_VERSION,
-  import.meta.url
-);
+const AGOR_VERSION = await loadOpenSourceTelemetryAgorVersion(DAEMON_VERSION, import.meta.url);
 
 // Resolve build SHA (env > .build-info file > git > 'dev'). UI tabs capture
 // this on first connect and prompt a refresh if a later handshake disagrees.
@@ -637,7 +634,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
   if (openSourceTelemetryLogger.isEnabled()) {
     const startupTelemetryProperties = {
-      agor_version: TELEMETRY_AGOR_VERSION,
+      agor_version: AGOR_VERSION,
       deployment_kind: process.env.KUBERNETES_SERVICE_HOST
         ? 'k8s'
         : process.env.container || process.env.AGOR_DOCKER
@@ -668,13 +665,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
     if (
       config.telemetry?.last_reported_version &&
-      config.telemetry.last_reported_version !== TELEMETRY_AGOR_VERSION
+      config.telemetry.last_reported_version !== AGOR_VERSION
     ) {
       openSourceTelemetryLogger.track({
         event: 'daemon.upgraded',
         properties: {
           from_version: config.telemetry.last_reported_version,
-          to_version: TELEMETRY_AGOR_VERSION,
+          to_version: AGOR_VERSION,
         },
       });
     }
@@ -735,6 +732,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     DB_PATH,
     DAEMON_PORT,
     DAEMON_VERSION,
+    AGOR_VERSION,
     DAEMON_BUILD_INFO,
     resolvedSecurity,
     realtimeRuntime,

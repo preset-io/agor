@@ -385,7 +385,8 @@ describe('POST /mcp with personal API keys', () => {
     services: Record<string, unknown>,
     fn: (baseUrl: string) => Promise<void>,
     config: Parameters<typeof setupMCPRoutes>[3] = { multi_tenancy: undefined },
-    toolSearchEnabled = false
+    toolSearchEnabled = false,
+    serverVersion = 'test-product-version'
   ) {
     const webApp = express();
     webApp.use(express.json());
@@ -396,7 +397,7 @@ describe('POST /mcp with personal API keys', () => {
       return svc;
     };
 
-    setupMCPRoutes(webApp as never, testSqliteDb(), toolSearchEnabled, config);
+    setupMCPRoutes(webApp as never, testSqliteDb(), toolSearchEnabled, config, { serverVersion });
 
     const httpServer = webApp.listen(0);
     try {
@@ -803,9 +804,16 @@ describe('POST /mcp with personal API keys', () => {
       expect(resp.headers.get('content-type')).toMatch(/^text\/event-stream/);
       expect(resp.headers.get('mcp-session-id')).toBeNull();
       const body = parseMcpResponse(await resp.text()) as {
-        result?: { capabilities?: { tools?: { listChanged?: boolean }; logging?: unknown } };
+        result?: {
+          capabilities?: { tools?: { listChanged?: boolean }; logging?: unknown };
+          serverInfo?: { name?: string; version?: string };
+        };
       };
       expect(body.result?.capabilities).toEqual({ tools: { listChanged: false } });
+      expect(body.result?.serverInfo).toMatchObject({
+        name: 'agor',
+        version: 'test-product-version',
+      });
     });
   });
 
@@ -888,12 +896,14 @@ describe('POST /mcp with personal API keys', () => {
       role: 'member',
     }));
 
-    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      // Run the installed SDK client under plain Node rather than Vitest's
-      // development export conditions (which select eventsource-parser's TS
-      // source build). This is still an end-to-end wire contract against the
-      // real Express route and fails the test on any client error.
-      const probe = `
+    await withMcpServer(
+      { users: { get: getUser } },
+      async (baseUrl) => {
+        // Run the installed SDK client under plain Node rather than Vitest's
+        // development export conditions (which select eventsource-parser's TS
+        // source build). This is still an end-to-end wire contract against the
+        // real Express route and fails the test on any client error.
+        const probe = `
         import { Client } from '@modelcontextprotocol/sdk/client/index.js';
         import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
         const transport = new StreamableHTTPClientTransport(new URL(process.argv[1] + '/mcp'), {
@@ -909,23 +919,30 @@ describe('POST /mcp with personal API keys', () => {
           await client.close();
         }
       `;
-      const { stdout } = await execFile(
-        process.execPath,
-        ['--input-type=module', '--eval', probe, baseUrl],
-        { cwd: process.cwd(), encoding: 'utf8', timeout: 10_000 }
-      );
-      const result = JSON.parse(stdout.trim()) as {
-        sessionId?: string;
-        listed: { tools: Array<{ name: string }> };
-        called: { content: Array<{ type: string; text?: string }> };
-      };
+        const { stdout } = await execFile(
+          process.execPath,
+          ['--input-type=module', '--eval', probe, baseUrl],
+          { cwd: process.cwd(), encoding: 'utf8', timeout: 10_000 }
+        );
+        const result = JSON.parse(stdout.trim()) as {
+          sessionId?: string;
+          listed: { tools: Array<{ name: string }> };
+          called: { content: Array<{ type: string; text?: string }> };
+        };
 
-      expect(result.sessionId).toBeUndefined();
-      expect(result.listed.tools.some(({ name }) => name === 'agor_users_get_current')).toBe(true);
-      expect(JSON.parse(result.called.content[0].text ?? '{}')).toMatchObject({
-        user_id: 'user-1',
-      });
-    });
+        expect(result.sessionId).toBeUndefined();
+        expect(result.listed.tools.map(({ name }) => name).sort()).toEqual([
+          'agor_execute_tool',
+          'agor_get_tool_details',
+          'agor_search_tools',
+        ]);
+        expect(JSON.parse(result.called.content[0].text ?? '{}')).toMatchObject({
+          user_id: 'user-1',
+        });
+      },
+      { multi_tenancy: undefined },
+      /* toolSearchEnabled */ true
+    );
   });
 
   it('interoperates end-to-end with the v2 TypeScript client in modern auto-negotiation mode', async () => {

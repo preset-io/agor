@@ -7,7 +7,8 @@
  *
  * When tool search is enabled (mcpToolSearch config flag), only essential
  * tools appear in tools/list. Agents discover others via agor_search_tools.
- * Hidden domain tools remain callable through the explicit execute facade.
+ * Hidden domain tools remain callable both directly by name for compatibility
+ * and through the explicit execute facade.
  *
  * DETERMINISM: The tools/list response and registry are built once on first
  * request and cached as module-level singletons. This ensures byte-identical
@@ -32,7 +33,7 @@ import type { Application } from '@agor/core/feathers';
 import type { SessionID, TenantContext, UserID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
+import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
@@ -192,7 +193,7 @@ function logQueryParamDeprecation(req: Request): void {
  * responses critical for client-side KV prefix caching.
  */
 let cachedRegistry: ToolRegistry | null = null;
-let cachedToolsList: { tools: Array<Record<string, unknown>> } | null = null;
+let cachedToolsList: ListToolsResult | null = null;
 
 type DomainToolRegistrar = {
   domain: string;
@@ -264,12 +265,14 @@ export function buildRegistry(): ToolRegistry {
     }
   ).registerTool = (name: string, config: Record<string, unknown>, cb: unknown) => {
     // Convert Zod schema to JSON Schema using Zod v4's built-in converter
-    let jsonSchema: Record<string, unknown> = { type: 'object' };
+    let jsonSchema: import('@modelcontextprotocol/server').Tool['inputSchema'] = {
+      type: 'object',
+    };
     if (config.inputSchema) {
       try {
         jsonSchema = toJSONSchema(
           config.inputSchema as Parameters<typeof toJSONSchema>[0]
-        ) as Record<string, unknown>;
+        ) as unknown as import('@modelcontextprotocol/server').Tool['inputSchema'];
       } catch {
         // Fallback: empty object schema if conversion fails
         jsonSchema = { type: 'object' };
@@ -304,7 +307,7 @@ export function buildRegistry(): ToolRegistry {
  */
 function getRegistry(): {
   registry: ToolRegistry;
-  toolsList: { tools: Array<Record<string, unknown>> };
+  toolsList: ListToolsResult;
 } {
   if (!cachedRegistry) {
     cachedRegistry = buildRegistry();
@@ -327,11 +330,15 @@ function getRegistry(): {
  * Tool handlers close over `ctx` for per-request user/session scope.
  * The registry and tools/list response are shared across all requests.
  */
-function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer {
+function createMcpServer(
+  ctx: McpContext,
+  toolSearchEnabled: boolean,
+  serverVersion: string
+): McpServer {
   const server = new McpServer(
     {
       name: 'agor',
-      version: '0.14.3',
+      version: serverVersion,
       ...(toolSearchEnabled && {
         description: 'Multiplayer canvas for orchestrating AI coding agents',
       }),
@@ -353,18 +360,21 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
     const { registry, toolsList } = getRegistry();
     const dispatcher = new ToolDispatcher();
 
-    // Only the three discovery facade tools are MCP-visible in progressive
-    // mode. Domain operations live in our own request-local dispatcher, where
-    // their handlers retain the same authenticated tenant wrapper used by
-    // directly exposed tools. This keeps tools/list truthful and avoids SDK
-    // private-field access.
-    registerDomainTools(
-      tenantScopedToolProxy(toolDispatcherProxy(server, dispatcher, false), ctx),
-      ctx
-    );
+    // Capture domain operations for agor_execute_tool while also registering
+    // them normally. Existing clients may call a known tool directly even
+    // though progressive discovery intentionally omits it from tools/list.
+    // Both paths retain the same authenticated tenant wrapper and SDK input /
+    // output validation.
+    registerDomainTools(tenantScopedToolProxy(toolDispatcherProxy(server, dispatcher), ctx), ctx);
 
     // Register search/detail/execute as the complete visible MCP catalog.
     registerSearchTools(server, registry, dispatcher);
+
+    // Keep the advertised catalog to the three progressive-discovery facade
+    // tools without removing direct tools/call compatibility. This uses the
+    // SDK's public low-level handler seam; domain tools remain registered with
+    // McpServer for native annotations, validation, and direct dispatch.
+    server.server.setRequestHandler('tools/list', async () => toolsList);
 
     // Guard the invariant that the SDK-generated catalog is the same stable
     // three-tool surface captured in the shared registry.
@@ -389,13 +399,17 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
  *
  * @param toolSearchEnabled - When true, tools/list returns only essential tools
  *   and agents discover others via agor_search_tools. Default: true.
+ * @param options.serverVersion - User-facing Agor release version advertised
+ *   during MCP initialization.
  */
 export function setupMCPRoutes(
   app: Application,
   db: TenantScopeAwareDatabase,
   toolSearchEnabled = true,
-  config: Pick<AgorConfig, 'multi_tenancy'> = { multi_tenancy: undefined }
+  config: Pick<AgorConfig, 'multi_tenancy'> = { multi_tenancy: undefined },
+  options: { serverVersion?: string } = {}
 ): void {
+  const serverVersion = options.serverVersion ?? '0.0.0';
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
     getRegistry();
@@ -413,7 +427,7 @@ export function setupMCPRoutes(
         throw new Error('Authenticated MCP request context is unavailable');
       }
       mcpRequestDebug(`🔌 Serving MCP ${era} protocol request`);
-      return createMcpServer(ctx, toolSearchEnabled);
+      return createMcpServer(ctx, toolSearchEnabled, serverVersion);
     },
     {
       // One endpoint serves the 2026-07-28 per-request protocol and every
