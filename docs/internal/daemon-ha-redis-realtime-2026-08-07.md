@@ -150,7 +150,7 @@ The live negative test is anonymous/static-tenant containment, not a real two-te
 - Audit historical active worktree rows before admitting a `base_repository: unavailable` Cloud cohort; change remote repo registration from a claimed durable base clone to metadata-only/ephemeral inspection.
 - Certify the remaining provider credential helpers against the persistent-per-user home contract. Codex auth-file check/import/logout now route through trusted executor identity variables; the device-code poller remains separately and deliberately blocked.
 - Optional durable permission decision read-after-gap/replay if manual resend after a lost transient click is not an acceptable long-term UX.
-- MCP OAuth, GitHub install state, Codex/OpenCode auth ownership, terminal, and Artifact runtime state externalization.
+- Activate and certify the durable PostgreSQL MCP OAuth authority; externalize Codex/OpenCode auth ownership, terminal, and Artifact runtime state. GitHub App install state is already durable on PostgreSQL and enabled in constrained HA.
 - Production Cloud ingress implementation/certification and a defined edge/fleet quota strategy.
 - Prove the configured external-executor callback URL is reachable in Cloud, and cover task execution/reconnect in the live harness.
 - Make concurrent first-admin bootstrap converge without relying on a losing replica restart.
