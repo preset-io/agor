@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   boardObjectQueryValidator,
   branchQueryValidator,
+  mcpCatalogQueryValidator,
   mcpServerQueryValidator,
   sessionQueryValidator,
   typedValidateQuery,
@@ -140,5 +141,30 @@ describe('mcpServerQueryValidator', () => {
       enabled: true,
       forUserId: '019e8e1c',
     });
+  });
+});
+
+describe('mcpCatalogQueryValidator', () => {
+  it('preserves a set of probe verdicts, which one filter genuinely needs', async () => {
+    const context = {
+      params: {
+        query: { probed_auth_types: ['none', 'unknown'], curated: 'true', unknown: 'removed' },
+      },
+    };
+
+    await typedValidateQuery(mcpCatalogQueryValidator)(context);
+
+    // `removeAdditional: 'all'` strips anything unlisted, so a filter the
+    // schema does not name reaches SQL as no filter at all.
+    expect(context.params.query).toEqual({
+      probed_auth_types: ['none', 'unknown'],
+      curated: true,
+    });
+  });
+
+  it('refuses a probe verdict outside the closed set', async () => {
+    const context = { params: { query: { probed_auth_types: ['none', 'sudo'] } } };
+
+    await expect(typedValidateQuery(mcpCatalogQueryValidator)(context)).rejects.toThrow();
   });
 });

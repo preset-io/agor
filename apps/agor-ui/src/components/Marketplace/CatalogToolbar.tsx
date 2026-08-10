@@ -10,7 +10,19 @@
 
 import type { MCPCatalogCategory, MCPCatalogSort } from '@agor/core/types';
 import { SearchOutlined } from '@ant-design/icons';
-import { Card, Col, Input, Row, Segmented, Select, Space, Switch, Typography, theme } from 'antd';
+import {
+  Card,
+  Col,
+  Input,
+  Row,
+  Segmented,
+  Select,
+  Space,
+  Switch,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import { memo, useEffect, useRef, useState } from 'react';
 import {
   ALL_CATEGORIES,
@@ -129,12 +141,18 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
           </Col>
           <Col flex="none">
             <Space size={token.marginXS}>
-              <Text type="secondary">Connectable now</Text>
+              {/* Named for what it removes, because what it keeps includes
+                  endpoints nobody has checked yet. */}
+              <Tooltip title="Hides servers Agor knows need an account. Unchecked endpoints stay — connecting is what checks them.">
+                <Text type="secondary" style={{ cursor: 'help' }}>
+                  Hide account-only
+                </Text>
+              </Tooltip>
               <Switch
                 size="small"
                 checked={connectableOnly}
                 onChange={onConnectableOnlyChange}
-                aria-label="Show only servers that need no account"
+                aria-label="Hide servers known to need an account"
               />
             </Space>
           </Col>

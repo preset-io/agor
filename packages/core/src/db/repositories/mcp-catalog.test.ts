@@ -289,6 +289,48 @@ describe('MCPCatalogRepository filter semantics', () => {
     ]);
   });
 
+  dbTest('matches any one of several probe verdicts', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    // Each verdict has to describe the row's current endpoint, or the
+    // repository discards it as stale.
+    await repository.upsertRegistryEntry({
+      name: 'a.example/open',
+      remote_url: 'https://open.example.com/mcp',
+    });
+    await repository.upsertRegistryEntry({
+      name: 'b.example/locked',
+      remote_url: 'https://locked.example.com/mcp',
+    });
+    await repository.upsertRegistryEntry({ name: 'c.example/unprobed' });
+    await repository.recordProbeResult('a.example/open', {
+      probed_auth_type: 'none',
+      probed_at: new Date(),
+      probed_url: 'https://open.example.com/mcp',
+    });
+    await repository.recordProbeResult('b.example/locked', {
+      probed_auth_type: 'oauth',
+      probed_at: new Date(),
+      probed_url: 'https://locked.example.com/mcp',
+    });
+
+    // What the marketplace's "hide account-only" filter asks for: everything
+    // not known to refuse, which on an install that never probed is all of it.
+    const connectable = await repository.findAll({ probed_auth_types: ['none', 'unknown'] });
+    expect(connectable.map((entry) => entry.name).sort()).toEqual([
+      'a.example/open',
+      'c.example/unprobed',
+    ]);
+    expect(await repository.count({ probed_auth_types: ['none', 'unknown'] })).toBe(2);
+  });
+
+  dbTest('returns nothing for an empty probe-verdict allowlist', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({ name: 'a.example/one' });
+
+    expect(await repository.findAll({ probed_auth_types: [] })).toEqual([]);
+    expect(await repository.count({ probed_auth_types: [] })).toBe(0);
+  });
+
   dbTest('returns nothing for an empty name allowlist', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
     await repository.upsertRegistryEntry({ name: 'a.example/one' });

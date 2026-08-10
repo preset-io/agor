@@ -1,11 +1,13 @@
 import type { MCPCatalogEntry, MCPCatalogEntryID } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
+  CONNECTABLE_PROBE_VERDICTS,
   capabilityLabel,
   connectBlockedReason,
   connectStatus,
   DEFAULT_SORT,
   entryTitle,
+  isConnectable,
 } from './catalogPresentation';
 
 function entry(overrides: Partial<MCPCatalogEntry> = {}): MCPCatalogEntry {
@@ -116,6 +118,26 @@ describe('connectStatus', () => {
       readiness: 'blocked',
       label: 'Needs an account',
     });
+  });
+});
+
+describe('isConnectable', () => {
+  it('agrees with the card: an unprobed entry is connectable', () => {
+    expect(isConnectable(entry({ probed_auth_type: 'unknown' }))).toBe(true);
+    expect(connectStatus(entry({ probed_auth_type: 'unknown' })).readiness).not.toBe('blocked');
+  });
+
+  it('excludes what the card calls blocked', () => {
+    expect(isConnectable(entry({ probed_auth_type: 'oauth' }))).toBe(false);
+    expect(isConnectable(entry({ probed_auth_type: 'unreachable' }))).toBe(false);
+    expect(isConnectable(entry({ curated: false }))).toBe(false);
+  });
+
+  it('is the rule the query filter sends, so the two cannot drift', () => {
+    // Every verdict the filter keeps must be one the presentation also keeps.
+    for (const verdict of CONNECTABLE_PROBE_VERDICTS) {
+      expect(isConnectable(entry({ probed_auth_type: verdict }))).toBe(true);
+    }
   });
 });
 

@@ -6,7 +6,12 @@
  * because they are presentation, not part of the catalog contract.
  */
 
-import type { MCPCatalogCategory, MCPCatalogEntry, MCPCatalogSort } from '@agor/core/types';
+import type {
+  MCPCatalogCategory,
+  MCPCatalogEntry,
+  MCPCatalogProbedAuthType,
+  MCPCatalogSort,
+} from '@agor/core/types';
 import { MCP_CATALOG_CATEGORIES } from '@agor/core/types';
 
 export const CATEGORY_LABELS: Record<MCPCatalogCategory, string> = {
@@ -190,6 +195,20 @@ const CONNECT_STATUSES = {
   },
 } as const satisfies Record<string, ConnectStatus>;
 
+/**
+ * Probe verdicts that are not a refusal.
+ *
+ * The same rule the cards state: `none` is confirmed open, and `unknown` has
+ * simply never been checked — connect probes it on demand and stops cleanly if
+ * it turns out to need an account. Registry sync is off by default, so every
+ * seeded row is `unknown`; a filter that demanded `none` could only ever return
+ * nothing, while the card beside it called the entry connectable.
+ *
+ * Exported so the toolbar's filter and `connectStatus` cannot drift into
+ * disagreeing about what "connectable" means.
+ */
+export const CONNECTABLE_PROBE_VERDICTS: MCPCatalogProbedAuthType[] = ['none', 'unknown'];
+
 export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
   if (!entry.curated) return CONNECT_STATUSES.notReviewed;
   if (!entry.has_remote || !entry.remote_url || entry.transport === 'stdio') {
@@ -204,6 +223,14 @@ export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
   if (!entry.permission_disclosure?.trim()) return CONNECT_STATUSES.undisclosed;
   if (entry.probed_auth_type !== 'none') return CONNECT_STATUSES.unchecked;
   return CONNECT_STATUSES.ready;
+}
+
+/** Whether the "connectable now" filter would keep this entry. */
+export function isConnectable(entry: MCPCatalogEntry): boolean {
+  return (
+    connectStatus(entry).readiness !== 'blocked' &&
+    CONNECTABLE_PROBE_VERDICTS.includes(entry.probed_auth_type)
+  );
 }
 
 /** Why connecting is refused outright, or `undefined` when it may proceed. */
