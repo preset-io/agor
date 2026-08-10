@@ -497,6 +497,12 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'mcp-servers/test-oauth',
 ] as const;
 
+/** Caller-specific Knowledge command responses must never become service events. */
+export function suppressKnowledgeCommandRealtimeEvent(context: HookContext): HookContext {
+  context.event = null;
+  return context;
+}
+
 /**
  * Service endpoints whose implementation retains process-local credentials,
  * provider handshakes, or native runtime state. Keep this inventory exported
@@ -1651,6 +1657,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'edit knowledge documents')],
     },
+    after: {
+      create: [suppressKnowledgeCommandRealtimeEvent],
+    },
   });
 
   safeService('kb/versions')?.hooks({
@@ -1662,6 +1671,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('kb/search')?.hooks({
     before: {
       all: [requireAuth],
+    },
+    after: {
+      create: [suppressKnowledgeCommandRealtimeEvent],
     },
   });
 
@@ -1680,6 +1692,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('kb/indexing/reindex')?.hooks({
     before: {
       all: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'reindex Knowledge embeddings')],
+    },
+    after: {
+      create: [suppressKnowledgeCommandRealtimeEvent],
     },
   });
 

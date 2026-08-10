@@ -15,6 +15,10 @@ import {
 import { tenantChannelName } from '../realtime/routing.js';
 import { isSuperAdmin } from './branch-authorization.js';
 import {
+  isKnowledgeRealtimeSuppressedEvent,
+  resolveKnowledgeRealtimeUserIds,
+} from './knowledge-realtime-publish.js';
+import {
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
@@ -212,6 +216,7 @@ export const REDIS_FEATHERS_DENIED_PATHS = new Set([
 
 function mayEnterRedisRelay(path: string, event: string): boolean {
   if (REDIS_FEATHERS_DENIED_PATHS.has(path)) return false;
+  if (isKnowledgeRealtimeSuppressedEvent(path, event)) return false;
   // Runtime DOM/status results can contain secret-derived values. CRUD events
   // for Artifact metadata remain ordinary tenant-authorized service payloads.
   if (path === 'artifacts' && event === 'agor-query') return false;
@@ -481,6 +486,27 @@ function filterToServiceConnections(authenticated: PublishChannel): PublishChann
   return authenticated.filter((connection: unknown) => isServiceConnection(connection));
 }
 
+function uniqueUserIds(authenticated: PublishChannel): string[] {
+  const userIds = new Set<string>();
+  for (const connection of authenticated.connections as unknown[]) {
+    if (isServiceConnection(connection)) continue;
+    const userId = userFromConnection(connection)?.user_id;
+    if (typeof userId === 'string') userIds.add(userId);
+  }
+  return [...userIds];
+}
+
+function filterToUserIdsOrServices(
+  authenticated: PublishChannel,
+  userIds: Set<string>
+): PublishChannel {
+  return authenticated.filter((connection: unknown) => {
+    if (isServiceConnection(connection)) return true;
+    const userId = userFromConnection(connection)?.user_id;
+    return typeof userId === 'string' && userIds.has(userId);
+  });
+}
+
 /**
  * Delivery set for a streaming event. Streaming chunks are the dominant
  * always-on realtime cost, so they bypass the tenant-wide broadcast and go to:
@@ -714,6 +740,18 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
           allowSuperadmin
         );
       }
+
+      const knowledgeUserIds = await resolveKnowledgeRealtimeUserIds({
+        app,
+        db,
+        data,
+        context,
+        userIds: uniqueUserIds(tenantScoped),
+      });
+      if (knowledgeUserIds) {
+        return filterToUserIdsOrServices(tenantScoped, knowledgeUserIds);
+      }
+
       if (!branchRbacEnabled) return tenantScoped;
 
       const scope = await resolvePublishScope(data, context, accessCache);
