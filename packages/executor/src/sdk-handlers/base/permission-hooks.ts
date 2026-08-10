@@ -272,38 +272,32 @@ export function createCanUseToolCallback(
         };
       }
 
-      // Update task status
+      // The permission decision settles this tool call, not the conversational turn.
+      // Return the task/session to their active state for both approval and denial;
+      // normal provider finalization remains the sole owner of terminal task state.
       await deps.tasksService.patch(taskId, {
-        status: decision.allow ? TaskStatus.RUNNING : TaskStatus.FAILED,
+        status: TaskStatus.RUNNING,
       });
 
-      // If permission was denied, stop execution
+      if (deps.sessionsService) {
+        await deps.sessionsService.patch(sessionId, {
+          status: 'running' as const,
+          ready_for_prompt: false,
+        });
+        console.log(
+          `✅ [canUseTool] Session ${sessionId} restored to running after permission decision`
+        );
+      }
+
+      // A denial rejects only this tool call. The SDK can report it to the model,
+      // which may continue the turn or choose a different action.
       if (!decision.allow) {
-        console.log(`🛑 [canUseTool] Permission denied for ${toolName}, stopping execution...`);
-
-        // Cancel all pending permission requests for this session
-        deps.permissionService.cancelPendingRequests(sessionId);
-
-        // Set session status to idle
-        if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: 'idle' as const,
-          });
-          console.log(`✅ [canUseTool] Session ${sessionId} set to idle after denial`);
-        }
+        console.log(`🛑 [canUseTool] Permission denied for ${toolName}; continuing turn`);
 
         return {
           behavior: 'deny' as const,
           message: `Permission denied for tool: ${toolName}`,
         };
-      }
-
-      // Restore session status to running (only if approved)
-      if (deps.sessionsService) {
-        await deps.sessionsService.patch(sessionId, {
-          status: 'running' as const,
-        });
-        console.log(`✅ [canUseTool] Session ${sessionId} restored to running after approval`);
       }
 
       // Build response with SDK's updatedPermissions for persistence
