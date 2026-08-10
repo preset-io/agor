@@ -1,11 +1,12 @@
 /**
  * Startup & Shutdown
  *
- * Orchestrates post-boot steps: orphan cleanup, health monitor, master secret,
- * server listen, scheduler, gateway init, and graceful shutdown.
+ * Orchestrates post-boot steps: orphan cleanup, health monitor, server listen
+ * (with dual-stack loopback), scheduler, gateway init, and graceful shutdown.
  */
 
 import { promises as fs } from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import {
   type AgorConfig,
@@ -601,31 +602,50 @@ export function initializeEnvironmentHealthMonitor(
 }
 
 // ---------------------------------------------------------------------------
-// Master secret
+// Dual-stack loopback
 // ---------------------------------------------------------------------------
 
-async function ensureMasterSecret(config: AgorConfig): Promise<void> {
-  // AGOR_MASTER_SECRET: env > existing config value > fail-fast.
-  //
-  // Same fail-fast reasoning as the JWT path: a fresh master secret on every
-  // restart corrupts every stored encrypted API key.
-  const { resolvePersistedSecret } = await import('./setup/persisted-secret.js');
-  const resolution = await resolvePersistedSecret({
-    name: 'AGOR_MASTER_SECRET (API key encryption)',
-    envVar: 'AGOR_MASTER_SECRET',
-    existing: config.daemon?.masterSecret,
-    configKey: 'daemon.masterSecret',
-  });
-  // Side effect: downstream code (encrypted-creds resolver, etc.) reads this
-  // off process.env, not off a parameter. Keep that contract.
-  process.env.AGOR_MASTER_SECRET = resolution.value;
-  switch (resolution.source) {
-    case 'env':
-      console.log('🔐 API key encryption enabled (AGOR_MASTER_SECRET set)');
-      break;
-    case 'config':
-      console.log('🔐 Using saved AGOR_MASTER_SECRET from config');
-      break;
+/**
+ * When the daemon is bound to a loopback address, also listen on the
+ * complementary loopback family so BOTH `127.0.0.1` and `::1` reach it.
+ *
+ * The secondary listener shares the same Express request handler and the same
+ * Socket.IO engine (so websocket traffic works on either family — nginx
+ * proxies `/socket.io` over whichever loopback its upstream targets).
+ *
+ * Best-effort: the primary listener already serves the daemon, so a failed
+ * secondary bind is logged and swallowed rather than crashing boot. Returns
+ * the secondary server (for graceful shutdown) or undefined.
+ */
+async function bindLoopbackSecondary(params: {
+  app: unknown;
+  port: number;
+  primaryHost: string;
+  getSocketServer: () => import('socket.io').Server | null;
+}): Promise<http.Server | undefined> {
+  const { app, port, primaryHost, getSocketServer } = params;
+  if (primaryHost !== '::1' && primaryHost !== '127.0.0.1') return undefined;
+  const secondaryHost = primaryHost === '127.0.0.1' ? '::1' : '127.0.0.1';
+  try {
+    const extra = http.createServer(app as unknown as http.RequestListener);
+    getSocketServer()?.attach(extra);
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => reject(err);
+      extra.once('error', onError);
+      extra.listen(port, secondaryHost, () => {
+        extra.removeListener('error', onError);
+        resolve();
+      });
+    });
+    console.log(`🔁 Dual-stack loopback: also listening on ${secondaryHost}:${port}`);
+    return extra;
+  } catch (err) {
+    console.warn(
+      `⚠️  Dual-stack loopback secondary bind on ${secondaryHost}:${port} failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    return undefined;
   }
 }
 
@@ -676,11 +696,23 @@ export async function startup(ctx: StartupContext): Promise<void> {
   }
   app.set('environmentHealthMonitor', healthMonitor);
 
-  // 3. Validate/generate master secret for API key encryption
-  await ensureMasterSecret(config);
-
-  // 4. Start server
-  const server = await app.listen(DAEMON_PORT, DAEMON_HOST);
+  // 3. Start server.
+  //
+  // Dual-stack loopback: when bound to `localhost`, Node listens on whichever
+  // single address getaddrinfo returns first — `::1` on dual-stack Linux —
+  // leaving the other loopback family (e.g. `127.0.0.1`) refused. Clients that
+  // dial the family we did not bind then fail: nginx upstreams pointed at
+  // `127.0.0.1` return 502, and executors/other tooling can hit connection
+  // storms. So when the configured host is a loopback address we bind BOTH
+  // `::1` and `127.0.0.1`, sharing the Express app and the Socket.IO engine.
+  const primaryHost = DAEMON_HOST === 'localhost' ? '::1' : DAEMON_HOST;
+  const server = await app.listen(DAEMON_PORT, primaryHost);
+  const secondaryServer = await bindLoopbackSecondary({
+    app,
+    port: DAEMON_PORT,
+    primaryHost,
+    getSocketServer,
+  });
 
   const displayHost = DAEMON_HOST === '0.0.0.0' ? 'localhost' : DAEMON_HOST;
   console.log(
@@ -952,6 +984,15 @@ export async function startup(ctx: StartupContext): Promise<void> {
               resolve();
             }
           });
+        });
+      }
+
+      // Close the dual-stack loopback secondary listener, if we bound one.
+      // (Closing the Socket.IO server above may already detach it; closing an
+      // already-closed server just yields an error we can ignore.)
+      if (secondaryServer) {
+        await new Promise<void>((resolve) => {
+          secondaryServer.close(() => resolve());
         });
       }
 

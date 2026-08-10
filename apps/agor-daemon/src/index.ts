@@ -67,6 +67,7 @@ import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import { initializeDatabase } from './setup/database.js';
 import { initializeDistributedWorkIdentity } from './setup/distributed-work-identity.js';
 import { warnDeprecatedConfig } from './setup/first-run-admin.js';
+import { resolveMasterSecretIntoEnv } from './setup/master-secret.js';
 import { securityHeaders } from './setup/security-headers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/static-assets.js';
@@ -584,6 +585,19 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       console.log(`🔑 Loaded JWT secret from config (length=${jwtSecret.length})`);
       break;
   }
+
+  // AGOR_MASTER_SECRET: resolve BEFORE Phase 1 (registerServices). Several
+  // services — notably MCPOAuthPendingFlowAuthority on the PostgreSQL path —
+  // are constructed eagerly during registration and read the secret off
+  // process.env in their constructor. Resolving it here (rather than later in
+  // startup()) is what lets deployments that keep the secret in config.yaml
+  // (daemon.masterSecret), not an env var, boot on Postgres.
+  const masterSecretSource = await resolveMasterSecretIntoEnv(config);
+  console.log(
+    masterSecretSource === 'env'
+      ? '🔐 API key encryption enabled (AGOR_MASTER_SECRET set)'
+      : '🔐 Using saved AGOR_MASTER_SECRET from config'
+  );
 
   // HA is unavailable without Redis. Establish both adapter clients before
   // constructing Socket.IO or accepting any HTTP traffic.
