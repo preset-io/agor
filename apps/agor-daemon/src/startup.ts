@@ -904,7 +904,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
       console.log('📚 Stopping MCP catalog ingestion...');
       mcpCatalogIngestion.stop();
 
-
       // Stop scheduler
       if (schedulerService) {
         schedulerService.stop();

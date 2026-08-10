@@ -570,17 +570,17 @@
       "breakpoints": true
     },
     {
-      "idx": 78,
+      "idx": 83,
       "version": "6",
-      "when": 1786200000000,
-      "tag": "0078_mcp_catalog_registry_status",
+      "when": 1786500000000,
+      "tag": "0083_mcp_catalog_registry_status",
       "breakpoints": true
     },
     {
-      "idx": 79,
+      "idx": 84,
       "version": "6",
-      "when": 1786300000000,
-      "tag": "0079_mcp_catalog_last_seen",
+      "when": 1786600000000,
+      "tag": "0084_mcp_catalog_last_seen",
       "breakpoints": true
     }
   ]

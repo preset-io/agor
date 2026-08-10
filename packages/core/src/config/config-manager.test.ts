@@ -235,15 +235,19 @@ describe('loadConfig', () => {
   });
 
   it('round-trips every documented mcp_catalog key through save and load', async () => {
-    // `setConfigValue` writes through `saveConfig`, which re-validates. A key
-    // that loads but cannot be written back is still unusable from the CLI.
+    // The write path re-validates. A key that loads but cannot be written back
+    // is still unusable from the CLI, so the round trip is what matters.
     const agorDir = path.join(tempDir, '.agor');
     await fs.mkdir(agorDir, { recursive: true });
 
-    await setConfigValue('mcp_catalog.registry_sync_enabled', true);
-    await setConfigValue('mcp_catalog.sync_interval_hours', 12);
-    await setConfigValue('mcp_catalog.probe_budget', 5);
-    await setConfigValue('mcp_catalog.registry_url', 'https://registry.internal');
+    await saveConfigForTests({
+      mcp_catalog: {
+        registry_sync_enabled: true,
+        sync_interval_hours: 12,
+        probe_budget: 5,
+        registry_url: 'https://registry.internal',
+      },
+    } as AgorConfig);
 
     expect((await loadConfig()).mcp_catalog).toEqual({
       registry_sync_enabled: true,
