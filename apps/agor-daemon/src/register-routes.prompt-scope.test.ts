@@ -40,4 +40,19 @@ describe('prompt and widget transaction scopes', () => {
     expect(prompt).toContain('buildPromptTaskMetadata(data.metadata, messageSource, createdBy');
     expect(run).toContain('messageSource: normalizeMessageSource(data.messageSource, params)');
   });
+
+  it('restores the queued user before hooked Session recovery under branch RBAC', () => {
+    const start = source.indexOf('async function processNextQueuedTaskInternal(');
+    const end = source.indexOf('// Inject queue processor into sessions service.', start);
+    const drain = source.slice(start, end);
+
+    expect(start).toBeGreaterThan(0);
+    const userLookup = drain.indexOf('userRepo.findById(userId)');
+    const sessionRead = drain.indexOf('sessionsService.get(sessionId, taskParams)');
+    expect(userLookup).toBeGreaterThan(0);
+    expect(sessionRead).toBeGreaterThan(userLookup);
+    expect(drain).toContain(
+      'reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams)'
+    );
+  });
 });

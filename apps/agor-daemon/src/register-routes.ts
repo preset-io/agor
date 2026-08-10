@@ -2842,21 +2842,24 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
-      sessionsService.get(sessionId, params)
-    );
-    const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, params);
-
-    if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
-      return;
-    }
-
+    // Recovery triggers carry trusted tenant routing but no request user. Restore
+    // the durable enqueuer identity before entering hooked Session reads/repairs
+    // so branch RBAC applies exactly as it did at admission time.
     const userId = nextTask.metadata?.queued_by_user_id ?? nextTask.created_by;
     const userRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
     const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
     const taskParams: RouteParams = queuedByUser
       ? ({ ...params, user: queuedByUser } as RouteParams)
       : params;
+
+    const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
+      sessionsService.get(sessionId, taskParams)
+    );
+    const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
+
+    if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
+      return;
+    }
 
     console.log(
       `[task-queue] event=drain_started session_id=${JSON.stringify(sessionId)} task_id=${JSON.stringify(nextTask.task_id)} queue_position=${nextTask.queue_position ?? 'null'}`
