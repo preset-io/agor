@@ -2167,6 +2167,83 @@ describe('BranchesService environment health recovery', () => {
   });
 });
 
+describe('BranchesService.startEnvironment concurrency guard', () => {
+  /**
+   * Two concurrent starts used to BOTH pass the `running` check, both flip the
+   * status to `starting`, and both spawn an executor — verified live: two POSTs
+   * to /start returned 201 and two agor-executor processes ran the lifecycle
+   * command at once. For a remote backend that is two `gh codespace create`
+   * calls and two billable Codespaces for one branch.
+   */
+  const startableBranch = (status: string | undefined) => ({
+    branch_id: 'wt-start-guard' as BranchID,
+    repo_id: 'repo-1',
+    name: 'wt-start-guard',
+    path: '/tmp/wt-start-guard',
+    branch_unique_id: 1,
+    start_command: 'echo start',
+    environment_instance: status ? { status } : undefined,
+  });
+
+  const serviceFor = (branch: unknown) => {
+    const app = {
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(
+      service as unknown as { loadEnvironmentForAction: (...a: unknown[]) => Promise<unknown> },
+      'loadEnvironmentForAction'
+    ).mockResolvedValue(branch as never);
+    const updateEnvironment = vi
+      .spyOn(service, 'updateEnvironment')
+      .mockResolvedValue(branch as never);
+    return { service, updateEnvironment };
+  };
+
+  it('rejects a start while one is already in flight', async () => {
+    const { service, updateEnvironment } = serviceFor(startableBranch('starting'));
+
+    await expect(service.startEnvironment('wt-start-guard' as BranchID)).rejects.toThrow(
+      /already starting/i
+    );
+    // Must bail BEFORE touching state or dispatching an executor.
+    expect(updateEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('does NOT block a start while stopping — restartEnvironment depends on it', async () => {
+    // restartEnvironment calls stopEnvironment then startEnvironment; the stop
+    // executor is async, so the status is still `stopping` when start runs.
+    // Guarding it here silently broke restart, which this locks against.
+    const { service } = serviceFor(startableBranch('stopping'));
+
+    await expect(service.startEnvironment('wt-start-guard' as BranchID)).rejects.not.toThrow(
+      /already (running|starting)|is stopping/i
+    );
+  });
+
+  it('still rejects a start when already running', async () => {
+    const { service } = serviceFor(startableBranch('running'));
+
+    await expect(service.startEnvironment('wt-start-guard' as BranchID)).rejects.toThrow(
+      /already running/i
+    );
+  });
+
+  it('allows a start from stopped and from error (recovery must stay possible)', async () => {
+    for (const status of ['stopped', 'error', undefined]) {
+      const { service } = serviceFor(startableBranch(status));
+      // Gets past the guards; fails later resolving the command, which is fine —
+      // the point is that the guard did not reject it.
+      await expect(service.startEnvironment('wt-start-guard' as BranchID)).rejects.not.toThrow(
+        /already (running|starting)|stopping/i
+      );
+    }
+  });
+});
+
 describe('BranchesService remote environment readiness gate', () => {
   const originalFetch = globalThis.fetch;
 

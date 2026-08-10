@@ -2064,6 +2064,28 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('Environment is already running');
     }
 
+    // Reject a start while one is already in flight. Without this, two
+    // concurrent starts (an agent retry racing a human click, a double-submit)
+    // BOTH pass the `running` check, both flip the status to `starting`, and
+    // both spawn an executor — verified: two POSTs to /start returned 201 and
+    // two agor-executor processes ran the lifecycle command simultaneously.
+    // For a remote backend that means two `gh codespace create` calls and TWO
+    // billable Codespaces for one branch; here it only escaped because a
+    // codespace already existed, so both invocations merely resumed it.
+    //
+    // A start wedged in `starting` cannot block forever: `checkHealth` demotes
+    // it to `error` after the startup timeout, and Stop stays enabled meanwhile
+    // (the UI allows stopping while starting), so recovery does not depend on
+    // waiting that out.
+    // NOTE: deliberately does NOT guard `stopping`. `restartEnvironment` calls
+    // stopEnvironment then startEnvironment, and the stop executor is async, so
+    // the status is still `stopping` when the start runs — guarding it breaks
+    // restart. The UI already disables Start while stopping, and the race that
+    // actually costs money is two concurrent starts, which the check above stops.
+    if (branch.environment_instance?.status === 'starting') {
+      throw new Error('Environment is already starting');
+    }
+
     const command = branch.start_command;
     const execution = await this.resolveEnvironmentCommand(command, 'start');
     const access_urls = branch.app_url ? [{ name: 'App', url: branch.app_url }] : undefined;
