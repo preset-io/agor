@@ -29,7 +29,6 @@ import {
   foreignKey,
   index,
   integer,
-  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -37,6 +36,7 @@ import {
   uniqueIndex,
   varchar,
 } from 'drizzle-orm/pg-core';
+import { sanitizeJsonValue } from '../utils/sanitize-json';
 
 // PostgreSQL bytea column mapped to Node.js Buffer
 const bytea = customType<{ data: Buffer | null; driverData: Buffer | null }>({
@@ -45,11 +45,17 @@ const bytea = customType<{ data: Buffer | null; driverData: Buffer | null }>({
   },
 });
 
+const safeJsonb = customType<{ data: unknown; driverData: string }>({
+  dataType: () => 'jsonb',
+  toDriver: (value) => JSON.stringify(sanitizeJsonValue(value)),
+  fromDriver: (value) => (typeof value === 'string' ? JSON.parse(value) : value),
+});
+
 // PostgreSQL-specific type helpers (inline to avoid factory pattern type issues)
 const t = {
   timestamp: (name: string) => timestamp(name, { mode: 'date', withTimezone: true }),
   bool: (name: string) => boolean(name),
-  json: <T>(name: string) => jsonb(name).$type<T>(),
+  json: <T>(name: string) => safeJsonb(name).$type<T>(),
 } as const;
 
 /**

@@ -130,7 +130,7 @@ export class AgorExecutor {
         process.exit(0);
         return;
       }
-      console.error('[executor] Fatal error:', error);
+      console.error('[executor] fatal error category=task_startup');
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
         error instanceof Error ? error.message : String(error)
@@ -391,7 +391,7 @@ export class AgorExecutor {
     process.on('SIGINT', () => shutdown('SIGINT'));
 
     process.on('uncaughtException', async (error) => {
-      console.error('[executor] Uncaught exception:', error);
+      console.error('[executor] uncaught exception category=process_failure');
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
         `uncaughtException: ${error instanceof Error ? error.message : String(error)}`
@@ -400,7 +400,7 @@ export class AgorExecutor {
     });
 
     process.on('unhandledRejection', async (reason) => {
-      console.error('[executor] Unhandled rejection:', reason);
+      console.error('[executor] unhandled rejection category=process_failure');
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
         `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`

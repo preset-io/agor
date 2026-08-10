@@ -118,6 +118,27 @@ async function createTestTask(db: any, sessionId: SessionID): Promise<TaskID> {
 // ============================================================================
 
 describe('MessagesRepository.create', () => {
+  dbTest('sanitizes PostgreSQL-invalid Unicode in JSON and preview fields', async ({ db }) => {
+    const actualNul = String.fromCharCode(0);
+    const loneHighSurrogate = String.fromCharCode(0xd800);
+    const loneLowSurrogate = String.fromCharCode(0xdc00);
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const original = createMessageData({
+      session_id: sessionId,
+      content_preview: `preview${actualNul}${loneHighSurrogate}`,
+      content: [
+        { type: 'tool_result', content: `binary${actualNul}${loneLowSurrogate} 😀` },
+      ] as Message['content'],
+      metadata: { nested: [actualNul] } as Message['metadata'],
+    });
+
+    const created = await repository.create(original);
+    expect(created.content_preview).toBe('preview��');
+    expect(created.content).toEqual([{ type: 'tool_result', content: 'binary�� 😀' }]);
+    expect(created.metadata).toEqual({ nested: ['�'] });
+    expect(original.content_preview).toBe(`preview${actualNul}${loneHighSurrogate}`);
+  });
   dbTest('should create message with all fields including task_id', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);
@@ -197,6 +218,15 @@ describe('MessagesRepository.create', () => {
 // ============================================================================
 
 describe('MessagesRepository.createMany', () => {
+  dbTest('sanitizes every row in bulk inserts', async ({ db }) => {
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await repository.createMany([
+      createMessageData({ session_id: sessionId, index: 0, content: 'a\0' }),
+      createMessageData({ session_id: sessionId, index: 1, content: 'b\ud800' }),
+    ]);
+    expect(created.map((message) => message.content)).toEqual(['a�', 'b�']);
+  });
   dbTest('should bulk insert multiple messages and preserve order', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);

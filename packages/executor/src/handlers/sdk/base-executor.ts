@@ -10,7 +10,7 @@ import {
   type ApiKeyName,
   stripProviderCredentialEnvironment,
 } from '@agor/core/config';
-import { generateId, shortId } from '@agor/core/db';
+import { generateId, sanitizeDbError, shortId } from '@agor/core/db';
 import type {
   AgenticToolName,
   ContextUsageSnapshot,
@@ -79,7 +79,7 @@ async function appendTaskFailureMessage(
       },
     });
   } catch (error) {
-    console.error('[executor] Failed to create task failure message:', error);
+    console.error('[executor.message.persist] failed', sanitizeDbError(error));
   }
 }
 
@@ -668,7 +668,7 @@ export async function executeToolTask(params: {
   } catch (error) {
     if (daemonOwnsTerminality()) return;
     const err = error instanceof Error ? error : new Error(String(error));
-    console.error(`[${toolName}] Execution failed:`, err);
+    console.error(`[${toolName}] execution failed category=task_execution`);
 
     // Capture git SHA at task end (even for failed tasks)
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
