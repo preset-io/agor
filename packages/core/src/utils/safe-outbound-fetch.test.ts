@@ -138,6 +138,50 @@ describe('safe OAuth outbound URL policy', () => {
     expect(redirectedRequestHeaders).toBeUndefined();
   });
 
+  it('retains caller headers across same-origin redirects', async () => {
+    let redirectedApiKey: string | undefined;
+    const { url } = await listen((request, response) => {
+      if (request.url === '/redirect-target') {
+        redirectedApiKey = request.headers['x-api-key'] as string | undefined;
+        response.writeHead(200);
+        response.end('ok');
+        return;
+      }
+      response.writeHead(302, { location: '/redirect-target' });
+      response.end();
+    });
+
+    const response = await safeOutboundFetch(url, {
+      headers: { 'X-API-Key': 'same-origin-only' },
+      redirect: 'follow',
+      allowLocalhostHttp: true,
+    });
+
+    expect(response.status).toBe(200);
+    expect(redirectedApiKey).toBe('same-origin-only');
+  });
+
+  it('allows headerless metadata redirects across validated origins', async () => {
+    let targetReached = false;
+    const target = await listen((_request, response) => {
+      targetReached = true;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"issuer":"https://issuer.example"}');
+    });
+    const source = await listen((_request, response) => {
+      response.writeHead(302, { location: `${target.url}/metadata` });
+      response.end();
+    });
+
+    const response = await safeOutboundFetch(source.url, {
+      redirect: 'follow',
+      allowLocalhostHttp: true,
+    });
+
+    expect(response.status).toBe(200);
+    expect(targetReached).toBe(true);
+  });
+
   it('bounds response bodies before parsing provider-controlled content', async () => {
     const { url } = await listen((_request, response) => {
       response.writeHead(200);

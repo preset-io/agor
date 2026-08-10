@@ -2935,7 +2935,7 @@ async function registerMCPServices(
 
   // Authoritative, user-bound pending-attempt status. The UI polls this after
   // opening the provider page; realtime completion is only a latency hint.
-  app.use('/mcp-servers/oauth-attempt-status', {
+  const oauthAttemptStatusService = {
     async get(attemptId: string, params?: AuthenticatedParams) {
       const tenantId = tenantIdFromParams(params);
       const userId = params?.user?.user_id as UserID | undefined;
@@ -2971,7 +2971,12 @@ async function registerMCPServices(
         failure_code: attempt.failureCode,
       };
     },
-  });
+  };
+  app.use('/mcp-servers/oauth-attempt-status', oauthAttemptStatusService, {
+    methods: ['get'],
+    docs: { idType: 'string' },
+    // biome-ignore lint/suspicious/noExplicitAny: feathers-swagger docs option not typed in FeathersJS
+  } as any);
   app.service('mcp-servers/oauth-attempt-status').hooks({
     before: { get: [ctx.requireAuth] },
   });

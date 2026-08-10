@@ -5996,7 +5996,7 @@
             "name": "id",
             "description": "ID of oauth-attempt-status to return",
             "schema": {
-              "type": "integer"
+              "type": "string"
             },
             "required": true
           }
