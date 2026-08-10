@@ -69,8 +69,37 @@ describe('register-services OAuth callback URL regression', () => {
     // before persisting user_mcp_oauth_tokens or backfilling mcp_servers auth.
     expect(codeOnly).toMatch(/tenantId\?\s*:\s*string/);
     expect(codeOnly).toMatch(/tenantId:\s*opts\.tenantId\s*\?\?\s*getCurrentTenantId\s*\(\s*\)/);
-    expect(codeOnly).toMatch(/runInOAuthTenantScope\s*\(\s*db,\s*pendingFlow\.tenantId/);
+    expect(codeOnly).toMatch(/runInOAuthTenantWriteScope\s*\(\s*db,\s*pendingFlow\.tenantId/);
     expect(codeOnly).toMatch(/Missing tenant context for MCP OAuth callback/);
     expect(codeOnly).toMatch(/OAuth flow belongs to a different tenant/);
+  });
+
+  it('uses durable hashed state claims on PostgreSQL and never broadcasts raw flow state', () => {
+    expect(codeOnly).toMatch(/durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/);
+    expect(codeOnly).toMatch(/cacheToken:\s*false/);
+    expect(codeOnly).toMatch(/attempt_id:\s*pendingFlow\.attemptId/);
+    expect(codeOnly).toMatch(
+      /app\.io\.local\.to\s*\(\s*opts\.socketId\s*\)\.emit\s*\(\s*['"]oauth:open_browser['"]/
+    );
+    expect(codeOnly).not.toMatch(/app\.io\.emit\s*\(\s*['"]oauth:open_browser['"]/);
+    expect(codeOnly).not.toMatch(/emit\s*\(\s*['"]oauth:completed['"][\s\S]{0,300}\bstate\b/);
+  });
+
+  it('keeps provider capability material out of callback logs', () => {
+    const callbackBody = rawSource.slice(
+      rawSource.indexOf('const oauthCallbackHandler'),
+      rawSource.indexOf("app.use('/mcp-servers',")
+    );
+    const loggedExpressions = [...callbackBody.matchAll(/console\.(?:log|warn|error)\(([^;]+)\)/g)]
+      .map((match) => match[1])
+      .join('\n');
+    expect(loggedExpressions).not.toMatch(/\b(?:code|state|tokenResponse|pendingFlow\.context)\b/);
+  });
+
+  it('uses one phase-aware failure classifier for callback and manual completion', () => {
+    const classifications = codeOnly.match(/classifyMCPOAuthCompletionFailure\s*\(/g) ?? [];
+    expect(classifications).toHaveLength(2);
+    expect(codeOnly).toMatch(/durableOAuthFlows!\.finish[\s\S]{0,180}classification\.status/);
+    expect(codeOnly.match(/classification\.failureCode/g)?.length).toBeGreaterThanOrEqual(2);
   });
 });

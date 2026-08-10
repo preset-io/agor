@@ -55,6 +55,12 @@ describe('register-services /mcp-servers/discover wiring', () => {
     expect(probeIdx).toBeLessThan(headersIdx);
   });
 
+  it('routes JWT and OAuth credentials through hosted-safe outbound/cache options', () => {
+    expect(discoverBlock).toContain('allowLocalhostHttp: !durableOAuthFlows');
+    expect(discoverBlock).toContain('cacheNamespace:');
+    expect(discoverBlock).toContain('disableProcessTokenCache: !!durableOAuthFlows');
+  });
+
   it('skips pre-resolution URL validation for templated URLs', () => {
     // `new URL("https://{{ user.env.HOST }}/mcp")` throws because of the
     // whitespace inside `{{ }}`, and `new URL("{{ user.env.MCP_URL }}")`

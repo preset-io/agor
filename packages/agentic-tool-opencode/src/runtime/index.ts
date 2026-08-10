@@ -7,6 +7,7 @@ export {
   reconcileOpenCodeMessages,
 } from './event-translator.js';
 export {
+  assertOpenCodeBinaryCompatibility,
   createOpenCodeSanitizer,
   ensureOpenCodeDataHome,
   isOpenCodeCleanupUnverifiedError,
@@ -15,6 +16,7 @@ export {
   OPENCODE_VERSION,
   OpenCodeCleanupUnverifiedError,
   type OpenCodeSanitizer,
+  readOpenCodeBinaryVersion,
   resolvePackagedOpenCodeBinary,
   startManagedOpenCodeServer,
   verifyOpenCodeAuthFileBoundary,

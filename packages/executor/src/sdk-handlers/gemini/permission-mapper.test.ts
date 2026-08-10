@@ -1,15 +1,11 @@
-import { Gemini } from '@agor/core/sdk';
 import type { GeminiPermissionMode } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
+import { ApprovalMode } from '@google/gemini-cli-core';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@agor/core/sdk', () => ({
-  Gemini: {
-    ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
-  },
+vi.mock('@google/gemini-cli-core', () => ({
+  ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
 }));
-
-const { ApprovalMode } = Gemini;
 
 import { GEMINI_DEFAULT_PERMISSION_MODE, mapPermissionMode } from './permission-mapper.js';
 
@@ -65,12 +61,12 @@ describe('mapPermissionMode', () => {
 
     it('should map legacy "ask" mode to DEFAULT (cross-agent compat)', () => {
       // Codex-style 'ask' maps to Gemini DEFAULT (prompt per tool use).
-      expect(mapPermissionMode('ask')).toBe(Gemini.ApprovalMode.DEFAULT);
+      expect(mapPermissionMode('ask')).toBe(ApprovalMode.DEFAULT);
     });
 
     it('should map legacy "allow-all" mode to YOLO (cross-agent compat)', () => {
       // Codex-style 'allow-all' maps to Gemini YOLO (auto-approve all).
-      expect(mapPermissionMode('allow-all')).toBe(Gemini.ApprovalMode.YOLO);
+      expect(mapPermissionMode('allow-all')).toBe(ApprovalMode.YOLO);
     });
   });
 

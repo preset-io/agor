@@ -1,3 +1,4 @@
+export { AgorCloudLanding } from './AgorCloudLanding';
 export { default as Aurora } from './Aurora/Aurora';
 export { BlogCard } from './BlogCard';
 export { BlogIndex } from './BlogIndex';

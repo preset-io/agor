@@ -14,6 +14,77 @@ import type { SessionID, UserID, UUID } from './id';
 export type MCPServerID = UUID & { readonly __brand: 'MCPServerID' };
 
 /**
+ * Durable identity for one browser-based MCP OAuth authorization attempt.
+ *
+ * This identifier is safe to expose to the initiating user for status reads.
+ * It is not the OAuth `state` capability: PostgreSQL stores only a SHA-256
+ * fingerprint of that high-entropy, one-time value.
+ */
+export type MCPOAuthAttemptID = UUID & { readonly __brand: 'MCPOAuthAttemptID' };
+
+/** Durable lifecycle of a browser-based MCP OAuth authorization attempt. */
+export type MCPOAuthPendingFlowStatus =
+  | 'pending'
+  | 'exchanging'
+  | 'succeeded'
+  | 'failed'
+  | 'ambiguous'
+  | 'expired';
+
+/** Authenticated durable-attempt read DTO; `not_found` avoids leaking rows. */
+export type MCPOAuthAttemptStatus = MCPOAuthPendingFlowStatus | 'not_found';
+
+export interface MCPOAuthAttemptResult {
+  status: MCPOAuthAttemptStatus;
+  mcp_server_id?: MCPServerID;
+  oauth_mode?: MCPOAuthMode;
+  failure_code?: string;
+}
+
+export interface MCPOAuthStatusResult {
+  authenticated_server_ids: MCPServerID[];
+}
+
+export interface MCPOAuthRefreshResult {
+  success: boolean;
+  expires_at?: number;
+  error?: string;
+}
+
+/** Credential subject selected for the resulting MCP OAuth grant. */
+export type MCPOAuthMode = 'per_user' | 'shared';
+
+/**
+ * Secret-bearing material required to exchange an authorization code.
+ * PostgreSQL stores this structure only inside an authenticated encrypted
+ * envelope derived from AGOR_MASTER_SECRET. Binding fields are duplicated in
+ * the row and verified after decryption so ciphertext cannot be moved between
+ * attempts, users, tenants, or MCP servers.
+ */
+export interface MCPOAuthPendingFlowSealedMaterial {
+  version: 2;
+  attemptId: MCPOAuthAttemptID;
+  tenantId: string;
+  userId: UserID;
+  mcpServerId: MCPServerID;
+  oauthMode: MCPOAuthMode;
+  grantGeneration: number;
+  configFingerprintVersion: 1;
+  configFingerprint: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
+  metadataUrl: string;
+  tokenEndpoint: string;
+  redirectUri: string;
+  pkceVerifier: string;
+  clientId: string;
+  clientSecret?: string;
+  compatibilityMode: 'strict' | 'legacy';
+  allowLocalhostHttp: boolean;
+}
+
+/**
  * MCP transport types
  */
 export type MCPTransport = 'stdio' | 'http' | 'sse';
@@ -48,6 +119,10 @@ export interface MCPAuth {
   oauth_client_secret?: string;
   oauth_scope?: string;
   oauth_grant_type?: string;
+  /** Strict current MCP Authorization behavior is the default. */
+  oauth_compatibility_mode?: 'strict' | 'legacy';
+  /** Dynamic Client Registration is disabled unless explicitly enabled. */
+  oauth_dcr_mode?: 'disabled' | 'fallback';
   // OAuth 2.1 runtime tokens (obtained via browser flow)
   oauth_access_token?: string;
   oauth_token_expires_at?: number; // Unix timestamp in milliseconds

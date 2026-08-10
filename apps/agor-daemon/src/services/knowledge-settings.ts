@@ -138,6 +138,14 @@ export class KnowledgeSettingsService {
         embedding_model: null,
         embedding_dimensions: null,
         embedding_error: null,
+        embedding_claim_token: null,
+        embedding_claim_generation: sql`${kbDocumentUnits.embedding_claim_generation} + 1`,
+        embedding_claimed_at: null,
+        embedding_claim_expires_at: null,
+        embedding_claim_instance_id: null,
+        embedding_claim_boot_id: null,
+        embedding_failure_count: 0,
+        embedding_retry_at: null,
         updated_at: new Date(),
       })
       .where(
@@ -155,6 +163,25 @@ export class KnowledgeSettingsService {
         );
       }
     }
+    return rows.length;
+  }
+
+  private async fenceCurrentClaims(db: KnowledgeSettingsDatabase): Promise<number> {
+    const rows = await update(db, kbDocumentUnits)
+      .set({
+        embedding_claim_token: null,
+        embedding_claim_generation: sql`${kbDocumentUnits.embedding_claim_generation} + 1`,
+        embedding_claimed_at: null,
+        embedding_claim_expires_at: null,
+        embedding_claim_instance_id: null,
+        embedding_claim_boot_id: null,
+        updated_at: new Date(),
+      })
+      .where(
+        sql`${kbDocumentUnits.embedding_claim_token} IS NOT NULL AND ${kbDocumentUnits.version_id} IN (SELECT current_version_id FROM kb_documents WHERE current_version_id IS NOT NULL AND archived = false)`
+      )
+      .returning({ unit_id: kbDocumentUnits.unit_id })
+      .all();
     return rows.length;
   }
 
@@ -194,6 +221,7 @@ export class KnowledgeSettingsService {
         current.dimensions !== saved.dimensions ||
         data.api_key !== undefined;
       const chunkingChanged = JSON.stringify(current.chunking) !== JSON.stringify(saved.chunking);
+      const pausedChanged = current.indexing.paused !== saved.indexing.paused;
 
       if (identityChanged || chunkingChanged) {
         const configured =
@@ -206,6 +234,15 @@ export class KnowledgeSettingsService {
             })
           : await this.markCurrentUnitsForEmbedding(db, configured ? 'pending' : 'not_configured');
         return { saved, shouldWake: queued > 0 && configured };
+      }
+
+      if (pausedChanged) {
+        // A provider request that began before pause may still incur cost, but
+        // clearing its token guarantees that it cannot publish after the
+        // policy transition. Unpause is a local wake hint; durable polling is
+        // still the recovery path on every daemon.
+        if (saved.indexing.paused) await this.fenceCurrentClaims(db);
+        return { saved, shouldWake: !saved.indexing.paused };
       }
 
       return { saved, shouldWake: false };

@@ -3,7 +3,7 @@ import {
   type ScheduleCreateData,
   type SchedulePatchData,
 } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 import { registerScheduleTools } from './schedules.js';
 

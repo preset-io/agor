@@ -10,7 +10,7 @@ import type { Server } from 'node:http';
 import type { Database } from '@agor/core/db';
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
-import { registerHealthProbeRoutes } from './routes';
+import { type ReadinessDependency, registerHealthProbeRoutes } from './routes';
 
 /** SQLite-shaped fake whose probe query resolves (DB reachable). */
 const healthyDb = { run: () => Promise.resolve({ rows: [] }) } as unknown as Database;
@@ -21,9 +21,9 @@ const brokenDb = {
 
 let server: Server | undefined;
 
-async function startWith(db: Database): Promise<string> {
+async function startWith(db: Database, dependencies: ReadinessDependency[] = []): Promise<string> {
   const app = express();
-  registerHealthProbeRoutes(app, db);
+  registerHealthProbeRoutes(app, db, dependencies);
   await new Promise<void>((resolve) => {
     server = app.listen(0, resolve);
   });
@@ -73,5 +73,17 @@ describe('GET /readyz', () => {
     const base = await startWith(brokenDb);
     const res = await fetch(`${base}/readyz`);
     expect(JSON.stringify(await res.json())).not.toContain('ECONNREFUSED');
+  });
+
+  it('returns 503 for a required Redis dependency while liveness remains 200', async () => {
+    const base = await startWith(healthyDb, [{ name: 'redis', isReady: () => false }]);
+    const ready = await fetch(`${base}/readyz`);
+    expect(ready.status).toBe(503);
+    expect(await ready.json()).toMatchObject({
+      status: 'error',
+      db: { ok: true },
+      dependencies: { redis: { ok: false } },
+    });
+    expect((await fetch(`${base}/livez`)).status).toBe(200);
   });
 });

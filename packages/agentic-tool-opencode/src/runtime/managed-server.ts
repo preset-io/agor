@@ -3,9 +3,13 @@ import { randomBytes as nodeRandomBytes } from 'node:crypto';
 import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
-import { resolvePackagedOpenCodeBinary } from './binary.js';
+import { type OpenCodeCommand, resolvePackagedOpenCodeBinary } from './binary.js';
 
-export { resolvePackagedOpenCodeBinary } from './binary.js';
+export {
+  assertOpenCodeBinaryCompatibility,
+  readOpenCodeBinaryVersion,
+  resolvePackagedOpenCodeBinary,
+} from './binary.js';
 export { OPENCODE_VERSION };
 
 const DEFAULT_READINESS_TIMEOUT_MS = 10_000;
@@ -383,7 +387,7 @@ export type ManagedOpenCodeServer = {
 };
 
 export type ManagedOpenCodeServerDependencies = {
-  resolveBinary?: () => Promise<string>;
+  resolveBinary?: () => Promise<string | OpenCodeCommand>;
   spawn?: (executable: string, args: readonly string[], options: SpawnOptions) => ManagedChild;
   randomBytes?: typeof nodeRandomBytes;
   fetch?: typeof globalThis.fetch;
@@ -441,12 +445,21 @@ export async function startManagedOpenCodeServer(
 
   let child: ManagedChild;
   try {
-    child = spawn(await resolveBinary(), ['serve', '--hostname=127.0.0.1', '--port=0'], {
-      cwd: input.directory,
-      detached: false,
-      env: environment,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const resolvedCommand = await resolveBinary();
+    const command =
+      typeof resolvedCommand === 'string'
+        ? { executable: resolvedCommand, argsPrefix: [] }
+        : resolvedCommand;
+    child = spawn(
+      command.executable,
+      [...command.argsPrefix, 'serve', '--hostname=127.0.0.1', '--port=0'],
+      {
+        cwd: input.directory,
+        detached: false,
+        env: environment,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
   } catch (error) {
     throw sanitizer.error(error);
   }

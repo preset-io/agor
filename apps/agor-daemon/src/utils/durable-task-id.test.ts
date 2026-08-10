@@ -1,6 +1,11 @@
-import type { MessageID, SessionID, TaskID } from '@agor/core/types';
+import type { GatewayInboundEventID, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { completionCallbackTaskId, widgetAutoResumeTaskId } from './durable-task-id.js';
+import {
+  completionCallbackTaskId,
+  gatewayInboundSessionId,
+  gatewayInboundTaskId,
+  widgetAutoResumeTaskId,
+} from './durable-task-id.js';
 
 const uuidV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -22,5 +27,13 @@ describe('durable internal Task identities', () => {
     expect(
       completionCallbackTaskId(source, '019f0000-0000-7000-8000-000000000003' as SessionID)
     ).not.toBe(taskId);
+  });
+
+  it('derives stable, domain-separated gateway Session and Task identities', () => {
+    const event = '019f0000-0000-7000-8000-000000000004' as GatewayInboundEventID;
+    expect(gatewayInboundTaskId(event)).toMatch(uuidV7);
+    expect(gatewayInboundSessionId(event)).toMatch(uuidV7);
+    expect(gatewayInboundTaskId(event)).not.toBe(gatewayInboundSessionId(event));
+    expect(gatewayInboundTaskId(event)).toBe(gatewayInboundTaskId(event));
   });
 });

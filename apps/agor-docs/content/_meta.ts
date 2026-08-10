@@ -26,6 +26,18 @@ export default {
   'selfware-is-dead': heroVariantMeta,
   'dev-team': heroVariantMeta,
   'costs-under-control': heroVariantMeta,
+  // Agor Cloud marketing landing page. Reached via the navbar "Agor Cloud"
+  // link (see NavbarCloudCTA); hidden from the sidebar and rendered full-bleed
+  // like the homepage via `theme.layout: 'full'`. The request-invite form
+  // stays behind the on-page CTAs.
+  cloud: {
+    title: 'Agor Cloud',
+    type: 'page',
+    display: 'hidden',
+    theme: {
+      layout: 'full',
+    },
+  },
   // Navbar links are separate from the content folders so Docs and Blog can
   // also remain in the shared root sidebar on every content surface.
   'docs-navbar': { title: 'Docs', type: 'page', href: '/guide' },

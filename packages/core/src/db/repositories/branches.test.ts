@@ -931,6 +931,28 @@ describe('BranchRepository.update', () => {
     expect(updated.notes ?? undefined).toBeUndefined();
   });
 
+  dbTest('clears a stale materialization error when the filesystem recovers', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const created = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    const failed = await branchRepo.update(created.branch_id, {
+      filesystem_status: 'failed',
+      error_message: 'Cannot use simple-git on a directory that does not exist',
+    });
+    expect(failed.error_message).toContain('simple-git');
+
+    const ready = await branchRepo.update(created.branch_id, {
+      filesystem_status: 'ready',
+    });
+    expect(ready.filesystem_status).toBe('ready');
+    expect(ready.error_message).toBeUndefined();
+    const refetched = await branchRepo.findById(created.branch_id);
+    expect(refetched?.filesystem_status).toBe('ready');
+    expect(refetched?.error_message).toBeUndefined();
+  });
+
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
     const wtRepo = new BranchRepository(db);
 

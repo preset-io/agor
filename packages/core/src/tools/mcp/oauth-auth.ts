@@ -18,6 +18,12 @@ export interface OAuthConfig {
   scope?: string;
   grant_type?: string;
   insecure?: boolean;
+  /** Exact loopback HTTP exception for standalone development only. */
+  allowLocalhostHttp?: boolean;
+  /** Trusted tenant/server/subject namespace for process-local caching. */
+  cacheNamespace?: string;
+  /** Durable daemon paths disable this process-local bearer cache. */
+  cache?: boolean;
 }
 
 export interface OAuthTokenResponse {
@@ -57,6 +63,8 @@ export interface OAuthDebugInfo {
   tokenExpiresAt?: Date;
 }
 
+import { createHash } from 'node:crypto';
+import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 // Cache tokens per unique credential set to avoid cross-tenant leakage
@@ -72,11 +80,25 @@ const UNKNOWN_EXPIRY_CACHE_TTL_SECONDS = 900;
 const EXPIRY_BUFFER_SECONDS = 30;
 
 /**
- * Generate cache key for OAuth credentials
- * Uses all credential fields to ensure per-tenant isolation
+ * Generate a non-secret cache key for OAuth credentials. Callers that can
+ * serve more than one authority domain must supply a trusted namespace (or
+ * disable the cache); the daemon always disables it in PostgreSQL mode.
  */
 function getCacheKey(config: OAuthConfig): string {
-  return `${config.token_url}::${config.client_id || 'none'}::${config.client_secret || 'none'}::${config.scope || ''}`;
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        version: 2,
+        namespace: config.cacheNamespace ?? '<standalone>',
+        tokenUrl: config.token_url,
+        clientId: config.client_id ?? null,
+        clientSecret: config.client_secret ?? null,
+        scope: config.scope ?? null,
+        grantType: config.grant_type ?? 'client_credentials',
+      }),
+      'utf8'
+    )
+    .digest('hex');
 }
 
 /**
@@ -165,7 +187,8 @@ export async function fetchOAuthToken(
 
   // Step 2: Check cache
   const cacheKey = getCacheKey(config);
-  const cached = oauthTokenCache.get(cacheKey);
+  const cacheEnabled = config.cache !== false;
+  const cached = cacheEnabled ? oauthTokenCache.get(cacheKey) : undefined;
 
   if (cached && cached.expiresAt > Date.now()) {
     const ttlRemaining = Math.floor((cached.expiresAt - Date.now()) / 1000);
@@ -198,6 +221,8 @@ export async function fetchOAuthToken(
 
   if (cached) {
     addDebugStep('check_cache', 'info', 'Cached token expired, fetching new token');
+  } else if (!cacheEnabled) {
+    addDebugStep('check_cache', 'info', 'Process-local OAuth token cache disabled');
   } else {
     addDebugStep('check_cache', 'info', 'No cached token found, fetching new token');
   }
@@ -225,13 +250,16 @@ export async function fetchOAuthToken(
   try {
     addDebugStep('fetch_token', 'info', `Sending POST request to ${config.token_url}`);
 
-    response = await fetch(config.token_url, {
+    response = await safeOutboundFetch(config.token_url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         Accept: 'application/json',
       },
       body: body.toString(),
+      redirect: 'error',
+      timeoutMs: 15_000,
+      allowLocalhostHttp: config.allowLocalhostHttp,
     });
 
     addDebugStep('fetch_token', 'info', `Received response with status ${response.status}`, {
@@ -252,11 +280,9 @@ export async function fetchOAuthToken(
 
   // Step 5: Handle response
   if (!response.ok) {
-    const errorText = await response.text();
     addDebugStep('handle_response', 'error', `Token fetch failed with status ${response.status}`, {
       status: response.status,
       statusText: response.statusText,
-      errorBody: errorText,
     });
 
     // Provide helpful error messages
@@ -271,7 +297,7 @@ export async function fetchOAuthToken(
       errorMessage += ' - Access forbidden. Client may not have permission for requested scope.';
     }
 
-    throw new Error(`${errorMessage}\n\nServer response: ${errorText}`);
+    throw new Error(errorMessage);
   }
 
   // Step 6: Parse response
@@ -310,16 +336,20 @@ export async function fetchOAuthToken(
   const expiresInSeconds = ttlSeconds;
   const expiresAt = fetchedAt + (ttlSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
 
-  oauthTokenCache.set(cacheKey, {
-    token: data.access_token,
-    expiresAt,
-    fetchedAt,
-  });
+  if (cacheEnabled) {
+    oauthTokenCache.set(cacheKey, {
+      token: data.access_token,
+      expiresAt,
+      fetchedAt,
+    });
+  }
 
   addDebugStep(
     'cache_token',
     'success',
-    `Token cached for ${expiresInSeconds}s (${EXPIRY_BUFFER_SECONDS}s buffer)`,
+    cacheEnabled
+      ? `Token cached for ${expiresInSeconds}s (${EXPIRY_BUFFER_SECONDS}s buffer)`
+      : 'Process-local OAuth token cache bypassed',
     {
       expiresIn: expiresInSeconds,
       expiresAt: new Date(expiresAt).toISOString(),

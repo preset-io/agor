@@ -265,6 +265,322 @@ describe('TaskRepository.create', () => {
 });
 
 // ============================================================================
+// HA runtime discovery and containment fencing
+// ============================================================================
+
+describe('TaskRepository runtime reconciliation', () => {
+  dbTest(
+    'discovers expired runtime facts in bounded order without treating fresh work as stale',
+    async ({ db }) => {
+      const tasks = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const now = new Date('2026-08-06T12:00:00.000Z');
+
+      for (const [index, startedAt] of [
+        '2026-08-06T11:50:00.000Z',
+        '2026-08-06T11:51:00.000Z',
+        '2026-08-06T11:52:00.000Z',
+      ].entries()) {
+        await tasks.create(
+          createTaskData({
+            session_id: sessionId,
+            full_prompt: `dispatch ${index}`,
+            status: TaskStatus.DISPATCHING,
+            started_at: startedAt,
+          })
+        );
+      }
+      await tasks.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.DISPATCHING,
+          started_at: '2026-08-06T11:59:59.000Z',
+        })
+      );
+
+      const expiredDispatches = await tasks.findExpiredDispatchRefs(60_000, {
+        now,
+        limit: 2,
+      });
+      expect(expiredDispatches).toHaveLength(2);
+      const remainingDispatches = await tasks.findExpiredDispatchRefs(60_000, {
+        now,
+        limit: 2,
+        after: expiredDispatches.at(-1)!.cursor,
+      });
+      expect(remainingDispatches).toHaveLength(1);
+      expect(
+        new Set([...expiredDispatches, ...remainingDispatches].map((ref) => ref.task_id)).size
+      ).toBe(3);
+
+      const stale = await tasks.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: '2026-08-06T11:50:00.000Z',
+          last_executor_heartbeat_at: '2026-08-06T11:55:00.000Z',
+        })
+      );
+      const fresh = await tasks.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: '2026-08-06T11:59:58.000Z',
+          last_executor_heartbeat_at: '2026-08-06T11:59:59.000Z',
+        })
+      );
+
+      const staleHeartbeats = await tasks.findStaleHeartbeatRefs(60_000, { now, limit: 25 });
+      expect(staleHeartbeats).toContainEqual(
+        expect.objectContaining({
+          task_id: stale.task_id,
+          executor_heartbeat_at: '2026-08-06T11:55:00.000Z',
+        })
+      );
+      expect(staleHeartbeats.map((ref) => ref.task_id)).not.toContain(fresh.task_id);
+    }
+  );
+
+  dbTest('elects one containment coordinator and fences the losing settlement', async ({ db }) => {
+    const tasksA = new TaskRepository(db);
+    const tasksB = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await tasksA.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    await tasksA.claimTermination({
+      taskId: task.task_id,
+      cause: 'heartbeat_lost',
+      errorMessage: 'heartbeat stale',
+      sdkFailure: {
+        reason: 'heartbeat_lost',
+        detected_at: '2026-08-06T12:00:00.000Z',
+        tool: 'codex',
+        termination: 'requested',
+      },
+      now: new Date('2026-08-06T12:00:00.000Z'),
+    });
+
+    const claims = await Promise.all([
+      tasksA.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'claim-a',
+        leaseDurationMs: 30_000,
+        instanceId: 'daemon-a',
+        bootId: 'boot-a',
+        now: new Date('2026-08-06T12:00:01.000Z'),
+      }),
+      tasksB.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'claim-b',
+        leaseDurationMs: 30_000,
+        instanceId: 'daemon-b',
+        bootId: 'boot-b',
+        now: new Date('2026-08-06T12:00:01.000Z'),
+      }),
+    ]);
+    expect(claims.filter((claim) => claim.outcome === 'claimed')).toHaveLength(1);
+    const winningToken = claims.find((claim) => claim.outcome === 'claimed')!.task
+      .termination_request!.coordination!.claim_token;
+    const losingToken = winningToken === 'claim-a' ? 'claim-b' : 'claim-a';
+
+    await expect(
+      tasksA.settleTermination({
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+        coordinationToken: losingToken,
+        now: new Date('2026-08-06T12:00:02.000Z'),
+      })
+    ).resolves.toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.STOPPING },
+    });
+    await expect(
+      tasksB.settleTermination({
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+        coordinationToken: winningToken,
+        now: new Date('2026-08-06T12:00:02.000Z'),
+      })
+    ).resolves.toMatchObject({ outcome: 'transitioned', task: { status: TaskStatus.FAILED } });
+  });
+
+  dbTest(
+    'reclaims an expired coordinator and does not rediscover guarded unverified work',
+    async ({ db }) => {
+      const tasks = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await tasks.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+      await tasks.claimTermination({
+        taskId: task.task_id,
+        cause: 'heartbeat_lost',
+        errorMessage: 'heartbeat stale',
+        now: new Date('2026-08-06T12:00:00.000Z'),
+      });
+      await tasks.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'dead-coordinator',
+        leaseDurationMs: 1_000,
+        instanceId: 'daemon-a',
+        bootId: 'boot-a',
+        now: new Date('2026-08-06T12:00:00.000Z'),
+      });
+
+      expect(
+        await tasks.findStrandedTerminationRefs({
+          now: new Date('2026-08-06T12:00:00.999Z'),
+        })
+      ).toEqual([]);
+      expect(
+        (
+          await tasks.findStrandedTerminationRefs({ now: new Date('2026-08-06T12:00:01.000Z') })
+        ).map((ref) => ref.task_id)
+      ).toContain(task.task_id);
+
+      const replacement = await tasks.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'replacement',
+        leaseDurationMs: 30_000,
+        instanceId: 'daemon-b',
+        bootId: 'boot-b',
+        now: new Date('2026-08-06T12:00:01.000Z'),
+      });
+      expect(replacement.outcome).toBe('claimed');
+      expect(
+        await tasks.settleTermination({
+          taskId: task.task_id,
+          outcome: 'unverified',
+          coordinationToken: 'replacement',
+          sdkFailure: {
+            reason: 'termination_unverified',
+            detected_at: '2026-08-06T12:00:02.000Z',
+            tool: 'codex',
+            termination: 'unverified',
+          },
+          errorMessage: 'No matching local process handle exists.',
+          now: new Date('2026-08-06T12:00:02.000Z'),
+        })
+      ).toMatchObject({ outcome: 'unverified' });
+      await expect(
+        tasks.settleTermination({
+          taskId: task.task_id,
+          outcome: 'verified_absent',
+          coordinationToken: 'replacement',
+          now: new Date('2026-08-06T12:00:03.000Z'),
+        })
+      ).resolves.toMatchObject({
+        outcome: 'condition_changed',
+        task: { status: TaskStatus.STOPPING },
+      });
+      expect(
+        await tasks.findStrandedTerminationRefs({ now: new Date('2026-08-06T13:00:00.000Z') })
+      ).toEqual([]);
+    }
+  );
+
+  dbTest(
+    'paginates expired and unclaimed termination work with a stable NULLS-LAST cursor',
+    async ({ db }) => {
+      const tasks = new TaskRepository(db);
+      const expiredSessionId = await createSessionWithDeps(db);
+      const unclaimedSessionId = await createSessionWithDeps(db);
+      const expired = await tasks.create(
+        createTaskData({ session_id: expiredSessionId, status: TaskStatus.RUNNING })
+      );
+      const unclaimed = await tasks.create(
+        createTaskData({ session_id: unclaimedSessionId, status: TaskStatus.RUNNING })
+      );
+      for (const task of [expired, unclaimed]) {
+        await tasks.claimTermination({
+          taskId: task.task_id,
+          cause: 'heartbeat_lost',
+          errorMessage: 'heartbeat stale',
+          now: new Date('2026-08-06T12:00:00.000Z'),
+        });
+      }
+      await tasks.claimTerminationCoordination({
+        taskId: expired.task_id,
+        claimToken: 'expired-claim',
+        leaseDurationMs: 1_000,
+        instanceId: 'daemon-a',
+        bootId: 'boot-a',
+        now: new Date('2026-08-06T12:00:00.000Z'),
+      });
+
+      const first = await tasks.findStrandedTerminationRefs({
+        now: new Date('2026-08-06T12:00:02.000Z'),
+        limit: 1,
+      });
+      expect(first).toHaveLength(1);
+      expect(first[0]).toMatchObject({
+        task_id: expired.task_id,
+        cursor: { order_at: '2026-08-06T12:00:01.000Z' },
+      });
+      const second = await tasks.findStrandedTerminationRefs({
+        now: new Date('2026-08-06T12:00:02.000Z'),
+        limit: 1,
+        after: first[0].cursor,
+      });
+      expect(second).toEqual([
+        expect.objectContaining({
+          task_id: unclaimed.task_id,
+          cursor: { task_id: unclaimed.task_id },
+        }),
+      ]);
+      await expect(
+        tasks.findStrandedTerminationRefs({
+          now: new Date('2026-08-06T12:00:02.000Z'),
+          limit: 1,
+          after: second[0].cursor,
+        })
+      ).resolves.toEqual([]);
+    }
+  );
+
+  dbTest('fences non-owner recovery with the database-authored request age', async ({ db }) => {
+    const tasks = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await tasks.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    await tasks.claimTermination({
+      taskId: task.task_id,
+      cause: 'heartbeat_lost',
+      errorMessage: 'heartbeat stale',
+      now: new Date('2026-08-06T12:00:00.000Z'),
+    });
+
+    await expect(
+      tasks.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'too-early',
+        leaseDurationMs: 30_000,
+        instanceId: 'daemon-b',
+        bootId: 'boot-b',
+        minimumRequestAgeMs: 15_000,
+        now: new Date('2026-08-06T12:00:14.999Z'),
+      })
+    ).resolves.toMatchObject({ outcome: 'condition_changed' });
+    await expect(
+      tasks.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'old-enough',
+        leaseDurationMs: 30_000,
+        instanceId: 'daemon-b',
+        bootId: 'boot-b',
+        minimumRequestAgeMs: 15_000,
+        now: new Date('2026-08-06T12:00:15.000Z'),
+      })
+    ).resolves.toMatchObject({
+      outcome: 'claimed',
+      task: { termination_request: { coordination: { claim_token: 'old-enough' } } },
+    });
+  });
+});
+
+// ============================================================================
 // CreateMany
 // ============================================================================
 
@@ -720,6 +1036,7 @@ async function createExecutorDispatch(
       session_id: sessionId,
       status: TaskStatus.DISPATCHING,
       executor_mode: executorMode,
+      started_at: '2026-01-01T00:00:00.000Z',
     })
   );
   return { taskRepo, task };
@@ -800,6 +1117,13 @@ describe('TaskRepository.connectExecutor', () => {
       { error_message: startupWarning }
     );
     expect(await taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning)).toBeNull();
+    expect(
+      (
+        await taskRepo.findExpiredDispatchRefs(1, {
+          now: new Date('2027-01-01T00:00:00.000Z'),
+        })
+      ).map((candidate) => candidate.task_id)
+    ).not.toContain(task.task_id);
 
     const connection = await taskRepo.connectExecutor(task.task_id);
     expect(connection).toMatchObject({
@@ -1137,14 +1461,26 @@ describe('TaskRepository.update', () => {
         status: TaskStatus.STOPPING,
         termination_request: { cause: 'user_stop' },
       });
+      await taskRepo.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'stop-winner',
+        leaseDurationMs: 30_000,
+        instanceId: 'daemon-a',
+        bootId: 'boot-a',
+      });
 
       const settled = await taskRepo.settleTermination({
         taskId: task.task_id,
         outcome: 'verified_absent',
+        coordinationToken: 'stop-winner',
       });
       expect(settled).toMatchObject({
         outcome: 'transitioned',
         task: { status: TaskStatus.STOPPED },
+      });
+      await expect(new SessionRepository(db).findById(sessionId)).resolves.toMatchObject({
+        status: SessionStatus.IDLE,
+        ready_for_prompt: true,
       });
     }
   );
@@ -1252,14 +1588,91 @@ describe('TaskRepository.update', () => {
 
     expect((await taskRepo.claimTermination(request)).outcome).toBe('claimed');
     expect((await taskRepo.claimTermination(request)).outcome).toBe('unchanged');
+    await taskRepo.claimTerminationCoordination({
+      taskId: task.task_id,
+      claimToken: 'idempotent-claim',
+      leaseDurationMs: 30_000,
+      instanceId: 'daemon-a',
+      bootId: 'boot-a',
+    });
     expect(
-      (await taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' }))
-        .outcome
+      (
+        await taskRepo.settleTermination({
+          taskId: task.task_id,
+          outcome: 'verified_absent',
+          coordinationToken: 'idempotent-claim',
+        })
+      ).outcome
     ).toBe('transitioned');
     expect(
-      (await taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' }))
-        .outcome
+      (
+        await taskRepo.settleTermination({
+          taskId: task.task_id,
+          outcome: 'verified_absent',
+          coordinationToken: 'idempotent-claim',
+        })
+      ).outcome
     ).toBe('terminal');
+  });
+
+  dbTest('projects the Session only when termination becomes authoritative', async ({ db }) => {
+    const tasks = new TaskRepository(db);
+    const sessions = new SessionRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    await sessions.update(sessionId, {
+      status: SessionStatus.STOPPING,
+      ready_for_prompt: false,
+    });
+    const task = await tasks.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    await tasks.claimTermination({
+      taskId: task.task_id,
+      cause: 'heartbeat_lost',
+      errorMessage: 'Heartbeat lost',
+    });
+    await expect(sessions.findById(sessionId)).resolves.toMatchObject({
+      status: SessionStatus.STOPPING,
+      ready_for_prompt: false,
+    });
+    await tasks.claimTerminationCoordination({
+      taskId: task.task_id,
+      claimToken: 'projection-claim',
+      leaseDurationMs: 30_000,
+      instanceId: 'daemon-a',
+      bootId: 'boot-a',
+    });
+
+    await tasks.settleTermination({
+      taskId: task.task_id,
+      outcome: 'unverified',
+      coordinationToken: 'projection-claim',
+      errorMessage: 'Containment is not verified',
+      sdkFailure: {
+        reason: 'termination_unverified',
+        detected_at: '2026-08-06T12:00:00.000Z',
+        tool: 'codex',
+        termination: 'unverified',
+      },
+    });
+    await expect(sessions.findById(sessionId)).resolves.toMatchObject({
+      status: SessionStatus.STOPPING,
+      ready_for_prompt: false,
+    });
+
+    const forced = await tasks.settleTermination({
+      taskId: task.task_id,
+      outcome: 'forced_unverified',
+      errorMessage: 'Force-failed by an authorized user',
+    });
+    expect(forced).toMatchObject({
+      outcome: 'transitioned',
+      task: { status: TaskStatus.FAILED },
+    });
+    await expect(sessions.findById(sessionId)).resolves.toMatchObject({
+      status: SessionStatus.FAILED,
+      ready_for_prompt: true,
+    });
   });
 
   dbTest('records only the current termination request as executor-quiesced', async ({ db }) => {

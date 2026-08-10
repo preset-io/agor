@@ -18,7 +18,6 @@ import { isTeammate } from '@agor/core/types';
 import { and, eq, inArray, isNull, like, ne, type SQL } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
-import { DEFAULT_BOARD_BACKGROUND } from '../../design/board-backgrounds';
 import { generateId } from '../../lib/ids';
 import { generateSlug } from '../../lib/slugs';
 import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
@@ -166,9 +165,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
           board.default_dangerously_allow_session_sharing ?? false,
         color: board.color,
         icon: normalizeExactEmojiShortcode(board.icon),
-        background_color: Object.hasOwn(board, 'background_color')
-          ? board.background_color
-          : DEFAULT_BOARD_BACKGROUND,
+        // No default is persisted: an unset background_color means "use the
+        // theme-aware default", resolved at render time. This keeps the
+        // product default improvable without rewriting stored boards.
+        background_color: board.background_color,
         custom_css: board.custom_css,
         objects: board.objects,
         custom_context: board.custom_context,

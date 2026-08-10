@@ -41,6 +41,22 @@ export class FeathersMessagesRepository {
     return Array.isArray(result) ? result : result.data;
   }
 
+  /**
+   * Total messages in a session, without transferring any of them.
+   *
+   * `$limit: 0` makes the service answer from `total`, which counts the whole
+   * result set rather than the returned page — a page length stops being the
+   * count once a session exceeds the service's pagination limit.
+   */
+  async countBySessionId(sessionId: SessionID): Promise<number> {
+    const service = this.client.service('messages');
+    const result = await service.find({
+      query: { session_id: sessionId, $limit: 0 },
+    });
+    if (Array.isArray(result)) return result.length;
+    return typeof result.total === 'number' ? result.total : 0;
+  }
+
   async findById(messageId: MessageID): Promise<Message | null> {
     try {
       const service = this.client.service('messages');

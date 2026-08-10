@@ -2,7 +2,9 @@
  * Session Token Authentication Strategy
  *
  * Custom Feathers authentication strategy for executor session tokens.
- * Session tokens are opaque UUIDs (not JWTs) managed by SessionTokenService.
+ * Legacy custom strategy for tokens managed by SessionTokenService. Current
+ * executor-session credentials are JWTs and authenticate through the JWT
+ * strategy; this class remains for backwards-compatible strategy wiring.
  */
 
 import { AuthenticationBaseStrategy } from '@agor/core/feathers';
@@ -142,11 +144,8 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       session_id: sessionInfo.session_id,
     };
 
-    console.debug('[SessionTokenStrategy] authenticate() returning:', {
-      strategy: result.authentication.strategy,
-      // SECURITY: no token preview.
-      user_id: sessionInfo.user_id,
-    });
+    // Do not log identity/resource claims from the bearer.
+    console.debug('[SessionTokenStrategy] authenticate() succeeded');
 
     return result;
   }
@@ -161,8 +160,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       hasToken: !!accessToken,
     });
 
-    // Session tokens are opaque UUIDs, not JWTs
-    // Validate via SessionTokenService instead of JWT verification
+    // Validate through SessionTokenService's signature + authority policy.
     const sessionInfo = await this.sessionTokenService.validateToken(accessToken);
 
     if (!sessionInfo) {
@@ -190,14 +188,14 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
    * Override to skip database lookup since we already have user info from token
    */
   async getEntity(id: string): Promise<unknown> {
-    console.debug('[SessionTokenStrategy] getEntity() called:', { user_id: id });
+    console.debug('[SessionTokenStrategy] getEntity() called');
     // Session tokens already include user_id, so we return a minimal user object
     // This prevents Feathers from trying to lookup the user in the database
     const user = {
       user_id: id,
       email: '',
     };
-    console.debug('[SessionTokenStrategy] getEntity() returning:', user);
+    console.debug('[SessionTokenStrategy] getEntity() returning');
     return user;
   }
 }

@@ -6,15 +6,17 @@ import type {
   BranchID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import {
-  mcpLimit,
+  mcpListLimit,
+  mcpOffset,
   mcpOptionalNonNegativeInt,
   mcpOptionalPositiveInt,
   mcpOptionalString,
+  mcpPageResult,
   mcpRequiredId,
   mcpRequiredString,
 } from '../schema.js';
@@ -185,10 +187,11 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     'agor_boards_list',
     {
       description:
-        'List all boards accessible to the current user. Each board includes a `url` field with a clickable link to view the board in the UI. By default, archived boards are excluded.',
+        'List a lean page of boards accessible to the current user (heavy canvas objects and custom CSS are omitted; use agor_boards_get for details). By default archived boards are excluded. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        limit: mcpLimit(50),
+        limit: mcpListLimit(),
+        offset: mcpOffset(),
         includeArchived: z
           .boolean()
           .optional()
@@ -204,15 +207,21 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const query: Record<string, unknown> = {};
-      if (args.limit) query.$limit = args.limit;
+      const limit = args.limit ?? 25;
+      const offset = args.offset ?? 0;
+      const query: Record<string, unknown> = {
+        $limit: limit,
+        $skip: offset,
+        lean: true,
+        $sort: { created_at: -1, board_id: 1 },
+      };
       if (args.archived === true) {
         query.archived = true;
       } else if (!args.includeArchived) {
         query.archived = false;
       }
       const boards = await ctx.app.service('boards').find({ query, ...ctx.baseServiceParams });
-      return textResult(boards);
+      return textResult(mcpPageResult(boards, limit, offset));
     }
   );
 

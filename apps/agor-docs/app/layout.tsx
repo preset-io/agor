@@ -78,6 +78,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable}`}
     >
       <Head>
+        {/* Google Tag Manager (container GTM-WL3Q29NW). Loaded as high in the
+            head as possible so downstream tags fire early. */}
+        <Script id="gtm-loader" strategy="afterInteractive">
+          {`(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-WL3Q29NW');`}
+        </Script>
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta name="description" content={DEFAULT_DESCRIPTION} />
         <meta name="theme-color" content={THEME_COLOR} />
@@ -130,6 +135,17 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </Head>
       <body>
+        {/* Google Tag Manager (noscript) — must sit immediately after the
+            opening body tag. */}
+        <noscript>
+          <iframe
+            title="Google Tag Manager"
+            src="https://www.googletagmanager.com/ns.html?id=GTM-WL3Q29NW"
+            height="0"
+            width="0"
+            style={{ display: 'none', visibility: 'hidden' }}
+          />
+        </noscript>
         <DocsAuroraBackground />
         {children}
         {analyticsEnabled && googleAnalyticsId ? (

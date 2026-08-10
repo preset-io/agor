@@ -160,6 +160,56 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Session Task queue HA (Pos
     expect(launches).toBe(1);
   });
 
+  it('keeps deterministic callback admission idempotent across replicas and lets a peer claim it', async () => {
+    const seed = await seedTenant(db, `queue-callback-replica-${generateId()}`);
+    const sessionId = await createSession(db, seed);
+    const callbackTaskId = generateId() as TaskID;
+    const callbackInput = {
+      task_id: callbackTaskId,
+      session_id: sessionId,
+      created_by: seed.userId,
+      full_prompt: '[Agor] Child session completed',
+      status: TaskStatus.QUEUED,
+      metadata: {
+        is_agor_callback: true,
+        source: 'agor' as const,
+        queued_by_user_id: seed.userId,
+        initial_message_id: callbackTaskId as MessageID,
+      },
+    };
+
+    // Separate repositories/scopes model two daemons whose local callback
+    // coalescer Maps cannot see each other. The stable Task identity and
+    // Session-row serialization are the durable authority.
+    const admissions = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+          new TaskRepository(scoped).createPending(callbackInput)
+        )
+      )
+    );
+    expect(admissions.map((task) => task.task_id)).toEqual([callbackTaskId, callbackTaskId]);
+
+    const claims = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+          new TaskRepository(scoped).claimDispatchAndProjectSession(
+            callbackTaskId,
+            TaskStatus.QUEUED,
+            { status: TaskStatus.DISPATCHING }
+          )
+        )
+      )
+    );
+    expect(claims.filter((claim) => claim.outcome === 'claimed')).toHaveLength(1);
+    expect(claims.filter((claim) => claim.outcome === 'already_claimed')).toHaveLength(1);
+
+    await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+      const persisted = await new TaskRepository(scoped).findBySession(sessionId);
+      expect(persisted.filter((task) => task.task_id === callbackTaskId)).toHaveLength(1);
+    });
+  });
+
   it('assigns one unique ordered position under concurrent enqueue', async () => {
     const seed = await seedTenant(db, `queue-order-${generateId()}`);
     const sessionId = await createSession(db, seed);
@@ -220,7 +270,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Session Task queue HA (Pos
         tasks.claimDispatchAndProjectSession(queuedB.task_id, TaskStatus.QUEUED, {
           status: TaskStatus.DISPATCHING,
         })
-      ).rejects.toThrow(/Task not found/);
+      ).rejects.toThrow(/not found/);
     });
 
     const refs = await runWithSystemDatabaseScope(

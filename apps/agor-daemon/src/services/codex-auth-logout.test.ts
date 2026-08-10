@@ -72,7 +72,10 @@ describe('codex-auth-logout', () => {
     const { app, usersService } = makeApp();
     const result = await service(app).create({}, AUTH_PARAMS);
 
-    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith(null); // simple mode → daemon user
+    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith(null, {
+      reportedUnixUser: null,
+      userId: 'user-1',
+    }); // simple mode → daemon user
     // Only the codex key is sent — the users-service merge clears it against the
     // FRESH record, preserving any concurrently-updated method for another tool.
     // userId comes from the auth context, never from request data. No token
@@ -123,6 +126,22 @@ describe('codex-auth-logout', () => {
     expect(usersService.patch).not.toHaveBeenCalled();
   });
 
+  it('admits hosted logout with persistent per-user executor homes', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth' },
+      execution: {
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          branch_workspace: 'persistent-per-branch',
+          base_repository: 'unavailable',
+        },
+      },
+    } as never);
+    const { app } = makeApp();
+
+    await expect(service(app).create({}, AUTH_PARAMS)).resolves.toEqual({ status: 'removed' });
+  });
+
   it('strict mode targets the caller’s own unix_username for the delete', async () => {
     loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'strict' } } as never);
     usersRepositoryMock.mockImplementation(function mockRepo() {
@@ -130,6 +149,9 @@ describe('codex-auth-logout', () => {
     } as never);
     const { app } = makeApp();
     await service(app).create({}, AUTH_PARAMS);
-    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith('alice');
+    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith('alice', {
+      reportedUnixUser: 'alice',
+      userId: 'user-1',
+    });
   });
 });

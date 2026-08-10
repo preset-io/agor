@@ -19,6 +19,11 @@ import {
   Typography,
 } from 'antd';
 import { useEffect, useRef, useState } from 'react';
+import {
+  oauthAttemptFailureMessage,
+  refetchMCPOAuthDurableState,
+  waitForMCPOAuthAttempt,
+} from '@/utils/mcpOAuthAttempt';
 import { useThemedMessage } from '@/utils/message';
 import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
 
@@ -95,6 +100,21 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    if (!client) return;
+    // Blocking discover/test endpoints cannot return the authorization URL
+    // before their callback. The daemon sends this compatibility hint only to
+    // this exact initiating socket; durable attempt/status refetch remains the
+    // completion authority.
+    const openBrowserForBlockingFlow = ({ authUrl }: { authUrl?: string }) => {
+      if (authUrl) window.open(authUrl, '_blank', 'noopener,noreferrer');
+    };
+    client.io.on('oauth:open_browser', openBrowserForBlockingFlow);
+    return () => {
+      client.io.off('oauth:open_browser', openBrowserForBlockingFlow);
+    };
+  }, [client]);
+
   // Track effective server ID (may differ from prop after onSaveFirst creates a new server)
   const [effectiveServerId, setEffectiveServerId] = useState<string | undefined>(serverId);
   useEffect(() => {
@@ -109,6 +129,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const watchedClientId = Form.useWatch('oauth_client_id', form);
   const watchedClientSecret = Form.useWatch('oauth_client_secret', form);
   const watchedOauthMode = Form.useWatch('oauth_mode', form);
+  const watchedCompatibilityMode = Form.useWatch('oauth_compatibility_mode', form);
+  const watchedDcrMode = Form.useWatch('oauth_dcr_mode', form);
   const watchedEnv = Form.useWatch('env', form);
   const watchedHeaders = Form.useWatch('headers', form);
   const hasEnvConfigured = typeof watchedEnv === 'string' && watchedEnv.trim().length > 0;
@@ -124,7 +146,9 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       watchedClientId,
       watchedClientSecret,
     ].some((v) => typeof v === 'string' && v.trim().length > 0) ||
-    (typeof watchedOauthMode === 'string' && watchedOauthMode !== 'per_user');
+    (typeof watchedOauthMode === 'string' && watchedOauthMode !== 'per_user') ||
+    watchedCompatibilityMode === 'legacy' ||
+    watchedDcrMode === 'fallback';
 
   const handleStartOAuthFlow = async () => {
     if (!client) {
@@ -153,11 +177,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
     setStartingOAuthFlow(true);
 
-    const handleOpenBrowser = ({ authUrl }: { authUrl: string }) => {
-      window.open(authUrl, '_blank', 'noopener,noreferrer');
-    };
-    client.io.on('oauth:open_browser', handleOpenBrowser);
-
     try {
       showInfo('Starting OAuth authentication flow...');
 
@@ -170,35 +189,53 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         error?: string;
         message?: string;
         authorizationUrl?: string;
+        attempt_id?: string;
         state?: string;
       };
 
-      if (data.success && data.state) {
+      if (data.success && data.authorizationUrl && data.attempt_id) {
+        window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
         setOauthCallbackModalVisible(true);
         showInfo('Authenticating... complete sign-in in the new tab.');
 
-        const handleOAuthCompleted = (event: { state: string; success: boolean }) => {
-          if (event.state === data.state && event.success) {
-            showSuccess('OAuth authentication successful!');
-            setOauthCallbackModalVisible(false);
-            setOauthBrowserFlowAvailable(false);
-            cleanup();
-          }
-        };
+        const controller = new AbortController();
         const cleanup = () => {
-          client.io.off('oauth:completed', handleOAuthCompleted);
+          controller.abort();
           oauthCompletedCleanupRef.current = null;
         };
         oauthCompletedCleanupRef.current?.();
         oauthCompletedCleanupRef.current = cleanup;
-        client.io.on('oauth:completed', handleOAuthCompleted);
+        void waitForMCPOAuthAttempt(client, data.attempt_id, { signal: controller.signal })
+          .then(async (attempt) => {
+            if (attempt.status === 'succeeded') {
+              if (targetServerId) {
+                try {
+                  await refetchMCPOAuthDurableState(client, targetServerId);
+                } catch {
+                  console.warn('[OAuth] Durable completion refetch failed');
+                }
+              }
+              showSuccess('OAuth authentication successful!');
+              setOauthCallbackModalVisible(false);
+              setOauthBrowserFlowAvailable(false);
+            } else {
+              showError(oauthAttemptFailureMessage(attempt.status));
+              setOauthCallbackModalVisible(false);
+            }
+          })
+          .catch((error) => {
+            if (error instanceof DOMException && error.name === 'AbortError') return;
+            showError('Could not confirm OAuth status. Check the connection and try again.');
+          })
+          .finally(() => {
+            if (!controller.signal.aborted) cleanup();
+          });
       } else {
         showError(data.error || 'Failed to start OAuth flow');
       }
     } catch (error) {
       showError(`OAuth flow error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      client.io.off('oauth:open_browser', handleOpenBrowser);
       setStartingOAuthFlow(false);
     }
   };
@@ -717,8 +754,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     description={
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                         <li>
-                          Modern OAuth 2.1 servers support discovery (RFC 8414 / RFC 9728) and
-                          Dynamic Client Registration — leave everything here blank.
+                          Strict MCP OAuth discovery, protected-resource binding, PKCE S256, and
+                          issuer checks are enabled by default.
                         </li>
                         <li>
                           Set Client ID / Client Secret only for servers that require a
@@ -737,12 +774,36 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Client ID"
                     name="oauth_client_id"
-                    tooltip="Required for servers that don't support Dynamic Client Registration (e.g. Figma, GitHub). Register an OAuth app with the provider and paste the client ID here. Leave blank to use DCR."
+                    tooltip="Register an OAuth app with the provider and paste its client ID. Dynamic Client Registration is used only when explicitly enabled below."
                   >
                     <Input
                       placeholder="Enter client ID or {{ user.env.OAUTH_CLIENT_ID }}"
                       allowClear
                     />
+                  </Form.Item>
+                  <Form.Item
+                    label="Dynamic Client Registration"
+                    name="oauth_dcr_mode"
+                    initialValue="disabled"
+                    tooltip="Pre-registration is preferred. Enable fallback only for a server that explicitly advertises a compatible registration endpoint."
+                  >
+                    <Select>
+                      <Select.Option value="disabled">
+                        Disabled — pre-registered client
+                      </Select.Option>
+                      <Select.Option value="fallback">Explicit DCR fallback</Select.Option>
+                    </Select>
+                  </Form.Item>
+                  <Form.Item
+                    label="OAuth Compatibility"
+                    name="oauth_compatibility_mode"
+                    initialValue="strict"
+                    tooltip="Legacy mode narrowly permits older discovery and metadata deviations. It never relaxes outbound network protections."
+                  >
+                    <Select>
+                      <Select.Option value="strict">Strict current MCP OAuth</Select.Option>
+                      <Select.Option value="legacy">Legacy provider compatibility</Select.Option>
+                    </Select>
                   </Form.Item>
                   <Form.Item
                     label="Client Secret"

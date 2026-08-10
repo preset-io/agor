@@ -1,6 +1,13 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { mcpLimit, mcpOptionalString, mcpRequiredId, mcpRequiredString } from '../schema.js';
+import {
+  mcpLimit,
+  mcpOffset,
+  mcpOptionalString,
+  mcpPageResult,
+  mcpRequiredId,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -60,19 +67,21 @@ export function registerCardTypeTools(server: McpServer, ctx: McpContext): void 
   server.registerTool(
     'agor_card_types_list',
     {
-      description: 'List all available card types.',
+      description:
+        'List available card types. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        limit: mcpLimit(50),
+        limit: mcpLimit(25, 100),
+        offset: mcpOffset(0),
       }),
     },
     async (args) => {
-      const limit = typeof args.limit === 'number' ? args.limit : 50;
+      const limit = typeof args.limit === 'number' ? args.limit : 25;
+      const offset = typeof args.offset === 'number' ? args.offset : 0;
       const result = await ctx.app
         .service('card-types')
-        .find({ query: { $limit: limit }, ...ctx.baseServiceParams } as never);
-      const data = 'data' in result ? result.data : result;
-      return textResult({ total: Array.isArray(data) ? data.length : 0, data });
+        .find({ query: { $limit: limit, $skip: offset }, ...ctx.baseServiceParams } as never);
+      return textResult(mcpPageResult(result, limit, offset));
     }
   );
 

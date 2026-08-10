@@ -8,7 +8,6 @@
 import type { Board, BoardID, BoardObject, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
-import { DEFAULT_BOARD_BACKGROUND } from '../../design/board-backgrounds';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
@@ -114,12 +113,14 @@ async function getStoredBoardIcon(db: Database, boardId: UUID): Promise<string |
 // ============================================================================
 
 describe('BoardRepository.create', () => {
-  dbTest('defaults an omitted background to Gold Shimmer', async ({ db }) => {
+  dbTest('leaves an omitted background unset (renders the themed default)', async ({ db }) => {
     const repo = new BoardRepository(db);
 
     const created = await repo.create(createBoardData());
 
-    expect(created.background_color).toBe(DEFAULT_BOARD_BACKGROUND);
+    // No background is persisted; an unset value means "use the theme-aware
+    // default", resolved at render time rather than frozen into the row.
+    expect(created.background_color).toBeUndefined();
   });
 
   dbTest('preserves an explicitly supplied background', async ({ db }) => {

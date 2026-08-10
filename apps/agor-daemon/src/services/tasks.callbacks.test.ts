@@ -264,7 +264,7 @@ describe('TasksService completion callbacks', () => {
     await vi.waitFor(() =>
       expect(getStoredTask().metadata?.callback_dispatches).toEqual([
         expect.objectContaining({
-          event: 'session_completion',
+          event: 'task_completion',
           target_session_id: parentSessionId,
           queued_task_id: durableCallbackTaskId,
         }),
@@ -480,7 +480,7 @@ describe('TasksService completion callbacks', () => {
         metadata: {
           callback_dispatches: [
             {
-              event: 'session_completion',
+              event: 'task_completion',
               target_session_id: parentSessionId,
               queued_task_id: callbackTaskId,
               dispatched_at: '2026-01-01T00:00:06.000Z',
@@ -495,7 +495,7 @@ describe('TasksService completion callbacks', () => {
       metadata: {
         callback_dispatches: [
           {
-            event: 'session_completion',
+            event: 'task_completion',
             target_session_id: parentSessionId,
             queued_task_id: callbackTaskId,
             dispatched_at: '2026-01-01T00:00:06.000Z',
@@ -551,6 +551,76 @@ describe('TasksService completion callbacks', () => {
 
     expect(createPending).toHaveBeenCalledWith(
       expect.objectContaining({ session_id: parentSessionId })
+    );
+  });
+
+  it('delivers a task-level callback without mutating session callback configuration', async () => {
+    const callerSessionId = '018f0000-0000-7000-8000-000000000777';
+    const { service, createPending, sessionsPatch, childSession } = makeService({
+      childSession: { genealogy: { children: [] }, callback_config: undefined },
+      task: {
+        metadata: {
+          completion_callback: {
+            target_session_id: callerSessionId as Task['session_id'],
+            requested_from_session_id: callerSessionId as Task['session_id'],
+            requested_by_user_id: userId,
+          },
+        },
+      },
+    });
+    (service.app.service as any).mockImplementation((name: string) => {
+      if (name === 'sessions') {
+        return {
+          get: vi.fn(async (id: string) =>
+            id === childSessionId
+              ? childSession
+              : makeSession({ session_id: id as Session['session_id'], created_by: userId })
+          ),
+          patch: sessionsPatch,
+          triggerQueueProcessing: vi.fn(async () => undefined),
+        };
+      }
+      if (name === 'messages') return { find: vi.fn(async () => []) };
+      if (name === 'branches') return { get: vi.fn() };
+      throw new Error(`unexpected service ${name}`);
+    });
+
+    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
+    expect(createPending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: callerSessionId,
+        metadata: expect.objectContaining({ child_task_id: taskId }),
+      })
+    );
+    expect(sessionsPatch).not.toHaveBeenCalledWith(
+      childSessionId,
+      expect.objectContaining({ callback_config: expect.anything() })
+    );
+  });
+
+  it('coalesces task-level and session-level callbacks to the same destination', async () => {
+    const { service, createPending, sessionsPatch } = makeService({
+      task: {
+        metadata: {
+          completion_callback: {
+            target_session_id: parentSessionId as Task['session_id'],
+            requested_from_session_id: parentSessionId as Task['session_id'],
+            requested_by_user_id: userId,
+          },
+        },
+      },
+    });
+
+    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(sessionsPatch).toHaveBeenCalledWith(
+        childSessionId,
+        expect.objectContaining({ callback_config: expect.objectContaining({ enabled: false }) })
+      )
     );
   });
 });

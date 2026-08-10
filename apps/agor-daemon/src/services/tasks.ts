@@ -23,6 +23,8 @@ import {
   shortId,
   type TaskDispatchClaimResult,
   TaskRepository,
+  type TaskTerminationCoordinationClaimInput,
+  type TaskTerminationCoordinationClaimResult,
   type TenantScopeAwareDatabase,
   type TerminationClaimInput,
   type TerminationClaimResult,
@@ -391,43 +393,59 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       !result.task.termination_request.executor_quiesced_at;
     if (!claimed && !retryingActiveRequest) return result;
 
-    if (claimed) {
+    await this.runAfterTenantDatabaseCommit('publish termination claim', async () => {
+      if (claimed) {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: result.task,
+          id: result.task.task_id,
+          params,
+        });
+      }
+      // A repeated claim keeps the original requested_at fence but
+      // re-publishes the private control event. This makes Stop retryable
+      // after a lost socket delivery without creating a new cancellation
+      // epoch.
       emitServiceEvent(this.app, {
         path: 'tasks',
-        event: 'patched',
+        event: 'termination_requested',
         data: result.task,
         id: result.task.task_id,
+        method: 'patch',
         params,
       });
-    }
-    // A repeated claim keeps the original requested_at fence but re-publishes
-    // the private control event. This makes Stop retryable after a lost socket
-    // delivery without creating a new cancellation epoch.
-    emitServiceEvent(this.app, {
-      path: 'tasks',
-      event: 'termination_requested',
-      data: result.task,
-      id: result.task.task_id,
-      method: 'patch',
-      params,
+      if (claimed) {
+        const session = await this.app
+          .service('sessions')
+          .get(result.task.session_id, { ...(params ?? {}), provider: undefined });
+        emitServiceEvent(this.app, {
+          path: 'sessions',
+          event: 'patched',
+          data: session,
+          id: session.session_id,
+          params,
+        });
+      }
     });
-    if (!claimed) return result;
+    return result;
+  }
 
-    try {
-      await this.app
-        .service('sessions')
-        .patch(
-          result.task.session_id,
-          { status: SessionStatus.STOPPING, ready_for_prompt: false },
-          { ...(params ?? {}), provider: undefined }
-        );
-    } catch (error) {
-      // The durable Task claim owns termination. A transient projection write
-      // must not prevent the coordinator from containing the process.
-      console.warn(
-        `[termination] Failed to project STOPPING onto session ${shortId(result.task.session_id)}:`,
-        error instanceof Error ? error.message : String(error)
-      );
+  async claimTerminationCoordination(
+    input: TaskTerminationCoordinationClaimInput,
+    params?: TaskParams
+  ): Promise<TaskTerminationCoordinationClaimResult> {
+    const result = await this.taskRepo.claimTerminationCoordination(input);
+    if (result.outcome === 'claimed') {
+      await this.runAfterTenantDatabaseCommit('publish termination coordination', async () => {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: result.task,
+          id: result.task.task_id,
+          params,
+        });
+      });
     }
     return result;
   }
@@ -439,40 +457,40 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const result = await this.taskRepo.settleTermination(input);
     if (result.outcome !== 'transitioned' && result.outcome !== 'unverified') return result;
 
-    emitServiceEvent(this.app, {
-      path: 'tasks',
-      event: 'patched',
-      data: result.task,
-      id: result.task.task_id,
-      params,
-    });
-    if (result.outcome === 'unverified') return result;
+    await this.runAfterTenantDatabaseCommit('publish termination settlement', async () => {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: result.task,
+        id: result.task.task_id,
+        params,
+      });
+      if (result.outcome === 'unverified') return;
 
-    this.trackTaskCompleted(result.task);
-    const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
-    const isStop = result.task.status === TaskStatus.STOPPED;
-    const completionParams = {
-      ...internalParams,
-      // Failure containment never drains queued work automatically. User Stop
-      // delegates that hand-off to its caller while the session lock is held;
-      // a late CLI confirmation has no caller and drains here instead.
-      suppressTerminalQueueProcessing: !isStop || params?.suppressTerminalQueueProcessing === true,
-    };
-    const sessionProjected = await this.processCompletionSideEffects(
-      result.task,
-      result.task.status,
-      completionParams
-    );
-    if (!sessionProjected) {
-      try {
-        await this.projectTerminalSession(result.task, result.task.status, completionParams);
-      } catch (error) {
-        console.warn(
-          `[termination] Failed to settle session ${shortId(result.task.session_id)}:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    }
+      this.trackTaskCompleted(result.task);
+      const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
+      const isStop = result.task.status === TaskStatus.STOPPED;
+      const completionParams = {
+        ...internalParams,
+        // Avoid a second eager hand-off from the settlement path. The durable
+        // all-daemon queue worker will independently reevaluate the committed
+        // Task outcome and Session projection; user Stop may still delegate
+        // an immediate hand-off to its caller while the Session lock is held.
+        suppressTerminalQueueProcessing:
+          !isStop || params?.suppressTerminalQueueProcessing === true,
+      };
+      // The repository committed the authoritative Task settlement and
+      // minimal Session projection atomically. Post-commit work must never
+      // patch that projection again: a new Task may already have claimed the
+      // Session, and an unconditional retry here would clobber
+      // RUNNING/ready=false.
+      await this.processCompletionSideEffects(
+        result.task,
+        result.task.status,
+        completionParams,
+        true
+      );
+    });
     return result;
   }
 
@@ -561,7 +579,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   private async processCompletionSideEffects(
     task: Task,
     status: Task['status'],
-    params?: TaskParams
+    params?: TaskParams,
+    sessionProjectionAlreadyCommitted = false
   ): Promise<boolean> {
     if (!task.session_id || !this.app) return false;
     try {
@@ -599,10 +618,22 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         return false;
       }
 
-      await this.projectTerminalSession(task, status, params);
-      console.log(
-        `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
-      );
+      if (sessionProjectionAlreadyCommitted) {
+        // Publish the latest Session fact rather than rewriting it. It may
+        // already reflect a newer Task admitted after the settlement commit.
+        emitServiceEvent(this.app, {
+          path: 'sessions',
+          event: 'patched',
+          data: session,
+          id: session.session_id,
+          params,
+        });
+      } else {
+        await this.projectTerminalSession(task, status, params);
+        console.log(
+          `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
+        );
+      }
 
       // Defensive fallback for tasks created before create-time auto-title
       // ran (or after a transient title-patch failure). Later completed
@@ -844,8 +875,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   /**
    * Centralized completion-callback dispatcher.
    *
-   * Both subsessions and generic callback_config callbacks resolve to the same
-   * target/event pair: `session_completion` delivered to
+   * Task-level and session-configured callbacks resolve to the same
+   * target/event pair: `task_completion` delivered to
    * `callback_config.callback_session_id`, with a genealogy-parent fallback for
    * legacy spawned sessions. Keeping all routing here prevents a completed child
    * from notifying its parent once via the rich/template path and again via a
@@ -856,60 +887,66 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     childSession: Session,
     params?: TaskParams
   ): Promise<void> {
-    const targetSessionId = this.resolveCompletionCallbackTarget(childSession);
-    if (!targetSessionId) return;
+    const sessionTargetId = this.resolveCompletionCallbackTarget(childSession);
+    const taskTargetId = task.metadata?.completion_callback?.target_session_id;
+    const targetSessionIds = [
+      ...new Set([sessionTargetId, taskTargetId].filter(Boolean)),
+    ] as SessionID[];
 
-    const dispatchResult = await this.dispatchCompletionCallbackOnce(
-      task,
-      childSession,
-      targetSessionId,
-      params
-    );
+    for (const targetSessionId of targetSessionIds) {
+      const dispatchResult = await this.dispatchCompletionCallbackOnce(
+        task,
+        childSession,
+        targetSessionId,
+        params
+      );
 
-    if (dispatchResult.callbackTask?.status === TaskStatus.QUEUED) {
-      // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.
-      // The queue processor uses a promise-based lock that will:
-      // - If target is busy: wait for current processing, then retry (self-healing)
-      // - If target is promptable: immediately process the callback
-      // - If target becomes promptable while waiting: the retry will catch it
-      //
-      // DO NOT check target status before triggering - let the queue processor handle it.
-      // This ensures callbacks are never missed due to timing issues.
-      try {
-        console.log(
-          `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
-        );
-        // Pass empty params to avoid leaking child's auth context to target.
-        // The queue processor reconstructs target auth from queued task metadata.
-        await this.triggerQueueProcessingAfterCommit(targetSessionId, {});
-      } catch (error) {
-        // Don't throw - target issues shouldn't break child queue processing.
-        console.warn(
-          `⚠️  [TasksService] Failed to trigger callback target queue processing (target may be deleted):`,
-          error
-        );
+      if (dispatchResult.callbackTask?.status === TaskStatus.QUEUED) {
+        // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.
+        // The queue processor uses a promise-based lock that will:
+        // - If target is busy: wait for current processing, then retry (self-healing)
+        // - If target is promptable: immediately process the callback
+        // - If target becomes promptable while waiting: the retry will catch it
+        //
+        // DO NOT check target status before triggering - let the queue processor handle it.
+        // This ensures callbacks are never missed due to timing issues.
+        try {
+          console.log(
+            `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
+          );
+          // Pass empty params to avoid leaking child's auth context to target.
+          // The queue processor reconstructs target auth from queued task metadata.
+          await this.triggerQueueProcessingAfterCommit(targetSessionId, {});
+        } catch (error) {
+          // Don't throw - target issues shouldn't break child queue processing.
+          console.warn(
+            `⚠️  [TasksService] Failed to trigger callback target queue processing (target may be deleted):`,
+            error
+          );
+        }
       }
-    }
 
-    // Post-callback cleanup: only runs after a callback task was actually
-    // queued. "once" means "after firing" — do not permanently disable a
-    // one-shot callback when delivery was skipped or failed before queueing.
-    // Default to "persistent" for backward compat — legacy sessions without
-    // callback_mode should continue firing on every completion as they always have.
-    const callbackMode = childSession.callback_config?.callback_mode ?? 'persistent';
-    if (dispatchResult.callbackTask && callbackMode === 'once') {
-      try {
-        await this.app.service('sessions').patch(childSession.session_id, {
-          callback_config: {
-            ...childSession.callback_config,
-            enabled: false,
-          },
-        });
-        console.log(
-          `🔕 [TasksService] Auto-disabled callback for session ${shortId(childSession.session_id)} (once mode)`
-        );
-      } catch (error) {
-        console.warn(`⚠️  [TasksService] Failed to auto-disable callback:`, error);
+      // Consume only the session-level one-shot that participated in this
+      // delivery. A task-only callback must never mutate session callback state.
+      const callbackMode = childSession.callback_config?.callback_mode ?? 'persistent';
+      if (
+        dispatchResult.callbackTask &&
+        targetSessionId === sessionTargetId &&
+        callbackMode === 'once'
+      ) {
+        try {
+          await this.app.service('sessions').patch(childSession.session_id, {
+            callback_config: {
+              ...childSession.callback_config,
+              enabled: false,
+            },
+          });
+          console.log(
+            `🔕 [TasksService] Auto-disabled callback for session ${shortId(childSession.session_id)} (once mode)`
+          );
+        } catch (error) {
+          console.warn(`⚠️  [TasksService] Failed to auto-disable callback:`, error);
+        }
       }
     }
   }
@@ -925,7 +962,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   private callbackDispatchMetadataKey(targetSessionId: SessionID): string {
-    return `session_completion:${targetSessionId}`;
+    return `task_completion:${targetSessionId}`;
   }
 
   private hasCompletionCallbackDispatch(
@@ -934,7 +971,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   ): boolean {
     return (metadata?.callback_dispatches ?? []).some(
       (dispatch) =>
-        dispatch.event === 'session_completion' && dispatch.target_session_id === targetSessionId
+        (dispatch.event === 'task_completion' || dispatch.event === 'session_completion') &&
+        dispatch.target_session_id === targetSessionId
     );
   }
 
@@ -952,7 +990,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       callback_dispatches: [
         ...(latestTask.metadata?.callback_dispatches ?? []),
         {
-          event: 'session_completion',
+          event: 'task_completion',
           target_session_id: targetSessionId,
           queued_task_id: queuedTaskId,
           dispatched_at: new Date().toISOString(),
@@ -1040,8 +1078,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // Check callback config - child overrides take precedence over target defaults
       // For subsessions (parent_session_id), default is enabled=true
       // For remote sessions (callback_session_id), enabled is explicitly set at creation time
+      const isExactTaskCallback =
+        task.metadata?.completion_callback?.target_session_id === targetSessionId;
       const callbackEnabled =
-        childSession.callback_config?.enabled ?? targetSession.callback_config?.enabled ?? true;
+        isExactTaskCallback ||
+        (childSession.callback_config?.enabled ?? targetSession.callback_config?.enabled ?? true);
 
       if (!callbackEnabled) {
         console.log(
@@ -1159,8 +1200,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // (task attribution), NOT the target session owner. Execution still runs
       // as the target session's Unix user. Falls back to target session creator
       // for backward compat (legacy sessions without callback_created_by).
+      const taskCallback = task.metadata?.completion_callback;
       const callbackCreator =
-        childSession.callback_config?.callback_created_by ?? targetSession.created_by;
+        (taskCallback?.target_session_id === targetSessionId
+          ? taskCallback.requested_by_user_id
+          : undefined) ??
+        childSession.callback_config?.callback_created_by ??
+        targetSession.created_by;
       const callbackTaskId = completionCallbackTaskId(task.task_id, targetSessionId);
       const createCallbackTask = () =>
         this.taskRepo.createPending({
@@ -1339,7 +1385,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     const task = await this.taskRepo.reportRuntimeTelemetry(data.task_id, data.pulse);
-    if (!task) throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
+    if (!task) {
+      // Heartbeat responses are also the executor's durable control-plane
+      // read. This lets a reconnected executor observe STOPPING through any
+      // daemon even before cross-replica realtime fanout is enabled.
+      const current = await this.taskRepo.findById(data.task_id);
+      if (current?.status === TaskStatus.STOPPING && current.termination_request) return current;
+      throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
+    }
     analyticsLogger.track(
       'executor.heartbeat',
       {

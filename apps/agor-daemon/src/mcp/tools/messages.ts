@@ -14,7 +14,7 @@ import {
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { ContentBlock } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveSessionId, resolveTaskId } from '../resolve-ids.js';
@@ -81,7 +81,7 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Content detail level. "preview" returns first 200 chars (default). "full" returns complete text content.'
           ),
-        limit: mcpLimit(20),
+        limit: mcpLimit(20, 100),
         offset: mcpOffset(0),
         order: z
           .enum(['asc', 'desc'])

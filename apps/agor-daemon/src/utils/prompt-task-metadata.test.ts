@@ -45,6 +45,11 @@ describe('buildPromptTaskMetadata', () => {
       widget_resolved_by_user_id: 'spoofed-resolver',
       source: 'gateway',
       initial_message_id: 'spoofed-message',
+      completion_callback: {
+        target_session_id: 'attacker-session',
+        requested_from_session_id: 'attacker-session',
+        requested_by_user_id: 'attacker',
+      },
     } as unknown as Parameters<typeof buildPromptTaskMetadata>[0];
 
     expect(

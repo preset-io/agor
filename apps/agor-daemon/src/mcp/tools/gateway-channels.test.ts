@@ -15,7 +15,7 @@ import {
   requiredBotScopes,
 } from '@agor/core/gateway';
 import { AGENTIC_TOOL_NAMES, getRequiredSecretFields } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
 import { getUploadDirectory, MAX_UPLOAD_FILE_SIZE } from '../../utils/upload.js';

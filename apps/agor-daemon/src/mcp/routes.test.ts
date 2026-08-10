@@ -35,6 +35,7 @@ async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
   const resp = await fetch(`${DAEMON_URL}/mcp`, {
     method: 'POST',
     headers: {
+      Accept: 'application/json, text/event-stream',
       'Content-Type': 'application/json',
       Authorization: `Bearer ${sessionToken}`,
     },
@@ -63,6 +64,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     const resp = await fetch(`${DAEMON_URL}/mcp`, {
       method: 'POST',
       headers: {
+        Accept: 'application/json, text/event-stream',
         'Content-Type': 'application/json',
         Authorization: `Bearer ${sessionToken}`,
       },

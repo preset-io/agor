@@ -51,7 +51,7 @@ const faqItems: Array<{ question: string; answer: string }> = [
   {
     question: "What does Agor's community telemetry collect?",
     answer:
-      'When enabled, Agor sends lightweight anonymous install and aggregate usage summaries: version, install channel, OS family, deployment kind, broad configuration modes, and aggregate counts like sessions and prompts. It never sends prompts, messages, repo names, file paths, code, emails, secrets, or tokens. Disable it with AGOR_TELEMETRY=0, DO_NOT_TRACK=1, or "agor telemetry off".',
+      'When enabled, Agor sends lightweight anonymous install and aggregate usage summaries: version, install channel, OS family, deployment kind, broad configuration modes, and aggregate counts like sessions and prompts. It never sends prompts, messages, repo names, file paths, code, emails, secrets, or tokens. Disable it with AGOR_TELEMETRY=0, DO_NOT_TRACK=1, or deployment-owned config.yaml.',
   },
 ];
 

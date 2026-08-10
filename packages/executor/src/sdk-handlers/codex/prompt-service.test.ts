@@ -70,13 +70,16 @@ async function* streamMockEvents() {
   if (mockStreamFailure) throw mockStreamFailure;
 }
 
-// Mock @agor/core/sdk to avoid spawning real Codex CLI processes
+// Mock the Codex SDK to avoid spawning real Codex CLI processes
 vi.mock('./app-server-client.js', () => appServerMocks);
-vi.mock('@agor/core/mcp', () => mcpScopingMocks);
+vi.mock('@agor/core/mcp', async () => {
+  const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
+  return { ...actual, ...mcpScopingMocks };
+});
 vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => configMocks);
 
-vi.mock('@agor/core/sdk', () => {
+vi.mock('@openai/codex-sdk', () => {
   class MockCodexClient {
     apiKey: string;
     baseUrl: string | undefined;
@@ -113,11 +116,7 @@ vi.mock('@agor/core/sdk', () => {
     }
   }
 
-  return {
-    Codex: {
-      Codex: MockCodexClient,
-    },
-  };
+  return { Codex: MockCodexClient };
 });
 
 // Mock repositories and database
@@ -2123,7 +2122,9 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       expect.objectContaining({
         forUserId: '019e3700-user-user-user-user00000001',
-      })
+      }),
+      // Codex can drop individual tools but has no way to prompt.
+      { toolFiltering: 'exclude' }
     );
   });
 

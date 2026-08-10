@@ -10,6 +10,8 @@
 import type { DistributedWorkIdentity } from '@agor/core/coordination';
 import type {
   TaskDispatchClaimResult,
+  TaskTerminationCoordinationClaimInput,
+  TaskTerminationCoordinationClaimResult,
   TerminationClaimInput,
   TerminationClaimResult,
   TerminationSettlementInput,
@@ -178,6 +180,10 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     input: TerminationClaimInput,
     params?: FeathersParams
   ): Promise<TerminationClaimResult>;
+  claimTerminationCoordination(
+    input: TaskTerminationCoordinationClaimInput,
+    params?: FeathersParams
+  ): Promise<TaskTerminationCoordinationClaimResult>;
   settleTermination(
     input: TerminationSettlementInput,
     params?: FeathersParams

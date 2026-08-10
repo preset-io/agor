@@ -205,7 +205,8 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 
 - MCP servers configured via SDK's `mcpServers` option
 - Supports streamable HTTP transport with session token authentication
-- Agor's built-in MCP server auto-configured with session token via query parameter
+- Agor's built-in MCP server auto-configured with the session token in the
+  `Authorization: Bearer` header
 - Session-level MCP selection via Agor UI, same as other agents
 
 **OpenCode:** ✅ **Native support**
@@ -857,7 +858,8 @@ OpenCode supports 75+ providers. Connect them in Settings → OpenCode Providers
 OpenCode supports MCP servers via its REST API:
 
 - **Local (STDIO):** Agor injects `command` + `args` configurations
-- **Remote (Streamable HTTP):** Agor injects its built-in MCP server URL with session token
+- **Remote (Streamable HTTP):** Agor injects its built-in MCP server URL with
+  the session token in an `Authorization: Bearer` header
 - OpenCode tries Streamable HTTP first, then falls back to SSE for remote connections
 - MCP servers are added per-session and scoped to the branch directory
 

@@ -1,81 +1,91 @@
 /**
- * `agor config` - Show all configuration
+ * `agor config` - Show the effective deployment configuration.
  */
 
-import { getConfigPath, getDefaultConfig, loadConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  formatConfigYaml,
+  getConfigPath,
+  loadConfig,
+  resolveEffectiveConfig,
+} from '@agor/core/config';
 import { getDatabaseUrl } from '@agor/core/db';
-import { Command } from '@oclif/core';
+import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 
-export default class ConfigIndex extends Command {
-  static description = 'Show current configuration';
+const REDACTED = '<redacted>';
 
-  static examples = ['<%= config.bin %> <%= command.id %>'];
+function redactSecrets(config: AgorConfig): AgorConfig {
+  const copy = structuredClone(config);
+  if (copy.daemon?.jwtSecret) copy.daemon.jwtSecret = REDACTED;
+  if (copy.daemon?.masterSecret) copy.daemon.masterSecret = REDACTED;
+  if (copy.database?.postgresql?.password) copy.database.postgresql.password = REDACTED;
+  if (copy.database?.postgresql?.url) {
+    copy.database.postgresql.url = copy.database.postgresql.url.replace(
+      /(?<=:\/\/[^:/?#]+:)[^@/?#]+(?=@)/,
+      REDACTED
+    );
+  }
+  if (copy.telemetry?.write_key) copy.telemetry.write_key = REDACTED;
+  return copy;
+}
+
+function materializeDatabaseEnvironment(config: AgorConfig): AgorConfig {
+  const dialect = process.env.AGOR_DB_DIALECT;
+  if (!dialect && !process.env.DATABASE_URL && !process.env.AGOR_DB_PATH) return config;
+  if (dialect === 'postgresql' || process.env.DATABASE_URL) {
+    return {
+      ...config,
+      database: { dialect: 'postgresql', postgresql: { url: getDatabaseUrl() } },
+    };
+  }
+  return {
+    ...config,
+    database: { dialect: 'sqlite', sqlite: { path: getDatabaseUrl().replace(/^file:/, '') } },
+  };
+}
+
+export default class ConfigIndex extends Command {
+  static description = 'Show the current effective configuration (YAML + environment + defaults)';
+
+  static examples = [
+    '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --yaml',
+    '<%= config.bin %> <%= command.id %> --yaml --show-secrets > config.materialized.yaml',
+  ];
+
+  static flags = {
+    yaml: Flags.boolean({ description: 'Print only machine-readable YAML', default: false }),
+    'show-secrets': Flags.boolean({
+      description: 'Include secrets in output (required for a directly reusable materialization)',
+      default: false,
+      dependsOn: ['yaml'],
+    }),
+  };
 
   async run(): Promise<void> {
+    const { flags } = await this.parse(ConfigIndex);
     try {
-      const config = await loadConfig();
-      const defaults = getDefaultConfig();
+      const effective = materializeDatabaseEnvironment(resolveEffectiveConfig(await loadConfig()));
+      const output = flags['show-secrets'] ? effective : redactSecrets(effective);
 
-      this.log(chalk.bold('\nCurrent Configuration'));
-      this.log(chalk.dim('─'.repeat(50)));
-
-      // Database Settings
-      // Use the same centralized database URL resolution as the daemon
-      const databaseUrl = getDatabaseUrl();
-      const dialect = process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite';
-
-      this.log(chalk.bold('\nDatabase Settings:'));
-      this.log(`  dialect:       ${chalk.gray(dialect)}`);
-
-      if (dialect === 'postgresql') {
-        // Mask password in PostgreSQL URL (same pattern as daemon)
-        const maskedUrl = databaseUrl.replace(/:([^:@]+)@/, ':****@');
-        this.log(`  connection:    ${chalk.gray(maskedUrl)}`);
-      } else {
-        this.log(`  database file: ${chalk.gray(databaseUrl)}`);
-      }
-
-      this.log(
-        chalk.dim(
-          '  (Configure via AGOR_DB_DIALECT, DATABASE_URL, or AGOR_DB_PATH environment variables)'
-        )
-      );
-
-      // Daemon Settings (merge with defaults to show effective values)
-      const daemonConfig = { ...defaults.daemon, ...config.daemon };
-
-      if (daemonConfig) {
-        this.log(chalk.bold('\nDaemon Settings:'));
-        if (daemonConfig.port !== undefined) {
-          this.log(`  port:          ${chalk.gray(String(daemonConfig.port))}`);
-        }
-        if (daemonConfig.host) {
-          this.log(`  host:          ${chalk.gray(daemonConfig.host)}`);
-        }
-        if (daemonConfig.jwtSecret) {
-          this.log(
-            `  JWT secret:    ${chalk.gray(`***${daemonConfig.jwtSecret.slice(-8)}`)} ${chalk.dim('(saved)')}`
+      if (flags.yaml) {
+        if (!flags['show-secrets']) {
+          this.warn(
+            'Secrets are redacted. Use --show-secrets only when writing to a protected destination.'
           );
         }
+        this.log(formatConfigYaml(output).trimEnd());
+        return;
       }
 
-      // Config File Path
-      this.log(chalk.bold('\nConfig File:'));
-      this.log(`  ${chalk.dim(getConfigPath())}`);
-
-      // Available Configuration Keys
-      this.log(chalk.bold('\nAvailable Configuration Keys:'));
-      this.log(chalk.dim('  Use `agor config set <key> <value>` to set any of these:'));
-      this.log('');
-      this.log(chalk.cyan('  Daemon:'));
-      this.log('    daemon.port, daemon.host');
-      this.log('    daemon.jwtSecret (auto-generated if not set)');
-
-      this.log('');
+      this.log(chalk.bold('\nCurrent Effective Configuration'));
+      this.log(chalk.dim(`Source: ${getConfigPath()} + environment overrides + defaults`));
+      this.log(chalk.dim('Secrets are redacted. Use --yaml for machine-readable output.\n'));
+      this.log(formatConfigYaml(output).trimEnd());
     } catch (error) {
       this.error(
-        `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to resolve effective config: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

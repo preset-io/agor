@@ -106,7 +106,7 @@ export function writeAgorYml(
   const yamlContent = yaml.dump(schema, {
     indent: 2,
     lineWidth: 100,
-    quoteStyle: 'double',
+    quotingType: '"',
     forceQuotes: false,
   });
 

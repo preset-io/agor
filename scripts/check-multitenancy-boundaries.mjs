@@ -38,8 +38,12 @@ const checks = [
     // tenant-aware realtime facade instead of adding more raw emits/rooms.
     baseline: {
       'apps/agor-daemon/src/register-hooks.ts': 1,
-      'apps/agor-daemon/src/register-services.ts': 11,
-      'apps/agor-daemon/src/register-routes.ts': 10,
+      // OAuth HA hints use the audited native-event inventory; authorization
+      // URLs and standalone socket hints are explicitly local-only.
+      'apps/agor-daemon/src/register-services.ts': 5,
+      // HA fork/spawn now use the tenant-aware Feathers event helper instead
+      // of raw global Socket.IO broadcasts.
+      'apps/agor-daemon/src/register-routes.ts': 6,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
@@ -51,8 +55,13 @@ const checks = [
       // leave paths so they never materialize a room), and both leave-all
       // helpers live here on purpose. Executor control rooms are explicitly
       // tenant-namespaced and can only be joined from a verified scoped JWT.
-      'apps/agor-daemon/src/utils/realtime-publish.ts': 9,
-      'apps/agor-daemon/src/setup/socketio.ts': 17,
+      // Includes the centralized tenant-channel eviction helper used on
+      // logout/live authentication replacement.
+      'apps/agor-daemon/src/utils/realtime-publish.ts': 10,
+      // Raw Socket.IO presence/user rooms are deliberately centralized here.
+      // Every join/leave/broadcast is tenant-namespaced, including logout
+      // cleanup, and cross-tenant negative tests cover same user/board IDs.
+      'apps/agor-daemon/src/setup/socketio.ts': 15,
     },
   },
 

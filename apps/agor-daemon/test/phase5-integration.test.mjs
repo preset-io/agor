@@ -28,7 +28,7 @@ console.log('   4. Call prompt endpoint and verify executor routing\n');
 console.log('📖 Manual Test Steps:');
 console.log('');
 console.log('1. Enable executor-based execution:');
-console.log('   agor config set execution.use_executor true');
+console.log('   Edit ~/.agor/config.yaml and set execution.use_executor: true');
 console.log('');
 console.log('2. Restart daemon (in watch mode):');
 console.log('   cd apps/agor-daemon && pnpm dev');

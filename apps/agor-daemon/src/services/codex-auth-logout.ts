@@ -20,13 +20,12 @@
  *   from the authenticated user, never from request data.
  * - Removal is idempotent; a genuine delete failure surfaces and does NOT clear
  *   the stored method (a login we couldn't remove keeps working).
- * - Refuses hosted multi-tenant mode, exactly like import/device: there the
- *   auth.json is the daemon's own server-global file, so a tenant user must not
- *   be able to delete it. (It is NOT gated on the tool-enabled check —
- *   cleaning up a login must stay possible even after Codex is disabled.)
+ * - Shared identity resolution refuses an auth-resolved tenant topology unless
+ *   the execution substrate guarantees a persistent-per-user home. Cleanup is
+ *   not gated on the tool-enabled check, so it remains possible after Codex is
+ *   disabled.
  */
 
-import { loadConfigSync } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -61,13 +60,8 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
       }
       const userId = authUser.user_id as UserID;
 
-      // Refuse hosted multi-tenant mode, like import/device: there the Codex
-      // auth.json is the daemon's server-global file, so no tenant user may
-      // delete it via this endpoint.
-      if (loadConfigSync().multi_tenancy?.mode === 'required_from_auth') {
-        throw new BadRequest('Codex login management is unavailable in hosted multi-tenant mode.');
-      }
-
+      // Hosted multi-tenant mode is safe only when the external substrate
+      // selects the same isolated home from trusted tenant/user identity for
       const tenantId = getCurrentTenantId();
       if (!tenantId) throw new Error('Missing active tenant context for Codex auth logout');
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
@@ -85,7 +79,10 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
       // do NOT clear the method in that case so a login we couldn't remove keeps
       // working. Log the error class only — never token bytes.
       try {
-        await deleteCodexAuthViaExecutor(identity.unixUser);
+        await deleteCodexAuthViaExecutor(identity.unixUser, {
+          reportedUnixUser: identity.reportedUnixUser,
+          userId: identity.userId,
+        });
       } catch (err) {
         console.error(
           `[CodexAuth] Failed to delete auth.json${

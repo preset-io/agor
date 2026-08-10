@@ -147,19 +147,20 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
-      # Executor Unix user isolation (set AGOR_USE_EXECUTOR=true to enable)
-      # When enabled, executors run as separate Unix user via sudo
+      # Executor Unix user isolation (set AGOR_USE_EXECUTOR=true to enable).
+      # An explicit username remains an override; otherwise executor mode falls
+      # back to agor_executor in the effective-config resolver.
       - AGOR_USE_EXECUTOR=${AGOR_USE_EXECUTOR:-false}
-      - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-agor_executor}
+      - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-}
 
-      # Branch RBAC + Unix isolation tier (written into ~/.agor/config.yaml
-      # by the entrypoint before the daemon boots). Both are optional — when
-      # unset the existing config.yaml values are left alone.
+      # Branch RBAC + Unix isolation tier (resolved in memory; config.yaml is
+      # never rewritten). Both are optional.
       #   AGOR_RBAC_ENABLED=true         → execution.branch_rbac: true
       #   AGOR_UNIX_USER_MODE=insulated  → execution.unix_user_mode: insulated
       #                                    (simple | insulated | strict)
       - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-}
       - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-}
+      - AGOR_DAEMON_UNIX_USER=${AGOR_DAEMON_UNIX_USER:-agor}
 
       # Instance identification (optional - displayed in UI navbar)
       - INSTANCE_LABEL=${INSTANCE_LABEL:-}

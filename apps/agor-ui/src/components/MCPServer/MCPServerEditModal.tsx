@@ -90,6 +90,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       formValues.oauth_scope = server.auth?.oauth_scope;
       formValues.oauth_grant_type = server.auth?.oauth_grant_type || 'client_credentials';
       formValues.oauth_mode = server.auth?.oauth_mode || 'per_user';
+      formValues.oauth_compatibility_mode = server.auth?.oauth_compatibility_mode || 'strict';
+      formValues.oauth_dcr_mode = server.auth?.oauth_dcr_mode || 'disabled';
     }
 
     form.setFieldsValue(formValues);

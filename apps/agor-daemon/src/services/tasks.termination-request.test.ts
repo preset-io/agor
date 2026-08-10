@@ -16,13 +16,19 @@ describe('TasksService termination request publication', () => {
     } as Task;
     const claimTermination = vi.fn().mockResolvedValue({ outcome: 'claimed', task });
     const emit = vi.fn();
-    const patchSession = vi.fn().mockResolvedValue({});
+    const emitSession = vi.fn();
+    const session = {
+      session_id: task.session_id,
+      status: 'stopping',
+      ready_for_prompt: false,
+    };
     const service = Object.create(TasksService.prototype) as TasksService;
     Reflect.set(service, 'taskRepo', { claimTermination });
     Reflect.set(service, 'app', {
       service(path: string) {
         if (path === 'tasks') return { emit };
-        if (path === 'sessions') return { patch: patchSession };
+        if (path === 'sessions')
+          return { get: vi.fn().mockResolvedValue(session), emit: emitSession };
         throw new Error(`Unexpected service ${path}`);
       },
     });
@@ -45,10 +51,10 @@ describe('TasksService termination request publication', () => {
       task,
       expect.objectContaining({ path: 'tasks', method: 'patch' })
     );
-    expect(patchSession).toHaveBeenCalledWith(
-      task.session_id,
-      { status: 'stopping', ready_for_prompt: false },
-      expect.objectContaining({ provider: undefined })
+    expect(emitSession).toHaveBeenCalledWith(
+      'patched',
+      session,
+      expect.objectContaining({ path: 'sessions', method: 'patch' })
     );
   });
 

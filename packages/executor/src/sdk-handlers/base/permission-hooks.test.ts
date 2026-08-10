@@ -8,6 +8,7 @@ vi.mock('@agor/core', () => ({
   shortId: vi.fn((id: string) => id),
 }));
 
+import { EMPTY_MCP_TOOL_PERMISSION_INDEX } from './mcp-tool-permissions.js';
 import { createCanUseToolCallback } from './permission-hooks.js';
 
 /**
@@ -49,6 +50,7 @@ describe('createCanUseToolCallback', () => {
       mcpServerRepo: {
         findById: vi.fn(),
       } as any,
+      mcpToolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX,
       sessionMCPRepo: {
         findBySessionId: vi.fn().mockResolvedValue([]),
         listServers: vi.fn().mockResolvedValue([]),

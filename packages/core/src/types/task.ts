@@ -1,5 +1,6 @@
 // src/types/task.ts
 import type { PersistedAgenticToolName } from './agentic-tool';
+import type { GatewayInboundEventID } from './gateway';
 import type { MessageID, SessionID, TaskID, UserID } from './id';
 import type { PersistedMessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
@@ -84,6 +85,21 @@ export type TerminationCause =
   | 'heartbeat_lost'
   | 'sdk_health_failure';
 
+/**
+ * Expiring, database-fenced ownership of one containment attempt.
+ *
+ * The daemon identity is diagnostic. `claim_token` is the correctness fence:
+ * a coordinator may settle containment only while this exact token remains on
+ * the Task. A replacement daemon can claim a new token after expiry.
+ */
+export interface TerminationCoordinationClaim {
+  claim_token: string;
+  claimed_at: string;
+  lease_expires_at: string;
+  instance_id: string;
+  boot_id: string;
+}
+
 export interface TerminationRequest {
   cause: TerminationCause;
   requested_at: string;
@@ -96,6 +112,8 @@ export interface TerminationRequest {
    * process-group absence verification before the session becomes promptable.
    */
   executor_quiesced_at?: string;
+  /** Current expiring containment coordinator, if one has been elected. */
+  coordination?: TerminationCoordinationClaim;
 }
 
 export interface ExecutorTerminationCompleteInput {
@@ -135,7 +153,8 @@ export interface TaskMetadata {
    * paths race.
    */
   callback_dispatches?: Array<{
-    event: 'session_completion';
+    /** `session_completion` is retained for callbacks recorded before task-level callbacks existed. */
+    event: 'task_completion' | 'session_completion';
     target_session_id: SessionID;
     queued_task_id?: TaskID;
     dispatched_at: string;
@@ -153,6 +172,10 @@ export interface TaskMetadata {
   widget_id?: MessageID;
   /** User who resolved the widget; Task execution remains session-owner attributed. */
   widget_resolved_by_user_id?: UserID;
+  /** Provider-event occurrence that durably admitted this gateway prompt. */
+  gateway_inbound_event_id?: GatewayInboundEventID;
+  /** Provider reply target captured for this gateway Task (for example an editable ack ID). */
+  gateway_reply_metadata?: Record<string, unknown>;
   /**
    * Durable identity of the Task's first transcript row. Internal
    * idempotent producers persist this alongside the Task so any daemon that
@@ -160,6 +183,17 @@ export interface TaskMetadata {
    * process-local message identity.
    */
   initial_message_id?: MessageID;
+
+  /**
+   * Immutable one-shot completion callback requested for this exact task.
+   * The MCP prompt tool derives both identities from trusted request context;
+   * callers cannot nominate an arbitrary destination.
+   */
+  completion_callback?: {
+    target_session_id: SessionID;
+    requested_from_session_id: SessionID;
+    requested_by_user_id: string;
+  };
 }
 
 /**

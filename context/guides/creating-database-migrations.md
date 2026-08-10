@@ -58,7 +58,8 @@ pnpm agor db migrate
 
 # 5. (Optional) Test against a live agor-managed env.
 #    The container's docker-entrypoint.sh runs `pnpm agor db migrate --yes`
-#    on boot, so a branch restart applies pending migrations automatically.
+#    on boot, so a branch restart applies ordinary pending migrations automatically.
+#    Purpose-marked offline cutovers still require an explicit maintenance run.
 
 # 6. Commit schema files + new SQL + the meta/_journal.json updates.
 git add packages/core/src/db/schema.{sqlite,postgres}.ts
@@ -102,7 +103,7 @@ Validate enum values at the application layer instead — Drizzle schema `enum` 
 ### New tenant-table FKs must be made `DEFERRABLE INITIALLY IMMEDIATE` (Postgres)
 
 `agor tenant import` restores a whole tenant inside one transaction with
-`SET CONSTRAINTS ALL DEFERRED`, which only works on constraints *declared*
+`SET CONSTRAINTS ALL DEFERRED`, which only works on constraints _declared_
 deferrable. Migration `0070_tenant_portability_deferrable_fks` marked every
 existing FK between tenant-manifest tables `DEFERRABLE INITIALLY IMMEDIATE`
 (behaviorally identical for normal transactions — checks still run per
@@ -145,6 +146,16 @@ setting to the migration transaction, so it never leaks onto pooled connections.
 The corollary for operators: migrations that ALTER existing tables should run
 with the daemon **stopped** (`systemctl stop` → `agor db migrate` → `start`);
 live daemon connections hold shared locks that will trip the timeout.
+
+### Protocol-breaking migrations require an enforced offline cutover
+
+If old and new workers cannot safely share the additive schema, register the
+migration in `OFFLINE_CUTOVER_MIGRATIONS` in `src/db/migrate.ts`. Existing
+PostgreSQL databases then refuse automatic migration until an operator stops
+every daemon and runs `agor db migrate --offline-cutover`. Fresh databases may
+still migrate automatically because no old worker can exist. Document the
+exact stop → migrate → start order in the user guide; the acknowledgement flag
+cannot itself prove that another host has stopped.
 
 ### Schemas drifting
 

@@ -22,11 +22,16 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createRequire } from 'node:module';
 
-import { BotFrameworkAdapter, type ConversationReference, TurnContext } from 'botbuilder';
+import type {
+  BotFrameworkAdapter as BotFrameworkAdapterType,
+  ConversationReference,
+  TurnContext as TurnContextType,
+} from 'botbuilder';
 
 import type { ChannelType } from '../../types/gateway';
-import type { GatewayConnector, InboundMessage } from '../connector';
+import type { GatewayConnector, GatewayInboundCallback } from '../connector';
 
 interface TeamsConfig {
   app_id: string;
@@ -36,6 +41,20 @@ interface TeamsConfig {
   webhook_path?: string;
   require_mention?: boolean;
   allow_thread_replies_without_mention?: boolean;
+}
+
+type BotBuilderModule = typeof import('botbuilder');
+
+function loadBotBuilder(): BotBuilderModule {
+  try {
+    return createRequire(import.meta.url)('botbuilder') as BotBuilderModule;
+  } catch (error) {
+    throw new Error(
+      'Microsoft Teams support requires the optional botbuilder package. ' +
+        'Install it alongside Agor, then retry. See https://agor.live/guide/extended-install#agentic-tools',
+      { cause: error }
+    );
+  }
 }
 
 /**
@@ -177,7 +196,8 @@ function wrapResponse(res: ServerResponse): ServerResponse & {
 export class TeamsConnector implements GatewayConnector {
   readonly channelType: ChannelType = 'teams';
 
-  private adapter: BotFrameworkAdapter;
+  private adapter: BotFrameworkAdapterType;
+  private TurnContext: BotBuilderModule['TurnContext'];
   private config: TeamsConfig;
   private server: Server | null = null;
 
@@ -194,6 +214,8 @@ export class TeamsConnector implements GatewayConnector {
       throw new Error('Teams connector requires app_password in config');
     }
 
+    const { BotFrameworkAdapter, TurnContext } = loadBotBuilder();
+    this.TurnContext = TurnContext;
     this.adapter = new BotFrameworkAdapter({
       appId: this.config.app_id,
       appPassword: this.config.app_password,
@@ -237,7 +259,7 @@ export class TeamsConnector implements GatewayConnector {
    * Creates a lightweight HTTP server that receives Bot Framework activities
    * from Azure Bot Service, processes them, and calls the gateway callback.
    */
-  async startListening(callback: (msg: InboundMessage) => void): Promise<void> {
+  async startListening(callback: GatewayInboundCallback): Promise<void> {
     const port = this.config.webhook_port ?? 3978;
     const path = this.config.webhook_path ?? '/api/messages';
     const requireMention = this.config.require_mention ?? true;
@@ -275,7 +297,7 @@ export class TeamsConnector implements GatewayConnector {
         this.adapter.processActivity(
           req as IncomingMessage & { body: unknown; headers: Record<string, string> },
           wrapResponse(res),
-          async (turnContext: TurnContext) => {
+          async (turnContext: TurnContextType) => {
             const activity = turnContext.activity;
 
             // Only handle message activities
@@ -289,7 +311,7 @@ export class TeamsConnector implements GatewayConnector {
             }
 
             // Store ConversationReference for proactive messaging
-            const ref = TurnContext.getConversationReference(activity);
+            const ref = this.TurnContext.getConversationReference(activity);
 
             // Resolve bot name from the first activity's recipient
             if (!botName && activity.recipient?.name) {
@@ -430,21 +452,30 @@ export class TeamsConnector implements GatewayConnector {
               | string
               | undefined;
 
-            callback({
-              threadId,
-              text: messageText,
-              userId: activity.from?.id ?? 'unknown',
-              timestamp: activity.timestamp?.toISOString() ?? new Date().toISOString(),
-              metadata: {
-                teams_conversation_type: conversationType,
-                teams_channel_name: channelName,
-                teams_team_name: teamName,
-                teams_user_name: userName,
-                teams_user_aad_id: userAadObjectId,
-                teams_tenant_id: tenantId,
-                requires_mapping_verification: !hasMention && isThreadReply,
-              },
-            });
+            // Teams is standalone-only today. Preserve its historical quick
+            // Bot Framework acknowledgement rather than holding the webhook
+            // open while Agor admits the prompt; PostgreSQL mode fails this
+            // connector closed before startup.
+            void Promise.resolve(
+              callback({
+                providerEventId: activity.id
+                  ? `teams:activity:${rawConversationId}:${activity.id}`
+                  : undefined,
+                threadId,
+                text: messageText,
+                userId: activity.from?.id ?? 'unknown',
+                timestamp: activity.timestamp?.toISOString() ?? new Date().toISOString(),
+                metadata: {
+                  teams_conversation_type: conversationType,
+                  teams_channel_name: channelName,
+                  teams_team_name: teamName,
+                  teams_user_name: userName,
+                  teams_user_aad_id: userAadObjectId,
+                  teams_tenant_id: tenantId,
+                  requires_mapping_verification: !hasMention && isThreadReply,
+                },
+              })
+            ).catch((error) => console.error('[teams] Gateway callback failed:', error));
           }
         );
       });

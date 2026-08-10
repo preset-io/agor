@@ -8,10 +8,12 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
 
 export interface OAuthMetadata {
+  resource?: string;
   authorization_servers: string[];
   scopes_supported?: string[];
   bearer_methods_supported?: string[];
@@ -23,8 +25,9 @@ interface CachedAuthCodeToken {
   fetchedAt: number;
 }
 
-// Cache tokens from Authorization Code flow (per resource metadata URL)
-// Key is the resource metadata URL to avoid cross-tenant leakage
+// Legacy standalone/CLI cache for Authorization Code flow tokens. This key is
+// NOT a tenant/user/server namespace. Daemon paths therefore pass
+// cacheToken:false and never consult this Map.
 const authCodeTokenCache = new Map<string, CachedAuthCodeToken>();
 
 /**
@@ -68,6 +71,44 @@ interface OAuthRawTokenResponse {
   };
 }
 
+/**
+ * Classified authorization-code exchange failure.
+ *
+ * `ambiguous=true` means the request may have reached the provider and the
+ * single-use authorization code may already be consumed. Callers must not
+ * replay it automatically.
+ */
+export class OAuthCodeExchangeError extends Error {
+  constructor(
+    message: string,
+    readonly ambiguous: boolean,
+    readonly failureCode: 'provider_rejected' | 'transport_ambiguous' | 'response_ambiguous'
+  ) {
+    super(message);
+    this.name = 'OAuthCodeExchangeError';
+  }
+}
+
+/**
+ * Known authorization-response validation failure before token-endpoint I/O.
+ * The provider code has not been submitted, so callers must persist `failed`,
+ * never the non-replayable `ambiguous` exchange outcome.
+ */
+export class OAuthCallbackValidationError extends Error {
+  readonly ambiguous = false;
+  readonly afterProviderExchange = false;
+
+  constructor(
+    readonly failureCode:
+      | 'callback_state_mismatch'
+      | 'callback_issuer_missing'
+      | 'callback_issuer_mismatch'
+  ) {
+    super(`OAuth callback validation failed (${failureCode})`);
+    this.name = 'OAuthCallbackValidationError';
+  }
+}
+
 // Buffer before expiry to avoid using soon-to-expire tokens
 const EXPIRY_BUFFER_SECONDS = 60;
 
@@ -80,6 +121,7 @@ export interface AuthorizationServerMetadata {
   response_types_supported?: string[];
   grant_types_supported?: string[];
   code_challenge_methods_supported?: string[];
+  authorization_response_iss_parameter_supported?: boolean;
 }
 
 export interface DynamicClientRegistrationResponse {
@@ -128,7 +170,10 @@ function parseWWWAuthenticate(header: string): string | null {
  * @param mcpUrl - The MCP server URL
  * @returns The resource metadata URL if discoverable, null otherwise
  */
-export async function discoverResourceMetadataUrl(mcpUrl: string): Promise<string | null> {
+export async function discoverResourceMetadataUrl(
+  mcpUrl: string,
+  options: { allowLocalhostHttp?: boolean } = {}
+): Promise<string | null> {
   const url = new URL(mcpUrl);
   const origin = url.origin;
   const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
@@ -143,23 +188,21 @@ export async function discoverResourceMetadataUrl(mcpUrl: string): Promise<strin
 
   for (const candidate of candidates) {
     try {
-      console.log('[MCP OAuth] Trying resource metadata discovery:', candidate);
-      const response = await fetch(candidate, { signal: AbortSignal.timeout(10_000) });
+      const response = await safeOutboundFetch(candidate, {
+        redirect: 'follow',
+        timeoutMs: 10_000,
+        allowLocalhostHttp: options.allowLocalhostHttp,
+      });
       if (response.ok) {
         // Validate it looks like proper metadata
         const data = (await response.json()) as Record<string, unknown>;
         if (data.authorization_servers && Array.isArray(data.authorization_servers)) {
-          console.log('[MCP OAuth] ✓ Discovered resource metadata at:', candidate);
+          console.log('[MCP OAuth] Resource metadata discovered');
           return candidate;
         }
       }
-    } catch (err) {
-      console.log(
-        '[MCP OAuth] Discovery failed for',
-        candidate,
-        ':',
-        err instanceof Error ? err.message : String(err)
-      );
+    } catch {
+      console.log('[MCP OAuth] Resource metadata discovery candidate failed');
     }
   }
 
@@ -179,7 +222,8 @@ export async function discoverResourceMetadataUrl(mcpUrl: string): Promise<strin
  */
 export async function resolveResourceMetadataUrl(
   wwwAuthenticateHeader: string | null,
-  mcpUrl: string
+  mcpUrl: string,
+  options: { allowLocalhostHttp?: boolean } = {}
 ): Promise<{ metadataUrl: string; source: 'header' | 'well-known' } | null> {
   // Strategy 1: Parse from WWW-Authenticate header
   if (wwwAuthenticateHeader) {
@@ -190,7 +234,7 @@ export async function resolveResourceMetadataUrl(
   }
 
   // Strategy 2: Auto-discover via .well-known endpoint
-  const discovered = await discoverResourceMetadataUrl(mcpUrl);
+  const discovered = await discoverResourceMetadataUrl(mcpUrl, options);
   if (discovered) {
     return { metadataUrl: discovered, source: 'well-known' };
   }
@@ -224,7 +268,8 @@ export async function resolveResourceMetadataUrl(
  * @returns Discovered AS metadata + the URL it was fetched from, or null
  */
 export async function discoverAuthorizationServerFromMcpOrigin(
-  mcpUrl: string
+  mcpUrl: string,
+  options: { allowLocalhostHttp?: boolean } = {}
 ): Promise<{ metadata: AuthorizationServerMetadata; discoveredAt: string } | null> {
   const url = new URL(mcpUrl);
   const origin = url.origin;
@@ -247,8 +292,11 @@ export async function discoverAuthorizationServerFromMcpOrigin(
 
   for (const candidate of unique) {
     try {
-      console.log('[MCP OAuth] Trying AS-direct discovery:', candidate);
-      const response = await fetch(candidate, { signal: AbortSignal.timeout(10_000) });
+      const response = await safeOutboundFetch(candidate, {
+        redirect: 'follow',
+        timeoutMs: 10_000,
+        allowLocalhostHttp: options.allowLocalhostHttp,
+      });
       if (!response.ok) continue;
       const data = (await response.json()) as Partial<AuthorizationServerMetadata>;
       // Minimal validation: must have authorization_endpoint + token_endpoint
@@ -256,19 +304,14 @@ export async function discoverAuthorizationServerFromMcpOrigin(
         typeof data.authorization_endpoint === 'string' &&
         typeof data.token_endpoint === 'string'
       ) {
-        console.log('[MCP OAuth] ✓ Discovered AS metadata at:', candidate);
+        console.log('[MCP OAuth] Authorization-server metadata discovered');
         return {
           metadata: data as AuthorizationServerMetadata,
           discoveredAt: candidate,
         };
       }
-    } catch (err) {
-      console.log(
-        '[MCP OAuth] AS-direct discovery failed for',
-        candidate,
-        ':',
-        err instanceof Error ? err.message : String(err)
-      );
+    } catch {
+      console.log('[MCP OAuth] Authorization-server discovery candidate failed');
     }
   }
 
@@ -316,16 +359,18 @@ export type MCPOAuthDiscoveryResult =
  */
 export async function resolveMCPOAuthDiscovery(
   wwwAuthenticateHeader: string | null,
-  mcpUrl: string
+  mcpUrl: string,
+  options: { compatibilityMode?: 'strict' | 'legacy'; allowLocalhostHttp?: boolean } = {}
 ): Promise<MCPOAuthDiscoveryResult | null> {
   // Strategies 1 + 2: RFC 9728 (header hint, then well-known fallback)
-  const rfc9728 = await resolveResourceMetadataUrl(wwwAuthenticateHeader, mcpUrl);
+  const rfc9728 = await resolveResourceMetadataUrl(wwwAuthenticateHeader, mcpUrl, options);
   if (rfc9728) {
     return { kind: 'resource-metadata', ...rfc9728 };
   }
 
   // Strategies 3 + 4: AS metadata directly at MCP origin (RFC 8414 / OIDC)
-  const asDirect = await discoverAuthorizationServerFromMcpOrigin(mcpUrl);
+  if ((options.compatibilityMode ?? 'strict') !== 'legacy') return null;
+  const asDirect = await discoverAuthorizationServerFromMcpOrigin(mcpUrl, options);
   if (asDirect) {
     return {
       kind: 'authorization-server',
@@ -340,8 +385,15 @@ export async function resolveMCPOAuthDiscovery(
 /**
  * Fetch Protected Resource Metadata (RFC 9728)
  */
-async function fetchResourceMetadata(metadataUrl: string): Promise<OAuthMetadata> {
-  const response = await fetch(metadataUrl, { signal: AbortSignal.timeout(15_000) });
+async function fetchResourceMetadata(
+  metadataUrl: string,
+  options: { allowLocalhostHttp?: boolean } = {}
+): Promise<OAuthMetadata> {
+  const response = await safeOutboundFetch(metadataUrl, {
+    redirect: 'follow',
+    timeoutMs: 15_000,
+    allowLocalhostHttp: options.allowLocalhostHttp,
+  });
   if (!response.ok) {
     throw new Error(
       `Failed to fetch OAuth resource metadata from ${metadataUrl} (${response.status}). ` +
@@ -388,17 +440,19 @@ async function registerDynamicClient(
   registrationEndpoint: string,
   redirectUri: string,
   clientName: string = 'Agor MCP Client',
-  scope?: string
+  scope?: string,
+  reuseLocalCache = true,
+  allowLocalhostHttp = false
 ): Promise<DynamicClientRegistrationResponse> {
   // Check cache first
   const cacheKey = registrationEndpoint;
-  const cached = dynamicClientCache.get(cacheKey);
+  const cached = reuseLocalCache ? dynamicClientCache.get(cacheKey) : undefined;
   if (cached && cached.redirect_uri === redirectUri) {
     console.log('[MCP OAuth] Using cached dynamic client registration');
     return { client_id: cached.client_id, client_secret: cached.client_secret };
   }
 
-  console.log('[MCP OAuth] Performing Dynamic Client Registration at:', registrationEndpoint);
+  console.log('[MCP OAuth] Performing Dynamic Client Registration');
 
   // biome-ignore lint/suspicious/noExplicitAny: DCR request shape varies per RFC 7591
   const registrationRequest: any = {
@@ -413,23 +467,23 @@ async function registerDynamicClient(
   // Per RFC 7591 §2, the scope field is a space-separated string of scope values.
   if (scope) {
     registrationRequest.scope = scope;
-    console.log('[MCP OAuth] Registering client with scope:', scope);
   }
 
-  const response = await fetch(registrationEndpoint, {
+  const response = await safeOutboundFetch(registrationEndpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
     body: JSON.stringify(registrationRequest),
-    signal: AbortSignal.timeout(15_000),
+    redirect: 'error',
+    timeoutMs: 15_000,
+    allowLocalhostHttp,
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
     throw new Error(
-      `Dynamic Client Registration failed (${response.status}): ${errorText}\n\n` +
+      `Dynamic Client Registration failed (${response.status}).\n\n` +
         'This MCP server does not support Dynamic Client Registration (RFC 7591). ' +
         "You need to register an OAuth app in the provider's developer portal " +
         '(e.g. figma.com/developers/apps for Figma) and enter the Client ID and ' +
@@ -439,17 +493,38 @@ async function registerDynamicClient(
 
   const result = (await response.json()) as DynamicClientRegistrationResponse;
 
-  // Cache the result
-  dynamicClientCache.set(cacheKey, {
-    client_id: result.client_id,
-    client_secret: result.client_secret,
-    redirect_uri: redirectUri,
-  });
+  if (typeof result.client_id !== 'string' || !result.client_id.trim()) {
+    throw new Error('Dynamic Client Registration returned an invalid client ID');
+  }
+  if (!result.redirect_uris?.includes(redirectUri)) {
+    throw new Error('Dynamic Client Registration did not bind the required redirect URI');
+  }
+  const authMethod = result.token_endpoint_auth_method ?? 'none';
+  if (!['none', 'client_secret_basic'].includes(authMethod)) {
+    throw new Error('Dynamic Client Registration returned an unsupported token auth method');
+  }
+  if (authMethod === 'client_secret_basic' && !result.client_secret) {
+    throw new Error('Dynamic Client Registration omitted the required client secret');
+  }
+  if (authMethod === 'none' && result.client_secret) {
+    throw new Error('Dynamic Client Registration returned incompatible public-client credentials');
+  }
+  if (result.grant_types && !result.grant_types.includes('authorization_code')) {
+    throw new Error('Dynamic Client Registration did not enable the authorization-code grant');
+  }
+  if (result.response_types && !result.response_types.includes('code')) {
+    throw new Error('Dynamic Client Registration did not enable the code response type');
+  }
 
-  console.log('[MCP OAuth] Dynamic client registered:', {
-    client_id: result.client_id,
-    client_name: result.client_name,
-  });
+  if (reuseLocalCache) {
+    dynamicClientCache.set(cacheKey, {
+      client_id: result.client_id,
+      client_secret: result.client_secret,
+      redirect_uri: redirectUri,
+    });
+  }
+
+  console.log('[MCP OAuth] Dynamic client registered');
 
   return result;
 }
@@ -477,7 +552,8 @@ function buildWellKnownUrl(issuerUrl: string, wellKnownSuffix: string): string {
  * Falls back to OIDC discovery and naive URL construction.
  */
 export async function fetchAuthorizationServerMetadata(
-  authServerUrl: string
+  authServerUrl: string,
+  options: { compatibilityMode?: 'strict' | 'legacy'; allowLocalhostHttp?: boolean } = {}
 ): Promise<AuthorizationServerMetadata> {
   const cleanUrl = authServerUrl.replace(/\/$/, '');
   const urlsToTry: { url: string; label: string }[] = [];
@@ -486,39 +562,49 @@ export async function fetchAuthorizationServerMetadata(
   const rfc8414Url = buildWellKnownUrl(cleanUrl, 'oauth-authorization-server');
   urlsToTry.push({ url: rfc8414Url, label: 'RFC 8414 (path-aware)' });
 
-  // 2. Naive append (common non-compliant servers just append /.well-known/...)
+  const legacy = options.compatibilityMode === 'legacy';
+  // Narrow opt-in legacy probes for non-compliant issuers.
   const naiveUrl = `${cleanUrl}/.well-known/oauth-authorization-server`;
-  if (naiveUrl !== rfc8414Url) {
+  if (legacy && naiveUrl !== rfc8414Url) {
     urlsToTry.push({ url: naiveUrl, label: 'RFC 8414 (naive append)' });
   }
 
   // 3. OIDC discovery — path-aware
   const oidcUrl = buildWellKnownUrl(cleanUrl, 'openid-configuration');
-  urlsToTry.push({ url: oidcUrl, label: 'OIDC (path-aware)' });
+  if (legacy) urlsToTry.push({ url: oidcUrl, label: 'OIDC (path-aware)' });
 
   // 4. OIDC discovery — naive append
   const naiveOidcUrl = `${cleanUrl}/.well-known/openid-configuration`;
-  if (naiveOidcUrl !== oidcUrl) {
+  if (legacy && naiveOidcUrl !== oidcUrl) {
     urlsToTry.push({ url: naiveOidcUrl, label: 'OIDC (naive append)' });
   }
 
   const errors: string[] = [];
   for (const { url, label } of urlsToTry) {
     try {
-      console.log(`[MCP OAuth] Trying ${label}: ${url}`);
-      const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      const response = await safeOutboundFetch(url, {
+        redirect: 'follow',
+        timeoutMs: 15_000,
+        allowLocalhostHttp: options.allowLocalhostHttp,
+      });
       if (response.ok) {
         console.log(`[MCP OAuth] ✓ Fetched metadata via ${label}`);
-        return (await response.json()) as AuthorizationServerMetadata;
+        const metadata = (await response.json()) as AuthorizationServerMetadata;
+        if (!legacy && metadata.issuer !== authServerUrl) {
+          throw new Error(
+            'Authorization server metadata issuer does not match the advertised issuer'
+          );
+        }
+        return metadata;
       }
-      errors.push(`${label} (${url}): HTTP ${response.status}`);
-    } catch (err) {
-      errors.push(`${label} (${url}): ${err instanceof Error ? err.message : String(err)}`);
+      errors.push(`${label}: HTTP ${response.status}`);
+    } catch {
+      errors.push(`${label}: request failed`);
     }
   }
 
   throw new Error(
-    `Failed to fetch authorization server metadata from ${authServerUrl}.\n` +
+    'Failed to fetch authorization server metadata.\n' +
       `Tried:\n${errors.map((e) => `  - ${e}`).join('\n')}\n\n` +
       'The authorization server may not support RFC 8414 or OIDC metadata discovery.\n' +
       'You can manually provide oauth_authorization_url and oauth_token_url in the MCP server config.'
@@ -639,7 +725,9 @@ async function exchangeCodeForToken(
   redirectUri: string,
   codeVerifier: string,
   clientId: string,
-  clientSecret?: string
+  clientSecret?: string,
+  resourceUri?: string,
+  allowLocalhostHttp = false
 ): Promise<OAuthTokenResponse> {
   const body: Record<string, string> = {
     grant_type: 'authorization_code',
@@ -647,11 +735,16 @@ async function exchangeCodeForToken(
     redirect_uri: redirectUri,
     code_verifier: codeVerifier,
   };
+  if (resourceUri) body.resource = resourceUri;
 
   // Build headers — use HTTP Basic auth when client_secret is available (RFC 6749 §2.3.1),
   // fall back to body params for public clients or providers that don't support Basic auth.
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
+    // GitHub's classic OAuth endpoint returns a form-encoded response by
+    // default. Request JSON explicitly so the response follows the OAuth token
+    // response shape parsed below.
+    Accept: 'application/json',
   };
 
   if (clientSecret) {
@@ -662,40 +755,72 @@ async function exchangeCodeForToken(
     body.client_id = clientId;
   }
 
-  console.log('[MCP OAuth] Token exchange request:', {
-    endpoint: tokenEndpoint,
-    hasBasicAuth: !!headers.Authorization,
-    bodyKeys: Object.keys(body),
-  });
+  console.log('[MCP OAuth] Starting authorization-code exchange');
 
-  const response = await fetch(tokenEndpoint, {
-    method: 'POST',
-    headers,
-    body: new URLSearchParams(body).toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
+  let response: Response;
+  try {
+    response = await safeOutboundFetch(tokenEndpoint, {
+      method: 'POST',
+      headers,
+      body: new URLSearchParams(body).toString(),
+      redirect: 'error',
+      timeoutMs: 15_000,
+      allowLocalhostHttp,
+    });
+  } catch {
+    throw new OAuthCodeExchangeError(
+      'The provider exchange outcome is unknown. Start a new OAuth flow.',
+      true,
+      'transport_ambiguous'
+    );
+  }
 
   console.log('[MCP OAuth] Token exchange response status:', response.status);
 
   if (!response.ok) {
-    const errorText = await response.text();
-    console.error('[MCP OAuth] Token exchange HTTP error:', response.status, errorText);
-    throw new Error(`Token exchange failed (${response.status}): ${errorText}`);
+    // Do not log or reflect the provider body: OAuth error responses are not
+    // guaranteed secret-free. Only a well-formed OAuth token error on the
+    // protocol's 400/401 statuses proves that the provider rejected this
+    // request. A bare 4xx (including timeout/rate-limit/proxy responses) may
+    // still arrive after the authorization code was consumed.
+    let explicitOAuthError = false;
+    if (response.status === 400 || response.status === 401) {
+      try {
+        const errorResponse = (await response.json()) as { error?: unknown };
+        explicitOAuthError =
+          typeof errorResponse.error === 'string' && /^[A-Za-z0-9._~-]+$/.test(errorResponse.error);
+      } catch {
+        // An unusable error response cannot prove the provider's code state.
+      }
+    }
+    const ambiguous = !explicitOAuthError;
+    throw new OAuthCodeExchangeError(
+      ambiguous
+        ? 'The provider exchange outcome is unknown. Start a new OAuth flow.'
+        : 'The provider rejected the authorization code. Start a new OAuth flow.',
+      ambiguous,
+      ambiguous ? 'transport_ambiguous' : 'provider_rejected'
+    );
   }
 
-  const json = (await response.json()) as OAuthRawTokenResponse;
-  console.log(
-    '[MCP OAuth] Token response keys:',
-    Object.keys(json),
-    'has access_token:',
-    !!json.access_token
-  );
+  let json: OAuthRawTokenResponse;
+  try {
+    json = (await response.json()) as OAuthRawTokenResponse;
+  } catch {
+    throw new OAuthCodeExchangeError(
+      'The provider exchange response was unusable. Start a new OAuth flow.',
+      true,
+      'response_ambiguous'
+    );
+  }
+  console.log('[MCP OAuth] Token exchange response parsed');
 
   // Some providers (e.g. Slack) return HTTP 200 with {"ok": false, "error": "..."} on failure
   if (json.ok === false && json.error) {
-    console.error('[MCP OAuth] Token exchange error response:', JSON.stringify(json));
-    throw new Error(
-      `Token exchange failed: ${json.error}${json.error_description ? ` - ${json.error_description}` : ''}`
+    throw new OAuthCodeExchangeError(
+      'The provider rejected the authorization code. Start a new OAuth flow.',
+      false,
+      'provider_rejected'
     );
   }
 
@@ -703,8 +828,10 @@ async function exchangeCodeForToken(
   // Some providers (e.g. Slack) nest user tokens under authed_user.access_token.
   const accessToken = json.access_token || json.authed_user?.access_token;
   if (!accessToken) {
-    throw new Error(
-      `Token exchange succeeded but no access_token found in response. Keys: ${Object.keys(json).join(', ')}`
+    throw new OAuthCodeExchangeError(
+      'The provider exchange response was unusable. Start a new OAuth flow.',
+      true,
+      'response_ambiguous'
     );
   }
 
@@ -776,8 +903,6 @@ export async function performMCPOAuthFlow(
     );
   }
 
-  console.log('[MCP OAuth] Resource metadata URL:', metadataUrl);
-
   // Check cache first
   const cached = authCodeTokenCache.get(metadataUrl);
   if (cached && cached.expiresAt > Date.now()) {
@@ -791,8 +916,8 @@ export async function performMCPOAuthFlow(
   }
 
   // Step 2: Fetch Protected Resource Metadata (RFC 9728)
-  const resourceMetadata = await fetchResourceMetadata(metadataUrl);
-  console.log('[MCP OAuth] Resource metadata:', resourceMetadata);
+  const resourceMetadata = await fetchResourceMetadata(metadataUrl, { allowLocalhostHttp: true });
+  console.log('[MCP OAuth] Resource metadata resolved');
 
   if (
     !resourceMetadata.authorization_servers ||
@@ -803,15 +928,15 @@ export async function performMCPOAuthFlow(
 
   // Use first authorization server
   const authServerUrl = resourceMetadata.authorization_servers[0];
-  console.log('[MCP OAuth] Authorization server:', authServerUrl);
-
   // Step 3: Fetch Authorization Server Metadata (RFC 8414)
-  const authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl);
-  console.log('[MCP OAuth] Authorization server metadata:', authServerMetadata);
+  const authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl, {
+    allowLocalhostHttp: true,
+  });
+  console.log('[MCP OAuth] Authorization server metadata resolved');
 
   // Step 4: Start local callback server
   const callback = await startCallbackServer();
-  console.log('[MCP OAuth] Callback server listening on:', callback.url);
+  console.log('[MCP OAuth] Local callback server ready');
 
   try {
     // Step 5: Generate PKCE challenge
@@ -838,7 +963,9 @@ export async function performMCPOAuthFlow(
           authServerMetadata.registration_endpoint,
           callback.url,
           'Agor MCP Client',
-          scopeString
+          scopeString,
+          true,
+          true
         );
         actualClientId = registration.client_id;
         clientSecret = registration.client_secret;
@@ -846,25 +973,24 @@ export async function performMCPOAuthFlow(
         // No DCR support and no client_id provided - check for well-known MCP registration endpoint
         // Some MCP servers use /register at the auth server URL
         const mcpRegisterEndpoint = `${authServerUrl}/register`;
-        console.log('[MCP OAuth] Trying MCP-style registration endpoint:', mcpRegisterEndpoint);
-
         try {
           const registration = await registerDynamicClient(
             mcpRegisterEndpoint,
             callback.url,
             'Agor MCP Client',
-            scopeString
+            scopeString,
+            true,
+            true
           );
           actualClientId = registration.client_id;
           clientSecret = registration.client_secret;
-        } catch (regError) {
+        } catch {
           throw new Error(
             'OAuth client_id is required but the authorization server does not support ' +
               'Dynamic Client Registration.\n\n' +
               "Register an OAuth app in the provider's developer portal and enter " +
               'the Client ID (and Client Secret if required) in the MCP server configuration.\n\n' +
-              `Server: ${authServerUrl}\n` +
-              `Registration error: ${regError instanceof Error ? regError.message : String(regError)}`
+              'The registration attempt was rejected.'
           );
         }
       }
@@ -888,7 +1014,6 @@ export async function performMCPOAuthFlow(
     }
 
     console.log('[MCP OAuth] Opening browser for user authentication...');
-    console.log('[MCP OAuth] Authorization URL:', authUrl.toString());
 
     // Step 7: Open browser (use custom opener if provided, otherwise default)
     if (browserOpener) {
@@ -920,7 +1045,9 @@ export async function performMCPOAuthFlow(
       callback.url,
       pkce.verifier,
       actualClientId,
-      clientSecret
+      clientSecret,
+      resourceMetadata.resource,
+      true
     );
 
     console.log('[MCP OAuth] Access token received successfully');
@@ -1074,6 +1201,9 @@ export function getAuthCodeTokenCacheStats(): {
  */
 export interface OAuthFlowContext {
   metadataUrl: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
   tokenEndpoint: string;
   redirectUri: string;
   pkceVerifier: string;
@@ -1081,6 +1211,9 @@ export interface OAuthFlowContext {
   clientSecret?: string;
   state: string;
   authorizationUrl: string;
+  compatibilityMode: 'strict' | 'legacy';
+  /** Narrow standalone-development exception; durable daemon flows leave this false. */
+  allowLocalhostHttp: boolean;
 }
 
 /**
@@ -1122,6 +1255,13 @@ async function startMCPOAuthFlowWithAS(opts: {
   fallbackRegistrationEndpoint?: string;
   /** Scopes advertised by the resource server (RFC 9728 path only) */
   resourceScopesSupported?: string[];
+  /** Daemons disable the process-global DCR cache; legacy local CLI flows may reuse it. */
+  reuseDynamicClientRegistration?: boolean;
+  resourceUri: string;
+  issuer: string;
+  compatibilityMode: 'strict' | 'legacy';
+  dcrMode: 'disabled' | 'fallback';
+  allowLocalhostHttp: boolean;
 }): Promise<OAuthFlowContext> {
   const {
     authServerMetadata,
@@ -1132,6 +1272,11 @@ async function startMCPOAuthFlowWithAS(opts: {
     tokenUrlOverride,
     fallbackRegistrationEndpoint,
     resourceScopesSupported,
+    resourceUri,
+    issuer,
+    compatibilityMode,
+    dcrMode,
+    allowLocalhostHttp,
   } = opts;
 
   const hasFullOverrides = !!(authorizationUrlOverride && tokenUrlOverride);
@@ -1141,6 +1286,10 @@ async function startMCPOAuthFlowWithAS(opts: {
 
   // Redirect URI default — preserved for legacy CLI callers
   const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
+  // Validate before registration: DCR sends this value to an external service
+  // and must not turn an unsafe configured callback into durable provider-side
+  // client metadata.
+  assertSafeOAuthUrl(actualRedirectUri, { allowLocalhostHttp });
 
   // Scope: explicit option > resource-metadata advertised scopes > none
   // (Skip auto-populating when client_id is pre-registered — see comment in
@@ -1155,26 +1304,25 @@ async function startMCPOAuthFlowWithAS(opts: {
   let actualClientId = clientId;
   let resolvedClientSecret = opts.clientSecret;
 
-  if (!actualClientId) {
+  if (!actualClientId && dcrMode === 'fallback') {
     const registrationEndpoint =
       authServerMetadata?.registration_endpoint || fallbackRegistrationEndpoint;
     if (registrationEndpoint) {
-      console.log('[MCP OAuth] Using DCR endpoint:', registrationEndpoint);
+      console.log('[MCP OAuth] Using Dynamic Client Registration');
       try {
         const registration = await registerDynamicClient(
           registrationEndpoint,
           actualRedirectUri,
           'Agor MCP Client',
-          scopeString
+          scopeString,
+          opts.reuseDynamicClientRegistration !== false,
+          allowLocalhostHttp
         );
         actualClientId = registration.client_id;
         resolvedClientSecret = registration.client_secret;
-      } catch (regError) {
-        const detail = regError instanceof Error ? regError.message : String(regError);
+      } catch {
         throw new Error(
           'Dynamic Client Registration failed.\n\n' +
-            `Registration endpoint: ${registrationEndpoint}\n` +
-            `Error: ${detail}\n\n` +
             "Register an OAuth app in the provider's developer portal and enter " +
             'the Client ID (and Client Secret if required) in the MCP server configuration.'
         );
@@ -1192,6 +1340,10 @@ async function startMCPOAuthFlowWithAS(opts: {
           'the Client ID (and Client Secret if required) in the MCP server configuration.'
       );
     }
+  } else if (!actualClientId) {
+    throw new Error(
+      'OAuth client_id is required. Configure a pre-registered client, or explicitly enable Dynamic Client Registration fallback for this server.'
+    );
   }
 
   // CSRF state
@@ -1213,8 +1365,35 @@ async function startMCPOAuthFlowWithAS(opts: {
         'or ensure the authorization server supports RFC 8414 metadata discovery.'
     );
   }
-  console.log('[MCP OAuth] Using authorization endpoint:', authorizationEndpoint);
-  console.log('[MCP OAuth] Using token endpoint:', tokenEndpoint);
+  console.log('[MCP OAuth] OAuth endpoints resolved');
+
+  assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
+  assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
+  if (compatibilityMode === 'strict') {
+    if (!authServerMetadata) {
+      throw new Error('Strict MCP OAuth requires authorization-server metadata');
+    }
+    if (authServerMetadata.issuer !== issuer) {
+      throw new Error('Authorization server issuer mismatch');
+    }
+    if (!authServerMetadata.code_challenge_methods_supported?.includes('S256')) {
+      throw new Error('Authorization server does not advertise required PKCE S256 support');
+    }
+    if (authServerMetadata.authorization_response_iss_parameter_supported !== true) {
+      throw new Error(
+        'Authorization server does not advertise the required callback issuer parameter'
+      );
+    }
+    if (
+      authorizationUrlOverride &&
+      authorizationUrlOverride !== authServerMetadata.authorization_endpoint
+    ) {
+      throw new Error('Strict MCP OAuth authorization endpoint override does not match metadata');
+    }
+    if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
+      throw new Error('Strict MCP OAuth token endpoint override does not match metadata');
+    }
+  }
 
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
@@ -1223,14 +1402,16 @@ async function startMCPOAuthFlowWithAS(opts: {
   authUrl.searchParams.set('code_challenge', pkce.challenge);
   authUrl.searchParams.set('code_challenge_method', 'S256');
   authUrl.searchParams.set('state', state);
+  authUrl.searchParams.set('resource', resourceUri);
   if (scopeString) {
     authUrl.searchParams.set('scope', scopeString);
   }
 
-  console.log('[MCP OAuth] Authorization URL:', authUrl.toString());
-
   return {
     metadataUrl: cacheKey,
+    resourceUri,
+    issuer,
+    authorizationEndpoint,
     tokenEndpoint,
     redirectUri: actualRedirectUri,
     pkceVerifier: pkce.verifier,
@@ -1238,6 +1419,8 @@ async function startMCPOAuthFlowWithAS(opts: {
     clientSecret: resolvedClientSecret,
     state,
     authorizationUrl: authUrl.toString(),
+    compatibilityMode,
+    allowLocalhostHttp,
   };
 }
 
@@ -1270,14 +1453,31 @@ export async function startMCPOAuthFlow(
      * matches by URL origin, so any value sharing the MCP URL's origin works.
      */
     cacheKey?: string;
+    /** Disable process-global DCR credential reuse in multi-user daemons. */
+    reuseDynamicClientRegistration?: boolean;
+    /** Exact protected resource identifier sent to authorization/token endpoints. */
+    resourceUri?: string;
+    compatibilityMode?: 'strict' | 'legacy';
+    dcrMode?: 'disabled' | 'fallback';
+    /** Exact loopback HTTP exception for standalone development only. */
+    allowLocalhostHttp?: boolean;
   }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
+  const compatibilityMode = options?.compatibilityMode ?? 'strict';
+  const dcrMode = options?.dcrMode ?? 'disabled';
+  const allowLocalhostHttp = options?.allowLocalhostHttp === true;
+  const resourceUri = options?.resourceUri;
+  if (!resourceUri) throw new Error('MCP OAuth requires an exact protected resource URI');
+  assertSafeOAuthUrl(resourceUri, { allowLocalhostHttp });
 
   // When AS metadata is prefetched (Reo.Dev-style discovery), there's no RFC
   // 9728 resource metadata to fetch. Take the short path and skip directly to
   // PKCE / DCR / auth-URL construction.
   if (options?.prefetchedAuthServerMetadata) {
+    if (compatibilityMode !== 'legacy') {
+      throw new Error('Authorization-server-direct discovery requires explicit legacy mode');
+    }
     if (!options.cacheKey) {
       // Without a cache key, `getCachedOAuth21Token` can't find the token on
       // future requests — every MCP call would re-trigger the browser flow.
@@ -1287,10 +1487,7 @@ export async function startMCPOAuthFlow(
           '(typically pass the MCP server URL).'
       );
     }
-    console.log(
-      '[MCP OAuth] Using prefetched AS metadata (RFC 9728 skipped):',
-      options.prefetchedAuthServerMetadata
-    );
+    console.log('[MCP OAuth] Using prefetched AS metadata (RFC 9728 skipped)');
     return startMCPOAuthFlowWithAS({
       authServerMetadata: options.prefetchedAuthServerMetadata,
       cacheKey: options.cacheKey,
@@ -1300,6 +1497,12 @@ export async function startMCPOAuthFlow(
       tokenUrlOverride: options.tokenUrlOverride,
       clientSecret: options.clientSecret,
       scope: options.scope,
+      reuseDynamicClientRegistration: options.reuseDynamicClientRegistration,
+      resourceUri,
+      issuer: options.prefetchedAuthServerMetadata.issuer,
+      compatibilityMode,
+      dcrMode,
+      allowLocalhostHttp,
     });
   }
 
@@ -1312,11 +1515,14 @@ export async function startMCPOAuthFlow(
         'and no pre-discovered metadata URL was provided.'
     );
   }
-  console.log('[MCP OAuth] Resource metadata URL:', metadataUrl);
+  console.log('[MCP OAuth] Resource metadata resolved');
 
   // Step 2: Fetch Protected Resource Metadata (RFC 9728)
-  const resourceMetadata = await fetchResourceMetadata(metadataUrl);
-  console.log('[MCP OAuth] Resource metadata:', resourceMetadata);
+  const resourceMetadata = await fetchResourceMetadata(metadataUrl, { allowLocalhostHttp });
+
+  if (compatibilityMode === 'strict' && resourceMetadata.resource !== resourceUri) {
+    throw new Error('Protected resource metadata does not match the MCP resource URI');
+  }
 
   if (
     !resourceMetadata.authorization_servers ||
@@ -1327,7 +1533,7 @@ export async function startMCPOAuthFlow(
 
   // Use first authorization server
   const authServerUrl = resourceMetadata.authorization_servers[0];
-  console.log('[MCP OAuth] Authorization server:', authServerUrl);
+  console.log('[MCP OAuth] Authorization server resolved');
 
   // Step 3: Fetch Authorization Server Metadata (RFC 8414)
   // Skip auto-discovery when both authorization URL and token URL overrides are provided.
@@ -1336,22 +1542,22 @@ export async function startMCPOAuthFlow(
   const hasFullOverrides = options?.authorizationUrlOverride && options?.tokenUrlOverride;
   let authServerMetadata: AuthorizationServerMetadata | null = null;
 
-  if (hasFullOverrides) {
-    console.log('[MCP OAuth] Skipping auth server metadata fetch — manual overrides provided:', {
-      authorization: options.authorizationUrlOverride,
-      token: options.tokenUrlOverride,
-    });
+  if (hasFullOverrides && compatibilityMode === 'legacy') {
+    console.log('[MCP OAuth] Skipping auth server metadata fetch — manual overrides provided');
   } else {
     try {
-      authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl);
-      console.log('[MCP OAuth] Authorization server metadata:', authServerMetadata);
+      authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl, {
+        compatibilityMode,
+        allowLocalhostHttp,
+      });
+      console.log('[MCP OAuth] Authorization server metadata resolved');
     } catch (metadataError) {
       // If we have at least partial overrides, we can continue without metadata
-      if (options?.authorizationUrlOverride || options?.tokenUrlOverride) {
-        console.log(
-          '[MCP OAuth] Auth server metadata fetch failed, but partial overrides available:',
-          metadataError instanceof Error ? metadataError.message : String(metadataError)
-        );
+      if (
+        compatibilityMode === 'legacy' &&
+        (options?.authorizationUrlOverride || options?.tokenUrlOverride)
+      ) {
+        console.log('[MCP OAuth] Auth server metadata unavailable; using configured overrides');
       } else {
         throw metadataError;
       }
@@ -1371,8 +1577,17 @@ export async function startMCPOAuthFlow(
     tokenUrlOverride: options?.tokenUrlOverride,
     clientSecret: options?.clientSecret,
     scope: options?.scope,
-    fallbackRegistrationEndpoint: hasFullOverrides ? undefined : `${authServerUrl}/register`,
+    fallbackRegistrationEndpoint:
+      compatibilityMode === 'legacy' && !hasFullOverrides
+        ? `${authServerUrl.replace(/\/$/, '')}/register`
+        : undefined,
     resourceScopesSupported: resourceMetadata.scopes_supported,
+    reuseDynamicClientRegistration: options?.reuseDynamicClientRegistration,
+    resourceUri,
+    issuer: authServerUrl,
+    compatibilityMode,
+    dcrMode,
+    allowLocalhostHttp,
   });
 }
 
@@ -1390,17 +1605,20 @@ export async function startMCPOAuthFlow(
 export async function completeMCPOAuthFlow(
   context: OAuthFlowContext,
   code: string,
-  state: string
+  state: string,
+  options: { cacheToken?: boolean; issuer?: string } = {}
 ): Promise<OAuthTokenResponse> {
   console.log('[MCP OAuth] Completing OAuth flow with authorization code');
-  console.log('[MCP OAuth] Token endpoint:', context.tokenEndpoint);
-  console.log('[MCP OAuth] Redirect URI:', context.redirectUri);
-  console.log('[MCP OAuth] Client ID:', context.clientId);
-  console.log('[MCP OAuth] Has client secret:', !!context.clientSecret);
 
   // Verify state to prevent CSRF
   if (state !== context.state) {
-    throw new Error('State mismatch - possible CSRF attack');
+    throw new OAuthCallbackValidationError('callback_state_mismatch');
+  }
+  if (context.compatibilityMode === 'strict' && options.issuer == null) {
+    throw new OAuthCallbackValidationError('callback_issuer_missing');
+  }
+  if (context.compatibilityMode === 'strict' && options.issuer !== context.issuer) {
+    throw new OAuthCallbackValidationError('callback_issuer_mismatch');
   }
 
   // Exchange code for token
@@ -1410,13 +1628,18 @@ export async function completeMCPOAuthFlow(
     context.redirectUri,
     context.pkceVerifier,
     context.clientId,
-    context.clientSecret
+    context.clientSecret,
+    context.resourceUri,
+    context.allowLocalhostHttp
   );
 
   console.log('[MCP OAuth] Access token received successfully');
 
-  // Cache token. Walk the shared cascade so this site agrees with the
-  // persisted-token paths on TTL resolution.
+  if (options.cacheToken === false) return tokenResponse;
+
+  // Legacy local CLI cache. Daemon callers pass cacheToken:false so a raw
+  // bearer is never put in an origin-only process-global namespace; daemon
+  // persisted-token paths resolve against durable storage instead.
   const fetchedAt = Date.now();
   const resolved = resolveTokenExpiry(tokenResponse, tokenResponse.access_token, fetchedAt);
   const expiresInSeconds =
@@ -1444,7 +1667,11 @@ export async function completeMCPOAuthFlow(
  * @param callbackUrl - The full callback URL from the browser (may include error page URL)
  * @returns Object with code and state, or throws if invalid
  */
-export function parseOAuthCallback(callbackUrl: string): { code: string; state: string } {
+export function parseOAuthCallback(callbackUrl: string): {
+  code: string;
+  state: string;
+  issuer?: string;
+} {
   try {
     const url = new URL(callbackUrl);
     const code = url.searchParams.get('code');
@@ -1452,9 +1679,8 @@ export function parseOAuthCallback(callbackUrl: string): { code: string; state: 
 
     if (!code) {
       const error = url.searchParams.get('error');
-      const errorDescription = url.searchParams.get('error_description');
       if (error) {
-        throw new Error(`OAuth error: ${error}${errorDescription ? ` - ${errorDescription}` : ''}`);
+        throw new Error('OAuth provider rejected authorization');
       }
       throw new Error('No authorization code in callback URL');
     }
@@ -1463,11 +1689,13 @@ export function parseOAuthCallback(callbackUrl: string): { code: string; state: 
       throw new Error('No state parameter in callback URL');
     }
 
-    return { code, state };
+    return { code, state, issuer: url.searchParams.get('iss') ?? undefined };
   } catch (e) {
-    if (e instanceof Error && e.message.startsWith('OAuth error:')) {
+    if (e instanceof Error && e.message === 'OAuth provider rejected authorization') {
       throw e;
     }
-    throw new Error(`Invalid callback URL: ${callbackUrl}`);
+    // The URL can contain the one-shot authorization code and state. Never
+    // copy either capability into an exception that a caller may later log.
+    throw new Error('Invalid OAuth callback URL');
   }
 }

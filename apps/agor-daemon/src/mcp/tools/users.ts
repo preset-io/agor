@@ -1,5 +1,5 @@
 import { ROLES, type User } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { mcpOptionalString, mcpRequiredId, mcpRequiredString } from '../schema.js';
 import type { McpContext } from '../server.js';
@@ -16,7 +16,8 @@ const USER_LIST_FIELDS = [
   'updated_at',
 ] as const;
 
-const USER_QUERY_LIMIT_MAX = 10000;
+const USER_QUERY_LIMIT_MAX = 100;
+const USER_FIELD_FILTER_SCAN_LIMIT = 10000;
 
 type UserListField = (typeof USER_LIST_FIELDS)[number];
 type UserListRow = Pick<User, UserListField>;
@@ -148,7 +149,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       const users = (await ctx.app.service('users').find({
         query: {
           search: searchTerm,
-          $limit: fieldFilters.length > 0 ? USER_QUERY_LIMIT_MAX : requestedLimit,
+          $limit: fieldFilters.length > 0 ? USER_FIELD_FILTER_SCAN_LIMIT : requestedLimit,
           $skip: 0,
         },
         ...ctx.baseServiceParams,

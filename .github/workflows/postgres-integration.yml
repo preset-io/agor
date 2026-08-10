@@ -1,0 +1,138 @@
+# Focused PostgreSQL/RLS integration lane.
+#
+# Expected cost on an ubuntu-latest hosted runner: about 2-4 minutes per
+# path-matched change (roughly 1 minute of test runtime). The pinned pgvector
+# image is ~154 MiB compressed / ~433 MiB unpacked on amd64; layer caching makes
+# warm starts cheaper. This intentionally stays separate from the all-purpose
+# CI workflow so UI/docs-only changes never pay the database startup cost.
+name: PostgreSQL integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/postgres-integration.yml'
+      - 'apps/agor-daemon/package.json'
+      - 'apps/agor-daemon/src/**'
+      - 'docker/postgres-dev.Dockerfile'
+      - 'docker/postgres-init-app-user.sql'
+      - 'package.json'
+      - 'packages/core/drizzle/**'
+      - 'packages/core/package.json'
+      - 'packages/core/src/db/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'scripts/run-postgres-integration-tests.mjs'
+      - 'scripts/test-postgres-docker.sh'
+      - 'turbo.json'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/postgres-integration.yml'
+      - 'apps/agor-daemon/package.json'
+      - 'apps/agor-daemon/src/**'
+      - 'docker/postgres-dev.Dockerfile'
+      - 'docker/postgres-init-app-user.sql'
+      - 'package.json'
+      - 'packages/core/drizzle/**'
+      - 'packages/core/package.json'
+      - 'packages/core/src/db/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'scripts/run-postgres-integration-tests.mjs'
+      - 'scripts/test-postgres-docker.sh'
+      - 'turbo.json'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: '11.17.0'
+  NODE_VERSION: '22'
+  AGOR_DB_DIALECT: postgresql
+  # Ephemeral, repository-public test credentials. Keep the URL in the job
+  # environment rather than interpolating it into commands or log messages.
+  AGOR_TEST_POSTGRES_URL: postgresql://agor_app:agor_dev_secret@127.0.0.1:5432/agor
+  # Used only for a test's disposable-database create/drop setup; application
+  # migrations, queries, and RLS assertions always use AGOR_TEST_POSTGRES_URL.
+  AGOR_TEST_POSTGRES_ADMIN_URL: postgresql://agor_bootstrap:agor_bootstrap_secret@127.0.0.1:5432/agor
+
+jobs:
+  postgres-integration:
+    name: PostgreSQL integration (non-superuser RLS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg16-trixie
+        env:
+          POSTGRES_DB: agor
+          POSTGRES_USER: agor_bootstrap
+          POSTGRES_PASSWORD: agor_bootstrap_secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U agor_bootstrap -d agor"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install PostgreSQL test workspace dependencies
+        run: pnpm install --frozen-lockfile --filter '@agor/core...' --filter '@agor/daemon...'
+
+      - name: Bootstrap and verify the non-superuser app role
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+
+          postgres_ready=false
+          for _ in {1..30}; do
+            if docker exec "$POSTGRES_CONTAINER_ID" \
+              pg_isready -h 127.0.0.1 -U agor_bootstrap -d agor >/dev/null 2>&1; then
+              postgres_ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$postgres_ready" != true ]]; then
+            echo '::error::PostgreSQL did not become ready within 60 seconds'
+            exit 1
+          fi
+
+          # Reuse the exact dev bootstrap contract; never duplicate role grants
+          # in workflow YAML where security-sensitive SQL could drift.
+          docker exec -i "$POSTGRES_CONTAINER_ID" \
+            psql --set ON_ERROR_STOP=1 -U agor_bootstrap -d agor \
+            < docker/postgres-init-app-user.sql >/dev/null
+
+          role_flags="$(docker exec -e PGPASSWORD=agor_dev_secret "$POSTGRES_CONTAINER_ID" \
+            psql -h 127.0.0.1 -U agor_app -d agor -Atqc \
+            "SELECT current_user || ':' || rolsuper || ':' || rolbypassrls FROM pg_roles WHERE rolname = current_user")"
+          if [[ "$role_flags" != 'agor_app:false:false' ]]; then
+            echo '::error::agor_app is not NOSUPERUSER and NOBYPASSRLS'
+            exit 1
+          fi
+          echo 'Verified test role: agor_app (NOSUPERUSER, NOBYPASSRLS).'
+
+      - name: Run PostgreSQL-gated suites
+        timeout-minutes: 6
+        run: pnpm test:postgres:integration

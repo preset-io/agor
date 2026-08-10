@@ -14,10 +14,17 @@ export interface TenantDatabaseScope {
 
 /** Narrow RLS capabilities available to explicit system database work. */
 export type SystemDatabaseCapability =
+  | 'environment_health_discovery'
   | 'gateway_listener_discovery'
+  | 'knowledge_embedding_discovery'
   | 'scheduler_discovery'
   | 'task_queue_discovery'
-  | 'upload_maintenance';
+  | 'task_runtime_discovery'
+  | 'executor_token_maintenance'
+  | 'mcp_oauth_callback'
+  | 'mcp_oauth_maintenance'
+  | 'upload_maintenance'
+  | 'mcp_catalog_ingestion';
 
 export interface TenantContextScope {
   tenantId: TenantID | string;

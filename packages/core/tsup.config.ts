@@ -33,6 +33,7 @@ export default defineConfig({
     'environment/webhook': 'src/environment/webhook.ts', // Managed environment webhook execution policy
     'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
+    'utils/safe-outbound-fetch': 'src/utils/safe-outbound-fetch.ts', // Pinned SSRF-safe OAuth/JWT egress
     'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities
     'utils/context-window': 'src/utils/context-window.ts', // Context window calculation utilities
@@ -49,7 +50,8 @@ export default defineConfig({
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sessions/index': 'src/sessions/index.ts', // Session config defaults resolution
     'coordination/index': 'src/coordination/index.ts', // Pure distributed-work identity and delay mechanics
-    'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini)
+    'sdk/index': 'src/sdk/index.ts', // Type-only compatibility exports; runtimes use managed integrations
+    'agentic-integrations': 'src/agentic-integrations.ts', // Managed agentic-tool package registry and loader
     'client/claude-system-suppression': 'src/client/claude-system-suppression.ts', // Browser-safe Claude system event suppression rules
     'tools/mcp/http-headers': 'src/tools/mcp/http-headers.ts', // MCP custom HTTP header utilities
     'tools/mcp/auth-secrets': 'src/tools/mcp/auth-secrets.ts', // MCP auth secret redaction/restoration utilities
@@ -66,11 +68,16 @@ export default defineConfig({
     'gateway/connectors/slack-manifest': 'src/gateway/connectors/slack-manifest.ts', // Browser-safe Slack manifest/scope derivation (no connector deps)
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
     'knowledge/index': 'src/knowledge/index.ts', // Knowledge editing helpers
+    'mcp-catalog/index': 'src/mcp-catalog/index.ts', // MCP marketplace catalog: registry mirror, curation, probe
   },
   format: ['cjs', 'esm'],
   dts: false,
   clean: process.env.TSUP_CLEAN !== 'false',
   splitting: false,
+  // These pure-JS, high-fanout feature dependencies are compiled into the
+  // copied core artifact. Keeping them out of the consumer dependency graph
+  // materially lowers cold-cache npm extraction concurrency and inode use.
+  noExternal: [/^analytics$/, /^open$/, /^@octokit\/(auth-app|rest)$/],
   shims: true, // Enable shims for import.meta.url in CJS builds
   // Don't bundle agent SDKs and Node.js-only dependencies
   external: [
@@ -97,5 +104,9 @@ export default defineConfig({
     // group-private mode inherited from an ACL-managed development worktree.
     chmodSync('dist/templates/agor-system-prompt.md', 0o644);
     console.log('✅ Copied agor-system-prompt.md template to dist/');
+
+    // The curated catalog overlay is data, not code — tsup would not emit it.
+    cpSync('src/mcp-catalog/curated.yaml', 'dist/mcp-catalog/curated.yaml');
+    console.log('✅ Copied curated.yaml to dist/');
   },
 });

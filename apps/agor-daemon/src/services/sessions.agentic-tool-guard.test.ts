@@ -19,7 +19,12 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Session, Task, UUID } from '@agor/core/types';
-import { SessionStatus, TaskStatus, USER_DEFAULT_AGENTIC_CONFIGURATION } from '@agor/core/types';
+import {
+  SessionStatus,
+  TaskStatus,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { SessionsService } from './sessions';
@@ -257,15 +262,14 @@ describe('SessionsService direct OpenCode model selection', () => {
     });
   });
 
-  dbTest('persists the authenticated subject fallback as an exact pair', async ({ db }) => {
+  dbTest('uses catalog fallback only for unresolved default references', async ({ db }) => {
+    const findCatalog = vi.fn(async () => ({
+      suggestedSelection: { providerId: 'openai', modelId: 'gpt-test' },
+    }));
     const app = {
       service: (path: string) => {
         if (path === 'opencode-models') {
-          return {
-            find: async () => ({
-              suggestedSelection: { providerId: 'openai', modelId: 'gpt-test' },
-            }),
-          };
+          return { find: findCatalog };
         }
         throw new Error(`Unexpected service: ${path}`);
       },
@@ -276,22 +280,65 @@ describe('SessionsService direct OpenCode model selection', () => {
       email: `catalog-fallback-${generateId()}@example.com`,
       name: 'Catalog fallback owner',
     });
+    const defaultsBefore = {
+      default_agentic_config: user.default_agentic_config,
+      default_agentic_selection: user.default_agentic_selection,
+    };
 
-    const created = await service.create(
+    for (const agenticToolPresetId of [
+      undefined,
+      USER_DEFAULT_AGENTIC_CONFIGURATION,
+      WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+    ]) {
+      const created = await service.create(
+        {
+          branch_id: branchId,
+          agentic_tool: 'opencode',
+          ...(agenticToolPresetId === undefined
+            ? {}
+            : { agentic_tool_preset_id: agenticToolPresetId }),
+          status: SessionStatus.IDLE,
+          created_by: user.user_id,
+        },
+        { user } as never
+      );
+
+      expect(created).toMatchObject({
+        model_config: {
+          mode: 'exact',
+          provider: 'openai',
+          model: 'gpt-test',
+        },
+      });
+    }
+    const reloadedUser = await new UsersRepository(db).findById(user.user_id);
+    expect({
+      default_agentic_config: reloadedUser?.default_agentic_config,
+      default_agentic_selection: reloadedUser?.default_agentic_selection,
+    }).toEqual(defaultsBefore);
+    expect(findCatalog).toHaveBeenCalledTimes(3);
+    const preset = await new AgenticToolPresetRepository(db).create(
       {
-        branch_id: branchId,
-        agentic_tool: 'opencode',
-        status: SessionStatus.IDLE,
-        created_by: user.user_id,
+        tool: 'opencode',
+        name: 'Incomplete preset',
+        configuration: { modelConfig: modelConfig() },
       },
-      { user } as never
+      user.user_id
     );
 
-    expect(created.model_config).toMatchObject({
-      mode: 'exact',
-      provider: 'openai',
-      model: 'gpt-test',
-    });
+    await expect(
+      service.create(
+        {
+          branch_id: branchId,
+          agentic_tool: 'opencode',
+          agentic_tool_preset_id: preset.preset_id,
+          status: SessionStatus.IDLE,
+          created_by: user.user_id,
+        },
+        { user } as never
+      )
+    ).rejects.toThrow(/provider and model/i);
+    expect(findCatalog).toHaveBeenCalledTimes(3);
   });
 
   dbTest('materializes selected user and workspace presets on direct create', async ({ db }) => {

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   containExecutorProcess,
+  getTrackedExecutor,
   markExecutorProcessExited,
   releaseExecutorContainmentFenceIntent,
   reserveExecutorContainmentFence,
@@ -18,6 +19,30 @@ import {
 describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
   'executor process-group containment',
   () => {
+    it('keeps local process handles scoped to the owning daemon application', async () => {
+      const ownerA = {};
+      const ownerB = {};
+      trackExecutorProcess(
+        { sessionId: 'session-owner', taskId: 'task-owner', pid: process.pid },
+        ownerA
+      );
+      try {
+        expect(getTrackedExecutor('session-owner', ownerA)).toMatchObject({
+          taskId: 'task-owner',
+          pid: process.pid,
+        });
+        expect(getTrackedExecutor('session-owner', ownerB)).toBeUndefined();
+        await expect(
+          containExecutorProcess('session-owner', 'task-owner', {}, ownerB)
+        ).resolves.toEqual({
+          status: 'unverified',
+          reason: 'No matching local executor is tracked.',
+        });
+      } finally {
+        untrackExecutorProcess('session-owner', 'task-owner', ownerA);
+      }
+    });
+
     it('kills a process group whose leader and descendant ignore SIGTERM', async () => {
       const script = `
         const { spawn } = require('node:child_process');
