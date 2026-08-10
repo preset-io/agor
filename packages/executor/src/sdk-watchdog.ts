@@ -28,6 +28,10 @@ export type RuntimeActivity =
 
 export type SdkActivityCallback = (activity: RuntimeActivity) => void;
 
+export type SdkHealthAuthorizationOutcome = 'authorized' | 'superseded' | 'retry';
+
+export const SDK_HEALTH_RETRY_CADENCE_MS = 2_000;
+
 export type AdapterConformanceMode = 'enforce' | 'observe-only' | 'blocked';
 
 export interface SdkActivityConformance {
@@ -42,15 +46,12 @@ export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkActivityAdapter, string> =
   gemini: '@google/gemini-cli-core@0.40.1',
   copilot: '@github/copilot-sdk@0.2.2',
   opencode: '@opencode-ai/sdk@1.14.33',
-  cursor: '@cursor/sdk@1.0.23',
+  cursor: '@cursor/sdk@1.0.26',
 };
 
 type SdkActivityConformancePolicy = Omit<SdkActivityConformance, 'version'>;
 
-const SDK_ACTIVITY_CONFORMANCE_POLICY: Record<
-  SdkActivityAdapter,
-  SdkActivityConformancePolicy
-> = {
+const SDK_ACTIVITY_CONFORMANCE_POLICY: Record<SdkActivityAdapter, SdkActivityConformancePolicy> = {
   'claude-code': {
     mode: 'enforce',
     nativeDeadline: 'observable',
@@ -138,7 +139,10 @@ interface ActiveWait {
 }
 
 interface WatchdogState {
-  startedAt?: number;
+  /** Immutable origin for the absolute turn ceiling. */
+  turnStartedAt?: number;
+  /** Pause-adjusted origin for the first-progress quiet deadline. */
+  quietStartedAt?: number;
   firstProgressAt?: number;
   idleAnchor?: number;
   pausedAt?: number;
@@ -173,8 +177,8 @@ export class SdkWatchdog {
   };
   private timer?: ReturnType<typeof setTimeout>;
   private decided = false;
-  private activityRevision = 0;
-  private pendingEnforcedDecision?: { key: string; activityRevision: number };
+  private pendingEnforcedDecision?: { key: string };
+  private readonly authorizationRetries = new Map<string, number>();
   private readonly observeLatches = new Set<string>();
 
   constructor(
@@ -183,18 +187,23 @@ export class SdkWatchdog {
       config: ResolvedSdkWatchdogConfig;
       sdkVersion?: string;
       pulseSequenceAtDetection?: () => number | undefined;
-      onDecision(evidence: WatchdogEvidence): boolean | undefined | Promise<boolean | undefined>;
+      onDecision(
+        evidence: WatchdogEvidence
+      ):
+        | SdkHealthAuthorizationOutcome
+        | undefined
+        | Promise<SdkHealthAuthorizationOutcome | undefined>;
       now?: () => number;
     }
   ) {}
 
   record(activity: RuntimeActivity): RuntimeActivity {
     if (this.decided || this.options.config.mode === 'disabled') return activity;
-    if (activity.type !== 'sdk_started') this.activityRevision += 1;
     const now = this.now();
 
     if (activity.type === 'waiting_started') {
-      this.state.startedAt ??= now;
+      this.state.turnStartedAt ??= now;
+      this.state.quietStartedAt ??= now;
       if (!this.state.waits.has(activity.id)) {
         this.state.waits.set(activity.id, {
           id: activity.id,
@@ -216,13 +225,17 @@ export class SdkWatchdog {
       }
       this.state.waits.delete(activity.id);
       this.observeLatches.delete(`wait_timed_out:${activity.id}`);
+      this.authorizationRetries.delete(`wait_timed_out:${activity.id}`);
       if (this.state.waits.size === 0 && this.state.pausedAt !== undefined) {
-        const pausedFor = now - this.state.pausedAt;
-        for (const key of ['startedAt', 'firstProgressAt', 'idleAnchor'] as const) {
-          if (this.state[key] !== undefined) this.state[key]! += pausedFor;
+        const pausedAt = this.state.pausedAt;
+        const resumeQuietAnchor = (anchor: number) => anchor + now - Math.max(pausedAt, anchor);
+        for (const key of ['quietStartedAt', 'firstProgressAt', 'idleAnchor'] as const) {
+          if (this.state[key] !== undefined) {
+            this.state[key] = resumeQuietAnchor(this.state[key]);
+          }
         }
         for (const operation of this.state.operations.values()) {
-          operation.lastProgressAt += pausedFor;
+          operation.lastProgressAt = resumeQuietAnchor(operation.lastProgressAt);
         }
         this.state.pausedAt = undefined;
       }
@@ -230,7 +243,8 @@ export class SdkWatchdog {
       return activity;
     }
 
-    this.state.startedAt ??= now;
+    this.state.turnStartedAt ??= now;
+    this.state.quietStartedAt ??= now;
     switch (activity.type) {
       case 'sdk_started':
         break;
@@ -246,6 +260,7 @@ export class SdkWatchdog {
         if (existing) {
           existing.lastProgressAt = now;
           this.observeLatches.delete(`operation_stalled:${activity.id}`);
+          this.authorizationRetries.delete(`operation_stalled:${activity.id}`);
           break;
         }
         const quietTimeoutMs = positiveTimeout(
@@ -275,6 +290,7 @@ export class SdkWatchdog {
         }
         operation.lastProgressAt = now;
         this.observeLatches.delete(`operation_stalled:${activity.id}`);
+        this.authorizationRetries.delete(`operation_stalled:${activity.id}`);
         this.recordProgress(now);
         break;
       }
@@ -287,6 +303,8 @@ export class SdkWatchdog {
         this.state.operations.delete(activity.id);
         this.observeLatches.delete(`operation_stalled:${activity.id}`);
         this.observeLatches.delete(`operation_timed_out:${activity.id}`);
+        this.authorizationRetries.delete(`operation_stalled:${activity.id}`);
+        this.authorizationRetries.delete(`operation_timed_out:${activity.id}`);
         this.recordProgress(now);
         break;
     }
@@ -304,6 +322,8 @@ export class SdkWatchdog {
     this.state.idleAnchor = now;
     this.observeLatches.delete('no_first_progress');
     this.observeLatches.delete('progress_stalled');
+    this.authorizationRetries.delete('no_first_progress');
+    this.authorizationRetries.delete('progress_stalled');
   }
 
   private recordUnknown(detail: string, now: number): RuntimeActivity {
@@ -347,11 +367,11 @@ export class SdkWatchdog {
     const now = this.now();
     const deadlines: WatchdogDeadline[] = [];
 
-    if (this.state.startedAt !== undefined) {
+    if (this.state.turnStartedAt !== undefined) {
       deadlines.push({
         reason: 'turn_timed_out',
         key: 'turn_timed_out',
-        at: this.state.startedAt + this.options.config.operation_absolute_timeout_ms,
+        at: this.state.turnStartedAt + this.options.config.operation_absolute_timeout_ms,
       });
     }
     for (const wait of this.state.waits.values()) {
@@ -378,13 +398,13 @@ export class SdkWatchdog {
     }
 
     if (this.state.waits.size === 0 && this.state.operations.size === 0) {
-      if (this.state.startedAt !== undefined && this.state.firstProgressAt === undefined) {
-        const deadline = this.state.startedAt + this.options.config.first_progress_timeout_ms;
+      if (this.state.quietStartedAt !== undefined && this.state.firstProgressAt === undefined) {
+        const deadline = this.state.quietStartedAt + this.options.config.first_progress_timeout_ms;
         deadlines.push({
           reason: 'no_first_progress',
           key: 'no_first_progress',
           at: deadline,
-          quietAnchor: this.state.startedAt,
+          quietAnchor: this.state.quietStartedAt,
         });
       } else if (this.state.firstProgressAt !== undefined) {
         const idleTimeout =
@@ -421,6 +441,21 @@ export class SdkWatchdog {
       };
     });
 
+    const effectiveDeadlines = interpretedDeadlines.map((deadline) => ({
+      ...deadline,
+      at: Math.max(deadline.at, this.authorizationRetries.get(deadline.key) ?? deadline.at),
+    }));
+    const expiredAbsolute = interpretedDeadlines.find(
+      (deadline) =>
+        now >= deadline.at &&
+        (deadline.reason === 'turn_timed_out' ||
+          deadline.reason === 'operation_timed_out' ||
+          deadline.reason === 'wait_timed_out')
+    );
+    const eligibleDeadlines = expiredAbsolute
+      ? effectiveDeadlines.filter((deadline) => deadline.key === expiredAbsolute.key)
+      : effectiveDeadlines;
+
     // Keep recording activity, but do not start a second decision or spin an
     // already-expired timer while daemon authorization is in flight. The
     // decision continuation calls check() again against the updated state.
@@ -429,7 +464,7 @@ export class SdkWatchdog {
       return;
     }
 
-    const decision = interpretedDeadlines.find(
+    const decision = eligibleDeadlines.find(
       (deadline) => now >= deadline.at && !this.observeLatches.has(deadline.key)
     );
     if (decision) {
@@ -437,7 +472,7 @@ export class SdkWatchdog {
       if (this.decided) return;
     }
 
-    const nextCheckAt = interpretedDeadlines
+    const nextCheckAt = eligibleDeadlines
       .filter((deadline) => !this.observeLatches.has(deadline.key))
       .reduce<number | undefined>(
         (earliest, deadline) => Math.min(earliest ?? deadline.at, deadline.at),
@@ -458,7 +493,7 @@ export class SdkWatchdog {
         : 'enforced';
     const evidence: WatchdogEvidence = {
       reason,
-      elapsed_ms: Math.max(0, Math.round(now - (this.state.startedAt ?? now))),
+      elapsed_ms: Math.max(0, Math.round(now - (this.state.turnStartedAt ?? now))),
       watchdog_action: action,
       unknown_event_count: this.state.unknownCount,
       sdk_version: this.options.sdkVersion,
@@ -470,26 +505,24 @@ export class SdkWatchdog {
     if (terminalDecision && action === 'enforced') {
       const key = observeKey ?? reason;
       if (this.pendingEnforcedDecision) return;
-      const pending = { key, activityRevision: this.activityRevision };
+      this.authorizationRetries.delete(key);
+      const pending = { key };
       this.pendingEnforcedDecision = pending;
       queueMicrotask(async () => {
-        let authorized = false;
+        let outcome: SdkHealthAuthorizationOutcome = 'retry';
         try {
-          authorized = (await this.options.onDecision(evidence)) === true;
+          outcome = (await this.options.onDecision(evidence)) ?? 'retry';
         } catch {
-          authorized = false;
+          outcome = 'retry';
         }
         if (this.pendingEnforcedDecision !== pending) return;
         this.pendingEnforcedDecision = undefined;
-        if (authorized) {
+        if (outcome === 'authorized') {
           this.stop();
           return;
         }
-        // A report can be superseded by activity observed while it was in
-        // flight. Recompute from that state. Without new activity, latch the
-        // expired deadline so a transport failure cannot create a hot loop.
-        if (this.activityRevision === pending.activityRevision) {
-          this.observeLatches.add(key);
+        if (outcome === 'retry') {
+          this.authorizationRetries.set(key, this.now() + SDK_HEALTH_RETRY_CADENCE_MS);
         }
         this.check();
       });

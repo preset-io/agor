@@ -9,13 +9,13 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { z } from 'zod';
 import type {
   MCPCatalogCategory,
   MCPCatalogCurationUpsert,
   MCPCatalogTransport,
-} from '@agor/core/types';
-import { MCP_CATALOG_CAPABILITIES, MCP_CATALOG_CATEGORIES } from '@agor/core/types';
-import { z } from 'zod';
+} from '../types/mcp-catalog';
+import { MCP_CATALOG_CAPABILITIES, MCP_CATALOG_CATEGORIES } from '../types/mcp-catalog';
 import { load as loadYaml } from '../yaml';
 
 /** Thrown when `curated.yaml` cannot be parsed or fails validation. */

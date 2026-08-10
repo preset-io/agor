@@ -78,7 +78,6 @@ export interface QuerySetupDeps {
   messagesService?: MessagesService;
   branchesRepo?: BranchRepository;
   usersRepo?: UsersRepository;
-  permissionLocks: Map<SessionID, Promise<void>>;
   mcpEnabled?: boolean;
 }
 
@@ -596,7 +595,6 @@ export async function setupQuery(
       messagesRepo: deps.messagesRepo!,
       messagesService: deps.messagesService,
       sessionsService: deps.sessionsService,
-      permissionLocks: deps.permissionLocks,
       mcpServerRepo: deps.mcpServerRepo,
       sessionMCPRepo: deps.sessionMCPRepo,
       mcpToolPermissions,

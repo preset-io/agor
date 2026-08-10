@@ -1,5 +1,5 @@
-import type { Task } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import type { Session, Task } from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
 
@@ -44,6 +44,63 @@ describe('TasksService executor connection', () => {
 });
 
 describe('TasksService executor patches', () => {
+  it('publishes the latest dispatch facts without rewriting a concurrently stopped Session', async () => {
+    const claimedTask = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      status: TaskStatus.DISPATCHING,
+    } as Task;
+    const stoppedTask = {
+      ...claimedTask,
+      status: TaskStatus.STOPPING,
+    } as Task;
+    const stoppedSession = {
+      session_id: claimedTask.session_id,
+      status: SessionStatus.STOPPING,
+      ready_for_prompt: false,
+    } as Session;
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const taskEmit = vi.fn();
+    const sessionEmit = vi.fn();
+    const sessionPatch = vi.fn();
+    Reflect.set(service, 'taskRepo', {
+      claimDispatchAndProjectSession: vi.fn().mockResolvedValue({
+        outcome: 'claimed',
+        task: claimedTask,
+      }),
+      findById: vi.fn().mockResolvedValue(stoppedTask),
+    });
+    Reflect.set(service, 'app', {
+      service: (path: string) => {
+        if (path === 'tasks') return { emit: taskEmit };
+        if (path === 'sessions') {
+          return {
+            emit: sessionEmit,
+            get: vi.fn().mockResolvedValue(stoppedSession),
+            patch: sessionPatch,
+          };
+        }
+        throw new Error(`Unexpected service ${path}`);
+      },
+    });
+
+    await service.claimDispatchAndProjectSession(claimedTask.task_id, TaskStatus.CREATED, {
+      status: TaskStatus.DISPATCHING,
+    });
+
+    expect(sessionPatch).not.toHaveBeenCalled();
+    expect(taskEmit).toHaveBeenCalledWith(
+      'patched',
+      stoppedTask,
+      expect.objectContaining({ path: 'tasks' })
+    );
+    expect(sessionEmit).toHaveBeenCalledWith(
+      'patched',
+      stoppedSession,
+      expect.objectContaining({ path: 'sessions' })
+    );
+  });
+
   it('uses the row-locked executor mutation path for transport patches', async () => {
     const service = Object.create(TasksService.prototype) as TasksService;
     const updateFromExecutor = vi
@@ -90,7 +147,11 @@ describe('TasksService executor patches', () => {
     expect(reconcileTerminalTask).toHaveBeenCalledWith(
       terminalTask,
       TaskStatus.COMPLETED,
-      expect.objectContaining({ provider: undefined })
+      expect.objectContaining({
+        provider: undefined,
+        suppressTerminalQueueProcessing: true,
+      }),
+      true
     );
     expect(emit).toHaveBeenCalledOnce();
     expect(trackTaskCompleted).toHaveBeenCalledOnce();

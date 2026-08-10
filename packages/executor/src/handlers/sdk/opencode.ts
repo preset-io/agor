@@ -104,7 +104,6 @@ export async function executeOpenCodeTask(params: {
     });
 
     const assistantMessageId = generateId() as MessageID;
-    const permissionLocks = new Map<SessionID, Promise<void>>();
     const tool = new OpenCodeTool({
       resolveMcpServers: async (targetSessionId) => {
         const reporter = collectWithheldMcpServers();
@@ -137,7 +136,6 @@ export async function executeOpenCodeTask(params: {
           messagesRepo: repos.messages,
           messagesService: repos.messagesService,
           sessionsService: repos.sessionsService,
-          permissionLocks,
           mcpServerRepo: repos.mcpServers,
           sessionMCPRepo: repos.sessionMCP,
           // Gated servers never reach this handler, so nothing here can be

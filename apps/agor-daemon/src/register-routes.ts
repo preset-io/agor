@@ -49,6 +49,7 @@ import {
 } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  GatewayTaskOrigin,
   HookContext,
   Message,
   MessageID,
@@ -144,6 +145,7 @@ import {
 import {
   buildPromptTaskMetadata,
   type InternalPromptTaskMetadataInput,
+  normalizeMessageSource,
 } from './utils/prompt-task-metadata.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
 import { runWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
@@ -153,7 +155,6 @@ import {
   shouldReconcileSessionPromptState,
 } from './utils/session-task-state.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
-import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
 import {
@@ -161,7 +162,6 @@ import {
   stableInitialMessageIdForTask,
 } from './utils/task-initial-message.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
-import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
 import {
   createTenantDatabaseScopeAroundHook,
@@ -224,6 +224,8 @@ export interface RouteParams extends Params {
   user?: User;
   /** Trusted internal callback request, populated by MCP tooling only. */
   _taskCompletionCallback?: NonNullable<TaskMetadata['completion_callback']>;
+  /** Trusted immutable gateway destination captured by gateway ingress. */
+  gatewayOrigin?: GatewayTaskOrigin;
 }
 
 /** Compatibility tombstone retained for stale Claude CLI restart clients. */
@@ -926,14 +928,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  /**
-   * Per-session local turn coalescing. This reduces redundant preparatory
-   * reads and duplicate drain triggers inside one daemon; it is not a
-   * correctness authority. Queue-position admission and the Session+Task
-   * dispatch fence in PostgreSQL are authoritative across daemons.
-   */
-  const sessionTurnLocks: SessionTurnLocks = new Map();
-
   async function reconcileSessionPromptStateIfStuck(
     session: Session,
     taskRepo: TaskRepository,
@@ -1111,6 +1105,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       stream?: boolean;
       messageSource?: MessageSource;
       stableInitialMessageId?: MessageID;
+      /** Explicit-run callers must own the durable Session+Task claim. */
+      requireDispatchClaim?: boolean;
     },
     params: RouteParams
   ): Promise<Task> {
@@ -1170,9 +1166,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
     if (!isTaskPendingDispatch(task)) return task;
 
-    // Atomically claim queued/created → launch status. Process-local session
-    // locks reduce contention, but this expected-state transition is the
-    // cross-daemon fence that prevents duplicate executor launches.
+    // Atomically claim queued/created → launch status. The Session row lock,
+    // queue-head check, and expected-state transition are the cross-daemon
+    // fence that prevents duplicate executor launches.
     const dispatchClaim = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
       await assertTenantWritable(tenantDb, tenantId);
       return tasksService.claimDispatchAndProjectSession(
@@ -1199,6 +1195,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       );
     });
     if (dispatchClaim.outcome !== 'claimed') {
+      if (options.requireDispatchClaim) {
+        throw new Conflict(
+          `Task ${shortId(task.task_id)} cannot be run: status is '${dispatchClaim.task.status}' ` +
+            `(another caller or queued Task won the durable Session claim).`
+        );
+      }
       const workIdentity = app.get('distributedWorkIdentity');
       console.info(
         formatStructuredLog('[distributed-work.task-dispatch]', {
@@ -1245,31 +1247,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         messageSource: runtimeMessageSource,
       });
     }
-
-    // Re-apply the Session projection through Feathers so hooks/realtime see
-    // the transition. TaskRepository.claimDispatchAndProjectSession already
-    // committed the same projection atomically with the Task fence; this
-    // service patch is no longer correctness-critical on SQLite and is
-    // intentionally idempotent.
-    //
-    // The session-status flip used to fall out of `TasksService.create` when
-    // the IDLE path created a task with `status: RUNNING` directly. Now the
-    // IDLE path creates `status: CREATED` and we patch the task here, which
-    // `TasksService.patch` does NOT mirror onto the session. Without this
-    // explicit patch, `session.status` stays IDLE while a task is RUNNING,
-    // causing the queue gate in the prompt route to wave subsequent prompts
-    // through instead of queuing them.
-    await app.service('sessions').patch(
-      task.session_id,
-      {
-        status: SessionStatus.RUNNING,
-        ready_for_prompt: false,
-        tasks: session.tasks.includes(task.task_id)
-          ? session.tasks
-          : [...session.tasks, task.task_id],
-      },
-      params
-    );
 
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
     // non-owner is prompting. The prompter identity comes from `task.created_by`
@@ -1517,101 +1494,97 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         const createdBy = params.user.user_id;
 
-        return await withSessionTurnLock(
-          sessionTurnLocks,
-          id as SessionID,
-          async () => {
-            let lockedSession = await sessionsService.get(id, params);
-            if (lockedSession.status === SessionStatus.STOPPING) {
-              // The earlier STOPPING check was against pre-lock state — re-check
-              // here so a session that entered STOPPING while we waited for our
-              // turn doesn't accept a prompt.
-              throw new Error('Cannot send prompt: session is currently stopping');
-            }
-            const promptState = await reconcileSessionPromptStateIfStuck(
-              lockedSession,
-              taskRepo,
-              params
-            );
-            lockedSession = promptState.session;
-
-            const prior = data.idempotencyTaskId
-              ? await taskRepo.findById(data.idempotencyTaskId)
-              : null;
-            if (prior && prior.session_id !== id) {
-              throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
-            }
-
-            const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy, {
-              trustedInternalMetadata: !params.provider,
-            });
-            if (data.idempotencyTaskId) {
-              taskMetadata.initial_message_id = data.idempotencyTaskId as MessageID;
-            }
-            if (params._taskCompletionCallback) {
-              taskMetadata.completion_callback = params._taskCompletionCallback;
-            }
-            const task = await taskRepo.createPending({
-              task_id: data.idempotencyTaskId,
-              session_id: id as SessionID,
-              full_prompt: data.prompt,
-              created_by: createdBy,
-              status: TaskStatus.QUEUED,
-              metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
-            });
-            await tasksService.autoTitleSession(task, params);
-
-            if (!prior) {
-              // Repository admission bypasses TasksService.create. Publish the
-              // entity before its possible patched/dispatch event so reactive
-              // clients observe a coherent lifecycle.
-              emitServiceEvent(app, {
-                path: 'tasks',
-                event: 'created',
-                data: task,
-                params,
-                id: task.task_id,
-              });
-            }
-
-            const admitted = await spawnTaskExecutor(
-              task,
-              {
-                permissionMode: data.permissionMode,
-                stream: data.stream !== false,
-                messageSource,
-                ...(data.idempotencyTaskId
-                  ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
-                  : {}),
-              },
-              params
-            );
-
-            if (admitted.status === TaskStatus.QUEUED) {
-              console.log(
-                `📬 [Prompt] Queued task for session ${shortId(id)} at position ${admitted.queue_position} ` +
-                  `(observed session status: ${lockedSession.status})`
-              );
-              app.service('tasks').emit('queued', admitted);
-
-              // Immediate triggers are a latency hint. Durable all-daemon
-              // discovery remains the recovery path if this process dies or
-              // another claim changes the Session after our observation.
-              deferInFreshTenantScope(params, async () => {
-                try {
-                  await sessionsService.triggerQueueProcessing(id as SessionID, params);
-                } catch (error) {
-                  console.error(`❌ [Prompt] Failed to trigger queued Task processing:`, error);
-                }
-              });
-            }
-
-            // Uniform response: QUEUED means durable wait; DISPATCHING/RUNNING
-            // means this or another daemon already won the launch claim.
-            return admitted;
-          },
-          { waiterTimeoutMs: 30_000 }
+        let lockedSession = await sessionsService.get(id, params);
+        if (lockedSession.status === SessionStatus.STOPPING) {
+          // The earlier STOPPING check was against stale request state. Re-read
+          // immediately before durable admission for a useful fast failure;
+          // the Session-first database claim remains authoritative.
+          throw new Error('Cannot send prompt: session is currently stopping');
+        }
+        const promptState = await reconcileSessionPromptStateIfStuck(
+          lockedSession,
+          taskRepo,
+          params
         );
+        lockedSession = promptState.session;
+
+        const prior = data.idempotencyTaskId
+          ? await taskRepo.findById(data.idempotencyTaskId)
+          : null;
+        if (prior && prior.session_id !== id) {
+          throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+        }
+
+        const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy, {
+          trustedInternalMetadata: !params.provider,
+          ...(!params.provider && messageSource === 'gateway' && params.gatewayOrigin
+            ? { gatewayOrigin: params.gatewayOrigin }
+            : {}),
+        });
+        if (data.idempotencyTaskId) {
+          taskMetadata.initial_message_id = data.idempotencyTaskId as MessageID;
+        }
+        if (params._taskCompletionCallback) {
+          taskMetadata.completion_callback = params._taskCompletionCallback;
+        }
+        const task = await taskRepo.createPending({
+          task_id: data.idempotencyTaskId,
+          session_id: id as SessionID,
+          full_prompt: data.prompt,
+          created_by: createdBy,
+          status: TaskStatus.QUEUED,
+          metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
+        });
+        await tasksService.autoTitleSession(task, params);
+
+        if (!prior) {
+          // Repository admission bypasses TasksService.create. Publish the
+          // entity before its possible patched/dispatch event so reactive
+          // clients observe a coherent lifecycle.
+          emitServiceEvent(app, {
+            path: 'tasks',
+            event: 'created',
+            data: task,
+            params,
+            id: task.task_id,
+          });
+        }
+
+        const admitted = await spawnTaskExecutor(
+          task,
+          {
+            permissionMode: data.permissionMode,
+            stream: data.stream !== false,
+            messageSource,
+            ...(data.idempotencyTaskId
+              ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
+              : {}),
+          },
+          params
+        );
+
+        if (admitted.status === TaskStatus.QUEUED) {
+          console.log(
+            `📬 [Prompt] Queued task for session ${shortId(id)} at position ${admitted.queue_position} ` +
+              `(observed session status: ${lockedSession.status})`
+          );
+          app.service('tasks').emit('queued', admitted);
+
+          // Immediate triggers are a latency hint. Durable all-daemon
+          // discovery remains the recovery path if this process dies or
+          // another claim changes the Session after our observation.
+          deferInFreshTenantScope(params, async () => {
+            try {
+              await sessionsService.triggerQueueProcessing(id as SessionID, params);
+            } catch (error) {
+              console.error(`❌ [Prompt] Failed to trigger queued Task processing:`, error);
+            }
+          });
+        }
+
+        // Uniform response: QUEUED means durable wait; DISPATCHING/RUNNING
+        // means this or another daemon already won the launch claim.
+        return admitted;
       },
     },
     {
@@ -1626,11 +1599,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Explicit executor trigger for an already-created task. Lets pure-REST
   // harnesses (Python, Go, shell+curl — anything without an MCP client) drive
   // the executor by POSTing a Task row first (`POST /tasks`) and then poking
-  // it awake here. Wraps `spawnTaskExecutor` via `runExistingTask` (status
-  // revalidation) under `withSessionTurnLock` — the same process-local mutex
-  // as `/sessions/:id/prompt` and local queue preparation. The drainer additionally
-  // uses a Session-first database claim, so the on-the-wire effect remains "create a task
-  // and run it now."
+  // it awake here. `spawnTaskExecutor` uses the same Session-first database
+  // claim as prompt and queue admission, so the on-the-wire effect remains
+  // "create a task and run it now" across daemon replicas.
   //
   // Only CREATED tasks on IDLE sessions are accepted. QUEUED tasks are
   // rejected with a hint to wait for the queue drainer (running them out of
@@ -1723,54 +1694,36 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           }
         }
 
-        // The local lock coalesces same-process contenders. The repository's
-        // Session-first dispatch claim is authoritative against other daemons
-        // and also refuses to jump a durable prompt queue.
-        return await withSessionTurnLock(
-          sessionTurnLocks,
-          task.session_id,
-          async () => {
-            // Re-read session state inside the lock — it may have flipped to
-            // RUNNING while we waited for our turn.
-            const { session } = await reconcileSessionPromptStateIfStuck(
-              await sessionsService.get(task.session_id, params),
-              taskRepo,
-              params,
-              { ignoredTaskIds: [task.task_id] }
-            );
+        // This read is advisory for a useful conflict response. The
+        // repository's Session-first CREATED -> DISPATCHING claim below is
+        // the cross-replica authority and refuses to jump durable queued work.
+        const { session } = await reconcileSessionPromptStateIfStuck(
+          await sessionsService.get(task.session_id, params),
+          taskRepo,
+          params,
+          { ignoredTaskIds: [task.task_id] }
+        );
 
-            if (session.status === SessionStatus.STOPPING) {
-              throw new BadRequest('Cannot run task: session is currently stopping');
-            }
-            if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
-              throw new Conflict(
-                `Cannot run task ${shortId(taskId)}: session is '${session.status}'. ` +
-                  `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
-                  `it creates and queues a task atomically.`
-              );
-            }
+        if (session.status === SessionStatus.STOPPING) {
+          throw new BadRequest('Cannot run task: session is currently stopping');
+        }
+        if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
+          throw new Conflict(
+            `Cannot run task ${shortId(taskId)}: session is '${session.status}'. ` +
+              `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
+              `it creates and queues a task atomically.`
+          );
+        }
 
-            const result = await runExistingTask(
-              task,
-              {
-                permissionMode: data.permissionMode,
-                stream: data.stream !== false,
-                messageSource: normalizeMessageSource(data.messageSource, params),
-              },
-              params,
-              {
-                findTaskById: (id) => taskRepo.findById(id),
-                spawnFn: spawnTaskExecutor,
-              }
-            );
-            if (result.status === TaskStatus.CREATED) {
-              throw new Conflict(
-                `Cannot run task ${shortId(taskId)}: another Task or queued prompt owns the Session turn.`
-              );
-            }
-            return result;
+        return spawnTaskExecutor(
+          task,
+          {
+            permissionMode: data.permissionMode,
+            stream: data.stream !== false,
+            messageSource: normalizeMessageSource(data.messageSource, params),
+            requireDispatchClaim: true,
           },
-          { waiterTimeoutMs: 30_000 }
+          params
         );
       },
     },
@@ -2568,7 +2521,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           });
         };
         if (body.force_unverified === true) {
-          const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
+          const result = await (async () => {
             const session = await app.service('sessions').get(id, params);
             const task = findUnverifiedTerminationTask(
               await findActiveTasksForSession(app, session.session_id, params)
@@ -2597,22 +2550,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               status: failedTask.status,
               stoppedTaskId: failedTask.task_id,
             };
-          });
+          })();
           return result;
         }
 
         const stopReason = typeof body.reason === 'string' ? body.reason : undefined;
-        const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
-          stopSessionPreserveQueue(
-            {
-              app,
-              taskRepo: stopRouteRepositories.taskRepo,
-              sessionsService: sessionsServiceWithHooks,
-            },
-            id as SessionID,
-            params,
-            { reason: stopReason }
-          )
+        const result = await stopSessionPreserveQueue(
+          {
+            app,
+            taskRepo: stopRouteRepositories.taskRepo,
+            sessionsService: sessionsServiceWithHooks,
+          },
+          id as SessionID,
+          params,
+          { reason: stopReason }
         );
 
         if (result.success && !result.stoppedTaskId) {
@@ -2663,12 +2614,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // Queue processing implementation — task-centric. `sessionTurnLocks` and
-  // `queueRetryScheduled` only coalesce duplicate work inside this daemon.
-  // They may disappear on process death without losing correctness: the
-  // durable queue head plus Session-first dispatch claim are authoritative,
-  // and the all-daemon queue worker rediscovers missed work.
-  const queueRetryScheduled = new Set<SessionID>();
+  // Queue processing is task-centric. The durable queue head plus the
+  // Session-first dispatch claim are authoritative; the distributed queue
+  // worker rediscovers missed work after process loss.
 
   async function processNextQueuedTask(sessionId: SessionID, params: RouteParams): Promise<void> {
     await runWithSessionQueueTenantScope(
@@ -2679,10 +2627,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         params,
         label: 'processNextQueuedTask',
       },
-      async (scopedParams) =>
-        withSessionTurnLock(sessionTurnLocks, sessionId, () =>
-          processNextQueuedTaskInternal(sessionId, scopedParams)
-        )
+      (scopedParams) => processNextQueuedTaskInternal(sessionId, scopedParams)
     );
   }
 

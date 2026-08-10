@@ -60,7 +60,9 @@ import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
+
 export { reportCodexActivity } from './sdk-activity.js';
+
 import { isCodexReconnectEvent, reportCodexActivity } from './sdk-activity.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 

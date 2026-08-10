@@ -74,9 +74,6 @@ export class ClaudePromptService {
   /** Enable token-level streaming from Claude Agent SDK */
   private static readonly ENABLE_TOKEN_STREAMING = true;
 
-  /** Serialize permission checks per session to prevent duplicate prompts for concurrent tool calls */
-  private permissionLocks = new Map<SessionID, Promise<void>>();
-
   constructor(
     private messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
@@ -217,7 +214,6 @@ If you continue to see authentication errors, please contact your Agor administr
         branchesRepo: this.branchesRepo,
         usersRepo: this.usersRepo,
         mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
-        permissionLocks: this.permissionLocks,
       },
       {
         taskId,
@@ -429,7 +425,6 @@ If you continue to see authentication errors, please contact your Agor administr
         branchesRepo: this.branchesRepo,
         usersRepo: this.usersRepo,
         mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
-        permissionLocks: this.permissionLocks,
       },
       {
         taskId: undefined,

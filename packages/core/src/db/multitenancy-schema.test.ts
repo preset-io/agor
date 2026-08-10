@@ -302,5 +302,4 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain('Baseline them once');
     expect(sqliteMigration).toContain('terminal_consequences_completed_at');
   });
-
 });

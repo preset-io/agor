@@ -94,9 +94,9 @@ export type TaskParams = QueryParams<{
 }> &
   AuthenticatedParams & {
     /**
-     * Internal-only: terminal task patches normally drain queued work for the
-     * owning session. Ordered startup recovery suppresses that continuation
-     * until its later terminal-consequence repair pass.
+     * Internal-only: skip the immediate queue trigger when the fleet worker or
+     * ordered startup repair owns continuation. Other terminal consequences
+     * still materialize.
      */
     suppressTerminalQueueProcessing?: boolean;
     /**
@@ -158,12 +158,26 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       updates
     );
     if (result.outcome === 'claimed') {
-      emitServiceEvent(this.app, {
-        path: 'tasks',
-        event: 'patched',
-        data: result.task,
-        params,
-        id: result.task.task_id,
+      await this.runAfterTenantDatabaseCommit('publish dispatch claim', async () => {
+        const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
+        const currentTask = (await this.taskRepo.findById(result.task.task_id)) ?? result.task;
+        const currentSession = (await this.app
+          .service('sessions')
+          .get(result.task.session_id, internalParams)) as Session;
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: currentTask,
+          params,
+          id: currentTask.task_id,
+        });
+        emitServiceEvent(this.app, {
+          path: 'sessions',
+          event: 'patched',
+          data: currentSession,
+          params,
+          id: currentSession.session_id,
+        });
       });
     }
     return result;
@@ -507,6 +521,24 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (!enqueueTenantDatabasePostCommitCallback(reconcile)) await reconcile();
   }
 
+  private async runAfterTenantDatabaseCommit(
+    label: string,
+    work: () => Promise<void>
+  ): Promise<void> {
+    const run = async () => {
+      try {
+        await work();
+      } catch (error) {
+        console.warn(
+          `⚠️  [TasksService] ${label} failed:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    };
+
+    if (!enqueueTenantDatabasePostCommitCallback(run)) await run();
+  }
+
   private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
     const payload: ExecutorHeartbeatCallbackPayload = {
       event: 'executor_heartbeat',
@@ -700,9 +732,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     await gateway.finalizeTask(gatewayData);
     if (continueQueue) {
       await this.continueQueuedTasksAfterTerminalSettlement(task, params);
-      // Startup recovery intentionally leaves the receipt incomplete so its
-      // ordered repair pass owns queue continuation after containment settles.
-      if (params?.suppressTerminalQueueProcessing) return;
     }
     await this.taskRepo.markTerminalConsequencesComplete(task.task_id);
     gateway.deliverTerminalTaskAfterCommit(gatewayData, params);
@@ -1398,6 +1427,24 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       params
     );
 
+    return task;
+  }
+
+  async recordExecutorStartupWarning(
+    taskId: string,
+    warning: string,
+    params?: TaskParams
+  ): Promise<Task | null> {
+    const task = await this.taskRepo.recordExecutorStartupWarning(taskId, warning);
+    if (task) {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: task,
+        id: task.task_id,
+        params,
+      });
+    }
     return task;
   }
 

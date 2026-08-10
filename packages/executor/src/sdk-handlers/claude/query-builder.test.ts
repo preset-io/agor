@@ -41,6 +41,12 @@ import * as Claude from '@anthropic-ai/claude-agent-sdk';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
+function firstQueryCall() {
+  const call = vi.mocked(Claude.query).mock.calls[0]?.[0];
+  if (!call?.options) throw new Error('Claude query was not called with options');
+  return { ...call, options: call.options };
+}
+
 describe('MCP logging helpers', () => {
   it('formats long server lists without dumping every entry', () => {
     expect(formatListForLog(['a', 'b', 'c'], 5)).toBe('a, b, c');
@@ -70,7 +76,6 @@ describe('setupQuery - Local Settings Support', () => {
       branchesRepo: {
         findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
       } as any,
-      permissionLocks: new Map(),
     };
   }
 
@@ -79,7 +84,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
 
     // This is the core test for your feature:
     // It ensures 'local' is passed alongside 'user' and 'project'
@@ -116,9 +121,10 @@ describe('setupQuery - Local Settings Support', () => {
 
       expect(logSpy.mock.calls).toEqual([['🤖 Prompting Claude for session test-session...']]);
 
-      const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+      const callArgs = firstQueryCall();
       expect(callArgs.options).not.toHaveProperty('debug');
       expect(callArgs.options.resume).toBe('sdk-session-secret');
+      if (typeof callArgs.prompt === 'string') throw new Error('Expected an async prompt stream');
       const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
       const firstMessage = await promptIterator.next();
       expect(firstMessage.value.message.content).toEqual([{ type: 'text', text: prompt }]);
@@ -148,7 +154,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     expect(callArgs.options.disallowedTools).toEqual([...CLAUDE_CODE_DISALLOWED_TOOLS]);
   });
 
@@ -174,7 +180,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor).toMatchObject({ alwaysLoad: true });
     expect(mcpServers.remote).toMatchObject({ alwaysLoad: true });
@@ -201,7 +207,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor.alwaysLoad).toBeUndefined();
     expect(mcpServers.remote.alwaysLoad).toBeUndefined();
@@ -230,7 +236,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor.alwaysLoad).toBeUndefined();
     expect(mcpServers.oauthRemote).toMatchObject({
@@ -264,7 +270,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor).toMatchObject({ alwaysLoad: true });
     expect(mcpServers.oauthRemote).toMatchObject({
@@ -305,7 +311,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor).toMatchObject({ alwaysLoad: true });
     expect(mcpServers.bearerRemote.alwaysLoad).toBeUndefined();
@@ -327,7 +333,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     expect(callArgs.options.model).toBe('claude-sonnet-4-6[1m]');
     // The advisor goes through the SDK's extraArgs → `--advisor opus`.
     expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'opus' });
@@ -352,7 +358,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'claude-opus-4-7[1m]' });
     expect(callArgs.options.settings).toBeUndefined();
     expect(callArgs.options.betas).toBeUndefined();
@@ -375,7 +381,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     expect(
       (callArgs.options.extraArgs as Record<string, unknown> | undefined)?.advisor
     ).toBeUndefined();
@@ -397,7 +403,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     expect(
       (callArgs.options.extraArgs as Record<string, unknown> | undefined)?.advisor
     ).toBeUndefined();
@@ -432,7 +438,6 @@ describe('setupQuery - canUseTool registration', () => {
       tasksService: {} as any,
       messagesService: {} as any,
       sessionsService: {} as any,
-      permissionLocks: new Map(),
     };
   }
 
@@ -448,7 +453,7 @@ describe('setupQuery - canUseTool registration', () => {
       permissionMode: 'bypassPermissions',
     });
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     expect(callArgs.options.canUseTool).toBeUndefined();
     expect(callArgs.options.permissionMode).toBe('bypassPermissions');
   });
@@ -461,7 +466,7 @@ describe('setupQuery - canUseTool registration', () => {
       permissionMode: 'default',
     });
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     expect(callArgs.options.canUseTool).toBeTypeOf('function');
   });
 
@@ -473,7 +478,7 @@ describe('setupQuery - canUseTool registration', () => {
       // no taskId
     });
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = firstQueryCall();
     expect(callArgs.options.canUseTool).toBeUndefined();
   });
 });
@@ -529,7 +534,6 @@ describe('setupQuery - ask under bypassPermissions', () => {
       tasksService: {} as any,
       messagesService: {} as any,
       sessionsService: {} as any,
-      permissionLocks: new Map(),
     };
   }
 
@@ -539,7 +543,7 @@ describe('setupQuery - ask under bypassPermissions', () => {
       permissionMode: 'bypassPermissions',
     });
 
-    const options = vi.mocked(Claude.query).mock.calls[0][0].options;
+    const options = firstQueryCall().options;
     // `disallowedTools` is mode-independent, so this holds even though bypass
     // skips canUseTool and could skip hooks.
     expect(options.disallowedTools).toContain(`mcp__${GATED_SERVER}__write_file`);
@@ -553,7 +557,7 @@ describe('setupQuery - ask under bypassPermissions', () => {
       permissionMode: 'default',
     });
 
-    const options = vi.mocked(Claude.query).mock.calls[0][0].options;
+    const options = firstQueryCall().options;
     expect(options.disallowedTools).not.toContain(`mcp__${GATED_SERVER}__write_file`);
     // Positive control: the server really was processed, so the absence above
     // is the promptable path and not a fixture that produced no servers.
@@ -608,7 +612,6 @@ describe('setupQuery - tool names the CLI has to rewrite', () => {
       tasksService: {} as any,
       messagesService: {} as any,
       sessionsService: {} as any,
-      permissionLocks: new Map(),
     };
   }
 
@@ -618,7 +621,7 @@ describe('setupQuery - tool names the CLI has to rewrite', () => {
       permissionMode: 'default',
     });
 
-    const disallowed = vi.mocked(Claude.query).mock.calls[0][0].options.disallowedTools as string[];
+    const disallowed = firstQueryCall().options.disallowedTools as string[];
 
     // What the CLI actually offers the model, and therefore the only form that
     // can bind: both halves rewritten.

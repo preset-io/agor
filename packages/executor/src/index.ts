@@ -25,7 +25,11 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
+import {
+  isTerminalTaskStatus,
+  sdkHealthFailureCanBeSupersededByProgress,
+  TaskStatus,
+} from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { InteractionMode, ResolvedConfigSlice } from './payload-types.js';
@@ -35,9 +39,14 @@ import {
   applyAdapterConformanceMode,
   getSdkActivityConformance,
   type RuntimeActivity,
+  type SdkHealthAuthorizationOutcome,
   SdkWatchdog,
 } from './sdk-watchdog.js';
-import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
+import {
+  type AgorClient,
+  createFeathersClient,
+  reportSdkHealthFailureWithAckTimeout,
+} from './services/feathers-client.js';
 import {
   type AgenticToolOutcome,
   finalizeTask as persistTaskOutcome,
@@ -85,10 +94,7 @@ export class AgorExecutor {
   private sdkWorkStarted = false;
   private terminationRequest: Task['termination_request'];
   private terminationReport: Promise<void> | null = null;
-  private sdkHealthReportInFlight?: {
-    action: SdkHealthFailureInput['watchdog_action'];
-    report: Promise<Task | undefined>;
-  };
+  private sdkHealthReportTail: Promise<void> = Promise.resolve();
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -185,6 +191,7 @@ export class AgorExecutor {
       const event = data as {
         requestId: string;
         taskId: string;
+        sessionId: string;
         allow: boolean;
         reason?: string;
         remember: boolean;
@@ -193,7 +200,8 @@ export class AgorExecutor {
       };
       console.log('[executor] Received permission_resolved event:', event);
 
-      if (event.taskId === this.config.taskId) {
+      if (event.taskId === this.config.taskId && event.sessionId === this.config.sessionId) {
+        this.recordActivity({ type: 'sdk_started', detail: 'permission.resolved' });
         // Forward to global permission manager
         globalPermissionManager.resolvePermission({
           requestId: event.requestId,
@@ -372,58 +380,59 @@ export class AgorExecutor {
 
   private async handleWatchdogDecision(
     evidence: Omit<SdkHealthFailureInput, 'task_id'>
-  ): Promise<boolean> {
+  ): Promise<SdkHealthAuthorizationOutcome> {
     const client = this.client;
-    if (!client) return false;
-    if (
-      !this.sdkHealthReportInFlight ||
-      this.sdkHealthReportInFlight.action !== evidence.watchdog_action
-    ) {
-      const previous = this.sdkHealthReportInFlight?.report;
-      const report = (previous ?? Promise.resolve())
-        .then(async () => {
+    if (!client) return 'retry';
+
+    const attempt = this.sdkHealthReportTail.then(
+      async (): Promise<SdkHealthAuthorizationOutcome> => {
+        try {
+          const detectionSequence = evidence.pulse_sequence_at_detection;
           if (
             evidence.watchdog_action === 'enforced' &&
-            evidence.pulse_sequence_at_detection !== undefined
+            detectionSequence !== undefined &&
+            sdkHealthFailureCanBeSupersededByProgress(evidence.reason)
           ) {
-            const acknowledgedProgress = await this.heartbeat?.flushProgressThrough(
-              evidence.pulse_sequence_at_detection
-            );
+            const acknowledgedProgress =
+              await this.heartbeat?.flushProgressThrough(detectionSequence);
             const newestProgress = Math.max(
               acknowledgedProgress ?? -1,
               this.latestProgressSequence ?? -1
             );
-            if (newestProgress > evidence.pulse_sequence_at_detection) return undefined;
+            if (newestProgress > detectionSequence) return 'superseded';
           }
-          return client.service('tasks').reportSdkHealthFailure({
-            ...evidence,
-            task_id: this.config.taskId,
-          });
-        })
-        .then((task) => {
-          if (task) this.handleTaskLifecycleUpdate(task);
-          return task;
-        })
-        .catch((error) => {
-          console.error('[executor] Failed to report SDK health:', error);
-          return undefined;
-        });
-      const inFlight = { action: evidence.watchdog_action, report };
-      this.sdkHealthReportInFlight = inFlight;
-      void report.finally(() => {
-        if (this.sdkHealthReportInFlight === inFlight) this.sdkHealthReportInFlight = undefined;
-      });
-    }
 
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const task = await Promise.race([
-      this.sdkHealthReportInFlight.report,
-      new Promise<undefined>((resolve) => {
-        timeout = setTimeout(() => resolve(undefined), SDK_HEALTH_ACK_WAIT_MS);
-        timeout.unref?.();
-      }),
-    ]).finally(() => clearTimeout(timeout));
-    return !!task && (isTerminalTaskStatus(task.status) || task.status === TaskStatus.STOPPING);
+          const task = await reportSdkHealthFailureWithAckTimeout(
+            client,
+            { ...evidence, task_id: this.config.taskId },
+            SDK_HEALTH_ACK_WAIT_MS
+          );
+          this.handleTaskLifecycleUpdate(task);
+          if (isTerminalTaskStatus(task.status) || task.status === TaskStatus.STOPPING) {
+            return 'authorized';
+          }
+          if (
+            detectionSequence !== undefined &&
+            sdkHealthFailureCanBeSupersededByProgress(evidence.reason) &&
+            Math.max(
+              task.latest_executor_progress?.sequence ?? -1,
+              this.latestProgressSequence ?? -1
+            ) > detectionSequence
+          ) {
+            return 'superseded';
+          }
+          return 'retry';
+        } catch (error) {
+          console.error('[executor] Failed to report SDK health:', error);
+          return 'retry';
+        }
+      }
+    );
+    this.sdkHealthReportTail = attempt.then(
+      () => undefined,
+      () => undefined
+    );
+    return attempt;
   }
 
   /**

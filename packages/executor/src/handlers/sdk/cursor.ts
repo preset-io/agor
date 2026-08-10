@@ -695,7 +695,6 @@ export async function executeCursorTask(params: {
         },
       };
       if (gitStateAtEnd) {
-        // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
         taskPatch.git_state = {
           ref_at_end: gitStateAtEnd.ref,
           sha_at_end: gitStateAtEnd.sha,
@@ -724,7 +723,6 @@ export async function executeCursorTask(params: {
       error_message: err.message,
     };
     if (gitStateAtEnd) {
-      // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       taskPatch.git_state = {
         ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,

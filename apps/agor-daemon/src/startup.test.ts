@@ -142,7 +142,12 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
   return { ctx, baseDb, tasksService, sessionsService, gatewayService };
 }
 
-function makeTask(overrides: Partial<Task>): Task {
+type TaskOverrides = Omit<Partial<Task>, 'task_id' | 'session_id'> & {
+  task_id?: string;
+  session_id?: string;
+};
+
+function makeTask(overrides: TaskOverrides): Task {
   return {
     task_id: 'task-1',
     session_id: 'session-1',
@@ -152,7 +157,12 @@ function makeTask(overrides: Partial<Task>): Task {
   } as Task;
 }
 
-function makeSession(overrides: Partial<Session>): Session {
+type SessionOverrides = Omit<Partial<Session>, 'session_id' | 'tasks'> & {
+  session_id?: string;
+  tasks?: string[] | Session['tasks'];
+};
+
+function makeSession(overrides: SessionOverrides): Session {
   return {
     session_id: 'session-1',
     agentic_tool: 'codex',
@@ -299,9 +309,11 @@ describe('startup tenant database scope', () => {
   it('claims orphaned execution for containment without terminalizing it or wiping its queue', async () => {
     const task = makeTask({});
     const queued = makeTask({ task_id: 'queued-1', status: TaskStatus.QUEUED });
+    const session = makeSession({ session_id: task.session_id });
     const { ctx, tasksService } = makeStartupContextWithGuardedDb({
       orphanedTasks: [task],
       queuedTasks: [queued],
+      sessionsById: { [session.session_id]: session },
     });
 
     const result = await cleanupOrphanStatuses(ctx);
@@ -435,7 +447,7 @@ describe('startup tenant database scope', () => {
           orphanedSessions: [session],
         },
       ],
-    } as Awaited<ReturnType<typeof cleanupOrphanStatuses>>);
+    } as unknown as Awaited<ReturnType<typeof cleanupOrphanStatuses>>);
     await vi.waitFor(() => expect(order).toEqual(['containment-start']));
     finishContainment();
     await recovery;
@@ -471,7 +483,7 @@ describe('startup tenant database scope', () => {
           orphanedSessions: [],
         },
       ],
-    } as Awaited<ReturnType<typeof cleanupOrphanStatuses>>);
+    } as unknown as Awaited<ReturnType<typeof cleanupOrphanStatuses>>);
 
     expect(tasksService.repairTerminalConsequences).toHaveBeenCalledOnce();
   });

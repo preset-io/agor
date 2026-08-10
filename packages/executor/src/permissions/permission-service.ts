@@ -86,6 +86,7 @@ type PermissionEvent = (typeof PermissionEvent)[keyof typeof PermissionEvent];
  */
 export class PermissionService {
   private readonly timeoutMs: number;
+  private readonly interactionTails = new Map<SessionID, Promise<void>>();
   private pendingRequests = new Map<
     string,
     {
@@ -107,6 +108,45 @@ export class PermissionService {
     private onActivity?: SdkActivityCallback
   ) {
     this.timeoutMs = resolvePermissionTimeoutMs({ permission_timeout_ms: timeoutMs });
+  }
+
+  /**
+   * Acquire the Session's interactive tail. The tail is installed before
+   * waiting on its predecessor so three or more concurrent callbacks cannot
+   * bypass one another. Capability and cancellation are checked before the
+   * caller can create messages, statuses, events, waiters, or watchdog pulses.
+   */
+  async acquireInteraction(sessionId: SessionID, signal: AbortSignal): Promise<() => void> {
+    if (this.interactionMode === 'unattended') {
+      throw new Error('This execution surface cannot answer permission requests');
+    }
+    if (signal.aborted) throw new Error('Permission request cancelled');
+
+    const predecessor = this.interactionTails.get(sessionId) ?? Promise.resolve();
+    let release!: () => void;
+    const ownTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.interactionTails.set(sessionId, ownTail);
+
+    let released = false;
+    const releaseInteraction = () => {
+      if (released) return;
+      released = true;
+      release();
+      if (this.interactionTails.get(sessionId) === ownTail) {
+        this.interactionTails.delete(sessionId);
+      }
+    };
+
+    try {
+      await predecessor;
+      if (signal.aborted) throw new Error('Permission request cancelled');
+      return releaseInteraction;
+    } catch (error) {
+      releaseInteraction();
+      throw error;
+    }
   }
 
   /**

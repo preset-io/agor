@@ -1,20 +1,47 @@
 import { runWithTenantDatabaseScope } from '@agor/core/db';
-import { type MessageID, type Session, type Task, type TaskID, TaskStatus } from '@agor/core/types';
+import {
+  type GatewayTerminalDeliveryReceipt,
+  type MessageID,
+  type Session,
+  type Task,
+  type TaskID,
+  TaskStatus,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { completionCallbackTaskId } from '../utils/durable-task-id.js';
 import { SessionsService } from './sessions';
 import { TasksService } from './tasks';
 
-const childSessionId = '018f0000-0000-7000-8000-000000000101';
-const parentSessionId = '018f0000-0000-7000-8000-000000000102';
-const taskId = '018f0000-0000-7000-8000-000000000201';
-const callbackTaskId = '018f0000-0000-7000-8000-000000000301';
-const userId = '018f0000-0000-7000-8000-000000000401';
-const durableCallbackTaskId = completionCallbackTaskId(
-  taskId as Task['task_id'],
-  parentSessionId as Session['session_id']
-);
+const childSessionId = '018f0000-0000-7000-8000-000000000101' as Session['session_id'];
+const parentSessionId = '018f0000-0000-7000-8000-000000000102' as Session['session_id'];
+const taskId = '018f0000-0000-7000-8000-000000000201' as TaskID;
+const callbackTaskId = '018f0000-0000-7000-8000-000000000301' as TaskID;
+const userId = '018f0000-0000-7000-8000-000000000401' as Task['created_by'];
+const durableCallbackTaskId = completionCallbackTaskId(taskId, parentSessionId);
 const tenantParams = { tenant: { tenant_id: 'tenant-1', source: 'explicit' } } as never;
+
+type TaskParams = Parameters<TasksService['reconcileTerminalTask']>[2];
+type PendingGatewayTerminalDeliveryReceipt = Extract<
+  GatewayTerminalDeliveryReceipt,
+  { status: 'pending' }
+>;
+type TasksServicePrivateMethods = {
+  projectTerminalSession(
+    task: Task,
+    status: Task['status'],
+    session: Session,
+    params?: TaskParams
+  ): Promise<Session>;
+  dispatchCompletionCallbacks(
+    task: Task,
+    childSession: Session,
+    params?: TaskParams
+  ): Promise<void>;
+};
+
+function privateTasksService(service: TasksService): TasksServicePrivateMethods {
+  return service as unknown as TasksServicePrivateMethods;
+}
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -116,7 +143,7 @@ function makeService(
   };
 
   const callbackTask = makeTask({
-    task_id: callbackTaskId,
+    task_id: durableCallbackTaskId,
     session_id: parentSessionId,
     status: TaskStatus.QUEUED,
   });
@@ -136,9 +163,9 @@ function makeService(
         callback_dispatches: [
           ...(source.metadata?.callback_dispatches ?? []),
           {
-            event: 'session_completion',
+            event: 'task_completion',
             target_session_id: targetSessionId as never,
-            queued_task_id: callbackTaskId as never,
+            queued_task_id: durableCallbackTaskId,
             dispatched_at: '2026-01-01T00:00:06.000Z',
           },
         ],
@@ -155,7 +182,7 @@ function makeService(
     Object.assign(target, updates);
     return { ...target };
   });
-  const triggerQueueProcessing = vi.fn(async () => undefined);
+  const triggerQueueProcessing = vi.fn(async (): Promise<void> => undefined);
   const gatewayFinalize = vi.fn(async () => undefined);
   const gatewayDeliver = vi.fn();
   const messagesFind = vi.fn(async () => [
@@ -166,38 +193,35 @@ function makeService(
     },
   ]);
 
-  const service = Object.create(TasksService.prototype) as TasksService & {
-    repository: typeof repository;
-    taskRepo: typeof repository & { createCompletionCallbackOnce: typeof createPending };
-    id: string;
-    emit: ReturnType<typeof vi.fn>;
-    app: { service: ReturnType<typeof vi.fn> };
-  };
-  service.repository = repository;
-  service.taskRepo = { ...repository, createCompletionCallbackOnce: createPending };
-  service.id = 'task_id';
-  service.emit = vi.fn();
-  service.app = {
-    service: vi.fn((name: string) => {
-      if (name === 'sessions') {
-        return {
-          get: vi.fn(async (id: string) => (id === parentSessionId ? parentSession : childSession)),
-          patch: sessionsPatch,
-          triggerQueueProcessing,
-        };
-      }
-      if (name === 'messages') return { find: messagesFind };
-      if (name === 'branches') return { get: vi.fn() };
-      if (name === 'gateway') {
-        return {
-          finalizeTask: gatewayFinalize,
-          deliverTerminalTaskAfterCommit: gatewayDeliver,
-          updateProgress: vi.fn(),
-        };
-      }
-      throw new Error(`unexpected service ${name}`);
-    }),
-  };
+  const service = Object.create(TasksService.prototype) as TasksService;
+  Reflect.set(service, 'repository', repository);
+  Reflect.set(service, 'taskRepo', {
+    ...repository,
+    createCompletionCallbackOnce: createPending,
+  });
+  Reflect.set(service, 'id', 'task_id');
+  Reflect.set(service, 'emit', vi.fn());
+  Reflect.set(service, 'db', { run: vi.fn() });
+  const appService = vi.fn((name: string) => {
+    if (name === 'sessions') {
+      return {
+        get: vi.fn(async (id: string) => (id === parentSessionId ? parentSession : childSession)),
+        patch: sessionsPatch,
+        triggerQueueProcessing,
+      };
+    }
+    if (name === 'messages') return { find: messagesFind };
+    if (name === 'branches') return { get: vi.fn() };
+    if (name === 'gateway') {
+      return {
+        finalizeTask: gatewayFinalize,
+        deliverTerminalTaskAfterCommit: gatewayDeliver,
+        updateProgress: vi.fn(),
+      };
+    }
+    throw new Error(`unexpected service ${name}`);
+  });
+  Reflect.set(service, 'app', { service: appService });
 
   return {
     service,
@@ -209,8 +233,13 @@ function makeService(
     gatewayFinalize,
     gatewayDeliver,
     markTerminalConsequencesComplete: repository.markTerminalConsequencesComplete,
-    getStoredTask: (id = taskId) => tasksById.get(id),
+    getStoredTask: (id: string = taskId) => {
+      const stored = tasksById.get(id);
+      if (!stored) throw new Error(`missing Task ${id}`);
+      return stored;
+    },
     childSession,
+    appService,
   };
 }
 
@@ -328,7 +357,7 @@ describe('TasksService completion callbacks', () => {
       },
     });
 
-    await (service as any).projectTerminalSession(
+    await privateTasksService(service).projectTerminalSession(
       makeTask({ status: TaskStatus.COMPLETED }),
       TaskStatus.COMPLETED,
       childSession,
@@ -599,8 +628,8 @@ describe('TasksService completion callbacks', () => {
     });
 
     await Promise.all([
-      (service as any).dispatchCompletionCallbacks(completedTask, childSession, {}),
-      (service as any).dispatchCompletionCallbacks(completedTask, childSession, {}),
+      privateTasksService(service).dispatchCompletionCallbacks(completedTask, childSession, {}),
+      privateTasksService(service).dispatchCompletionCallbacks(completedTask, childSession, {}),
     ]);
 
     expect(createPending).toHaveBeenCalledTimes(2);
@@ -616,7 +645,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    await (service as any).dispatchCompletionCallbacks(firstTask, childSession, {});
+    await privateTasksService(service).dispatchCompletionCallbacks(firstTask, childSession, {});
 
     expect(createPending).toHaveBeenCalledTimes(1);
     expect(childSession.callback_config?.enabled).toBe(false);
@@ -630,7 +659,7 @@ describe('TasksService completion callbacks', () => {
       metadata: undefined,
     });
 
-    await (service as any).dispatchCompletionCallbacks(secondTask, childSession, {});
+    await privateTasksService(service).dispatchCompletionCallbacks(secondTask, childSession, {});
 
     expect(createPending).not.toHaveBeenCalled();
   });
@@ -644,7 +673,7 @@ describe('TasksService completion callbacks', () => {
     });
 
     await expect(
-      (service as any).dispatchCompletionCallbacks(completedTask, childSession, {})
+      privateTasksService(service).dispatchCompletionCallbacks(completedTask, childSession, {})
     ).rejects.toThrow('queue failed');
 
     expect(createPending).toHaveBeenCalledTimes(1);
@@ -715,10 +744,11 @@ describe('TasksService completion callbacks', () => {
   });
 
   it('completes consequences and continues delivery independently after durable gateway intent', async () => {
-    const gatewayReceipt = {
-      mapping_id: 'mapping-1',
-      channel_id: 'channel-1',
-      status: 'pending' as const,
+    const gatewayReceipt: PendingGatewayTerminalDeliveryReceipt = {
+      mapping_id: 'mapping-1' as PendingGatewayTerminalDeliveryReceipt['mapping_id'],
+      channel_id: 'channel-1' as PendingGatewayTerminalDeliveryReceipt['channel_id'],
+      thread_id: 'thread-1',
+      status: 'pending',
       intended_at: '2026-01-01T00:00:05.000Z',
     };
     const { service, gatewayFinalize, gatewayDeliver, markTerminalConsequencesComplete } =
@@ -741,6 +771,31 @@ describe('TasksService completion callbacks', () => {
 
     expect(gatewayFinalize).toHaveBeenCalledOnce();
     expect(markTerminalConsequencesComplete).toHaveBeenCalledWith(completedTask.task_id);
+    expect(gatewayDeliver).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: completedTask.task_id }),
+      expect.anything()
+    );
+  });
+
+  it('completes terminal consequences when the fleet queue worker owns continuation', async () => {
+    const { service, triggerQueueProcessing, gatewayDeliver, markTerminalConsequencesComplete } =
+      makeService({
+        childSession: { callback_config: undefined, genealogy: { children: [] } },
+      });
+    const completedTask = makeTask({
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
+
+    await service.reconcileTerminalTask(completedTask, TaskStatus.COMPLETED, {
+      ...(tenantParams as object),
+      suppressTerminalQueueProcessing: true,
+    } as never);
+
+    expect(triggerQueueProcessing).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(markTerminalConsequencesComplete).toHaveBeenCalledWith(completedTask.task_id)
+    );
     expect(gatewayDeliver).toHaveBeenCalledWith(
       expect.objectContaining({ task_id: completedTask.task_id }),
       expect.anything()
@@ -777,7 +832,7 @@ describe('TasksService completion callbacks', () => {
       },
     });
 
-    await (service as any).dispatchCompletionCallbacks(completedTask, childSession, {});
+    await privateTasksService(service).dispatchCompletionCallbacks(completedTask, childSession, {});
 
     expect(createPending).toHaveBeenCalledTimes(1);
     expect(triggerQueueProcessing).toHaveBeenCalledWith(parentSessionId, {});
@@ -799,7 +854,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    await (service as any).dispatchCompletionCallbacks(completedTask, childSession, {});
+    await privateTasksService(service).dispatchCompletionCallbacks(completedTask, childSession, {});
 
     expect(createPending).not.toHaveBeenCalled();
     expect(triggerQueueProcessing).not.toHaveBeenCalledWith(parentSessionId, {});
@@ -820,7 +875,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    await (service as any).dispatchCompletionCallbacks(completedTask, childSession, {});
+    await privateTasksService(service).dispatchCompletionCallbacks(completedTask, childSession, {});
 
     expect(createPending).toHaveBeenCalledWith(
       completedTask.task_id,
@@ -830,20 +885,20 @@ describe('TasksService completion callbacks', () => {
   });
 
   it('delivers a task-level callback without mutating session callback configuration', async () => {
-    const callerSessionId = '018f0000-0000-7000-8000-000000000777';
-    const { service, createPending, sessionsPatch, childSession } = makeService({
+    const callerSessionId = '018f0000-0000-7000-8000-000000000777' as Session['session_id'];
+    const { service, createPending, sessionsPatch, childSession, appService } = makeService({
       childSession: { genealogy: { children: [] }, callback_config: undefined },
       task: {
         metadata: {
           completion_callback: {
-            target_session_id: callerSessionId as Task['session_id'],
-            requested_from_session_id: callerSessionId as Task['session_id'],
+            target_session_id: callerSessionId,
+            requested_from_session_id: callerSessionId,
             requested_by_user_id: userId,
           },
         },
       },
     });
-    (service.app.service as any).mockImplementation((name: string) => {
+    appService.mockImplementation((name: string) => {
       if (name === 'sessions') {
         return {
           get: vi.fn(async (id: string) =>
@@ -857,15 +912,25 @@ describe('TasksService completion callbacks', () => {
       }
       if (name === 'messages') return { find: vi.fn(async () => []) };
       if (name === 'branches') return { get: vi.fn() };
+      if (name === 'gateway') {
+        return {
+          finalizeTask: vi.fn(async () => undefined),
+          deliverTerminalTaskAfterCommit: vi.fn(),
+          updateProgress: vi.fn(),
+        };
+      }
       throw new Error(`unexpected service ${name}`);
     });
 
-    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+    await reconcile(service, TaskStatus.COMPLETED, {
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
 
     await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     expect(createPending).toHaveBeenCalledWith(
+      taskId,
+      callerSessionId,
       expect.objectContaining({
-        session_id: callerSessionId,
         metadata: expect.objectContaining({ child_task_id: taskId }),
       })
     );
@@ -880,15 +945,17 @@ describe('TasksService completion callbacks', () => {
       task: {
         metadata: {
           completion_callback: {
-            target_session_id: parentSessionId as Task['session_id'],
-            requested_from_session_id: parentSessionId as Task['session_id'],
+            target_session_id: parentSessionId,
+            requested_from_session_id: parentSessionId,
             requested_by_user_id: userId,
           },
         },
       },
     });
 
-    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+    await reconcile(service, TaskStatus.COMPLETED, {
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
 
     await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     await vi.waitFor(() =>

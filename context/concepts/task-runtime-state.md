@@ -104,9 +104,9 @@ executor claim, result, or permission resume cannot revive or overwrite it.
 `dispatching`, `running`, `stopping`, and permission/input waits all block
 admission. `stopping` is daemon-coordinator-owned; the others represent an
 executor handoff or active executor turn. `created` and `queued` are excluded
-from that set; queued work does not block prompt reconciliation, while a
-created launch handoff can still block admission until it is dispatched or
-settled.
+from that set and do not block admission. A `created` Task becomes
+admission-blocking only after it wins the guarded transition to `dispatching`;
+queued work waits for its ordered claim.
 
 Queue materialization and draining are documented separately in
 [task-queueing.md](task-queueing.md).
@@ -151,9 +151,9 @@ mapping-review point.
 
 ## Two supervisors, two failure classes
 
-| Supervisor              | Runs in  | Observes                                                                        | Detects                                                                                               | Default behavior on `main`                                  |
-| ----------------------- | -------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| Task runtime reconciler | Daemon   | Durable dispatch/connection, heartbeat, and termination-coordination timestamps | Dispatches that never connect; stale connected wrappers; stranded termination requests                | Requests database-fenced daemon containment                 |
+| Supervisor              | Runs in  | Observes                                                                        | Detects                                                                                                | Default behavior on `main`                                  |
+| ----------------------- | -------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| Task runtime reconciler | Daemon   | Durable dispatch/connection, heartbeat, and termination-coordination timestamps | Dispatches that never connect; stale connected wrappers; stranded termination requests                 | Requests database-fenced daemon containment                 |
 | SDK watchdog            | Executor | Semantic activity on a monotonic clock                                          | No first progress; Claude/Codex post-progress stalls; bounded operation/wait deadlines; unknown events | `enforce`: abort recognized stalls and hand off containment |
 
 ### Daemon Task runtime reconciler
@@ -210,16 +210,15 @@ mapping-review point.
 - In `enforce` mode, recognized first-progress, absolute-turn, idle, operation, or wait
   deadline failures report the executor-local pulse sequence captured at
   detection. Before reporting, the executor coalescingly flushes telemetry
-  through that decision sequence and abandons locally superseded evidence when
-  the acknowledgement includes newer meaningful progress. Under the locked
-  termination claim, the daemon also rejects enforcement if newer meaningful
-  progress is already durable. Only one health acknowledgement remains in
-  flight, and the executor aborts only
-  after the daemon returns a `stopping` or terminal Task; activity observed while
-  that decision is pending remains in the watchdog and rearms its deadlines when
-  the report is superseded. The acknowledgement wait is bounded without issuing
-  parallel reports; timeout alone never authorizes abort, while a late daemon
-  response still passes through the normal Task lifecycle handler.
+  through that decision sequence. Newer meaningful progress supersedes only
+  progress-derived evidence (`no_first_progress`, `progress_stalled`, and
+  `operation_stalled`); it never renews absolute turn, operation, or wait
+  ceilings. The daemon applies the same reason-aware fence under the locked
+  termination claim. Only one health acknowledgement remains in flight. Each
+  transport wait is bounded, definite authentication failure uses the existing
+  single-flight reauthentication owner, and unresolved evidence is retried
+  serially without a hot loop. Timeout alone never authorizes abort; the
+  executor aborts only after the daemon returns a `stopping` or terminal Task.
 
 First-progress supervision covers all mapped executor SDKs, including Cursor.
 Claude and Codex also have a one-hour post-progress idle timeout by default;
@@ -277,13 +276,18 @@ executor finalizer commit `failed` or `timed_out`. A `timed_out` task retains
 the same terminal reconciliation contract as other settled tasks. Their shared
 permission service owns the interaction deadline while the watchdog only
 pauses quiet supervision, avoiding two clocks racing to choose the outcome.
+The same service owns a per-Session interaction tail: every request installs
+its place before awaiting its predecessor, so three or more concurrent adapter
+callbacks activate one at a time and settle exactly once.
 
 Executor launch payloads also declare whether the surface is `interactive` or
 `unattended`. A direct agent launch is interactive only when its request or
 Session stream room has a live authenticated browser responder. Scheduled and
 gateway sessions are unattended while those surfaces lack a matching response path.
-Claude and Copilot fail unavailable requests immediately; their interactive
-waits use the shared `execution.permission_timeout_ms` resolver and its
+Claude and Copilot fail unavailable requests immediately; their capability
+check occurs before any Message, Task/Session waiting projection, realtime
+event, waiter, or watchdog pulse is created. Their interactive waits use the
+shared `execution.permission_timeout_ms` resolver and its
 ten-minute default. Codex unattended runs fail before SDK work when their
 approval policy requires a responder; policy-only runs retain the configured
 sandbox and network boundaries. OpenCode has no Agor permission-response path, so it
@@ -364,7 +368,7 @@ admission/UI projection:
 - task launch projects the session to `running` and not promptable;
 - the Session row is also the admission fence across different pending Tasks,
   so concurrent daemons cannot launch two executors for one Session; a losing
-  created Task is durably queued;
+  prompt Task remains durably queued;
 - generic Task patches cannot commit terminal status; executor settlement and
   termination settlement are the only release-gated terminal paths;
 - permission and Stop states are projected while their task owns the turn;
@@ -379,13 +383,18 @@ admission/UI projection:
   retry them. Queue processing and other idempotent side effects run after
   commit;
 - callback Task creation and its source receipt are one transaction. Gateway
-  terminal intent is stored on the source Task, and the final assistant
+  ingress stores its trusted mapping, channel, and external thread once on the
+  source Task. Terminal delivery uses only that immutable origin and validates
+  it against current topology; a later Session mapping is never a fallback.
+  The final assistant
   response is reloaded from persisted Messages instead of an in-memory buffer.
   Terminal reconciliation completes after durable intent and applicable queue
   continuation; it never waits for connector delivery. Delivery remains
   at-least-once and independently repairable. Provider failure remains pending,
-  while invalidated origin topology becomes a terminal skipped receipt and a
-  Task without an origin is explicitly not applicable;
+  while invalidated origin topology becomes a terminal skipped receipt. A
+  non-gateway Task is explicitly not applicable, while a gateway Task missing
+  its trusted origin is skipped rather than routed through mutable Session
+  state;
 - `terminal_consequences_completed_at` is recorded only after Session
   projection, callback materialization, durable gateway intent, and applicable
   queue continuation succeed. The introducing migration baselines older
@@ -482,7 +491,6 @@ Preserve these invariants:
 | Agentic-tool outcome normalization                                    | `packages/executor/src/handlers/sdk/`                                                                  |
 | Interaction capability and permission waits                           | `packages/executor/src/permissions/permission-service.ts`, `apps/agor-daemon/src/register-services.ts` |
 | Runtime discovery and recovery                                        | `apps/agor-daemon/src/services/task-runtime-reconciler.ts`                                             |
-| Stale-wrapper and dispatch supervision                                | `apps/agor-daemon/src/services/executor-heartbeat-supervisor.ts`                                       |
 | Termination claims and containment settlement                         | `apps/agor-daemon/src/termination-coordinator.ts`, `apps/agor-daemon/src/executor-tracking.ts`         |
 | Startup orphan reconciliation                                         | `apps/agor-daemon/src/startup.ts`                                                                      |
 | Full HA kill-point audit                                              | `docs/internal/task-runtime-ha-reconciliation-2026-08-06.md`                                           |

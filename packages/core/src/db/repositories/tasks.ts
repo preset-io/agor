@@ -28,22 +28,9 @@ import {
   sessionCanStartTask,
   TaskStatus,
 } from '@agor/core/types';
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  gt,
-  inArray,
-  isNotNull,
-  isNull,
-  like,
-  lte,
-  ne,
-  or,
-  sql,
-} from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, like, lte, ne, or, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
+import { sdkHealthFailureCanBeSupersededByProgress } from '../../types/task';
 import type { Database, SystemDatabase } from '../client';
 import {
   deleteFrom,
@@ -1160,6 +1147,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           (!Number.isFinite(heartbeatAt) || heartbeatAt! > staleBefore)) ||
         (input.requireExecutorDisconnected === true && !!current.executor_connected_at) ||
         (sdkDetectionSequence !== undefined &&
+          input.sdkFailure !== undefined &&
+          sdkHealthFailureCanBeSupersededByProgress(input.sdkFailure.reason) &&
           (current.latest_executor_progress?.sequence ?? -1) > sdkDetectionSequence);
       if (conditionChanged) return { outcome: 'condition_changed', task: current };
 
@@ -1431,9 +1420,21 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       // side effects after commit.
       const sessionProjection = await update(txDb, sessions)
         .set({
-          status: finalStatus === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+          status:
+            finalStatus === TaskStatus.FAILED
+              ? SessionStatus.FAILED
+              : finalStatus === TaskStatus.TIMED_OUT
+                ? SessionStatus.TIMED_OUT
+                : SessionStatus.IDLE,
           ready_for_prompt: true,
           updated_at: settlementAt,
+          data: {
+            ...sessionRow.data,
+            runtime_projection: {
+              terminal_task_id: current.task_id,
+              applied_at: settlementAt.toISOString(),
+            },
+          },
         })
         .where(eq(sessions.session_id, sessionRow.session_id))
         .run();
@@ -1598,12 +1599,18 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           throw new RepositoryError('terminal tasks must settle through the runtime release gate');
         }
 
+        const candidate = deepMerge(current, withTerminalTiming(current, updates));
+        const { gateway_origin: _untrustedOrigin, ...candidateMetadata } = candidate.metadata ?? {};
+        const metadata = current.metadata?.gateway_origin
+          ? { ...candidateMetadata, gateway_origin: current.metadata.gateway_origin }
+          : candidateMetadata;
         const merged = {
-          ...deepMerge(current, withTerminalTiming(current, updates)),
+          ...candidate,
           task_id: current.task_id,
           session_id: current.session_id,
           created_by: current.created_by,
           created_at: current.created_at,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
         };
         const insertData = this.taskToInsert(merged);
 
@@ -1947,12 +1954,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     sessionLocked = false
   ): Promise<Task> {
     if (!sessionLocked) {
-      await lockRowForUpdate(
-        txDb,
-        this.db,
-        sessions,
-        eq(sessions.session_id, taskBase.session_id)
-      );
+      await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, taskBase.session_id));
     }
     const sessionRow = await select(txDb)
       .from(sessions)
@@ -2253,7 +2255,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   /** Settle a pending gateway receipt without rewriting an already terminal receipt. */
   async settleGatewayTerminalDelivery(
     id: string,
-    expected: { mapping_id: string; channel_id: string },
+    expected: { mapping_id: string; channel_id: string; thread_id: string },
     receipt: Extract<GatewayTerminalDeliveryReceipt, { status: 'delivered' | 'skipped' }>
   ): Promise<Task> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
@@ -2262,7 +2264,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (
         pending?.status !== 'pending' ||
         pending.mapping_id !== expected.mapping_id ||
-        pending.channel_id !== expected.channel_id
+        pending.channel_id !== expected.channel_id ||
+        pending.thread_id !== expected.thread_id
       ) {
         return current;
       }

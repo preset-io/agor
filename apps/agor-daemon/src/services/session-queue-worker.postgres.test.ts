@@ -23,6 +23,7 @@ import type { SessionID, TaskID, TenantID, UUID } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SessionQueueWorker } from './session-queue-worker.js';
+import { SessionsService } from './sessions.js';
 import { TasksService } from './tasks.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -123,13 +124,22 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           requireScope: true,
           label: `${instanceId} queue integration`,
         });
-        let tasksService: TasksService;
-        const taskEvents = { emit: vi.fn() };
+        let tasksService!: TasksService;
+        let sessionsService!: SessionsService;
         const app = {
           get: (name: string) => (name === 'config' ? { execution: {} } : undefined),
-          service: (name: string) => (name === 'tasks' ? taskEvents : undefined),
+          service: (name: string) => {
+            if (name === 'tasks') return tasksService;
+            if (name === 'sessions') return sessionsService;
+            return undefined;
+          },
         } as unknown as Application;
-        tasksService = new TasksService(scopedDb, app as never);
+        tasksService = new TasksService(scopedDb, app);
+        sessionsService = new SessionsService(scopedDb, app);
+        const taskEvents = vi.fn();
+        const sessionEvents = vi.fn();
+        Object.assign(tasksService, { emit: taskEvents });
+        Object.assign(sessionsService, { emit: sessionEvents });
 
         const discover = async () => {
           const refs = await runWithTenantDatabaseScope(scopedDb, tenantId, (tenantDb) =>
@@ -158,7 +168,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             });
           },
         });
-        return { app, worker, taskEvents };
+        return { app, worker, sessionEvents, taskEvents };
       };
 
       const daemonA = makeDaemon('daemon-a', dbA);
@@ -170,8 +180,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       expect(launchOwners).toHaveLength(1);
       expect(['daemon-a', 'daemon-b']).toContain(launchOwners[0]);
+      expect(daemonA.taskEvents.mock.calls.length + daemonB.taskEvents.mock.calls.length).toBe(1);
       expect(
-        daemonA.taskEvents.emit.mock.calls.length + daemonB.taskEvents.emit.mock.calls.length
+        daemonA.sessionEvents.mock.calls.length + daemonB.sessionEvents.mock.calls.length
       ).toBe(1);
       // Read the winner through the peer connection rather than the seeding
       // connection, proving that no process-local service state is authority.

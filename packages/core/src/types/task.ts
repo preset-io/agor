@@ -66,12 +66,27 @@ export const SDK_WATCHDOG_FAILURE_REASONS = [
 
 export type SdkWatchdogFailureReason = (typeof SDK_WATCHDOG_FAILURE_REASONS)[number];
 
+export type ProgressSupersedableSdkWatchdogFailureReason = Extract<
+  SdkWatchdogFailureReason,
+  'no_first_progress' | 'progress_stalled' | 'operation_stalled'
+>;
+
 export type SdkFailureReason =
   | 'startup_timeout'
   | SdkWatchdogFailureReason
   | 'agentic_tool_timeout'
   | 'heartbeat_lost'
   | 'termination_unverified';
+
+export function sdkHealthFailureCanBeSupersededByProgress(
+  reason: SdkFailureReason
+): reason is ProgressSupersedableSdkWatchdogFailureReason {
+  return (
+    reason === 'no_first_progress' ||
+    reason === 'progress_stalled' ||
+    reason === 'operation_stalled'
+  );
+}
 
 export interface SdkFailure {
   reason: SdkFailureReason;
@@ -176,16 +191,24 @@ export interface LocalExecutorRuntime {
   as_user?: string;
 }
 
+export interface GatewayTaskOrigin {
+  mapping_id: ThreadSessionMapID;
+  channel_id: GatewayChannelID;
+  thread_id: string;
+}
+
 export type GatewayTerminalDeliveryReceipt =
   | {
       mapping_id: ThreadSessionMapID;
       channel_id: GatewayChannelID;
+      thread_id: string;
       status: 'pending';
       intended_at: string;
     }
   | {
       mapping_id: ThreadSessionMapID;
       channel_id: GatewayChannelID;
+      thread_id: string;
       status: 'delivered';
       intended_at: string;
       delivered_at: string;
@@ -193,6 +216,7 @@ export type GatewayTerminalDeliveryReceipt =
   | {
       mapping_id: ThreadSessionMapID;
       channel_id: GatewayChannelID;
+      thread_id: string;
       status: 'skipped';
       intended_at: string;
       completed_at: string;
@@ -204,10 +228,16 @@ export type GatewayTerminalDeliveryReceipt =
         | 'origin_channel_unsupported';
     }
   | {
+      status: 'skipped';
+      intended_at: string;
+      completed_at: string;
+      reason: 'origin_missing';
+    }
+  | {
       status: 'not_applicable';
       intended_at: string;
       completed_at: string;
-      reason: 'no_origin_mapping';
+      reason: 'non_gateway_task';
     };
 
 export interface TaskMetadata {
@@ -231,6 +261,8 @@ export interface TaskMetadata {
   }>;
   /** Restart-safe gateway consequence receipt, scoped to this source Task. */
   gateway_terminal_delivery?: GatewayTerminalDeliveryReceipt;
+  /** Immutable daemon-captured external destination for this gateway Task. */
+  gateway_origin?: GatewayTaskOrigin;
   /** Set only after every applicable terminal consequence has succeeded. */
   terminal_consequences_completed_at?: string;
   /** Local process identity used only to resume containment after daemon restart. */
@@ -523,6 +555,7 @@ const ExecutorOutcomePatchSchema = z.strictObject({
     .strictObject({
       ref_at_start: z.string().optional(),
       sha_at_start: z.string().optional(),
+      ref_at_end: z.string().optional(),
       sha_at_end: z.string().optional(),
       commit_message: z.string().optional(),
     })

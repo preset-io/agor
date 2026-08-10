@@ -159,6 +159,11 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     data: import('@agor/core/types').ExecutorTerminationCompleteInput,
     params?: FeathersParams
   ): Promise<Task>;
+  recordExecutorStartupWarning(
+    taskId: string,
+    warning: string,
+    params?: FeathersParams
+  ): Promise<Task | null>;
   reportExecutorSettlement(
     data: import('@agor/core/types').ExecutorSettlementInput,
     params?: FeathersParams

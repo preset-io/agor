@@ -5,18 +5,21 @@ import {
   attachHiddenTenant,
   createTenantScopedDatabaseProxy,
   GatewayListenerDiscoveryRepository,
+  type GatewayListenerLease,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   shortId,
 } from '@agor/core/db';
-import { getConnector } from '@agor/core/gateway';
+import { getConnector, type InboundMessage } from '@agor/core/gateway';
 import type {
   GatewayChannel,
   SessionID,
   Task,
+  TenantID,
   ThreadSessionMap,
+  UploadRef,
   User,
   UserID,
 } from '@agor/core/types';
@@ -129,7 +132,17 @@ function makeGuardedPostgresDatabase() {
   return { db, observations, touch, transactions };
 }
 
-function makeMapping(overrides: Partial<ThreadSessionMap> = {}): ThreadSessionMap {
+type TestMappingOverrides = Omit<
+  Partial<ThreadSessionMap>,
+  'id' | 'channel_id' | 'session_id' | 'branch_id'
+> & {
+  id?: ThreadSessionMap['id'] | string;
+  channel_id?: ThreadSessionMap['channel_id'] | string;
+  session_id?: ThreadSessionMap['session_id'] | string;
+  branch_id?: ThreadSessionMap['branch_id'] | string;
+};
+
+function makeMapping(overrides: TestMappingOverrides = {}): ThreadSessionMap {
   return {
     id: 'map-1',
     channel_id: slackChannel.id,
@@ -160,7 +173,7 @@ function makeGatewayHarness(args: {
   const channel = args.channel ?? slackChannel;
   const executionUser = args.user ?? user;
   let mapping = args.existingMapping ?? null;
-  const promptCreate = vi.fn(async () => ({
+  const promptCreate = vi.fn(async (_data: Record<string, unknown>, _params: unknown) => ({
     task_id: 'task-1',
     session_id: mapping?.session_id ?? 'sess-new',
     status: 'running',
@@ -225,7 +238,7 @@ function makeGatewayHarness(args: {
     updateMetadata: vi.fn(async (_id: string, metadata: Record<string, unknown>) => {
       if (mapping) mapping = { ...mapping, metadata } as ThreadSessionMap;
     }),
-    findById: vi.fn(async () => mapping),
+    findById: vi.fn(async (_id: string) => mapping),
     create: vi.fn(async (data: Partial<ThreadSessionMap>) => {
       mapping = makeMapping({
         ...data,
@@ -246,7 +259,16 @@ function makeGatewayHarness(args: {
         task_id: id,
         session_id: 'sess-1',
         status: TaskStatus.COMPLETED,
-        metadata: {},
+        metadata: mapping
+          ? {
+              source: 'gateway',
+              gateway_origin: {
+                mapping_id: mapping.id,
+                channel_id: mapping.channel_id,
+                thread_id: mapping.thread_id,
+              },
+            }
+          : {},
       } as Task;
       tasks.set(id, task);
       return task;
@@ -604,8 +626,8 @@ describe('GatewayService multi-tenant process state', () => {
     const findEnabledTenantRefs = vi
       .spyOn(GatewayListenerDiscoveryRepository.prototype, 'findEnabledTenantRefs')
       .mockResolvedValue([
-        { channel_id: 'same-channel' as never, tenant_id: 'tenant-a' },
-        { channel_id: 'same-channel' as never, tenant_id: 'tenant-b' },
+        { channel_id: 'same-channel' as never, tenant_id: 'tenant-a' as TenantID },
+        { channel_id: 'same-channel' as never, tenant_id: 'tenant-b' as TenantID },
       ]);
     const channelRepo = {
       findById: vi.fn(async () =>
@@ -626,6 +648,7 @@ describe('GatewayService multi-tenant process state', () => {
       return { success: true, sessionId: 'sess-1', created: false };
     });
     vi.mocked(getConnector).mockImplementation(() => ({
+      channelType: 'slack',
       startListening: vi.fn(async (callback) => {
         startedInTenants.push(getCurrentTenantId());
         callbacks.push(callback);
@@ -664,6 +687,7 @@ describe('GatewayService multi-tenant process state', () => {
     (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
     const startListening = vi.fn(async () => undefined);
     vi.mocked(getConnector).mockReturnValue({
+      channelType: 'slack',
       startListening,
       sendMessage: vi.fn(async () => 'sent'),
     });
@@ -685,8 +709,8 @@ describe('GatewayService multi-tenant process state', () => {
     const findEnabledTenantRefs = vi
       .spyOn(GatewayListenerDiscoveryRepository.prototype, 'findEnabledTenantRefs')
       .mockResolvedValue([
-        { channel_id: 'forged-channel' as never, tenant_id: 'tenant-a' },
-        { channel_id: 'valid-channel' as never, tenant_id: 'tenant-b' },
+        { channel_id: 'forged-channel' as never, tenant_id: 'tenant-a' as TenantID },
+        { channel_id: 'valid-channel' as never, tenant_id: 'tenant-b' as TenantID },
       ]);
     const channelRepo = {
       findById: vi.fn(async (channelId: string) =>
@@ -703,6 +727,7 @@ describe('GatewayService multi-tenant process state', () => {
     (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
     const startListening = vi.fn(async () => undefined);
     vi.mocked(getConnector).mockReturnValue({
+      channelType: 'slack',
       startListening,
       sendMessage: vi.fn(async () => 'sent'),
     });
@@ -786,6 +811,11 @@ describe('GatewayService Slack thread catch-up', () => {
     expect(promptCreate.mock.calls[0][1]).toMatchObject({
       route: { id: 'sess-1' },
       tenant: { tenant_id: 'tenant-channel', source: 'explicit' },
+      gatewayOrigin: {
+        mapping_id: mapping.id,
+        channel_id: mapping.channel_id,
+        thread_id: 'C123-100.000000',
+      },
     });
   });
 
@@ -1101,6 +1131,7 @@ describe('GatewayService durable listener delivery fences', () => {
       await options.saveCheckpoint?.({ cursor: 'next' });
     });
     vi.mocked(getConnector).mockReturnValue({
+      channelType: 'slack',
       startListening,
       stopListening,
       sendMessage: vi.fn(async () => 'sent'),
@@ -1323,8 +1354,8 @@ describe('GatewayService durable listener delivery fences', () => {
           handleListenerInboundMessage: (
             channel: GatewayChannel,
             tenantId: string,
-            msg: Record<string, unknown>,
-            lease: typeof lease
+            msg: InboundMessage,
+            listenerLease: GatewayListenerLease
           ) => Promise<void>;
         }
       ).handleListenerInboundMessage(
@@ -1335,6 +1366,7 @@ describe('GatewayService durable listener delivery fences', () => {
           threadId: 'C1-1.0',
           text: 'hello',
           userId: 'U1',
+          timestamp: '2026-01-01T00:00:00.000Z',
           prepareDelivery,
         },
         lease
@@ -1668,6 +1700,48 @@ describe('GatewayService MCP resolution', () => {
 });
 
 describe('GatewayService terminal reconciliation', () => {
+  it('materializes and delivers only to the Task immutable gateway origin', async () => {
+    const originalMapping = makeMapping({ id: 'map-original', thread_id: 'C123-original' });
+    const currentMapping = makeMapping({ id: 'map-current', thread_id: 'C123-current' });
+    const setThreadStatus = vi.fn(async () => undefined);
+    const { service, taskRepo, threadMapRepo } = makeGatewayHarness({
+      existingMapping: currentMapping,
+      connector: { setThreadStatus },
+    });
+    threadMapRepo.findById.mockImplementation(async (id: string) =>
+      id === originalMapping.id ? originalMapping : currentMapping
+    );
+    await taskRepo.update('task-1', {
+      metadata: {
+        source: 'gateway',
+        gateway_origin: {
+          mapping_id: originalMapping.id,
+          channel_id: originalMapping.channel_id,
+          thread_id: originalMapping.thread_id,
+        },
+      },
+    });
+    const terminal = { session_id: 'sess-1', task_id: 'task-1', state: 'done' as const };
+
+    await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+    await runWithTenantContext('tenant-channel', () => service.deliverTerminalTask(terminal));
+
+    expect(threadMapRepo.findBySession).not.toHaveBeenCalled();
+    expect(setThreadStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: originalMapping.thread_id })
+    );
+    await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
+      metadata: {
+        gateway_terminal_delivery: {
+          mapping_id: originalMapping.id,
+          channel_id: originalMapping.channel_id,
+          thread_id: originalMapping.thread_id,
+          status: 'delivered',
+        },
+      },
+    });
+  });
+
   it('reloads persisted responses and keeps one idempotency receipt per Task', async () => {
     const sendMessage = vi.fn(async () => 'comment-1');
     const channel = {
@@ -1771,6 +1845,7 @@ describe('GatewayService terminal reconciliation', () => {
         gateway_terminal_delivery: {
           mapping_id: originalMapping.id,
           channel_id: originalMapping.channel_id,
+          thread_id: originalMapping.thread_id,
           status: 'pending',
           intended_at: '2026-06-22T00:00:00.000Z',
         },
@@ -1788,6 +1863,31 @@ describe('GatewayService terminal reconciliation', () => {
     );
     await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
       metadata: { gateway_terminal_delivery: { status: 'delivered' } },
+    });
+  });
+
+  it('skips delivery when the immutable origin no longer matches current topology', async () => {
+    const origin = makeMapping({ thread_id: 'C123-origin' });
+    const setThreadStatus = vi.fn(async () => undefined);
+    const { service, taskRepo, threadMapRepo } = makeGatewayHarness({
+      existingMapping: origin,
+      connector: { setThreadStatus },
+    });
+    const terminal = { session_id: 'sess-1', task_id: 'task-1', state: 'done' as const };
+
+    await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+    threadMapRepo.findById.mockResolvedValueOnce({
+      ...origin,
+      thread_id: 'C123-rebound',
+      metadata: {},
+    });
+    await runWithTenantContext('tenant-channel', () => service.deliverTerminalTask(terminal));
+
+    expect(setThreadStatus).not.toHaveBeenCalled();
+    await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
+      metadata: {
+        gateway_terminal_delivery: { status: 'skipped', reason: 'origin_mapping_changed' },
+      },
     });
   });
 
@@ -1818,7 +1918,7 @@ describe('GatewayService terminal reconciliation', () => {
     });
   });
 
-  it('materializes an explicit not-applicable receipt when no origin mapping exists', async () => {
+  it('materializes an explicit not-applicable receipt for a non-gateway Task', async () => {
     const { service, taskRepo } = makeGatewayHarness({ existingMapping: null });
 
     await runWithTenantContext('tenant-channel', () =>
@@ -1829,8 +1929,24 @@ describe('GatewayService terminal reconciliation', () => {
       metadata: {
         gateway_terminal_delivery: {
           status: 'not_applicable',
-          reason: 'no_origin_mapping',
+          reason: 'non_gateway_task',
         },
+      },
+    });
+  });
+
+  it('skips a gateway Task whose trusted origin was not captured', async () => {
+    const { service, taskRepo, threadMapRepo } = makeGatewayHarness({ existingMapping: null });
+    await taskRepo.update('task-1', { metadata: { source: 'gateway' } });
+
+    await runWithTenantContext('tenant-channel', () =>
+      service.finalizeTask({ session_id: 'sess-1', task_id: 'task-1', state: 'done' })
+    );
+
+    expect(threadMapRepo.findBySession).not.toHaveBeenCalled();
+    await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
+      metadata: {
+        gateway_terminal_delivery: { status: 'skipped', reason: 'origin_missing' },
       },
     });
   });
@@ -1911,7 +2027,7 @@ describe('GatewayService outbound routing tenant scope', () => {
         events.push('tx:commit');
         return result;
       }),
-    } as TenantScopeAwareDatabase;
+    } as unknown as TenantScopeAwareDatabase;
 
     const seenTenants: Array<string | undefined> = [];
     const sendMessage = vi.fn(async () => {
@@ -1965,7 +2081,7 @@ describe('GatewayService Slack progress tenant scope', () => {
         events.push('tx:commit');
         return result;
       }),
-    } as TenantScopeAwareDatabase;
+    } as unknown as TenantScopeAwareDatabase;
 
     const seenTenants: Array<string | undefined> = [];
     const setThreadStatus = vi.fn(async () => {
@@ -2359,7 +2475,7 @@ describe('GatewayService Slack attachment ingestion', () => {
     vi.mocked(ingestInboundAttachments).mockResolvedValue({
       uploads: [
         {
-          ref: 'upl_00000000-0000-4000-8000-000000000001',
+          ref: 'upl_00000000-0000-4000-8000-000000000001' as UploadRef,
           name: 'screenshot.png',
           mimeType: 'image/png',
           size: 2048,
@@ -2448,7 +2564,7 @@ describe('GatewayService Slack attachment ingestion', () => {
     vi.mocked(ingestInboundAttachments).mockResolvedValue({
       uploads: [
         {
-          ref: 'upl_00000000-0000-4000-8000-000000000002',
+          ref: 'upl_00000000-0000-4000-8000-000000000002' as UploadRef,
           name: 'ok.png',
           mimeType: 'image/png',
           size: 1,

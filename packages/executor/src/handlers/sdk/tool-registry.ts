@@ -7,11 +7,7 @@
 
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
-import type {
-  ExecutorResult,
-  InteractionMode,
-  ResolvedConfigSlice,
-} from '../../payload-types.js';
+import type { ExecutorResult, InteractionMode, ResolvedConfigSlice } from '../../payload-types.js';
 import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import type { AgenticToolOutcome } from '../../terminal-task.js';

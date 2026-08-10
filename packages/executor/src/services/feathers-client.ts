@@ -7,6 +7,8 @@
 
 import { type AgorClient, createClient } from '@agor/core/api';
 import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
+import type { SdkHealthFailureInput, Task } from '@agor/core/types';
+import { isDefiniteAuthFailure } from './auth-errors.js';
 import { createAuthRetryAroundHook, createSingleFlight } from './feathers-auth-retry.js';
 
 // Re-export AgorClient type for use in other executor files
@@ -22,6 +24,62 @@ const SERVER_DISCONNECT_RECONNECT_MAX_AUTH_FAILURES = 3;
 const EXECUTOR_ACK_TIMEOUT_MS = 60_000;
 
 export const EXECUTOR_REQUEST_DATA_BUDGET_BYTES = SOCKET_IO_MAX_BUFFER_SIZE_BYTES - 200_000;
+
+function transportError(value: unknown): Error {
+  if (value instanceof Error) return value;
+  if (value && typeof value === 'object' && 'message' in value) {
+    return Object.assign(new Error(String(value.message)), value);
+  }
+  return new Error(String(value));
+}
+
+type ExecutorAuthRecoverableClient = AgorClient & {
+  executorReauthenticate?: (label: string) => Promise<boolean>;
+};
+
+function emitSdkHealthFailureWithAckTimeout(
+  client: AgorClient,
+  input: SdkHealthFailureInput,
+  timeoutMs: number
+): Promise<Task> {
+  return new Promise((resolve, reject) => {
+    client.io
+      .timeout(timeoutMs)
+      .emit(
+        'reportSdkHealthFailure',
+        'tasks',
+        input,
+        {},
+        (timeoutError: unknown, error: unknown, task: Task) => {
+          const failure = timeoutError ?? error;
+          if (failure) reject(transportError(failure));
+          else resolve(task);
+        }
+      );
+  });
+}
+
+/**
+ * SDK-health authorization must not inherit the executor's general one-minute
+ * acknowledgement lifetime. Use one request-local Socket.IO acknowledgement
+ * deadline so a lost response cannot monopolize the watchdog's serialized
+ * authorization lane.
+ */
+export async function reportSdkHealthFailureWithAckTimeout(
+  client: AgorClient,
+  input: SdkHealthFailureInput,
+  timeoutMs: number
+): Promise<Task> {
+  try {
+    return await emitSdkHealthFailureWithAckTimeout(client, input, timeoutMs);
+  } catch (error) {
+    const reauthenticate = (client as ExecutorAuthRecoverableClient).executorReauthenticate;
+    if (!isDefiniteAuthFailure(error) || !reauthenticate || !(await reauthenticate('SDK health'))) {
+      throw error;
+    }
+    return emitSdkHealthFailureWithAckTimeout(client, input, timeoutMs);
+  }
+}
 
 function feathersClientDebug(...args: unknown[]): void {
   if (DEBUG_FEATHERS_CLIENT) {
@@ -185,6 +243,7 @@ export async function createExecutorClient(
       }
     }
   });
+  (client as ExecutorAuthRecoverableClient).executorReauthenticate = reauthenticateSocket;
 
   // Method-agnostic, one-shot 401 retry. Any service call that fails with a
   // definite auth failure (401 / NotAuthenticated) runs single-flight reauth

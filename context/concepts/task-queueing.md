@@ -57,9 +57,8 @@ tenant scope. There is no permanent leader and no worker lease: overlapping
 scans are expected, while the Session+Task claim elects the only launcher.
 
 The scan cursor, startup offset, bounded backoff, and jitter are contention
-etiquette and fairness only. A process-local `SessionTurnLocks` map and
-`queueRetryScheduled` set similarly coalesce work inside one daemon; process
-death or duplicate triggers cannot affect correctness.
+etiquette and fairness only; process death or duplicate triggers cannot affect
+correctness.
 
 Queued rows survive daemon restart. Completion, Stop, callbacks, widgets,
 scheduled initialization, and the recovery worker may all trigger draining;
@@ -121,7 +120,7 @@ and pending/resolving widgets cannot be externally removed.
 - Persistence: `packages/core/src/db/repositories/tasks.ts`
 - Admission/launch/drain: `apps/agor-daemon/src/register-routes.ts`
 - Fleet recovery: `apps/agor-daemon/src/services/session-queue-worker.ts`
-- Local coalescer: `apps/agor-daemon/src/utils/session-turn-lock.ts`
+- Runtime recovery: `apps/agor-daemon/src/services/task-runtime-reconciler.ts`
 - Producer identities: `apps/agor-daemon/src/utils/durable-task-id.ts`
 - Widget resolution fence: `apps/agor-daemon/src/widgets/resolution-store.ts`
 - Reactive client: `packages/client/src/reactive-session.ts`

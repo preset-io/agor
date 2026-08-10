@@ -124,7 +124,6 @@ export class CopilotPromptService {
   private messagesService?: MessagesService;
   private tasksService?: TasksService;
   private sessionsService?: SessionsPatchClient;
-  private permissionLocks = new Map<SessionID, Promise<void>>();
 
   constructor(
     messagesRepo: MessagesRepository,
@@ -354,7 +353,6 @@ export class CopilotPromptService {
               messagesRepo: this.messagesRepo,
               messagesService: this.messagesService,
               sessionsService: this.sessionsService,
-              permissionLocks: this.permissionLocks,
               mcpServerRepo: this.mcpServerRepo,
               sessionMCPRepo: this.sessionMCPServerRepo,
               abortController: abortController ?? new AbortController(),

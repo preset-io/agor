@@ -154,7 +154,6 @@ describe('a denied MCP tool never reaches the server', () => {
         tasksService: { patch: vi.fn().mockResolvedValue(undefined) } as never,
         messagesRepo: { findBySessionId: vi.fn().mockResolvedValue([]) } as never,
         sessionsService: { patch: vi.fn().mockResolvedValue(undefined) } as never,
-        permissionLocks: new Map(),
         mcpServerRepo: {} as never,
         sessionMCPRepo: {
           listServers: vi.fn().mockResolvedValue([{ name: SERVER_NAME }]),
@@ -179,7 +178,13 @@ describe('a denied MCP tool never reaches the server', () => {
           'u1',
           { signal: new AbortController().signal }
         );
-        if (hook.hookSpecificOutput?.permissionDecision === 'deny') return 'blocked-by-hook';
+        const hookOutput =
+          'hookSpecificOutput' in hook
+            ? (hook.hookSpecificOutput as unknown as { permissionDecision?: string })
+            : undefined;
+        if (hookOutput?.permissionDecision === 'deny') {
+          return 'blocked-by-hook';
+        }
 
         const decision = await canUseTool(
           sdkToolName,

@@ -43,8 +43,7 @@ const checks = [
       'apps/agor-daemon/src/register-services.ts': 5,
       // HA fork/spawn now use the tenant-aware Feathers event helper instead
       // of raw global Socket.IO broadcasts.
-      'apps/agor-daemon/src/register-routes.ts': 6,
-      'apps/agor-daemon/src/startup.ts': 1,
+      'apps/agor-daemon/src/register-routes.ts': 4,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,

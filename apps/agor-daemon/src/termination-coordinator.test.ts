@@ -1,4 +1,4 @@
-import { TaskStatus } from '@agor/core/types';
+import { type Task, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const containExecutorProcess = vi.hoisted(() => vi.fn());
@@ -18,21 +18,31 @@ import {
   requestExecutorTermination,
 } from './termination-coordinator.js';
 
-const taskId = '018f0000-0000-7000-8000-000000000001';
-const sessionId = '018f0000-0000-7000-8000-000000000002';
+const taskId = '018f0000-0000-7000-8000-000000000001' as Task['task_id'];
+const sessionId = '018f0000-0000-7000-8000-000000000002' as Task['session_id'];
 
-function task(status = TaskStatus.RUNNING, extra: Record<string, unknown> = {}) {
-  return { task_id: taskId, session_id: sessionId, status, created_at: '2026-01-01', ...extra };
+function task(status: Task['status'] = TaskStatus.RUNNING, extra: Partial<Task> = {}): Task {
+  return {
+    task_id: taskId,
+    session_id: sessionId,
+    created_by: '018f0000-0000-7000-8000-000000000003' as Task['created_by'],
+    full_prompt: 'test task',
+    status,
+    created_at: '2026-01-01',
+    ...extra,
+  } as Task;
 }
 
 function appDouble(tool = 'codex') {
   let current = task();
   const claimTermination = vi.fn();
   const claimTerminationCoordination = vi.fn(async (input: { claimToken: string }) => {
+    const terminationRequest = current.termination_request;
+    if (!terminationRequest) throw new Error('termination request must be claimed first');
     current = {
       ...current,
       termination_request: {
-        ...current.termination_request,
+        ...terminationRequest,
         coordination: {
           claim_token: input.claimToken,
           claimed_at: '2026-01-01T00:00:01.000Z',
@@ -74,10 +84,12 @@ function appDouble(tool = 'codex') {
     current = value;
   };
   const markExecutorQuiesced = () => {
+    const terminationRequest = current.termination_request;
+    if (!terminationRequest) throw new Error('termination request must be claimed first');
     current = {
       ...current,
       termination_request: {
-        ...current.termination_request,
+        ...terminationRequest,
         executor_quiesced_at: '2026-01-01T00:00:01.100Z',
       },
     };
@@ -102,6 +114,13 @@ const stopping = (cause: 'user_stop' | 'sdk_health_failure' | 'heartbeat_lost') 
       requested_at: '2026-01-01T00:00:01.000Z',
     },
   });
+
+const unverifiedSdkFailure: NonNullable<Task['sdk_failure']> = {
+  reason: 'progress_stalled',
+  detected_at: '2026-01-01T00:00:00.000Z',
+  tool: 'codex',
+  termination: 'unverified',
+};
 
 function request(app: never, cause: 'user_stop' | 'sdk_health_failure' | 'heartbeat_lost') {
   return requestExecutorTermination({
@@ -150,7 +169,7 @@ describe('termination coordinator', () => {
       taskId,
       cause: 'daemon_restart',
       errorMessage: 'Recovering after restart',
-      params: { suppressTerminalQueueProcessing: true },
+      params: { suppressTerminalQueueProcessing: true } as never,
     });
 
     expect(state.settleTermination).toHaveBeenCalledWith(
@@ -159,7 +178,7 @@ describe('termination coordinator', () => {
     );
   });
 
-  it('allows verified health containment to continue distinct queued work', async () => {
+  it('leaves health-failure queue continuation to the distributed worker', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
     const state = appDouble();
     state.claim(stopping('sdk_health_failure'));
@@ -167,22 +186,25 @@ describe('termination coordinator', () => {
 
     await request(state.app, 'sdk_health_failure');
 
-    expect(state.settleTermination).toHaveBeenCalledWith(expect.anything(), {
-      provider: undefined,
-    });
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        provider: undefined,
+        suppressTerminalQueueProcessing: true,
+      })
+    );
   });
 
   it('accepts a scoped remote executor quiescence report without local signaling', async () => {
     const state = appDouble();
-    const remoteStopping = {
-      ...stopping('user_stop'),
+    const remoteStopping = task(TaskStatus.STOPPING, {
       executor_mode: 'templated',
       executor_connected_at: '2026-01-01T00:00:00.000Z',
       termination_request: {
-        ...stopping('user_stop').termination_request,
+        ...stopping('user_stop').termination_request!,
         executor_quiesced_at: '2026-01-01T00:00:01.100Z',
       },
-    };
+    });
     state.claim(remoteStopping);
     state.settle(task(TaskStatus.STOPPED));
 
@@ -195,11 +217,11 @@ describe('termination coordinator', () => {
 
   it('observes a remote socket-stop report during the cooperative grace window', async () => {
     const state = appDouble();
-    const remoteStopping = {
-      ...stopping('user_stop'),
+    const remoteStopping = task(TaskStatus.STOPPING, {
       executor_mode: 'templated',
       executor_connected_at: '2026-01-01T00:00:00.000Z',
-    };
+      termination_request: stopping('user_stop').termination_request,
+    });
     state.claim(remoteStopping);
     state.settle(task(TaskStatus.STOPPED));
 
@@ -221,15 +243,14 @@ describe('termination coordinator', () => {
   it('still verifies local process absence after executor quiescence', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
     const state = appDouble();
-    const localStopping = {
-      ...stopping('user_stop'),
+    const localStopping = task(TaskStatus.STOPPING, {
       executor_mode: 'local',
       executor_connected_at: '2026-01-01T00:00:00.000Z',
       termination_request: {
-        ...stopping('user_stop').termination_request,
+        ...stopping('user_stop').termination_request!,
         executor_quiesced_at: '2026-01-01T00:00:01.100Z',
       },
-    };
+    });
     state.claim(localStopping);
     state.settle(task(TaskStatus.STOPPED));
 
@@ -406,10 +427,7 @@ describe('termination coordinator', () => {
       containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
       const state = appDouble(tool);
       state.claim(stopping('heartbeat_lost'));
-      state.settle(
-        task(TaskStatus.STOPPING, { sdk_failure: { termination: 'unverified' } }),
-        'unverified'
-      );
+      state.settle(task(TaskStatus.STOPPING, { sdk_failure: unverifiedSdkFailure }), 'unverified');
 
       await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
         status: 'unverified',
@@ -543,7 +561,6 @@ describe('termination coordinator', () => {
     ).resolves.toMatchObject({ status: 'unverified' });
   });
 
-
   it('accepts launch-fence absence before an OpenCode runtime connects', async () => {
     const state = appDouble('opencode');
     state.claim(stopping('heartbeat_lost'));
@@ -580,7 +597,7 @@ describe('termination coordinator', () => {
     state.settle(
       task(TaskStatus.STOPPING, {
         termination_request: stopping('heartbeat_lost').termination_request,
-        sdk_failure: { termination: 'unverified' },
+        sdk_failure: unverifiedSdkFailure,
       }),
       'unverified'
     );

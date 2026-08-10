@@ -29,7 +29,6 @@ import {
   isDatabaseUniqueConstraintError,
   isPostgresDatabase,
   MCPServerRepository,
-  MessagesRepository,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
@@ -71,6 +70,7 @@ import type {
   GatewayChannel,
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
+  GatewayTaskOrigin,
   GatewayTerminalDeliveryReceipt,
   MCPServerID,
   Message,
@@ -336,16 +336,6 @@ function previewText(text: string, maxChars = 500): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-function gatewayMessageText(content: Message['content']): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((block) => block.type === 'text')
-    .map((block) => (typeof block.text === 'string' ? block.text : ''))
-    .filter(Boolean)
-    .join('\n');
 }
 
 function quoteForPrompt(text: string, maxChars = 2000): string {
@@ -710,7 +700,6 @@ export class GatewayService {
   private sessionRepo: SessionRepository;
   private taskRepo: TaskRepository;
   private usersRepo: UsersRepository;
-  private messagesRepo: MessagesRepository;
   private inboundEventRepo: GatewayInboundEventRepository;
 
   private mcpServerRepo: MCPServerRepository;
@@ -772,7 +761,6 @@ export class GatewayService {
     this.sessionRepo = bindRepositoryToTenantUnitOfWork(db, new SessionRepository(db));
     this.taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
     this.usersRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
-    this.messagesRepo = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
     this.inboundEventRepo = bindRepositoryToTenantUnitOfWork(
       db,
       new GatewayInboundEventRepository(db)
@@ -1294,12 +1282,13 @@ export class GatewayService {
    */
   async updateProgress(
     data: GatewayProgressData,
-    originMappingId?: ThreadSessionMapID
+    originMappingId?: ThreadSessionMapID,
+    originThreadId?: string
   ): Promise<void> {
     const previous = this.slackProgressQueues.get(data.session_id) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => this.updateProgressNow(data, originMappingId));
+      .then(() => this.updateProgressNow(data, originMappingId, originThreadId));
     this.slackProgressQueues.set(data.session_id, next);
 
     try {
@@ -1385,7 +1374,8 @@ export class GatewayService {
 
   private async updateProgressNow(
     data: GatewayProgressData,
-    originMappingId?: ThreadSessionMapID
+    originMappingId?: ThreadSessionMapID,
+    originThreadId?: string
   ): Promise<void> {
     const isTerminal = data.state === 'done' || data.state === 'failed';
     if (!isTerminal && !(await this.shouldQueryGatewayRouting())) return;
@@ -1477,9 +1467,10 @@ export class GatewayService {
         ...this.pickSlackRoutingMetadata(freshMetadata),
       };
       const slackThreadId =
-        typeof metadataForWrite.slack_active_thread_id === 'string'
+        originThreadId ??
+        (typeof metadataForWrite.slack_active_thread_id === 'string'
           ? metadataForWrite.slack_active_thread_id
-          : mapping.thread_id;
+          : mapping.thread_id);
 
       await this.threadMapRepo.updateMetadata(mapping.id, metadataForWrite);
 
@@ -2763,6 +2754,7 @@ export class GatewayService {
       ) {
         throw new Error('Gateway listener ownership lost before Task admission');
       }
+      if (!mappingForCursor) throw new Error('Gateway origin mapping is unavailable');
       const task = await promptService.create(
         {
           prompt: promptText,
@@ -2787,6 +2779,11 @@ export class GatewayService {
         {
           route: { id: sessionId },
           user,
+          gatewayOrigin: {
+            mapping_id: mappingForCursor.id,
+            channel_id: channel.id,
+            thread_id: data.thread_id,
+          } satisfies GatewayTaskOrigin,
           ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
         }
       );
@@ -2999,21 +2996,28 @@ export class GatewayService {
     if (!task) return;
     const existing = task.metadata?.gateway_terminal_delivery;
     if (existing) return;
-    const mapping = await this.threadMapRepo.findBySession(data.session_id);
     const intendedAt = new Date().toISOString();
-    const receipt: GatewayTerminalDeliveryReceipt = mapping
-      ? {
-          mapping_id: mapping.id,
-          channel_id: mapping.channel_id,
-          status: 'pending',
-          intended_at: intendedAt,
-        }
-      : {
-          status: 'not_applicable',
-          intended_at: intendedAt,
-          completed_at: intendedAt,
-          reason: 'no_origin_mapping',
-        };
+    const origin = task.metadata?.gateway_origin;
+    const receipt: GatewayTerminalDeliveryReceipt =
+      task.metadata?.source !== 'gateway'
+        ? {
+            status: 'not_applicable',
+            intended_at: intendedAt,
+            completed_at: intendedAt,
+            reason: 'non_gateway_task',
+          }
+        : origin
+          ? {
+              ...origin,
+              status: 'pending',
+              intended_at: intendedAt,
+            }
+          : {
+              status: 'skipped',
+              intended_at: intendedAt,
+              completed_at: intendedAt,
+              reason: 'origin_missing',
+            };
     await this.taskRepo.materializeGatewayTerminalDelivery(task.task_id, receipt);
   }
 
@@ -3025,10 +3029,15 @@ export class GatewayService {
     const completedAt = new Date().toISOString();
     await this.taskRepo.settleGatewayTerminalDelivery(
       task.task_id,
-      { mapping_id: receipt.mapping_id, channel_id: receipt.channel_id },
       {
         mapping_id: receipt.mapping_id,
         channel_id: receipt.channel_id,
+        thread_id: receipt.thread_id,
+      },
+      {
+        mapping_id: receipt.mapping_id,
+        channel_id: receipt.channel_id,
+        thread_id: receipt.thread_id,
         status: 'skipped',
         intended_at: receipt.intended_at,
         completed_at: completedAt,
@@ -3048,7 +3057,16 @@ export class GatewayService {
       await this.skipTerminalDelivery(task, receipt, 'origin_mapping_deleted');
       return;
     }
-    if (mapping.channel_id !== receipt.channel_id) {
+    const mappingMetadata = (mapping.metadata ?? {}) as Record<string, unknown>;
+    const aliases = Array.isArray(mappingMetadata.slack_thread_aliases)
+      ? mappingMetadata.slack_thread_aliases
+      : [];
+    if (
+      mapping.session_id !== task.session_id ||
+      mapping.channel_id !== receipt.channel_id ||
+      mapping.status !== 'active' ||
+      (mapping.thread_id !== receipt.thread_id && !aliases.includes(receipt.thread_id))
+    ) {
       await this.skipTerminalDelivery(task, receipt, 'origin_mapping_changed');
       return;
     }
@@ -3065,9 +3083,13 @@ export class GatewayService {
       await this.skipTerminalDelivery(task, receipt, 'origin_channel_unsupported');
       return;
     }
+    if (mapping.branch_id !== channel.target_branch_id) {
+      await this.skipTerminalDelivery(task, receipt, 'origin_mapping_changed');
+      return;
+    }
 
     if (channel.channel_type === 'slack') {
-      await this.updateProgress(data, mapping.id);
+      await this.updateProgress(data, mapping.id, receipt.thread_id);
     } else {
       const connector =
         this.getActiveListener(channel.id) ??
@@ -3080,7 +3102,7 @@ export class GatewayService {
       const processingCommentId = mapping.metadata?.processing_comment_id;
       if (typeof processingCommentId === 'number') metadata.edit_comment_id = processingCommentId;
       await connector.sendMessage({
-        threadId: mapping.thread_id,
+        threadId: receipt.thread_id,
         text,
         blocks,
         metadata,
@@ -3089,7 +3111,11 @@ export class GatewayService {
 
     await this.taskRepo.settleGatewayTerminalDelivery(
       task.task_id,
-      { mapping_id: receipt.mapping_id, channel_id: receipt.channel_id },
+      {
+        mapping_id: receipt.mapping_id,
+        channel_id: receipt.channel_id,
+        thread_id: receipt.thread_id,
+      },
       { ...receipt, status: 'delivered', delivered_at: new Date().toISOString() }
     );
   }

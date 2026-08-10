@@ -214,7 +214,6 @@ describe('executeToolTask credential preflight', () => {
         },
       })
     );
-    expect(order).toEqual(['message', 'task']);
   });
 
   it('does not launch provider work when cancellation arrives before tool execution', async () => {

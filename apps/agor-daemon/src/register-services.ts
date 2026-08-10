@@ -176,8 +176,8 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
-import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { hasSessionInteractionResponder } from './utils/realtime-publish.js';
+import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
 /**
@@ -1355,6 +1355,7 @@ async function registerMCPServices(
       updatedAt: number;
     }
   >();
+  let pendingOAuthFlowSweepTimer: NodeJS.Timeout | null = null;
 
   /**
    * Hard ceiling on how long an inbound HTTP request will block waiting for
@@ -1367,7 +1368,7 @@ async function registerMCPServices(
 
   // Standalone cleanup remains process-local. PostgreSQL cleanup is a
   // fleet-safe, idempotent state-machine transition plus terminal retention.
-  const oauthCleanupTimer = setInterval(() => {
+  function sweepPendingOAuthFlows(): void {
     const now = Date.now();
     const tenMinutes = 10 * 60 * 1000;
     for (const [state, flow] of pendingOAuthFlows.entries()) {
@@ -1398,8 +1399,34 @@ async function registerMCPServices(
         console.warn('[OAuth Maintenance] Pending-flow maintenance failed');
       });
     }
-  }, 60_000);
-  oauthCleanupTimer.unref();
+  }
+
+  function startPendingOAuthFlowSweep(): void {
+    if (pendingOAuthFlowSweepTimer) return;
+    pendingOAuthFlowSweepTimer = setInterval(sweepPendingOAuthFlows, 60_000);
+    pendingOAuthFlowSweepTimer.unref?.();
+  }
+
+  function stopPendingOAuthFlowSweep(): void {
+    if (!pendingOAuthFlowSweepTimer) return;
+    clearInterval(pendingOAuthFlowSweepTimer);
+    pendingOAuthFlowSweepTimer = null;
+  }
+
+  app.hooks({
+    setup: [
+      async (_context: unknown, next: () => Promise<void>) => {
+        await next();
+        startPendingOAuthFlowSweep();
+      },
+    ],
+    teardown: [
+      async (_context: unknown, next: () => Promise<void>) => {
+        stopPendingOAuthFlowSweep();
+        await next();
+      },
+    ],
+  });
 
   /**
    * Shared helper for starting the daemon's two-phase MCP OAuth flow.

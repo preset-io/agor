@@ -1,4 +1,4 @@
-import { TaskStatus } from '@agor/core/types';
+import { type SdkHealthFailureInput, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const runtime = vi.hoisted(() => ({
@@ -11,6 +11,10 @@ const runtime = vi.hoisted(() => ({
 }));
 vi.mock('./services/feathers-client.js', () => ({
   createFeathersClient: runtime.createClient,
+  reportSdkHealthFailureWithAckTimeout: (
+    client: { service: (path: string) => { reportSdkHealthFailure: (input: unknown) => unknown } },
+    input: unknown
+  ) => client.service('tasks').reportSdkHealthFailure(input),
 }));
 vi.mock('./executor-heartbeat.js', () => ({
   startExecutorHeartbeat: () => ({
@@ -29,14 +33,16 @@ import { globalPermissionManager } from './permissions/permission-manager.js';
 import { SdkWatchdog } from './sdk-watchdog.js';
 import { RuntimeCleanupError } from './terminal-task.js';
 
+type WatchdogEvidence = Omit<SdkHealthFailureInput, 'task_id'>;
+
 const evidence = {
   reason: 'no_first_progress' as const,
   elapsed_ms: 1_000,
   watchdog_action: 'enforced' as const,
   pulse_sequence_at_detection: 1,
-};
+} satisfies WatchdogEvidence;
 
-function harness(reportSdkHealthFailure: () => Promise<unknown>) {
+function harness(reportSdkHealthFailure: (input: SdkHealthFailureInput) => Promise<unknown>) {
   const executor = new AgorExecutor({
     sessionToken: 'token',
     sessionId: 'session-1',
@@ -65,7 +71,7 @@ function harness(reportSdkHealthFailure: () => Promise<unknown>) {
     abortController: AbortController;
     latestPulseSequence?: number;
     latestProgressSequence?: number;
-    handleWatchdogDecision(input: typeof evidence): Promise<boolean>;
+    handleWatchdogDecision(input: WatchdogEvidence): Promise<'authorized' | 'superseded' | 'retry'>;
   };
   executor.client = { service: () => ({ reportSdkHealthFailure }) };
   executor.heartbeat = {
@@ -143,6 +149,7 @@ describe('AgorExecutor watchdog handoff', () => {
       daemonUrl: 'http://daemon',
     }) as unknown as {
       client: { service: () => typeof tasks };
+      abortController: AbortController;
       executeTask(): Promise<void>;
     };
     executor.client = { service: () => tasks };
@@ -335,67 +342,74 @@ describe('AgorExecutor watchdog handoff', () => {
     const executor = harness(reportSdkHealthFailure);
     runtime.flushProgressThrough.mockResolvedValueOnce(2);
 
-    await expect(executor.handleWatchdogDecision(evidence)).resolves.toBe(false);
+    await expect(executor.handleWatchdogDecision(evidence)).resolves.toBe('superseded');
 
     expect(runtime.flushProgressThrough).toHaveBeenCalledWith(1);
     expect(reportSdkHealthFailure).not.toHaveBeenCalled();
     expect(executor.abortController.signal.aborted).toBe(false);
   });
 
-  it('bounds a hung health acknowledgement without accumulating parallel reports', async () => {
-    vi.useFakeTimers();
-    const reportSdkHealthFailure = vi.fn(() => new Promise<never>(() => undefined));
+  it('keeps an absolute turn failure live across newer progress before and after acknowledgement', async () => {
+    let resolveFirst!: (task: unknown) => void;
+    const reportSdkHealthFailure = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockResolvedValue({ task_id: 'task-1', status: TaskStatus.STOPPING });
+    const executor = harness(reportSdkHealthFailure);
+    runtime.flushProgressThrough.mockResolvedValue(3);
+    const absoluteEvidence = { ...evidence, reason: 'turn_timed_out' as const };
+
+    const first = executor.handleWatchdogDecision(absoluteEvidence);
+    await vi.waitFor(() => expect(reportSdkHealthFailure).toHaveBeenCalledOnce());
+    executor.latestProgressSequence = 3;
+    resolveFirst({
+      task_id: 'task-1',
+      status: TaskStatus.RUNNING,
+      latest_executor_progress: { sequence: 3, kind: 'progress' },
+    });
+
+    await expect(first).resolves.toBe('retry');
+    await expect(executor.handleWatchdogDecision(absoluteEvidence)).resolves.toBe('authorized');
+    expect(runtime.flushProgressThrough).not.toHaveBeenCalled();
+    expect(reportSdkHealthFailure).toHaveBeenCalledTimes(2);
+    expect(reportSdkHealthFailure.mock.calls).toEqual([
+      [expect.objectContaining({ reason: 'turn_timed_out' })],
+      [expect.objectContaining({ reason: 'turn_timed_out' })],
+    ]);
+  });
+
+  it('serializes health authorization attempts without parallel reports', async () => {
+    let resolveFirst!: (task: unknown) => void;
+    const reportSdkHealthFailure = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockResolvedValue({ task_id: 'task-1', status: TaskStatus.RUNNING });
     const executor = harness(reportSdkHealthFailure);
 
     const firstDecision = executor.handleWatchdogDecision(evidence);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await expect(firstDecision).resolves.toBe(false);
-
     const secondDecision = executor.handleWatchdogDecision(evidence);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await expect(secondDecision).resolves.toBe(false);
-
-    expect(reportSdkHealthFailure).toHaveBeenCalledOnce();
-    expect(executor.abortController.signal.aborted).toBe(false);
-  });
-
-  it('applies late daemon authorization after the acknowledgement wait expires', async () => {
-    vi.useFakeTimers();
-    let resolveReport!: (task: unknown) => void;
-    const reportSdkHealthFailure = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveReport = resolve;
-        })
-    );
-    const executor = harness(reportSdkHealthFailure);
-    const heartbeat = executor.heartbeat;
-
-    const decision = executor.handleWatchdogDecision(evidence);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await expect(decision).resolves.toBe(false);
-    expect(executor.abortController.signal.aborted).toBe(false);
-
-    resolveReport({
-      task_id: 'task-1',
-      status: TaskStatus.STOPPING,
-      termination_request: {
-        cause: 'sdk_health_failure',
-        requested_at: '2026-01-01T00:00:02.000Z',
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(heartbeat?.stop).toHaveBeenCalledOnce();
-    expect(executor.heartbeat).toBeNull();
-    expect(executor.abortController.signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(reportSdkHealthFailure).toHaveBeenCalledOnce());
+    resolveFirst({ task_id: 'task-1', status: TaskStatus.RUNNING });
+    await expect(firstDecision).resolves.toBe('retry');
+    await expect(secondDecision).resolves.toBe('retry');
+    expect(reportSdkHealthFailure).toHaveBeenCalledTimes(2);
   });
 
   it('sends enforced evidence after an in-flight diagnostic report settles', async () => {
     vi.useFakeTimers();
     const resolvers: Array<(task: unknown) => void> = [];
     const reportSdkHealthFailure = vi.fn(
-      () =>
+      (_input: SdkHealthFailureInput) =>
         new Promise((resolve) => {
           resolvers.push(resolve);
         })
@@ -417,13 +431,9 @@ describe('AgorExecutor watchdog handoff', () => {
     await Promise.resolve();
     expect(reportSdkHealthFailure).toHaveBeenCalledOnce();
 
-    await vi.advanceTimersByTimeAsync(2_000);
-    await expect(diagnostic).resolves.toBe(false);
-    await expect(enforced).resolves.toBe(false);
-    expect(executor.abortController.signal.aborted).toBe(false);
-
     resolvers[0]?.({ task_id: 'task-1', status: TaskStatus.RUNNING });
-    await vi.advanceTimersByTimeAsync(0);
+    await expect(diagnostic).resolves.toBe('retry');
+    await Promise.resolve();
     expect(reportSdkHealthFailure).toHaveBeenCalledTimes(2);
     expect(reportSdkHealthFailure.mock.calls[1]?.[0]).toMatchObject({
       reason: 'adapter_incompatible',
@@ -438,7 +448,7 @@ describe('AgorExecutor watchdog handoff', () => {
         requested_at: '2026-01-01T00:00:02.000Z',
       },
     });
-    await vi.advanceTimersByTimeAsync(0);
+    await expect(enforced).resolves.toBe('authorized');
 
     expect(executor.abortController.signal.aborted).toBe(true);
   });
@@ -447,7 +457,7 @@ describe('AgorExecutor watchdog handoff', () => {
     vi.useFakeTimers();
     let resolveDiagnostic!: (task: unknown) => void;
     const reportSdkHealthFailure = vi.fn(
-      () =>
+      (_input: SdkHealthFailureInput) =>
         new Promise((resolve) => {
           resolveDiagnostic = resolve;
         })
@@ -466,16 +476,15 @@ describe('AgorExecutor watchdog handoff', () => {
 
     const enforced = executor.handleWatchdogDecision({
       ...evidence,
-      reason: 'adapter_incompatible',
+      reason: 'progress_stalled',
     });
     await Promise.resolve();
     acknowledgedProgress = 2;
     executor.latestProgressSequence = 2;
     resolveDiagnostic({ task_id: 'task-1', status: TaskStatus.RUNNING });
-    await vi.advanceTimersByTimeAsync(2_000);
 
-    await expect(diagnostic).resolves.toBe(false);
-    await expect(enforced).resolves.toBe(false);
+    await expect(diagnostic).resolves.toBe('retry');
+    await expect(enforced).resolves.toBe('superseded');
     expect(runtime.flushProgressThrough).toHaveBeenCalledWith(1);
     expect(reportSdkHealthFailure).toHaveBeenCalledOnce();
     expect(executor.abortController.signal.aborted).toBe(false);
@@ -684,6 +693,7 @@ describe('AgorExecutor watchdog handoff', () => {
           on(event: string, listener: (data: unknown) => void): void;
         };
       };
+      heartbeat: { recordPulse: typeof runtime.recordPulse } | null;
       setupEventListeners(): void;
     };
     executor.client = {
@@ -695,6 +705,7 @@ describe('AgorExecutor watchdog handoff', () => {
         };
       },
     };
+    executor.heartbeat = { recordPulse: runtime.recordPulse };
     executor.setupEventListeners();
 
     listeners.get('messages:permission_resolved')?.({
@@ -736,5 +747,6 @@ describe('AgorExecutor watchdog handoff', () => {
       scope: 'once',
       decidedBy: 'user-a',
     });
+    expect(runtime.recordPulse).toHaveBeenCalledWith('sdk_started', 'permission.resolved');
   });
 });

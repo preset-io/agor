@@ -8,7 +8,6 @@
  *   - basic CRUD round-trip + agentic_tool_config jsonb/text roundtrip
  */
 
-import { normalizePersistedScheduleAgenticToolConfig } from '@agor/core/config';
 import {
   type AgenticToolPresetID,
   type BranchID,
@@ -20,6 +19,7 @@ import {
 } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
+import { normalizePersistedScheduleAgenticToolConfig } from '../../config/schedule-agentic-tool-config';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';

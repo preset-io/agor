@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   branchFind: vi.fn(),
   permissionRegister: vi.fn(),
   permissionUnregister: vi.fn(),
+  flushPending: vi.fn(),
 }));
 
 vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
@@ -32,6 +33,7 @@ vi.mock('../../db/feathers-repositories.js', () => ({
 }));
 
 vi.mock('../../permissions/permission-service.js', () => ({
+  createExecutionPermissionService: vi.fn(() => ({})),
   PermissionService: class {},
 }));
 
@@ -48,7 +50,7 @@ vi.mock('../../sdk-handlers/claude/message-builder.js', () => ({
 
 vi.mock('./base-executor.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./base-executor.js')>()),
-  createStreamingCallbacks: () => ({}),
+  createStreamingCallbacks: () => ({ flushPending: mocks.flushPending }),
 }));
 
 import { executeOpenCodeTask } from './opencode.js';
@@ -98,6 +100,7 @@ function execute(
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.branchFind.mockResolvedValue({ path: '/worktree' });
+  mocks.flushPending.mockResolvedValue(undefined);
   mocks.messagesFind.mockResolvedValueOnce([]).mockResolvedValueOnce([{}]);
   mocks.runTurn.mockResolvedValue({
     finalMessage: {
@@ -240,7 +243,10 @@ describe('OpenCode executor adapter', () => {
     abortController.abort();
     mocks.runTurn.mockRejectedValue(new Error('cancelled'));
 
-    await expect(execute(state.value, abortController)).resolves.toEqual({ result: 'failure', failureCause: 'runtime_cancelled' });
+    await expect(execute(state.value, abortController)).resolves.toEqual({
+      result: 'failure',
+      failureCause: 'runtime_cancelled',
+    });
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();

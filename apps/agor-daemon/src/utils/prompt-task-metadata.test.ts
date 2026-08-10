@@ -1,11 +1,16 @@
+import type { GatewayTaskOrigin } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { buildPromptTaskMetadata } from './prompt-task-metadata.js';
-import { normalizeMessageSource } from './task-runner.js';
+import { buildPromptTaskMetadata, normalizeMessageSource } from './prompt-task-metadata.js';
 
 describe('buildPromptTaskMetadata', () => {
   it('drops a stale legacy source and makes normalized provenance authoritative', () => {
     const input = {
       source: 'cli-repl',
+      gateway_origin: {
+        mapping_id: 'spoofed-map',
+        channel_id: 'spoofed-channel',
+        thread_id: 'spoofed-thread',
+      },
       system_authored: true,
       queued_by_user_id: 'spoofed-user',
       initial_message_id: 'spoofed-message-id',
@@ -73,5 +78,32 @@ describe('buildPromptTaskMetadata', () => {
       queued_by_user_id: 'authenticated-user',
       source: 'agor',
     });
+  });
+
+  it('persists only the gateway origin captured by trusted daemon ingress', () => {
+    const gatewayOrigin = {
+      mapping_id: 'mapping-1' as GatewayTaskOrigin['mapping_id'],
+      channel_id: 'channel-1' as GatewayTaskOrigin['channel_id'],
+      thread_id: 'thread-1',
+    } satisfies GatewayTaskOrigin;
+
+    expect(
+      buildPromptTaskMetadata(undefined, 'gateway', 'gateway-user', {
+        trustedInternalMetadata: true,
+        gatewayOrigin,
+      })
+    ).toMatchObject({
+      source: 'gateway',
+      queued_by_user_id: 'gateway-user',
+      gateway_origin: gatewayOrigin,
+    });
+  });
+});
+
+describe('normalizeMessageSource', () => {
+  it('passes valid sources and sanitizes invalid transport input', () => {
+    expect(normalizeMessageSource('gateway', { provider: 'rest' })).toBe('agor');
+    expect(normalizeMessageSource('bogus' as 'agor', { provider: 'rest' })).toBe('agor');
+    expect(normalizeMessageSource('bogus' as 'agor', {})).toBeUndefined();
   });
 });

@@ -21,7 +21,7 @@ import { BranchRepository } from './branches';
 import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
-import { TaskRepository } from './tasks';
+import { TaskRepository, type TerminationSettlementInput } from './tasks';
 import { UsersRepository } from './users';
 
 /**
@@ -92,6 +92,30 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
   });
 
   return session.session_id;
+}
+
+type CoordinatedSettlementInput = Omit<
+  Extract<
+    TerminationSettlementInput,
+    { outcome: 'verified_absent' | 'unverified'; coordinationToken: string }
+  >,
+  'coordinationToken'
+>;
+
+async function settleWithTestCoordination(
+  tasks: TaskRepository,
+  input: CoordinatedSettlementInput
+) {
+  const coordinationToken = generateId();
+  const claim = await tasks.claimTerminationCoordination({
+    taskId: input.taskId,
+    claimToken: coordinationToken,
+    leaseDurationMs: 60_000,
+    instanceId: 'repository-test',
+    bootId: 'repository-test-boot',
+  });
+  expect(['claimed', 'terminal']).toContain(claim.outcome);
+  return tasks.settleTermination({ ...input, coordinationToken });
 }
 
 // ============================================================================
@@ -1029,6 +1053,8 @@ describe('TaskRepository.findByStatus', () => {
 // Executor connection
 // ============================================================================
 
+const startupWarning = 'Remote executor has not connected within the startup window.';
+
 async function createExecutorDispatch(
   db: Database,
   executorMode: 'local' | 'templated' = 'templated'
@@ -1404,7 +1430,10 @@ describe('TaskRepository.recordSdkHealthObservation', () => {
       taskRepo.settleExecutorOutcome({ taskId: task.task_id, status: TaskStatus.COMPLETED }),
       taskRepo.recordSdkHealthObservation(task.task_id, failure),
     ]);
-    await taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' });
+    await settleWithTestCoordination(taskRepo, {
+      taskId: task.task_id,
+      outcome: 'verified_absent',
+    });
     const completed = await taskRepo.findById(task.task_id);
 
     expect(completed).toMatchObject({ status: TaskStatus.COMPLETED });
@@ -1484,7 +1513,7 @@ describe('TaskRepository.settleExecutorOutcome', () => {
           },
         },
       });
-      const released = await taskRepo.settleTermination({
+      const released = await settleWithTestCoordination(taskRepo, {
         taskId: task.task_id,
         outcome: 'verified_absent',
         now: new Date('2026-01-01T00:05:00.000Z'),
@@ -1543,7 +1572,10 @@ describe('TaskRepository.settleExecutorOutcome', () => {
         },
       });
 
-      await taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' });
+      await settleWithTestCoordination(taskRepo, {
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+      });
       await expect(taskRepo.findById(task.task_id)).resolves.toMatchObject({
         status: TaskStatus.STOPPED,
         model: 'settled-model',
@@ -1552,7 +1584,10 @@ describe('TaskRepository.settleExecutorOutcome', () => {
         sdk_failure: { reason: 'agentic_tool_timeout' },
       });
       await expect(
-        taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' })
+        settleWithTestCoordination(taskRepo, {
+          taskId: task.task_id,
+          outcome: 'verified_absent',
+        })
       ).resolves.toMatchObject({ outcome: 'terminal', task: { status: TaskStatus.STOPPED } });
     }
   );
@@ -1581,7 +1616,7 @@ describe('TaskRepository.settleExecutorOutcome', () => {
         },
       },
     });
-    await taskRepo.settleTermination({
+    await settleWithTestCoordination(taskRepo, {
       taskId: task.task_id,
       outcome: 'verified_absent',
       errorMessage: 'generic coordinator fallback',
@@ -1611,7 +1646,10 @@ describe('TaskRepository.settleExecutorOutcome', () => {
     });
 
     await expect(
-      taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' })
+      settleWithTestCoordination(taskRepo, {
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+      })
     ).resolves.toMatchObject({
       outcome: 'transitioned',
       task: { status: TaskStatus.STOPPED },
@@ -1690,6 +1728,34 @@ describe('TaskRepository.update', () => {
     });
   });
 
+  dbTest('keeps the daemon-captured gateway origin immutable', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const origin = {
+      mapping_id: 'mapping-original',
+      channel_id: 'channel-original',
+      thread_id: 'thread-original',
+    } as const;
+    const created = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        metadata: { source: 'gateway', gateway_origin: origin as never },
+      })
+    );
+
+    const updated = await taskRepo.update(created.task_id, {
+      metadata: {
+        gateway_origin: {
+          mapping_id: 'mapping-forged',
+          channel_id: 'channel-forged',
+          thread_id: 'thread-forged',
+        } as never,
+      },
+    });
+
+    expect(updated.metadata?.gateway_origin).toEqual(origin);
+  });
+
   dbTest('settles a connected running executor through the release gate', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -1715,7 +1781,7 @@ describe('TaskRepository.update', () => {
       },
     });
     await expect(
-      taskRepo.settleTermination({
+      settleWithTestCoordination(taskRepo, {
         taskId: created.task_id,
         outcome: 'verified_absent',
         now: new Date('2026-07-10T20:00:00.000Z'),
@@ -1750,7 +1816,7 @@ describe('TaskRepository.update', () => {
       now: new Date(completedAt),
     });
     await expect(
-      taskRepo.settleTermination({
+      settleWithTestCoordination(taskRepo, {
         taskId: created.task_id,
         outcome: 'verified_absent',
         now: new Date(completedAt),
@@ -2011,6 +2077,45 @@ describe('TaskRepository.update', () => {
     });
   });
 
+  dbTest('does not let newer progress supersede absolute SDK-health deadlines', async ({ db }) => {
+    for (const reason of ['turn_timed_out', 'operation_timed_out', 'wait_timed_out'] as const) {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: '2026-07-10T20:00:00.000Z',
+        })
+      );
+      await taskRepo.reportRuntimeTelemetry(
+        task.task_id,
+        { sequence: 5, kind: 'progress', detail: 'operation:new' },
+        { sequence: 5, kind: 'progress', detail: 'operation:new' }
+      );
+
+      await expect(
+        taskRepo.claimTermination({
+          taskId: task.task_id,
+          cause: 'sdk_health_failure',
+          errorMessage: 'Absolute deadline expired',
+          expectedStatus: TaskStatus.RUNNING,
+          sdkFailure: {
+            reason,
+            detected_at: '2026-07-10T20:00:04.000Z',
+            tool: 'codex',
+            pulse_sequence_at_detection: 4,
+            watchdog_action: 'enforced',
+            termination: 'requested',
+          },
+        })
+      ).resolves.toMatchObject({
+        outcome: 'claimed',
+        task: { status: TaskStatus.STOPPING, sdk_failure: { reason } },
+      });
+    }
+  });
+
   dbTest('requires detection-time evidence for an enforced SDK-health claim', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -2152,6 +2257,49 @@ describe('TaskRepository.update', () => {
     await expect(sessions.findById(sessionId)).resolves.toMatchObject({
       status: SessionStatus.FAILED,
       ready_for_prompt: true,
+      runtime_projection: {
+        terminal_task_id: task.task_id,
+        applied_at: expect.any(String),
+      },
+    });
+  });
+
+  dbTest('atomically projects timed-out terminal state onto the Session', async ({ db }) => {
+    const tasks = new TaskRepository(db);
+    const sessions = new SessionRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await tasks.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-08-10T12:00:00.000Z',
+      })
+    );
+
+    await tasks.settleExecutorOutcome({
+      taskId: task.task_id,
+      status: TaskStatus.TIMED_OUT,
+    });
+    await tasks.claimTerminationCoordination({
+      taskId: task.task_id,
+      claimToken: 'timeout-projection-claim',
+      leaseDurationMs: 30_000,
+      instanceId: 'daemon-a',
+      bootId: 'boot-a',
+    });
+    await tasks.settleTermination({
+      taskId: task.task_id,
+      outcome: 'verified_absent',
+      coordinationToken: 'timeout-projection-claim',
+    });
+
+    await expect(sessions.findById(sessionId)).resolves.toMatchObject({
+      status: SessionStatus.TIMED_OUT,
+      ready_for_prompt: true,
+      runtime_projection: {
+        terminal_task_id: task.task_id,
+        applied_at: expect.any(String),
+      },
     });
   });
 
@@ -2213,7 +2361,7 @@ describe('TaskRepository.update', () => {
         errorMessage: 'Stopped by user',
       });
 
-      const result = await taskRepo.settleTermination({
+      const result = await settleWithTestCoordination(taskRepo, {
         taskId: task.task_id,
         outcome: 'unverified',
         errorMessage: 'Daemon restarted',
@@ -2404,7 +2552,10 @@ describe('TaskRepository.update', () => {
         taskPatch: { model: 'test-model' },
       });
       await expect(
-        taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' })
+        settleWithTestCoordination(taskRepo, {
+          taskId: task.task_id,
+          outcome: 'verified_absent',
+        })
       ).resolves.toMatchObject({
         outcome: 'transitioned',
         task: { status: TaskStatus.COMPLETED, model: 'test-model' },
@@ -2442,7 +2593,7 @@ describe('TaskRepository.update', () => {
         } else {
           expect(String(resumeResult.reason)).toContain('termination-owned tasks');
         }
-        await taskRepo.settleTermination({
+        await settleWithTestCoordination(taskRepo, {
           taskId: created.task_id,
           outcome: 'verified_absent',
         });
@@ -2535,7 +2686,7 @@ describe('TaskRepository.update', () => {
       status: TaskStatus.FAILED,
       taskPatch: { error_message: errorMessage },
     });
-    const released = await taskRepo.settleTermination({
+    const released = await settleWithTestCoordination(taskRepo, {
       taskId: data.task_id!,
       outcome: 'verified_absent',
     });
@@ -2898,7 +3049,6 @@ describe('TaskRepository.createPending', () => {
     'writes one correctly ordered widget transcript row only after busy-session drain claims it',
     async ({ db }) => {
       const taskRepo = new TaskRepository(db);
-      const sessionRepo = new SessionRepository(db);
       const messagesRepo = new MessagesRepository(db);
       const sessionId = await createSessionWithDeps(db);
       const first = await taskRepo.createPending(
@@ -2946,10 +3096,14 @@ describe('TaskRepository.createPending', () => {
       });
       expect(await messagesRepo.findByTaskId(widgetTask.task_id)).toHaveLength(0);
 
-      await taskRepo.update(first.task_id, { status: TaskStatus.COMPLETED });
-      await sessionRepo.update(sessionId, {
-        status: SessionStatus.IDLE,
-        ready_for_prompt: true,
+      await taskRepo.connectExecutor(first.task_id);
+      await taskRepo.settleExecutorOutcome({
+        taskId: first.task_id,
+        status: TaskStatus.COMPLETED,
+      });
+      await settleWithTestCoordination(taskRepo, {
+        taskId: first.task_id,
+        outcome: 'verified_absent',
       });
       const drained = await taskRepo.claimDispatchAndProjectSession(
         widgetTask.task_id,
@@ -3425,18 +3579,19 @@ describe('TaskRepository.findIncompleteTerminalPage', () => {
       })
     );
     const pending = {
-      mapping_id: 'mapping-1',
-      channel_id: 'channel-1',
+      mapping_id: generateId(),
+      channel_id: generateId(),
+      thread_id: 'thread-1',
       status: 'pending' as const,
       intended_at: '2026-01-01T00:00:01.000Z',
     };
 
-    await taskRepo.materializeGatewayTerminalDelivery(task.task_id, pending as never);
+    await taskRepo.materializeGatewayTerminalDelivery(task.task_id, pending);
     await taskRepo.materializeGatewayTerminalDelivery(task.task_id, {
       status: 'not_applicable',
       intended_at: '2026-01-01T00:00:02.000Z',
       completed_at: '2026-01-01T00:00:02.000Z',
-      reason: 'no_origin_mapping',
+      reason: 'non_gateway_task',
     });
     await taskRepo.markTerminalConsequencesComplete(task.task_id);
 
@@ -3447,13 +3602,17 @@ describe('TaskRepository.findIncompleteTerminalPage', () => {
 
     await taskRepo.settleGatewayTerminalDelivery(
       task.task_id,
-      { mapping_id: pending.mapping_id, channel_id: pending.channel_id },
+      {
+        mapping_id: pending.mapping_id,
+        channel_id: pending.channel_id,
+        thread_id: pending.thread_id,
+      },
       {
         ...pending,
         status: 'skipped',
         completed_at: '2026-01-01T00:00:03.000Z',
         reason: 'origin_channel_disabled',
-      } as never
+      }
     );
     expect(await taskRepo.findPendingGatewayDeliveryPage()).toHaveLength(0);
   });

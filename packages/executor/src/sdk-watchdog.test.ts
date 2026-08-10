@@ -6,10 +6,9 @@ import {
   applyAdapterConformanceMode,
   getSdkActivityConformance,
   getSdkActivityVersion,
-  isSdkHealthAbort,
-  markSdkHealthAbort,
   SdkWatchdog,
 } from './sdk-watchdog.js';
+import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
 const config = {
   mode: 'enforce',
@@ -64,7 +63,7 @@ describe('SdkWatchdog', () => {
       now: () => Date.now(),
       onDecision: (evidence) => {
         decisions.push(evidence);
-        return evidence.watchdog_action === 'enforced';
+        return evidence.watchdog_action === 'enforced' ? 'authorized' : 'superseded';
       },
     });
     return { watchdog, decisions };
@@ -126,6 +125,92 @@ describe('SdkWatchdog', () => {
     expect(decisions).toEqual([expect.objectContaining({ reason: 'turn_timed_out' })]);
   });
 
+  it('does not let a completed wait renew the absolute turn deadline', async () => {
+    const { watchdog, decisions } = setup({
+      codex_idle_timeout_ms: null,
+      operation_absolute_timeout_ms: 150,
+    });
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(50);
+    watchdog.record({
+      type: 'waiting_started',
+      id: 'permission-1',
+      reason: 'permission',
+      absoluteTimeoutMs: 500,
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    watchdog.record({ type: 'waiting_finished', id: 'permission-1' });
+
+    await vi.advanceTimersByTimeAsync(49);
+    expect(decisions).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'turn_timed_out' })]);
+  });
+
+  it('retries failed authorization at a bounded cadence without parallel attempts', async () => {
+    const decisions: Array<Record<string, unknown>> = [];
+    const resolvers: Array<(outcome: 'retry' | 'authorized') => void> = [];
+    const watchdog = new SdkWatchdog({
+      tool: 'codex',
+      config: { ...config, operation_absolute_timeout_ms: 100_000 },
+      now: () => Date.now(),
+      onDecision: (evidence) => {
+        decisions.push(evidence);
+        return new Promise<'retry' | 'authorized'>((resolve) => resolvers.push(resolve));
+      },
+    });
+    watchdog.record({ type: 'sdk_started' });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(decisions).toHaveLength(1);
+
+    resolvers[0]?.('retry');
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(decisions).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(decisions).toHaveLength(2);
+
+    resolvers[1]?.('authorized');
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(decisions).toHaveLength(2);
+  });
+
+  it('does not let authorization retry cadence postpone the absolute turn ceiling', async () => {
+    const decisions: Array<Record<string, unknown>> = [];
+    const watchdog = new SdkWatchdog({
+      tool: 'codex',
+      config: {
+        ...config,
+        first_progress_timeout_ms: 100,
+        operation_absolute_timeout_ms: 150,
+      },
+      now: () => Date.now(),
+      onDecision: (evidence) => {
+        decisions.push(evidence);
+        return 'retry';
+      },
+    });
+    watchdog.record({ type: 'sdk_started' });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'no_first_progress' })]);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(decisions).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(decisions).toEqual([
+      expect.objectContaining({ reason: 'no_first_progress' }),
+      expect.objectContaining({ reason: 'turn_timed_out' }),
+    ]);
+    await vi.advanceTimersByTimeAsync(1_950);
+    expect(decisions).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(decisions.at(-1)).toEqual(expect.objectContaining({ reason: 'turn_timed_out' }));
+  });
+
   it('pauses the Codex post-progress deadline during a known wait', async () => {
     const { watchdog, decisions } = setup();
     watchdog.record({ type: 'progress' });
@@ -140,6 +225,60 @@ describe('SdkWatchdog', () => {
     watchdog.record({ type: 'waiting_finished', id: 'permission-1' });
 
     await vi.advanceTimersByTimeAsync(19);
+    expect(decisions).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'progress_stalled' })]);
+  });
+
+  it('pauses the first-progress deadline during a known wait', async () => {
+    const { watchdog, decisions } = setup({ operation_absolute_timeout_ms: 500 });
+    watchdog.record({ type: 'sdk_started' });
+    await vi.advanceTimersByTimeAsync(80);
+    watchdog.record({
+      type: 'waiting_started',
+      id: 'permission-1',
+      reason: 'permission',
+      absoluteTimeoutMs: 200,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    watchdog.record({ type: 'waiting_finished', id: 'permission-1' });
+
+    await vi.advanceTimersByTimeAsync(19);
+    expect(decisions).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'no_first_progress' })]);
+  });
+
+  it('resumes the quiet deadline from progress inside nested waits', async () => {
+    const { watchdog, decisions } = setup({
+      codex_idle_timeout_ms: 100,
+      operation_absolute_timeout_ms: 1_000,
+    });
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(20);
+    watchdog.record({
+      type: 'waiting_started',
+      id: 'permission-1',
+      reason: 'permission',
+      absoluteTimeoutMs: 500,
+    });
+    await vi.advanceTimersByTimeAsync(20);
+    watchdog.record({
+      type: 'waiting_started',
+      id: 'input-1',
+      reason: 'input',
+      absoluteTimeoutMs: 500,
+    });
+    await vi.advanceTimersByTimeAsync(20);
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(20);
+    watchdog.record({ type: 'waiting_finished', id: 'permission-1' });
+    await vi.advanceTimersByTimeAsync(20);
+    watchdog.record({ type: 'waiting_finished', id: 'input-1' });
+
+    await vi.advanceTimersByTimeAsync(99);
     expect(decisions).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
 
@@ -290,6 +429,34 @@ describe('SdkWatchdog', () => {
     expect(decisions).toEqual([expect.objectContaining({ reason: 'operation_stalled' })]);
   });
 
+  it('resumes operation quiet time from progress recorded during a wait', async () => {
+    const { watchdog, decisions } = setup({ operation_absolute_timeout_ms: 1_000 });
+    watchdog.record({
+      type: 'operation_started',
+      id: 'command',
+      kind: 'command',
+      quietTimeoutMs: 100,
+      absoluteTimeoutMs: 1_000,
+    });
+    await vi.advanceTimersByTimeAsync(20);
+    watchdog.record({
+      type: 'waiting_started',
+      id: 'permission-1',
+      reason: 'permission',
+      absoluteTimeoutMs: 500,
+    });
+    await vi.advanceTimersByTimeAsync(40);
+    watchdog.record({ type: 'operation_progress', id: 'command' });
+    await vi.advanceTimersByTimeAsync(40);
+    watchdog.record({ type: 'waiting_finished', id: 'permission-1' });
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(decisions).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'operation_stalled' })]);
+  });
+
   it('diagnoses unknown activity without treating it as meaningful progress', async () => {
     const { watchdog, decisions } = setup();
     watchdog.record({ type: 'sdk_started' });
@@ -349,10 +516,10 @@ describe('SdkWatchdog', () => {
 
   it('marks coordinator-owned aborts distinctly from user Stop', () => {
     const controller = new AbortController();
-    expect(isSdkHealthAbort(controller)).toBe(false);
-    markSdkHealthAbort(controller);
-    expect(controller.signal.aborted).toBe(true);
-    expect(isSdkHealthAbort(controller)).toBe(true);
+    expect(isDaemonOwnedAbort(controller)).toBe(false);
+    markCoordinatorTerminationAbort(controller);
+    expect(controller.signal.aborted).toBe(false);
+    expect(isDaemonOwnedAbort(controller)).toBe(true);
   });
 });
 

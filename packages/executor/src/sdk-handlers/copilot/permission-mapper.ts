@@ -16,7 +16,7 @@
  * Returns: 'approved' | 'denied-interactively-by-user' | 'denied-by-rules' | etc.
  */
 
-import { generateId, shortId } from '@agor/core';
+import { generateId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole, PermissionStatus, TaskStatus } from '@agor/core/types';
 import type {
@@ -55,7 +55,6 @@ export interface PermissionDeps {
   messagesRepo: MessagesRepository;
   messagesService?: MessagesService;
   sessionsService?: SessionsPatchClient;
-  permissionLocks: Map<SessionID, Promise<void>>;
   mcpServerRepo?: MCPServerRepository;
   sessionMCPRepo?: SessionMCPServerRepository;
   abortController: AbortController;
@@ -211,26 +210,15 @@ export function createPermissionHandler(
 
     // --- Interactive permission flow (same pattern as Claude Code) ---
 
-    // Track lock release function for finally block
-    let releaseLock: (() => void) | undefined;
+    let releaseInteraction: (() => void) | undefined;
 
     try {
-      // STEP 1: Wait for any pending permission check to finish (queue serialization)
-      const existingLock = deps.permissionLocks.get(sessionId);
-      if (existingLock) {
-        console.log(
-          `⏳ [Copilot Permission] Waiting for pending permission check (session ${shortId(sessionId)})`
-        );
-        await existingLock;
-      }
-
-      // STEP 2: Create lock for this permission check
+      releaseInteraction = await deps.permissionService.acquireInteraction(
+        sessionId,
+        deps.abortController.signal
+      );
       const toolName = getToolDisplayName(request);
       console.log(`🔒 [Copilot Permission] Requesting permission for ${toolName}...`);
-      const newLock = new Promise<void>((resolve) => {
-        releaseLock = resolve;
-      });
-      deps.permissionLocks.set(sessionId, newLock);
 
       // Generate request ID
       const requestId = generateId();
@@ -326,7 +314,7 @@ export function createPermissionHandler(
       if (resolution.outcome === 'unavailable') {
         const message = resolution.reason ?? `Permission cannot be requested for: ${toolName}`;
         markInteractionAbort(deps.abortController, {
-          status: TaskStatus.FAILED,
+          cause: 'interaction_unavailable',
           errorMessage: message,
         });
         return {
@@ -341,7 +329,7 @@ export function createPermissionHandler(
         const message = `Permission request timed out for: ${toolName}`;
         console.log(`⏰ [Copilot Permission] ${message}`);
         markInteractionAbort(deps.abortController, {
-          status: TaskStatus.TIMED_OUT,
+          cause: 'interaction_timeout',
           errorMessage: message,
         });
 
@@ -384,7 +372,7 @@ export function createPermissionHandler(
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (!isDaemonOwnedAbort(deps.abortController)) {
         markInteractionAbort(deps.abortController, {
-          status: TaskStatus.FAILED,
+          cause: 'interaction_unavailable',
           errorMessage,
         });
       }
@@ -394,14 +382,7 @@ export function createPermissionHandler(
         feedback: errorMessage,
       };
     } finally {
-      // STEP 3: Always release the lock when done
-      if (releaseLock) {
-        releaseLock();
-        deps.permissionLocks.delete(sessionId);
-        console.log(
-          `🔓 [Copilot Permission] Released permission lock for session ${shortId(sessionId)}`
-        );
-      }
+      releaseInteraction?.();
     }
   };
 }

@@ -24,6 +24,75 @@ describe('PermissionService interaction capability', () => {
     });
   });
 
+  it('rejects unattended interaction before any event or watchdog activity', async () => {
+    const emitEvent = vi.fn().mockResolvedValue(undefined);
+    const onActivity = vi.fn();
+    const service = new PermissionService(emitEvent, 600_000, 'unattended', onActivity);
+
+    await expect(
+      service.acquireInteraction(sessionId, new AbortController().signal)
+    ).rejects.toThrow(/cannot answer permission requests/i);
+
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(onActivity).not.toHaveBeenCalled();
+  });
+
+  it('serializes three interactions per Session in arrival order', async () => {
+    const service = new PermissionService(vi.fn().mockResolvedValue(undefined));
+    const releases: Array<() => void> = [];
+    const order: string[] = [];
+    const run = async (label: string) => {
+      const releaseInteraction = await service.acquireInteraction(
+        sessionId,
+        new AbortController().signal
+      );
+      try {
+        order.push(`start:${label}`);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        order.push(`finish:${label}`);
+        return label;
+      } finally {
+        releaseInteraction();
+      }
+    };
+
+    const first = run('first');
+    const second = run('second');
+    const third = run('third');
+    await vi.waitFor(() => expect(order).toEqual(['start:first']));
+
+    releases.shift()?.();
+    await vi.waitFor(() => expect(order).toEqual(['start:first', 'finish:first', 'start:second']));
+    releases.shift()?.();
+    await vi.waitFor(() =>
+      expect(order).toEqual([
+        'start:first',
+        'finish:first',
+        'start:second',
+        'finish:second',
+        'start:third',
+      ])
+    );
+    releases.shift()?.();
+
+    await expect(Promise.all([first, second, third])).resolves.toEqual([
+      'first',
+      'second',
+      'third',
+    ]);
+  });
+
+  it('revalidates cancellation after waiting for the Session tail', async () => {
+    const service = new PermissionService(vi.fn().mockResolvedValue(undefined));
+    const releaseFirst = await service.acquireInteraction(sessionId, new AbortController().signal);
+    const queuedAbort = new AbortController();
+    const second = service.acquireInteraction(sessionId, queuedAbort.signal);
+    queuedAbort.abort();
+    releaseFirst();
+
+    await expect(second).rejects.toThrow(/cancelled/i);
+  });
+
   it('does not wait when cancellation arrived before registration', async () => {
     const service = new PermissionService(vi.fn().mockResolvedValue(undefined));
     const abortController = new AbortController();
@@ -137,7 +206,9 @@ describe('PermissionService interaction capability', () => {
         claude_idle_timeout_ms: 60_000,
         codex_idle_timeout_ms: 60_000,
       } as ResolvedSdkWatchdogConfig,
-      onDecision: (evidence) => decisions.push(evidence),
+      onDecision: (evidence) => {
+        decisions.push(evidence);
+      },
     });
     const service = new PermissionService(
       vi.fn().mockResolvedValue(undefined),

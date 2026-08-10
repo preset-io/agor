@@ -19,7 +19,8 @@ for (const name of [
 }
 
 const ingress = process.env.HA_URL ?? `http://127.0.0.1:${process.env.HA_PORT ?? '3030'}`;
-const publicOrigin = process.env.AGOR_HA_PUBLIC_ORIGIN ?? ingress;
+const publicOrigin =
+  process.env.AGOR_HA_PUBLIC_ORIGIN ?? `http://localhost:${process.env.HA_PORT ?? '3030'}`;
 const daemonA = `http://127.0.0.1:${process.env.HA_DAEMON_A_PORT ?? '13031'}`;
 const daemonB = `http://127.0.0.1:${process.env.HA_DAEMON_B_PORT ?? '13032'}`;
 const project = process.env.COMPOSE_PROJECT_NAME ?? 'agor-ha-integration';

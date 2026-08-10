@@ -63,11 +63,11 @@ Containerized Agor requires infrastructure that most organizations already have 
 
 ### Storage and identity requirements
 
-| Requirement           | What It Provides                        | Common Solutions                           |
-| --------------------- | --------------------------------------- | ------------------------------------------ |
-| **Durable branch workspace** | Same branch bytes for every relevant invocation | Per-branch PVC/volume or a shared filesystem |
-| **Persistent user home when native credentials are used** | Same isolated home for auth helpers and Tasks | Per-user PVC/home selected from trusted tenant/user identity |
-| **Consistent execution identity** | UID/GID or delegated identity maps predictably | Orchestrator identity mapping, LDAP/sssd, or synchronized IDs |
+| Requirement                                               | What It Provides                                | Common Solutions                                              |
+| --------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------- |
+| **Durable branch workspace**                              | Same branch bytes for every relevant invocation | Per-branch PVC/volume or a shared filesystem                  |
+| **Persistent user home when native credentials are used** | Same isolated home for auth helpers and Tasks   | Per-user PVC/home selected from trusted tenant/user identity  |
+| **Consistent execution identity**                         | UID/GID or delegated identity maps predictably  | Orchestrator identity mapping, LDAP/sssd, or synchronized IDs |
 
 These are standard requirements for any multi-server development environment. If your organization runs shared `/home` directories across servers, you likely already have both.
 
@@ -1124,7 +1124,7 @@ containment.
 
 A scoped remote executor's quiescence report is the authoritative cooperative
 result because the daemon cannot inspect a process group on another host.
-Missing reports still flow through the heartbeat supervisor and remain visible
+Missing reports still flow through the fleet runtime reconciler and remain visible
 and blocked rather than being treated as proof of termination. Templated or
 remote execution that cannot prove absence likewise remains blocked until a
 branch owner or administrator explicitly force-fails it. Normal cooperative
