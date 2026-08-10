@@ -6,7 +6,12 @@
  * tenant/user/server grant to another lookup for the same MCP origin.
  */
 
-import { type TenantScopeAwareDatabase, UserMCPOAuthTokenRepository } from '@agor/core/db';
+import {
+  type SaveTokenInput,
+  type TenantScopeAwareDatabase,
+  UserMCPOAuthTokenRepository,
+} from '@agor/core/db';
+import type { OAuthTokenResponse } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import { resolveTokenExpiry } from '@agor/core/tools/mcp/oauth-token-expiry';
 import type { MCPServerID, UserID } from '@agor/core/types';
 
@@ -30,7 +35,7 @@ import type { MCPServerID, UserID } from '@agor/core/types';
  */
 export async function persistOAuthToken(
   db: TenantScopeAwareDatabase,
-  tokenResponse: { access_token: string; expires_in?: number; refresh_token?: string },
+  tokenResponse: Pick<OAuthTokenResponse, 'access_token' | 'expires_in' | 'refresh_token'>,
   pendingFlow: {
     mcpServerId?: string;
     userId?: string;
@@ -44,18 +49,9 @@ export async function persistOAuthToken(
      * server config when it was previously blank so later refreshes do not
      * have to guess from the MCP resource URL.
      */
-    tokenEndpoint?: string;
-    grantBinding?: {
-      generation: number;
-      version: 1;
-      fingerprint: string;
-      metadataUri: string;
-      resourceUri: string;
-      issuer: string;
-      authorizationEndpoint: string;
-      tokenEndpoint: string;
-      redirectUri: string;
-    };
+    tokenEndpoint?: SaveTokenInput['tokenEndpoint'];
+    resourceUri?: SaveTokenInput['resourceUri'];
+    grantBinding?: SaveTokenInput['grantBinding'];
   },
   logPrefix: string
 ): Promise<void> {
@@ -91,6 +87,8 @@ export async function persistOAuthToken(
     refreshToken: tokenResponse.refresh_token,
     clientId: pendingFlow.clientId,
     clientSecret: pendingFlow.clientSecret,
+    tokenEndpoint: pendingFlow.tokenEndpoint,
+    resourceUri: pendingFlow.resourceUri,
     grantBinding: pendingFlow.grantBinding,
   });
 

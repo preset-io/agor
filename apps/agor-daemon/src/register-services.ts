@@ -1821,6 +1821,7 @@ async function registerMCPServices(
           clientId: pendingFlow.context.clientId,
           clientSecret: pendingFlow.context.clientSecret,
           tokenEndpoint: pendingFlow.context.tokenEndpoint,
+          resourceUri: pendingFlow.context.resourceUri,
           ...(pendingFlow.durableRecord
             ? {
                 grantBinding: {
@@ -3306,10 +3307,15 @@ async function registerMCPServices(
         if (
           err instanceof InvalidGrantError ||
           err instanceof MissingRefreshTokenError ||
-          err instanceof AmbiguousRefreshError ||
-          err instanceof FailedRefreshError
+          err instanceof AmbiguousRefreshError
         ) {
           return { success: false, error: 'needs_reauth' };
+        }
+        // A peer observed a known, non-ambiguous owner failure. Match the
+        // owner's retryable response rather than forcing one daemon's caller
+        // to reconnect for the same refresh generation.
+        if (err instanceof FailedRefreshError) {
+          return { success: false, error: 'token_refresh_failed' };
         }
         if (err instanceof MissingTokenEndpointError) {
           return { success: false, error: 'missing_token_endpoint' };

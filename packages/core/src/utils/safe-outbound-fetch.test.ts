@@ -126,4 +126,20 @@ describe('safe OAuth outbound URL policy', () => {
       safeOutboundFetch(url, { allowLocalhostHttp: true, maxResponseBytes: 16 })
     ).rejects.toThrow('response is too large');
   });
+
+  it('applies one absolute deadline while a response drips bytes', async () => {
+    const { url } = await listen((_request, response) => {
+      response.writeHead(200);
+      const interval = setInterval(() => response.write('x'), 10);
+      response.on('close', () => clearInterval(interval));
+    });
+
+    await expect(
+      safeOutboundFetch(url, {
+        allowLocalhostHttp: true,
+        timeoutMs: 40,
+        maxResponseBytes: 1024,
+      })
+    ).rejects.toThrow('Outbound OAuth timeout');
+  });
 });

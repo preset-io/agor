@@ -14,7 +14,7 @@ import {
 import { getConnector } from '@agor/core/gateway';
 import type { GatewayChannel, SessionID, ThreadSessionMap, User, UserID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
 import { SessionsService } from './sessions.js';
@@ -260,8 +260,16 @@ function makeGatewayHarness(args: {
   };
 }
 
+beforeEach(() => {
+  // PostgreSQL-shaped database doubles exercise the same encrypted OAuth
+  // repository construction as production and therefore need the deployment
+  // master-secret invariant to be explicit.
+  vi.stubEnv('AGOR_MASTER_SECRET', 'gateway-test-master-secret');
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.mocked(materializeAgenticToolConfiguration).mockClear();
   vi.mocked(getBaseUrl).mockReset();
   vi.mocked(getBaseUrl).mockResolvedValue('https://agor.example.com');

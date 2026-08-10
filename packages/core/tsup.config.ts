@@ -33,6 +33,7 @@ export default defineConfig({
     'environment/webhook': 'src/environment/webhook.ts', // Managed environment webhook execution policy
     'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
+    'utils/safe-outbound-fetch': 'src/utils/safe-outbound-fetch.ts', // Pinned SSRF-safe OAuth/JWT egress
     'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities
     'utils/context-window': 'src/utils/context-window.ts', // Context window calculation utilities

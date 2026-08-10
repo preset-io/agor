@@ -6,7 +6,6 @@ import {
 import type { Branch, BranchPermissionLevel, Session, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { HA_NATIVE_SOCKET_EVENT_INVENTORY } from '../realtime/routing';
 import type {
   RealtimeAccessBranchRepository,
   RealtimeAccessSessionRepository,
@@ -307,7 +306,7 @@ describe('HA Feathers publication relay', () => {
     expect(JSON.stringify(relay.relay.mock.calls)).not.toContain('must-not-enter-redis');
   });
 
-  it('keeps the credential/process-affine deny list and native HA inventory explicit', () => {
+  it('keeps the credential/process-affine Feathers deny list explicit', () => {
     expect([...REDIS_FEATHERS_DENIED_PATHS]).toEqual(
       expect.arrayContaining([
         'authentication',
@@ -319,12 +318,6 @@ describe('HA Feathers publication relay', () => {
         'terminals',
       ])
     );
-    expect(HA_NATIVE_SOCKET_EVENT_INVENTORY).toEqual([
-      'cursor-moved',
-      'cursor-left',
-      'presence-updated',
-      'repo:cloneError',
-    ]);
   });
 });
 

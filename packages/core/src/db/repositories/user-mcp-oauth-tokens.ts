@@ -14,14 +14,7 @@ import { randomUUID } from 'node:crypto';
 import type { MCPServerID, UserID } from '@agor/core/types';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../client';
-import {
-  deleteFrom,
-  executeRaw,
-  insert,
-  isPostgresDatabase,
-  select,
-  update,
-} from '../database-wrapper';
+import { deleteFrom, executeRaw, insert, select, update } from '../database-wrapper';
 import { openMCPOAuthSecret, sealMCPOAuthSecret } from '../oauth-secret-envelope';
 import {
   type UserMCPOAuthTokenInsert,
@@ -29,6 +22,7 @@ import {
   userMcpOauthTokens,
 } from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
+import { isPostgresDatabaseHandle } from '../tenant-scope';
 import { RepositoryError } from './base';
 
 /**
@@ -87,6 +81,16 @@ export interface SaveTokenInput {
   clientId?: string;
   /** If absent on update, the existing client_secret is kept. */
   clientSecret?: string;
+  /**
+   * Discovered endpoint retained for standalone/SQLite refresh. PostgreSQL
+   * grants take this value only from the authoritative grant binding below.
+   */
+  tokenEndpoint?: string;
+  /**
+   * Protected resource retained for standalone/SQLite refresh requests.
+   * PostgreSQL grants take this value only from the authoritative binding.
+   */
+  resourceUri?: string;
   /** Required for every new PostgreSQL grant and checked on replacement. */
   grantBinding?: {
     generation: number;
@@ -209,7 +213,10 @@ export class UserMCPOAuthTokenRepository {
     private db: Database,
     masterSecret = process.env.AGOR_MASTER_SECRET
   ) {
-    this.postgres = isPostgresDatabase(db);
+    // The daemon passes a long-lived tenant-scoped proxy here. Dialect
+    // inspection must unwrap that proxy rather than trigger its guarded `has`
+    // trap before a tenant scope exists.
+    this.postgres = isPostgresDatabaseHandle(db);
     this.masterSecret = masterSecret;
     if (this.postgres && !masterSecret) {
       throw new RepositoryError('PostgreSQL MCP OAuth grants require AGOR_MASTER_SECRET');
@@ -379,6 +386,10 @@ export class UserMCPOAuthTokenRepository {
                         ),
                       }
                     : {}),
+                  ...(input.tokenEndpoint != null
+                    ? { oauth_token_endpoint: input.tokenEndpoint }
+                    : {}),
+                  ...(input.resourceUri != null ? { oauth_resource_uri: input.resourceUri } : {}),
                 }),
             ...(binding
               ? {
@@ -430,10 +441,10 @@ export class UserMCPOAuthTokenRepository {
           grant_binding_version: binding?.version,
           grant_binding_fingerprint: binding?.fingerprint,
           oauth_metadata_uri: binding?.metadataUri,
-          oauth_resource_uri: binding?.resourceUri,
+          oauth_resource_uri: binding?.resourceUri ?? input.resourceUri,
           oauth_issuer: binding?.issuer,
           oauth_authorization_endpoint: binding?.authorizationEndpoint,
-          oauth_token_endpoint: binding?.tokenEndpoint,
+          oauth_token_endpoint: binding?.tokenEndpoint ?? input.tokenEndpoint,
           oauth_redirect_uri: binding?.redirectUri,
           refresh_status: 'idle',
           refresh_generation: 0,

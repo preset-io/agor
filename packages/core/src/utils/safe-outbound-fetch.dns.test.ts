@@ -7,7 +7,9 @@ vi.mock('node:dns/promises', () => ({ lookup: lookupMock }));
 import { safeOutboundFetch, UnsafeOutboundUrlError } from './safe-outbound-fetch';
 
 describe('safe outbound connection-time DNS policy', () => {
-  beforeEach(() => lookupMock.mockReset());
+  beforeEach(() => {
+    lookupMock.mockReset();
+  });
 
   it('rejects a mixed public/private DNS answer before opening a connection', async () => {
     lookupMock.mockResolvedValue([
@@ -30,5 +32,13 @@ describe('safe outbound connection-time DNS policy', () => {
     await expect(
       safeOutboundFetch('https://rebound.example/latest/meta-data')
     ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+  });
+
+  it('applies the absolute deadline to unresolved DNS', async () => {
+    lookupMock.mockReturnValue(new Promise(() => undefined));
+
+    await expect(
+      safeOutboundFetch('https://unresolved.example/token', { timeoutMs: 30 })
+    ).rejects.toThrow('Outbound OAuth timeout');
   });
 });

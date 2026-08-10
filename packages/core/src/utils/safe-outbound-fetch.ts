@@ -64,6 +64,44 @@ export interface SafeOutboundFetchOptions extends Omit<RequestInit, 'redirect' |
   allowLocalhostHttp?: boolean;
 }
 
+const DEFAULT_TIMEOUT_MS = 15_000;
+const MAX_TIMER_MS = 2_147_483_647;
+
+function outboundTimeoutError(): Error {
+  return new Error('Outbound OAuth timeout');
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : outboundTimeoutError();
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortReason(signal);
+}
+
+/** Race work such as DNS lookup that does not itself accept an AbortSignal. */
+function withAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(abortReason(signal));
+    };
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      }
+    );
+  });
+}
+
 function isLoopback(address: string, family: 4 | 6): boolean {
   if (family === 4) return address.startsWith('127.');
   return address === '::1';
@@ -110,13 +148,16 @@ function assertSafeParsedUrl(url: URL, allowLocalhostHttp: boolean): void {
 
 async function resolvePinnedAddress(
   url: URL,
-  allowLocalhostHttp: boolean
+  allowLocalhostHttp: boolean,
+  signal: AbortSignal
 ): Promise<{ address: string; family: 4 | 6 }> {
+  throwIfAborted(signal);
   const hostname = normalizedHostname(url);
   const literalFamily = isIP(hostname);
   const addresses = literalFamily
     ? [{ address: hostname, family: literalFamily as 4 | 6 }]
-    : await lookup(hostname, { all: true, verbatim: true });
+    : await withAbort(lookup(hostname, { all: true, verbatim: true }), signal);
+  throwIfAborted(signal);
   if (addresses.length === 0) throw new UnsafeOutboundUrlError('OAuth destination did not resolve');
   for (const candidate of addresses) {
     const family = candidate.family as 4 | 6;
@@ -144,26 +185,45 @@ function requestBody(body: unknown): string | Uint8Array | undefined {
   throw new UnsafeOutboundUrlError('Unsupported outbound OAuth request body');
 }
 
-async function requestOnce(url: URL, options: SafeOutboundFetchOptions): Promise<Response> {
+async function requestOnce(
+  url: URL,
+  options: SafeOutboundFetchOptions,
+  signal: AbortSignal
+): Promise<Response> {
+  throwIfAborted(signal);
   assertSafeParsedUrl(url, options.allowLocalhostHttp === true);
-  const pinned = await resolvePinnedAddress(url, options.allowLocalhostHttp === true);
+  const pinned = await resolvePinnedAddress(url, options.allowLocalhostHttp === true, signal);
   const body = requestBody(options.body);
   const headers = new Headers(options.headers);
   if (body != null && !headers.has('content-length')) {
     headers.set('content-length', String(Buffer.byteLength(body)));
   }
   const requestImpl = url.protocol === 'https:' ? https.request : http.request;
-  const timeoutMs = options.timeoutMs ?? 15_000;
   const maxBytes = options.maxResponseBytes ?? 1024 * 1024;
 
   return new Promise<Response>((resolve, reject) => {
     let settled = false;
+    let responseStream: http.IncomingMessage | undefined;
+    let request: http.ClientRequest | undefined;
+    const cleanup = () => signal.removeEventListener('abort', abortRequest);
     const fail = (error: Error) => {
       if (settled) return;
       settled = true;
+      cleanup();
       reject(error);
     };
-    const request = requestImpl(
+    const abortRequest = () => {
+      const error = abortReason(signal);
+      fail(error);
+      responseStream?.destroy();
+      request?.destroy();
+    };
+    signal.addEventListener('abort', abortRequest, { once: true });
+    if (signal.aborted) {
+      abortRequest();
+      return;
+    }
+    request = requestImpl(
       url,
       {
         method: options.method ?? 'GET',
@@ -175,6 +235,7 @@ async function requestOnce(url: URL, options: SafeOutboundFetchOptions): Promise
         servername: isIP(normalizedHostname(url)) ? undefined : normalizedHostname(url),
       },
       (response) => {
+        responseStream = response;
         const chunks: Buffer[] = [];
         let received = 0;
         response.on('data', (chunk: Buffer) => {
@@ -182,7 +243,7 @@ async function requestOnce(url: URL, options: SafeOutboundFetchOptions): Promise
           if (received > maxBytes) {
             const error = new UnsafeOutboundUrlError('Outbound OAuth response is too large');
             response.destroy();
-            request.destroy();
+            request?.destroy();
             fail(error);
             return;
           }
@@ -191,6 +252,7 @@ async function requestOnce(url: URL, options: SafeOutboundFetchOptions): Promise
         response.on('end', () => {
           if (settled) return;
           settled = true;
+          cleanup();
           const responseHeaders = new Headers();
           for (const [name, value] of Object.entries(response.headers)) {
             if (Array.isArray(value)) for (const item of value) responseHeaders.append(name, item);
@@ -207,11 +269,6 @@ async function requestOnce(url: URL, options: SafeOutboundFetchOptions): Promise
         response.on('error', fail);
       }
     );
-    request.setTimeout(timeoutMs, () => {
-      const error = new Error('Outbound OAuth timeout');
-      request.destroy();
-      fail(error);
-    });
     request.on('error', fail);
     if (body != null) request.write(body);
     request.end();
@@ -222,22 +279,32 @@ export async function safeOutboundFetch(
   input: string | URL,
   options: SafeOutboundFetchOptions = {}
 ): Promise<Response> {
-  let url = new URL(input);
-  const redirectMode = options.redirect ?? 'error';
-  const maxRedirects = options.maxRedirects ?? 3;
-  for (let hop = 0; ; hop += 1) {
-    const response = await requestOnce(url, options);
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-    if (redirectMode !== 'follow' || hop >= maxRedirects) {
-      throw new UnsafeOutboundUrlError('Outbound OAuth redirect is not allowed');
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_MS) {
+    throw new UnsafeOutboundUrlError('Outbound OAuth timeout is invalid');
+  }
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(outboundTimeoutError()), timeoutMs);
+  try {
+    let url = new URL(input);
+    const redirectMode = options.redirect ?? 'error';
+    const maxRedirects = options.maxRedirects ?? 3;
+    for (let hop = 0; ; hop += 1) {
+      const response = await requestOnce(url, options, deadline.signal);
+      if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+      if (redirectMode !== 'follow' || hop >= maxRedirects) {
+        throw new UnsafeOutboundUrlError('Outbound OAuth redirect is not allowed');
+      }
+      const location = response.headers.get('location');
+      if (!location) throw new UnsafeOutboundUrlError('Outbound OAuth redirect is invalid');
+      url = new URL(location, url);
+      // Metadata fetches are GET. Secret-bearing POST endpoints use redirect:error.
+      if ((options.method ?? 'GET').toUpperCase() !== 'GET') {
+        throw new UnsafeOutboundUrlError('Secret-bearing OAuth requests cannot redirect');
+      }
     }
-    const location = response.headers.get('location');
-    if (!location) throw new UnsafeOutboundUrlError('Outbound OAuth redirect is invalid');
-    url = new URL(location, url);
-    // Metadata fetches are GET. Secret-bearing POST endpoints use redirect:error.
-    if ((options.method ?? 'GET').toUpperCase() !== 'GET') {
-      throw new UnsafeOutboundUrlError('Secret-bearing OAuth requests cannot redirect');
-    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
