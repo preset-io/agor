@@ -523,9 +523,11 @@ The case-insensitive sensitive matcher mirrors Express's default routing, and
 the outage proof covers canonical and mixed-case callback spellings. The route
 retains the redacted access-log status/timing signal and suppresses nginx's
 fixed-format upstream error log, which otherwise includes the complete
-still-valid request target. Final post-rebase validation passes typecheck, lint,
-the multitenancy boundary check, all 3,586 runnable core tests, 57 focused daemon tests,
-and all 125 PostgreSQL tests across 22 files
+still-valid request target. A broad validation run passed all 3,586 runnable
+core tests, and the latest rebase-specific run passed 111 focused core tests
+and 61 focused daemon tests (with 15 and 9 environment-gated skips,
+respectively). Typecheck, lint, and the multitenancy boundary check pass, as do
+all 125 PostgreSQL tests across 22 files
 (including 9 GitHub-state tests as a `NOSUPERUSER`/`NOBYPASSRLS` role), the
 PostgreSQL runner interruption harness, and the opt-in two-daemon HA Docker
 integration including the upstream-failure regression.
