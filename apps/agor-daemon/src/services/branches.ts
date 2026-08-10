@@ -2500,18 +2500,53 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         Object.keys(facts).length > 0 &&
         (lastCommand?.action === 'start' || lastCommand?.action === 'restart') &&
         lastCommand?.status === 'succeeded';
-      const shouldTransitionToRunning = currentStatus === 'starting' && startReportedUp;
+
+      // `starting` MUST have an exit here too, in BOTH directions — the same
+      // principle as the probe-based startup timeout further below. Without
+      // one, an environment with no probe pins at `starting` forever while the
+      // UI disables Start, leaving the user no way to recover. Observed live:
+      // a branch stuck `starting` for ten days with no health_check_url, no
+      // facts and a dead pid.
+      //
+      // Exit UP when there is positive evidence the environment is up: either
+      // the lifecycle command reported success with facts, or the daemon still
+      // owns a live process for it (which we already report as 'healthy'
+      // below — pinning at `starting` while claiming healthy is incoherent).
+      const shouldTransitionToRunning =
+        currentStatus === 'starting' && (startReportedUp || !!isProcessAlive);
+
+      // Exit DOWN once the startup window has elapsed with no such evidence.
+      // Anchored on wall-clock rather than a probe streak because there are no
+      // probes to count on this path, and because the anchor has to survive a
+      // daemon restart — an in-memory streak would grant a fresh hour on every
+      // restart and never fire for an already-stalled environment.
+      const startedAt = branch.environment_instance?.process?.started_at ?? lastCommand?.timestamp;
+      const startupElapsedMs = startedAt ? Date.now() - new Date(startedAt).getTime() : 0;
+      const shouldDemoteStalledStart =
+        currentStatus === 'starting' &&
+        !shouldTransitionToRunning &&
+        startupElapsedMs > ENVIRONMENT_STARTUP_TIMEOUT_MS;
 
       if (shouldTransitionToRunning) {
         console.log(
-          `✅ ${branch.name}: start reported success with facts and no health probe configured - transitioning to 'running'`
+          `✅ ${branch.name}: ${
+            startReportedUp ? 'start reported success with facts' : 'managed process is alive'
+          } and no health probe configured - transitioning to 'running'`
+        );
+      } else if (shouldDemoteStalledStart) {
+        console.warn(
+          `🔌 ${branch.name}: never reported readiness and no health probe is configured - marking 'error' so it can be started again`
         );
       }
 
       return await this.updateEnvironment(
         id,
         {
-          ...(shouldTransitionToRunning ? { status: 'running' as const } : {}),
+          ...(shouldTransitionToRunning
+            ? { status: 'running' as const }
+            : shouldDemoteStalledStart
+              ? { status: 'error' as const }
+              : {}),
           last_health_check: {
             timestamp: new Date().toISOString(),
             status: startReportedUp || isProcessAlive ? 'healthy' : 'unknown',
@@ -2519,7 +2554,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               ? 'Started (reported by lifecycle command; no health probe configured)'
               : isProcessAlive
                 ? 'Process running'
-                : 'No health check configured',
+                : shouldDemoteStalledStart
+                  ? 'Environment never reported readiness (no health check configured)'
+                  : 'No health check configured',
           },
         },
         params

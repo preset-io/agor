@@ -2469,3 +2469,119 @@ describe('BranchesService remote environment readiness gate', () => {
     expect(result.environment_instance?.status).toBe('running');
   });
 });
+
+describe('BranchesService no-probe startup exit', () => {
+  /**
+   * An environment with NO probe at all — neither a frozen health_check_url nor
+   * a `health` fact — takes an early-return path that never reaches the
+   * probe-based startup timeout. Observed live: a branch pinned at `starting`
+   * for ten days (no health_check_url, no facts, dead pid) while the UI
+   * disables Start, so the user could not recover without DB surgery.
+   *
+   * `starting` must always have an exit, in both directions.
+   */
+  const STARTUP_TIMEOUT_MS = 60 * 60 * 1000;
+
+  const noProbeBranch = (envOverrides: Record<string, unknown> = {}) => ({
+    branch_id: 'wt-no-probe' as BranchID,
+    repo_id: 'repo-1',
+    name: 'wt-no-probe',
+    path: '/tmp/wt-no-probe',
+    branch_unique_id: 1,
+    // deliberately no health_check_url AND no facts
+    environment_instance: {
+      status: 'starting',
+      last_command: { action: 'start', status: 'succeeded' },
+      ...envOverrides,
+    },
+  });
+
+  const serviceFor = (branch: unknown) => {
+    const app = {
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update) =>
+        ({
+          ...(branch as Record<string, unknown>),
+          environment_instance: {
+            ...(branch as { environment_instance: Record<string, unknown> }).environment_instance,
+            ...(update as Record<string, unknown>),
+          },
+        }) as never
+    );
+    return service;
+  };
+
+  it('demotes a stalled start to `error` once the startup window has elapsed', async () => {
+    const branch = noProbeBranch({
+      process: { started_at: new Date(Date.now() - STARTUP_TIMEOUT_MS - 60_000).toISOString() },
+    });
+    const service = serviceFor(branch);
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(result.environment_instance?.status).toBe('error');
+  });
+
+  it('does NOT demote while still inside the startup window', async () => {
+    const branch = noProbeBranch({
+      process: { started_at: new Date(Date.now() - 5 * 60_000).toISOString() },
+    });
+    const service = serviceFor(branch);
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    // A cold Codespace create legitimately takes 12-27 min.
+    expect(result.environment_instance?.status).toBe('starting');
+  });
+
+  it('falls back to last_command.timestamp when no process anchor exists', async () => {
+    const branch = noProbeBranch({
+      last_command: {
+        action: 'start',
+        status: 'succeeded',
+        timestamp: new Date(Date.now() - STARTUP_TIMEOUT_MS - 60_000).toISOString(),
+      },
+    });
+    const service = serviceFor(branch);
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(result.environment_instance?.status).toBe('error');
+  });
+
+  it('exits UP to `running` when the daemon still owns a live process', async () => {
+    const branch = noProbeBranch({
+      process: { started_at: new Date(Date.now() - STARTUP_TIMEOUT_MS - 60_000).toISOString() },
+    });
+    const service = serviceFor(branch);
+    // Reporting 'healthy' ("Process running") while pinned at `starting` is
+    // incoherent, and the wall-clock timeout would otherwise mark a live
+    // environment `error`.
+    (service as unknown as { processes: Map<string, unknown> }).processes.set(branch.branch_id, {
+      process: { killed: false },
+    });
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(result.environment_instance?.status).toBe('running');
+  });
+
+  it('leaves a `running` no-probe environment alone', async () => {
+    const branch = noProbeBranch({
+      status: 'running',
+      process: { started_at: new Date(Date.now() - STARTUP_TIMEOUT_MS - 60_000).toISOString() },
+    });
+    const service = serviceFor(branch);
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(result.environment_instance?.status).toBe('running');
+  });
+});
