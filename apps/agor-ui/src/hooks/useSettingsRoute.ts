@@ -23,6 +23,12 @@ export const SETTINGS_SECTIONS = [
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /**
+ * Section shown when Settings opens without an explicit tab. People leads the
+ * redesigned IA, so an admin lands on who-has-access first.
+ */
+export const DEFAULT_SETTINGS_SECTION: SettingsSection = 'users';
+
+/**
  * Settings route state parsed from URL
  */
 export interface SettingsRouteState {
@@ -63,7 +69,7 @@ export function useSettingsRoute() {
     if (!settingsMatch) {
       return {
         isOpen: false,
-        section: 'boards',
+        section: DEFAULT_SETTINGS_SECTION,
         itemId: null,
       };
     }
@@ -76,7 +82,7 @@ export function useSettingsRoute() {
       section as SettingsSection
     )
       ? (section as SettingsSection)
-      : 'boards';
+      : DEFAULT_SETTINGS_SECTION;
 
     return {
       isOpen: true,
@@ -102,7 +108,7 @@ export function useSettingsRoute() {
    * Open the settings modal to a specific section
    */
   const openSettings = useCallback(
-    (section: SettingsSection = 'boards', itemId?: string) => {
+    (section: SettingsSection = DEFAULT_SETTINGS_SECTION, itemId?: string) => {
       const path = itemId ? `/settings/${section}/${itemId}/` : `/settings/${section}/`;
       const backgroundPath = location.pathname.startsWith('/settings')
         ? settingsBackgroundPath || '/'

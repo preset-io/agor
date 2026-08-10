@@ -1,16 +1,17 @@
 import type { AgorClient, Group, GroupMembership, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
+import { EditOutlined, InboxOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
 import {
   Button,
+  Empty,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Select,
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -22,6 +23,7 @@ import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
 interface GroupsTableProps {
   client: AgorClient | null;
@@ -33,15 +35,14 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const { showError, showSuccess } = useThemedMessage();
   const [groups, setGroups] = useState<Group[]>([]);
   const [memberships, setMemberships] = useState<GroupMembership[]>([]);
-  const [editingGroup, setEditingGroup] = useState<Group | null>(null);
   const [editingMemberIds, setEditingMemberIds] = useState<string[]>([]);
-  const [createOpen, setCreateOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [dirty, setDirty] = useState(false);
   const [form] = Form.useForm();
-  const [editForm] = Form.useForm();
-  const createSlugEditedRef = useRef(false);
-  const editSlugEditedRef = useRef(false);
+  const slugEditedRef = useRef(false);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
 
   const load = useCallback(async () => {
     if (!client || !isAdmin) {
@@ -73,83 +74,113 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
     return map;
   }, [memberships]);
 
-  const createGroup = async () => {
+  const groupById = useMemo(() => {
+    const map = new Map<string, Group>();
+    for (const group of groups) map.set(group.group_id, group);
+    return map;
+  }, [groups]);
+
+  // Editing/creating swaps this section's Content pane for the drill-in editor
+  // below, instead of stacking a second Modal on top of Settings.
+  const editingGroup =
+    drill?.kind === 'groups' && drill.mode === 'edit' && drill.recordId
+      ? (groupById.get(drill.recordId) ?? null)
+      : null;
+  const isCreating = drill?.kind === 'groups' && drill.mode === 'create';
+
+  const openEdit = useCallback(
+    (group: Group) => openDrill({ kind: 'groups', mode: 'edit', recordId: group.group_id }),
+    [openDrill]
+  );
+  const openCreate = useCallback(() => openDrill({ kind: 'groups', mode: 'create' }), [openDrill]);
+
+  const syncGroupMembers = useCallback(
+    async (group: Group, nextUserIds: string[]) => {
+      if (!client) return;
+      await syncGroupMembersForGroup(
+        client,
+        group.group_id,
+        membershipsByGroup.get(group.group_id) || [],
+        nextUserIds
+      );
+    },
+    [client, membershipsByGroup]
+  );
+
+  const setGroupMembers = async (group: Group, nextUserIds: string[]) => {
+    await syncGroupMembers(group, nextUserIds);
+    await load();
+  };
+
+  // Seed the form whenever the drill-in targets a group (edit) or opens fresh
+  // (create). The slug auto-fill flag is reset alongside so name-driven slugs
+  // resume from a clean slate.
+  useEffect(() => {
+    if (editingGroup) {
+      slugEditedRef.current = false;
+      form.setFieldsValue({
+        name: editingGroup.name,
+        slug: editingGroup.slug || '',
+        description: editingGroup.description || '',
+      });
+      setEditingMemberIds(membershipsByGroup.get(editingGroup.group_id) || []);
+      setDirty(false);
+    }
+  }, [editingGroup, form, membershipsByGroup]);
+
+  useEffect(() => {
+    if (isCreating) {
+      slugEditedRef.current = false;
+      form.resetFields();
+      setEditingMemberIds([]);
+      setDirty(false);
+    }
+  }, [isCreating, form]);
+
+  // Auto-fill slug from name until the user edits the slug field directly.
+  const handleValuesChange = useCallback(
+    (changedValues: { name?: string; slug?: string }) => {
+      setDirty(true);
+      if (Object.hasOwn(changedValues, 'slug')) {
+        slugEditedRef.current = true;
+        return;
+      }
+      if (Object.hasOwn(changedValues, 'name') && !slugEditedRef.current) {
+        form.setFieldsValue({ slug: slugify(changedValues.name || '') });
+      }
+    },
+    [form]
+  );
+
+  const handleSave = useCallback(async () => {
     if (!client) return;
     const values = await form.validateFields();
-    await client.service('groups').create(values);
-    closeCreateModal();
-    showSuccess('Group created');
+    if (editingGroup) {
+      await client.service('groups').patch(editingGroup.group_id, values);
+      await syncGroupMembers(editingGroup, editingMemberIds);
+      showSuccess('Group updated');
+    } else {
+      await client.service('groups').create(values);
+      showSuccess('Group created');
+    }
+    setDirty(false);
+    closeDrill();
     await load();
-  };
-
-  const openCreateModal = () => {
-    createSlugEditedRef.current = false;
-    form.resetFields();
-    setCreateOpen(true);
-  };
-
-  const closeCreateModal = () => {
-    createSlugEditedRef.current = false;
-    form.resetFields();
-    setCreateOpen(false);
-  };
-
-  const handleCreateValuesChange = (changedValues: { name?: string; slug?: string }) => {
-    if (Object.hasOwn(changedValues, 'slug')) {
-      createSlugEditedRef.current = true;
-      return;
-    }
-
-    if (Object.hasOwn(changedValues, 'name') && !createSlugEditedRef.current) {
-      form.setFieldsValue({ slug: slugify(changedValues.name || '') });
-    }
-  };
-
-  const handleEditValuesChange = (changedValues: { name?: string; slug?: string }) => {
-    if (Object.hasOwn(changedValues, 'slug')) {
-      editSlugEditedRef.current = true;
-      return;
-    }
-
-    if (
-      Object.hasOwn(changedValues, 'name') &&
-      !editSlugEditedRef.current &&
-      !editForm.getFieldValue('slug')
-    ) {
-      editForm.setFieldsValue({ slug: slugify(changedValues.name || '') });
-    }
-  };
-
-  const saveGroup = async () => {
-    if (!client || !editingGroup) return;
-    const values = await editForm.validateFields();
-    await client.service('groups').patch(editingGroup.group_id, values);
-    await syncGroupMembers(editingGroup, editingMemberIds);
-    setEditingGroup(null);
-    setEditingMemberIds([]);
-    showSuccess('Group updated');
-    await load();
-  };
+  }, [
+    client,
+    form,
+    editingGroup,
+    editingMemberIds,
+    syncGroupMembers,
+    showSuccess,
+    closeDrill,
+    load,
+  ]);
 
   const archiveGroup = async (group: Group) => {
     if (!client) return;
     await client.service('groups').patch(group.group_id, { archived: true });
     showSuccess('Group archived');
-    await load();
-  };
-
-  const syncGroupMembers = async (group: Group, nextUserIds: string[]) => {
-    if (!client) return;
-    await syncGroupMembersForGroup(
-      client,
-      group.group_id,
-      membershipsByGroup.get(group.group_id) || [],
-      nextUserIds
-    );
-  };
-
-  const setGroupMembers = async (group: Group, nextUserIds: string[]) => {
-    await syncGroupMembers(group, nextUserIds);
     await load();
   };
 
@@ -160,20 +191,70 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const userOptions = mapToSortedArray(userById, (a, b) => a.email.localeCompare(b.email)).map(
     toUserSelectOption
   );
-  const filteredGroups = filterBySettingsSearch(
-    [...groups].sort((a, b) => a.name.localeCompare(b.name)),
-    searchTerm,
-    [
-      (group) => group.name,
-      (group) => group.slug,
-      (group) => group.description,
-      (group) =>
-        (membershipsByGroup.get(group.group_id) || [])
-          .map((userId) => userById.get(userId))
-          .filter((user): user is User => Boolean(user))
-          .flatMap((user) => [user.name, user.email, user.unix_username]),
-    ]
-  );
+
+  const activeGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
+  const filteredGroups = filterBySettingsSearch(activeGroups, searchTerm, [
+    (group) => group.name,
+    (group) => group.slug,
+    (group) => group.description,
+    (group) =>
+      (membershipsByGroup.get(group.group_id) || [])
+        .map((userId) => userById.get(userId))
+        .filter((user): user is User => Boolean(user))
+        .flatMap((user) => [user.name, user.email, user.unix_username]),
+  ]);
+
+  if (editingGroup || isCreating) {
+    return (
+      <DrillInFrame
+        title={editingGroup ? `Edit ${editingGroup.name}` : 'New Group'}
+        dirty={dirty}
+        onSave={handleSave}
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          style={{ maxWidth: 520 }}
+          onValuesChange={handleValuesChange}
+        >
+          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="slug"
+            label="Slug"
+            extra={
+              editingGroup
+                ? 'Editable stable key used in URLs and APIs.'
+                : 'Auto-filled from name; editable.'
+            }
+          >
+            <Input placeholder="engineering" />
+          </Form.Item>
+          <Form.Item name="description" label="Description">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          {editingGroup && (
+            <Form.Item label="Members">
+              <Select
+                mode="multiple"
+                style={{ width: '100%' }}
+                value={editingMemberIds}
+                options={userOptions}
+                {...searchableSelectProps}
+                onChange={(ids) => {
+                  setEditingMemberIds(ids);
+                  setDirty(true);
+                }}
+                placeholder="Select users..."
+              />
+            </Form.Item>
+          )}
+        </Form>
+      </DrillInFrame>
+    );
+  }
+
   return (
     <div>
       <div
@@ -193,121 +274,95 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 320 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             New Group
           </Button>
         </Space>
       </div>
 
-      <Table
-        rowKey="group_id"
-        size="small"
-        pagination={false}
-        dataSource={filteredGroups}
-        columns={[
-          {
-            title: 'Group',
-            dataIndex: 'name',
-            render: (_: string, group: Group) => (
-              <Space>
-                <TeamOutlined />
-                <span>
-                  <HighlightMatch text={group.name} query={searchTerm} />
-                </span>
-                <Tag>
-                  <HighlightMatch text={group.slug || ''} query={searchTerm} />
-                </Tag>
-              </Space>
-            ),
-          },
-          {
-            title: 'Description',
-            dataIndex: 'description',
-            render: (v?: string) => (v ? <HighlightMatch text={v} query={searchTerm} /> : '—'),
-          },
-          {
-            title: 'Members',
-            render: (_: unknown, group: Group) => (
-              <Select
-                mode="multiple"
-                style={{ minWidth: 320 }}
-                value={membershipsByGroup.get(group.group_id) || []}
-                options={userOptions}
-                {...searchableSelectProps}
-                onChange={(ids) => setGroupMembers(group, ids)}
-              />
-            ),
-          },
-          {
-            title: 'Actions',
-            width: 76,
-            render: (_: unknown, group: Group) => (
-              <SettingsActionGroup>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<EditOutlined />}
-                  onClick={() => {
-                    editSlugEditedRef.current = false;
-                    setEditingGroup(group);
-                    setEditingMemberIds(membershipsByGroup.get(group.group_id) || []);
-                    editForm.setFieldsValue(group);
-                  }}
+      {filteredGroups.length === 0 ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: 400,
+          }}
+        >
+          {activeGroups.length === 0 ? (
+            <Empty description="No groups yet">
+              <Typography.Text type="secondary">
+                Create a group to organize users and manage memberships.
+              </Typography.Text>
+            </Empty>
+          ) : (
+            <Empty description={`No groups match “${searchTerm}”`} />
+          )}
+        </div>
+      ) : (
+        <Table
+          rowKey="group_id"
+          size="small"
+          pagination={false}
+          dataSource={filteredGroups}
+          columns={[
+            {
+              title: 'Group',
+              dataIndex: 'name',
+              render: (_: string, group: Group) => (
+                <Space>
+                  <TeamOutlined />
+                  <Typography.Link strong title={group.name} onClick={() => openEdit(group)}>
+                    <HighlightMatch text={group.name} query={searchTerm} />
+                  </Typography.Link>
+                  <Tag>
+                    <HighlightMatch text={group.slug || ''} query={searchTerm} />
+                  </Tag>
+                </Space>
+              ),
+            },
+            {
+              title: 'Description',
+              dataIndex: 'description',
+              render: (v?: string) => (v ? <HighlightMatch text={v} query={searchTerm} /> : '—'),
+            },
+            {
+              title: 'Members',
+              render: (_: unknown, group: Group) => (
+                <Select
+                  mode="multiple"
+                  style={{ minWidth: 320 }}
+                  value={membershipsByGroup.get(group.group_id) || []}
+                  options={userOptions}
+                  {...searchableSelectProps}
+                  onChange={(ids) => setGroupMembers(group, ids)}
                 />
-                <Popconfirm title="Archive group?" onConfirm={() => archiveGroup(group)}>
-                  <Button type="text" size="small" icon={<DeleteOutlined />} danger />
-                </Popconfirm>
-              </SettingsActionGroup>
-            ),
-          },
-        ]}
-      />
-
-      <Modal title="Create Group" open={createOpen} onOk={createGroup} onCancel={closeCreateModal}>
-        <Form form={form} layout="vertical" onValuesChange={handleCreateValuesChange}>
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="slug" label="Slug" extra="Auto-filled from name; editable.">
-            <Input placeholder="engineering" />
-          </Form.Item>
-          <Form.Item name="description" label="Description">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-        </Form>
-      </Modal>
-      <Modal
-        title="Edit Group"
-        open={!!editingGroup}
-        onOk={saveGroup}
-        onCancel={() => {
-          setEditingGroup(null);
-          setEditingMemberIds([]);
-        }}
-      >
-        <Form form={editForm} layout="vertical" onValuesChange={handleEditValuesChange}>
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="slug" label="Slug" extra="Editable stable key used in URLs and APIs.">
-            <Input />
-          </Form.Item>
-          <Form.Item name="description" label="Description">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-          <Form.Item label="Members">
-            <Select
-              mode="multiple"
-              style={{ width: '100%' }}
-              value={editingMemberIds}
-              options={userOptions}
-              {...searchableSelectProps}
-              onChange={setEditingMemberIds}
-              placeholder="Select users..."
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+              ),
+            },
+            {
+              title: 'Actions',
+              width: 76,
+              render: (_: unknown, group: Group) => (
+                <SettingsActionGroup>
+                  <Tooltip title="Edit group">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<EditOutlined />}
+                      onClick={() => openEdit(group)}
+                    />
+                  </Tooltip>
+                  <Popconfirm title="Archive group?" onConfirm={() => archiveGroup(group)}>
+                    <Tooltip title="Archive group">
+                      <Button type="text" size="small" icon={<InboxOutlined />} />
+                    </Tooltip>
+                  </Popconfirm>
+                </SettingsActionGroup>
+              ),
+            },
+          ]}
+        />
+      )}
     </div>
   );
 };
