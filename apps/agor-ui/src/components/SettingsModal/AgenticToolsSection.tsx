@@ -150,7 +150,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   );
 
   return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="large" style={{ width: '100%' }}>
       {error && <Alert title={error} type="error" closable onClose={() => setError(null)} />}
       <Space size={8} align="center">
         <ToolIcon tool={tool} size={24} />
@@ -173,8 +173,8 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
             label: 'Authentication',
             children:
               TENANT_TOOL_FIELDS[tool].length > 0 ? (
-                <Space direction="vertical" size="large" style={{ width: '100%' }}>
-                  <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+                  <Space orientation="vertical" size="small" style={{ width: '100%' }}>
                     <Typography.Text strong>Credential resolution</Typography.Text>
                     <Select
                       value={current.resolution_policy}
@@ -230,8 +230,8 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
             key: 'presets',
             label: 'Presets',
             children: (
-              <Space direction="vertical" size="large" style={{ width: '100%' }}>
-                <Space direction="vertical" size="small">
+              <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+                <Space orientation="vertical" size="small">
                   <Space>
                     <Switch
                       checked={current.inline_configuration_allowed}
