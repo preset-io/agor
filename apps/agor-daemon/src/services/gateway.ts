@@ -9,13 +9,26 @@
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import { getBaseUrl, resolveExecutionSecurityMode } from '@agor/core/config';
 import {
+  boundedBackoffDelay,
+  type DistributedWorkIdentity,
+  initialWorkOffset,
+  jitterDelay,
+} from '@agor/core/coordination';
+import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   GatewayChannelRepository,
+  GatewayInboundEventRepository,
+  type GatewayListenerDiscoveryCursor,
   GatewayListenerDiscoveryRepository,
+  type GatewayListenerLease,
   GatewayOutboundMessageRepository,
+  generateId,
   getCurrentTenantId,
   getHiddenTenantId,
+  isDatabaseUniqueConstraintError,
+  isPostgresDatabase,
+  MessagesRepository,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
@@ -23,6 +36,7 @@ import {
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
+  TaskRepository,
   type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
   UsersRepository,
@@ -55,10 +69,12 @@ import type {
   GatewayChannel,
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
+  Message,
   MessageSource,
   Session,
   SessionID,
   Task,
+  TaskID,
   TenantID,
   ThreadSessionMap,
   User,
@@ -75,6 +91,7 @@ import { getSessionUrl } from '@agor/core/utils/url';
 import { gatewayAgenticConfigToInlineConfiguration } from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
+import { gatewayInboundSessionId, gatewayInboundTaskId } from '../utils/durable-task-id.js';
 import {
   buildPromptWithAttachments,
   ingestInboundAttachments,
@@ -92,6 +109,12 @@ interface PostMessageData {
   user_name?: string;
   files?: InboundFile[];
   metadata?: Record<string, unknown>;
+  /** Daemon-internal durable identities for a claimed provider occurrence. */
+  idempotency_task_id?: TaskID;
+  idempotency_session_id?: SessionID;
+  gateway_inbound_event_id?: import('@agor/core/types').GatewayInboundEventID;
+  listener_claim_token?: string;
+  listener_channel_id?: import('@agor/core/types').GatewayChannelID;
 }
 
 /**
@@ -101,6 +124,7 @@ interface PostMessageResult {
   success: boolean;
   sessionId: string;
   created: boolean;
+  taskId?: TaskID;
 }
 
 /**
@@ -108,8 +132,37 @@ interface PostMessageResult {
  */
 interface RouteMessageData {
   session_id: string;
+  message_id?: string;
   message: string;
   metadata?: Record<string, unknown>;
+}
+
+interface ActiveGatewayListenerLease extends GatewayListenerLease {
+  tenant_id: TenantID | string;
+}
+
+const GATEWAY_LISTENER_LEASE_MS = 30_000;
+const GATEWAY_LISTENER_SCAN_BATCH = 25;
+const GATEWAY_LISTENER_RENEW_SCAN_MAX_MS = 5_000;
+const GATEWAY_EVENT_PROCESSING_LEASE_MS = 2 * 60_000;
+const GATEWAY_LISTENER_STOP_TIMEOUT_MS = 5_000;
+
+async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Gateway bounded operation timed out')),
+          timeoutMs
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -270,6 +323,16 @@ function previewText(text: string, maxChars = 500): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function gatewayMessageText(content: Message['content']): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((block) => block.type === 'text')
+    .map((block) => (typeof block.text === 'string' ? block.text : ''))
+    .filter(Boolean)
+    .join('\n');
 }
 
 function quoteForPrompt(text: string, maxChars = 2000): string {
@@ -632,13 +695,28 @@ export class GatewayService {
   private outboundRepo: GatewayOutboundMessageRepository;
   private branchRepo: BranchRepository;
   private sessionRepo: SessionRepository;
+  private taskRepo: TaskRepository;
   private usersRepo: UsersRepository;
+  private messagesRepo: MessagesRepository;
+  private inboundEventRepo: GatewayInboundEventRepository;
 
   private db: TenantScopeAwareDatabase;
   private app: Application;
 
   /** Active listeners keyed by immutable tenant + channel identity. */
   private activeListeners = new Map<string, GatewayConnector>();
+  /** PostgreSQL-only durable ownership diagnostics/fences for local listeners. */
+  private activeListenerLeases = new Map<string, ActiveGatewayListenerLease>();
+  private listenerTimer: NodeJS.Timeout | null = null;
+  private listenerScanRunning = false;
+  private listenerStopped = false;
+  private listenerDraining = false;
+  private listenerDiscoveryTenantId: TenantID | string | undefined;
+  private listenerDiscoveryCursor: GatewayListenerDiscoveryCursor | undefined;
+  private listenerIdleRounds = 0;
+  private inboundThreadQueues = new Map<string, Promise<void>>();
+  private durableListenerOwnership: boolean | undefined;
+  private readonly workIdentity: DistributedWorkIdentity;
 
   /**
    * Tenants with at least one enabled gateway channel.
@@ -674,6 +752,10 @@ export class GatewayService {
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
+    // Long-lived listener orchestration carries tenant identity without
+    // holding a transaction. Every repository field is therefore bound to a
+    // short per-method tenant unit of work here; provider/process/network work
+    // must remain outside those database scopes.
     this.channelRepo = bindRepositoryToTenantUnitOfWork(db, new GatewayChannelRepository(db));
     this.threadMapRepo = bindRepositoryToTenantUnitOfWork(db, new ThreadSessionMapRepository(db));
     this.outboundRepo = bindRepositoryToTenantUnitOfWork(
@@ -682,17 +764,58 @@ export class GatewayService {
     );
     this.branchRepo = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
     this.sessionRepo = bindRepositoryToTenantUnitOfWork(db, new SessionRepository(db));
+    this.taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
     this.usersRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
+    this.messagesRepo = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
+    this.inboundEventRepo = bindRepositoryToTenantUnitOfWork(
+      db,
+      new GatewayInboundEventRepository(db)
+    );
 
     this.db = db;
     this.app = app;
+    this.workIdentity = (
+      app as unknown as { get?: (name: string) => DistributedWorkIdentity | undefined }
+    ).get?.('distributedWorkIdentity') ?? {
+      instanceId: 'daemon',
+      bootId: `gateway-${generateId()}`,
+    };
   }
 
   private listenerKey(tenantId: TenantID | string, channelId: string): string {
     return `${tenantId}\0${channelId}`;
   }
 
+  /**
+   * Re-enter listener tenant identity only. Repository calls inside `work`
+   * open their own guarded RLS transactions through the constructor bindings;
+   * external provider work deliberately does not inherit a DB transaction.
+   */
+  private runWithListenerTenantIdentity<T>(tenantId: TenantID | string, work: () => T): T {
+    return runWithTenantContext(tenantId, work);
+  }
+
+  /**
+   * Detect the database ownership model only from inside a valid database
+   * scope. The tenant-aware DB proxy intentionally cannot be inspected from a
+   * constructor or other unscoped lifecycle edge.
+   */
+  private async detectDurableListenerOwnership(): Promise<boolean> {
+    if (this.durableListenerOwnership !== undefined) return this.durableListenerOwnership;
+    this.durableListenerOwnership = await runWithTenantDatabaseScope(
+      this.db,
+      getCurrentTenantId(),
+      async (scopedDb) => isPostgresDatabase(scopedDb)
+    );
+    return this.durableListenerOwnership;
+  }
+
   private getActiveListener(channelId: string): GatewayConnector | undefined {
+    // PostgreSQL outbound work is stateless and reloads fresh tenant-scoped
+    // credentials. Never reuse a connector whose listener lease may have been
+    // revoked between renewal passes. Teams is the only connector that needs
+    // its process-local listener for replies, and is fail-closed in this mode.
+    if (this.durableListenerOwnership) return undefined;
     const tenantId = getCurrentTenantId();
     return tenantId ? this.activeListeners.get(this.listenerKey(tenantId, channelId)) : undefined;
   }
@@ -700,6 +823,16 @@ export class GatewayService {
   private currentTenantHasActiveChannels(): boolean {
     const tenantId = getCurrentTenantId();
     return !!tenantId && this.activeChannelTenants.has(tenantId);
+  }
+
+  /**
+   * The SQLite fast path is process-complete because standalone listeners are
+   * all local. In PostgreSQL, any daemon can execute a tenant's Task before its
+   * listener discovery cursor has visited that tenant, so absence from the
+   * process-local cache must never suppress durable outbound routing.
+   */
+  private async shouldQueryGatewayRouting(): Promise<boolean> {
+    return (await this.detectDurableListenerOwnership()) || this.currentTenantHasActiveChannels();
   }
 
   /** Refresh the current tenant's process-local channel fast path. */
@@ -780,12 +913,12 @@ export class GatewayService {
       const matched = await this.usersRepo.findByEmailForAlignment(mappedEmail);
       if (matched) {
         console.log(
-          `[gateway] ${platform} user aligned via user_map: ${externalId} → ${mappedEmail} → Agor user ${shortId(matched.user_id)}`
+          `[gateway] ${platform} user alignment succeeded: source=user_map agor_user=${shortId(matched.user_id)}`
         );
         return matched;
       }
       console.warn(
-        `[gateway] user_map entry ${externalId} → ${mappedEmail} but no Agor user with that email`
+        `[gateway] ${platform} user alignment failed: source=user_map result=agor_user_not_found`
       );
     }
 
@@ -795,7 +928,7 @@ export class GatewayService {
       const matched = await this.usersRepo.findByEmailForAlignment(normalizedEmail);
       if (matched) {
         console.log(
-          `[gateway] ${platform} user aligned via email: ${externalId ?? 'unknown'} (${normalizedEmail}) → Agor user ${shortId(matched.user_id)}`
+          `[gateway] ${platform} user alignment succeeded: source=email agor_user=${shortId(matched.user_id)}`
         );
         return matched;
       }
@@ -1230,7 +1363,7 @@ export class GatewayService {
   }
 
   private async updateProgressNow(data: GatewayProgressData): Promise<void> {
-    if (!this.currentTenantHasActiveChannels()) return;
+    if (!(await this.shouldQueryGatewayRouting())) return;
 
     const mapping = await this.threadMapRepo.findBySession(data.session_id);
     if (!mapping) return;
@@ -1342,7 +1475,7 @@ export class GatewayService {
     event: 'streaming:start' | 'streaming:chunk' | 'streaming:end' | 'streaming:error',
     data: Record<string, unknown>
   ): Promise<void> {
-    if (!this.currentTenantHasActiveChannels()) return;
+    if (!(await this.shouldQueryGatewayRouting())) return;
 
     const sessionId = typeof data.session_id === 'string' ? data.session_id : undefined;
     const messageId = typeof data.message_id === 'string' ? data.message_id : undefined;
@@ -1713,6 +1846,7 @@ export class GatewayService {
    * for the given thread, and sends the prompt to the session.
    */
   async create(data: PostMessageData): Promise<PostMessageResult> {
+    const durableListenerOwnership = await this.detectDurableListenerOwnership();
     // 1. Authenticate via channel_key
     const channel = await this.channelRepo.findByKey(data.channel_key);
     if (!channel) {
@@ -1721,6 +1855,18 @@ export class GatewayService {
 
     if (!channel.enabled) {
       throw new Error('Channel is disabled');
+    }
+    if (durableListenerOwnership && !data.gateway_inbound_event_id) {
+      throw new Error(
+        'Direct gateway inbound delivery is unsupported on PostgreSQL without a provider event identity'
+      );
+    }
+    if (
+      data.listener_claim_token &&
+      (data.listener_channel_id !== channel.id ||
+        !(await this.channelRepo.listenerClaimIsCurrent(channel.id, data.listener_claim_token)))
+    ) {
+      throw new Error('Gateway listener ownership lost before inbound routing');
     }
 
     // 2. Look up existing thread mapping
@@ -1740,6 +1886,43 @@ export class GatewayService {
       console.log(
         `[gateway] Slack inbound thread ${data.thread_id} → session ${shortId(existingMapping.session_id)} (root ${existingMapping.thread_id})`
       );
+    }
+    let recoveringInitialDelivery = false;
+
+    // A process can die after the stable Task is admitted but before the
+    // provider occurrence is completed. Reconcile that durable fact before
+    // rebuilding a prompt: the first delivery may have created the mapping and
+    // therefore formatted an "initial" prompt, while a retry observes an
+    // existing mapping and would otherwise produce a different prompt string.
+    if (
+      durableListenerOwnership &&
+      data.gateway_inbound_event_id &&
+      data.idempotency_task_id &&
+      existingMapping
+    ) {
+      const priorTask = await this.taskRepo.findById(data.idempotency_task_id);
+      if (priorTask) {
+        const priorSession = await this.sessionRepo.findById(existingMapping.session_id);
+        const gatewaySource = priorSession?.custom_context?.gateway_source as
+          | Record<string, unknown>
+          | undefined;
+        if (
+          priorTask.session_id !== existingMapping.session_id ||
+          priorTask.metadata?.gateway_inbound_event_id !== data.gateway_inbound_event_id ||
+          !priorSession ||
+          priorSession.branch_id !== channel.target_branch_id ||
+          gatewaySource?.channel_id !== channel.id
+        ) {
+          throw new Error('Gateway provider event Task identity is already in use');
+        }
+        return {
+          success: true,
+          sessionId: existingMapping.session_id,
+          created: false,
+          taskId: priorTask.task_id,
+        };
+      }
+      recoveringInitialDelivery = existingMapping.session_id === data.idempotency_session_id;
     }
 
     const outboundSeed =
@@ -1875,11 +2058,11 @@ export class GatewayService {
 
         if (matchedUser) {
           console.log(
-            `[gateway] Slack user aligned: ${email} → Agor user ${shortId(matchedUser.user_id)} (${matchedUser.name || matchedUser.email})`
+            `[gateway] Slack user alignment succeeded: agor_user=${shortId(matchedUser.user_id)}`
           );
           user = await usersService.get(matchedUser.user_id);
         } else {
-          console.log(`[gateway] Slack user alignment failed: no Agor user with email ${email}`);
+          console.log('[gateway] Slack user alignment failed: result=agor_user_not_found');
           this.sendSystemMessage(
             channel,
             data.thread_id,
@@ -1895,9 +2078,7 @@ export class GatewayService {
         // Alignment is enabled but email couldn't be resolved (missing
         // users:read.email scope, Slack API error, or no email on profile).
         // Reject instead of silently falling back to channel owner.
-        console.log(
-          `[gateway] Slack user alignment failed: could not resolve email for Slack user ${data.user_name ?? 'unknown'} (thread=${data.thread_id})`
-        );
+        console.log('[gateway] Slack user alignment failed: result=identity_email_unavailable');
         this.sendSystemMessage(
           channel,
           data.thread_id,
@@ -1929,9 +2110,7 @@ export class GatewayService {
         user = await usersService.get(matchedUser.user_id);
       } else {
         // Reject — no silent fallback to channel owner.
-        console.log(
-          `[gateway] GitHub user alignment failed: no Agor mapping for ${githubLogin ?? 'unknown'} (thread=${data.thread_id})`
-        );
+        console.log('[gateway] GitHub user alignment failed: result=agor_user_not_found');
         // Edit the Processing comment with rejection message (if we have one)
         if (data.metadata?.processing_comment_id) {
           try {
@@ -1970,9 +2149,7 @@ export class GatewayService {
       } else {
         // Reject — no silent fallback to channel owner. Deliver the rejection by
         // editing the "👀 on it" ack (or a fresh comment if the ack is absent).
-        console.log(
-          `[gateway] Shortcut user alignment failed: no Agor mapping for ${shortcutMemberId ?? 'unknown'} (thread=${data.thread_id})`
-        );
+        console.log('[gateway] Shortcut user alignment failed: result=agor_user_not_found');
         try {
           const connector = getConnector(channel.channel_type as ChannelType, channel.config);
           await connector.sendMessage({
@@ -1994,7 +2171,8 @@ export class GatewayService {
     }
 
     let sessionId: SessionID;
-    let created = false;
+    let created = recoveringInitialDelivery;
+    let admittedTaskId: TaskID | undefined;
     let mappingForCursor: ThreadSessionMap | null = existingMapping ?? null;
 
     // Resolve agentic config: channel config > user defaults > system defaults.
@@ -2104,6 +2282,7 @@ export class GatewayService {
       // New thread → create session via FeathersJS service
       const sessionsService = this.app.service('sessions') as unknown as {
         create: (data: Partial<Session>, params?: SessionParams) => Promise<Session>;
+        get: (id: SessionID, params?: Record<string, unknown>) => Promise<Session>;
         setMCPServers: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
       };
 
@@ -2186,32 +2365,64 @@ export class GatewayService {
         `gateway user ${user.user_id}`
       );
 
-      const session = await sessionsService.create(
-        {
-          title: data.text.substring(0, 100),
-          description: data.text,
-          branch_id: channel.target_branch_id,
-          created_by: user.user_id,
-          // Stamp session with creator's unix_username for executor impersonation.
-          // Normally set by the setSessionUnixUsername hook, but that hook skips
-          // internal calls (no provider). Gateway sessions are internal, so we
-          // must set it explicitly. When user alignment is active, this uses the
-          // aligned user's unix_username; otherwise the channel owner's.
-          unix_username: user.unix_username ?? null,
-          status: SessionStatus.IDLE,
-          agentic_tool: agenticTool,
-          agentic_tool_preset_id: resolvedPresetId,
-          permission_config: gatewayPermissionConfig,
-          model_config: gatewayModelConfig,
-          tasks: [],
-          // Denormalized gateway metadata (immutable snapshot at creation time)
-          // Avoids N+1 lookups when rendering board cards
-          custom_context: {
-            gateway_source: gatewaySource,
-          },
+      const sessionInput: Partial<Session> = {
+        ...(data.idempotency_session_id ? { session_id: data.idempotency_session_id } : {}),
+        title: data.text.substring(0, 100),
+        description: data.text,
+        branch_id: channel.target_branch_id,
+        created_by: user.user_id,
+        // Stamp session with creator's unix_username for executor impersonation.
+        // Normally set by the setSessionUnixUsername hook, but that hook skips
+        // internal calls (no provider). Gateway sessions are internal, so we
+        // must set it explicitly. When user alignment is active, this uses the
+        // aligned user's unix_username; otherwise the channel owner's.
+        unix_username: user.unix_username ?? null,
+        status: SessionStatus.IDLE,
+        agentic_tool: agenticTool,
+        agentic_tool_preset_id: resolvedPresetId,
+        permission_config: gatewayPermissionConfig,
+        model_config: gatewayModelConfig,
+        tasks: [],
+        // Denormalized gateway metadata (immutable snapshot at creation time)
+        // Avoids N+1 lookups when rendering board cards
+        custom_context: {
+          gateway_source: gatewaySource,
         },
-        { _agenticConfigResolved: true }
-      );
+      };
+      let session: Session;
+      if (
+        data.listener_claim_token &&
+        !(await this.channelRepo.listenerClaimIsCurrent(channel.id, data.listener_claim_token))
+      ) {
+        throw new Error('Gateway listener ownership lost before Session admission');
+      }
+      try {
+        session = await sessionsService.create(sessionInput, { _agenticConfigResolved: true });
+      } catch (error) {
+        if (!data.idempotency_session_id || !isDatabaseUniqueConstraintError(error)) {
+          throw error;
+        }
+        // A crash can leave the stable Session committed before the provider
+        // occurrence is completed. Reuse it only when its immutable security
+        // identity matches this channel; never adopt an arbitrary collision.
+        let prior: Session;
+        try {
+          prior = await sessionsService.get(data.idempotency_session_id, { user });
+        } catch {
+          throw error;
+        }
+        const priorGatewaySource = prior.custom_context?.gateway_source as
+          | Record<string, unknown>
+          | undefined;
+        if (
+          prior.branch_id !== channel.target_branch_id ||
+          prior.created_by !== user.user_id ||
+          priorGatewaySource?.channel_id !== channel.id
+        ) {
+          throw error;
+        }
+        session = prior;
+      }
 
       sessionId = session.session_id;
       created = true;
@@ -2240,19 +2451,31 @@ export class GatewayService {
               ...(outboundSeed ? { outbound_seed_id: outboundSeed.id } : {}),
             }
           : (data.metadata ?? null);
-      mappingForCursor = await this.threadMapRepo.create({
-        channel_id: channel.id,
-        thread_id: data.thread_id,
-        session_id: session.session_id,
-        branch_id: channel.target_branch_id,
-        status: 'active',
-        metadata: initialMappingMetadata,
-      });
+      try {
+        mappingForCursor = await this.threadMapRepo.create({
+          channel_id: channel.id,
+          thread_id: data.thread_id,
+          session_id: session.session_id,
+          branch_id: channel.target_branch_id,
+          status: 'active',
+          metadata: initialMappingMetadata,
+        });
+      } catch (error) {
+        // Different provider events can arrive concurrently on the same new
+        // thread. The database unique key elects the mapping; a loser reloads
+        // and routes its stable Task to the winner instead of creating a
+        // second externally-visible thread association.
+        const winner = await this.threadMapRepo.findByChannelAndThread(channel.id, data.thread_id);
+        if (!winner) throw error;
+        mappingForCursor = winner;
+        sessionId = winner.session_id;
+        created = false;
+      }
 
       if (outboundSeed) {
         await this.outboundRepo.markConsumed(
           outboundSeed.id as GatewayOutboundMessageID,
-          session.session_id as SessionID
+          sessionId
         );
       }
 
@@ -2305,7 +2528,16 @@ export class GatewayService {
     try {
       const promptService = this.app.service('/sessions/:id/prompt') as {
         create: (
-          data: { prompt: string; permissionMode?: string; messageSource?: MessageSource },
+          data: {
+            prompt: string;
+            permissionMode?: string;
+            messageSource?: MessageSource;
+            metadata?: {
+              gateway_inbound_event_id?: import('@agor/core/types').GatewayInboundEventID;
+              gateway_reply_metadata?: Record<string, unknown>;
+            };
+            idempotencyTaskId?: TaskID;
+          },
           params: Record<string, unknown>
         ) => Promise<Task>;
       };
@@ -2453,14 +2685,40 @@ export class GatewayService {
       // Internal call: pass user, omit provider to bypass auth hooks
       // Mark message source as 'gateway' so it won't be echoed back to the platform
       const tenantId = getCurrentTenantId();
+      if (
+        data.listener_claim_token &&
+        !(await this.channelRepo.listenerClaimIsCurrent(channel.id, data.listener_claim_token))
+      ) {
+        throw new Error('Gateway listener ownership lost before Task admission');
+      }
       const task = await promptService.create(
-        { prompt: promptText, permissionMode, messageSource: 'gateway' },
+        {
+          prompt: promptText,
+          permissionMode,
+          messageSource: 'gateway',
+          ...(data.gateway_inbound_event_id
+            ? {
+                metadata: {
+                  gateway_inbound_event_id: data.gateway_inbound_event_id,
+                  ...(data.metadata?.processing_comment_id
+                    ? {
+                        gateway_reply_metadata: {
+                          processing_comment_id: data.metadata.processing_comment_id,
+                        },
+                      }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(data.idempotency_task_id ? { idempotencyTaskId: data.idempotency_task_id } : {}),
+        },
         {
           route: { id: sessionId },
           user,
           ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
         }
       );
+      admittedTaskId = task.task_id as TaskID;
 
       if (channel.channel_type === 'slack' && slackCursorTsToWrite && mappingForCursor) {
         const latestMapping = await this.threadMapRepo.findById(mappingForCursor.id);
@@ -2513,12 +2771,17 @@ export class GatewayService {
         state: 'failed',
         error_message: error instanceof Error ? error.message : String(error),
       });
+      // Durable listener recovery must retry/reconcile the same stable Task;
+      // swallowing this error would mark the provider event completed even
+      // though prompt admission never crossed its database fence.
+      if (data.gateway_inbound_event_id) throw error;
     }
 
     return {
       success: true,
       sessionId,
       created,
+      ...(admittedTaskId ? { taskId: admittedTaskId } : {}),
     };
   }
 
@@ -2530,7 +2793,7 @@ export class GatewayService {
    */
   async routeMessage(data: RouteMessageData): Promise<RouteMessageResult> {
     // Fast path: skip DB lookup entirely when no channels are configured
-    if (!this.currentTenantHasActiveChannels()) {
+    if (!(await this.shouldQueryGatewayRouting())) {
       return { routed: false };
     }
 
@@ -2645,12 +2908,31 @@ export class GatewayService {
    * processing acknowledgement. If no buffered message exists, this is a no-op.
    */
   async flushOutboundBuffer(sessionId: string): Promise<void> {
-    const bufferedMessage = this.lastMessageBuffer.get(sessionId);
-    if (!bufferedMessage) {
-      return; // No buffered message — nothing to flush
+    let bufferedMessage = this.lastMessageBuffer.get(sessionId);
+    let durableMessageId: string | undefined;
+    let durableReplyMetadata: Record<string, unknown> | undefined;
+    // The local buffer is only a latency cache. PostgreSQL/SQLite messages are
+    // the durable recovery source when creation and idle hooks land on
+    // different daemons or the message-producing daemon dies.
+    try {
+      const messages = await this.messagesRepo.findBySessionId(sessionId as SessionID);
+      const latest = [...messages]
+        .reverse()
+        .find((message) => message.role === 'assistant' && gatewayMessageText(message.content));
+      if (latest) {
+        bufferedMessage = gatewayMessageText(latest.content);
+        durableMessageId = latest.message_id;
+        if (latest.task_id) {
+          const task = await this.taskRepo.findById(latest.task_id);
+          durableReplyMetadata = task?.metadata?.gateway_reply_metadata;
+        }
+      }
+    } catch (error) {
+      if (!bufferedMessage) throw error;
+      console.warn('[gateway] Falling back to process-local outbound buffer:', error);
     }
+    if (!bufferedMessage) return;
 
-    // Remove from buffer immediately (prevent double-flush)
     this.lastMessageBuffer.delete(sessionId);
 
     // Look up session → thread mapping
@@ -2670,6 +2952,14 @@ export class GatewayService {
       return;
     }
 
+    const mappingMetadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
+      string,
+      unknown
+    >;
+    if (durableMessageId && mappingMetadata.gateway_last_flushed_message_id === durableMessageId) {
+      return;
+    }
+
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
 
@@ -2679,7 +2969,9 @@ export class GatewayService {
 
       // Edit the "Processing..." comment with the final response
       const outboundMetadata: Record<string, unknown> = {};
-      if (
+      if (typeof durableReplyMetadata?.processing_comment_id === 'number') {
+        outboundMetadata.edit_comment_id = durableReplyMetadata.processing_comment_id;
+      } else if (
         mapping.metadata &&
         typeof (mapping.metadata as Record<string, unknown>).processing_comment_id === 'number'
       ) {
@@ -2694,6 +2986,12 @@ export class GatewayService {
         blocks,
         metadata: outboundMetadata,
       });
+
+      if (durableMessageId) {
+        await this.threadMapRepo.mergeMetadata(mapping.id, {
+          gateway_last_flushed_message_id: durableMessageId,
+        });
+      }
 
       console.log(
         `[gateway] Flushed ${channel.channel_type} buffer for session ${shortId(sessionId)} → ${mapping.thread_id} (${bufferedMessage.length} chars)`
@@ -2710,6 +3008,144 @@ export class GatewayService {
     }
   }
 
+  private scheduleListenerScan(delayMs: number): void {
+    if (this.listenerStopped || this.listenerDraining) return;
+    this.listenerTimer = setTimeout(() => {
+      this.listenerTimer = null;
+      void this.runListenerScanLoop();
+    }, delayMs);
+    this.listenerTimer.unref?.();
+  }
+
+  private async startListenerWorker(): Promise<void> {
+    if (this.listenerTimer || this.listenerScanRunning) return;
+    this.listenerStopped = false;
+    this.listenerDraining = false;
+    console.log(
+      `[distributed-work.gateway-listener] event="loop_started" instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} scan_batch_size=${GATEWAY_LISTENER_SCAN_BATCH}`
+    );
+    // Preserve prompt startup while spreading each daemon's next contention
+    // pass over the renewal window.
+    await this.runListenerScanLoop(false);
+    this.scheduleListenerScan(initialWorkOffset(GATEWAY_LISTENER_RENEW_SCAN_MAX_MS, Math.random()));
+  }
+
+  private async runListenerScanLoop(scheduleNext = true): Promise<void> {
+    if (this.listenerScanRunning || this.listenerStopped) return;
+    this.listenerScanRunning = true;
+    let found = 0;
+    try {
+      found = await this.reconcileListenersOnce();
+      this.listenerIdleRounds = found === 0 ? this.listenerIdleRounds + 1 : 0;
+    } catch (error) {
+      this.listenerIdleRounds += 1;
+      console.warn(
+        `[distributed-work.gateway-listener] event=scan_failed instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+      );
+    } finally {
+      this.listenerScanRunning = false;
+    }
+    if (!scheduleNext) return;
+    const delay =
+      found >= GATEWAY_LISTENER_SCAN_BATCH
+        ? jitterDelay(150, 2 / 3, Math.random())
+        : boundedBackoffDelay(
+            this.listenerIdleRounds,
+            {
+              baseDelayMs: 1_000,
+              maxDelayMs: GATEWAY_LISTENER_RENEW_SCAN_MAX_MS,
+              jitterRatio: 0.2,
+            },
+            Math.random()
+          );
+    this.scheduleListenerScan(delay);
+  }
+
+  /** One bounded all-daemon renewal/discovery pass; database claims elect owners. */
+  private async reconcileListenersOnce(): Promise<number> {
+    // Renew before discovery so a full candidate page cannot starve local
+    // owners. An expired/revoked token is removed immediately and never
+    // released: its provider transport gets a bounded stop while the new owner
+    // may already contend safely behind the database fence.
+    for (const [key, lease] of [...this.activeListenerLeases]) {
+      await this.runWithListenerTenantIdentity(lease.tenant_id, async () => {
+        const renewed = await this.channelRepo.renewListener(
+          lease.channel_id,
+          lease.claim_token,
+          GATEWAY_LISTENER_LEASE_MS
+        );
+        if (!renewed) {
+          await this.stopChannelListener(lease.channel_id, { releaseClaim: false });
+          return;
+        }
+        this.activeListenerLeases.set(key, { ...renewed, tenant_id: lease.tenant_id });
+      });
+    }
+
+    const refs = this.listenerDiscoveryTenantId
+      ? await this.runWithListenerTenantIdentity(this.listenerDiscoveryTenantId, async () => {
+          const channels = await this.channelRepo.findEnabledListenerCandidates(
+            GATEWAY_LISTENER_SCAN_BATCH,
+            this.listenerDiscoveryCursor?.channel_id
+          );
+          return channels.map((channel) => ({
+            channel_id: channel.id,
+            tenant_id: this.listenerDiscoveryTenantId!,
+          }));
+        })
+      : await runWithSystemDatabaseScope(
+          this.db,
+          'gateway listener discovery',
+          (systemDb) =>
+            new GatewayListenerDiscoveryRepository(systemDb).findEnabledTenantRefs({
+              limit: GATEWAY_LISTENER_SCAN_BATCH,
+              after: this.listenerDiscoveryCursor,
+            }),
+          { capability: 'gateway_listener_discovery' }
+        );
+
+    if (refs.length === 0) {
+      this.listenerDiscoveryCursor = undefined;
+      return 0;
+    }
+    const last = refs.at(-1)!;
+    this.listenerDiscoveryCursor = {
+      tenant_id: last.tenant_id as TenantID,
+      channel_id: last.channel_id,
+    };
+
+    for (const ref of refs) {
+      await this.runWithListenerTenantIdentity(ref.tenant_id, async () => {
+        const key = this.listenerKey(ref.tenant_id, ref.channel_id);
+        if (this.activeListeners.has(key)) return;
+        const channel = await this.channelRepo.findById(ref.channel_id);
+        if (!channel?.enabled) return;
+        if (tenantIdFromGatewayChannel(channel) !== ref.tenant_id) {
+          throw new Error(
+            `Gateway listener discovery tenant mismatch for channel ${ref.channel_id}`
+          );
+        }
+        this.activeChannelTenants.add(ref.tenant_id);
+        if (!hasConnector(channel.channel_type as ChannelType) || !hasListeningConfig(channel)) {
+          return;
+        }
+        // Provider authentication/connect is external network work and must not
+        // hold up the bounded/fair discovery cursor. The channel-row claim
+        // prevents a second start while this promise is in flight.
+        void this.startChannelListener(channel, ref.tenant_id).catch((error) => {
+          console.warn(
+            `[distributed-work.gateway-listener] event=start_failed tenant_id=${JSON.stringify(ref.tenant_id)} channel_id=${JSON.stringify(ref.channel_id)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+          );
+        });
+      }).catch((error) => {
+        console.warn(
+          `[distributed-work.gateway-listener] event=candidate_failed tenant_id=${JSON.stringify(ref.tenant_id)} channel_id=${JSON.stringify(ref.channel_id)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+        );
+      });
+    }
+    return refs.length;
+  }
+
   /**
    * Start Socket Mode listeners for all enabled channels that support it.
    * Called once at daemon startup. Inbound messages are routed through
@@ -2719,6 +3155,16 @@ export class GatewayService {
     const tenantId = requireCurrentTenantId(
       'Missing tenant context while starting gateway listeners'
     );
+    this.durableListenerOwnership = await runWithTenantDatabaseScope(
+      this.db,
+      tenantId,
+      async (scopedDb) => isPostgresDatabase(scopedDb)
+    );
+    if (this.durableListenerOwnership) {
+      this.listenerDiscoveryTenantId = tenantId;
+      await this.startListenerWorker();
+      return;
+    }
     const channels = await this.channelRepo.findAll();
     if (channels.some((channel) => channel.enabled)) {
       this.activeChannelTenants.add(tenantId);
@@ -2745,6 +3191,16 @@ export class GatewayService {
    * connector-owned work are reloaded under the discovered tenant's RLS scope.
    */
   async startListenersAcrossTenants(): Promise<void> {
+    this.durableListenerOwnership = await runWithSystemDatabaseScope(
+      this.db,
+      'gateway listener dialect detection',
+      async (systemDb) => isPostgresDatabase(systemDb)
+    );
+    if (this.durableListenerOwnership) {
+      this.listenerDiscoveryTenantId = undefined;
+      await this.startListenerWorker();
+      return;
+    }
     const refs = await runWithSystemDatabaseScope(
       this.db,
       'gateway listener discovery',
@@ -2761,7 +3217,7 @@ export class GatewayService {
       const tenantId = ref.tenant_id;
 
       try {
-        await runWithTenantContext(tenantId, async () => {
+        await this.runWithListenerTenantIdentity(tenantId, async () => {
           const channel = await this.channelRepo.findById(ref.channel_id);
           if (!channel) {
             console.warn(
@@ -2804,6 +3260,11 @@ export class GatewayService {
   async startListenerForChannel(channelId: string): Promise<void> {
     const tenantId = requireCurrentTenantId(
       'Missing tenant context while managing a gateway listener'
+    );
+    this.durableListenerOwnership = await runWithTenantDatabaseScope(
+      this.db,
+      tenantId,
+      async (scopedDb) => isPostgresDatabase(scopedDb)
     );
     const channel = await this.channelRepo.findById(channelId);
     if (!channel) {
@@ -2850,33 +3311,49 @@ export class GatewayService {
   /**
    * Stop a Socket Mode listener for a single channel
    */
-  async stopChannelListener(channelId: string): Promise<void> {
+  async stopChannelListener(
+    channelId: string,
+    options: { releaseClaim?: boolean } = {}
+  ): Promise<boolean> {
     const tenantId = requireCurrentTenantId(
       'Missing tenant context while stopping a gateway listener'
     );
     const key = this.listenerKey(tenantId, channelId);
     const connector = this.activeListeners.get(key);
+    const lease = this.activeListenerLeases.get(key);
     if (!connector) {
-      return; // Not listening
+      return true; // Not listening
     }
 
     // Always remove from activeListeners so a fresh start can proceed,
     // even if stopListening() throws (e.g. socket already closed).
     this.activeListeners.delete(key);
+    this.activeListenerLeases.delete(key);
 
+    let stopped = false;
     try {
       if (connector.stopListening) {
-        await connector.stopListening();
+        await withGatewayTimeout(connector.stopListening(), GATEWAY_LISTENER_STOP_TIMEOUT_MS);
       }
+      stopped = true;
       console.log(`[gateway] Listener stopped for channel ${shortId(channelId)}`);
     } catch (error) {
-      // Old socket may still be alive — duplicate inbound messages are possible
-      // until the next daemon restart. See: listener lifecycle serialization (tech debt).
+      // A transport that ignores stop may still deliver, but every callback and
+      // checkpoint remains fenced by its opaque database token. Do not release
+      // the lease early; expiry is the safe takeover path.
       console.error(
         `[gateway] Error stopping listener for ${channelId} (old socket may still be alive):`,
         error
       );
     }
+
+    // Releasing after the provider transport has stopped avoids handing the
+    // channel to a new owner while the old socket/poller can still receive.
+    // A failed/timed-out stop is fenced by expiry instead.
+    if (stopped && lease && options.releaseClaim !== false) {
+      await this.channelRepo.releaseListener(lease.channel_id, lease.claim_token);
+    }
+    return stopped;
   }
 
   /**
@@ -2884,8 +3361,10 @@ export class GatewayService {
    */
   private async startChannelListener(
     channel: GatewayChannel,
-    listenerTenantId: TenantID | string
+    listenerTenantId: TenantID | string,
+    claimedLease?: GatewayListenerLease
   ): Promise<void> {
+    if (this.listenerStopped || this.listenerDraining) return;
     const rowTenantId = tenantIdFromGatewayChannel(channel);
     if (rowTenantId && rowTenantId !== listenerTenantId) {
       throw new Error(`Gateway listener tenant mismatch for channel ${channel.id}`);
@@ -2896,28 +3375,108 @@ export class GatewayService {
       return; // Already listening
     }
 
+    if (this.durableListenerOwnership && channel.channel_type === 'teams') {
+      console.error(
+        `[distributed-work.gateway-listener] event=provider_unsupported provider=teams tenant_id=${JSON.stringify(listenerTenantId)} channel_id=${JSON.stringify(channel.id)} reason=${JSON.stringify('Teams webhook ingress and ConversationReference routing are process-local')}`
+      );
+      return;
+    }
+
+    let lease = claimedLease;
+    if (this.durableListenerOwnership && !lease) {
+      const claim = await this.channelRepo.claimListener({
+        channelId: channel.id,
+        claimToken: generateId(),
+        leaseDurationMs: GATEWAY_LISTENER_LEASE_MS,
+        instanceId: this.workIdentity.instanceId,
+        bootId: this.workIdentity.bootId,
+      });
+      if (claim.outcome !== 'claimed') return;
+      lease = claim.lease;
+    }
+
     return runWithoutTenantDatabaseScope(async () => {
+      let connector: GatewayConnector | undefined;
       try {
-        const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+        connector = getConnector(channel.channel_type as ChannelType, channel.config);
 
         if (!connector.startListening) {
+          if (lease) {
+            await this.runWithListenerTenantIdentity(listenerTenantId, () =>
+              this.channelRepo.releaseListener(channel.id, lease!.claim_token)
+            );
+          }
           return; // Connector doesn't support listening
         }
 
-        const callback = (msg: InboundMessage) => {
-          this.handleListenerInboundMessage(channel, listenerTenantId, msg).catch((error) => {
-            console.error(
-              `[gateway] Failed to process inbound message for channel ${channel.name}:`,
-              error
-            );
-          });
-        };
+        const callback = (msg: InboundMessage) =>
+          this.handleListenerInboundMessage(channel, listenerTenantId, msg, lease);
 
-        await connector.startListening(callback);
+        await connector.startListening(callback, {
+          checkpoint: lease?.checkpoint,
+          durableEventIdempotency: !!lease,
+          ...(lease
+            ? {
+                saveCheckpoint: (checkpoint: Record<string, unknown>) =>
+                  this.runWithListenerTenantIdentity(listenerTenantId, () =>
+                    this.channelRepo.saveListenerCheckpoint(
+                      channel.id,
+                      lease!.claim_token,
+                      checkpoint
+                    )
+                  ),
+              }
+            : {}),
+        });
+        const leaseIsCurrent = lease
+          ? await this.runWithListenerTenantIdentity(listenerTenantId, () =>
+              this.channelRepo.listenerClaimIsCurrent(channel.id, lease!.claim_token)
+            )
+          : true;
+        if (this.listenerStopped || this.listenerDraining || !leaseIsCurrent) {
+          let stopped = !connector.stopListening;
+          if (connector.stopListening) {
+            try {
+              await withGatewayTimeout(connector.stopListening(), GATEWAY_LISTENER_STOP_TIMEOUT_MS);
+              stopped = true;
+            } catch (stopError) {
+              console.error(
+                `[gateway] Failed to stop listener that completed startup after drain/fence loss for channel "${channel.name}":`,
+                stopError
+              );
+            }
+          }
+          if (lease && stopped) {
+            await this.runWithListenerTenantIdentity(listenerTenantId, () =>
+              this.channelRepo.releaseListener(channel.id, lease!.claim_token)
+            ).catch(() => undefined);
+          }
+          return;
+        }
         this.activeListeners.set(key, connector);
-        console.log(`[gateway] Socket Mode listener started for channel "${channel.name}"`);
+        if (lease) {
+          this.activeListenerLeases.set(key, { ...lease, tenant_id: listenerTenantId });
+        }
+        console.log(`[gateway] Listener started for channel "${channel.name}"`);
       } catch (error) {
         console.error(`[gateway] Failed to start listener for channel "${channel.name}":`, error);
+        let stopped = !connector;
+        if (connector?.stopListening) {
+          try {
+            await withGatewayTimeout(connector.stopListening(), GATEWAY_LISTENER_STOP_TIMEOUT_MS);
+            stopped = true;
+          } catch (stopError) {
+            console.error(
+              `[gateway] Failed to stop partially-started listener for channel "${channel.name}":`,
+              stopError
+            );
+          }
+        }
+        if (lease && stopped) {
+          await this.runWithListenerTenantIdentity(listenerTenantId, () =>
+            this.channelRepo.releaseListener(channel.id, lease!.claim_token)
+          ).catch(() => undefined);
+        }
       }
     });
   }
@@ -2925,40 +3484,180 @@ export class GatewayService {
   private async handleListenerInboundMessage(
     channel: GatewayChannel,
     tenantId: TenantID | string | undefined,
-    msg: InboundMessage
+    msg: InboundMessage,
+    lease?: GatewayListenerLease
   ): Promise<void> {
     if (!tenantId) {
       throw new Error(`Missing tenant context for gateway listener channel ${channel.id}`);
     }
 
-    await runWithTenantContext(tenantId, async () => {
-      await this.create({
-        channel_key: channel.channel_key,
-        thread_id: msg.threadId,
-        text: msg.text,
-        user_name: msg.userId,
-        ...(msg.files ? { files: msg.files } : {}),
-        metadata: msg.metadata,
-      });
-    });
+    const queueKey = this.listenerKey(tenantId, `${channel.id}\0${msg.threadId}`);
+    const prior = this.inboundThreadQueues.get(queueKey) ?? Promise.resolve();
+    const current = prior
+      .catch(() => undefined)
+      .then(() =>
+        this.runWithListenerTenantIdentity(tenantId, async () => {
+          if (this.listenerDraining) throw new Error('Gateway listener is draining');
+
+          let eventId: import('@agor/core/types').GatewayInboundEventID | undefined;
+          let metadata = msg.metadata;
+          let deliveryMetadata: Record<string, unknown> | undefined;
+          if (this.durableListenerOwnership) {
+            if (!lease || !msg.providerEventId) {
+              throw new Error(
+                `Provider ${channel.channel_type} did not supply a durable event identity or listener fence`
+              );
+            }
+            const admitted = await this.inboundEventRepo.claim({
+              channelId: channel.id,
+              providerEventId: msg.providerEventId,
+              threadId: msg.threadId,
+              processingToken: lease.claim_token,
+              leaseDurationMs: GATEWAY_EVENT_PROCESSING_LEASE_MS,
+              requireListenerClaim: true,
+            });
+            if (admitted.outcome === 'completed_duplicate') return;
+            if (admitted.outcome === 'in_progress_elsewhere') {
+              throw new Error(
+                'Gateway inbound event is still being processed by the previous listener owner'
+              );
+            }
+            if (admitted.outcome === 'listener_lost') {
+              throw new Error('Gateway listener ownership lost before inbound admission');
+            }
+            eventId = admitted.event.id;
+            deliveryMetadata = admitted.event.delivery_metadata ?? undefined;
+          }
+
+          if (
+            lease &&
+            !(await this.channelRepo.listenerClaimIsCurrent(channel.id, lease.claim_token))
+          ) {
+            throw new Error('Gateway listener ownership lost before provider acknowledgement');
+          }
+          if (!deliveryMetadata) {
+            const prepared = await msg.prepareDelivery?.();
+            if (prepared) {
+              if (eventId && lease) {
+                const recorded = await this.inboundEventRepo.recordDeliveryMetadata({
+                  eventId,
+                  channelId: channel.id,
+                  processingToken: lease.claim_token,
+                  metadata: prepared,
+                  requireListenerClaim: true,
+                });
+                if (!recorded) {
+                  throw new Error(
+                    'Gateway listener ownership lost while recording provider acknowledgement'
+                  );
+                }
+              }
+              deliveryMetadata = prepared;
+            }
+          }
+          if (deliveryMetadata) metadata = { ...(metadata ?? {}), ...deliveryMetadata };
+          if (
+            lease &&
+            !(await this.channelRepo.listenerClaimIsCurrent(channel.id, lease.claim_token))
+          ) {
+            throw new Error('Gateway listener ownership lost before inbound routing');
+          }
+
+          const result = await this.create({
+            channel_key: channel.channel_key,
+            thread_id: msg.threadId,
+            text: msg.text,
+            user_name: msg.userId,
+            ...(msg.files ? { files: msg.files } : {}),
+            metadata,
+            ...(eventId && lease
+              ? {
+                  gateway_inbound_event_id: eventId,
+                  idempotency_task_id: gatewayInboundTaskId(eventId),
+                  idempotency_session_id: gatewayInboundSessionId(eventId),
+                  listener_claim_token: lease.claim_token,
+                  listener_channel_id: channel.id,
+                }
+              : {}),
+          });
+
+          if (eventId && lease) {
+            const completed = await this.inboundEventRepo.complete({
+              eventId,
+              channelId: channel.id,
+              processingToken: lease.claim_token,
+              ...(result.sessionId ? { sessionId: result.sessionId as SessionID } : {}),
+              ...(result.taskId ? { taskId: result.taskId } : {}),
+              requireListenerClaim: true,
+            });
+            if (!completed) {
+              throw new Error('Gateway listener ownership lost before inbound completion');
+            }
+          }
+        })
+      );
+    this.inboundThreadQueues.set(queueKey, current);
+    try {
+      await current;
+    } finally {
+      if (this.inboundThreadQueues.get(queueKey) === current) {
+        this.inboundThreadQueues.delete(queueKey);
+      }
+    }
   }
 
   /**
    * Stop all active listeners (called on shutdown)
    */
   async stopListeners(): Promise<void> {
-    for (const [listenerKey, connector] of this.activeListeners) {
-      try {
-        if (connector.stopListening) {
-          await connector.stopListening();
-        }
-        console.log(`[gateway] Listener stopped for ${listenerKey.replace('\0', '/')}`);
-      } catch (error) {
-        console.error(`[gateway] Error stopping listener for ${listenerKey}:`, error);
+    this.listenerStopped = true;
+    this.listenerDraining = true;
+    if (this.listenerTimer) clearTimeout(this.listenerTimer);
+    this.listenerTimer = null;
+    const leases = new Map(this.activeListenerLeases);
+    const stoppedTransports = new Set<string>();
+    for (const listenerKey of [...this.activeListeners.keys()]) {
+      const separator = listenerKey.indexOf('\0');
+      const tenantId = listenerKey.slice(0, separator);
+      const channelId = listenerKey.slice(separator + 1);
+      const stopped = await this.runWithListenerTenantIdentity(tenantId, () =>
+        this.stopChannelListener(channelId, { releaseClaim: false })
+      );
+      if (stopped) stoppedTransports.add(listenerKey);
+    }
+
+    // Keep claims while callbacks already admitted by the provider drain. This
+    // makes graceful shutdown finish occurrence completion before handoff. If
+    // draining exceeds the bound, leave every claim to database expiry rather
+    // than let a replacement overlap an old in-flight callback.
+    let callbacksDrained = false;
+    try {
+      await withGatewayTimeout(
+        Promise.allSettled([...this.inboundThreadQueues.values()]).then(() => undefined),
+        GATEWAY_LISTENER_STOP_TIMEOUT_MS
+      );
+      callbacksDrained = true;
+    } catch (error) {
+      console.warn('[gateway] In-flight listener callbacks did not drain before shutdown:', error);
+    }
+
+    if (callbacksDrained) {
+      for (const [listenerKey, lease] of leases) {
+        if (!stoppedTransports.has(listenerKey)) continue;
+        await this.runWithListenerTenantIdentity(lease.tenant_id, () =>
+          this.channelRepo.releaseListener(lease.channel_id, lease.claim_token)
+        ).catch((error) => {
+          console.warn(
+            `[gateway] Failed to release drained listener claim for ${lease.channel_id}:`,
+            error
+          );
+        });
       }
     }
-    this.activeListeners.clear();
     this.activeChannelTenants.clear();
+    console.log(
+      `[distributed-work.gateway-listener] event="loop_stopped" instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} callbacks_drained=${callbacksDrained}`
+    );
   }
 }
 

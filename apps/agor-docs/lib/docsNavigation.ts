@@ -12,6 +12,7 @@ export const guideNavigation: Record<string, NavigationItem> = {
   'first-teammate': 'Your First AI Teammate',
   'getting-started': 'Getting Started',
   'extended-install': 'Extended Installation',
+  'config-yaml': 'Operator Configuration',
   '--- Features': {
     type: 'separator',
     title: 'Features',
@@ -49,6 +50,7 @@ export const guideNavigation: Record<string, NavigationItem> = {
     type: 'separator',
     title: 'Deployment',
   },
+  'daemon-ha': 'Daemon High Availability',
   'multi-tenant-filesystem': 'Multi-Tenant Filesystem',
   'tenant-data-portability': 'Tenant Data Portability',
   'multiplayer-unix-isolation': 'Full Multiplayer Mode',

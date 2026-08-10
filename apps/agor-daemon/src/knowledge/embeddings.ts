@@ -23,11 +23,43 @@ export interface EmbeddingOptions {
   model: string;
   dimensions: number;
   baseUrl?: string;
+  signal?: AbortSignal;
 }
 
 export interface EmbeddingProvider {
   id: 'openai';
   embed(inputs: EmbeddingInput[], options: EmbeddingOptions): Promise<EmbeddingResult[]>;
+}
+
+const RETRYABLE_EMBEDDING_HTTP_STATUSES = new Set([408, 409, 425, 429]);
+
+export class EmbeddingProviderHttpError extends Error {
+  readonly retryable: boolean;
+
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly retryAfterMs: number | null,
+    readonly retryAfterAt: Date | null
+  ) {
+    super(message);
+    this.name = 'EmbeddingProviderHttpError';
+    this.retryable =
+      RETRYABLE_EMBEDDING_HTTP_STATUSES.has(status) || (status >= 500 && status <= 599);
+  }
+}
+
+export function parseRetryAfter(value: string | null): {
+  delayMs: number | null;
+  at: Date | null;
+} {
+  if (!value) return { delayMs: null, at: null };
+  const seconds = Number(value.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return { delayMs: Math.ceil(seconds * 1_000), at: null };
+  }
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? { delayMs: null, at: new Date(at) } : { delayMs: null, at: null };
 }
 
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = DEFAULT_KNOWLEDGE_SEMANTIC_POLICY.model;
@@ -74,12 +106,17 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
         input: inputs.map((input) => input.text),
         dimensions: options.dimensions,
       }),
+      signal: options.signal,
     });
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new Error(
-        `OpenAI embeddings request failed (${response.status}): ${body.slice(0, 500)}`
+      const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
+      throw new EmbeddingProviderHttpError(
+        `OpenAI embeddings request failed (${response.status}): ${body.slice(0, 500)}`,
+        response.status,
+        retryAfter.delayMs,
+        retryAfter.at
       );
     }
 

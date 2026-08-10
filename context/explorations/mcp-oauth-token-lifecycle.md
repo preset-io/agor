@@ -4,68 +4,68 @@
 > Audience: agor maintainers thinking about cron / schedule-driven agents.
 > Last reviewed: 2026-05-05.
 
-## TL;DR
+> [!IMPORTANT]
+> **Implementation update (2026-08-09):** The May audit below is preserved
+> only as historical design context and is not an accurate description of the
+> current implementation. The authoritative HA/security contract is
+> `docs/internal/mcp-oauth-pending-flow-ha-2026-08-09.md`.
 
-Agor's MCP OAuth implementation is **already in good shape** for the
-interactive case: tokens live in `user_mcp_oauth_tokens` (per-user or shared),
-JIT refresh is wired into both the read hook and the executor's auth-header
-service, refreshes are mutexed per `(user, server)` to survive rotating refresh
-tokens, and `invalid_grant` cleanly surfaces "please re-auth".
+## Current snapshot
 
-For **unattended / scheduled agents** there are four gaps, one of which is
-a real bug:
-
-0. **🔴 The 1-hour default lies to the DB on initial auth, then disappears on
-   refresh.** `apps/agor-daemon/src/oauth-cache.ts:89` (`persistOAuthToken`)
-   does `const expiresIn = tokenResponse.expires_in ?? 3600;` and writes that
-   default into `user_mcp_oauth_tokens.oauth_token_expires_at`. The
-   refresh-time persist (`refreshAndPersistToken` in
-   `packages/core/src/tools/mcp/oauth-refresh.ts`) does **not** apply the
-   same default — it passes `result.expires_in` (undefined for Notion) through
-   to `saveToken`, which writes `expires_at = NULL`. Same row, same provider,
-   two different defaults at two stages of the same lifecycle. Net effect for
-   Notion: Agor declares the initial token expired at +1h *whether or not the
-   MCP server would still accept it*, then after the auto-refresh forgets to
-   set any expiry at all and `needsRefresh(null) === false` keeps the row
-   stuck on whatever access_token was last written until something 401s. See
-   "🔴 The 1-hour default bug" in the audit.
-1. **No retry-on-401 at the MCP transport.** A token that expires *mid-call*
-   (after the JIT preflight) just fails the tool call. Explicitly listed as a
-   known follow-up in `packages/core/src/tools/mcp/oauth-refresh.ts`.
-2. **No proactive refresh hook for scheduled triggers.** Cron fires → executor
-   spawns → JIT refresh runs. Fine when refresh succeeds; silent failure when
-   it doesn't (revoked grant, network blip).
-3. **Provider-specific failure modes.** Notion's refresh response omits
-   `expires_in` (compounds gap 0). Slack's MCP server requires user-token
-   rotation (12h TTL) but the rotation toggle is one-way and easy to forget.
-   Atlassian needs `offline_access` in scopes or no refresh_token is issued.
-
-The 80/20 fix is **(a)** a retry-on-401 shim in the executor's MCP transport,
-**(b)** a pre-cron refresh pass in the scheduler service, and **(c)** loud
-"needs re-auth" notifications on scheduled-run failure. After that, declarative
-per-provider lifecycle config papers over Notion-style quirks.
+- PostgreSQL pending flows are durable, tenant/user/server/mode bound, latest-
+  generation-wins, and one-shot claimed. A post-claim owner loss is
+  `ambiguous`; authorization codes are never replayed automatically.
+- Strict MCP OAuth is the default: protected-resource binding and `resource`,
+  exact issuer and callback `iss`, PKCE S256, HTTPS endpoints, and hardened
+  DNS-pinned outbound requests. The loopback HTTP exception is standalone-only;
+  PostgreSQL/hosted paths reject it. Legacy discovery and DCR are explicit
+  per-server opt-ins.
+- PostgreSQL access/refresh/grant-client fields are OAuth-envelope encrypted.
+  They carry a versioned configuration fingerprint and grant generation.
+  SQLite keeps its standalone behavior. Admin-configured client secrets in MCP
+  server JSON remain under the existing MCP configuration storage contract.
+- PostgreSQL rotating refresh is active-active coordinated with database-time
+  claim ID, grant generation, and refresh generation fences. A stale owner is
+  `ambiguous`; a losing `invalid_grant` cannot delete a newer row. The local
+  Promise coalescer remains only for SQLite/standalone.
+- Shared grant start, callback completion, replacement/refresh, and disconnect
+  require current admin status. Per-user grants remain self-service. Local
+  disconnect is not provider revocation.
+- Realtime is a tenant-qualified latency hint. Durable attempt/status and server
+  refetch are the browser correctness path.
+- PostgreSQL daemon paths bypass both process-local OAuth bearer caches.
+  Standalone client-credentials caching hashes the complete credential/grant
+  configuration and includes a caller namespace; authorization-code caching is
+  CLI-only.
+- The shared expiry resolver shipped. Still-open lifecycle/product work includes
+  transport retry-on-401, proactive scheduled-run refresh/notification policy,
+  and provider-specific scope/rotation guidance.
 
 ---
 
-## Phase 1 — Audit of Agor's current OAuth lifecycle
+## Historical Phase 1 — May 2026 audit (superseded)
+
+> [!CAUTION]
+> Claims below describe the pre-HA implementation and must not be used as the
+> current security or operations contract.
 
 ### Storage
 
 `user_mcp_oauth_tokens` (drizzle schema in `packages/core/src/db/schema.*`)
 holds:
 
-| column | purpose |
-|---|---|
-| `user_id` | Per-user token; `NULL` = shared-mode token for the server |
-| `mcp_server_id` | FK to `mcp_servers` |
-| `oauth_access_token` | Bearer to attach |
-| `oauth_token_expires_at` | Absolute Date or NULL (when provider omits `expires_in`) |
-| `oauth_refresh_token` | nullable — present iff provider issued one |
-| `oauth_client_id` / `oauth_client_secret` | Bound to the grant (DCR-issued or admin-pre-registered) |
-| `created_at` / `updated_at` | timestamps |
+| column                                    | purpose                                                   |
+| ----------------------------------------- | --------------------------------------------------------- |
+| `user_id`                                 | Per-user token; `NULL` = shared-mode token for the server |
+| `mcp_server_id`                           | FK to `mcp_servers`                                       |
+| `oauth_access_token`                      | Bearer to attach                                          |
+| `oauth_token_expires_at`                  | Absolute Date or NULL (when provider omits `expires_in`)  |
+| `oauth_refresh_token`                     | nullable — present iff provider issued one                |
+| `oauth_client_id` / `oauth_client_secret` | Bound to the grant (DCR-issued or admin-pre-registered)   |
+| `created_at` / `updated_at`               | timestamps                                                |
 
 Co-locating client credentials with the refresh_token is correct: refreshing
-requires the *exact* `client_id`/`client_secret` the grant was issued under,
+requires the _exact_ `client_id`/`client_secret` the grant was issued under,
 because each DCR registration is its own client.
 
 Repository: `packages/core/src/db/repositories/user-mcp-oauth-tokens.ts`.
@@ -165,7 +165,7 @@ await userTokenRepo.saveToken(tokenUserId, ..., {
 ```ts
 await userTokenRepo.saveToken(deps.userId, deps.mcpServerId, {
   accessToken: result.access_token,
-  expiresInSeconds: result.expires_in,                // ← undefined → NULL in DB
+  expiresInSeconds: result.expires_in, // ← undefined → NULL in DB
   refreshToken: result.refresh_token,
 });
 ```
@@ -176,17 +176,17 @@ Repository (`saveToken`,
 ```ts
 const expiresAt = input.expiresInSeconds
   ? new Date(Date.now() + input.expiresInSeconds * 1000)
-  : undefined;                                        // ← becomes NULL
+  : undefined; // ← becomes NULL
 ```
 
 For a provider like **Notion** (which returns no `expires_in` on either grant
 or refresh) the resulting row evolves as:
 
-| Phase | `expires_at` | `needsRefresh()` returns | Net behavior |
-|---|---|---|---|
-| Right after first auth | `now + 1h` (fake) | `false` (until 1h elapses) | Agor *thinks* token is good for 1h regardless of provider truth |
-| ~59 min later | `now + 1h` minus ~59 min | `true` (within 60s buffer) | JIT refresh fires |
-| Right after first refresh | `NULL` | **`false` forever** | Stale token returned indefinitely until 401 — and there's no retry-on-401 |
+| Phase                     | `expires_at`             | `needsRefresh()` returns   | Net behavior                                                              |
+| ------------------------- | ------------------------ | -------------------------- | ------------------------------------------------------------------------- |
+| Right after first auth    | `now + 1h` (fake)        | `false` (until 1h elapses) | Agor _thinks_ token is good for 1h regardless of provider truth           |
+| ~59 min later             | `now + 1h` minus ~59 min | `true` (within 60s buffer) | JIT refresh fires                                                         |
+| Right after first refresh | `NULL`                   | **`false` forever**        | Stale token returned indefinitely until 401 — and there's no retry-on-401 |
 
 So your suspicion is exactly right: the 1H comes from
 `oauth-cache.ts:89` and **Agor may incorrectly mark the token as expired
@@ -221,7 +221,7 @@ Two follow-ups suggested (out of scope here):
   this in-memory map is what backs it.
 - ⚠️ **Token endpoint inference on refresh.** `refreshAndPersistToken` falls
   back to `inferOAuthTokenUrl(server.url)` when `oauth_token_url` isn't
-  persisted on the server config. We should persist the *discovered* token
+  persisted on the server config. We should persist the _discovered_ token
   endpoint at DCR time so refresh never depends on heuristics.
 - ⚠️ **No notification on unattended refresh failure.** A scheduled trigger
   hitting `invalid_grant` deletes the row but emits only a console warn —
@@ -248,12 +248,12 @@ public docs as of 2026-05-05.
 - **Refresh endpoint**: `POST https://slack.com/api/oauth.v2.access` with
   `grant_type=refresh_token`. Response shape is RFC 6749-compliant; deviation
   is the rotated/single-use refresh token. HTTP 200 with `{"ok": false,
-  "error": "..."}` is a possible failure mode (already handled in
+"error": "..."}` is a possible failure mode (already handled in
   `oauth-mcp-transport.ts`).
   ([docs.slack.dev/reference/methods/oauth.v2.access](https://docs.slack.dev/reference/methods/oauth.v2.access))
 - **Slack's MCP server** uses **user tokens (`xoxp-`)**, with distinct OAuth
   endpoints (`/oauth/v2_user/authorize`, `/api/oauth.v2.user.access`). Whether
-  rotation is *required* for the MCP variant isn't explicitly stated in the
+  rotation is _required_ for the MCP variant isn't explicitly stated in the
   MCP docs, but the user's empirical "~1 hour" observation suggests an
   even-shorter MCP-specific TTL or a 1h rotation policy worth confirming
   empirically. ([docs.slack.dev/ai/slack-mcp-server/](https://docs.slack.dev/ai/slack-mcp-server/))
@@ -269,7 +269,7 @@ public docs as of 2026-05-05.
   ([developers.notion.com/reference/introspect-token](https://developers.notion.com/reference/introspect-token))
 - **Refresh tokens** are issued for public OAuth integrations and the refresh
   call **rotates both** (access + refresh). The refresh endpoint is `POST
-  https://api.notion.com/v1/oauth/token` (HTTP Basic with `client_id:client_secret`).
+https://api.notion.com/v1/oauth/token` (HTTP Basic with `client_id:client_secret`).
   ([developers.notion.com/reference/refresh-a-token](https://developers.notion.com/reference/refresh-a-token))
 - **Refresh response omits `expires_in`.** Returns `access_token`, `token_type`,
   `refresh_token`, plus workspace metadata — no TTL field. This is the
@@ -307,7 +307,7 @@ public docs as of 2026-05-05.
   No documented absolute cap — a healthy daily refresh keeps the grant alive
   indefinitely. **10-minute reuse grace** for network/concurrency retries.
 - Requires the **`offline_access`** scope on initial auth or no refresh
-  token is issued — *easy to miss during DCR*. Worth a guardrail in Agor's
+  token is issued — _easy to miss during DCR_. Worth a guardrail in Agor's
   scope auto-population path.
 - Refresh endpoint: `POST https://auth.atlassian.com/oauth/token`. Standard
   shape.
@@ -325,7 +325,7 @@ Three distinct token types — pick deliberately for unattended:
   When non-expiring, auto-revoked after 1 year of non-use.
 - **GitHub App user-to-server tokens (`ghu_`):** **8h access** + **6mo
   refresh** (`ghr_`), refresh tokens rotate. Endpoint: `POST
-  https://github.com/login/oauth/access_token` with `grant_type=refresh_token`.
+https://github.com/login/oauth/access_token` with `grant_type=refresh_token`.
   Response includes both `expires_in` and `refresh_token_expires_in`.
   ([docs.github.com/.../refreshing-user-access-tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens))
 - **GitHub App installation tokens:** **1h, no refresh token.** Re-minted by
@@ -343,29 +343,29 @@ Three distinct token types — pick deliberately for unattended:
 
 - **MCP Authorization spec** delegates lifetime entirely to the AS. No
   MCP-mandated TTL. Refresh tokens are **permitted, not required**: clients
-  *MUST NOT* assume refresh tokens will be issued; ASes *SHOULD* issue
+  _MUST NOT_ assume refresh tokens will be issued; ASes _SHOULD_ issue
   short-lived access tokens; **public clients MUST rotate refresh tokens**
   (inherited from OAuth 2.1 §4.3.1).
   ([modelcontextprotocol.io/specification/draft/basic/authorization](https://modelcontextprotocol.io/specification/draft/basic/authorization))
-- **Mid-call expiry**: spec says only that 401 *MUST* be returned and
-  clients *MUST* parse `WWW-Authenticate`. Retry-with-refresh is **not
+- **Mid-call expiry**: spec says only that 401 _MUST_ be returned and
+  clients _MUST_ parse `WWW-Authenticate`. Retry-with-refresh is **not
   specified** — it's a client concern.
-- **DPoP (RFC 9449)** is *SHOULD* in OAuth 2.1 (sender-constrained tokens),
+- **DPoP (RFC 9449)** is _SHOULD_ in OAuth 2.1 (sender-constrained tokens),
   not a current MCP requirement. **None of Slack/Notion/Linear/Atlassian/
   GitHub publicly support DPoP** in their OAuth flows. Out of scope for now.
 
 ### Provider matrix (cheat sheet)
 
-| Provider | Access TTL | Refresh TTL | Refresh rotates? | Quirk |
-|---|---|---|---|---|
-| Slack (rotation on) | 12h | none documented | Yes, single-use | 2-token limit; rotation one-way |
-| Slack (rotation off) | ∞ | n/a | n/a | Legacy; long-lived bot/user token |
-| Notion | **undocumented** | undocumented | Yes | No `expires_in` in response |
-| Linear | 24h | undocumented | Yes | 30-min grace window — best-in-class |
-| Atlassian | 1h | 90-day sliding | Yes | Needs `offline_access` scope |
-| GitHub OAuth App | ∞ or 8h | (n/a or 6mo) | If expiring, yes | App-level toggle |
-| GitHub App user-to-server | 8h | 6mo | Yes | `ghu_`/`ghr_` prefix |
-| GitHub App installation | 1h | **no refresh token** | re-mint via JWT | Best for unattended |
+| Provider                  | Access TTL       | Refresh TTL          | Refresh rotates? | Quirk                               |
+| ------------------------- | ---------------- | -------------------- | ---------------- | ----------------------------------- |
+| Slack (rotation on)       | 12h              | none documented      | Yes, single-use  | 2-token limit; rotation one-way     |
+| Slack (rotation off)      | ∞                | n/a                  | n/a              | Legacy; long-lived bot/user token   |
+| Notion                    | **undocumented** | undocumented         | Yes              | No `expires_in` in response         |
+| Linear                    | 24h              | undocumented         | Yes              | 30-min grace window — best-in-class |
+| Atlassian                 | 1h               | 90-day sliding       | Yes              | Needs `offline_access` scope        |
+| GitHub OAuth App          | ∞ or 8h          | (n/a or 6mo)         | If expiring, yes | App-level toggle                    |
+| GitHub App user-to-server | 8h               | 6mo                  | Yes              | `ghu_`/`ghr_` prefix                |
+| GitHub App installation   | 1h               | **no refresh token** | re-mint via JWT  | Best for unattended                 |
 
 ---
 
@@ -373,21 +373,21 @@ Three distinct token types — pick deliberately for unattended:
 
 ### Coverage matrix
 
-| Capability needed | Agor implements? | Notes |
-|---|---|---|
-| Refresh token storage | ✅ | `user_mcp_oauth_tokens.oauth_refresh_token` |
-| Rotated refresh on persist | ✅ | `refreshAndPersistToken` saves new value atomically |
-| Per-(user, server) mutex | ✅ | `_inFlightRefreshes` map |
-| `invalid_grant` cleanup | ✅ | Row deleted; UI surfaces re-auth |
-| Transient error fallback | ✅ | Use stale token, emit warn |
-| Proactive refresh near expiry | ⚠️ Partial | Works only when `expires_at` is set; **silent on Notion** |
-| Retry-on-401 mid-call | ❌ | Listed as known follow-up |
-| Pre-cron / scheduled refresh hook | ❌ | Scheduler doesn't pre-warm tokens |
-| Notification on unattended re-auth | ❌ | Console warn only |
-| `offline_access` scope guardrail | ❌ | DCR scope auto-pop won't add it for Atlassian |
-| Persisted token endpoint | ⚠️ Partial | Falls back to `inferOAuthTokenUrl` heuristic |
-| DPoP / sender-constrained tokens | ❌ | Not needed yet — no provider supports it |
-| API-key fallback path | ✅ | env vars + per-tool credential storage (PR #1077) |
+| Capability needed                  | Agor implements? | Notes                                                     |
+| ---------------------------------- | ---------------- | --------------------------------------------------------- |
+| Refresh token storage              | ✅               | `user_mcp_oauth_tokens.oauth_refresh_token`               |
+| Rotated refresh on persist         | ✅               | `refreshAndPersistToken` saves new value atomically       |
+| Per-(user, server) mutex           | ✅               | `_inFlightRefreshes` map                                  |
+| `invalid_grant` cleanup            | ✅               | Row deleted; UI surfaces re-auth                          |
+| Transient error fallback           | ✅               | Use stale token, emit warn                                |
+| Proactive refresh near expiry      | ⚠️ Partial       | Works only when `expires_at` is set; **silent on Notion** |
+| Retry-on-401 mid-call              | ❌               | Listed as known follow-up                                 |
+| Pre-cron / scheduled refresh hook  | ❌               | Scheduler doesn't pre-warm tokens                         |
+| Notification on unattended re-auth | ❌               | Console warn only                                         |
+| `offline_access` scope guardrail   | ❌               | DCR scope auto-pop won't add it for Atlassian             |
+| Persisted token endpoint           | ⚠️ Partial       | Falls back to `inferOAuthTokenUrl` heuristic              |
+| DPoP / sender-constrained tokens   | ❌               | Not needed yet — no provider supports it                  |
+| API-key fallback path              | ✅               | env vars + per-tool credential storage (PR #1077)         |
 
 ### Specific gaps & their consequence
 
@@ -399,7 +399,7 @@ Three distinct token types — pick deliberately for unattended:
 2. **Notion silently breaks at provider rotation.** Without `expires_in`,
    `needsRefresh` is permanently false; refresh only happens on manual UI
    click or via the gap-1 retry-on-401 (which doesn't exist). Two-step fix:
-   add a per-server "default access token TTL" hint *and* implement
+   add a per-server "default access token TTL" hint _and_ implement
    retry-on-401.
 
 3. **Scheduled triggers can fire into a near-expired token.** A trigger
@@ -413,7 +413,7 @@ Three distinct token types — pick deliberately for unattended:
 
 5. **Slack rotation is one-way and easy to forget.** If an admin sets up an
    MCP server with a Slack app that has rotation OFF, tokens are non-expiring
-   and Agor's code is correct (no refresh needed). But the user *thinks*
+   and Agor's code is correct (no refresh needed). But the user _thinks_
    they're using a 12h-rotating setup. We can detect by inspecting
    `expires_in` on first issuance.
 
@@ -434,12 +434,12 @@ discovery paths are realistically available.
 
 Probed each MCP server's RFC 8414 / RFC 9728 metadata + bearer-challenge:
 
-| Server | `authorization_endpoint` | `token_endpoint` | `registration_endpoint` (DCR) | `introspection_endpoint` | `revocation_endpoint` |
-|---|---|---|---|---|---|
-| `mcp.slack.com` | ✅ | ✅ (`/api/oauth.v2.user.access`) | ✅ | ❌ **not advertised** | ❌ |
-| `mcp.notion.com` | ✅ | ✅ (`/v1/oauth/token`) | ✅ | ❌ **not advertised** | ✅ |
-| `mcp.linear.app` | ✅ | ✅ | ✅ | ❌ **not advertised** | ✅ |
-| `api.githubcopilot.com/mcp` | ✅ (via `WWW-Authenticate: resource_metadata=`) | ✅ | varies | ❌ | varies |
+| Server                      | `authorization_endpoint`                        | `token_endpoint`                 | `registration_endpoint` (DCR) | `introspection_endpoint` | `revocation_endpoint` |
+| --------------------------- | ----------------------------------------------- | -------------------------------- | ----------------------------- | ------------------------ | --------------------- |
+| `mcp.slack.com`             | ✅                                              | ✅ (`/api/oauth.v2.user.access`) | ✅                            | ❌ **not advertised**    | ❌                    |
+| `mcp.notion.com`            | ✅                                              | ✅ (`/v1/oauth/token`)           | ✅                            | ❌ **not advertised**    | ✅                    |
+| `mcp.linear.app`            | ✅                                              | ✅                               | ✅                            | ❌ **not advertised**    | ✅                    |
+| `api.githubcopilot.com/mcp` | ✅ (via `WWW-Authenticate: resource_metadata=`) | ✅                               | varies                        | ❌                       | varies                |
 
 **Decisive finding**: **none of the MCP servers we care about advertise an
 `introspection_endpoint`** in their AS metadata. RFC 7662 token introspection
@@ -465,15 +465,15 @@ resolveTokenExpiry(tokenResponse, accessToken, serverConfig) → seconds | null
 
 Order, with rationale for each:
 
-| # | Source | Rationale |
-|---|---|---|
-| 1 | `tokenResponse.expires_in` | RFC 6749 §5.1 standard — the canonical answer when present. |
-| 2 | `tokenResponse.expires_at` (absolute → relative) | Some Auth0 / Spotify configs return absolute Unix timestamps instead. Convert to relative. |
-| 3 | `tokenResponse.exp` (top-level, JWT-style) | A handful of providers leak a top-level `exp` claim. Cheap to check. |
-| 4 | `tokenResponse.ext_expires_in` | Microsoft / Azure AD's "extended expiry" field used during outages. Better than nothing. |
-| 5 | JWT-decode `accessToken` and read `exp` claim | Only if the token has the JWT shape (`header.payload.sig` with valid base64url segments). Skip for opaque tokens. **No signature verification needed** — we're reading our own token, not validating it. |
-| 6 | `serverConfig.auth.lifecycle.default_access_ttl_seconds` | Per-server config hint (option G). Lets an admin encode "Notion ≈ 1h" without lying about other providers. |
-| 7 | **`null`** ("unknown") | Surface as "expires in: unknown" in the UI tooltip; rely on retry-on-401 (gap 1) for actual lifecycle handling. |
+| #   | Source                                                   | Rationale                                                                                                                                                                                                |
+| --- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `tokenResponse.expires_in`                               | RFC 6749 §5.1 standard — the canonical answer when present.                                                                                                                                              |
+| 2   | `tokenResponse.expires_at` (absolute → relative)         | Some Auth0 / Spotify configs return absolute Unix timestamps instead. Convert to relative.                                                                                                               |
+| 3   | `tokenResponse.exp` (top-level, JWT-style)               | A handful of providers leak a top-level `exp` claim. Cheap to check.                                                                                                                                     |
+| 4   | `tokenResponse.ext_expires_in`                           | Microsoft / Azure AD's "extended expiry" field used during outages. Better than nothing.                                                                                                                 |
+| 5   | JWT-decode `accessToken` and read `exp` claim            | Only if the token has the JWT shape (`header.payload.sig` with valid base64url segments). Skip for opaque tokens. **No signature verification needed** — we're reading our own token, not validating it. |
+| 6   | `serverConfig.auth.lifecycle.default_access_ttl_seconds` | Per-server config hint (option G). Lets an admin encode "Notion ≈ 1h" without lying about other providers.                                                                                               |
+| 7   | **`null`** ("unknown")                                   | Surface as "expires in: unknown" in the UI tooltip; rely on retry-on-401 (gap 1) for actual lifecycle handling.                                                                                          |
 
 Notes on the cascade:
 
@@ -483,7 +483,7 @@ Notes on the cascade:
   `refreshAndPersistToken` (refresh persist). One source of truth.
 - **JWT decode is shape-gated**: we never attempt to decode opaque tokens
   (Slack `xoxe.`, Notion `secret_`, etc.) — the JWT step is a fast `if
-  isJwtShape(token) { peek payload }` and is a no-op otherwise.
+isJwtShape(token) { peek payload }` and is a no-op otherwise.
 - **Step 6 is config-only, not provider-detection**. We resist the urge to
   hardcode `if (origin === 'mcp.notion.com') return 3600` — that's a
   maintenance hazard. Either the server config carries a hint or it doesn't.
@@ -512,7 +512,7 @@ doesn't re-litigate it:
 - **DPoP would obviate the need** (sender-constrained tokens carry their own
   proof), but no provider in our matrix supports DPoP.
 
-If a future MCP provider *does* advertise introspection AND returns `exp`, it
+If a future MCP provider _does_ advertise introspection AND returns `exp`, it
 slots in as step 1.5 of the cascade as a per-server opt-in (config flag
 `auth.lifecycle.use_introspection: true`). Don't enable it by default.
 
@@ -520,7 +520,7 @@ slots in as step 1.5 of the cascade as a per-server opt-in (config flag
 
 ## Phase 4 — Options
 
-### A. Improve the existing JIT refresh path *(recommended baseline)*
+### A. Improve the existing JIT refresh path _(recommended baseline)_
 
 Status: most of this is shipped. The remaining work is:
 
@@ -557,6 +557,7 @@ env var injection. A skill like `slack-bot` or `notion-internal` can wrap a
 provider's REST API with a long-lived PAT/internal token.
 
 Trade-offs:
+
 - ➕ No expiry, no refresh, no UI loop. Survives any token-lifecycle
   weirdness.
 - ➖ Loses the MCP UX wins: server-side tool definitions, scope-narrowing,
@@ -575,6 +576,7 @@ refresh is empirically unreliable (currently Notion, possibly Slack-with-
 rotation-off).
 
 Trade-offs:
+
 - ➕ Always-on path for cron without giving up MCP for humans.
 - ➖ Two code paths to maintain per provider; users have to set both up.
 - ➖ Risk of behavioral drift (a cron agent calls a Slack channel via a
@@ -604,12 +606,13 @@ on-demand), but the payoff is "scheduled agents just work, forever".
 Status: not implemented.
 
 When a scheduled trigger fires, the daemon's scheduler service walks the
-in-scope MCP servers, refreshes any token within ~30 min of expiry, *then*
+in-scope MCP servers, refreshes any token within ~30 min of expiry, _then_
 spawns the executor. Single integration point; handles gap (3) cleanly.
 
 Trade-offs:
+
 - ➕ Bounded work — only fires when a cron actually runs.
-- ➕ Fails loudly: refresh failure happens *before* the agent spawns, so we
+- ➕ Fails loudly: refresh failure happens _before_ the agent spawns, so we
   can route it to a "trigger failed" notification path.
 - ➖ Doesn't help for in-session expiry (gap 1) or Notion's missing TTL
   (gap 2). Pair with A.
@@ -622,7 +625,7 @@ Add an optional `auth.lifecycle` block on `mcp_servers.data`:
 
 ```yaml
 lifecycle:
-  default_access_ttl_seconds: 3600   # for providers that omit expires_in
+  default_access_ttl_seconds: 3600 # for providers that omit expires_in
   require_offline_access_scope: true # auto-add to DCR scopes
   refresh_strategy: rotated_single_use | non_rotating | none
 ```
@@ -731,14 +734,14 @@ Don't build it speculatively — the maintenance cost is double.
 
 ## Appendix — Where to look in the codebase
 
-| Topic | Path |
-|---|---|
-| OAuth transport (discovery, two-phase auth, in-mem cache) | `packages/core/src/tools/mcp/oauth-mcp-transport.ts` |
-| Refresh logic (HTTP call + persist + mutex) | `packages/core/src/tools/mcp/oauth-refresh.ts` |
-| Token storage repo | `packages/core/src/db/repositories/user-mcp-oauth-tokens.ts` |
-| JIT refresh hook (server reads) | `apps/agor-daemon/src/register-hooks.ts` (`injectPerUserOAuthTokens`) |
-| Auth-headers service (executor JIT) | `apps/agor-daemon/src/register-services.ts` (`/mcp-servers/oauth-auth-headers`) |
-| Manual refresh endpoint | `apps/agor-daemon/src/register-services.ts` (`/mcp-servers/oauth-refresh`) |
-| OAuth-status (UI green-pill) | `apps/agor-daemon/src/register-services.ts` (`/mcp-servers/oauth-status`) |
-| OAuth 2.1 discovery upgrade | PR #1078 (`feat(mcp): support full OAuth 2.1 discovery`) |
-| Recent UI fixes around expired-token state | PRs #1084, #1086 |
+| Topic                                                     | Path                                                                            |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| OAuth transport (discovery, two-phase auth, in-mem cache) | `packages/core/src/tools/mcp/oauth-mcp-transport.ts`                            |
+| Refresh logic (HTTP call + persist + mutex)               | `packages/core/src/tools/mcp/oauth-refresh.ts`                                  |
+| Token storage repo                                        | `packages/core/src/db/repositories/user-mcp-oauth-tokens.ts`                    |
+| JIT refresh hook (server reads)                           | `apps/agor-daemon/src/register-hooks.ts` (`injectPerUserOAuthTokens`)           |
+| Auth-headers service (executor JIT)                       | `apps/agor-daemon/src/register-services.ts` (`/mcp-servers/oauth-auth-headers`) |
+| Manual refresh endpoint                                   | `apps/agor-daemon/src/register-services.ts` (`/mcp-servers/oauth-refresh`)      |
+| OAuth-status (UI green-pill)                              | `apps/agor-daemon/src/register-services.ts` (`/mcp-servers/oauth-status`)       |
+| OAuth 2.1 discovery upgrade                               | PR #1078 (`feat(mcp): support full OAuth 2.1 discovery`)                        |
+| Recent UI fixes around expired-token state                | PRs #1084, #1086                                                                |

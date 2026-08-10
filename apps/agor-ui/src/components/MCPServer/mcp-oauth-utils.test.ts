@@ -51,6 +51,8 @@ describe('extractOAuthConfig', () => {
       oauth_scope: 'read write',
       oauth_grant_type: 'authorization_code',
       oauth_mode: 'per_user',
+      oauth_compatibility_mode: 'strict',
+      oauth_dcr_mode: 'disabled',
     });
   });
 
@@ -72,6 +74,25 @@ describe('extractOAuthConfig', () => {
   it('preserves oauth_mode=shared when explicitly set', () => {
     const result = extractOAuthConfig({ oauth_mode: 'shared' });
     expect(result.oauth_mode).toBe('shared');
+  });
+
+  it('defaults to strict OAuth without dynamic registration', () => {
+    expect(extractOAuthConfig({})).toMatchObject({
+      oauth_compatibility_mode: 'strict',
+      oauth_dcr_mode: 'disabled',
+    });
+  });
+
+  it('preserves explicit legacy and DCR fallback opt-ins', () => {
+    expect(
+      extractOAuthConfig({
+        oauth_compatibility_mode: 'legacy',
+        oauth_dcr_mode: 'fallback',
+      })
+    ).toMatchObject({
+      oauth_compatibility_mode: 'legacy',
+      oauth_dcr_mode: 'fallback',
+    });
   });
 
   it('omits falsy string fields', () => {

@@ -9,6 +9,7 @@ import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
+import { MCP_CATALOG_CATEGORIES, MCP_CATALOG_PROBED_AUTH_TYPES } from '../types/mcp-catalog';
 
 /**
  * Query validator with type coercion enabled
@@ -268,6 +269,58 @@ export const mcpServerQuerySchema = createQuerySchema(
 );
 
 /**
+ * MCP catalog query schema
+ *
+ * The catalog's filters reach SQL, so validation is also the injection
+ * boundary: `removeAdditional: 'all'` drops anything not listed here before a
+ * value can be interpolated into a LIKE pattern or an ORDER BY.
+ */
+export const mcpCatalogQuerySchema = Type.Intersect(
+  [
+    Type.Object({
+      catalog_entry_id: Type.Optional(CommonSchemas.uuid),
+      name: Type.Optional(Type.String({ maxLength: 512 })),
+      search: Type.Optional(Type.String({ maxLength: 128 })),
+      category: Type.Optional(
+        Type.Union(MCP_CATALOG_CATEGORIES.map((category) => Type.Literal(category)))
+      ),
+      capability: Type.Optional(Type.String({ maxLength: 64 })),
+      verified: Type.Optional(Type.Boolean()),
+      curated: Type.Optional(Type.Boolean()),
+      has_remote: Type.Optional(Type.Boolean()),
+      probed_auth_type: Type.Optional(
+        Type.Union(MCP_CATALOG_PROBED_AUTH_TYPES.map((value) => Type.Literal(value)))
+      ),
+      // Asking for a lifecycle state by name opts out of the default exclusion
+      // of withdrawn servers, so it has to survive validation rather than be
+      // stripped as an unknown key.
+      registry_status: Type.Optional(Type.String({ maxLength: 32 })),
+      sort: Type.Optional(
+        Type.Union([
+          Type.Literal('popularity'),
+          Type.Literal('name'),
+          Type.Literal('recently_updated'),
+          Type.Literal('relevance'),
+        ])
+      ),
+    }),
+    // Deliberately not `createQuerySchema`: that shape also advertises `$sort`
+    // and `$select`, and this service honours neither. Ordering is the domain
+    // `sort` above, which maps onto indexed SQL; a caller-supplied `$sort` over
+    // arbitrary columns would silently do nothing. Listing only what is
+    // implemented keeps the schema an accurate contract rather than a wish.
+    Type.Object({
+      // Mirrors MCP_CATALOG_PAGINATION.MAX_LIMIT in the catalog service. Every
+      // row carries curation copy and registry metadata, so a page bound the
+      // shared schema would allow is a multi-megabyte response.
+      $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
+      $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+    }),
+  ],
+  { additionalProperties: false }
+);
+
+/**
  * Create validators for each schema
  */
 export const sessionQueryValidator = getValidator(sessionQuerySchema, queryValidator);
@@ -279,6 +332,7 @@ export const boardObjectQueryValidator = getValidator(boardObjectQuerySchema, qu
 export const boardCommentQueryValidator = getValidator(boardCommentQuerySchema, queryValidator);
 export const repoQueryValidator = getValidator(repoQuerySchema, queryValidator);
 export const mcpServerQueryValidator = getValidator(mcpServerQuerySchema, queryValidator);
+export const mcpCatalogQueryValidator = getValidator(mcpCatalogQuerySchema, queryValidator);
 
 /**
  * Wrap validateQuery to produce a FeathersJS-compatible hook function.

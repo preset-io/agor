@@ -455,7 +455,7 @@ Agor exposes the `effort` parameter to control how much reasoning the agent appl
 | `xhigh`  | Extra reasoning depth            | Demanding tasks before max       |
 | `max`    | Highest effort (model-dependent) | Critical decisions, architecture |
 
-On Codex, both `xhigh` and `max` map to Codex's `xhigh` (its ceiling). Codex `minimal` is not exposed by Agor.
+On Codex, `xhigh` and `max` are passed through unchanged. Codex `minimal` is not exposed by Agor.
 
 ### Extended Context (1M tokens)
 
@@ -498,11 +498,8 @@ Effort is configured per-session via `model_config.effort` and can be changed at
 Agor uses `~/.agor/config.yaml` for persistent configuration.
 
 ```bash
-# Set daemon port
-pnpm agor config set daemon.port 4000
-
-# Set UI port
-pnpm agor config set ui.port 5174
+# Edit ~/.agor/config.yaml explicitly, then inspect the resolved result
+pnpm agor config --yaml
 ```
 
 **Environment Variables:**
@@ -515,6 +512,49 @@ pnpm agor config set ui.port 5174
 
 Tunable from `~/.agor/config.yaml` under `security.*` — see
 [`context/concepts/security.md`](context/concepts/security.md).
+
+### MCP Catalog (`mcp_catalog.*`)
+
+The MCP marketplace catalog is a mirror of the public
+[MCP registry](https://registry.modelcontextprotocol.io) with a curated overlay
+from `packages/core/src/mcp-catalog/curated.yaml`. Unlike every other table,
+`mcp_catalog_entries` has no `tenant_id`: it holds only public-registry and
+repo-checked-in data, and Agor resolves tenants from request auth so there is no
+tenant list an ingestion job could enumerate. Postgres RLS keeps reads open to
+all tenants and confines writes to the `mcp_catalog_ingestion` system
+capability.
+
+Registry sync is **off by default**: it makes outbound requests to the registry
+and, during the auth probe, to arbitrary registry-published hosts, and nothing
+renders uncurated registry rows yet. The ~50 curated entries seed on every
+daemon start regardless, so the marketplace is populated offline.
+
+Curation is reconciled, not merely applied: an entry removed from `curated.yaml`
+has its overlay withdrawn on the next seed, so the file stays the source of
+truth for what the marketplace offers.
+
+Every request the auth probe makes goes through `createPinnedFetch`
+(`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,
+refuses it unless every resolved address is public, and connects to the address
+it checked — so a registry-published hostname resolving into private space is
+refused rather than fetched. Verdicts record the URL they describe and are
+discarded when the endpoint moves, and only a valid JSON-RPC `initialize` result
+earns `probed_auth_type: none`.
+
+One sync cannot walk the whole registry — a page takes seconds and there are
+hundreds — so a run checkpoints its cursor and the next resumes from it, and
+pagination gets only part of the deadline so the probe sweep still runs. The
+checkpoint lives in the worker process: a daemon restart re-reads the head,
+which is cheap because unchanged rows are skipped.
+
+```yaml
+# ~/.agor/config.yaml
+mcp_catalog:
+  registry_sync_enabled: false # true = also mirror the public registry
+  sync_interval_hours: 6
+  probe_budget: 40 # entries auth-probed per sync; 0 disables probing
+  # registry_url: https://registry.internal  # advanced override
+```
 
 ### Git Config Hardening (`security.git_config_parameters`)
 

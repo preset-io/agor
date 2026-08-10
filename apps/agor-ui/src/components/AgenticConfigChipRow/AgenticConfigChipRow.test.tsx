@@ -306,7 +306,7 @@ describe('AgenticConfigChipRow', () => {
 
     fireEvent.click(effortChip);
     const selector = await screen.findByTestId('effort-select');
-    expect(selector).toHaveTextContent('Inherited|clearable|low,medium,high,xhigh');
+    expect(selector.textContent).toBe('Inherited|clearable|low,medium,high,xhigh,max');
     fireEvent.click(selector);
 
     await waitFor(() => expect(screen.getByText('Custom')).toBeInTheDocument());

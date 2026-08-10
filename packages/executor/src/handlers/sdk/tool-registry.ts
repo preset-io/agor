@@ -198,13 +198,11 @@ export class ToolRegistry {
  */
 export async function initializeToolRegistry(): Promise<void> {
   // Import all tool handlers
-  const [claude, codex, gemini, opencode, copilot, cursor] = await Promise.all([
+  const [claude, codex, opencode, copilot] = await Promise.all([
     import('./claude.js'),
     import('./codex.js'),
-    import('./gemini.js'),
     import('./opencode.js'),
     import('./copilot.js'),
-    import('./cursor.js'),
   ]);
 
   // Register Claude Code
@@ -228,7 +226,25 @@ export async function initializeToolRegistry(): Promise<void> {
     tool: 'gemini',
     name: getAgenticToolIntegration('gemini').displayName,
     apiKeyEnvVar: getAgenticToolIntegration('gemini').apiKeyName!,
-    runner: gemini.executeGeminiTask,
+    runner: async (params) => {
+      try {
+        const gemini = await import('./gemini.js');
+        return await gemini.executeGeminiTask(params);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message.includes('@google/gemini-cli-core') ||
+            (error as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND')
+        ) {
+          throw new Error(
+            'Gemini support is not installed on this Agor instance. ' +
+              'See https://agor.live/guide/extended-install#agentic-tools',
+            { cause: error }
+          );
+        }
+        throw error;
+      }
+    },
   });
 
   // Register OpenCode
@@ -247,11 +263,29 @@ export async function initializeToolRegistry(): Promise<void> {
     runner: copilot.executeCopilotTask,
   });
 
-  // Register Cursor SDK (experimental skeleton; handler intentionally fails until runtime lands)
+  // Register Cursor SDK (beta). Load it only when selected so Cursor remains optional.
   ToolRegistry.register({
     tool: 'cursor',
     name: getAgenticToolIntegration('cursor').displayName,
     apiKeyEnvVar: getAgenticToolIntegration('cursor').apiKeyName!,
-    runner: cursor.executeCursorTask,
+    runner: async (params) => {
+      try {
+        const cursor = await import('./cursor.js');
+        return await cursor.executeCursorTask(params);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message.includes('@cursor/sdk') ||
+            (error as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND')
+        ) {
+          throw new Error(
+            'Cursor SDK support is not installed on this Agor instance. ' +
+              'See https://agor.live/guide/extended-install#agentic-tools',
+            { cause: error }
+          );
+        }
+        throw error;
+      }
+    },
   });
 }

@@ -27,6 +27,126 @@ Homebrew is a convenience path for macOS/Linux users; npm remains the canonical 
 
 ---
 
+## Agentic tools
+
+Agor keeps its base installation small by installing only the agentic tools you choose. Each tool is
+an isolated, version-aligned package with the exact same version as Agor. Those packages pin the vendor SDK and the matching runtime expected
+by that SDK, so Agor never guesses whether an unrelated executable from your shell is compatible.
+
+The normal setup remains:
+
+```bash
+npm install -g agor-live@latest
+agor init
+```
+
+The original npm installation never downloads optional runtimes. On a local installation, run
+`agor install` and choose tools interactively. Agor records the choice in a private, host-local
+manifest beside the packages; it never rewrites `config.yaml`.
+
+For a declarative or headless deployment, explicitly configure the selection:
+
+```yaml filename="~/.agor/config.yaml"
+agentic_tools:
+  installed:
+    - claude-code
+    - codex
+```
+
+Then run `agor install --sync` to reconcile disk state noninteractively. An explicit `installed: []`
+is valid and removes all managed tools. Merely omitting the key selects local-managed mode.
+
+`agor install` uses your configured npm registry, proxy, authentication, and integrity verification,
+but installs into Agor's private runtime directory rather than changing global npm state. Installation
+is staged and swapped into place only after the exact Agor package version is verified. It does not
+replace Claude, Codex, or other tools you may already use from your terminal.
+
+Inspect the managed integrations at any time:
+
+```bash
+agor doctor
+```
+
+The packaged daemon refuses to start when a selected integration is absent, corrupt, or from a
+different Agor version. An empty selection does not block startup; a missing local manifest produces
+an actionable warning. Unselected tools are unavailable to tenants.
+
+| Agentic tool   | Configuration value | Managed package       |
+| -------------- | ------------------- | --------------------- |
+| Claude Code    | `claude-code`       | `@agor-live/claude`   |
+| Codex          | `codex`             | `@agor-live/codex`    |
+| Gemini         | `gemini`            | `@agor-live/gemini`   |
+| GitHub Copilot | `copilot`           | `@agor-live/copilot`  |
+| OpenCode       | `opencode`          | `@agor-live/opencode` |
+| Cursor         | `cursor`            | `@agor-live/cursor`   |
+
+For automated images and CI, run the same noninteractive commands after installing Agor:
+
+```bash
+npm install -g agor-live@latest
+agor init --non-interactive --agentic-tools claude,codex
+agor install --sync
+```
+
+Set `AGOR_AGENTIC_TOOLS_DIR` when integrations must live in an administrator-provisioned shared
+read-only location. Executors receive the resolved absolute directory across Agor's supported Unix
+identity modes; every executing user must be able to traverse and read that directory.
+
+Run `agor install` as the user the daemon runs as. Integrations install under that user's home
+directory, so installing them with `sudo` places them in root's home where the daemon cannot see
+them — `agor doctor` then reports them as missing. Set `AGOR_AGENTIC_TOOLS_DIR` explicitly when the
+daemon and its executors run as different users.
+
+### Upgrading
+
+Managed integrations are installed per Agor version. After upgrading Agor, reconcile the
+deployment-owned list and confirm the result:
+
+```bash
+npm install -g agor-live@latest
+agor install --sync
+agor doctor
+```
+
+`agor install --sync` is noninteractive and idempotent. It installs missing or invalid selected packages,
+removes current-version packages absent from `agentic_tools.installed`, deletes every older-version
+directory, and cleans interrupted staging/backup directories. There is currently no compatibility
+range or keep-old mode: every managed wrapper must exactly match `agor-live`.
+
+On local upgrades where the YAML key and local manifest are both absent, `agor install --sync`
+fails without changing packages and directs the operator to interactive `agor install`. Docker and
+Kubernetes deployments should always declare `agentic_tools.installed` and use `--sync`.
+
+Microsoft Teams gateway support remains optional and separate from agentic tools:
+
+```bash
+npm install -g agor-live@latest botbuilder@^4.23.3
+```
+
+Credentials are configured in **Settings → Agentic Tools** after the runtime is installed; Teams
+credentials are configured with the gateway channel.
+
+---
+
+## npm reports `EMFILE` after a cache cleanup
+
+A cold npm cache makes npm fetch, cache, and extract many packages concurrently. On systems with a
+low open-file limit this can fail with `EMFILE`, `ENFILE`, or `TAR_ENTRY_ERROR`, even when the same
+install succeeds with a warm cache. Check the current limit with `ulimit -n`.
+
+Prefer raising the limit for the install. If that is unavailable, reducing npm's network concurrency
+also reduces concurrent cache writes:
+
+```bash
+npm_config_maxsockets=8 npm install -g agor-live@latest
+```
+
+Re-running the same npm command is safe; npm reuses the cache entries completed by the first attempt.
+If the error persists, collect `node -v`, `npm -v`, `ulimit -Sn`, `ulimit -Hn`, `npm cache path`,
+`df -h`, and `df -i` when reporting it.
+
+---
+
 ## Optional: Zellij (for the web terminal)
 
 Agor has a built-in web terminal that uses [Zellij](https://zellij.dev/) for persistent, multiplexed terminal sessions. The terminal is **optional**. Agor runs fine without it; if you don't have Zellij, terminal buttons in the UI will show a friendly message instead.
@@ -53,6 +173,25 @@ CREATE EXTENSION IF NOT EXISTS vector;
 Run that as a database owner or another role with permission to create extensions. After pgvector is enabled, configure Knowledge semantic search in Agor and run a Knowledge reindex; the daemon creates the vector storage table and index idempotently when the feature is enabled.
 
 If pgvector is missing or the Agor DB user cannot enable it, semantic search returns a clear `semantic_unavailable` error and text search continues to work.
+
+### PostgreSQL offline-cutover migrations
+
+Migrations `0074_knowledge_embedding_claims` and `0078_mcp_oauth_pending_flows` change distributed ownership/state protocols. Existing PostgreSQL installations must apply either pending migration as a **stop-the-world cutover**. Rolling old and new daemons against the same database is not supported.
+
+1. Stop every Agor daemon connected to the database.
+2. From the new release, run:
+
+   ```bash
+   agor db migrate --offline-cutover --yes
+   ```
+
+3. Start only daemons running the new release.
+
+Normal daemon startup and `agor db migrate --yes` deliberately refuse these migrations on an existing PostgreSQL database unless `--offline-cutover` is present. The flag is an operator acknowledgement; it cannot verify that another host has stopped. Fresh installations and SQLite databases do not require this cutover.
+
+Migration `0078` deletes existing MCP OAuth grant rows because the old plaintext, unfenced rows are not compatible with active-active callback and rotating-refresh ownership. Users must reconnect MCP OAuth after the upgrade. Take a backup before the cutover. A rollback to an older daemon requires restoring the pre-cutover backup; do not run an older cohort against the new OAuth schema.
+
+Tenant archives deliberately omit MCP OAuth grants. The encrypted grant envelope is bound to the source tenant ID, server, generation, and deployment master secret, so importing or re-homing a tenant restores the MCP server configuration but requires users to reconnect OAuth. Pending OAuth attempts and executor token authorities are likewise non-portable.
 
 ---
 
@@ -81,7 +220,7 @@ Workspace administrators can define live, tool-specific presets under **Workspac
 
 Administrators can require presets independently for each tool. Presets contain runtime behavior (model, permissions, and sandbox policy) but never provider credentials or MCP attachments. MCP servers are selected independently on sessions, schedules, and gateway channels. Referenced presets cannot be deleted. Editing a preset affects the next task started by every session, schedule, or gateway channel that references it; a running task keeps the configuration resolved when it started.
 
-Each tool may have one workspace default preset. Users can choose that moving workspace default, a specific preset, or (when policy permits) an inline personal default. Creation forms also offer **Use my default**.  Sessions and gateway channels resolve those defaults when saved, then store the concrete preset reference or inline configuration. Schedules preserve a symbolic user/workspace default and resolve it from the schedule creator immediately before every run, so later default changes apply to the next run. A schedule that names a specific preset continues to follow that preset directly.
+Each tool may have one workspace default preset. Users can choose that moving workspace default, a specific preset, or (when policy permits) an inline personal default. Creation forms also offer **Use my default**. Sessions and gateway channels resolve those defaults when saved, then store the concrete preset reference or inline configuration. Schedules preserve a symbolic user/workspace default and resolve it from the schedule creator immediately before every run, so later default changes apply to the next run. A schedule that names a specific preset continues to follow that preset directly.
 
 Agor uses these credentials only to authenticate the agent runtime with the provider SDK/CLI. Stored secrets are encrypted at rest and are not written into the prompt transcript or intentionally sent to the model as text.
 
@@ -134,6 +273,46 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 ```
 
 > **Heads-up:** custom config paths are not yet threaded through every code path (e.g. database URL resolution). If you hit issues, please [file an issue](https://github.com/preset-io/agor/issues).
+
+---
+
+## MCP catalog (`mcp_catalog.*`)
+
+Agor ships a browsable catalog of MCP servers. Around fifty curated entries are
+checked into the repository and reapplied on every daemon start, so the
+marketplace is populated even with no network access.
+
+Mirroring the public [MCP registry](https://registry.modelcontextprotocol.io) on
+top of that is **off by default**. Turning it on makes outbound requests to the
+registry and, while probing which servers need authorization, to arbitrary
+hosts those registry records name.
+
+```yaml
+# ~/.agor/config.yaml
+mcp_catalog:
+  registry_sync_enabled: false # true = also mirror the public registry
+  sync_interval_hours: 6
+  probe_budget: 40 # entries auth-probed per sync; 0 disables probing
+  # registry_url: https://registry.internal  # advanced override
+```
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| `registry_sync_enabled` | `false` | Mirror the public registry in addition to the curated entries. |
+| `sync_interval_hours` | `6` | Held between one minute and roughly 24 days; values outside that range are clamped. |
+| `probe_budget` | `40` | Entries auth-probed per sync. `0` disables probing while leaving the mirror on. |
+| `registry_url` | official registry | Point at a private mirror. |
+
+Because the seed *reconciles* rather than merely applies, the catalog's contents
+are a function of the deployed binary: rolling back to an older release
+withdraws curation added since, until you roll forward again. That is intended,
+but it is not something to discover during an incident.
+
+The registry is far larger than one sync can walk, so each run resumes from
+where the previous one stopped and the probe sweep always gets a share of the
+run's time budget. Outbound probes only connect to public addresses: the
+hostname is resolved first and refused unless every resolved address is
+globally reachable.
 
 ---
 

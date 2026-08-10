@@ -31,13 +31,32 @@ export interface InboundFile {
  * Inbound message from a messaging platform
  */
 export interface InboundMessage {
+  /** Stable provider delivery identity used for durable idempotency. */
+  providerEventId?: string;
   threadId: string;
   text: string;
   userId: string;
   timestamp: string;
   files?: InboundFile[];
   metadata?: Record<string, unknown>;
+  /**
+   * Optional provider acknowledgement prepared only after Agor durably wins
+   * the event occurrence. The returned metadata is merged into the inbound
+   * message (for example an editable acknowledgement comment ID).
+   */
+  prepareDelivery?: () => Promise<Record<string, unknown> | undefined>;
 }
+
+/** Durable provider polling checkpoint owned by the current listener lease. */
+export interface GatewayListenerOptions {
+  checkpoint?: Record<string, unknown> | null;
+  /** The gateway durably deduplicates stable provider event identities. */
+  durableEventIdempotency?: boolean;
+  /** False means the listener lost its durable owner fence and must stop. */
+  saveCheckpoint?: (checkpoint: Record<string, unknown>) => Promise<boolean>;
+}
+
+export type GatewayInboundCallback = (msg: InboundMessage) => void | Promise<void>;
 
 /**
  * Outbound payload for a single message.
@@ -109,7 +128,10 @@ export interface GatewayConnector {
   /**
    * Start listening for inbound messages (e.g., via Socket Mode or webhooks)
    */
-  startListening?(callback: (msg: InboundMessage) => void): Promise<void>;
+  startListening?(
+    callback: GatewayInboundCallback,
+    options?: GatewayListenerOptions
+  ): Promise<void>;
 
   /**
    * Stop listening for inbound messages

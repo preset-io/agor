@@ -16,5 +16,13 @@ export default defineConfig({
   clean: true,
   splitting: false,
   outDir: 'dist',
-  external: [/^@agor\/core/],
+  // Bundle pure-JS feature trees that otherwise add many tiny packages to the
+  // global install. Native and platform-selected dependencies stay external.
+  noExternal: [
+    /^@anthropic-ai\/sdk$/,
+    /^@aws-sdk\/(client-s3|lib-storage)$/,
+    /^@octokit\/(auth-app|rest)$/,
+    /^(mdast-util-gfm|mdast-util-to-markdown|remark-gfm|remark-parse|unified)$/,
+  ],
+  external: [/^@agor\/core/, '@cursor/sdk'],
 });

@@ -2,7 +2,7 @@ import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
 import { RepositoryError } from './repositories/base';
-import { sanitizeDbError } from './sanitize-error';
+import { isDatabaseUniqueConstraintError, sanitizeDbError } from './sanitize-error';
 
 describe('sanitizeDbError', () => {
   function drizzleFailure(): Error {
@@ -73,5 +73,29 @@ describe('sanitizeDbError', () => {
     expect(output).toContain("name: 'DatabaseError'");
     expect(output).not.toContain('code:');
     expect(output).not.toContain('constraint:');
+  });
+});
+
+describe('isDatabaseUniqueConstraintError', () => {
+  it('recognizes wrapped PostgreSQL and SQLite unique violations', () => {
+    expect(isDatabaseUniqueConstraintError({ cause: { code: '23505' } })).toBe(true);
+    expect(isDatabaseUniqueConstraintError({ code: 'SQLITE_CONSTRAINT_UNIQUE' })).toBe(true);
+    expect(
+      isDatabaseUniqueConstraintError({
+        code: 'SQLITE_CONSTRAINT',
+        message: 'UNIQUE constraint failed: sessions.session_id',
+      })
+    ).toBe(true);
+  });
+
+  it('does not classify other constraint or validation failures as unique', () => {
+    expect(isDatabaseUniqueConstraintError({ code: '23503' })).toBe(false);
+    expect(
+      isDatabaseUniqueConstraintError({
+        code: 'SQLITE_CONSTRAINT_FOREIGNKEY',
+        message: 'FOREIGN KEY constraint failed',
+      })
+    ).toBe(false);
+    expect(isDatabaseUniqueConstraintError(new Error('model validation failed'))).toBe(false);
   });
 });

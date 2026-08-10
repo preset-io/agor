@@ -111,7 +111,15 @@ beforeEach(() => {
 
 describe('OpenCode executor adapter', () => {
   it('preserves the exact provider/model and native session across resume', async () => {
-    const state = client({ sdk_session_id: 'oc-existing' });
+    const state = client({
+      sdk_session_id: 'oc-existing',
+      model_config: {
+        mode: 'exact',
+        provider: 'openai',
+        model: 'gpt-test',
+        effort: 'max',
+      },
+    });
 
     await execute(state.value);
 
@@ -119,6 +127,7 @@ describe('OpenCode executor adapter', () => {
       expect.objectContaining({
         provider: 'openai',
         model: 'gpt-test',
+        effort: 'max',
         existingOpenCodeSessionId: 'oc-existing',
         dataHome: '/opaque/opencode-home',
       }),

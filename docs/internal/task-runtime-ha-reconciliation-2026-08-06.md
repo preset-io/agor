@@ -3,6 +3,11 @@
 **Checkpoint date:** 2026-08-07
 **Base dependencies:** scheduler HA PR [#2174](https://github.com/preset-io/agor/pull/2174), merged as `f48e929e`, and Session queue HA PR [#2180](https://github.com/preset-io/agor/pull/2180), merged as `a1dc2c15`.
 
+**Successor status:** the explicit constrained HA composition now selects
+`shared_postgres`; see `daemon-ha-redis-realtime-2026-08-07.md`. References below
+to a future activation or a hard-coded standalone composition describe this
+design checkpoint, not the current integration.
+
 **Base integration checkpoint:** this branch was rebased onto `main` after both dependencies merged. #2180 now owns durable queue admission, ordering, all-daemon queue discovery, and the Session-first dispatch fence. This change retains the post-claim runtime work that #2180 explicitly left as its follow-up: dispatch/heartbeat expiry, stranded termination recovery, containment evidence, startup ownership, and outcome UX. Generic contained executor commands retain their legacy process-local registry. PostgreSQL `0073` and SQLite `0076` are the next migration ordinals on this base.
 
 This change deliberately reuses the thin helpers in `@agor/core/coordination` for diagnostic identity and deterministic delay policy. It does **not** introduce a distributed-worker framework or a central controller. Task state remains owned by `TaskRepository` and Task-specific services.
@@ -11,12 +16,14 @@ This change deliberately reuses the thin helpers in `@agor/core/coordination` fo
 
 Task runtime startup now has an explicit internal policy:
 
-| Policy            | Boot behavior                                                                                                                                 | Intended deployment                    |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `standalone`      | Preserves the legacy sentinel, active-orphan release, Session reset, and restart messages; queued Tasks remain durable per #2180              | Current composition default and SQLite |
-| `shared_postgres` | Does not consume/write the process-global sentinel and does not mutate Tasks, queues, Sessions, or transcripts merely because a daemon starts | Future HA configuration                |
+| Policy            | Boot behavior                                                                                                                                 | Intended deployment       |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `standalone`      | Preserves the legacy sentinel, active-orphan release, Session reset, and restart messages; queued Tasks remain durable per #2180              | Default/non-HA and SQLite |
+| `shared_postgres` | Does not consume/write the process-global sentinel and does not mutate Tasks, queues, Sessions, or transcripts merely because a daemon starts | Explicit constrained HA   |
 
-The composition root intentionally still passes `standalone`. HA configuration is not part of this branch. The shared policy is testable but must not become the default implicitly.
+The successor composition root passes `shared_postgres` only after explicit HA
+validation. Standalone remains the default and must not be changed implicitly
+by PostgreSQL or `REDIS_URL` alone.
 
 Both policies run the Task runtime reconciler. PostgreSQL uses database time for discovery, dispatch/connect heartbeats, termination claims, coordination leases, and settlement where practical. SQLite retains its existing process-clock behavior and supports injected clocks in tests.
 
@@ -101,10 +108,12 @@ Initial HA support for process tracking is intentionally narrow:
 - Missing local tracking is **not** absence proof.
 - A non-owner waits a short grace period for the owner, then may reclaim the durable request, but containment remains `unverified` without an authoritative handle. The Task stays `stopping`.
 - A branch owner/admin may force-fail an unverified Task by typing its short ID. This does not convert the evidence to verified.
-- Local executors are detached. Abrupt launcher-daemon death does not itself kill them; they may reconnect and heartbeat through another replica.
+- Local executors are detached from the daemon process, but survival still depends on the execution substrate. If the substrate survives launcher loss, they may reconnect and heartbeat through another replica. The checked-in shared-local Compose smoke stack does not guarantee survival when the whole daemon container is lost.
 - Standalone graceful shutdown retains local PGID containment. A shared
-  replica leaves its detached executors running so they can reconnect through
-  a peer; killing them and discarding the only process-local absence evidence
+  replica does not intentionally kill its detached executors, allowing a
+  substrate that independently survives the daemon to reconnect through a
+  peer; this is not a guarantee that a shared-local container keeps the process
+  alive. Killing it here and discarding the only process-local absence evidence
   would force the peer into an avoidable unverified hold.
 - Templated executors become verified only through authoritative launcher failure before dispatch or scoped executor cooperative-quiescence evidence.
 
@@ -137,8 +146,9 @@ Task settlement is authoritative and happens before Session projection.
 - Shared shutdown does not write the global clean-shutdown sentinel.
 - The reconciler stops before services close.
 - Standalone shutdown contains executors tracked by that application.
-- Shared shutdown does not kill tracked detached executors; durable heartbeat
-  and termination state remains authoritative during peer handoff.
+- Shared shutdown does not intentionally kill tracked detached executors;
+  durable heartbeat and termination state remains authoritative if the
+  execution substrate survives for peer handoff.
 - Shared startup injects no daemon-restart-specific transcript messages.
 - Standalone retains its historical active-runtime cleanup, containment, sentinel, and notices behind policy while preserving queued Tasks per #2180.
 

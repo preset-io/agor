@@ -186,7 +186,7 @@ graph TB
 
     subgraph "Agor Daemon"
         Feathers["FeathersJS Server"]
-        MCP["MCP HTTP Endpoint<br/>/mcp?sessionToken=..."]
+        MCP["MCP HTTP Endpoint<br/>POST /mcp + Bearer auth"]
         Services["Services<br/>Sessions, Tasks, Messages<br/>Boards, Branches, Repos"]
         ORM["Drizzle ORM"]
     end

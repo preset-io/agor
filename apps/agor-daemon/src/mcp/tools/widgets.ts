@@ -28,7 +28,7 @@ import type {
   WidgetMessageMetadata,
 } from '@agor/core/types';
 import { getRequiredSecretFields, hasMinimumRole, MessageRole, ROLES } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { widgetAutoResumeTaskId } from '../../utils/durable-task-id.js';

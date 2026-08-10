@@ -41,7 +41,7 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
       supportsSessionFork: true,
       supportsChildSpawn: true,
       supportsSessionImport: false,
-      reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh'],
+      reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     },
   }),
   gemini: defineIntegration({

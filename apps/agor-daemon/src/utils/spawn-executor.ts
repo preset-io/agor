@@ -104,7 +104,10 @@ export interface ExecutorTemplateVariables {
   unix_user_gid?: number;
   session_id?: string;
   branch_id?: string;
+  /** Trusted Agor user UUID used by external launchers for identity-scoped storage. */
+  user_id?: string;
   log_level?: string;
+  executor_type?: string;
   /**
    * Trusted runtime tenant identity. This is populated from the ambient tenant
    * context, shell-escaped during substitution, and is not caller-overridable
@@ -132,7 +135,7 @@ export interface SpawnExecutorOptions {
    * excluded: it must come from the ambient tenant context.
    */
   templateVariables?: Omit<ExecutorTemplateVariables, 'tenant_id'>;
-  onExit?: (code: number | null, context: ExecutorSpawnContext) => void;
+  onExit?: (code: number | null, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
   onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
@@ -149,6 +152,29 @@ export interface ExecutorCommandResult {
     message: string;
     details?: unknown;
   };
+}
+
+/**
+ * Invoke a fire-and-forget lifecycle callback while observing both synchronous
+ * throws and asynchronous rejections. The spawn API deliberately remains void,
+ * but callback failures must never become process-level unhandled rejections.
+ * Error objects are not logged because database failures can carry bound token
+ * fingerprints or other sensitive parameters.
+ */
+function observeExitCallback(
+  callback: SpawnExecutorOptions['onExit'],
+  code: number | null,
+  context: ExecutorSpawnContext,
+  logPrefix: string
+): void {
+  if (!callback) return;
+  try {
+    void Promise.resolve(callback(code, context)).catch(() => {
+      console.error(`${logPrefix} Executor exit callback failed`);
+    });
+  } catch {
+    console.error(`${logPrefix} Executor exit callback failed`);
+  }
 }
 
 export interface RunExecutorCommandOptions
@@ -223,6 +249,14 @@ export function substituteTemplateVariables(
       'executor_command_template {unix_user} value is not a valid Unix username; refusing to execute'
     );
   }
+  if (
+    variables.user_id !== undefined &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(variables.user_id)
+  ) {
+    throw new Error(
+      'executor_command_template {user_id} value is not a valid Agor user UUID; refusing to execute'
+    );
+  }
 
   let result = template;
 
@@ -234,7 +268,9 @@ export function substituteTemplateVariables(
     unix_user_gid: variables.unix_user_gid,
     session_id: variables.session_id,
     branch_id: variables.branch_id,
+    user_id: variables.user_id,
     log_level: variables.log_level,
+    executor_type: variables.executor_type,
     tenant_id: variables.tenant_id,
   };
 
@@ -351,6 +387,7 @@ export function spawnExecutor(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
+        executor_type: 'executor',
         ...templateVariables,
         tenant_id: tenantId,
       },
@@ -400,7 +437,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
         `This usually means the branch or repo directory was deleted out-of-band. ` +
         `Verify that the volume backing the working directory persists across restarts.`
     );
-    options.onExit?.(127, { mode: 'local' });
+    observeExitCallback(options.onExit, 127, { mode: 'local' }, logPrefix);
     return;
   }
 
@@ -421,7 +458,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code, { mode: 'local' });
+    observeExitCallback(options.onExit, code, { mode: 'local' }, logPrefix);
   };
 
   const executorProcess = spawn(cmd, args, {
@@ -481,7 +518,7 @@ function spawnExecutorWithTemplate(
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code, { mode: 'templated' });
+    observeExitCallback(options.onExit, code, { mode: 'templated' }, logPrefix);
   };
 
   const executorProcess = spawn('sh', ['-c', command], {
@@ -601,6 +638,12 @@ function executorEnvironmentForImpersonation(env: Record<string, string>): Recor
     PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
     NODE_ENV: env.NODE_ENV,
     LOG_LEVEL: env.LOG_LEVEL,
+    // Version-aligned agentic tool packages are system runtime metadata, not
+    // tenant credentials. Preserve their absolute read-only location when an
+    // executor crosses a Unix identity boundary.
+    AGOR_VERSION: env.AGOR_VERSION,
+    AGOR_AGENTIC_TOOLS_DIR: env.AGOR_AGENTIC_TOOLS_DIR,
+    AGOR_MANAGED_AGENTIC_TOOLS: env.AGOR_MANAGED_AGENTIC_TOOLS,
     ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
     ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
     ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
@@ -1030,6 +1073,7 @@ export async function runExecutorCommand(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
+        executor_type: 'executor',
         ...templateVariables,
         tenant_id: tenantId,
       },

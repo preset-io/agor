@@ -40,7 +40,7 @@ export abstract class BaseCommand extends Command {
           '\n\n' +
           chalk.bold('To configure daemon URL:') +
           '\n  ' +
-          chalk.cyan('agor config set daemon.url <url>') +
+          chalk.cyan('set DAEMON_URL=<url>, or edit ~/.agor/config.yaml') +
           '\n  ' +
           chalk.gray(`Current: ${this.daemonUrl}`)
       );

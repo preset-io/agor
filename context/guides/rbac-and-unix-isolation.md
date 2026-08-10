@@ -322,13 +322,13 @@ execution:
 
 ```bash
 # Set feature flag
-agor config set execution.branch_rbac true
+$EDITOR ~/.agor/config.yaml # set execution.branch_rbac: true
 
 # Set Unix user mode
-agor config set execution.unix_user_mode insulated
+$EDITOR ~/.agor/config.yaml # set execution.unix_user_mode: insulated
 
 # Verify configuration
-agor config get execution
+agor config --yaml
 ```
 
 Expected output:
@@ -741,7 +741,7 @@ execution:
 
 **Checklist:**
 
-1. ✅ RBAC enabled: `agor config get execution.branch_rbac` → should be `true`
+1. ✅ RBAC enabled: `agor config --yaml | grep -A20 "^execution:"` → should be `true`
 2. ✅ User has permission: `agor branch owners list <branch-id>` → should show user
 3. ✅ Unix group membership: `groups` → should show `agor-wt-<branch-id>`
 4. ✅ Filesystem permissions: `ls -la <branch-path>` → should allow group access
@@ -847,9 +847,9 @@ agor branch delete <branch-id>
 
 ```bash
 # Configuration
-agor config set execution.branch_rbac true
-agor config set execution.unix_user_mode insulated
-agor config get execution
+$EDITOR ~/.agor/config.yaml # set execution.branch_rbac: true
+$EDITOR ~/.agor/config.yaml # set execution.unix_user_mode: insulated
+agor config --yaml
 
 # Branch owners
 agor branch owners list <branch-id>

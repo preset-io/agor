@@ -17,6 +17,7 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   SessionEnvSelectionRepository,
@@ -240,6 +241,14 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private branchRepo: BranchRepository;
   private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
+  private deploymentAvailable: (tool: AgenticToolName) => boolean;
+
+  private assertDeploymentToolConfigured(tool: AgenticToolName): void {
+    if (this.deploymentAvailable(tool)) return;
+    throw new BadRequest(
+      `${tool} is unavailable under this deployment's agentic-tool policy. A local operator must select it with agor install, or declare it in config.yaml and run agor install --sync.`
+    );
+  }
 
   private assertSupportedModelConfig(
     agenticTool: Session['agentic_tool'],
@@ -271,7 +280,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     return policy.resolveCatalogFallback(catalog);
   }
 
-  constructor(db: TenantScopeAwareDatabase, app: Application) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    app: Application,
+    deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
+  ) {
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
       id: 'session_id',
@@ -285,8 +298,13 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     this.sessionRepo = sessionRepo;
     this.db = db;
+    this.deploymentAvailable = deploymentAvailable;
     this.app = app;
-    this.sessionMCPRepo = new SessionMCPServerRepository(db);
+    // Custom service-to-service methods such as setMCPServers() can run with
+    // tenant identity but without a request-scoped database transaction. Bind
+    // this repository to short per-method units so those paths remain RLS-safe
+    // without extending a transaction across session/provider orchestration.
+    this.sessionMCPRepo = bindRepositoryToTenantUnitOfWork(db, new SessionMCPServerRepository(db));
     this.sessionRelationshipRepo = new SessionRelationshipRepository(db);
     this.sessionEnvSelectionRepo = new SessionEnvSelectionRepository(db);
     this.branchRepo = new BranchRepository(db);
@@ -343,6 +361,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       return Promise.all(data.map((session) => this.create(session, params) as Promise<Session>));
     }
     const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
+    this.assertDeploymentToolConfigured(agenticTool);
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
       throw new BadRequest(`${agenticTool} is disabled for this workspace`);
     }
@@ -372,7 +391,13 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           executionOwnerId: data.created_by as import('@agor/core/types').UserID | undefined,
         });
       } catch (error) {
-        if (!isInvalidModelConfigError(error) || configurationReference) throw error;
+        const shouldUseCatalogFallback =
+          isInvalidModelConfigError(error) &&
+          (!configurationReference ||
+            isAgenticToolDefaultConfigurationReference(configurationReference));
+        if (!shouldUseCatalogFallback) {
+          throw error;
+        }
         const modelFallback = await this.resolveDirectCreateModelFallback(
           agenticTool,
           data as CreateSessionInput,
@@ -1338,6 +1363,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (patchedAgenticTool && !(await isTenantAgenticToolEnabled(patchedAgenticTool, this.db))) {
       throw new BadRequest(`${patchedAgenticTool} is disabled for this workspace`);
     }
+    if (patchedAgenticTool) this.assertDeploymentToolConfigured(patchedAgenticTool);
     // `agentic_tool` is immutable once a session has tasks. Multi-session and
     // array patches that touch it are already rejected above, so the single-id
     // path is the only one that can reach the actual mutation — enforce the
@@ -1560,7 +1586,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
  */
 export function createSessionsService(
   db: TenantScopeAwareDatabase,
-  app: Application
+  app: Application,
+  deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
 ): SessionsService {
-  return new SessionsService(db, app);
+  return new SessionsService(db, app, deploymentAvailable);
 }

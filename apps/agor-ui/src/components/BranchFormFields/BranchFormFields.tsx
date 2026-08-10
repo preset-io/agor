@@ -85,10 +85,11 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
 
   const form = Form.useFormInstance();
   const storageFieldName = `${fieldPrefix}storage_mode`;
-  const { defaultMode: defaultStorageMode, allowedModes: allowedStorageModes } = useMemo(
-    () => resolveUiBranchStorageConfig(branchStorageConfig),
-    [branchStorageConfig]
-  );
+  const {
+    defaultMode: defaultStorageMode,
+    allowedModes: allowedStorageModes,
+    allowShallowClones,
+  } = useMemo(() => resolveUiBranchStorageConfig(branchStorageConfig), [branchStorageConfig]);
   const previousDefaultStorageMode = useRef<BranchStorageMode | undefined>(undefined);
 
   useEffect(() => {
@@ -105,6 +106,12 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
     }
     previousDefaultStorageMode.current = defaultStorageMode;
   }, [allowedStorageModes, defaultStorageMode, form, storageFieldName]);
+
+  useEffect(() => {
+    if (!allowShallowClones) {
+      form.setFieldValue(`${fieldPrefix}clone_depth`, undefined);
+    }
+  }, [allowShallowClones, fieldPrefix, form]);
 
   const handleCheckboxChange = (checked: boolean) => {
     setUseSameBranchName(checked);
@@ -296,11 +303,18 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
             <Form.Item
               name={`${fieldPrefix}clone_depth`}
               label="Depth"
-              initialValue={DEFAULT_CLONE_DEPTH}
+              initialValue={allowShallowClones ? DEFAULT_CLONE_DEPTH : undefined}
               tooltip={
-                'Number of commits to keep (`git clone --depth N`). ' +
-                'Defaults to 100 — usually plenty for a feature branch. ' +
-                'Leave empty for a full clone with complete history.'
+                allowShallowClones
+                  ? 'Number of commits to keep (`git clone --depth N`). ' +
+                    'Defaults to 100 — usually plenty for a feature branch. ' +
+                    'Leave empty for a full clone with complete history.'
+                  : 'Full clone history is required by execution.branch_storage.allow_shallow_clones.'
+              }
+              extra={
+                allowShallowClones
+                  ? undefined
+                  : 'Full clone history is required on this Agor instance.'
               }
               rules={[
                 {
@@ -321,7 +335,8 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
             >
               <InputNumber
                 min={1}
-                placeholder="100"
+                placeholder={allowShallowClones ? '100' : 'Full clone'}
+                disabled={!allowShallowClones}
                 style={{ width: 160 }}
                 onChange={() => onFormChange?.()}
               />

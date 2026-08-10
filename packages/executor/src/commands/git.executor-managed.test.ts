@@ -93,6 +93,7 @@ function createClient(records: {
   branches?: Array<Record<string, unknown>>;
   branchPages?: Array<Array<Record<string, unknown>>>;
   branch?: Record<string, unknown>;
+  branchFindQueries?: Array<Record<string, unknown>>;
   patchedRepos?: Array<Record<string, unknown>>;
   patchedBranches?: Array<Record<string, unknown>>;
 }) {
@@ -129,6 +130,7 @@ function createClient(records: {
       if (name === 'branches') {
         const find = vi.fn(
           async ({ query }: { query?: { $skip?: number; $limit?: number } } = {}) => {
+            records.branchFindQueries?.push(query ?? {});
             if (records.branchPages) {
               const skip = query?.$skip ?? 0;
               const limit = query?.$limit ?? 1000;
@@ -404,6 +406,34 @@ describe('managed executor git/fs commands', () => {
 
     expect(result).toMatchObject({ success: true, data: { dryRun: true } });
     expect(mocks.scrubGitConfigRemoteCredentials).not.toHaveBeenCalled();
+  });
+
+  it('reconciles active and archived branches without an unsupported archived query operator', async () => {
+    const activePath = '/managed/active';
+    const archivedPath = '/managed/archived';
+    const branchFindQueries: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: { repo_id: repoId, repo_type: 'remote', local_path: '/managed/repo' },
+      branchFindQueries,
+      branches: [
+        { branch_id: branchId, repo_id: repoId, path: activePath, archived: false },
+        { branch_id: 'archived-branch', repo_id: repoId, path: archivedPath, archived: true },
+      ],
+    });
+
+    const result = await handleGitManagedCredentialsReconcile(
+      {
+        command: 'git.managed-credentials.reconcile',
+        sessionToken: 'tenant-token',
+        params: {},
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(mocks.scrubGitConfigRemoteCredentials).toHaveBeenCalledWith(activePath);
+    expect(mocks.scrubGitConfigRemoteCredentials).toHaveBeenCalledWith(archivedPath);
+    expect(branchFindQueries).toEqual([{ repo_id: repoId, $limit: 1000, $skip: 0 }]);
   });
   it('uses the daemon-provided tenant root when removing a branch directory', async () => {
     const branchesRoot = await mkdtemp(join(tmpdir(), 'agor-tenant-worktrees-'));

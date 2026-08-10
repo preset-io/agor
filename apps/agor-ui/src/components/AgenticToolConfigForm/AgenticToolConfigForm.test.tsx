@@ -37,12 +37,15 @@ function renderForm(agenticTool: 'codex' | 'gemini' | 'opencode') {
 }
 
 describe('AgenticToolConfigForm reasoning effort', () => {
-  it('renders truthful Codex levels with inherited runtime configuration', () => {
-    renderForm('codex');
-    expect(screen.getByTestId('effort-selector')).toHaveTextContent(
-      'low,medium,high,xhigh|inherited'
-    );
-  });
+  it.each(['codex', 'opencode'] as const)(
+    'renders the exact five effort levels for %s with inherited runtime configuration',
+    (agenticTool) => {
+      renderForm(agenticTool);
+      expect(screen.getByTestId('effort-selector').textContent).toBe(
+        'low,medium,high,xhigh,max|inherited'
+      );
+    }
+  );
 
   it('omits the control for unsupported tools', () => {
     renderForm('gemini');

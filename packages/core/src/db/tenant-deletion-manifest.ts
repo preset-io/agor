@@ -33,8 +33,10 @@
  * the PostgreSQL schema exclusively.
  */
 
+import type { MCPCatalogEntryData } from '@agor/core/types';
 import { is } from 'drizzle-orm';
 import { getTableConfig, type PgColumn, PgTable } from 'drizzle-orm/pg-core';
+import type { mcpCatalogEntries } from './schema.postgres';
 import * as postgresSchema from './schema.postgres';
 
 /** Name of the column that scopes a row to a tenant. */
@@ -47,14 +49,144 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  * This list is intentionally explicit: the exhaustiveness test fails if a schema
  * table is neither tenant-scoped, transitively tenant-scoped, nor named here, so
  * a new global table cannot be introduced without a conscious decision recorded
- * in this set. It is currently empty because every application table in the
- * PostgreSQL schema carries a `tenant_id` column.
+ * in this set.
+ *
+ * `mcp_catalog_entries` mirrors the public MCP registry and joins a curated
+ * overlay checked into this repository onto it. Every field originates outside
+ * any tenant, and Agor has no tenant registry to enumerate, so a per-tenant copy
+ * of the mirror could never be kept in sync. Its Postgres RLS policies keep
+ * reads open to all tenants and confine writes to the `mcp_catalog_ingestion`
+ * system capability.
+ *
+ * **The invariant is per column, not per table.** A table qualifies only while
+ * every one of its columns is sourced from outside every tenant — a public
+ * registry, or a file in this repository. Adding a column derived from tenant
+ * activity (a connect counter, a rating, a last-used timestamp) silently breaks
+ * the justification above even though the table stays in this set: the value
+ * aggregates across tenants on read, and its only writer would be a tenant
+ * request path, which the write policy correctly refuses. Such a column belongs
+ * in its own tenant-scoped table. `GLOBAL_TABLE_COLUMN_SOURCES` records the
+ * per-column decision so the companion test can hold a reviewer to it.
  *
  * Note: Drizzle's own migration bookkeeping table (`drizzle.__drizzle_migrations`)
  * is not part of the application schema exports and is never enumerated by this
  * manifest.
  */
-export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>([]);
+export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(['mcp_catalog_entries']);
+
+/**
+ * Where a column of a global table gets its value.
+ *
+ * The vocabulary is deliberately narrow. The invariant a global table has to
+ * hold is "no column derives from tenant activity", and a broad label like
+ * `derived` cannot express that — it reads as "Agor computed it", which is
+ * exactly what a usage counter is, so the next person adding one finds a label
+ * that appears to fit and the guard passes. Naming what each value is computed
+ * *from* leaves no label a counter can honestly take:
+ *
+ * - `registry` — mirrored verbatim from the public MCP registry.
+ * - `repo` — supplied by `curated.yaml`, checked into this repository.
+ * - `computed-from-registry` — Agor computed it, from registry data alone.
+ * - `computed-from-repo` — Agor computed it, from repository data alone.
+ * - `row-identity` — this row's own identity and write timestamps.
+ * - `probe` — discovered by probing a public endpoint the registry named.
+ * - `composite` — a JSON column whose keys have different sources, classified
+ *   one level down in {@link GLOBAL_BLOB_KEY_SOURCES}. Not a licence to skip
+ *   the question: a `composite` column with no entry there is a type error.
+ *
+ * A column fed by user behaviour fits none of these. It belongs in its own
+ * tenant-scoped table, and the absence of a label is the prompt to build one.
+ */
+export type GlobalColumnSource =
+  | 'registry'
+  | 'repo'
+  | 'computed-from-registry'
+  | 'computed-from-repo'
+  | 'row-identity'
+  | 'probe'
+  | 'composite';
+
+/**
+ * Every column of every global table, classified.
+ *
+ * `satisfies` against the compiled Drizzle table is what makes this binding:
+ * adding a column to the schema without classifying it is a type error in the
+ * editor and in `tsc`, not a test failure someone sees after pushing.
+ */
+type ColumnsOf<T extends PgTable> = keyof T['_']['columns'] & string;
+
+export const GLOBAL_TABLE_COLUMN_SOURCES = {
+  mcp_catalog_entries: {
+    catalog_entry_id: 'row-identity',
+    created_at: 'row-identity',
+    updated_at: 'row-identity',
+    name: 'registry',
+    version: 'registry',
+    registry_updated_at: 'registry',
+    title: 'registry',
+    description: 'registry',
+    website_url: 'registry',
+    repository_url: 'registry',
+    transport: 'registry',
+    remote_url: 'registry',
+    has_remote: 'computed-from-registry',
+    has_package: 'computed-from-registry',
+    curated: 'computed-from-repo',
+    category: 'repo',
+    capability_tags: 'repo',
+    benefit: 'repo',
+    starter_prompt: 'repo',
+    permission_disclosure: 'repo',
+    icon_url: 'repo',
+    verified: 'repo',
+    popularity_rank: 'repo',
+    probed_auth_type: 'probe',
+    probed_at: 'probe',
+    auth_server_origin: 'probe',
+    registry_status: 'registry',
+    last_registry_seen_at: 'computed-from-registry',
+    data: 'composite',
+  },
+  // One key per table in GLOBAL_TABLES, spelled out rather than `Record<string,
+  // ...>` so each table is checked against its own columns.
+} satisfies {
+  mcp_catalog_entries: Record<ColumnsOf<typeof mcpCatalogEntries>, GlobalColumnSource>;
+};
+
+/**
+ * Every key of every `composite` column, classified.
+ *
+ * The column-level guard is airtight against the easy mistake and blind to the
+ * likely one. A JSON column is schemaless in the database: a `connect_count` or
+ * a `last_used_by_tenant` key needs no migration, changes no Drizzle table, and
+ * so trips nothing at the column level — while breaking the same invariant a new
+ * column would. The `satisfies` below closes that by binding to the TypeScript
+ * interface the blob is written through, which is the one place such a key has
+ * to be declared.
+ *
+ * Keys are optional on the interface but required here: `Required<...>` is what
+ * makes an unclassified key a compile error rather than a silently absent entry.
+ */
+export const GLOBAL_BLOB_KEY_SOURCES = {
+  mcp_catalog_entries: {
+    data: {
+      remotes: 'registry',
+      packages: 'registry',
+      registry_icons: 'registry',
+      registry_mirrored: 'computed-from-registry',
+      registry: 'registry',
+      capabilities: 'repo',
+      curation: 'repo',
+      repository_source: 'registry',
+      probed_auth_scheme: 'probe',
+      probed_url: 'probe',
+    },
+  },
+} satisfies {
+  mcp_catalog_entries: {
+    data: Record<keyof Required<MCPCatalogEntryData>, GlobalColumnSource>;
+  };
+};
 
 /** Full classification of a table, including non-tenant tables. */
 export type TableClassification = 'direct' | 'transitive' | 'global';
@@ -75,7 +207,7 @@ interface ForeignKeyMeta {
   onDelete?: string;
 }
 
-interface TableMeta {
+export interface TableMeta {
   table: PgTable;
   columns: PgColumn[];
   foreignKeys: ForeignKeyMeta[];
@@ -141,13 +273,30 @@ export interface TableClassificationResult {
  * Classify every PostgreSQL table into direct / transitive / global, computing
  * the transitive set to a fixpoint over foreign-key chains.
  */
-export function classifyPostgresTables(): TableClassificationResult {
-  const metas = discoverTableMetas();
-
+export function classifyPostgresTables(
+  /**
+   * Override the discovered schema. Only tests pass this, to assert what the
+   * classifier does with a shape the real schema is guarded against ever having.
+   */
+  metas: ReadonlyMap<string, TableMeta> = discoverTableMetas()
+): TableClassificationResult {
   const global = new Set<string>();
   const direct = new Set<string>();
   for (const [name, meta] of metas) {
     if (GLOBAL_TABLES.has(name)) {
+      // Checked before the exemption is granted, not after. A declaration is
+      // not evidence: adding `tenant_id` to a table already named here would
+      // otherwise be classified global and drop out of the deletion plan
+      // silently, since every other guard accepts it — the column-source map
+      // takes any label, the manifest test compares names rather than sources,
+      // and the migration test reads one migration's text. The live-catalog
+      // audit does catch it, but only on Postgres at deletion time.
+      if (hasTenantColumn(meta)) {
+        throw new Error(
+          `${name} is declared global but has a ${TENANT_SCOPE_COLUMN} column; ` +
+            'a table holding tenant rows cannot be exempt from tenant deletion'
+        );
+      }
       global.add(name);
       continue;
     }
@@ -166,6 +315,22 @@ export function classifyPostgresTables(): TableClassificationResult {
       if (reachesScoped) {
         transitive.add(name);
         changed = true;
+      }
+    }
+  }
+
+  // Checked once the fixpoint has settled, so `transitive` is complete. A global
+  // table is skipped by the loop above and can never be classified transitive no
+  // matter what it references, which makes the exemption honest only while the
+  // table reaches no tenant-scoped row. An FK from here into tenant space would
+  // leave deletion either blocking on the constraint or cascading rows out of a
+  // table declared untouchable — and every other guard would still pass.
+  for (const name of global) {
+    for (const fk of metas.get(name)?.foreignKeys ?? []) {
+      if (direct.has(fk.parentTable) || transitive.has(fk.parentTable)) {
+        throw new Error(
+          `${name} is declared global but has a foreign key into tenant-scoped ${fk.parentTable}`
+        );
       }
     }
   }

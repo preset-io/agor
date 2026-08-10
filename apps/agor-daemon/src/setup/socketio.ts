@@ -23,6 +23,7 @@ import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedUser,
+  BoardID,
   CursorLeaveEvent,
   CursorMovedEvent,
   CursorMoveEvent,
@@ -30,15 +31,22 @@ import type {
   TenantContext,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
-import type { Server, Socket } from 'socket.io';
+import type { Server, ServerOptions, Socket } from 'socket.io';
 import { isExecutorSessionTokenPayload } from '../auth/executor-session-token.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import { isTerminalExecutorIdentity } from '../auth/terminal-executor-guard.js';
+import {
+  boardPresenceRoomName,
+  emitHaNativeSocketEvent,
+  tenantChannelName,
+  tenantUserChannelName,
+} from '../realtime/routing.js';
 import {
   executorTaskChannelName,
   joinExecutorTaskChannel,
   leaveAllExecutorTaskChannels,
   leaveAllSessionStreamChannels,
+  leaveAllTenantChannels,
 } from '../utils/realtime-publish.js';
 import type { BuildInfo } from './build-info.js';
 import type { CorsOrigin } from './cors.js';
@@ -74,7 +82,9 @@ interface FeathersSocket extends Socket {
     isService?: boolean;
     /** Terminal user scope for handshake-token service sockets (see SocketAuthState). */
     terminalUserId?: string;
-    currentBoardId?: string;
+    currentBoardId?: BoardID;
+    /** Boards authorized through the Feathers boards.get hook on this socket. */
+    authorizedBoardIds?: Set<string>;
     lastPresenceEmitAt?: number;
     tenant?: TenantContext;
   };
@@ -111,8 +121,14 @@ export interface SocketIOOptions {
    * simply skipped when omitted.
    */
   buildInfo?: BuildInfo;
+  /** Process identity is diagnostic only and never used for routing/fencing. */
+  workIdentity?: { instanceId: string; bootId: string };
   /** Resolved app-level multi-tenancy configuration for socket tenant binding. */
   multiTenancy?: ResolvedMultiTenancyConfig;
+  /** Redis adapter constructor in explicit HA mode. */
+  adapter?: ServerOptions['adapter'];
+  /** Called as soon as Feathers creates the Socket.IO server. */
+  onServerCreated?: (io: Server) => void;
 }
 
 /**
@@ -241,28 +257,6 @@ export function createTokenBucket(
  *
  * Centralized so the prefix can change in one place without drift.
  */
-export function userRoomName(userId: string): string {
-  return `user:${userId}`;
-}
-
-export function tenantChannelName(tenantId: string): string {
-  return `tenant:${tenantId}`;
-}
-
-export function tenantUserChannelName(tenantId: string, userId: string): string {
-  return `tenant:${tenantId}:user:${userId}`;
-}
-
-/**
- * Per-board room name for high-frequency collaborative cursor traffic.
- *
- * Only tabs actively viewing a board should join this room so cursor motion
- * doesn't fan out to the entire app.
- */
-export function boardPresenceRoomName(boardId: string): string {
-  return `board:${boardId}:presence`;
-}
-
 /**
  * Validate a terminal channel name and extract its target user_id.
  *
@@ -336,20 +330,31 @@ export function createSocketIOConfig(
     pingInterval: 25000, // How often to ping clients
     maxHttpBufferSize: SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
     transports: ['websocket', 'polling'], // Prefer WebSocket
+    ...(options.adapter ? { adapter: options.adapter } : {}),
   };
 
   const callback = (io: Server) => {
     // Store Socket.io server instance for shutdown
     socketServer = io;
+    options.onServerCreated?.(io);
 
     // Track active connections for periodic operational metrics.
     let activeConnections = 0;
+    // Intentionally system-global: the aggregate keeps only a saturated count,
+    // never socket, user, tenant, channel, or client metadata.
+    let unauthenticatedDisconnects = 0;
+    // Weak per-socket state owns both auth-log dedupe and durable auth history.
+    const authenticatedIdentities = new WeakMap<Socket, string>();
 
-    const logAuthenticated = (socketId: string, userId?: string) => {
+    const logAuthenticated = (socket: Socket, userId?: string) => {
+      const identity = userId ? `user:${userId}` : 'service';
+      if (authenticatedIdentities.get(socket) === identity) return;
+      authenticatedIdentities.set(socket, identity);
+
       console.log(
         userId
-          ? `socket authenticated: ${socketId} user:${shortId(userId)}`
-          : `socket authenticated: ${socketId} service`
+          ? `socket authenticated: ${socket.id} user:${shortId(userId)}`
+          : `socket authenticated: ${socket.id} service`
       );
     };
 
@@ -436,7 +441,7 @@ export function createSocketIOConfig(
             (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
             if (fs.data) fs.data.tenant = tenant;
           }
-          logAuthenticated(socket.id);
+          logAuthenticated(socket);
           return next();
         }
 
@@ -457,7 +462,7 @@ export function createSocketIOConfig(
           if (fs.data) fs.data.tenant = tenant;
         }
 
-        logAuthenticated(socket.id, user.user_id);
+        logAuthenticated(socket, user.user_id);
         next();
       } catch (error) {
         console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
@@ -485,6 +490,12 @@ export function createSocketIOConfig(
         socket.emit('server-info', {
           buildSha: buildInfo.sha,
           builtAt: buildInfo.builtAt,
+          ...(options.workIdentity
+            ? {
+                instanceId: options.workIdentity.instanceId,
+                bootId: options.workIdentity.bootId,
+              }
+            : {}),
         });
       }
 
@@ -494,8 +505,12 @@ export function createSocketIOConfig(
       // they only ever consume raw `terminal:*` events on their own
       // `user/<id>/terminal` room, never Feathers channel broadcasts, so channel
       // membership would just hand them a firehose subscription they must not have.
-      if (user?.user_id && !isTerminalExecutorIdentity(user)) {
-        socket.join(userRoomName(user.user_id));
+      if (user?.user_id && user._isServiceAccount !== true && !isTerminalExecutorIdentity(user)) {
+        const tenantId = (socket as FeathersSocket).data.tenant?.tenant_id;
+        if (tenantId) {
+          socket.join(tenantChannelName(tenantId));
+          socket.join(tenantUserChannelName(tenantId, user.user_id));
+        }
         console.debug(
           `🏠 Socket ${socket.id} joined user room at connection: user:${shortId(user.user_id)}`
         );
@@ -515,17 +530,56 @@ export function createSocketIOConfig(
       // here directly, consistent with the channel-join exclusions.
       const isTerminalExecutorSocket = () =>
         isTerminalExecutorIdentity((socket as FeathersSocket).feathers?.user);
+      const getTenantId = () => getSocketAuthState(socket).tenant?.tenant_id;
 
-      socket.on('presence:watch-board', (boardId: string) => {
-        const auth = getSocketAuthState(socket);
-        if (!isAuthenticated(auth) || isTerminalExecutorSocket()) return;
-        if (typeof boardId !== 'string' || !boardId.trim()) return;
-        socket.join(boardPresenceRoomName(boardId));
-      });
+      socket.on(
+        'presence:watch-board',
+        async (boardId: string, acknowledge?: (result: { ok: boolean }) => void) => {
+          const auth = getSocketAuthState(socket);
+          if (!auth.userId || isTerminalExecutorSocket()) return acknowledge?.({ ok: false });
+          if (typeof boardId !== 'string' || !boardId.trim()) return acknowledge?.({ ok: false });
+          if (!auth.tenant?.tenant_id) return acknowledge?.({ ok: false });
+          const fs = socket as FeathersSocket;
+          try {
+            // Raw Socket.IO rooms bypass Feathers publication hooks, so perform
+            // the normal authenticated boards.get authorization before granting
+            // membership. Tenant-qualified room names alone are not branch/board
+            // authorization and Redis prefixes are never treated as auth.
+            await app.service('boards').get(boardId, {
+              ...(fs.feathers ?? {}),
+              provider: 'socketio',
+              connection: fs.feathers,
+              tenant: auth.tenant,
+            } as never);
+          } catch {
+            return acknowledge?.({ ok: false });
+          }
+
+          // Authorization above is asynchronous. Logout or a second login can
+          // replace this socket's identity while boards.get is in flight. Do
+          // not let the stale completion restore a previous tenant's raw room
+          // after the auth-replacement cleanup has already run.
+          const currentAuth = getSocketAuthState(socket);
+          if (
+            !socket.connected ||
+            currentAuth.userId !== auth.userId ||
+            currentAuth.tenant?.tenant_id !== auth.tenant.tenant_id
+          ) {
+            return acknowledge?.({ ok: false });
+          }
+          fs.data.authorizedBoardIds ??= new Set();
+          fs.data.authorizedBoardIds.add(boardId);
+          socket.join(boardPresenceRoomName(auth.tenant.tenant_id, boardId));
+          acknowledge?.({ ok: true });
+        }
+      );
 
       socket.on('presence:unwatch-board', (boardId: string) => {
         if (typeof boardId !== 'string' || !boardId.trim()) return;
-        socket.leave(boardPresenceRoomName(boardId));
+        const tenantId = getTenantId();
+        if (!tenantId) return;
+        socket.leave(boardPresenceRoomName(tenantId, boardId));
+        (socket as FeathersSocket).data.authorizedBoardIds?.delete(boardId);
       });
 
       // Handle cursor movement events
@@ -533,14 +587,21 @@ export function createSocketIOConfig(
         if (isTerminalExecutorSocket()) return;
         const userId = getUserId();
         const fs = socket as FeathersSocket;
+        const tenantId = getTenantId();
+        if (!tenantId || !getSocketAuthState(socket).userId) return;
+        if (!fs.data.authorizedBoardIds?.has(data.boardId)) return;
         const previousBoardId = fs.data.currentBoardId;
 
         if (previousBoardId && previousBoardId !== data.boardId) {
-          socket.broadcast.to(boardPresenceRoomName(previousBoardId)).emit('cursor-left', {
-            userId,
-            boardId: previousBoardId,
-            timestamp: Date.now(),
-          });
+          emitHaNativeSocketEvent(
+            socket.broadcast.to(boardPresenceRoomName(tenantId, previousBoardId)),
+            'cursor-left',
+            {
+              userId,
+              boardId: previousBoardId,
+              timestamp: Date.now(),
+            }
+          );
         }
 
         const broadcastData: CursorMovedEvent = {
@@ -552,9 +613,11 @@ export function createSocketIOConfig(
         };
 
         // Broadcast cursor position only to tabs actively watching this board.
-        socket.broadcast
-          .to(boardPresenceRoomName(data.boardId))
-          .emit('cursor-moved', broadcastData);
+        emitHaNativeSocketEvent(
+          socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)),
+          'cursor-moved',
+          broadcastData
+        );
 
         fs.data.currentBoardId = data.boardId;
 
@@ -569,7 +632,11 @@ export function createSocketIOConfig(
             boardId: data.boardId,
             timestamp: data.timestamp,
           };
-          socket.broadcast.emit('presence-updated', presenceData);
+          emitHaNativeSocketEvent(
+            socket.broadcast.to(tenantChannelName(tenantId)),
+            'presence-updated',
+            presenceData
+          );
           fs.data.lastPresenceEmitAt = data.timestamp;
         }
       });
@@ -579,12 +646,19 @@ export function createSocketIOConfig(
         if (isTerminalExecutorSocket()) return;
         const userId = getUserId();
         const fs = socket as FeathersSocket;
+        const tenantId = getTenantId();
+        if (!tenantId || !getSocketAuthState(socket).userId) return;
+        if (!fs.data.authorizedBoardIds?.has(data.boardId)) return;
 
-        socket.broadcast.to(boardPresenceRoomName(data.boardId)).emit('cursor-left', {
-          userId,
-          boardId: data.boardId,
-          timestamp: Date.now(),
-        });
+        emitHaNativeSocketEvent(
+          socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)),
+          'cursor-left',
+          {
+            userId,
+            boardId: data.boardId,
+            timestamp: Date.now(),
+          }
+        );
 
         if (fs.data.currentBoardId === data.boardId) {
           delete fs.data.currentBoardId;
@@ -748,7 +822,9 @@ export function createSocketIOConfig(
         socket.join(channel);
         if (auth.isService && auth.terminalUserId === target) {
           const prev = activeTerminalExecutorByUser.get(target);
-          if (prev && prev !== socket.id) io.to(prev).emit('terminal:shutdown', { userId: target });
+          if (prev && prev !== socket.id) {
+            io.local.to(prev).emit('terminal:shutdown', { userId: target });
+          }
           activeTerminalExecutorByUser.set(target, socket.id);
         }
       });
@@ -802,7 +878,7 @@ export function createSocketIOConfig(
         // its own `user/<id>/terminal` channel to relay I/O, so `io.to` would
         // bounce every output frame straight back to the executor that just
         // produced it — a wasted round trip on the hottest path.
-        socket.to(channel).emit('terminal:output', data);
+        socket.local.to(channel).emit('terminal:output', data);
       });
 
       // Route terminal input from browser to executor.
@@ -822,7 +898,7 @@ export function createSocketIOConfig(
         // ever weakened.
         const channel = `user/${userId}/terminal`;
         const executor = activeTerminalExecutorByUser.get(userId);
-        io.to(executor ?? channel).emit('terminal:input', { userId, input: data.input });
+        io.local.to(executor ?? channel).emit('terminal:input', { userId, input: data.input });
       });
 
       // Route terminal resize events. Same auth model as terminal:input —
@@ -834,7 +910,7 @@ export function createSocketIOConfig(
         if (!userId) return;
         const channel = `user/${userId}/terminal`;
         const executor = activeTerminalExecutorByUser.get(userId);
-        io.to(executor ?? channel).emit('terminal:resize', {
+        io.local.to(executor ?? channel).emit('terminal:resize', {
           userId,
           cols: data.cols,
           rows: data.rows,
@@ -851,7 +927,7 @@ export function createSocketIOConfig(
         (data: { userId: string; action: string; tabName: string; cwd?: string }) => {
           if (!requireServiceForOwnUserId('terminal:tab', data?.userId)) return;
           const channel = `user/${data.userId}/terminal`;
-          io.to(channel).emit('terminal:tab', data);
+          io.local.to(channel).emit('terminal:tab', data);
         }
       );
 
@@ -861,7 +937,7 @@ export function createSocketIOConfig(
       socket.on('terminal:exit', (data: { userId: string; exitCode: number; signal?: number }) => {
         if (!requireServiceForOwnUserId('terminal:exit', data?.userId)) return;
         const channel = `user/${data.userId}/terminal`;
-        io.to(channel).emit('terminal:exit', data);
+        io.local.to(channel).emit('terminal:exit', data);
         console.log(`🖥️  Terminal exited for user ${data.userId}: code=${data.exitCode}`);
       });
 
@@ -889,9 +965,19 @@ export function createSocketIOConfig(
       // Track disconnections
       socket.on('disconnect', (reason) => {
         activeConnections--;
+        const disconnectedBeforeAuthentication =
+          !authenticatedIdentities.has(socket) && !isAuthenticated(getSocketAuthState(socket));
+        if (disconnectedBeforeAuthentication) {
+          unauthenticatedDisconnects = Math.min(
+            unauthenticatedDisconnects + 1,
+            Number.MAX_SAFE_INTEGER
+          );
+        }
         const message = `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`;
         if (reason === 'transport error') {
           console.warn(message);
+        } else if (disconnectedBeforeAuthentication) {
+          return;
         } else if (reason === 'transport close' || reason === 'client namespace disconnect') {
           console.debug(message);
         } else {
@@ -913,20 +999,80 @@ export function createSocketIOConfig(
     // so we need to join the user room here when the login event fires.
     app.on('login', (authResult: unknown, context: { connection?: unknown; params?: unknown }) => {
       if (!context.connection) return;
-      const result = authResult as { user?: { user_id?: string } };
+      const result = authResult as {
+        user?: { user_id?: string; _isServiceAccount?: boolean };
+      };
       const userId = result.user?.user_id;
       if (!userId) return;
 
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
-          logAuthenticated(socket.id, userId);
+          const fs = socket as FeathersSocket & { tenant?: TenantContext };
+          const isService =
+            result.user?._isServiceAccount === true || isTerminalExecutorIdentity(result.user);
+          logAuthenticated(socket, isService ? undefined : userId);
+
+          // Authentication can be replaced on a live transport. Revoke every
+          // raw Socket.IO capability belonging to the previous identity before
+          // deriving rooms for the new one. This must also run when the new
+          // identity is a service/terminal executor; otherwise user -> service
+          // replacement would retain the user's tenant and board subscriptions.
+          for (const room of socket.rooms) {
+            if (room.startsWith('tenant:')) socket.leave(room);
+          }
+          fs.data.authorizedBoardIds?.clear();
+          delete fs.data.currentBoardId;
+          delete fs.data.tenant;
+          delete fs.tenant;
+          delete fs.data.isService;
+          delete fs.data.terminalUserId;
+
           // Terminal-executor identities get no user room (see connection handler).
-          if (!isTerminalExecutorIdentity(result.user)) {
-            socket.join(userRoomName(userId));
+          if (!isService) {
+            let tenant: TenantContext | undefined;
+            if (multiTenancy) {
+              try {
+                tenant = resolveTenantContext(multiTenancy, {
+                  params: context.params as never,
+                });
+                fs.data.tenant = tenant;
+                fs.tenant = tenant;
+              } catch {
+                // configureChannels will fail closed as well; no raw room join.
+              }
+            } else {
+              tenant = fs.data.tenant ?? fs.tenant;
+            }
+            const tenantId = tenant?.tenant_id;
+            if (tenantId) {
+              socket.join(tenantChannelName(tenantId));
+              socket.join(tenantUserChannelName(tenantId, userId));
+            }
           }
           break;
         }
+      }
+    });
+
+    // Feathers channel removal does not affect raw Socket.IO rooms. Explicitly
+    // drop every tenant-scoped direct room on logout so a connected anonymous
+    // socket cannot keep receiving presence or user notifications.
+    app.on('logout', (_authResult: unknown, context: { connection?: unknown }) => {
+      if (!context.connection) return;
+      for (const [, socket] of io.sockets.sockets) {
+        if ((socket as FeathersSocket).feathers !== context.connection) continue;
+        const fs = socket as FeathersSocket;
+        for (const room of socket.rooms) {
+          if (room.startsWith('tenant:')) socket.leave(room);
+        }
+        fs.data.authorizedBoardIds?.clear();
+        delete fs.data.currentBoardId;
+        delete fs.data.tenant;
+        delete (fs as FeathersSocket & { tenant?: TenantContext }).tenant;
+        delete fs.data.isService;
+        delete fs.data.terminalUserId;
+        break;
       }
     });
 
@@ -934,7 +1080,11 @@ export function createSocketIOConfig(
     // and periods with no connection churn remain observable.
     const metricsInterval = setInterval(
       () => {
-        console.log(`ws_active_connections=${activeConnections}`);
+        const disconnectedBeforeAuthentication = unauthenticatedDisconnects;
+        unauthenticatedDisconnects = 0;
+        console.log(
+          `ws_active_connections=${activeConnections} ws_unauthenticated_disconnects=${disconnectedBeforeAuthentication}`
+        );
       },
       5 * 60 * 1000
     );
@@ -987,9 +1137,17 @@ export function configureChannels(
         task_id?: string;
       };
       // Authentication can be replaced on an already-open socket. Remove any
-      // prior executor capability before considering the new signed claims, so
-      // a socket can never accumulate control rooms across Tasks.
+      // prior identity's complete Feathers capability set before considering
+      // the new signed claims. Raw Socket.IO rooms are cleared by the sibling
+      // login handler above; these named Feathers channels are independent.
+      app.channel('authenticated').leave(context.connection as never);
+      leaveAllTenantChannels(app, context.connection);
+      leaveAllSessionStreamChannels(app, context.connection);
       leaveAllExecutorTaskChannels(app, context.connection);
+
+      const connection = context.connection as FeathersSocket & { tenant?: TenantContext };
+      delete connection.tenant;
+      if (connection.data) delete connection.data.tenant;
 
       // A terminal-executor identity must NOT receive broadcast events. It only
       // consumes raw `terminal:*` events on its own `user/<id>/terminal` room,
@@ -999,7 +1157,6 @@ export function configureChannels(
       // specifically so full service accounts KEEP their channel membership.
       if (isTerminalExecutorIdentity(result.user)) return;
 
-      const connection = context.connection as FeathersSocket & { tenant?: TenantContext };
       const loginParams =
         context.params && typeof context.params === 'object'
           ? (context.params as {
@@ -1061,24 +1218,17 @@ export function configureChannels(
       console.log('👋 Logout event fired');
 
       const connection = context.connection as FeathersSocket & { tenant?: TenantContext };
-      const tenant = connection.data?.tenant ?? connection.tenant;
-      const userId = connection.feathers?.user?.user_id;
 
       // Remove from authenticated channel - no more broadcast events
       app.channel('authenticated').leave(context.connection as never);
       leaveAllExecutorTaskChannels(app, context.connection);
-      if (tenant) {
-        app.channel(tenantChannelName(tenant.tenant_id)).leave(context.connection as never);
-        if (userId) {
-          app
-            .channel(tenantUserChannelName(tenant.tenant_id, userId))
-            .leave(context.connection as never);
-        }
-      }
+      leaveAllTenantChannels(app, context.connection);
       // Streaming rooms are separate per-session channels; drop the logged-out
       // connection from all of them so it stops receiving live session text
       // while it remains socket-connected.
       leaveAllSessionStreamChannels(app, context.connection);
+      delete connection.tenant;
+      if (connection.data) delete connection.data.tenant;
     }
   });
 }

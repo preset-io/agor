@@ -3,8 +3,39 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'vitest';
+import { pendingOfflineCutoverMigrations } from './migrate';
 
 describe('Postgres migrations', () => {
+  it('requires the Knowledge claim protocol migration to be an offline existing-db cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: ['0073_task_runtime_reconciliation'],
+        pending: ['0074_knowledge_embedding_claims'],
+      })
+    ).toEqual(['0074_knowledge_embedding_claims']);
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: [],
+        pending: ['0000_pretty_mac_gargan', '0074_knowledge_embedding_claims'],
+      })
+    ).toEqual([]);
+  });
+
+  it('enforces the structurally incompatible MCP OAuth migration as an offline cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: ['0076_executor_session_token_session_binding'],
+        pending: ['0078_mcp_oauth_pending_flows'],
+      })
+    ).toEqual(['0078_mcp_oauth_pending_flows']);
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: [],
+        pending: ['0000_pretty_mac_gargan', '0078_mcp_oauth_pending_flows'],
+      })
+    ).toEqual([]);
+  });
+
   it('keeps Knowledge pgvector storage out of required base migrations', async () => {
     const migration = await readFile(
       new URL('../../drizzle/postgres/0043_kb_embeddings.sql', import.meta.url),
@@ -36,6 +67,137 @@ describe('Postgres migrations', () => {
       /ALTER COLUMN "last_executor_heartbeat_at" TYPE timestamp with time zone/i
     );
     expect(heartbeatMigration).toMatch(/AT TIME ZONE 'UTC'/i);
+  });
+
+  it('persists only an executor bearer fingerprint behind forced tenant RLS', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0075_executor_session_token_authority.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain('"token_fingerprint" varchar(64) PRIMARY KEY NOT NULL');
+    expect(migration).not.toMatch(/"(?:raw_)?token"\s/);
+    expect(migration).toContain(
+      'ALTER TABLE "executor_session_token_authorities" FORCE ROW LEVEL SECURITY'
+    );
+    expect(migration).toContain('"tenant_id" = COALESCE');
+  });
+
+  it('stores MCP OAuth pending flow capabilities without raw codes or tokens', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0078_mcp_oauth_pending_flows.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain('"state_hash" varchar(64) NOT NULL');
+    expect(migration).toContain('"sealed_material" text');
+    expect(migration).not.toMatch(/"(?:raw_)?state"\s/);
+    expect(migration).not.toMatch(/"(?:authorization_)?code"\s/);
+    expect(migration).not.toMatch(/"(?:access|refresh|bearer)_token"\s/);
+    expect(migration).toContain('ALTER TABLE "mcp_oauth_pending_flows" FORCE ROW LEVEL SECURITY');
+    expect(migration).toContain("SET LOCAL lock_timeout = '3s'");
+    expect(migration).toContain("COALESCE(current_setting('agor.system_scope', true), '') = ''");
+    expect(migration).toContain("= 'mcp_oauth_callback'");
+    expect(migration).toContain('"state_hash" = current_setting(\'agor.oauth_state_hash\', true)');
+    expect(migration).toContain("= 'mcp_oauth_maintenance'");
+    expect(migration).toContain('DELETE FROM "user_mcp_oauth_tokens"');
+    expect(migration).toContain('"grant_binding_fingerprint" varchar(64)');
+    expect(migration).toContain('"refresh_generation" bigint');
+    expect(migration).toContain('"refresh_success_generation" bigint');
+    expect(migration).toContain('"oauth_metadata_uri" text');
+    expect(migration).toContain('"user_mcp_oauth_tokens_tenant_user_fk"');
+    expect(migration).toContain('"user_mcp_oauth_tokens_tenant_server_fk"');
+    expect(migration).toContain('"mcp_oauth_pending_flows_current_user_grant_uq"');
+    expect(migration).toContain('"mcp_oauth_pending_flows_current_shared_grant_uq"');
+    expect(migration).not.toMatch(/CHECK\s*\([^)]*"status"/i);
+    expect(migration).not.toMatch(/CHECK\s*\([^)]*"oauth_mode"/i);
+  });
+});
+
+describe('Executor session token authority migrations', () => {
+  it('keeps the SQLite schema compatible without enabling shared authority', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-token-authority-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+
+    try {
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0078_executor_session_token_authority.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const columns = await client.execute('PRAGMA table_info(executor_session_token_authorities)');
+      const columnNames = columns.rows.map((column) => column.name);
+
+      expect(columnNames).toContain('token_fingerprint');
+      expect(columnNames).not.toContain('tenant_id');
+      expect(columnNames).not.toContain('token');
+      expect(columnNames).not.toContain('raw_token');
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('MCP OAuth pending-flow migrations', () => {
+  it('keeps SQLite schema-compatible while standalone flow authority stays local', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-mcp-oauth-flow-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+
+    try {
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0081_mcp_oauth_pending_flows.sql', import.meta.url),
+        'utf8'
+      );
+      await client.execute('PRAGMA foreign_keys = OFF');
+      await client.execute(`
+        CREATE TABLE user_mcp_oauth_tokens (
+          user_id text,
+          mcp_server_id text NOT NULL,
+          oauth_access_token text NOT NULL,
+          oauth_token_expires_at integer,
+          oauth_refresh_token text,
+          oauth_client_id text,
+          oauth_client_secret text,
+          created_at integer NOT NULL,
+          updated_at integer
+        )
+      `);
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const columns = await client.execute('PRAGMA table_info(mcp_oauth_pending_flows)');
+      const columnNames = columns.rows.map((column) => column.name);
+      expect(columnNames).toContain('state_hash');
+      expect(columnNames).toContain('sealed_material');
+      expect(columnNames).toContain('grant_generation');
+      expect(columnNames).toContain('config_fingerprint');
+      expect(columnNames).toContain('is_current');
+      expect(columnNames).not.toContain('tenant_id');
+      expect(columnNames).not.toContain('state');
+      expect(columnNames).not.toContain('code');
+      expect(columnNames).not.toContain('access_token');
+      expect(columnNames).not.toContain('refresh_token');
+
+      const tokenColumns = await client.execute('PRAGMA table_info(user_mcp_oauth_tokens)');
+      const tokenColumnNames = tokenColumns.rows.map((column) => column.name);
+      expect(tokenColumnNames).toContain('grant_binding_fingerprint');
+      expect(tokenColumnNames).toContain('oauth_metadata_uri');
+      expect(tokenColumnNames).toContain('refresh_generation');
+      expect(tokenColumnNames).toContain('refresh_success_generation');
+
+      const tableSql = await client.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'mcp_oauth_pending_flows'"
+      );
+      expect(String(tableSql.rows[0]?.sql)).not.toMatch(/CHECK\s*\(/i);
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

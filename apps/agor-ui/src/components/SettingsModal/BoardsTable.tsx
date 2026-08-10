@@ -1,4 +1,3 @@
-import { GOLD_SHIMMER_BOARD_BACKGROUND } from '@agor/core/design/board-backgrounds';
 import type { AgorClient, Board, Branch, Session } from '@agor-live/client';
 import {
   CopyOutlined,
@@ -356,8 +355,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
+              // New boards start on the theme-aware default (no persisted
+              // background); the editor's Default mode reflects this.
               form.resetFields();
-              form.setFieldsValue({ background_color: GOLD_SHIMMER_BOARD_BACKGROUND });
               setCreateModalOpen(true);
             }}
           >
@@ -390,7 +390,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         okText="Create"
       >
         <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
-          <BoardFormFields form={form} extra={customContextField} initialCustomCSS />
+          <BoardFormFields form={form} extra={customContextField} />
         </Form>
       </Modal>
 

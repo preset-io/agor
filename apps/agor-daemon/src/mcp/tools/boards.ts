@@ -6,7 +6,7 @@ import type {
   BranchID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';

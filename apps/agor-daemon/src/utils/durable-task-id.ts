@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { MessageID, SessionID, TaskID } from '@agor/core/types';
+import type { GatewayInboundEventID, MessageID, SessionID, TaskID } from '@agor/core/types';
 
 function stableTaskId(sourceId: string, domain: string, discriminator = ''): TaskID {
   const digest = createHash('sha256')
@@ -21,4 +21,14 @@ export function completionCallbackTaskId(sourceTaskId: TaskID, targetSessionId: 
 /** One durable auto-resume Task per widget message. */
 export function widgetAutoResumeTaskId(widgetId: MessageID): TaskID {
   return stableTaskId(widgetId, 'widget_auto_resume');
+}
+
+/** One stable prompt Task for one durably admitted provider event. */
+export function gatewayInboundTaskId(eventId: GatewayInboundEventID): TaskID {
+  return stableTaskId(eventId, 'gateway_inbound_prompt');
+}
+
+/** Stable first-Session identity if listener recovery repeats initial admission. */
+export function gatewayInboundSessionId(eventId: GatewayInboundEventID): SessionID {
+  return stableTaskId(eventId, 'gateway_inbound_session') as unknown as SessionID;
 }

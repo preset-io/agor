@@ -8,10 +8,12 @@
 
 import type { SpawnOptions } from 'node:child_process';
 import type { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import {
   type ContentBlock,
+  type EffortLevel,
   type ExecutorPulseKind,
   type MCPServer,
   type MessageID,
@@ -21,8 +23,9 @@ import {
   type TaskID,
   type ToolUse,
 } from '@agor/core/types';
-import { createOpencodeClient } from '@opencode-ai/sdk';
+import type { createOpencodeClient } from '@opencode-ai/sdk';
 import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '../shared/index.js';
+import type { OpenCodeCommand } from './binary.js';
 import {
   createOpenCodeEventTranslator,
   type OpenCodeEventEffect,
@@ -37,6 +40,7 @@ import {
   resolvePackagedOpenCodeBinary,
   startManagedOpenCodeServer,
 } from './managed-server.js';
+import { loadOpenCodeSdk } from './sdk-loader.js';
 
 export { resolvePackagedOpenCodeBinary };
 
@@ -82,6 +86,7 @@ export type RunOpenCodeTurnInput = {
   directory: string;
   provider?: string;
   model?: string;
+  effort?: EffortLevel;
   mcpToken?: string;
   permissionMode?: PermissionMode;
   dataHome?: string;
@@ -144,7 +149,7 @@ export type OpenCodeCanUseToolCallback = (
 }>;
 
 export type OpenCodeToolDependencies = {
-  resolveBinary?: () => Promise<string>;
+  resolveBinary?: () => Promise<string | OpenCodeCommand>;
   spawn?: (executable: string, args: readonly string[], options: SpawnOptions) => ManagedChild;
   createClient?: typeof createOpencodeClient;
   resolveInvocationConfig?: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
@@ -444,7 +449,7 @@ export class OpenCodeTool {
     | 'cancelPendingPermissions'
     | 'enrichContentBlocks'
   > & {
-    createClient: typeof createOpencodeClient;
+    createClient?: typeof createOpencodeClient;
     resolveInvocationConfig: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
     resolveMcpServers: NonNullable<OpenCodeToolDependencies['resolveMcpServers']>;
     getDaemonUrl: NonNullable<OpenCodeToolDependencies['getDaemonUrl']>;
@@ -457,7 +462,7 @@ export class OpenCodeTool {
     this.dependencies = {
       resolveBinary: dependencies.resolveBinary,
       spawn: dependencies.spawn,
-      createClient: dependencies.createClient ?? createOpencodeClient,
+      createClient: dependencies.createClient,
       resolveInvocationConfig:
         dependencies.resolveInvocationConfig ??
         ((input) =>
@@ -628,12 +633,20 @@ export class OpenCodeTool {
     let outcome: OpenCodeTurnResult | undefined;
     let turnFailure: Error | undefined;
     try {
-      client = this.dependencies.createClient({
+      const createClient =
+        this.dependencies.createClient ?? (await loadOpenCodeSdk()).createOpencodeClient;
+      client = createClient({
         baseUrl,
         directory: input.directory,
         headers: { Authorization: authorization },
       });
-      await this.assertExplicitModelAvailable(client, input.directory, provider, model);
+      await this.assertExplicitModelAvailable(
+        client,
+        input.directory,
+        provider,
+        model,
+        input.effort
+      );
 
       const { openCodeSessionId, sessionWasCreated } = await this.resolveSession(client, input);
 
@@ -751,9 +764,11 @@ export class OpenCodeTool {
     client: OpenCodeClient,
     directory: string,
     providerId: string,
-    modelId: string
+    modelId: string,
+    effort?: EffortLevel
   ): Promise<void> {
-    let available = false;
+    let modelAvailable = false;
+    let effortAvailable = !effort;
     try {
       const query = { directory };
       const [catalogResponse, runtimeResponse] = await Promise.all([
@@ -761,22 +776,32 @@ export class OpenCodeTool {
         client.provider.list({ query }),
       ]);
       const provider = catalogResponse.data?.providers.find((entry) => entry.id === providerId);
-      available =
+      const selectedModel = provider
+        ? Object.entries(provider.models).find(
+            ([candidateId, model]) => candidateId === modelId || model.id === modelId
+          )?.[1]
+        : undefined;
+      modelAvailable =
         !catalogResponse.error &&
         !runtimeResponse.error &&
         Boolean(runtimeResponse.data?.connected.includes(providerId)) &&
-        Boolean(
-          provider &&
-            Object.entries(provider.models).some(
-              ([candidateId, model]) => candidateId === modelId || model.id === modelId
-            )
-        );
+        Boolean(selectedModel);
+      if (modelAvailable && effort) {
+        // OpenCode returns native variants here; the generated SDK model type currently omits them.
+        const variants = (selectedModel as { variants?: Record<string, unknown> }).variants;
+        effortAvailable = Boolean(variants && Object.hasOwn(variants, effort));
+      }
     } catch {
       // Public failure stays independent of raw provider objects and SDK details.
     }
-    if (!available) {
+    if (!modelAvailable) {
       throw new Error(
         'The selected OpenCode provider/model is not available for this session owner and branch configuration; retry discovery or enter an available exact pair'
+      );
+    }
+    if (!effortAvailable) {
+      throw new Error(
+        "The selected OpenCode reasoning effort is not available for this session owner's provider/model and branch configuration; choose a supported effort or leave it unset"
       );
     }
   }
@@ -877,16 +902,23 @@ export class OpenCodeTool {
       new Error(
         `OpenCode prompt failed for ${context.provider}/${context.model}. Reconnect ${context.provider} in OpenCode settings or choose another provider/model.`
       );
+    // Carry the shared Agor orientation on every turn. `system` appends to
+    // OpenCode's provider baseline; the managed agent's own prompt would
+    // replace it.
+    const agorSystemPrompt = await renderAgorSystemPrompt();
     const request = {
       path: { id: context.opencodeSessionId },
       signal: input.signal,
       body: {
         agent: AGOR_MANAGED_AGENT,
+        system: agorSystemPrompt,
         parts: [{ type: 'text' as const, text: input.prompt }],
+        ...(input.effort ? { variant: input.effort } : {}),
         ...(context.model && context.provider
           ? { model: { providerID: context.provider, modelID: context.model } }
           : {}),
-      },
+        // OpenCode accepts `variant`; the generated SDK request type currently omits it.
+      } as NonNullable<Parameters<OpenCodeClient['session']['prompt']>[0]>['body'],
       query: context.branchPath ? { directory: context.branchPath } : undefined,
     };
     const transcriptRequest = {

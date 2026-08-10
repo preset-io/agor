@@ -7,6 +7,31 @@ import { dbTest } from './test-helpers';
 import { createUser } from './user-utils';
 
 describe('bootstrapFirstRunAdmin', () => {
+  dbTest('allows competing daemon seeders to converge on one default board', async ({ db }) => {
+    await Promise.all([seedInitialData(db), seedInitialData(db)]);
+
+    const boardRows = await select(db).from(boards).all();
+    expect(boardRows).toHaveLength(1);
+    expect(boardRows[0].slug).toBe('default');
+  });
+
+  dbTest('allows competing daemon admin bootstraps to converge on one user', async ({ db }) => {
+    const createAdmin = () =>
+      createUser(db, {
+        email: 'admin@agor.live',
+        password: 'concurrent-bootstrap-password',
+        role: 'superadmin',
+      });
+
+    const results = await Promise.all([
+      bootstrapFirstRunAdmin(db, createAdmin),
+      bootstrapFirstRunAdmin(db, createAdmin),
+    ]);
+
+    expect(results.filter((result) => result.createdAdmin)).toHaveLength(1);
+    expect(new Set(results.map((result) => result.admin?.user_id)).size).toBe(1);
+  });
+
   dbTest('prefers existing superadmins when reattributing legacy rows', async ({ db }) => {
     const member = await createUser(db, {
       email: 'member@example.com',

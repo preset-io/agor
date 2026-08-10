@@ -29,6 +29,10 @@ import { executeRaw, isPostgresDatabase } from './database-wrapper';
 import { checkMigrationStatus } from './migrate';
 import { buildTenantDeletionManifest } from './tenant-deletion-manifest';
 import { IMPERATIVE_TENANT_TABLES } from './tenant-imperative-tables';
+import {
+  nonPortableTenantTableNames,
+  tenantPortabilityTableNames,
+} from './tenant-portability-manifest';
 
 /** Thrown when a portability operation targets a non-multi-tenant database. */
 export class TenantPortabilityUnsupportedError extends Error {
@@ -49,7 +53,7 @@ export class TenantCatalogError extends Error {
 /**
  * Runtime-derived database identity. Stable, machine-readable, secret-free — it
  * contains only the dialect, the applied-migration ledger, and the sorted set of
- * tenant-owned table names, plus a fingerprint over all of them.
+ * tenant-owned table classifications, plus a fingerprint over all of them.
  */
 export interface TenantDatabaseIdentity {
   dialect: 'postgresql';
@@ -57,8 +61,10 @@ export interface TenantDatabaseIdentity {
   schemaVersion: string;
   /** Applied migration tags, in applied order. Import requires an exact match. */
   migrations: string[];
-  /** Sorted names of every tenant-owned table covered by the manifest. */
+  /** Sorted names of tenant-owned tables whose rows move with an archive. */
   tenantTables: string[];
+  /** Sorted tenant-owned tables deleted with a tenant but never moved. */
+  nonPortableTenantTables: string[];
   /**
    * Imperative tenant tables (created lazily outside the schema) proven present
    * in the live catalog. A subset of the registered imperative tables.
@@ -190,7 +196,22 @@ export async function resolveTenantDatabaseIdentity(db: Database): Promise<Tenan
   }
 
   const presentImperativeTables = [...imperativeSet].filter((name) => live.has(name)).sort();
-  const tenantTables = [...manifestSet].sort();
+  const tenantTables = tenantPortabilityTableNames();
+  const nonPortableTenantTables = nonPortableTenantTableNames();
+  const classifiedManifestTables = new Set([...tenantTables, ...nonPortableTenantTables]);
+  const unclassifiedManifestTables = manifestNames
+    .filter((name) => !classifiedManifestTables.has(name))
+    .sort();
+  const staleClassifications = [...classifiedManifestTables]
+    .filter((name) => !manifestSet.has(name))
+    .sort();
+  if (unclassifiedManifestTables.length > 0 || staleClassifications.length > 0) {
+    throw new TenantCatalogError(
+      'Refusing the tenant operation: portable/non-portable table classification does not match ' +
+        `the deletion manifest (unclassified=${unclassifiedManifestTables.join(',') || 'none'}; ` +
+        `stale=${staleClassifications.join(',') || 'none'})`
+    );
+  }
 
   const fingerprint = createHash('sha256')
     .update(
@@ -199,6 +220,7 @@ export async function resolveTenantDatabaseIdentity(db: Database): Promise<Tenan
         schemaVersion,
         migrations,
         tenantTables,
+        nonPortableTenantTables,
         presentImperativeTables,
       })
     )
@@ -209,6 +231,7 @@ export async function resolveTenantDatabaseIdentity(db: Database): Promise<Tenan
     schemaVersion,
     migrations,
     tenantTables,
+    nonPortableTenantTables,
     presentImperativeTables,
     fingerprint,
   };

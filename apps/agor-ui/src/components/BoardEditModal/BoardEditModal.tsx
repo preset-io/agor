@@ -8,10 +8,10 @@ import type {
   User,
   UUID,
 } from '@agor-live/client';
-import { Alert, Form, Modal } from 'antd';
+import { Alert, Form, Modal, Skeleton } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
-import { BoardFormFields, extractBoardFormValues, isCustomCSS } from '../forms/BoardFormFields';
+import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 
 export interface BoardEditModalProps {
@@ -76,7 +76,9 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
         }
         if (cancelled) return;
         if (ownerIds.length === 0 && fresh.created_by) ownerIds = [fresh.created_by];
-        setLoadedBoard(fresh);
+        // Populate the form BEFORE exposing loadedBoard so the background
+        // editor mounts against fully-initialized field values (rather than
+        // relying on render batching). loadedBoard is set last, below.
         form.resetFields();
         form.setFieldsValue({
           name: fresh.name,
@@ -94,6 +96,8 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
           board_group_grants: grants,
           custom_context: fresh.custom_context ? JSON.stringify(fresh.custom_context, null, 2) : '',
         });
+        // Expose the loaded board last: this is what un-gates the form render.
+        setLoadedBoard(fresh);
       } catch (error) {
         if (!cancelled) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -183,14 +187,18 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
     >
       {loadError ? (
         <Alert type="error" showIcon title="Board settings unavailable" description={loadError} />
+      ) : !loadedBoard ? (
+        // Render the form only once the full board has loaded, so its fields —
+        // including the background editor's mode — initialize from real values
+        // rather than the empty pre-load state (the cause of the mode/checkbox
+        // resetting on reopen).
+        <Skeleton active paragraph={{ rows: 6 }} style={{ marginTop: 16 }} />
       ) : (
         <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
           <BoardFormFields
-            key={board?.board_id}
+            key={loadedBoard.board_id}
             form={form}
-            initialCustomCSS={
-              isCustomCSS(loadedBoard?.background_color) || Boolean(loadedBoard?.custom_css)
-            }
+            backgroundResetSignal={loadedBoard.board_id}
             rbacEnabled={rbacEnabled}
             allUsers={allUsers}
             allGroups={allGroups}

@@ -41,7 +41,9 @@
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
+  type DeploymentAgenticToolPolicy,
   InvalidScheduleAgenticToolConfigError,
+  isDeploymentAgenticToolAvailable,
   isTenantAgenticToolEnabled,
   normalizePersistedScheduleAgenticToolConfig,
   unixUserModeRequiresUsername,
@@ -57,6 +59,7 @@ import {
   EntityNotFoundError,
   generateId,
   getCurrentTenantId,
+  isDatabaseUniqueConstraintError,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -111,25 +114,6 @@ import {
   type StructuredLogValue,
   structuredLogErrorCode,
 } from '../utils/structured-log.js';
-
-/**
- * Best-effort detection of the partial-unique-index conflict raised by
- * `sessions_schedule_run_unique` when a concurrent spawn races past
- * the dedup check. SQLite returns `SQLITE_CONSTRAINT_UNIQUE` /
- * `SQLITE_CONSTRAINT`; postgres-js raises an error whose `.code` is
- * `'23505'`. We match on the message too in case the underlying error
- * is wrapped (the repo wraps insert errors in `RepositoryError`).
- */
-function isUniqueConstraintError(err: unknown): boolean {
-  if (!err) return false;
-  const e = err as { code?: string; cause?: unknown; message?: string };
-  const code = e.code ?? '';
-  if (code === '23505') return true; // postgres
-  if (code.startsWith('SQLITE_CONSTRAINT')) return true; // libsql / sqlite
-  const msg = (e.message ?? '').toLowerCase();
-  if (msg.includes('unique constraint') || msg.includes('sqlite_constraint_unique')) return true;
-  return e.cause !== err && isUniqueConstraintError(e.cause);
-}
 
 function isSQLiteBusyError(err: unknown): boolean {
   if (!err) return false;
@@ -252,6 +236,8 @@ export class ScheduleNotReadyError extends Error {
 }
 
 export interface SchedulerConfig {
+  /** Immutable deployment configuration captured when the daemon starts. */
+  deploymentPolicy?: DeploymentAgenticToolPolicy;
   /** Tick interval in milliseconds (default: 30000 = 30s) */
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
@@ -283,6 +269,7 @@ export interface SchedulerTestHooks {
 }
 
 interface ResolvedSchedulerConfig {
+  deploymentPolicy: DeploymentAgenticToolPolicy;
   tickInterval: number;
   gracePeriod: number;
   unixUserMode: UnixUserMode;
@@ -328,6 +315,7 @@ export class SchedulerService {
       );
     }
     this.config = {
+      deploymentPolicy: config.deploymentPolicy ?? { managed: false, installed: new Set() },
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       unixUserMode: config.unixUserMode ?? 'simple',
@@ -827,6 +815,11 @@ export class SchedulerService {
     }
     const cfg = resolvedConfig.config;
     if (
+      !isDeploymentAgenticToolAvailable(resolvedConfig.activeTool, this.config.deploymentPolicy)
+    ) {
+      throw new BadRequest(`${resolvedConfig.activeTool} is not installed for this deployment`);
+    }
+    if (
       !(await this.withTenantDatabase(() =>
         isTenantAgenticToolEnabled(resolvedConfig.activeTool, this.db)
       ))
@@ -916,7 +909,7 @@ export class SchedulerService {
     } catch (error) {
       // SQLite has no row-level lock and may race between the lookup and insert.
       // PostgreSQL's corrected tenant-aware unique index is defense in depth.
-      if (!isUniqueConstraintError(error)) throw error;
+      if (!isDatabaseUniqueConstraintError(error)) throw error;
       const winner = await this.withTenantDatabase(() =>
         this.sessionRepo.findScheduleRun(schedule.schedule_id, scheduledRunAt)
       );

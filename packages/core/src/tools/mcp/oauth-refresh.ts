@@ -1,41 +1,25 @@
-/**
- * MCP OAuth Token Refresh (RFC 6749 §6)
- *
- * Exchanges a saved refresh_token for a new access_token without user
- * interaction. Invoked just-in-time from the daemon service that hands
- * auth headers to the executor.
- *
- * Contract with the refresh call site:
- *   - The caller MUST hold a per-(user, server) mutex — two concurrent
- *     refreshes against the same refresh_token can fail or, with strict
- *     providers, revoke the entire grant chain. `refreshAndPersistToken`
- *     in this module does the locking.
- *   - On `invalid_grant`, the token row is deleted so the user gets an
- *     "please re-auth" state. All other HTTP/network errors are surfaced
- *     to the caller (NOT swallowed) — the access token stays in place
- *     in case the failure is transient.
- *
- * Out of scope (tracked as follow-ups in the PR description):
- *   - Retry-on-401 shim for the MCP transport.
- *   - `registration_access_token` / `registration_client_uri` capture
- *     from DCR for future client-management.
- *   - Background refresh scheduler (deliberately rejected — JIT is
- *     simpler, avoids wasted refreshes on idle users, and has the same
- *     correctness properties for our access patterns).
- */
+/** PostgreSQL-coordinated MCP OAuth refresh with rotating-token fencing. */
 
-import type { Database } from '../../db/client';
-import { MCPServerRepository, UserMCPOAuthTokenRepository } from '../../db/repositories';
+import { getCurrentTenantId, isPostgresDatabaseHandle, runWithTenantDatabaseScope } from '../../db';
+import type { Database, TenantScopeAwareDatabase } from '../../db/client';
+import {
+  type MCPOAuthRefreshVersion,
+  MCPServerRepository,
+  type UserMCPOAuthToken,
+  UserMCPOAuthTokenRepository,
+} from '../../db/repositories';
 import type { MCPServerID, UserID } from '../../types';
+import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { inferOAuthTokenUrl } from './oauth-auth';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
-/** 60s safety window before hard expiry. */
 export const REFRESH_BUFFER_MS = 60_000;
+const REFRESH_OBSERVE_TIMEOUT_MS = 20_000;
+const REFRESH_OBSERVE_INTERVAL_MS = 100;
 
 export class InvalidGrantError extends Error {
   readonly code = 'invalid_grant';
-  constructor(message: string) {
+  constructor(message = 'OAuth refresh grant is no longer valid') {
     super(message);
     this.name = 'InvalidGrantError';
   }
@@ -43,7 +27,7 @@ export class InvalidGrantError extends Error {
 
 export class MissingRefreshTokenError extends Error {
   readonly code = 'missing_refresh_token';
-  constructor(message: string = 'No stored refresh_token available for this grant') {
+  constructor(message = 'No stored refresh token is available for this grant') {
     super(message);
     this.name = 'MissingRefreshTokenError';
   }
@@ -51,7 +35,7 @@ export class MissingRefreshTokenError extends Error {
 
 export class MissingTokenEndpointError extends Error {
   readonly code = 'missing_token_endpoint';
-  constructor(message: string = 'Could not determine OAuth token endpoint for refresh') {
+  constructor(message = 'Could not determine the OAuth token endpoint for refresh') {
     super(message);
     this.name = 'MissingTokenEndpointError';
   }
@@ -59,11 +43,35 @@ export class MissingTokenEndpointError extends Error {
 
 export class MissingClientIdError extends Error {
   readonly code = 'missing_client_id';
-  constructor(
-    message: string = 'Cannot refresh OAuth token: no client_id available for this grant'
-  ) {
+  constructor(message = 'Cannot refresh OAuth token without a client ID') {
     super(message);
     this.name = 'MissingClientIdError';
+  }
+}
+
+export class AmbiguousRefreshError extends Error {
+  readonly code = 'ambiguous_refresh';
+  constructor(message = 'OAuth refresh outcome is ambiguous; reconnect safely') {
+    super(message);
+    this.name = 'AmbiguousRefreshError';
+  }
+}
+
+export class FailedRefreshError extends Error {
+  readonly code = 'failed_refresh';
+  constructor(message = 'The observed OAuth refresh failed; retry or reconnect safely') {
+    super(message);
+    this.name = 'FailedRefreshError';
+  }
+}
+
+export class OAuthRefreshExchangeError extends Error {
+  constructor(
+    readonly category: 'provider_rejected' | 'transport_ambiguous' | 'response_ambiguous',
+    readonly ambiguous: boolean
+  ) {
+    super(`OAuth refresh failed (${category})`);
+    this.name = 'OAuthRefreshExchangeError';
   }
 }
 
@@ -71,18 +79,15 @@ export interface RefreshMCPTokenOptions {
   tokenEndpoint: string;
   refreshToken: string;
   clientId: string;
-  /** Public clients omit this. */
   clientSecret?: string;
+  resourceUri?: string;
+  /** Exact loopback HTTP exception for standalone development/tests only. */
+  allowLocalhostHttp?: boolean;
 }
 
 export interface RefreshMCPTokenResult {
   access_token: string;
-  /**
-   * Present when the provider rotates refresh tokens (OAuth 2.1 / public
-   * clients). Callers must persist this and DISCARD the old value.
-   */
   refresh_token?: string;
-  /** Seconds until the access token expires. */
   expires_in?: number;
   token_type?: string;
   scope?: string;
@@ -95,19 +100,9 @@ interface OAuthRefreshRawResponse {
   refresh_token?: string;
   scope?: string;
   error?: string;
-  error_description?: string;
 }
 
-/**
- * Pure HTTP call: POST `grant_type=refresh_token` to the token endpoint.
- *
- * Mirrors `exchangeCodeForToken` in oauth-mcp-transport.ts for auth style —
- * Basic auth when `client_secret` is present (RFC 6749 §2.3.1), otherwise
- * `client_id` in the request body for public clients.
- *
- * Does NOT persist. Callers should prefer `refreshAndPersistToken`, which
- * handles mutexing, DB lookup, and invalid_grant cleanup.
- */
+/** The only emitted failure data is a stable local category/status. */
 export async function refreshMCPToken(
   opts: RefreshMCPTokenOptions
 ): Promise<RefreshMCPTokenResult> {
@@ -115,264 +110,297 @@ export async function refreshMCPToken(
     grant_type: 'refresh_token',
     refresh_token: opts.refreshToken,
   };
-
+  if (opts.resourceUri) body.resource = opts.resourceUri;
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
     Accept: 'application/json',
   };
-
   if (opts.clientSecret) {
     headers.Authorization = `Basic ${Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString('base64')}`;
   } else {
     body.client_id = opts.clientId;
   }
 
-  const response = await fetch(opts.tokenEndpoint, {
-    method: 'POST',
-    headers,
-    body: new URLSearchParams(body).toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
+  let response: Response;
+  try {
+    response = await safeOutboundFetch(opts.tokenEndpoint, {
+      method: 'POST',
+      headers,
+      body: new URLSearchParams(body).toString(),
+      redirect: 'error',
+      timeoutMs: 15_000,
+      allowLocalhostHttp: opts.allowLocalhostHttp,
+    });
+  } catch {
+    throw new OAuthRefreshExchangeError('transport_ambiguous', true);
+  }
 
-  const rawText = await response.text();
   let parsed: OAuthRefreshRawResponse;
   try {
-    parsed = rawText ? (JSON.parse(rawText) as OAuthRefreshRawResponse) : {};
+    parsed = (await response.json()) as OAuthRefreshRawResponse;
   } catch {
-    throw new Error(
-      `Token refresh returned non-JSON body (HTTP ${response.status}): ${rawText.slice(0, 200)}`
-    );
+    throw new OAuthRefreshExchangeError('response_ambiguous', true);
   }
-
-  if (!response.ok || parsed.error) {
-    const err = parsed.error || `http_${response.status}`;
-    const description = parsed.error_description ? ` — ${parsed.error_description}` : '';
-    if (err === 'invalid_grant') {
-      throw new InvalidGrantError(`invalid_grant${description}`);
-    }
-    throw new Error(`Token refresh failed (${response.status}): ${err}${description}`);
+  if (parsed.error === 'invalid_grant') throw new InvalidGrantError();
+  if (parsed.error) throw new OAuthRefreshExchangeError('provider_rejected', false);
+  if (!response.ok || typeof parsed.access_token !== 'string' || !parsed.access_token) {
+    throw new OAuthRefreshExchangeError('response_ambiguous', true);
   }
-
-  if (!parsed.access_token) {
-    throw new Error(
-      `Token refresh succeeded but response has no access_token. Keys: ${Object.keys(parsed).join(', ')}`
-    );
-  }
-
-  const expiresInNum =
-    parsed.expires_in != null
-      ? Number.isFinite(Number(parsed.expires_in))
-        ? Number(parsed.expires_in)
-        : undefined
-      : undefined;
-
+  const expiresIn = parsed.expires_in == null ? undefined : Number(parsed.expires_in);
   return {
     access_token: parsed.access_token,
     refresh_token: parsed.refresh_token,
-    expires_in: expiresInNum,
+    expires_in: Number.isFinite(expiresIn) ? expiresIn : undefined,
     token_type: parsed.token_type,
     scope: parsed.scope,
   };
 }
 
-// ---------------------------------------------------------------------------
-// Persistence-aware refresh with per-key mutex
-// ---------------------------------------------------------------------------
-
 type MutexKey = string;
-
-/**
- * Module-level map of in-flight refreshes. Keyed on `${user|shared}:${server}`.
- *
- * Rationale: if a provider rotates refresh_tokens and two callers both fire a
- * refresh with the same (now-stale) refresh_token, the second call fails.
- * Worse, some providers treat a replayed refresh_token as a compromise signal
- * and revoke the whole grant chain. The mutex collapses concurrent refresh
- * attempts into a single HTTP call that all callers await.
- *
- * Module-local to avoid leaking internals on the package API surface. Tests
- * that need a clean slate should call {@link __resetRefreshMutexForTests}.
- */
 const _inFlightRefreshes = new Map<MutexKey, Promise<string>>();
-
-/**
- * Test-only hook: clears the in-flight refresh map. Do NOT call from
- * production code; there's no race-free reason to reach in here at runtime.
- */
 export function __resetRefreshMutexForTests(): void {
   _inFlightRefreshes.clear();
 }
-
-/**
- * Test-only hook: snapshot the number of in-flight refreshes. Used to assert
- * the map clears after success/failure. Do NOT call from production code.
- */
 export function __refreshMutexSizeForTests(): number {
   return _inFlightRefreshes.size;
 }
-
 function mutexKey(userId: UserID | null, serverId: MCPServerID): MutexKey {
   return `${userId ?? '<shared>'}:${serverId}`;
 }
 
 export interface RefreshAndPersistDeps {
-  db: Database;
+  db: Database | TenantScopeAwareDatabase;
+  tenantId?: string;
   userId: UserID | null;
   mcpServerId: MCPServerID;
-  /** Optional hook for "re-auth needed" signals (FeathersJS app, etc.) */
+  /**
+   * Version read by the caller when it decided a PostgreSQL refresh was
+   * needed. Required at runtime for PostgreSQL so a delayed caller cannot
+   * refresh a peer's newly rotated token.
+   */
+  observedRefreshVersion?: MCPOAuthRefreshVersion;
   onInvalidGrant?: (info: { userId: UserID | null; mcpServerId: MCPServerID }) => void;
+  /** Internal test/development seam; daemon PostgreSQL callers leave this false. */
+  allowLocalhostHttpDevelopment?: boolean;
 }
 
-/**
- * Refresh the stored OAuth token and persist the rotation atomically.
- *
- * - Loads refresh_token + client_id + client_secret from `user_mcp_oauth_tokens`.
- * - Loads token endpoint from `mcp_servers.data.auth.oauth_token_url`; if
- *   missing, infers via {@link inferOAuthTokenUrl} from the server URL.
- *   (Full RFC 8414 re-discovery is avoided here because the refresh path is
- *   hot; if the server was originally DCR-registered, we persisted enough to
- *   refresh without re-fetching metadata.)
- * - On success: writes new access_token, rotated refresh_token if any, and
- *   new expiry back. Preserves client_id / client_secret unchanged.
- * - On `invalid_grant`: deletes the token row so the user is surfaced
- *   "please re-auth", then re-throws.
- *
- * Returns the new access_token string.
- */
-export async function refreshAndPersistToken(deps: RefreshAndPersistDeps): Promise<string> {
-  const key = mutexKey(deps.userId, deps.mcpServerId);
+function resolveTenantId(deps: RefreshAndPersistDeps): string {
+  const tenantId = deps.tenantId ?? getCurrentTenantId();
+  if (!tenantId) throw new Error('MCP OAuth refresh requires trusted tenant identity');
+  return String(tenantId);
+}
 
-  const existing = _inFlightRefreshes.get(key);
-  if (existing) {
-    console.log(`[MCP OAuth Refresh] Piggybacking on in-flight refresh for ${key}`);
-    return existing;
+async function tenantWork<T>(
+  deps: RefreshAndPersistDeps,
+  work: (db: Database) => Promise<T>
+): Promise<T> {
+  return runWithTenantDatabaseScope(deps.db, resolveTenantId(deps), (scoped) =>
+    work(scoped as Database)
+  );
+}
+
+function notifyInvalidGrant(deps: RefreshAndPersistDeps): void {
+  try {
+    deps.onInvalidGrant?.({ userId: deps.userId, mcpServerId: deps.mcpServerId });
+  } catch {
+    console.error('[MCP OAuth Refresh] callback_failed category=invalid_grant_notification');
+  }
+}
+
+async function observeCommittedRefresh(
+  deps: RefreshAndPersistDeps,
+  expected: MCPOAuthRefreshVersion
+): Promise<string> {
+  const deadline = Date.now() + REFRESH_OBSERVE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const token = await tenantWork(deps, (db) =>
+      new UserMCPOAuthTokenRepository(db).getToken(deps.userId, deps.mcpServerId)
+    );
+    if (!token) throw new InvalidGrantError();
+    if (token.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
+    if (token.refresh_status === 'idle') {
+      // A newer authorization replaced the old grant atomically and is valid
+      // independently of the old refresh attempt.
+      if (token.grant_generation !== expected.grantGeneration) {
+        return token.oauth_access_token;
+      }
+      if (token.refresh_success_generation >= expected.refreshGeneration) {
+        return token.oauth_access_token;
+      }
+      // `idle` alone is not success: a known provider rejection releases the
+      // claim for retry while deliberately leaving success generation behind.
+      throw new FailedRefreshError();
+    }
+    await new Promise((resolve) => setTimeout(resolve, REFRESH_OBSERVE_INTERVAL_MS));
+  }
+  throw new AmbiguousRefreshError('OAuth refresh owner did not commit before the wait timeout');
+}
+
+async function settleObservedRefresh(
+  deps: RefreshAndPersistDeps,
+  token: UserMCPOAuthToken | null
+): Promise<string> {
+  if (!token) throw new InvalidGrantError();
+  if (token.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
+  if (token.refresh_status === 'refreshing') {
+    return observeCommittedRefresh(deps, {
+      grantGeneration: token.grant_generation,
+      refreshGeneration: token.refresh_generation,
+    });
+  }
+  if (!token.oauth_refresh_token) throw new MissingRefreshTokenError();
+  if (token.refresh_success_generation < token.refresh_generation) {
+    throw new FailedRefreshError();
+  }
+  // A stale caller lost its expected-version CAS to a successfully refreshed
+  // row or to a newer atomic grant replacement. It must observe, not exchange.
+  return token.oauth_access_token;
+}
+
+async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
+  const expected = deps.observedRefreshVersion;
+  if (!expected) {
+    throw new Error('PostgreSQL MCP OAuth refresh requires an observed grant version');
+  }
+  const claim = await tenantWork(deps, (db) =>
+    new UserMCPOAuthTokenRepository(db).claimRefresh(deps.userId, deps.mcpServerId, expected)
+  );
+  if (claim.outcome === 'observed') {
+    return settleObservedRefresh(deps, claim.token);
   }
 
-  const promise = (async () => {
-    const userTokenRepo = new UserMCPOAuthTokenRepository(deps.db);
-    const mcpServerRepo = new MCPServerRepository(deps.db);
-
-    const row = await userTokenRepo.getToken(deps.userId, deps.mcpServerId);
-    if (!row) {
-      throw new MissingRefreshTokenError(
-        `No OAuth token row for user=${deps.userId ?? '<shared>'} server=${deps.mcpServerId}`
-      );
-    }
-    if (!row.oauth_refresh_token) {
-      throw new MissingRefreshTokenError();
-    }
-
-    const server = await mcpServerRepo.findById(deps.mcpServerId);
-    const serverAuth = server?.auth;
-
-    // client_id/client_secret come from the token row first (DCR-bound), with
-    // fallback to server config for admin pre-registered apps where all users
-    // share the same client credentials.
-    const clientId = row.oauth_client_id ?? serverAuth?.oauth_client_id;
-    const clientSecret = row.oauth_client_secret ?? serverAuth?.oauth_client_secret;
-
-    if (!clientId) {
-      throw new MissingClientIdError(
-        `Cannot refresh OAuth token: no client_id available for server ${deps.mcpServerId}`
-      );
-    }
-
-    let tokenEndpoint = serverAuth?.oauth_token_url;
-    if (!tokenEndpoint && server?.url) {
-      try {
-        tokenEndpoint = inferOAuthTokenUrl(server.url);
-        console.log(
-          `[MCP OAuth Refresh] Inferred token endpoint from server URL: ${tokenEndpoint}`
-        );
-      } catch {
-        // fall through to the throw below
-      }
-    }
-    if (!tokenEndpoint) {
-      throw new MissingTokenEndpointError();
-    }
-
-    console.log(
-      `[MCP OAuth Refresh] Refreshing token for user=${deps.userId ?? '<shared>'} ` +
-        `server=${deps.mcpServerId} endpoint=${tokenEndpoint}`
+  const row = claim.token;
+  const fence = {
+    claimId: claim.claimId,
+    refreshGeneration: claim.refreshGeneration,
+    grantGeneration: claim.grantGeneration,
+  };
+  const releaseUnstartedClaim = async (error: Error): Promise<never> => {
+    await tenantWork(deps, (db) =>
+      new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
+        deps.userId,
+        deps.mcpServerId,
+        fence,
+        'idle'
+      )
     );
-
-    try {
-      const result = await refreshMCPToken({
-        tokenEndpoint,
-        refreshToken: row.oauth_refresh_token,
-        clientId,
-        clientSecret,
-      });
-
-      // Resolve expiry via the shared cascade so this site behaves
-      // identically to `persistOAuthToken` (initial-auth path). For providers
-      // that omit `expires_in` on refresh (e.g. Notion), `expiry.expiresAt`
-      // will be `null`, which `saveToken` writes as a literal `NULL` to
-      // `oauth_token_expires_at` — surfaced in the UI as
-      // "expires in: unknown" rather than the previous silent oscillation
-      // between fake-1h and stale-NULL values. See Phase 3.5 in
-      // `context/explorations/mcp-oauth-token-lifecycle.md`.
-      const expiry = resolveTokenExpiry(result, result.access_token);
-
-      // Persist atomically. Per RFC 6749 §6, an omitted refresh_token in the
-      // response means the old one is still valid — keep it. When present,
-      // the rotation replaces the old value.
-      await userTokenRepo.saveToken(deps.userId, deps.mcpServerId, {
-        accessToken: result.access_token,
-        expiresAt: expiry.expiresAt, // Date | null — null means "unknown"
-        refreshToken: result.refresh_token, // undefined = keep existing
-        // Don't touch client_id / client_secret — same grant, same client.
-      });
-
-      console.log(
-        `[MCP OAuth Refresh] ✓ Refreshed token for user=${deps.userId ?? '<shared>'} ` +
-          `server=${deps.mcpServerId} (expiry source: ${expiry.source}` +
-          `${expiry.expiresAt !== null ? `, expires=${expiry.expiresAt.toISOString()}` : ', expires=unknown'})` +
-          `${result.refresh_token ? ' (with rotated refresh_token)' : ''}`
-      );
-
-      return result.access_token;
-    } catch (err) {
-      if (err instanceof InvalidGrantError) {
-        console.warn(
-          `[MCP OAuth Refresh] invalid_grant for user=${deps.userId ?? '<shared>'} ` +
-            `server=${deps.mcpServerId} — deleting token row, user must re-auth`
-        );
-        try {
-          await userTokenRepo.deleteToken(deps.userId, deps.mcpServerId);
-        } catch (deleteErr) {
-          console.error(
-            '[MCP OAuth Refresh] Failed to delete token row after invalid_grant:',
-            deleteErr
-          );
-        }
-        if (deps.onInvalidGrant) {
-          try {
-            deps.onInvalidGrant({ userId: deps.userId, mcpServerId: deps.mcpServerId });
-          } catch (hookErr) {
-            console.error('[MCP OAuth Refresh] onInvalidGrant hook threw:', hookErr);
-          }
-        }
-      }
-      throw err;
-    }
-  })();
-
-  _inFlightRefreshes.set(key, promise);
+    throw error;
+  };
+  if (!row.oauth_refresh_token) {
+    return releaseUnstartedClaim(new MissingRefreshTokenError());
+  }
+  if (!row.oauth_client_id) return releaseUnstartedClaim(new MissingClientIdError());
+  if (!row.oauth_token_endpoint) {
+    return releaseUnstartedClaim(new MissingTokenEndpointError());
+  }
   try {
-    return await promise;
+    const result = await refreshMCPToken({
+      tokenEndpoint: row.oauth_token_endpoint,
+      refreshToken: row.oauth_refresh_token,
+      clientId: row.oauth_client_id,
+      clientSecret: row.oauth_client_secret,
+      resourceUri: row.oauth_resource_uri,
+      allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
+    });
+    const expiry = resolveTokenExpiry(result, result.access_token);
+    const committed = await tenantWork(deps, (db) =>
+      new UserMCPOAuthTokenRepository(db).completeClaimedRefresh(
+        deps.userId,
+        deps.mcpServerId,
+        fence,
+        {
+          accessToken: result.access_token,
+          refreshToken: result.refresh_token,
+          expiresAt: expiry.expiresAt,
+        }
+      )
+    );
+    if (!committed) return observeCommittedRefresh(deps, fence);
+    console.log('[MCP OAuth Refresh] refresh_succeeded category=committed');
+    return result.access_token;
+  } catch (error) {
+    if (error instanceof InvalidGrantError) {
+      const deleted = await tenantWork(deps, (db) =>
+        new UserMCPOAuthTokenRepository(db).deleteClaimedInvalidGrant(
+          deps.userId,
+          deps.mcpServerId,
+          fence
+        )
+      );
+      if (!deleted) return observeCommittedRefresh(deps, fence);
+      console.warn('[MCP OAuth Refresh] refresh_failed category=invalid_grant');
+      notifyInvalidGrant(deps);
+      throw error;
+    }
+    const ambiguous = !(error instanceof OAuthRefreshExchangeError) || error.ambiguous;
+    await tenantWork(deps, (db) =>
+      new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
+        deps.userId,
+        deps.mcpServerId,
+        fence,
+        ambiguous ? 'ambiguous' : 'idle'
+      )
+    );
+    console.warn(
+      `[MCP OAuth Refresh] refresh_failed category=${
+        error instanceof OAuthRefreshExchangeError ? error.category : 'local_ambiguous'
+      }`
+    );
+    throw error;
+  }
+}
+
+async function refreshStandalone(deps: RefreshAndPersistDeps): Promise<string> {
+  const userTokenRepo = new UserMCPOAuthTokenRepository(deps.db as Database);
+  const row = await userTokenRepo.getToken(deps.userId, deps.mcpServerId);
+  if (!row?.oauth_refresh_token) throw new MissingRefreshTokenError();
+  const server = await new MCPServerRepository(deps.db as Database).findById(deps.mcpServerId);
+  const clientId = row.oauth_client_id ?? server?.auth?.oauth_client_id;
+  if (!clientId) throw new MissingClientIdError();
+  let tokenEndpoint = row.oauth_token_endpoint ?? server?.auth?.oauth_token_url;
+  if (!tokenEndpoint && server?.url) tokenEndpoint = inferOAuthTokenUrl(server.url);
+  if (!tokenEndpoint) throw new MissingTokenEndpointError();
+  try {
+    const result = await refreshMCPToken({
+      tokenEndpoint,
+      refreshToken: row.oauth_refresh_token,
+      clientId,
+      clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
+      resourceUri: row.oauth_resource_uri,
+      allowLocalhostHttp: true,
+    });
+    const expiry = resolveTokenExpiry(result, result.access_token);
+    await userTokenRepo.saveToken(deps.userId, deps.mcpServerId, {
+      accessToken: result.access_token,
+      refreshToken: result.refresh_token,
+      expiresAt: expiry.expiresAt,
+    });
+    return result.access_token;
+  } catch (error) {
+    if (error instanceof InvalidGrantError) {
+      await userTokenRepo.deleteToken(deps.userId, deps.mcpServerId);
+      notifyInvalidGrant(deps);
+    }
+    throw error;
+  }
+}
+
+export async function refreshAndPersistToken(deps: RefreshAndPersistDeps): Promise<string> {
+  if (isPostgresDatabaseHandle(deps.db)) return refreshPostgres(deps);
+  const key = mutexKey(deps.userId, deps.mcpServerId);
+  const existing = _inFlightRefreshes.get(key);
+  if (existing) return existing;
+  const refresh = refreshStandalone(deps);
+  _inFlightRefreshes.set(key, refresh);
+  try {
+    return await refresh;
   } finally {
     _inFlightRefreshes.delete(key);
   }
 }
 
-/**
- * Check whether a token needs refreshing. Returns `true` when the token is
- * absent, expired, or within {@link REFRESH_BUFFER_MS} of expiry.
- */
 export function needsRefresh(expiresAt: Date | number | null | undefined): boolean {
-  if (expiresAt == null) return false; // unknown expiry → trust current token
+  if (expiresAt == null) return false;
   const ms = expiresAt instanceof Date ? expiresAt.getTime() : expiresAt;
   return Date.now() >= ms - REFRESH_BUFFER_MS;
 }

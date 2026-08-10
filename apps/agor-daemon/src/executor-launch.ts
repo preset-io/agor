@@ -1,11 +1,12 @@
 import { homedir } from 'node:os';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
-import { getBaseUrl } from '@agor/core/config';
+import { getBaseUrl, resolveDeploymentAgenticToolPolicy } from '@agor/core/config';
 import {
   BranchRepository,
   GatewayChannelRepository,
   getCurrentTenantId,
   MCPServerRepository,
+  runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   shortId,
@@ -23,6 +24,7 @@ import {
   retainExecutorContainmentFence,
   trackExecutorProcess,
 } from './executor-tracking.js';
+import { assertHaTaskPermissionSupported } from './ha-support.js';
 import {
   inOpenCodeNativeStateMutationSlot,
   type OpenCodeNativeStateMutationFence,
@@ -51,6 +53,7 @@ export function createExecuteHandler(
   sessionTokenService: import('./services/session-token-service.js').SessionTokenService
 ) {
   const { db, app, config, daemonUrl } = ctx;
+  const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
 
   return async (
     sessionId: string,
@@ -60,7 +63,22 @@ export function createExecuteHandler(
   ) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Missing active tenant context for executor startup');
-    const session = await prepareSessionForExecutorStart(db, sessionsService, sessionId, params);
+    const session = await prepareSessionForExecutorStart(
+      db,
+      sessionsService,
+      sessionId,
+      params,
+      deploymentAgenticToolPolicy
+    );
+    // Older direct-launch test harnesses omit deployment metadata; the live
+    // register-services context always supplies it. Keep the HA permission
+    // guard whenever that authoritative deployment context is present.
+    if (ctx.deployment) {
+      assertHaTaskPermissionSupported(ctx.deployment, {
+        session,
+        requestedMode: data.permissionMode,
+      });
+    }
     const prompterUserId = data.prompterUserId;
     const prompterUser = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
       new UsersRepository(tenantDb).findById(prompterUserId)
@@ -332,6 +350,8 @@ export function createExecuteHandler(
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
+        branch_id: session.branch_id,
+        user_id: prompterUserId,
         // Mode-resolved identity for the execution substrate: the sudo user in
         // insulated/strict, the session's unix_username in delegated (no sudo),
         // and unset in simple. Supersedes the interim
@@ -447,8 +467,13 @@ export function createExecuteHandler(
           console.error(`❌ [Executor] Failed to coordinate executor exit:`, error);
         }
 
-        appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
-        nativeState?.finished.resolve();
+        try {
+          await runWithoutTenantDatabaseScope(() =>
+            appWithExecutor.sessionTokenService?.revokeToken(sessionToken)
+          );
+        } finally {
+          nativeState?.finished.resolve();
+        }
       },
     });
 

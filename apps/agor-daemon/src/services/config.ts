@@ -1,8 +1,11 @@
 /**
  * Config Service
  *
- * Provides REST + WebSocket API for configuration management.
- * Wraps @agor/core/config functions for UI access.
+ * Narrow read-only runtime configuration resolver.
+ *
+ * This is not a config.yaml CRUD surface. It only resolves task-scoped
+ * user/tenant credentials for trusted executors; deployment configuration is
+ * operator-owned and immutable at runtime.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
@@ -119,8 +122,8 @@ export class ConfigService {
        * Explicit task-scoped executor JWT proof. The Socket.io connection can
        * authenticate as the session creator user while dropping custom JWT
        * claims from later service params, so executors include the minted token
-       * on this secret-resolution call and the daemon validates it against the
-       * in-memory session-token registry.
+       * on this secret-resolution call and the daemon validates its signature,
+       * scope, and active token authority.
        */
       executorSessionToken?: string;
     },

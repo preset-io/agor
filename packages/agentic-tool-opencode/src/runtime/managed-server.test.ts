@@ -120,7 +120,10 @@ describe('managed OpenCode readiness', () => {
     const started = startManagedOpenCodeServer(
       { directory: tmpdir(), dataHome },
       {
-        resolveBinary: async () => '/packaged/opencode',
+        resolveBinary: async () => ({
+          executable: process.execPath,
+          argsPrefix: ['/managed/opencode-ai/bin/opencode'],
+        }),
         spawn,
         fetch: vi.fn(async () => new Response('{}', { status: 200 })),
       }
@@ -129,8 +132,8 @@ describe('managed OpenCode readiness', () => {
     const server = await started;
 
     expect(spawn).toHaveBeenCalledWith(
-      '/packaged/opencode',
-      ['serve', '--hostname=127.0.0.1', '--port=0'],
+      process.execPath,
+      ['/managed/opencode-ai/bin/opencode', 'serve', '--hostname=127.0.0.1', '--port=0'],
       expect.objectContaining({
         env: expect.objectContaining({
           XDG_DATA_HOME: dataHome,

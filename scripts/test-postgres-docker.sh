@@ -59,7 +59,15 @@ if [[ -z "$host_port" ]]; then
   exit 1
 fi
 
+app_url="postgresql://agor_app:agor_dev_secret@127.0.0.1:${host_port}/agor"
+admin_url="postgresql://agor_bootstrap:agor_bootstrap_secret@127.0.0.1:${host_port}/agor"
+
 AGOR_DB_DIALECT=postgresql \
-AGOR_TEST_POSTGRES_URL="postgresql://agor_app:agor_dev_secret@127.0.0.1:${host_port}/agor" \
-AGOR_TEST_POSTGRES_ADMIN_URL="postgresql://agor_bootstrap:agor_bootstrap_secret@127.0.0.1:${host_port}/agor" \
+AGOR_TEST_POSTGRES_URL="$app_url" \
+AGOR_TEST_POSTGRES_ADMIN_URL="$admin_url" \
   pnpm test:postgres:integration
+
+AGOR_DB_DIALECT=postgresql \
+AGOR_TEST_POSTGRES_URL="$app_url" \
+AGOR_TEST_POSTGRES_ADMIN_URL="$admin_url" \
+  pnpm test:postgres:interruption
