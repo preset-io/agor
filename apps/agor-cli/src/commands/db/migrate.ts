@@ -72,7 +72,9 @@ export default class DbMigrate extends Command {
       if (offlineCutovers.length > 0) {
         this.log(chalk.red.bold('⛔ OFFLINE CUTOVER REQUIRED'));
         this.log('');
-        this.log(`${offlineCutovers.join(', ')} changes a distributed worker ownership protocol.`);
+        this.log(
+          `${offlineCutovers.join(', ')} changes a distributed state/ownership protocol and is not rolling-compatible.`
+        );
         this.log('Old and new daemons must not index this database concurrently.');
         this.log('');
         this.log('Required order:');

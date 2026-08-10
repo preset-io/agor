@@ -49,6 +49,7 @@ interface FakeSocket {
   data: Record<string, any>;
   handshake: { auth?: { token?: string }; headers?: Record<string, string> };
   connected: boolean;
+  rooms: Set<string>;
   joined: Set<string>;
   left: Set<string>;
   /** Events actually delivered TO this socket (models room fanout). */
@@ -84,11 +85,13 @@ interface FakeIO {
 
 function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
   const handlers = new Map<string, (...args: any[]) => void>();
+  const rooms = new Set<string>([id]);
   return {
     id,
     data: {},
     handshake: { auth: {}, headers: {} },
     connected: true,
+    rooms,
     joined: new Set(),
     left: new Set(),
     received: [],
@@ -98,9 +101,11 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
     },
     join(channel) {
       this.joined.add(channel);
+      this.rooms.add(channel);
     },
     leave(channel) {
       this.left.add(channel);
+      this.rooms.delete(channel);
     },
     broadcast: {
       emit: (event: string, data: unknown) => {
@@ -324,7 +329,9 @@ describe('Socket.IO lifecycle logging', () => {
   });
 
   it('logs first authentication and identity changes but omits same-identity repeats', () => {
-    const { app, io } = buildHarness();
+    const { app, io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
     const socket = makeSocket('alice-sock');
     connect(io, socket);
 
@@ -390,7 +397,9 @@ describe('Socket.IO lifecycle logging', () => {
   });
 
   it('uses the same single authentication signal for handshake-authenticated users', async () => {
-    const { app, io } = buildHarness();
+    const { app, io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
     const socket = makeSocket('handshake-sock');
     socket.handshake.auth = {
       token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '5m'),
@@ -412,7 +421,10 @@ describe('Socket.IO lifecycle logging', () => {
     expect(logSpy).toHaveBeenCalledWith(
       'socket authenticated: handshake-sock user:11111111aaaaaaaaaaaa1111'
     );
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('joined user room'));
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('joined tenant-qualified rooms'));
+    expect(socket.joined.has(tenantChannelName('tenant-a'))).toBe(true);
+    expect(socket.joined.has(tenantUserChannelName('tenant-a', ALICE))).toBe(true);
+    expect(socket.joined.has(userRoomName(ALICE))).toBe(false);
   });
 
   it.each([
@@ -424,7 +436,7 @@ describe('Socket.IO lifecycle logging', () => {
         role: 'service',
         _isServiceAccount: true,
       },
-      joinsUserRoom: true,
+      joinsUserRoom: false,
     },
     {
       kind: 'terminal executor',
@@ -452,7 +464,7 @@ describe('Socket.IO lifecycle logging', () => {
   });
 
   it.each([
-    { kind: 'full service', terminalUserId: undefined, joinsUserRoom: true },
+    { kind: 'full service', terminalUserId: undefined, joinsUserRoom: false },
     { kind: 'terminal executor', terminalUserId: ALICE, joinsUserRoom: false },
   ])(
     'deduplicates handshake $kind authentication followed by the same service login',
@@ -488,6 +500,28 @@ describe('Socket.IO lifecycle logging', () => {
       expect(socket.joined.has(userRoomName('executor-service'))).toBe(joinsUserRoom);
     }
   );
+
+  it('joins and leaves only tenant-qualified native rooms after browser login/logout', () => {
+    const { app, io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const socket = makeSocket('browser-tenant-room');
+    connect(io, socket);
+    const connection = { data: {} };
+    socket.feathers = connection;
+
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: ALICE }, authentication: { payload: {} } },
+      { connection }
+    );
+    expect(socket.joined.has(tenantChannelName('tenant-a'))).toBe(true);
+    expect(socket.joined.has(tenantUserChannelName('tenant-a', ALICE))).toBe(true);
+    expect(socket.joined.has(userRoomName(ALICE))).toBe(false);
+
+    (app as any).eventHandlers.get('logout')?.({}, { connection });
+    expect(socket.left.has(tenantChannelName('tenant-a'))).toBe(true);
+    expect(socket.left.has(tenantUserChannelName('tenant-a', ALICE))).toBe(true);
+  });
 
   it('emits an unconditional five-minute gauge and stops it when Engine.IO closes', () => {
     vi.useFakeTimers();

@@ -313,19 +313,17 @@ describe('tenant-owned service registration', () => {
     );
   });
 
-  it('wraps MCP OAuth/session helper services in tenant database scope', () => {
+  it('wraps MCP OAuth/session database helpers in tenant scope without holding network I/O open', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining([
         'sessions/:id/mcp-servers',
-        'mcp-servers/discover',
-        'mcp-servers/oauth-auth-headers',
-        'mcp-servers/oauth-complete',
+        'mcp-servers/oauth-attempt-status',
         'mcp-servers/oauth-disconnect',
-        'mcp-servers/oauth-refresh',
-        'mcp-servers/oauth-start',
         'mcp-servers/oauth-status',
-        'mcp-servers/test-oauth',
       ])
+    );
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toEqual(
+      expect.arrayContaining(['mcp-servers/oauth-auth-headers', 'mcp-servers/oauth-refresh'])
     );
   });
 
@@ -636,5 +634,15 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
       path.startsWith('codex-auth/')
     );
     expect(codexPaths).toEqual(['codex-auth/device', 'codex-auth/import', 'codex-auth/logout']);
+  });
+
+  it.each([
+    'mcp-servers/discover',
+    'mcp-servers/oauth-complete',
+    'mcp-servers/oauth-start',
+    'mcp-servers/test-oauth',
+  ])('keeps provider/waiting endpoint %s out of an HTTP-long transaction', (path) => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
   });
 });

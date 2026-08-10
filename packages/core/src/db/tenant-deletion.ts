@@ -406,6 +406,15 @@ async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
 const CANONICAL_TENANT_POLICY_EXPRESSION =
   "tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default')";
 
+// The pending OAuth table also exposes two narrow transaction-local system
+// capabilities for an unauthenticated provider callback and bounded cleanup.
+// Its ordinary tenant policy must be disabled while either capability is
+// active; otherwise permissive RLS policies would OR the default-tenant arm
+// with the state-hash capability and broaden callback visibility. Keep this as
+// an exact table-specific contract rather than accepting arbitrary predicates.
+const MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION =
+  "(coalesce(current_setting('agor.system_scope',true),'')='')and(tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default'))";
+
 function stripOuterParentheses(expression: string): string {
   let current = expression;
   while (current.startsWith('(') && current.endsWith(')')) {
@@ -444,6 +453,10 @@ function normalizePolicyExpression(expression: string | null): string | null {
 
 function assertSupportedPolicies(relation: CatalogRelation): void {
   const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
+  const expectedTenantPolicyExpression =
+    relation.tableName === 'mcp_oauth_pending_flows'
+      ? MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION
+      : CANONICAL_TENANT_POLICY_EXPRESSION;
 
   const restrictive = relation.policies.filter((policy) => !policy.permissive);
   if (restrictive.length > 0) {
@@ -480,11 +493,11 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
     );
   }
   if (
-    normalizePolicyExpression(isolation.usingExpression) !== CANONICAL_TENANT_POLICY_EXPRESSION ||
-    normalizePolicyExpression(isolation.checkExpression) !== CANONICAL_TENANT_POLICY_EXPRESSION
+    normalizePolicyExpression(isolation.usingExpression) !== expectedTenantPolicyExpression ||
+    normalizePolicyExpression(isolation.checkExpression) !== expectedTenantPolicyExpression
   ) {
     throw new TenantDeletionCatalogError(
-      `Refusing tenant deletion: ${qualifiedName}.${expectedName} must use the canonical tenant_id equality for both USING and WITH CHECK`
+      `Refusing tenant deletion: ${qualifiedName}.${expectedName} must use the canonical tenant_id equality and approved table-specific capability guard for both USING and WITH CHECK`
     );
   }
 }

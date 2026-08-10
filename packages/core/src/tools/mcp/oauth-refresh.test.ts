@@ -8,6 +8,19 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../../utils/safe-outbound-fetch', () => ({
+  safeOutboundFetch: (input: string | URL, options: Record<string, unknown> = {}) => {
+    const {
+      timeoutMs: _timeout,
+      maxRedirects: _max,
+      maxResponseBytes: _bytes,
+      allowLocalhostHttp: _local,
+      ...init
+    } = options;
+    return globalThis.fetch(input, init as RequestInit);
+  },
+}));
+
 import type { MCPServerID, UserID } from '../../types';
 import {
   __refreshMutexSizeForTests,
@@ -123,17 +136,29 @@ describe('refreshMCPToken', () => {
 
   it('surfaces invalid_grant as InvalidGrantError', async () => {
     mockFetchOnce(
-      { error: 'invalid_grant', error_description: 'refresh token has been revoked' },
+      {
+        error: 'invalid_grant',
+        error_description: 'provider-body-marker-that-must-not-be-logged',
+      },
       { status: 400 }
     );
 
     await expect(
       refreshMCPToken({
         tokenEndpoint: 'https://auth.example.com/token',
-        refreshToken: 'stale',
-        clientId: 'c',
+        refreshToken: 'refresh-secret-marker-that-must-not-be-logged',
+        clientId: 'client-marker-that-must-not-be-logged',
       })
     ).rejects.toBeInstanceOf(InvalidGrantError);
+
+    const logged = [console.log, console.warn, console.error]
+      .flatMap((logger) => vi.mocked(logger).mock.calls)
+      .flat()
+      .join(' ');
+    expect(logged).not.toContain('provider-body-marker');
+    expect(logged).not.toContain('refresh-secret-marker');
+    expect(logged).not.toContain('client-marker');
+    expect(logged).not.toContain('auth.example.com');
   });
 
   it('throws generic Error for other OAuth errors', async () => {
@@ -145,7 +170,7 @@ describe('refreshMCPToken', () => {
         refreshToken: 'rt',
         clientId: 'c',
       })
-    ).rejects.toThrow(/server_error/);
+    ).rejects.toThrow(/provider_rejected/);
   });
 
   it('returns rotated refresh_token when provider rotates (OAuth 2.1)', async () => {
@@ -185,7 +210,7 @@ describe('refreshMCPToken', () => {
         refreshToken: 'rt',
         clientId: 'c',
       })
-    ).rejects.toThrow(/no access_token/);
+    ).rejects.toThrow(/response_ambiguous/);
   });
 
   it('throws on non-JSON body (HTML error page etc.)', async () => {
@@ -197,7 +222,7 @@ describe('refreshMCPToken', () => {
         refreshToken: 'rt',
         clientId: 'c',
       })
-    ).rejects.toThrow(/non-JSON body/);
+    ).rejects.toThrow(/response_ambiguous/);
   });
 
   it('coerces numeric-string expires_in to number', async () => {
@@ -266,7 +291,7 @@ describe('refreshAndPersistToken', () => {
     mockFetchJson({ access_token: 'new-a', expires_in: 3600 });
 
     const token = await refreshAndPersistToken({
-      db: {} as any,
+      db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
     });
@@ -303,7 +328,7 @@ describe('refreshAndPersistToken', () => {
     });
 
     await refreshAndPersistToken({
-      db: {} as any,
+      db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
     });
@@ -334,7 +359,7 @@ describe('refreshAndPersistToken', () => {
 
     await expect(
       refreshAndPersistToken({
-        db: {} as any,
+        db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
         onInvalidGrant,
@@ -360,7 +385,7 @@ describe('refreshAndPersistToken', () => {
 
     await expect(
       refreshAndPersistToken({
-        db: {} as any,
+        db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
       })
@@ -372,7 +397,7 @@ describe('refreshAndPersistToken', () => {
 
     await expect(
       refreshAndPersistToken({
-        db: {} as any,
+        db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
       })
@@ -395,7 +420,7 @@ describe('refreshAndPersistToken', () => {
     mockFetchJson({ access_token: 'new-a', expires_in: 3600 });
 
     const token = await refreshAndPersistToken({
-      db: {} as any,
+      db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
     });
@@ -419,7 +444,7 @@ describe('refreshAndPersistToken', () => {
 
     await expect(
       refreshAndPersistToken({
-        db: {} as any,
+        db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
       })
@@ -446,7 +471,7 @@ describe('refreshAndPersistToken', () => {
     mockFetchJson({ access_token: 'new-a', expires_in: 3600 });
 
     await refreshAndPersistToken({
-      db: {} as any,
+      db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
     });
@@ -474,7 +499,7 @@ describe('refreshAndPersistToken', () => {
 
     await expect(
       refreshAndPersistToken({
-        db: {} as any,
+        db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
       })
@@ -506,12 +531,12 @@ describe('refreshAndPersistToken', () => {
     ) as typeof globalThis.fetch;
 
     const p1 = refreshAndPersistToken({
-      db: {} as any,
+      db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
     });
     const p2 = refreshAndPersistToken({
-      db: {} as any,
+      db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
     });
@@ -563,12 +588,12 @@ describe('refreshAndPersistToken', () => {
 
     await Promise.all([
       refreshAndPersistToken({
-        db: {} as any,
+        db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
       }),
       refreshAndPersistToken({
-        db: {} as any,
+        db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID_2,
       }),
@@ -592,7 +617,7 @@ describe('refreshAndPersistToken', () => {
     mockFetchJson({ access_token: 'a', expires_in: 3600 });
 
     await refreshAndPersistToken({
-      db: {} as any,
+      db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
     });
@@ -617,7 +642,7 @@ describe('refreshAndPersistToken', () => {
 
     await expect(
       refreshAndPersistToken({
-        db: {} as any,
+        db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
       })
@@ -641,7 +666,7 @@ describe('refreshAndPersistToken', () => {
     mockFetchJson({ access_token: 'shared-new', expires_in: 3600 });
 
     const token = await refreshAndPersistToken({
-      db: {} as any,
+      db: { run: () => undefined } as any,
       userId: null,
       mcpServerId: SERVER_ID,
     });

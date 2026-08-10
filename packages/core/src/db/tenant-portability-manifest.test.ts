@@ -44,18 +44,20 @@ describe('buildTenantInsertOrder', () => {
     }
   });
 
-  it('deletes but never exports transient bearer-token authority', () => {
+  it('deletes but never exports transient token and OAuth flow authority', () => {
     const nonPortable = nonPortableTenantTableNames();
-    expect(nonPortable).toEqual(['executor_session_token_authorities']);
-    expect(buildTenantDeletionManifest().map((entry) => entry.name)).toContain(nonPortable[0]);
-    expect(buildTenantInsertOrder().map((entry) => entry.name)).not.toContain(nonPortable[0]);
+    expect(nonPortable).toEqual(['executor_session_token_authorities', 'mcp_oauth_pending_flows']);
+    for (const table of nonPortable) {
+      expect(buildTenantDeletionManifest().map((entry) => entry.name)).toContain(table);
+      expect(buildTenantInsertOrder().map((entry) => entry.name)).not.toContain(table);
+    }
   });
 });
 
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    expect(foreignKeys).toHaveLength(94);
+    expect(foreignKeys).toHaveLength(96);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -71,6 +73,27 @@ describe('tenantPortabilityForeignKeys', () => {
       expect(Object.isFrozen(foreignKey.childColumns)).toBe(true);
       expect(Object.isFrozen(foreignKey.parentColumns)).toBe(true);
     }
+  });
+
+  it('binds portable MCP OAuth grants to same-tenant users and servers', () => {
+    expect(tenantPortabilityForeignKeys()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          childTable: 'user_mcp_oauth_tokens',
+          childColumns: ['tenant_id', 'user_id'],
+          parentTable: 'users',
+          parentColumns: ['tenant_id', 'user_id'],
+          onDelete: 'cascade',
+        }),
+        expect.objectContaining({
+          childTable: 'user_mcp_oauth_tokens',
+          childColumns: ['tenant_id', 'mcp_server_id'],
+          parentTable: 'mcp_servers',
+          parentColumns: ['tenant_id', 'mcp_server_id'],
+          onDelete: 'cascade',
+        }),
+      ])
+    );
   });
 
   it('moves inbound event relations with their channel, Session, and Task', () => {

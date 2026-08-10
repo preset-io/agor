@@ -647,12 +647,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     const manifest = await readManifest(archive);
     expect(manifest.database.identity.nonPortableTenantTables).toEqual([
       'executor_session_token_authorities',
+      'mcp_oauth_pending_flows',
     ]);
     expect(manifest.database.identity.tenantTables).not.toContain(
       'executor_session_token_authorities'
     );
+    expect(manifest.database.identity.tenantTables).not.toContain('mcp_oauth_pending_flows');
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'executor_session_token_authorities'
+    );
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'mcp_oauth_pending_flows'
     );
 
     // A destination containing only non-portable authority is not empty. An

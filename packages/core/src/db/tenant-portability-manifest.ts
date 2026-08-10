@@ -37,6 +37,7 @@ import { IMPERATIVE_TENANT_TABLES } from './tenant-imperative-tables';
  */
 export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
   'executor_session_token_authorities',
+  'mcp_oauth_pending_flows',
 ]);
 
 function portableDeletionManifest() {

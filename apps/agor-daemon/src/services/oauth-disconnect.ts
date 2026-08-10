@@ -1,8 +1,7 @@
 /**
  * OAuth disconnect logic extracted from daemon index.ts for testability.
  *
- * Handles deleting per-user OAuth tokens, clearing in-memory caches,
- * and removing shared OAuth tokens from server config.
+ * Handles deleting per-user and shared OAuth token rows.
  */
 
 import { shortId } from '@agor/core/db';
@@ -11,6 +10,7 @@ import type { MCPAuth } from '@agor/core/types';
 export interface OAuthDisconnectDeps {
   userId: string | undefined;
   mcpServerId: string;
+  isAdmin: boolean;
   userTokenRepo: {
     /**
      * `userId` may be null to target the shared-mode row for this server.
@@ -20,16 +20,14 @@ export interface OAuthDisconnectDeps {
   };
   mcpServerRepo: {
     findById(id: string): Promise<{ url?: string; auth?: MCPAuth } | null>;
-    update(id: string, data: { auth: MCPAuth }): Promise<unknown>;
   };
-  oauthTokenCache: Map<string, unknown>;
-  clearCoreTokenCache: () => void;
 }
 
 export interface OAuthDisconnectResult {
   success: boolean;
   message?: string;
   error?: string;
+  oauthMode?: 'per_user' | 'shared';
 }
 
 /**
@@ -38,14 +36,7 @@ export interface OAuthDisconnectResult {
 export async function performOAuthDisconnect(
   deps: OAuthDisconnectDeps
 ): Promise<OAuthDisconnectResult> {
-  const {
-    userId,
-    mcpServerId,
-    userTokenRepo,
-    mcpServerRepo,
-    oauthTokenCache,
-    clearCoreTokenCache,
-  } = deps;
+  const { userId, mcpServerId, userTokenRepo, mcpServerRepo } = deps;
 
   if (!userId) {
     return { success: false, error: 'User not authenticated' };
@@ -60,48 +51,32 @@ export async function performOAuthDisconnect(
   );
 
   try {
-    // 1. Delete the caller's per-user token row (if any).
-    const deletedPerUser = await userTokenRepo.deleteToken(userId, mcpServerId);
-
-    // 2. Also delete the shared-mode row (user_id = NULL) so the server is
-    //    fully disconnected. Shared tokens no longer live on
-    //    `mcp_servers.data.auth` — they moved to `user_mcp_oauth_tokens` in
-    //    migration 0038/0027.
-    let deletedShared = false;
     const server = await mcpServerRepo.findById(mcpServerId);
     if (server?.auth?.oauth_mode === 'shared') {
-      deletedShared = await userTokenRepo.deleteToken(null, mcpServerId);
-      if (deletedShared) {
-        console.log('[OAuth Disconnect] Deleted shared-mode token row');
+      if (!deps.isAdmin) {
+        return {
+          success: false,
+          error: 'Shared OAuth grants can only be disconnected by an admin',
+        };
       }
-    }
-
-    // 3. Clear in-memory caches (daemon-level + core-level)
-    if (server?.url) {
-      try {
-        const origin = new URL(server.url).origin;
-        oauthTokenCache.delete(origin);
-        console.log(`[OAuth Disconnect] Cleared daemon cache for origin: ${origin}`);
-      } catch {
-        // Invalid URL, skip cache clear
-      }
-
-      clearCoreTokenCache();
-      console.log('[OAuth Disconnect] Cleared core OAuth token cache');
-    }
-
-    if (deletedPerUser || deletedShared) {
-      console.log('[OAuth Disconnect] Token deleted successfully');
-      return { success: true, message: 'OAuth connection removed' };
+      await userTokenRepo.deleteToken(null, mcpServerId);
     } else {
-      console.log('[OAuth Disconnect] No token found, caches cleared');
-      return { success: true, message: 'OAuth connection removed' };
+      await userTokenRepo.deleteToken(userId, mcpServerId);
     }
+
+    console.log('[OAuth Disconnect] Local grant row removed');
+    return {
+      success: true,
+      message: 'OAuth connection removed locally; provider access was not revoked',
+      oauthMode: server?.auth?.oauth_mode ?? 'per_user',
+    };
   } catch (error) {
-    console.error('[OAuth Disconnect] Error:', error);
+    console.error(
+      `[OAuth Disconnect] Failed category=${error instanceof Error ? error.name : 'unknown'}`
+    );
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: 'OAuth connection could not be removed',
     };
   }
 }

@@ -43,7 +43,10 @@ export class MigrationError extends Error {
   }
 }
 
-const OFFLINE_CUTOVER_MIGRATIONS = new Set(['0074_knowledge_embedding_claims']);
+const OFFLINE_CUTOVER_MIGRATIONS = new Set([
+  '0074_knowledge_embedding_claims',
+  '0077_mcp_oauth_pending_flows',
+]);
 
 export interface RunMigrationsOptions {
   /**

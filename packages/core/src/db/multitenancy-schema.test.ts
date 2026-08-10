@@ -40,6 +40,9 @@ function migrationTenantTables(): string[] {
   const gatewayHaMigration = readRepoFile(
     'packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'
   );
+  const mcpOauthMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0077_mcp_oauth_pending_flows.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -49,6 +52,7 @@ function migrationTenantTables(): string[] {
         ...uploadsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...executorTokenMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...gatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...mcpOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -63,6 +67,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0077_mcp_oauth_pending_flows.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -183,6 +188,23 @@ describe('Postgres multitenancy schema coverage', () => {
     );
   });
 
+  it('binds OAuth callback RLS to one exact fingerprint and narrows maintenance to due rows', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0077_mcp_oauth_pending_flows.sql'
+    );
+
+    expect(migration).toContain('FORCE ROW LEVEL SECURITY');
+    expect(migration).toContain("COALESCE(current_setting('agor.system_scope', true), '') = ''");
+    expect(migration).toContain("= 'mcp_oauth_callback'");
+    expect(migration).toContain('"state_hash" = current_setting(\'agor.oauth_state_hash\', true)');
+    expect(migration).toContain("= 'mcp_oauth_maintenance'");
+    expect(migration).toContain('"expires_at" <= CURRENT_TIMESTAMP');
+    expect(migration).toContain(
+      '"exchange_started_at" <= CURRENT_TIMESTAMP - INTERVAL \'2 minutes\''
+    );
+    expect(migration).toContain('"finished_at" <= CURRENT_TIMESTAMP - INTERVAL \'24 hours\'');
+  });
+
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {
     const migration = readRepoFile('packages/core/drizzle/postgres/0071_scheduler_ha_indexes.sql');
 
@@ -203,5 +225,16 @@ describe('Postgres multitenancy schema coverage', () => {
 
     expect(sources).not.toMatch(/from\s+['"][^'"]*redis/i);
     expect(sources).not.toMatch(/ioredis|redlock/i);
+  });
+
+  it('keeps OAuth capabilities and token material out of Redis paths', () => {
+    const sources = [
+      readRepoFile('packages/core/src/db/repositories/mcp-oauth-pending-flows.ts'),
+      readRepoFile('apps/agor-daemon/src/services/mcp-oauth-pending-flow-authority.ts'),
+      readRepoFile('apps/agor-daemon/src/oauth-cache.ts'),
+    ].join('\n');
+
+    expect(sources).not.toMatch(/from\s+['"][^'"]*redis/i);
+    expect(sources).not.toMatch(/ioredis|redlock|redisClient|redis\.set/i);
   });
 });

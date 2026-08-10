@@ -172,6 +172,12 @@
       "import": "./dist/utils/url.js",
       "require": "./dist/utils/url.cjs"
     },
+    "./utils/safe-outbound-fetch": {
+      "source": "./src/utils/safe-outbound-fetch.ts",
+      "types": "./dist/utils/safe-outbound-fetch.d.ts",
+      "import": "./dist/utils/safe-outbound-fetch.js",
+      "require": "./dist/utils/safe-outbound-fetch.cjs"
+    },
     "./utils/permission-mode-mapper": {
       "source": "./src/utils/permission-mode-mapper.ts",
       "types": "./dist/utils/permission-mode-mapper.d.ts",

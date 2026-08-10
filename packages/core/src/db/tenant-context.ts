@@ -20,6 +20,8 @@ export type SystemDatabaseCapability =
   | 'task_queue_discovery'
   | 'task_runtime_discovery'
   | 'executor_token_maintenance'
+  | 'mcp_oauth_callback'
+  | 'mcp_oauth_maintenance'
   | 'upload_maintenance';
 
 export interface TenantContextScope {

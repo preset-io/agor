@@ -7,7 +7,6 @@
 
 import type { MCPAuth } from '../../types/mcp';
 import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
-import { getCachedOAuth21Token } from './oauth-mcp-transport';
 
 interface JWTConfig {
   api_url: string;
@@ -144,7 +143,12 @@ export async function getMCPRemoteArgsWithJWT(
  */
 export async function resolveMCPAuthHeaders(
   auth?: MCPAuth,
-  mcpUrl?: string
+  mcpUrl?: string,
+  options: {
+    allowLocalhostHttp?: boolean;
+    oauthCacheNamespace?: string;
+    disableOAuthTokenCache?: boolean;
+  } = {}
 ): Promise<Record<string, string> | undefined> {
   if (!auth || auth.type === 'none') {
     return undefined;
@@ -191,16 +195,11 @@ export async function resolveMCPAuthHeaders(
       }
     }
 
-    // Priority 2: Check for in-memory cached token from browser flow
+    // Browser authorization-code tokens must arrive through the caller's
+    // trusted, server/user-scoped durable record. The legacy origin-only
+    // process cache is deliberately not consulted here: two tenants or users
+    // can configure different grants for the same MCP origin.
     if (!auth.oauth_client_id && !auth.oauth_client_secret) {
-      if (mcpUrl) {
-        const cachedToken = getCachedOAuth21Token(mcpUrl);
-        if (cachedToken) {
-          return {
-            Authorization: `Bearer ${cachedToken}`,
-          };
-        }
-      }
       return undefined;
     }
 
@@ -224,6 +223,11 @@ export async function resolveMCPAuthHeaders(
         scope: auth.oauth_scope,
         grant_type: auth.oauth_grant_type,
         insecure: auth.insecure,
+        // Direct core/executor use is the standalone compatibility path.
+        // PostgreSQL daemon callers explicitly pass false and disable caching.
+        allowLocalhostHttp: options.allowLocalhostHttp ?? true,
+        cacheNamespace: options.oauthCacheNamespace,
+        cache: options.disableOAuthTokenCache !== true,
       });
 
       return {

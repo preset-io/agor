@@ -26,6 +26,8 @@ export interface OAuthConfig {
   oauth_scope?: string;
   oauth_grant_type?: string;
   oauth_mode?: 'per_user' | 'shared';
+  oauth_compatibility_mode?: 'strict' | 'legacy';
+  oauth_dcr_mode?: 'disabled' | 'fallback';
 }
 
 /**
@@ -69,6 +71,9 @@ export function extractOAuthConfig(values: Record<string, unknown>): OAuthConfig
   // is collapsed by default; combined with forceRender on the panel so the
   // initialValue actually applies, this default is a defensive fallback.)
   config.oauth_mode = values.oauth_mode === 'shared' ? 'shared' : 'per_user';
+  config.oauth_compatibility_mode =
+    values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
+  config.oauth_dcr_mode = values.oauth_dcr_mode === 'fallback' ? 'fallback' : 'disabled';
 
   return config;
 }
@@ -80,6 +85,8 @@ export interface TestConfig {
   client_secret?: string;
   scope?: string;
   grant_type?: string;
+  compatibility_mode?: 'strict' | 'legacy';
+  dcr_mode?: 'disabled' | 'fallback';
 }
 
 /**
@@ -126,6 +133,8 @@ export function extractOAuthConfigForTesting(values: Record<string, unknown>): T
   if (values.oauth_grant_type && typeof values.oauth_grant_type === 'string') {
     config.grant_type = values.oauth_grant_type;
   }
+  config.compatibility_mode = values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
+  config.dcr_mode = values.oauth_dcr_mode === 'fallback' ? 'fallback' : 'disabled';
 
   return config;
 }
@@ -148,6 +157,8 @@ export interface BuiltAuth {
   oauth_scope?: string;
   oauth_grant_type?: string;
   oauth_mode?: 'per_user' | 'shared';
+  oauth_compatibility_mode?: 'strict' | 'legacy';
+  oauth_dcr_mode?: 'disabled' | 'fallback';
 }
 
 /**

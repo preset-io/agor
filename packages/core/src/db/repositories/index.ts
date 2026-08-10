@@ -22,6 +22,7 @@ export * from './groups';
 export * from './knowledge';
 export * from './knowledge-embedding-work';
 export * from './knowledge-semantic-settings';
+export * from './mcp-oauth-pending-flows';
 export * from './mcp-servers';
 export * from './messages';
 export * from './repos';

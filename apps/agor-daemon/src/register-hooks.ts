@@ -28,6 +28,7 @@ import {
   type BranchRepository,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
+  isPostgresDatabaseHandle,
   runWithTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
@@ -102,6 +103,7 @@ import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
+import { isMCPOAuthGrantBoundToServer } from './services/mcp-oauth-grant-binding.js';
 import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
@@ -433,14 +435,9 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'agentic-tool-settings',
   'agentic-tool-presets',
   'mcp-servers',
-  'mcp-servers/discover',
-  'mcp-servers/oauth-auth-headers',
-  'mcp-servers/oauth-complete',
+  'mcp-servers/oauth-attempt-status',
   'mcp-servers/oauth-disconnect',
-  'mcp-servers/oauth-refresh',
-  'mcp-servers/oauth-start',
   'mcp-servers/oauth-status',
-  'mcp-servers/test-oauth',
   'card-types',
   'cards',
   'artifacts',
@@ -479,6 +476,16 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'copilot-models',
   'cursor-models',
   'terminals',
+  // These OAuth/discovery endpoints perform provider network I/O or wait for
+  // a browser callback. Their durable one-shot claim must commit before any
+  // authorization-code exchange, so they must never inherit an HTTP-long
+  // tenant transaction. Each DB access opens a short tenant unit of work.
+  'mcp-servers/discover',
+  'mcp-servers/oauth-complete',
+  'mcp-servers/oauth-start',
+  'mcp-servers/oauth-auth-headers',
+  'mcp-servers/oauth-refresh',
+  'mcp-servers/test-oauth',
 ] as const;
 
 const taskFieldSet = (...fields: (keyof Task)[]) => new Set<string>(fields);
@@ -1682,39 +1689,25 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         if (!row) {
           return server;
         }
-
-        // JIT refresh — see `refreshAndPersistToken` for mutexing + invalid_grant cleanup.
-        let accessToken = row.oauth_access_token;
-        let expiresAt = row.oauth_token_expires_at;
-        const { needsRefresh, refreshAndPersistToken, InvalidGrantError } = await import(
-          '@agor/core/tools/mcp/oauth-refresh'
-        );
-        if (needsRefresh(row.oauth_token_expires_at) && row.oauth_refresh_token) {
-          console.log(`[MCP OAuth] Token near/past expiry for ${server.name} — refreshing`);
-          try {
-            accessToken = await refreshAndPersistToken({
-              db,
-              userId: tokenUserId,
-              mcpServerId: server.mcp_server_id,
-            });
-            // Re-read to pick up the rotated expiry for the UI.
-            const fresh = await userTokenRepo.getToken(tokenUserId, server.mcp_server_id);
-            if (fresh) expiresAt = fresh.oauth_token_expires_at;
-          } catch (refreshErr) {
-            if (refreshErr instanceof InvalidGrantError) {
-              console.warn(
-                `[MCP OAuth] invalid_grant refreshing ${server.name} — user must re-auth`
-              );
-              return server;
-            }
-            // Transient error: fall through with the stale access_token. The
-            // MCP call may still succeed or fail cleanly at the transport.
-            console.warn(
-              `[MCP OAuth] Refresh failed for ${server.name} (using stale token):`,
-              refreshErr instanceof Error ? refreshErr.message : refreshErr
-            );
-          }
+        if (
+          isPostgresDatabaseHandle(db) &&
+          !isMCPOAuthGrantBoundToServer(process.env.AGOR_MASTER_SECRET!, server, row)
+        ) {
+          console.warn('[MCP OAuth] grant_rejected category=binding_mismatch');
+          return server;
         }
+
+        // Response enrichment is a durable read only. Refresh is coordinated
+        // by oauth-auth-headers/manual refresh, never from an after hook that
+        // may hold an unrelated tenant transaction.
+        if (
+          row.refresh_status !== 'idle' ||
+          (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
+        ) {
+          return server;
+        }
+        const accessToken = row.oauth_access_token;
+        const expiresAt = row.oauth_token_expires_at;
 
         return {
           ...server,
@@ -1727,11 +1720,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               expiresAt instanceof Date ? expiresAt.getTime() : (expiresAt ?? undefined),
           },
         };
-      } catch (error) {
-        console.warn(
-          `[MCP OAuth] Failed to resolve OAuth token for ${server.name}:`,
-          error instanceof Error ? error.message : error
-        );
+      } catch {
+        console.warn('[MCP OAuth] grant_resolution_failed category=local_error');
       }
 
       return server;
@@ -1771,6 +1761,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
       create: [requireMinimumRole(ROLES.ADMIN, 'create MCP servers')],
       patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
+      update: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
     },
     after: {

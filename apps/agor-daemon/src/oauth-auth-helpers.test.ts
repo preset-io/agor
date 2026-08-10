@@ -15,9 +15,13 @@
  */
 
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { runWithTenantDatabaseScope } from '@agor/core/db';
+import { assertTenantWritable, runWithTenantDatabaseScope } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolveForUserIdWithGate, runInOAuthTenantScope } from './oauth-auth-helpers';
+import {
+  resolveForUserIdWithGate,
+  runInOAuthTenantScope,
+  runInOAuthTenantWriteScope,
+} from './oauth-auth-helpers';
 
 // Mock only runWithTenantDatabaseScope; preserve all other @agor/core/db exports
 // so downstream code that imports types from the same path still resolves.
@@ -25,6 +29,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/db')>();
   return {
     ...actual,
+    assertTenantWritable: vi.fn(),
     runWithTenantDatabaseScope: vi.fn(),
   };
 });
@@ -37,8 +42,11 @@ describe('runInOAuthTenantScope', () => {
   const mockDb = {} as TenantScopeAwareDatabase;
 
   beforeEach(() => {
+    vi.mocked(assertTenantWritable).mockReset().mockResolvedValue(undefined);
     vi.mocked(runWithTenantDatabaseScope).mockClear();
-    vi.mocked(runWithTenantDatabaseScope).mockImplementation((_db, _tenantId, work) => work());
+    vi.mocked(runWithTenantDatabaseScope).mockImplementation((_db, _tenantId, work) =>
+      work(mockDb as never)
+    );
   });
 
   it('invokes runWithTenantDatabaseScope with the captured tenant ID', async () => {
@@ -79,6 +87,45 @@ describe('runInOAuthTenantScope', () => {
     const result = await runInOAuthTenantScope(mockDb, 'tenant-abc', work);
 
     expect(result).toEqual(expectedResult);
+  });
+});
+
+describe('runInOAuthTenantWriteScope', () => {
+  const mockDb = {} as TenantScopeAwareDatabase;
+
+  beforeEach(() => {
+    vi.mocked(assertTenantWritable).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runWithTenantDatabaseScope)
+      .mockReset()
+      .mockImplementation((_db, _tenantId, work) => work(mockDb as never));
+  });
+
+  it('checks the tenant write gate before running callback persistence', async () => {
+    const work = vi.fn().mockResolvedValue('persisted');
+
+    await expect(runInOAuthTenantWriteScope(mockDb, 'tenant-abc', work)).resolves.toBe('persisted');
+
+    expect(assertTenantWritable).toHaveBeenCalledWith(mockDb, 'tenant-abc');
+    expect(assertTenantWritable).toHaveBeenCalledBefore(work);
+  });
+
+  it('does not persist when the tenant write gate is held', async () => {
+    const work = vi.fn();
+    vi.mocked(assertTenantWritable).mockRejectedValueOnce(new Error('tenant writes held'));
+
+    await expect(runInOAuthTenantWriteScope(mockDb, 'tenant-abc', work)).rejects.toThrow(
+      'tenant writes held'
+    );
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it('keeps the standalone no-tenant path unchanged', async () => {
+    const work = vi.fn().mockResolvedValue('standalone');
+
+    await expect(runInOAuthTenantWriteScope(mockDb, undefined, work)).resolves.toBe('standalone');
+
+    expect(runWithTenantDatabaseScope).not.toHaveBeenCalled();
+    expect(assertTenantWritable).not.toHaveBeenCalled();
   });
 });
 

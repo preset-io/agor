@@ -1617,6 +1617,19 @@ export const userMcpOauthTokens = sqliteTable(
     // Must be preserved across refreshes.
     oauth_client_id: text('oauth_client_id'),
     oauth_client_secret: text('oauth_client_secret'),
+    grant_generation: integer('grant_generation').notNull().default(0),
+    grant_binding_version: integer('grant_binding_version'),
+    grant_binding_fingerprint: text('grant_binding_fingerprint', { length: 64 }),
+    oauth_metadata_uri: text('oauth_metadata_uri'),
+    oauth_resource_uri: text('oauth_resource_uri'),
+    oauth_issuer: text('oauth_issuer'),
+    oauth_authorization_endpoint: text('oauth_authorization_endpoint'),
+    oauth_token_endpoint: text('oauth_token_endpoint'),
+    oauth_redirect_uri: text('oauth_redirect_uri'),
+    refresh_status: text('refresh_status').notNull().default('idle'),
+    refresh_generation: integer('refresh_generation').notNull().default(0),
+    refresh_claim_id: text('refresh_claim_id', { length: 36 }),
+    refresh_claimed_at: t.timestamp('refresh_claimed_at'),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
   },
@@ -1626,6 +1639,63 @@ export const userMcpOauthTokens = sqliteTable(
     pk: index('user_mcp_oauth_tokens_pk').on(table.user_id, table.mcp_server_id),
     userIdx: index('user_mcp_oauth_tokens_user_idx').on(table.user_id),
     serverIdx: index('user_mcp_oauth_tokens_server_idx').on(table.mcp_server_id),
+  })
+);
+
+/**
+ * Schema mirror for PostgreSQL MCP OAuth pending-flow authority.
+ *
+ * Standalone SQLite deliberately keeps its existing process-local flow state;
+ * this table is unused at runtime and exists for cross-dialect compatibility.
+ */
+export const mcpOauthPendingFlows = sqliteTable(
+  'mcp_oauth_pending_flows',
+  {
+    attempt_id: text('attempt_id', { length: 36 }).primaryKey(),
+    state_hash: text('state_hash', { length: 64 }).notNull(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    mcp_server_id: text('mcp_server_id', { length: 36 })
+      .notNull()
+      .references(() => mcpServers.mcp_server_id, { onDelete: 'cascade' }),
+    oauth_mode: text('oauth_mode', { enum: ['per_user', 'shared'] }).notNull(),
+    subject_user_id: text('subject_user_id', { length: 36 }),
+    grant_generation: integer('grant_generation').notNull(),
+    config_fingerprint_version: integer('config_fingerprint_version').notNull(),
+    config_fingerprint: text('config_fingerprint', { length: 64 }).notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: integer('is_current', { mode: 'boolean' }).notNull().default(true),
+    status: text('status', {
+      enum: ['pending', 'exchanging', 'succeeded', 'failed', 'ambiguous', 'expired'],
+    })
+      .notNull()
+      .default('pending'),
+    sealed_material: text('sealed_material'),
+    exchange_claim_id: text('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    stateHashUnique: uniqueIndex('mcp_oauth_pending_flows_state_hash_unique').on(table.state_hash),
+    userIdx: index('mcp_oauth_pending_flows_user_idx').on(table.user_id, table.created_at),
+    serverIdx: index('mcp_oauth_pending_flows_server_idx').on(table.mcp_server_id),
+    grantIdx: index('mcp_oauth_pending_flows_grant_idx').on(
+      table.mcp_server_id,
+      table.oauth_mode,
+      table.subject_user_id,
+      table.grant_generation
+    ),
+    maintenanceIdx: index('mcp_oauth_pending_flows_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
   })
 );
 
@@ -2468,6 +2538,8 @@ export type SessionEnvSelectionRow = typeof sessionEnvSelections.$inferSelect;
 export type SessionEnvSelectionInsert = typeof sessionEnvSelections.$inferInsert;
 export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
+export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
+export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;
 export type CardTypeInsert = typeof cardTypes.$inferInsert;
 export type CardRow = typeof cards.$inferSelect;

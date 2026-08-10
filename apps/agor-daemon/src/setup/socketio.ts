@@ -234,12 +234,9 @@ export function createTokenBucket(
 }
 
 /**
- * Per-user socket.io room name. Sockets owned by `userId` auto-join this room
- * on connect / login (see the connection handler and the `app.on('login', …)`
- * hook in this file). Use this everywhere we want to emit to "every tab the
- * user owns" — e.g. user-scoped notifications like `oauth:completed`.
- *
- * Centralized so the prefix can change in one place without drift.
+ * Legacy unqualified room name. Kept for terminal/backward-compatible call
+ * sites, but authenticated browser sockets no longer auto-join it: a user ID
+ * alone is not a complete multi-tenant realtime identity.
  */
 export function userRoomName(userId: string): string {
   return `user:${userId}`;
@@ -477,6 +474,23 @@ export function createSocketIOConfig(
     // One input-target executor socket per user; keeps keystrokes off orphans.
     const activeTerminalExecutorByUser = new Map<string, string>();
 
+    const leaveNativeIdentityRooms = (socket: Socket) => {
+      for (const room of socket.rooms ?? []) {
+        if (room.startsWith('tenant:') || room.startsWith('user:')) socket.leave(room);
+      }
+    };
+
+    const joinNativeTenantRooms = (
+      socket: Socket,
+      tenant: TenantContext | undefined,
+      userId: string | undefined
+    ) => {
+      leaveNativeIdentityRooms(socket);
+      if (!tenant || !userId) return;
+      socket.join(tenantChannelName(tenant.tenant_id));
+      socket.join(tenantUserChannelName(tenant.tenant_id, userId));
+    };
+
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
       activeConnections++;
@@ -497,17 +511,20 @@ export function createSocketIOConfig(
         });
       }
 
-      // Auto-join per-user room for user-scoped events (OAuth prompts, notifications)
-      // Try at connection time (for sockets that authenticate via handshake token).
+      // Auto-join tenant-qualified native rooms for handshake-authenticated
+      // sockets. Authorization URLs and raw state are never emitted here.
       // Terminal-executor identities are excluded from ALL room/channel joins —
       // they only ever consume raw `terminal:*` events on their own
       // `user/<id>/terminal` room, never Feathers channel broadcasts, so channel
       // membership would just hand them a firehose subscription they must not have.
       if (user?.user_id && !isTerminalExecutorIdentity(user)) {
-        socket.join(userRoomName(user.user_id));
-        console.debug(
-          `🏠 Socket ${socket.id} joined user room at connection: user:${shortId(user.user_id)}`
-        );
+        const tenant = (socket as FeathersSocket).data?.tenant;
+        joinNativeTenantRooms(socket, tenant, user.user_id);
+        if (tenant) {
+          console.debug(
+            `🏠 Socket ${socket.id} joined tenant-qualified rooms at connection for user ${shortId(user.user_id)}`
+          );
+        }
       }
 
       // Helper to get user ID from socket's Feathers connection
@@ -925,7 +942,7 @@ export function createSocketIOConfig(
       });
     });
 
-    // Join user room after FeathersJS authentication completes
+    // Join tenant-qualified native rooms after FeathersJS authentication.
     // Sockets connect anonymously first, then authenticate via client.authenticate().
     // The io.on('connection') handler above only catches pre-authenticated sockets
     // (those with a handshake token). Most browser sockets authenticate AFTER connecting,
@@ -944,10 +961,51 @@ export function createSocketIOConfig(
           const isService =
             result.user?._isServiceAccount === true || isTerminalExecutorIdentity(result.user);
           logAuthenticated(socket, isService ? undefined : userId);
-          // Terminal-executor identities get no user room (see connection handler).
+          // Terminal-executor identities get no broadcast room (see connection handler).
           if (!isTerminalExecutorIdentity(result.user)) {
-            socket.join(userRoomName(userId));
+            const connection = context.connection as FeathersSocket & {
+              tenant?: TenantContext;
+            };
+            const params =
+              context.params && typeof context.params === 'object'
+                ? (context.params as {
+                    tenant?: TenantContext;
+                    tenant_id?: string;
+                    headers?: Record<string, unknown>;
+                  })
+                : undefined;
+            const resultWithAuth = authResult as {
+              user?: AuthenticatedUser;
+              authentication?: { payload?: unknown };
+            };
+            const tenant = options.multiTenancy
+              ? resolveTenantContext(options.multiTenancy, {
+                  params: {
+                    tenant: params?.tenant,
+                    tenant_id: params?.tenant_id,
+                    headers: params?.headers,
+                    user: resultWithAuth.user,
+                    authentication: { payload: resultWithAuth.authentication?.payload },
+                  },
+                })
+              : (connection.data?.tenant ?? connection.tenant);
+            if (tenant) {
+              connection.data ??= {};
+              connection.data.tenant = tenant;
+              connection.tenant = tenant;
+            }
+            joinNativeTenantRooms(socket, tenant, userId);
           }
+          break;
+        }
+      }
+    });
+
+    app.on('logout', (_authResult: unknown, context: { connection?: unknown }) => {
+      if (!context.connection) return;
+      for (const [, socket] of io.sockets.sockets) {
+        if ((socket as FeathersSocket).feathers === context.connection) {
+          leaveNativeIdentityRooms(socket);
           break;
         }
       }

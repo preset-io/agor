@@ -3,6 +3,11 @@ import { ApiOutlined, EditOutlined, LoginOutlined, ReloadOutlined } from '@ant-d
 import { Tooltip } from 'antd';
 import { useState } from 'react';
 import { usePermissions } from '@/hooks/usePermissions';
+import {
+  oauthAttemptFailureMessage,
+  refetchMCPOAuthDurableState,
+  waitForMCPOAuthAttempt,
+} from '../../utils/mcpOAuthAttempt';
 import { useThemedMessage } from '../../utils/message';
 import { formatAbsoluteTime } from '../../utils/time';
 import { ENTITY_PILL_COLORS } from '../Pill';
@@ -91,24 +96,18 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
         success: boolean;
         error?: string;
         authorizationUrl?: string;
-        state?: string;
+        attempt_id?: string;
       };
 
-      if (data.success && data.authorizationUrl) {
+      if (data.success && data.authorizationUrl && data.attempt_id) {
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
         showInfo('Complete sign-in in the new tab.');
-
-        // Listen for completion — show toast when done
-        if (data.state) {
-          const handleCompleted = (event: { state: string; success: boolean }) => {
-            if (event.state === data.state && event.success) {
-              showSuccess(`${server.display_name || server.name} authenticated!`);
-              client.io.off('oauth:completed', handleCompleted);
-            }
-          };
-          client.io.on('oauth:completed', handleCompleted);
-          // Clean up after 5 minutes (flow timeout)
-          setTimeout(() => client.io.off('oauth:completed', handleCompleted), 5 * 60 * 1000);
+        const attempt = await waitForMCPOAuthAttempt(client, data.attempt_id);
+        if (attempt.status === 'succeeded') {
+          await refetchMCPOAuthDurableState(client, server.mcp_server_id);
+          showSuccess(`${server.display_name || server.name} authenticated!`);
+        } else {
+          showError(oauthAttemptFailureMessage(attempt.status));
         }
       } else if (!data.success) {
         showError(data.error || 'Failed to start OAuth flow');

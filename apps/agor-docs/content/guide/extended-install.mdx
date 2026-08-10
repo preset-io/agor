@@ -71,14 +71,14 @@ The packaged daemon refuses to start when a selected integration is absent, corr
 different Agor version. An empty selection does not block startup; a missing local manifest produces
 an actionable warning. Unselected tools are unavailable to tenants.
 
-| Agentic tool | Configuration value | Managed package |
-| --- | --- | --- |
-| Claude Code | `claude-code` | `@agor-live/claude` |
-| Codex | `codex` | `@agor-live/codex` |
-| Gemini | `gemini` | `@agor-live/gemini` |
-| GitHub Copilot | `copilot` | `@agor-live/copilot` |
-| OpenCode | `opencode` | `@agor-live/opencode` |
-| Cursor | `cursor` | `@agor-live/cursor` |
+| Agentic tool   | Configuration value | Managed package       |
+| -------------- | ------------------- | --------------------- |
+| Claude Code    | `claude-code`       | `@agor-live/claude`   |
+| Codex          | `codex`             | `@agor-live/codex`    |
+| Gemini         | `gemini`            | `@agor-live/gemini`   |
+| GitHub Copilot | `copilot`           | `@agor-live/copilot`  |
+| OpenCode       | `opencode`          | `@agor-live/opencode` |
+| Cursor         | `cursor`            | `@agor-live/cursor`   |
 
 For automated images and CI, run the same noninteractive commands after installing Agor:
 
@@ -174,9 +174,9 @@ Run that as a database owner or another role with permission to create extension
 
 If pgvector is missing or the Agor DB user cannot enable it, semantic search returns a clear `semantic_unavailable` error and text search continues to work.
 
-### PostgreSQL upgrade through migration 0074
+### PostgreSQL offline-cutover migrations
 
-Migration `0074_knowledge_embedding_claims` changes the ownership protocol used by Knowledge embedding workers. Existing PostgreSQL installations must apply this migration as a **stop-the-world cutover**. Rolling old and new daemons against the same database during this one upgrade is not supported.
+Migrations `0074_knowledge_embedding_claims` and `0077_mcp_oauth_pending_flows` change distributed ownership/state protocols. Existing PostgreSQL installations must apply either pending migration as a **stop-the-world cutover**. Rolling old and new daemons against the same database is not supported.
 
 1. Stop every Agor daemon connected to the database.
 2. From the new release, run:
@@ -187,7 +187,9 @@ Migration `0074_knowledge_embedding_claims` changes the ownership protocol used 
 
 3. Start only daemons running the new release.
 
-Normal daemon startup and `agor db migrate --yes` deliberately refuse this migration on an existing PostgreSQL database unless `--offline-cutover` is present. The flag is an operator acknowledgement; it cannot verify that another host has stopped. Fresh installations and SQLite databases do not require this cutover.
+Normal daemon startup and `agor db migrate --yes` deliberately refuse these migrations on an existing PostgreSQL database unless `--offline-cutover` is present. The flag is an operator acknowledgement; it cannot verify that another host has stopped. Fresh installations and SQLite databases do not require this cutover.
+
+Migration `0077` deletes existing MCP OAuth grant rows because the old plaintext, unfenced rows are not compatible with active-active callback and rotating-refresh ownership. Users must reconnect MCP OAuth after the upgrade. Take a backup before the cutover. A rollback to an older daemon requires restoring the pre-cutover backup; do not run an older cohort against the new OAuth schema.
 
 ---
 

@@ -47,6 +47,7 @@ export const sessionMcpServers = schema.sessionMcpServers;
 export const sessionRelationships = schema.sessionRelationships;
 export const sessionEnvSelections = schema.sessionEnvSelections;
 export const userMcpOauthTokens = schema.userMcpOauthTokens;
+export const mcpOauthPendingFlows = schema.mcpOauthPendingFlows;
 export const boardComments = schema.boardComments;
 export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;
