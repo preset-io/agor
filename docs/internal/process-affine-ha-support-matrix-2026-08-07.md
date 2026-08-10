@@ -322,7 +322,9 @@ called initially supported is:
    auth/launch rate limiting;
 6. stateless HTTP/REST, stateless MCP POST, durable scheduled/queued Task
    admission, and Task execution using PostgreSQL-backed executor credentials;
-7. noninteractive Task permission modes until durable permission replay lands;
+7. Task execution with live Agor-managed permission routing for Claude,
+   Copilot, and OpenCode, the current autonomous Cursor SDK, and only
+   noninteractive Gemini/Codex modes;
 8. web terminal, MCP OAuth and Codex device auth, OpenCode native-state
    mutation, and synchronous artifact runtime introspection disabled;
    PostgreSQL-backed GitHub App installation setup remains enabled;
@@ -439,10 +441,12 @@ above owns its explicit PostgreSQL state machine and fence.
 
 ## Settled activation decisions
 
-1. The initial profile disables web terminal, interactive permission prompts,
-   MCP OAuth setup, Codex device auth, OpenCode auth/native mutation, and
-   synchronous Artifact runtime introspection. PostgreSQL-backed GitHub App
-   installation setup is enabled.
+1. The initial profile disables web terminal, Gemini/Codex provider-native
+   interactive permission prompts, MCP OAuth setup, Codex device auth,
+   OpenCode auth/native mutation, and synchronous Artifact runtime
+   introspection. Claude, Copilot, and OpenCode Agor-managed permission
+   callbacks are enabled with manual retry while the executor remains alive.
+   PostgreSQL-backed GitHub App installation setup is enabled.
 2. Executors whose substrate survives the launcher may reconnect through peers;
    an in-flight unacknowledged mutation remains explicitly ambiguous/at-most-once
    unless its domain adds a durable operation identity. Shared-local workspace
@@ -463,8 +467,10 @@ above owns its explicit PostgreSQL state machine and fence.
 8. Executor-authority rollout uses a maintenance drain and all-at-once daemon
    cohort replacement. Old/unrecorded token cohorts fail closed.
 9. Binding token validation more tightly to active durable Task runtime state
-   and durable revocation retry remains a defense-in-depth follow-up; it does
-   not silently widen the initial noninteractive execution profile.
+   and durable revocation retry remain defense-in-depth follow-ups. Durable
+   permission-decision replay is an optional UX follow-up: the current managed
+   path deliberately uses manual retry, and none of these follow-ups widens the
+   Gemini/Codex provider-native prompt gate.
 
 ## Prerequisite test record
 
