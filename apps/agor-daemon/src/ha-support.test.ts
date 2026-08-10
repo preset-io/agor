@@ -16,7 +16,7 @@ describe('constrained HA support profile', () => {
     capabilities: {
       taskExecution: true as const,
       executorTokenAuthority: true as const,
-      interactivePermissions: false as const,
+      interactivePermissions: true as const,
       scheduler: true as const,
       sessionQueue: true as const,
       taskRuntimeReconciliation: true as const,
@@ -47,9 +47,9 @@ describe('constrained HA support profile', () => {
     },
   };
 
-  it('fails interactive permissions with an explicit stable feature code', () => {
+  it('keeps unsupported provider-native prompts behind an explicit stable feature code', () => {
     expect(() => rejectInConstrainedHa(ha, 'interactivePermissions')({} as HookContext)).toThrow(
-      /durable decision replay/
+      /provider-native interactive permission modes/
     );
     expect(haUnavailable('interactivePermissions').data).toMatchObject({
       code: 'HA_FEATURE_UNSUPPORTED',
@@ -72,13 +72,16 @@ describe('constrained HA support profile', () => {
     ).toBe(true);
   });
 
-  it('rejects a mode that can create a process-local permission waiter', () => {
-    expect(() =>
-      assertHaTaskPermissionSupported(ha, {
-        session: { agentic_tool: 'claude-code', permission_config: { mode: 'auto' } } as never,
-      })
-    ).toThrow(/interactive permission modes/);
-  });
+  it.each(['claude-code', 'copilot', 'opencode'] as const)(
+    'admits %s interactive execution through the task-private realtime route',
+    (agenticTool) => {
+      expect(() =>
+        assertHaTaskPermissionSupported(ha, {
+          session: { agentic_tool: agenticTool, permission_config: { mode: 'ask' } } as never,
+        })
+      ).not.toThrow();
+    }
+  );
 
   it.each([
     ['claude-code', { mode: 'dontAsk' }],
@@ -92,6 +95,20 @@ describe('constrained HA support profile', () => {
           session: { agentic_tool: agenticTool, permission_config } as never,
         })
       ).toBe(false);
+    }
+  );
+
+  it.each([
+    ['gemini', { mode: 'default' }],
+    ['codex', { mode: 'allow-all', codex: { approvalPolicy: 'on-request' } }],
+  ] as const)(
+    'still rejects provider-native %s confirmation modes',
+    (agenticTool, permission_config) => {
+      expect(() =>
+        assertHaTaskPermissionSupported(ha, {
+          session: { agentic_tool: agenticTool, permission_config } as never,
+        })
+      ).toThrow(/provider-native interactive permission modes/);
     }
   );
 

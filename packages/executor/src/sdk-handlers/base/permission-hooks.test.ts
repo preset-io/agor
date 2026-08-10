@@ -136,6 +136,15 @@ describe('createCanUseToolCallback', () => {
       expect(deps.tasksService.patch).toHaveBeenNthCalledWith(2, taskId, {
         status: 'running',
       });
+      expect(deps.messagesService.patch).toHaveBeenCalledWith(
+        'test-generated-id',
+        expect.objectContaining({
+          content: expect.objectContaining({
+            status: 'approved',
+            approved_by: 'test-user',
+          }),
+        })
+      );
       // Lock was acquired AND released.
       expect(deps.permissionLocks.size).toBe(0);
     });

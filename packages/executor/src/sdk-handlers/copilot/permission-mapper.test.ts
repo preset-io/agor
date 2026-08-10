@@ -7,6 +7,10 @@ describe('createPermissionHandler', () => {
     const sessionId = 'test-session' as SessionID;
     const taskId = 'test-task' as TaskID;
     const tasksService = { patch: vi.fn().mockResolvedValue(undefined) };
+    const messagesService = {
+      create: vi.fn().mockResolvedValue(undefined),
+      patch: vi.fn().mockResolvedValue(undefined),
+    };
     const handler = createPermissionHandler(sessionId, taskId, 'ask', {
       permissionService: {
         emitRequest: vi.fn(),
@@ -21,10 +25,7 @@ describe('createPermissionHandler', () => {
       tasksService: tasksService as any,
       sessionsRepo: {} as any,
       messagesRepo: { findBySessionId: vi.fn().mockResolvedValue([]) } as any,
-      messagesService: {
-        create: vi.fn().mockResolvedValue(undefined),
-        patch: vi.fn().mockResolvedValue(undefined),
-      } as any,
+      messagesService: messagesService as any,
       sessionsService: { patch: vi.fn().mockResolvedValue(undefined) } as any,
       permissionLocks: new Map(),
     });
@@ -40,5 +41,14 @@ describe('createPermissionHandler', () => {
       status: 'awaiting_permission',
     });
     expect(tasksService.patch).toHaveBeenNthCalledWith(2, taskId, { status: 'running' });
+    expect(messagesService.patch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        content: expect.objectContaining({
+          status: 'approved',
+          approved_by: 'test-user',
+        }),
+      })
+    );
   });
 });

@@ -18,6 +18,7 @@ vi.mock('./handlers/sdk/tool-registry.js', () => ({
 }));
 
 import { AgorExecutor } from './index.js';
+import { globalPermissionManager } from './permissions/permission-manager.js';
 
 const evidence = {
   reason: 'no_first_progress' as const,
@@ -200,5 +201,66 @@ describe('AgorExecutor watchdog handoff', () => {
 
     expect(executor.abortController.signal.aborted).toBe(true);
     expect(heartbeatStop).toHaveBeenCalledOnce();
+  });
+
+  it('forwards only this Task permission decision to the live permission waiter', () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    const resolvePermission = vi
+      .spyOn(globalPermissionManager, 'resolvePermission')
+      .mockImplementation(() => undefined);
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'claude-code',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service(path: string): {
+          on(event: string, listener: (data: unknown) => void): void;
+        };
+      };
+      setupEventListeners(): void;
+    };
+    executor.client = {
+      service(path) {
+        return {
+          on(event, listener) {
+            listeners.set(`${path}:${event}`, listener);
+          },
+        };
+      },
+    };
+    executor.setupEventListeners();
+
+    listeners.get('messages:permission_resolved')?.({
+      requestId: 'request-other',
+      taskId: 'task-other',
+      allow: true,
+      remember: false,
+      scope: 'once',
+      decidedBy: 'user-a',
+    });
+    listeners.get('messages:permission_resolved')?.({
+      requestId: 'request-1',
+      taskId: 'task-1',
+      allow: true,
+      reason: 'Approved by user',
+      remember: false,
+      scope: 'once',
+      decidedBy: 'user-a',
+    });
+
+    expect(resolvePermission).toHaveBeenCalledOnce();
+    expect(resolvePermission).toHaveBeenCalledWith({
+      requestId: 'request-1',
+      taskId: 'task-1',
+      allow: true,
+      reason: 'Approved by user',
+      remember: false,
+      scope: 'once',
+      decidedBy: 'user-a',
+    });
   });
 });

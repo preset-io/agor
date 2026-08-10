@@ -93,7 +93,6 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         reason: allow ? 'Approved by user' : 'Denied by user',
         remember: scope !== PermissionScope.ONCE,
         scope,
-        decidedBy: currentUser?.user_id || 'unknown',
       });
     } catch (error) {
       console.error('Failed to send permission decision:', error);

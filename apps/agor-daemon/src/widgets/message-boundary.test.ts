@@ -8,6 +8,17 @@ import {
 } from './message-boundary';
 
 const externalParams = { provider: 'rest' } as never;
+const executorParams = {
+  provider: 'socketio',
+  authentication: {
+    payload: {
+      type: 'executor-session',
+      purpose: 'executor-task',
+      task_id: 'task-1',
+      session_id: 'session-1',
+    },
+  },
+} as never;
 
 function widgetMessage(status: 'pending' | 'resolving' | 'submitted'): Message {
   const messageId = 'widget-message' as MessageID;
@@ -53,6 +64,26 @@ function ordinaryMessage(): Message {
     timestamp: '2026-08-06T00:00:02.000Z',
     content_preview: 'hello',
     content: 'hello',
+  };
+}
+
+function permissionMessage(): Message {
+  return {
+    message_id: 'permission-message' as MessageID,
+    session_id: 'session-1' as never,
+    task_id: 'task-1' as never,
+    type: 'permission_request',
+    role: MessageRole.SYSTEM,
+    index: 2,
+    timestamp: '2026-08-06T00:00:03.000Z',
+    content_preview: 'Permission required: Bash',
+    content: {
+      request_id: 'request-1',
+      task_id: 'task-1' as never,
+      tool_name: 'Bash',
+      tool_input: { command: 'pwd' },
+      status: 'pending' as never,
+    },
   };
 }
 
@@ -179,5 +210,35 @@ describe('external widget Message boundary', () => {
       service.patch(pending.message_id, { content: 'daemon projection' })
     ).resolves.toMatchObject({ content: 'daemon projection' });
     expect(rows.get(pending.message_id)?.content).toBe('daemon projection');
+  });
+
+  it('keeps the permission display and outcome executor-owned', async () => {
+    const permission = permissionMessage();
+    const { rows, service } = makeTransportService([permission]);
+
+    await expect(service.create(permission, externalParams)).rejects.toThrow(
+      'task-scoped executor'
+    );
+    await expect(
+      service.patch(
+        permission.message_id,
+        { content: { ...permission.content, tool_input: { command: 'rm -rf /' } } },
+        externalParams
+      )
+    ).rejects.toThrow('task-scoped executor');
+    await expect(service.remove(permission.message_id, externalParams)).rejects.toThrow(
+      'task-scoped executor'
+    );
+
+    await expect(
+      service.patch(
+        permission.message_id,
+        { content: { ...permission.content, status: 'approved' as never } },
+        executorParams
+      )
+    ).resolves.toMatchObject({
+      content: expect.objectContaining({ status: 'approved' }),
+    });
+    expect(rows.get(permission.message_id)?.content).toMatchObject({ status: 'approved' });
   });
 });

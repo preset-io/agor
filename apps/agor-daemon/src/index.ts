@@ -764,8 +764,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     terminalsService: services.terminalsService,
     distributedWorkIdentity,
     // PostgreSQL leases/claims and executor-token authority make the merged
-    // runtime workers replica-independent. Interactive permission modes remain
-    // separately fail-closed until durable decision replay exists.
+    // runtime workers replica-independent. Agor-managed permission callbacks
+    // use the transient task-private realtime control path; unsupported
+    // provider-native confirmation modes remain separately fail-closed.
     taskRuntimePolicy: deployment.mode === 'ha' ? 'shared_postgres' : 'standalone',
     environmentHealthMonitorPolicy: deployment.mode === 'ha' ? 'shared_postgres' : 'standalone',
     environmentHealthMonitorSettings:

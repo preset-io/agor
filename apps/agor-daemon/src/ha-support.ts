@@ -6,7 +6,8 @@ import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 export const HA_CONSTRAINED_PROFILE = 'constrained-active-active' as const;
 
 export const HA_UNSUPPORTED_FEATURES = {
-  interactivePermissions: 'interactive permission modes without durable decision replay',
+  interactivePermissions:
+    'provider-native interactive permission modes without Agor realtime decision routing',
   mcpOAuth: 'MCP OAuth flows',
   githubInstall: 'GitHub App installation state',
   codexAuth: 'Codex credential-file import/logout without a consistent executor user home',
@@ -49,11 +50,7 @@ export function rejectInConstrainedHa(
   };
 }
 
-/**
- * Initial HA execution admits only modes that cannot create an Agor permission
- * waiter. Permission Messages are durable, but an executor that reconnects
- * after the decision still has no durable read-after-gap/replay protocol.
- */
+/** Identify modes that cannot create either an Agor or provider-native prompt. */
 export function isHaNonInteractivePermission(options: {
   session: Pick<Session, 'agentic_tool' | 'permission_config'>;
   requestedMode?: PermissionMode;
@@ -90,7 +87,20 @@ export function assertHaTaskPermissionSupported(
   deployment: ResolvedDeploymentConfig,
   options: Parameters<typeof isHaNonInteractivePermission>[0]
 ): void {
-  if (isConstrainedHa(deployment) && !isHaNonInteractivePermission(options)) {
+  // Claude, Copilot, and OpenCode route their interactive callback through the
+  // executor's Agor PermissionService. The task-scoped Feathers control room
+  // can deliver those decisions across replicas while the executor remains
+  // alive. Gemini and Codex still rely on provider-native confirmation
+  // surfaces that Agor does not answer, so retain their noninteractive gate.
+  const hasAgorRealtimeDecisionHandler =
+    options.session.agentic_tool === 'claude-code' ||
+    options.session.agentic_tool === 'copilot' ||
+    options.session.agentic_tool === 'opencode';
+  if (
+    isConstrainedHa(deployment) &&
+    !hasAgorRealtimeDecisionHandler &&
+    !isHaNonInteractivePermission(options)
+  ) {
     throw haUnavailable('interactivePermissions');
   }
 }

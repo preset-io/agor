@@ -47,16 +47,13 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
-import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
   AuthenticatedParams,
   HookContext,
   Message,
   MessageID,
   MessageSource,
-  Paginated,
   Params,
-  PermissionRequestContent,
   ScheduleID,
   Session,
   SessionID,
@@ -95,7 +92,6 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
-import { haUnavailable, isConstrainedHa } from './ha-support.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -105,6 +101,10 @@ import {
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
+import {
+  deliverPermissionDecision,
+  type PermissionDecisionSubmission,
+} from './permissions/deliver-permission-decision.js';
 import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
@@ -235,13 +235,6 @@ export function rejectRemovedClaudeCliRestart(): never {
 
 function isServiceAccountRoute(params: RouteParams): boolean {
   return (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
-}
-
-/**
- * Type guard to check if result is paginated
- */
-function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
-  return !Array.isArray(result) && 'data' in result && 'total' in result;
 }
 
 /**
@@ -721,10 +714,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const _branchesRepo = new BranchRepository(db);
   const _reposRepo = new RepoRepository(db);
   const _tasksRepo = new TaskRepository(db);
-
-  const permissionService = new PermissionService((event, data) => {
-    app.service('sessions').emit(event, data);
-  });
 
   // ============================================================================
   // Messages bulk + streaming routes
@@ -2931,77 +2920,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/sessions/:id/permission-decision',
     {
-      async create(data: PermissionDecision, params: RouteParams) {
-        if (isConstrainedHa(deployment)) throw haUnavailable('interactivePermissions');
+      async create(data: PermissionDecisionSubmission, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        if (!data.requestId) throw new Error('requestId required');
-        if (typeof data.allow !== 'boolean') throw new Error('allow field required');
-
-        const messagesServiceInst = app.service('messages');
-        const messages = await messagesServiceInst.find({
-          query: {
-            session_id: id,
-            type: 'permission_request',
-          },
+        return deliverPermissionDecision({
+          app,
+          sessionId: id as SessionID,
+          data,
+          params,
         });
-
-        const messageList = isPaginated(messages) ? messages.data : messages;
-        const permissionMessage = messageList.find((msg: Message) => {
-          const content = msg.content as PermissionRequestContent;
-          return content?.request_id === data.requestId;
-        });
-
-        if (!permissionMessage) {
-          throw new Error(`Permission request ${data.requestId} not found`);
-        }
-
-        const permissionContent = permissionMessage.content as PermissionRequestContent;
-
-        if (permissionContent?.status && permissionContent.status !== 'pending') {
-          return {
-            success: false,
-            alreadyResolved: true,
-            status: permissionContent.status,
-            message: `Permission request already ${permissionContent.status}`,
-          };
-        }
-
-        const resolvedTaskId = permissionContent.task_id || permissionMessage.task_id;
-
-        if (!resolvedTaskId) {
-          console.error(
-            `❌ [Permission] Cannot resolve permission: task_id missing from both content and message. requestId=${data.requestId}`
-          );
-          throw new Error(
-            'Cannot process permission decision: task_id is missing. This permission request may be corrupted.'
-          );
-        }
-
-        await messagesServiceInst.patch(permissionMessage.message_id, {
-          content: {
-            ...permissionContent,
-            status: data.allow ? 'approved' : 'denied',
-            scope: data.scope,
-            approved_by: data.decidedBy,
-            approved_at: new Date().toISOString(),
-          },
-        });
-
-        permissionService.resolvePermission(data);
-
-        app.service('messages').emit('permission_resolved', {
-          requestId: data.requestId,
-          taskId: resolvedTaskId,
-          sessionId: id,
-          allow: data.allow,
-          reason: data.reason,
-          remember: data.remember,
-          scope: data.scope,
-          decidedBy: data.decidedBy,
-        });
-
-        return { success: true };
       },
     },
     {
