@@ -1405,8 +1405,9 @@ export const mcpServers = pgTable(
         display_name?: string;
         description?: string;
         import_path?: string;
-        // Catalog entry this server was installed from (UUID, never the name).
-        catalog_entry_id?: string;
+        // Catalog entry this server was installed from, by the registry name
+        // that outlives the entry row.
+        catalog_entry_name?: string;
 
         // Transport config
         command?: string;

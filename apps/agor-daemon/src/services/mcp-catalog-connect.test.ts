@@ -12,11 +12,14 @@ vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType }));
 
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 
+/** The registry name — the catalog's unique key, and what an install records. */
+const LINEAR = 'com.linear/linear';
+
 const CURATED: MCPCatalogEntry = {
-  catalog_entry_id: 'ce-1' as MCPCatalogEntry['catalog_entry_id'],
+  catalog_entry_id: '00000000-0000-7000-8000-0000000ce001' as MCPCatalogEntry['catalog_entry_id'],
   created_at: new Date(),
   updated_at: new Date(),
-  name: 'com.linear/linear',
+  name: LINEAR,
   title: 'Linear',
   benefit: 'Read and update your Linear issues.',
   starter_prompt: 'List the issues assigned to me this cycle.',
@@ -75,7 +78,7 @@ const params = {
 } as unknown as AuthenticatedParams;
 
 const request = {
-  catalog_key: 'com.linear/linear',
+  catalog_key: LINEAR,
   branch_id: 'branch-1',
   agentic_tool: 'claude-code' as const,
 };
@@ -96,7 +99,7 @@ describe('mcp-catalog/connect', () => {
       transport: 'http',
       url: 'https://mcp.linear.app/mcp',
       scope: 'session',
-      catalog_entry_id: 'ce-1',
+      catalog_entry_name: LINEAR,
       auth: { type: 'none' },
     });
     // Ownership is not decided here — the mcp-servers create hook stamps it.
@@ -118,7 +121,7 @@ describe('mcp-catalog/connect', () => {
   });
 
   it('reuses an install rather than creating a second row', async () => {
-    const existing = { mcp_server_id: 'server-existing', catalog_entry_id: 'ce-1' };
+    const existing = { mcp_server_id: 'server-existing', catalog_entry_name: LINEAR };
     const { app, services, created } = buildApp(CURATED, [existing]);
 
     const result = await createMCPCatalogConnectService(app).create(request, params);
@@ -131,6 +134,38 @@ describe('mcp-catalog/connect', () => {
     ).toHaveBeenCalledWith(
       expect.objectContaining({ query: expect.objectContaining({ usableByUserId: ALICE }) })
     );
+  });
+
+  it('reuses the install after the entry is withdrawn and republished', async () => {
+    // A republication is a delete and a re-create, so the entry for the same
+    // server comes back under an id nothing installed before it ever saw.
+    const republished: MCPCatalogEntry = {
+      ...CURATED,
+      catalog_entry_id:
+        '00000000-0000-7000-8000-0000000ce002' as MCPCatalogEntry['catalog_entry_id'],
+    };
+    expect(republished.catalog_entry_id).not.toBe(CURATED.catalog_entry_id);
+
+    const existing = { mcp_server_id: 'server-existing', catalog_entry_name: LINEAR };
+    const { app, services, created } = buildApp(republished, [existing]);
+
+    const result = await createMCPCatalogConnectService(app).create(
+      { ...request, catalog_key: existing.catalog_entry_name },
+      params
+    );
+
+    // What the install recorded is still a key the catalog answers to, so
+    // provenance resolves to the row that now describes the same server.
+    expect((services['mcp-catalog'] as { get: ReturnType<typeof vi.fn> }).get).toHaveBeenCalledWith(
+      LINEAR,
+      expect.anything()
+    );
+    // And reuse recognises that install as this entry's, rather than reading
+    // the unfamiliar id as a server the user has not connected yet and adding
+    // a second row beside the one they already have.
+    expect(created.mcpServers).toHaveLength(0);
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe('server-existing');
   });
 
   it('refuses an uncurated entry', async () => {
@@ -214,7 +249,7 @@ describe('mcp-catalog/connect', () => {
   });
 
   it('leaves a reused install alone when a later step fails', async () => {
-    const existing = { mcp_server_id: 'server-existing', catalog_entry_id: 'ce-1' };
+    const existing = { mcp_server_id: 'server-existing', catalog_entry_name: LINEAR };
     const { app, services, removed } = buildApp(CURATED, [existing]);
     (services.sessions as { create: ReturnType<typeof vi.fn> }).create.mockRejectedValue(
       new Error('branch not found')

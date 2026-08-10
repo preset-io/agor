@@ -6,7 +6,6 @@
 
 import type {
   CreateMCPServerInput,
-  MCPCatalogEntryID,
   MCPScope,
   MCPServer,
   MCPServerFilters,
@@ -59,7 +58,7 @@ export class MCPServerRepository
       display_name: row.data.display_name,
       description: row.data.description,
       import_path: row.data.import_path,
-      catalog_entry_id: row.data.catalog_entry_id as MCPCatalogEntryID | undefined,
+      catalog_entry_name: row.data.catalog_entry_name,
 
       // Transport config
       command: row.data.command,
@@ -116,7 +115,7 @@ export class MCPServerRepository
         display_name: data.display_name,
         description: data.description,
         import_path: data.import_path,
-        catalog_entry_id: data.catalog_entry_id,
+        catalog_entry_name: data.catalog_entry_name,
         command: data.command,
         args: data.args,
         url: data.url,

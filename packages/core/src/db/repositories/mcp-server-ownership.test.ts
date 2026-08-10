@@ -183,7 +183,6 @@ describe('private MCP server ownership', () => {
 
   dbTest('a catalog install records the entry it came from', async ({ db }) => {
     const { mcpServerRepo } = await setupTenant(db);
-    const catalogEntryId = generateId() as UUID;
 
     const installed = await mcpServerRepo.create({
       name: 'linear',
@@ -192,17 +191,19 @@ describe('private MCP server ownership', () => {
       scope: 'session',
       source: 'user',
       owner_user_id: BOB,
-      catalog_entry_id: catalogEntryId as never,
+      catalog_entry_name: 'com.linear/linear',
     });
 
     await expect(mcpServerRepo.findById(installed.mcp_server_id)).resolves.toMatchObject({
-      catalog_entry_id: catalogEntryId,
+      catalog_entry_name: 'com.linear/linear',
     });
 
-    // Renaming is what a name-keyed stamp would not survive.
+    // An update rewrites the JSON blob wholesale from the current row, so the
+    // stamp is only durable if it survives that round trip — and provenance
+    // that a routine edit could drop would be worse than none.
     await mcpServerRepo.update(installed.mcp_server_id, { display_name: 'Linear (renamed)' });
     await expect(mcpServerRepo.findById(installed.mcp_server_id)).resolves.toMatchObject({
-      catalog_entry_id: catalogEntryId,
+      catalog_entry_name: 'com.linear/linear',
     });
   });
 

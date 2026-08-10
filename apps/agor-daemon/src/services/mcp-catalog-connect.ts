@@ -56,7 +56,7 @@ function toServerTransport(entry: MCPCatalogEntry): MCPTransport {
  * A readable, tool-namespace-safe server name from a reverse-DNS catalog name.
  *
  * `io.github.github/github-mcp-server` becomes `github-mcp-server`: the full
- * identity stays on `catalog_entry_id`, while this is what shows up in every
+ * identity stays on `catalog_entry_name`, while this is what shows up in every
  * `mcp__<name>__<tool>` the agent sees.
  */
 function serverNameFor(entry: MCPCatalogEntry): string {
@@ -121,7 +121,15 @@ export function createMCPCatalogConnectService(
 ): MCPCatalogConnectService {
   const service = (path: string) => app.service(path);
 
-  /** An install of this entry the caller can already use, if there is one. */
+  /**
+   * An install of this entry the caller can already use, if there is one.
+   *
+   * Matched on the registry name, so an entry the registry withdrew and
+   * republished — a fresh row for the same server — still recognises the
+   * install the user already has instead of adding a duplicate beside it. Both
+   * sides carry the catalog's own `name` verbatim, which is what the entry is
+   * unique on, so there is no second normalisation to keep in step.
+   */
   const findExistingInstall = async (
     entry: MCPCatalogEntry,
     userId: UserID | undefined,
@@ -133,7 +141,7 @@ export function createMCPCatalogConnectService(
       query: { ...(userId ? { usableByUserId: userId } : {}), $limit: 1000 },
     });
     const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
-    return servers.find((server) => server.catalog_entry_id === entry.catalog_entry_id);
+    return servers.find((server) => server.catalog_entry_name === entry.name);
   };
 
   return {
@@ -169,7 +177,7 @@ export function createMCPCatalogConnectService(
         // silently for every session its owner will ever start.
         scope: 'session',
         source: 'user',
-        catalog_entry_id: entry.catalog_entry_id,
+        catalog_entry_name: entry.name,
       };
 
       const mcpServer =

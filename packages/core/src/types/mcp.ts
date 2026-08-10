@@ -7,7 +7,6 @@
 // See: apps/agor-docs/pages/guide/internal-mcp.mdx for the user-facing reference
 
 import type { SessionID, UserID, UUID } from './id';
-import type { MCPCatalogEntryID } from './mcp-catalog';
 
 /**
  * MCP Server ID (branded UUID)
@@ -284,11 +283,14 @@ export interface MCPServer {
   /**
    * The catalog entry this server was installed from, if any.
    *
-   * Stamped as the entry's UUID rather than its reverse-DNS name: the name is
-   * mutable on both sides of the mirror, so a rename would orphan every row
-   * that recorded it, and the link cannot be reconstructed after the fact.
+   * Stamped as the entry's reverse-DNS registry name, which is the catalog's
+   * unique join key and the only identifier that outlives a row. A registry
+   * withdrawal followed by a republication deletes the entry and re-creates it
+   * under a fresh `catalog_entry_id`, so an id would dangle on the one event
+   * ingestion performs routinely, while the name still resolves to the entry
+   * for the same server.
    */
-  catalog_entry_id?: MCPCatalogEntryID;
+  catalog_entry_name?: string;
   enabled: boolean;
 
   // Capabilities (discovered from server)
@@ -350,7 +352,7 @@ export interface CreateMCPServerInput {
   owner_user_id?: UserID; // Private to this user; omit for a shared server
   source?: MCPSource;
   import_path?: string;
-  catalog_entry_id?: MCPCatalogEntryID;
+  catalog_entry_name?: string;
   enabled?: boolean;
 }
 
