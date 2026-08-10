@@ -465,7 +465,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
                 columns={cardColumns}
                 rowKey="card_id"
                 size="small"
-                pagination={{ pageSize: 20, hideOnSinglePage: true }}
+                pagination={{ defaultPageSize: 20, hideOnSinglePage: true }}
                 onRow={(record) => ({
                   onClick: () => {
                     setCardModalCard(record);

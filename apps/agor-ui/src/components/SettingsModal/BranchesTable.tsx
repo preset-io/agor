@@ -617,7 +617,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           dataSource={filteredBranches}
           columns={columns}
           rowKey="branch_id"
-          pagination={{ pageSize: 10 }}
+          pagination={{ defaultPageSize: 10 }}
           size="small"
           onRow={(record) => ({
             onClick: () => onRowClick?.(record),
