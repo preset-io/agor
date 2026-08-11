@@ -17,6 +17,7 @@ import type {
 } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
+  ApartmentOutlined,
   ApiOutlined,
   AppstoreOutlined,
   BranchesOutlined,
@@ -691,15 +692,17 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
               padding: '20px 0',
             }}
           >
-            <div
-              style={{
-                padding: '0 24px 16px',
-                fontWeight: 600,
-                fontSize: 18,
-                color: token.colorText,
-              }}
-            >
-              Workspace Settings
+            {/* Icon + label so the admin/tenant surface is recognizable at a
+                glance (vs. the personal User Settings surface). This header is
+                the only chrome that never scrolls away inside a drill-in, so the
+                persistent identity signal lives here. Mirrored in UserSettingsModal. */}
+            <div style={{ padding: '0 24px 16px' }}>
+              <Space size={8} align="center">
+                <ApartmentOutlined style={{ fontSize: 18, color: token.colorText }} />
+                <span style={{ fontWeight: 600, fontSize: 18, color: token.colorText }}>
+                  Workspace Settings
+                </span>
+              </Space>
             </div>
             <Menu
               mode="inline"
