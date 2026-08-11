@@ -23,7 +23,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantID } from '@agor/core/types';
-import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
+import { isAllowedFactProbeUrl, isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
 export interface DistributedHealthMonitorOptions {
@@ -457,11 +457,25 @@ export class DistributedHealthMonitor {
     branch: Branch,
     controller: AbortController
   ): Promise<EnvironmentHealthObservation | null> {
-    const healthUrl = branch.health_check_url;
+    // A REMOTE environment (a Codespace) has no frozen health_check_url — its
+    // reachable address does not exist until the environment starts, so the
+    // lifecycle command reports it as a `health` fact instead. Without this
+    // fallback every remote environment is permanently "not observable" here
+    // and can never leave `starting`, which is the whole Codespaces variant.
+    //
+    // Facts are command output, so the URL is untrusted input and gets the
+    // stricter fact guard (blocks loopback/RFC1918/link-local/.internal) rather
+    // than the plain health-check guard applied to operator-authored config.
+    const rawFactsHealthUrl = branch.environment_instance?.facts?.health;
+    const factsHealthUrl =
+      rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl) ? rawFactsHealthUrl : undefined;
+    const healthUrl = branch.health_check_url || factsHealthUrl;
     if (!healthUrl) {
       return {
         status: 'unknown',
-        message: 'No health check configured; remote environment health is not observable',
+        message: rawFactsHealthUrl
+          ? 'Health fact points at a disallowed destination; environment health is not observable'
+          : 'No health check configured; remote environment health is not observable',
         recordWhileStarting: true,
       };
     }
