@@ -1451,7 +1451,18 @@ export const App: React.FC<AppProps> = ({
           instanceDescription={instanceDescription}
         />
         {topBanner}
-        <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
+        {/* flex:1 + minHeight:0 pin the workspace to the viewport remainder;
+            without them the flex item's auto min-height lets board content
+            overflow below the fold by the header height. */}
+        <Content
+          style={{
+            position: 'relative',
+            overflow: 'hidden',
+            display: 'flex',
+            flex: 1,
+            minHeight: 0,
+          }}
+        >
           <PanelGroup
             id="main-layout"
             direction="horizontal"
