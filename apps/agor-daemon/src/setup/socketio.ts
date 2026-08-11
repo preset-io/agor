@@ -594,7 +594,8 @@ export function createSocketIOConfig(
 
         if (previousBoardId && previousBoardId !== data.boardId) {
           emitHaNativeSocketEvent(
-            socket.broadcast.to(boardPresenceRoomName(tenantId, previousBoardId)),
+            socket.broadcast,
+            boardPresenceRoomName(tenantId, previousBoardId),
             'cursor-left',
             {
               userId,
@@ -614,7 +615,8 @@ export function createSocketIOConfig(
 
         // Broadcast cursor position only to tabs actively watching this board.
         emitHaNativeSocketEvent(
-          socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)),
+          socket.broadcast,
+          boardPresenceRoomName(tenantId, data.boardId),
           'cursor-moved',
           broadcastData
         );
@@ -633,7 +635,8 @@ export function createSocketIOConfig(
             timestamp: data.timestamp,
           };
           emitHaNativeSocketEvent(
-            socket.broadcast.to(tenantChannelName(tenantId)),
+            socket.broadcast,
+            tenantChannelName(tenantId),
             'presence-updated',
             presenceData
           );
@@ -651,7 +654,8 @@ export function createSocketIOConfig(
         if (!fs.data.authorizedBoardIds?.has(data.boardId)) return;
 
         emitHaNativeSocketEvent(
-          socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)),
+          socket.broadcast,
+          boardPresenceRoomName(tenantId, data.boardId),
           'cursor-left',
           {
             userId,

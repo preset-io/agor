@@ -1912,7 +1912,7 @@ async function registerMCPServices(
         event.oauth_mode === 'per_user' && pendingFlow.userId
           ? tenantUserChannelName(pendingFlow.tenantId, pendingFlow.userId)
           : tenantChannelName(pendingFlow.tenantId);
-      emitHaNativeSocketEvent(app.io.to(room), 'oauth:completed', event);
+      emitHaNativeSocketEvent(app.io, room, 'oauth:completed', event);
     } else if (pendingFlow.socketId) {
       // Standalone defensive fallback: exact originating socket only. Never
       // globally broadcast OAuth attempt metadata or authorization URLs.
@@ -2882,7 +2882,7 @@ async function registerMCPServices(
           result.oauthMode === 'shared'
             ? tenantChannelName(tenantId)
             : tenantUserChannelName(tenantId, params.user.user_id);
-        emitHaNativeSocketEvent(app.io.to(room), 'oauth:disconnected', {
+        emitHaNativeSocketEvent(app.io, room, 'oauth:disconnected', {
           mcp_server_id: data.mcp_server_id as MCPServerID,
         });
       }

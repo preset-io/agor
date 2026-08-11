@@ -28,6 +28,16 @@ function isPotentialClusterBroadcast(receiver, aliases) {
   );
 }
 
+function isHaNativeBoundaryImplementation(node, file) {
+  if (!file.endsWith(join('apps', 'agor-daemon', 'src', 'realtime', 'routing.ts'))) return false;
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isFunctionDeclaration(current) && current.name?.text === 'emitHaNativeSocketEvent') {
+      return true;
+    }
+  }
+  return false;
+}
+
 const violations = [];
 for (const file of sourceFiles(SOURCE_ROOT)) {
   const source = ts.createSourceFile(
@@ -63,6 +73,17 @@ for (const file of sourceFiles(SOURCE_ROOT)) {
   function visit(node) {
     if (
       ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'emitHaNativeSocketEvent' &&
+      node.arguments.length !== 4
+    ) {
+      const position = source.getLineAndCharacterOfPosition(node.getStart(source));
+      violations.push(
+        `${relative(ROOT, file)}:${position.line + 1}:${position.character + 1} HA native emit must pass emitter, branded tenant room, event, and payload`
+      );
+    }
+    if (
+      ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
       node.expression.name.text === 'emit'
     ) {
@@ -70,11 +91,12 @@ for (const file of sourceFiles(SOURCE_ROOT)) {
       const receiverText = receiver.getText();
       if (
         isPotentialClusterBroadcast(receiver, clusterAliases) &&
-        !receiverText.includes('.local')
+        !receiverText.includes('.local') &&
+        !isHaNativeBoundaryImplementation(node, file)
       ) {
         const position = source.getLineAndCharacterOfPosition(node.getStart(source));
         violations.push(
-          `${relative(ROOT, file)}:${position.line + 1}:${position.character + 1} raw room/global Socket.IO emit must use .local or emitHaNativeSocketEvent()`
+          `${relative(ROOT, file)}:${position.line + 1}:${position.character + 1} raw room/global Socket.IO emit must use .local or the tenant-bound emitHaNativeSocketEvent()`
         );
       }
     }

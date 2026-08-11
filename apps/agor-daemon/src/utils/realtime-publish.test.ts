@@ -1159,6 +1159,50 @@ describe('configureRealtimePublish streaming scope', () => {
     expect(unionConnections(result)).toEqual([subscribed]);
   });
 
+  it('intersects an unprefixed session stream room with the resolved tenant channel', async () => {
+    // Session UUIDs are globally unique and subscribe is tenant-authorized, but
+    // defend in depth against stale/forged membership: even if both tenants sit
+    // in the same stream room, only the event tenant may receive its chunks.
+    const tenantA = { user: user('tenant-a-user') };
+    const tenantB = { user: user('tenant-b-user') };
+    const app = makeApp(
+      [tenantA, tenantB],
+      {},
+      {
+        authenticated: [tenantA, tenantB],
+        'tenant:tenant-a': [tenantA],
+        'tenant:tenant-b': [tenantB],
+        'session-stream:s1': [tenantA, tenantB],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'tenant-a-only' },
+      {
+        ...streamingContext,
+        params: { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
+      }
+    );
+
+    expect(unionConnections(result)).toEqual([tenantA]);
+    expect(unionConnections(result)).not.toContain(tenantB);
+  });
+
   it('still delivers streaming chunks to service-account connections (gateway/Slack)', async () => {
     const viewer = { user: user('viewer') };
     const service = { user: { _isServiceAccount: true, role: 'service' } };

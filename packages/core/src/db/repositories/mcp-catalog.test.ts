@@ -337,6 +337,52 @@ describe('serializeCapabilityTags', () => {
   });
 });
 
+describe('concurrent catalog writers', () => {
+  dbTest('tolerates concurrent daemon curation seeding of the same natural key', async ({ db }) => {
+    const daemonA = new MCPCatalogRepository(db);
+    const daemonB = new MCPCatalogRepository(db);
+
+    await expect(
+      Promise.all([
+        daemonA.upsertCuration(curation('com.concurrent/mcp')),
+        daemonB.upsertCuration(curation('com.concurrent/mcp')),
+      ])
+    ).resolves.toEqual(expect.arrayContaining(['created', 'updated']));
+
+    expect(await daemonA.findByName('com.concurrent/mcp')).toMatchObject({
+      name: 'com.concurrent/mcp',
+      curated: true,
+      category: 'dev-tools',
+    });
+    expect(await daemonA.count({ names: ['com.concurrent/mcp'] })).toBe(1);
+  });
+
+  dbTest('merges simultaneous first registry and curation writes', async ({ db }) => {
+    const registryDaemon = new MCPCatalogRepository(db);
+    const curationDaemon = new MCPCatalogRepository(db);
+
+    await Promise.all([
+      registryDaemon.upsertRegistryEntry({
+        name: 'com.concurrent/mixed',
+        title: 'Registry title',
+        version: '1.0.0',
+      }),
+      curationDaemon.upsertCuration(
+        curation('com.concurrent/mixed', { description: 'Curated description' })
+      ),
+    ]);
+
+    expect(await registryDaemon.findByName('com.concurrent/mixed')).toMatchObject({
+      name: 'com.concurrent/mixed',
+      title: 'Registry title',
+      description: 'Curated description',
+      version: '1.0.0',
+      curated: true,
+    });
+    expect(await registryDaemon.count({ names: ['com.concurrent/mixed'] })).toBe(1);
+  });
+});
+
 describe('field ownership across writers', () => {
   const curation = (
     overrides: Partial<MCPCatalogCurationUpsert> = {}

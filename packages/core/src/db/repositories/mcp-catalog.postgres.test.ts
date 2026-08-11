@@ -37,6 +37,7 @@ const CAPABILITY_WRITE = `test.capability-${suffix}/mcp`;
 const UNSCOPED_WRITE = `test.unscoped-${suffix}/mcp`;
 const TENANT_WRITE = `test.tenant-${suffix}/mcp`;
 const TX_PREFIX = `test.tx-${suffix}`;
+const CONCURRENT_SEED = `test.concurrent-seed-${suffix}/mcp`;
 
 describePostgres('mcp_catalog_entries row-level security', () => {
   let db: Database;
@@ -97,6 +98,35 @@ describePostgres('mcp_catalog_entries row-level security', () => {
     );
 
     expect(await repository.findByName(CAPABILITY_WRITE)).not.toBeNull();
+  });
+
+  it('lets two daemons seed the same curated natural key concurrently', async () => {
+    const seedFromDaemon = () =>
+      runWithSystemDatabaseScope(
+        db,
+        'concurrent mcp catalog seed test',
+        (scoped) =>
+          new MCPCatalogRepository(scoped as never).upsertCuration({
+            name: CONCURRENT_SEED,
+            category: 'dev-tools',
+            capabilities: ['code-repos'],
+            benefit: 'Benefit',
+            starter_prompt: 'Prompt',
+            permission_disclosure: 'Disclosure',
+            verified: true,
+          }),
+        { capability: 'mcp_catalog_ingestion' }
+      );
+
+    await expect(Promise.all([seedFromDaemon(), seedFromDaemon()])).resolves.toEqual(
+      expect.arrayContaining(['created', 'updated'])
+    );
+    expect(await repository.findByName(CONCURRENT_SEED)).toMatchObject({
+      name: CONCURRENT_SEED,
+      curated: true,
+      category: 'dev-tools',
+    });
+    expect(await repository.count({ names: [CONCURRENT_SEED] })).toBe(1);
   });
 
   it('refuses a write made without any system capability', async () => {

@@ -26,14 +26,28 @@ describe('realtime routing boundary', () => {
       'oauth:disconnected',
     ]);
     const target = { emit: vi.fn() };
-    emitHaNativeSocketEvent(target, 'cursor-left', {
+    const emitter = { to: vi.fn(() => target) };
+    emitHaNativeSocketEvent(emitter, boardPresenceRoomName('tenant-a', 'board-a'), 'cursor-left', {
       userId: 'user-a',
       boardId: '019fe5bc-65cf-7095-b160-454363604446' as never,
       timestamp: 1,
     });
+    expect(emitter.to).toHaveBeenCalledWith('tenant:tenant-a:board:board-a:presence');
     expect(target.emit).toHaveBeenCalledWith('cursor-left', {
       userId: 'user-a',
       boardId: '019fe5bc-65cf-7095-b160-454363604446',
+      timestamp: 1,
+    });
+  });
+
+  it('rejects unqualified rooms at the typed HA boundary', () => {
+    const emitter = { to: vi.fn(() => ({ emit: vi.fn() })) };
+    // This assertion is compile-time coverage: removing the tenant room brand
+    // makes the @ts-expect-error unused and fails the repository typecheck.
+    // @ts-expect-error native cross-replica rooms must be tenant-qualified
+    emitHaNativeSocketEvent(emitter, 'board-a', 'cursor-left', {
+      userId: 'user-a',
+      boardId: '019fe5bc-65cf-7095-b160-454363604446' as never,
       timestamp: 1,
     });
   });

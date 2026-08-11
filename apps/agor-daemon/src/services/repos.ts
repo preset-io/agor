@@ -363,7 +363,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
               const branchHint = data.default_branch
                 ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
                 : '';
-              emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
+              emitHaNativeSocketEvent(io, tenantChannelName(tenantId), 'repo:cloneError', {
                 slug,
                 url: remoteUrl,
                 error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,

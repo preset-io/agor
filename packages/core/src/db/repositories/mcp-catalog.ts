@@ -414,7 +414,7 @@ export class MCPCatalogRepository {
     entry: MCPCatalogRegistryUpsert
   ): Promise<'created' | 'updated' | 'unchanged'> {
     const now = new Date();
-    const existing = await this.rawByName(entry.name);
+    let existing = await this.rawByName(entry.name);
 
     const registryColumns = {
       version: entry.version ?? null,
@@ -452,8 +452,21 @@ export class MCPCatalogRepository {
         },
         ...registryColumns,
       };
-      await insert(this.db, mcpCatalogEntries).values(row).run();
-      return 'created';
+      const inserted = await insert(this.db, mcpCatalogEntries)
+        .values(row)
+        .onConflictDoNothing()
+        .run();
+      if (inserted.rowsAffected > 0) return 'created';
+
+      // Another daemon may have seeded the same natural key after our SELECT.
+      // Reload its row and merge this writer's source half instead of turning a
+      // harmless startup race into a unique-constraint failure.
+      existing = await this.rawByName(entry.name);
+      if (!existing) {
+        throw new RepositoryError(
+          `MCP catalog entry ${entry.name} conflicted during insert but could not be reloaded`
+        );
+      }
     }
 
     const storedAt = existing.registry_updated_at
@@ -506,7 +519,7 @@ export class MCPCatalogRepository {
    */
   async upsertCuration(entry: MCPCatalogCurationUpsert): Promise<'created' | 'updated'> {
     const now = new Date();
-    const existing = await this.rawByName(entry.name);
+    let existing = await this.rawByName(entry.name);
 
     // Rewritten in full each seed rather than merged into what is already
     // stored: dropping `title` from `curated.yaml` has to hand that field back
@@ -534,7 +547,7 @@ export class MCPCatalogRepository {
 
     if (!existing) {
       const shared = deriveSharedColumns({}, curationSide);
-      await insert(this.db, mcpCatalogEntries)
+      const inserted = await insert(this.db, mcpCatalogEntries)
         .values({
           catalog_entry_id: generateId(),
           created_at: now,
@@ -544,8 +557,18 @@ export class MCPCatalogRepository {
           data: { capabilities: entry.capabilities, curation: curationSide },
           ...curationColumns,
         } satisfies MCPCatalogEntryInsert)
+        .onConflictDoNothing()
         .run();
-      return 'created';
+      if (inserted.rowsAffected > 0) return 'created';
+
+      // Every HA daemon reconciles curated.yaml on startup. A peer can insert
+      // this name between our read and write, so merge onto the winning row.
+      existing = await this.rawByName(entry.name);
+      if (!existing) {
+        throw new RepositoryError(
+          `MCP catalog entry ${entry.name} conflicted during insert but could not be reloaded`
+        );
+      }
     }
 
     const existingData = existing.data ?? {};
