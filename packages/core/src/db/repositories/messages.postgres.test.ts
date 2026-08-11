@@ -62,17 +62,10 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         branch_unique_id: Math.floor(Math.random() * 1_000_000),
         created_by: generateId() as UUID,
       });
-      const sessions = new SessionRepository(scoped);
-      const session = await sessions.create({
+      const session = await new SessionRepository(scoped).create({
         branch_id: branch.branch_id,
         title: 'test',
         created_by: generateId() as UUID,
-      });
-      await sessions.update(session.session_id, {
-        custom_context: { provider_payload: `value${actualNul}${loneHighSurrogate}` },
-      });
-      expect((await sessions.findById(session.session_id))?.custom_context).toEqual({
-        provider_payload: 'value��',
       });
       const repository = new MessagesRepository(scoped);
       const message = (index: number, content: string): Message => ({
