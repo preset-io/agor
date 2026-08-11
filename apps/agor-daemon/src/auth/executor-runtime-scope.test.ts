@@ -257,7 +257,7 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
   });
 
-  it('rejects repo reads outside the token branch, including another tenant repo', async () => {
+  it('preserves tenant context and rejects a repo outside the token branch', async () => {
     const context = ctx({
       path: 'repos',
       method: 'get',
