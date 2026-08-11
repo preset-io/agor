@@ -33,12 +33,14 @@ import {
 } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutationGate } from '../../contexts/ConnectionContext';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { AgorAvatar } from '../AgorAvatar';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { AgorEmojiPicker } from '../EmojiPickerInput';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MetaRow } from '../MetaRow';
 import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
+import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
 const { Text, Title } = Typography;
 
@@ -173,6 +175,7 @@ const ReplyItem: React.FC<{
   onDelete?: (commentId: string) => void;
 }> = ({ reply, userById, currentUserId, onToggleReaction, onDelete }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const [replyHovered, setReplyHovered] = useState(false);
   const replyUser = userById.get(reply.created_by);
   const isReplyCurrentUser = reply.created_by === currentUserId;
@@ -189,7 +192,13 @@ const ReplyItem: React.FC<{
         onMouseLeave={() => setReplyHovered(false)}
       >
         <MetaRow
-          avatar={<AgorAvatar>{replyUser?.emoji || '👤'}</AgorAvatar>}
+          avatar={
+            isSlim ? (
+              <UserIdentityAvatar user={replyUser} size={40} />
+            ) : (
+              <AgorAvatar>{replyUser?.emoji || '👤'}</AgorAvatar>
+            )
+          }
           title={
             <Space size={4}>
               <Text strong style={{ fontSize: token.fontSizeSM }}>
@@ -292,6 +301,7 @@ const CommentThread: React.FC<{
   client,
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const [showReplyInput, setShowReplyInput] = useState(false);
   const [replyValue, setReplyValue] = useState('');
   const [isHovered, setIsHovered] = useState(false);
@@ -317,7 +327,13 @@ const CommentThread: React.FC<{
       >
         {/* Thread Root */}
         <MetaRow
-          avatar={<AgorAvatar>{user?.emoji || '👤'}</AgorAvatar>}
+          avatar={
+            isSlim ? (
+              <UserIdentityAvatar user={user} size={40} />
+            ) : (
+              <AgorAvatar>{user?.emoji || '👤'}</AgorAvatar>
+            )
+          }
           title={
             <Space size={4}>
               <Text strong style={{ fontSize: token.fontSizeSM }}>

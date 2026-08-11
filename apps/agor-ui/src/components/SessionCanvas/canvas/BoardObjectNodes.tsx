@@ -20,6 +20,8 @@ import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
+import { useUIMode } from '../../../contexts/UIModeContext';
+import { nameInitial } from '../../../utils/nameInitial';
 import { getContrastingTextColor } from '../../../utils/theme';
 import { DeleteZoneModal } from './DeleteZoneModal';
 import { ZoneConfigModal } from './ZoneConfigModal';
@@ -933,6 +935,7 @@ const PIN_OFFSET_Y = -PIN_HEIGHT; // Position tip at coordinate
 
 const CommentNodeComponent = ({ data }: { data: CommentNodeData }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const { zoom } = useViewport();
   const { comment, replyCount, user, parentLabel, parentColor, onClick, onHover, onLeave } = data;
   const [isHovered, setIsHovered] = useState(false);
@@ -1002,8 +1005,10 @@ const CommentNodeComponent = ({ data }: { data: CommentNodeData }) => {
             left: '0',
           }}
         >
-          {/* Emoji (counter-rotate to keep upright) */}
-          <div style={{ transform: 'rotate(45deg)' }}>{user?.emoji || '💬'}</div>
+          {/* Avatar glyph (counter-rotate to keep upright) */}
+          <div style={{ transform: 'rotate(45deg)', fontWeight: isSlim ? 600 : undefined }}>
+            {isSlim ? nameInitial(user?.name) : user?.emoji || '💬'}
+          </div>
         </div>
 
         {/* Reply count badge */}
@@ -1075,7 +1080,9 @@ const CommentNodeComponent = ({ data }: { data: CommentNodeData }) => {
         >
           {/* Who and when */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <div style={{ fontSize: 14 }}>{user?.emoji || '💬'}</div>
+            <div style={{ fontSize: 14, fontWeight: isSlim ? 600 : undefined }}>
+              {isSlim ? nameInitial(user?.name) : user?.emoji || '💬'}
+            </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div
                 style={{
