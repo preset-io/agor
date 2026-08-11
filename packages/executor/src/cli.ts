@@ -23,6 +23,7 @@ import {
   executeInteractiveCommand,
   getRegisteredCommands,
 } from './commands/index.js';
+import { emitExecutorResult } from './executor-output.js';
 import { initializeToolRegistry, ToolRegistry } from './handlers/sdk/tool-registry.js';
 import { AgorExecutor } from './index.js';
 import {
@@ -50,10 +51,6 @@ async function readStdin(): Promise<string> {
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString('utf-8');
-}
-
-function emitExecutorResult(result: unknown): void {
-  console.log(`AGOR_EXECUTOR_RESULT ${JSON.stringify(result)}`);
 }
 
 function emitInteractiveEvent(event: unknown): void {
@@ -109,7 +106,8 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
     emitExecutorResult(result);
 
     if (!result.success) {
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
 
     // DON'T exit - stay alive to stream PTY I/O
@@ -124,7 +122,9 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   // Output result on a sentinel line so daemon parsers can suppress it from logs.
   emitExecutorResult(result);
 
-  process.exit(result.success ? 0 : 1);
+  // Let Node drain piped stdout before exiting. Calling process.exit() here can
+  // truncate executor results larger than the OS pipe buffer.
+  process.exitCode = result.success ? 0 : 1;
 }
 
 /**
@@ -188,7 +188,8 @@ async function handlePromptPayload(
         },
       })
     );
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   // =========================================================================
