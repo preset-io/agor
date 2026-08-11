@@ -157,6 +157,7 @@ import {
 } from './utils/session-task-state.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { launchPendingTask } from './utils/session-unix-identity.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
 import {
@@ -1209,211 +1210,214 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       config.execution?.executor_command_template ? 'templated' : 'local'
     );
 
-    if (!isTaskPendingDispatch(task)) return task;
-
     // Atomically claim queued/created → launch status. Process-local session
     // locks reduce contention, but this expected-state transition is the
     // cross-daemon fence that prevents duplicate executor launches.
-    const dispatchClaim = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
-      await assertTenantWritable(tenantDb, tenantId);
-      return tasksService.claimDispatchAndProjectSession(
-        task.task_id,
-        task.status,
-        {
-          ...launchState,
-          ...(launchState.executor_mode
-            ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
-            : {}),
-          queue_position: undefined,
-          message_range: {
-            start_index: messageStartIndex,
-            end_index: messageStartIndex + 1,
-            start_timestamp: startTimestamp,
-            end_timestamp: startTimestamp,
-          },
-          git_state: {
-            ref_at_start: refAtStart,
-            sha_at_start: gitStateAtStart,
-          },
-        },
-        { ...params, provider: undefined }
-      );
-    });
-    if (dispatchClaim.outcome !== 'claimed') {
-      const workIdentity = app.get('distributedWorkIdentity');
-      console.info(
-        formatStructuredLog('[distributed-work.task-dispatch]', {
-          event: 'claim_lost',
-          instance_id: workIdentity?.instanceId,
-          boot_id: workIdentity?.bootId,
-          tenant_id: tenantId,
-          task_id: task.task_id,
-          session_id: task.session_id,
-          observed_status: dispatchClaim.task.status,
-        })
-      );
-      if (shouldReconcileStableInitialMessage(dispatchClaim.task, stableInitialMessageId)) {
-        await reconcileStableInitialUserMessage(
-          dispatchClaim.task,
-          params,
-          stableInitialMessageId,
+    return launchPendingTask({
+      db,
+      tenantId,
+      execution: config.execution,
+      task,
+      session,
+      claimDispatch: (pendingTask) =>
+        tasksService.claimDispatchAndProjectSession(
+          pendingTask.task_id,
+          pendingTask.status,
           {
+            ...launchState,
+            ...(launchState.executor_mode
+              ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
+              : {}),
+            queue_position: undefined,
+            message_range: {
+              start_index: messageStartIndex,
+              end_index: messageStartIndex + 1,
+              start_timestamp: startTimestamp,
+              end_timestamp: startTimestamp,
+            },
+            git_state: {
+              ref_at_start: refAtStart,
+              sha_at_start: gitStateAtStart,
+            },
+          },
+          { ...params, provider: undefined }
+        ),
+      onClaimNotWon: async (dispatchClaim) => {
+        const workIdentity = app.get('distributedWorkIdentity');
+        console.info(
+          formatStructuredLog('[distributed-work.task-dispatch]', {
+            event: 'claim_lost',
+            instance_id: workIdentity?.instanceId,
+            boot_id: workIdentity?.bootId,
+            tenant_id: tenantId,
+            task_id: task.task_id,
+            session_id: task.session_id,
+            observed_status: dispatchClaim.task.status,
+          })
+        );
+        if (shouldReconcileStableInitialMessage(dispatchClaim.task, stableInitialMessageId)) {
+          await reconcileStableInitialUserMessage(
+            dispatchClaim.task,
+            params,
+            stableInitialMessageId,
+            {
+              messageStartIndex,
+              startTimestamp,
+              messageSource: runtimeMessageSource,
+            }
+          );
+        }
+        return dispatchClaim.task;
+      },
+      onClaimed: async (updatedTask) => {
+        // Alt D — write the user-message row before spawning. Gated by kill switch.
+        // The executor's createUserMessage has a skip-if-exists guard so a duplicate
+        // write is harmless if the daemon path is enabled.
+        // Prefer task.metadata.source (set when the task was queued) over the
+        // request's messageSource — the latter applies only to this drain tick.
+        if (stableInitialMessageId) {
+          await reconcileStableInitialUserMessage(updatedTask, params, stableInitialMessageId, {
             messageStartIndex,
             startTimestamp,
             messageSource: runtimeMessageSource,
-          }
-        );
-      }
-      return dispatchClaim.task;
-    }
-    const updatedTask = dispatchClaim.task;
-
-    // Alt D — write the user-message row before spawning. Gated by kill switch.
-    // The executor's createUserMessage has a skip-if-exists guard so a duplicate
-    // write is harmless if the daemon path is enabled.
-    // Prefer task.metadata.source (set when the task was queued) over the
-    // request's messageSource — the latter applies only to this drain tick.
-    if (stableInitialMessageId) {
-      await reconcileStableInitialUserMessage(updatedTask, params, stableInitialMessageId, {
-        messageStartIndex,
-        startTimestamp,
-        messageSource: runtimeMessageSource,
-      });
-    } else {
-      await ensureInitialUserMessage(task, params, {
-        messageStartIndex,
-        startTimestamp,
-        messageSource: runtimeMessageSource,
-      });
-    }
-
-    // Re-apply the Session projection through Feathers so hooks/realtime see
-    // the transition. TaskRepository.claimDispatchAndProjectSession already
-    // committed the same projection atomically with the Task fence; this
-    // service patch is no longer correctness-critical on SQLite and is
-    // intentionally idempotent.
-    //
-    // The session-status flip used to fall out of `TasksService.create` when
-    // the IDLE path created a task with `status: RUNNING` directly. Now the
-    // IDLE path creates `status: CREATED` and we patch the task here, which
-    // `TasksService.patch` does NOT mirror onto the session. Without this
-    // explicit patch, `session.status` stays IDLE while a task is RUNNING,
-    // causing the queue gate in the prompt route to wave subsequent prompts
-    // through instead of queuing them.
-    await app.service('sessions').patch(
-      task.session_id,
-      {
-        status: SessionStatus.RUNNING,
-        ready_for_prompt: false,
-        tasks: [...session.tasks, task.task_id],
-      },
-      params
-    );
-
-    // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
-    // non-owner is prompting. The prompter identity comes from `task.created_by`
-    // (NOT `params.user`): every persisted Task row requires `created_by`
-    // (`createPending` for the prompt/queue/callback paths, `create`/`createMany`
-    // for pre-created tasks run via `/tasks/:id/run`), so it survives the queue
-    // / hook / drain hop intact. `params.user` can drop on hook-triggered drains
-    // that don't carry `queued_by_user_id` and is therefore not authoritative.
-    // See `./utils/build-prompter-prefix.ts` for the helper + tests.
-    const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
-      rawPrompt: task.full_prompt,
-      sessionCreatedBy: session.created_by,
-      prompterUserId: task.created_by,
-      usersRepo: bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db)),
-    });
-
-    const useStreaming = options.stream !== false;
-    const sessionId = task.session_id;
-    const taskId = task.task_id;
-
-    // Background spawn + failure handling. Returning the patched Task to the
-    // caller before this resolves matches the previous behavior — the HTTP
-    // response should not block on the executor process being live.
-    // deferInFreshTenantScope uses a fresh DB connection and tenant RLS scope
-    // instead of inheriting a stale committed transaction.
-    deferInFreshTenantScope(params, async () => {
-      try {
-        console.log(
-          `🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor (task ${shortId(taskId)})`
-        );
-
-        await sessionsService.executeTask(
-          sessionId,
-          {
-            taskId,
-            prompt: promptForExecutor,
-            permissionMode: options.permissionMode,
-            stream: useStreaming,
+          });
+        } else {
+          await ensureInitialUserMessage(task, params, {
+            messageStartIndex,
+            startTimestamp,
             messageSource: runtimeMessageSource,
-          },
-          params
-        );
+          });
+        }
 
-        console.log(
-          `✅ [Daemon] Executor spawned for session ${shortId(sessionId)}, waiting for task completion`
-        );
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(
-          `❌ [Daemon] Executor spawn failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
-          error
-        );
-        await safePatch(
-          'tasks',
-          taskId,
+        // Re-apply the Session projection through Feathers so hooks/realtime see
+        // the transition. TaskRepository.claimDispatchAndProjectSession already
+        // committed the same projection atomically with the Task fence; this
+        // service patch is no longer correctness-critical on SQLite and is
+        // intentionally idempotent.
+        //
+        // The session-status flip used to fall out of `TasksService.create` when
+        // the IDLE path created a task with `status: RUNNING` directly. Now the
+        // IDLE path creates `status: CREATED` and we patch the task here, which
+        // `TasksService.patch` does NOT mirror onto the session. Without this
+        // explicit patch, `session.status` stays IDLE while a task is RUNNING,
+        // causing the queue gate in the prompt route to wave subsequent prompts
+        // through instead of queuing them.
+        await app.service('sessions').patch(
+          task.session_id,
           {
-            status: TaskStatus.FAILED,
-            completed_at: new Date().toISOString(),
-            error_message: errorMessage,
+            status: SessionStatus.RUNNING,
+            ready_for_prompt: false,
+            tasks: [...session.tasks, task.task_id],
           },
-          'Task',
           params
         );
 
-        // Synthesize a system message so the chat surfaces *why* the agent
-        // didn't respond. Without this the transcript shows only the user
-        // prompt and silence even though the task list reads FAILED.
-        try {
-          // Recompute the next index instead of trusting `messageStartIndex
-          // + 1` — the daemon-write user-message above is wrapped in a
-          // try/catch and may have been swallowed, leaving a gap at
-          // `messageStartIndex`. countMessages always reports the live row
-          // count, so it lands the system error at the true tail whether
-          // the user-message row exists or not (no gap, no collision).
-          const errorContent = `⚠️ The agent failed to start.\n\n${errorMessage}`;
-          await appendSystemMessage({
-            app,
-            db,
-            sessionId,
-            taskId,
-            content: errorContent,
-            role: MessageRole.ASSISTANT,
-            metadata: { is_meta: true },
-            params,
-          });
-        } catch (sysErr) {
-          console.warn(
-            '[Daemon] Failed to write system error message after spawn failure:',
-            sysErr
-          );
-        }
+        // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
+        // non-owner is prompting. The prompter identity comes from `task.created_by`
+        // (NOT `params.user`): every persisted Task row requires `created_by`
+        // (`createPending` for the prompt/queue/callback paths, `create`/`createMany`
+        // for pre-created tasks run via `/tasks/:id/run`), so it survives the queue
+        // / hook / drain hop intact. `params.user` can drop on hook-triggered drains
+        // that don't carry `queued_by_user_id` and is therefore not authoritative.
+        // See `./utils/build-prompter-prefix.ts` for the helper + tests.
+        const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
+          rawPrompt: task.full_prompt,
+          sessionCreatedBy: session.created_by,
+          prompterUserId: task.created_by,
+          usersRepo: bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db)),
+        });
 
-        try {
-          app.service('tasks').emit('failed', {
-            task_id: taskId,
-            session_id: sessionId,
-            error_message: errorMessage,
-          });
-        } catch (emitErr) {
-          console.warn('[Daemon] Failed to emit tasks:failed event:', emitErr);
-        }
-      }
+        const useStreaming = options.stream !== false;
+        const sessionId = task.session_id;
+        const taskId = task.task_id;
+
+        // Background spawn + failure handling. Returning the patched Task to the
+        // caller before this resolves matches the previous behavior — the HTTP
+        // response should not block on the executor process being live.
+        // deferInFreshTenantScope uses a fresh DB connection and tenant RLS scope
+        // instead of inheriting a stale committed transaction.
+        deferInFreshTenantScope(params, async () => {
+          try {
+            console.log(
+              `🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor (task ${shortId(taskId)})`
+            );
+
+            await sessionsService.executeTask(
+              sessionId,
+              {
+                taskId,
+                prompt: promptForExecutor,
+                permissionMode: options.permissionMode,
+                stream: useStreaming,
+                messageSource: runtimeMessageSource,
+              },
+              params
+            );
+
+            console.log(
+              `✅ [Daemon] Executor spawned for session ${shortId(sessionId)}, waiting for task completion`
+            );
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(
+              `❌ [Daemon] Executor spawn failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
+              error
+            );
+            await safePatch(
+              'tasks',
+              taskId,
+              {
+                status: TaskStatus.FAILED,
+                completed_at: new Date().toISOString(),
+                error_message: errorMessage,
+              },
+              'Task',
+              params
+            );
+
+            // Synthesize a system message so the chat surfaces *why* the agent
+            // didn't respond. Without this the transcript shows only the user
+            // prompt and silence even though the task list reads FAILED.
+            try {
+              // Recompute the next index instead of trusting `messageStartIndex
+              // + 1` — the daemon-write user-message above is wrapped in a
+              // try/catch and may have been swallowed, leaving a gap at
+              // `messageStartIndex`. countMessages always reports the live row
+              // count, so it lands the system error at the true tail whether
+              // the user-message row exists or not (no gap, no collision).
+              const errorContent = `⚠️ The agent failed to start.\n\n${errorMessage}`;
+              await appendSystemMessage({
+                app,
+                db,
+                sessionId,
+                taskId,
+                content: errorContent,
+                role: MessageRole.ASSISTANT,
+                metadata: { is_meta: true },
+                params,
+              });
+            } catch (sysErr) {
+              console.warn(
+                '[Daemon] Failed to write system error message after spawn failure:',
+                sysErr
+              );
+            }
+
+            try {
+              app.service('tasks').emit('failed', {
+                task_id: taskId,
+                session_id: sessionId,
+                error_message: errorMessage,
+              });
+            } catch (emitErr) {
+              console.warn('[Daemon] Failed to emit tasks:failed event:', emitErr);
+            }
+          }
+        });
+
+        return updatedTask;
+      },
     });
-
-    return updatedTask;
   }
 
   // ============================================================================

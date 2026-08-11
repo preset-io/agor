@@ -29,6 +29,7 @@ import type {
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
+import { assertSessionUnixIdentityMatchesCreator } from './session-unix-identity.js';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -1227,23 +1228,7 @@ export function validateSessionUnixUsername(
       return context;
     }
 
-    // Load session creator to check current unix_username
-    const creator = await userRepo.findById(session.created_by);
-
-    if (!creator) {
-      throw new Forbidden(`Session creator not found: ${session.created_by}`);
-    }
-
-    // DEFENSIVE CHECK: Creator's current unix_username must match session's
-    if (creator.unix_username !== session.unix_username) {
-      throw new Forbidden(
-        `Session security context has changed. ` +
-          `Session was created with unix_username="${session.unix_username}" ` +
-          `but creator's current unix_username="${creator.unix_username || 'null'}". ` +
-          `Cannot execute this session with a different unix user. ` +
-          `SDK session data is stored in the original user's home directory and cannot be accessed.`
-      );
-    }
+    await assertSessionUnixIdentityMatchesCreator(session, userRepo);
 
     return context;
   };
