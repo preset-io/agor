@@ -16,6 +16,13 @@ describe('realtime routing boundary', () => {
     );
   });
 
+  it('encodes room delimiters so tenant and resource namespaces cannot collide', () => {
+    expect(tenantChannelName('a:board:b:presence')).toBe('tenant:a%3Aboard%3Ab%3Apresence');
+    expect(tenantChannelName('a:board:b:presence')).not.toBe(boardPresenceRoomName('a', 'b'));
+    expect(tenantUserChannelName('a:user:b', 'c')).not.toBe(tenantUserChannelName('a', 'b:user:c'));
+    expect(tenantChannelName('a%3Aboard')).toBe('tenant:a%253Aboard');
+  });
+
   it('emits only through the explicit native HA event inventory', () => {
     expect(HA_NATIVE_SOCKET_EVENT_INVENTORY).toEqual([
       'cursor-moved',

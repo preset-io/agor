@@ -6,27 +6,37 @@ import type {
   PresenceUpdatedEvent,
 } from '@agor/core/types';
 
-declare const tenantBoundSocketRoom: unique symbol;
+declare const tenantQualifiedSocketRoom: unique symbol;
 
 /**
- * A room proven to carry tenant context in its name. Native Socket.IO packets
- * can cross the Redis adapter only when addressed to this branded type.
+ * A room whose structured name includes an encoded tenant component. Native
+ * Socket.IO packets can cross the Redis adapter only when addressed to this
+ * branded type. The brand proves construction through this module; call sites
+ * remain responsible for supplying tenant identity from trusted auth context.
  */
-export type TenantBoundSocketRoom = string & {
-  readonly [tenantBoundSocketRoom]: true;
+export type TenantQualifiedSocketRoom = string & {
+  readonly [tenantQualifiedSocketRoom]: true;
 };
 
+/** Escape the room delimiter injectively while preserving ordinary UUID/slugs. */
+function socketRoomComponent(value: string): string {
+  return value.replaceAll('%', '%25').replaceAll(':', '%3A');
+}
+
 /** One authoritative naming scheme for Socket.IO rooms and Feathers channels. */
-export function tenantChannelName(tenantId: string): TenantBoundSocketRoom {
-  return `tenant:${tenantId}` as TenantBoundSocketRoom;
+export function tenantChannelName(tenantId: string): TenantQualifiedSocketRoom {
+  return `tenant:${socketRoomComponent(tenantId)}` as TenantQualifiedSocketRoom;
 }
 
-export function tenantUserChannelName(tenantId: string, userId: string): TenantBoundSocketRoom {
-  return `tenant:${tenantId}:user:${userId}` as TenantBoundSocketRoom;
+export function tenantUserChannelName(tenantId: string, userId: string): TenantQualifiedSocketRoom {
+  return `tenant:${socketRoomComponent(tenantId)}:user:${socketRoomComponent(userId)}` as TenantQualifiedSocketRoom;
 }
 
-export function boardPresenceRoomName(tenantId: string, boardId: string): TenantBoundSocketRoom {
-  return `tenant:${tenantId}:board:${boardId}:presence` as TenantBoundSocketRoom;
+export function boardPresenceRoomName(
+  tenantId: string,
+  boardId: string
+): TenantQualifiedSocketRoom {
+  return `tenant:${socketRoomComponent(tenantId)}:board:${socketRoomComponent(boardId)}:presence` as TenantQualifiedSocketRoom;
 }
 
 interface HaNativeSocketPayloads {
@@ -58,12 +68,14 @@ export const HA_NATIVE_SOCKET_EVENT_INVENTORY = [
   'oauth:disconnected',
 ] as const satisfies readonly (keyof HaNativeSocketPayloads)[];
 
+type HaNativeSocketEvent = (typeof HA_NATIVE_SOCKET_EVENT_INVENTORY)[number];
+
 type NativeSocketTarget = {
   emit(event: string, payload: unknown): unknown;
 };
 
 type NativeSocketRoomEmitter = {
-  to(room: TenantBoundSocketRoom): NativeSocketTarget;
+  to(room: TenantQualifiedSocketRoom): NativeSocketTarget;
 };
 
 /**
@@ -73,9 +85,9 @@ type NativeSocketRoomEmitter = {
  * a plain string/global emitter a type error rather than relying on every call
  * site to remember tenant qualification.
  */
-export function emitHaNativeSocketEvent<Event extends keyof HaNativeSocketPayloads>(
+export function emitHaNativeSocketEvent<Event extends HaNativeSocketEvent>(
   emitter: NativeSocketRoomEmitter,
-  room: TenantBoundSocketRoom,
+  room: TenantQualifiedSocketRoom,
   event: Event,
   payload: HaNativeSocketPayloads[Event]
 ): void {

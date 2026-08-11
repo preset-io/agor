@@ -21,7 +21,7 @@
 
 import { sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { createDatabase, type Database } from '../client';
+import { createDatabase, type Database, type SystemDatabase } from '../client';
 import { executeRaw } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from '../tenant-scope';
@@ -38,6 +38,71 @@ const UNSCOPED_WRITE = `test.unscoped-${suffix}/mcp`;
 const TENANT_WRITE = `test.tenant-${suffix}/mcp`;
 const TX_PREFIX = `test.tx-${suffix}`;
 const CONCURRENT_SEED = `test.concurrent-seed-${suffix}/mcp`;
+const INTERLEAVED_SOURCES = `test.interleaved-sources-${suffix}/mcp`;
+const INTERLEAVED_REGISTRY = `test.interleaved-registry-${suffix}/mcp`;
+
+async function waitForBlockedCatalogRowLock(db: Database): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [row] = (await executeRaw(
+      db,
+      sql`
+        SELECT count(*)::int AS count
+        FROM pg_stat_activity
+        WHERE pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock'
+          AND query ILIKE '%mcp_catalog_entries%'
+          AND query ILIKE '%FOR UPDATE%'
+      `
+    )) as Array<{ count: number }>;
+    if ((row?.count ?? 0) > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('Timed out waiting for the catalog writer to block on its row lock');
+}
+
+/**
+ * Hold a catalog row in one capability transaction, start a second writer, and
+ * release only after PostgreSQL proves that writer reached the row lock.
+ */
+async function interleaveCatalogWriters<HeldResult, BlockedResult>(
+  db: Database,
+  name: string,
+  holdingWork: (scoped: SystemDatabase) => Promise<HeldResult>,
+  blockedWork: () => Promise<BlockedResult>
+): Promise<[HeldResult, BlockedResult]> {
+  let reportLocked!: () => void;
+  const locked = new Promise<void>((resolve) => {
+    reportLocked = resolve;
+  });
+  let releaseLock!: () => void;
+  const release = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+
+  const holder = runWithSystemDatabaseScope(
+    db,
+    'hold catalog row for forced writer interleaving',
+    async (scoped) => {
+      await executeRaw(
+        scoped as never,
+        sql`SELECT 1 FROM mcp_catalog_entries WHERE name = ${name} FOR UPDATE`
+      );
+      reportLocked();
+      await release;
+      return holdingWork(scoped);
+    },
+    { capability: 'mcp_catalog_ingestion' }
+  );
+
+  await locked;
+  const blocked = blockedWork();
+  try {
+    await waitForBlockedCatalogRowLock(db);
+  } finally {
+    releaseLock();
+  }
+  return Promise.all([holder, blocked]);
+}
 
 describePostgres('mcp_catalog_entries row-level security', () => {
   let db: Database;
@@ -127,6 +192,103 @@ describePostgres('mcp_catalog_entries row-level security', () => {
       category: 'dev-tools',
     });
     expect(await repository.count({ names: [CONCURRENT_SEED] })).toBe(1);
+  });
+
+  it('reloads the registry half after a stale curation writer acquires the row lock', async () => {
+    await runWithSystemDatabaseScope(
+      db,
+      'seed interleaved catalog source test',
+      (scoped) =>
+        new MCPCatalogRepository(scoped as never).upsertRegistryEntry({
+          name: INTERLEAVED_SOURCES,
+          title: 'Old registry title',
+          version: '1',
+          registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+        }),
+      { capability: 'mcp_catalog_ingestion' }
+    );
+
+    await interleaveCatalogWriters(
+      db,
+      INTERLEAVED_SOURCES,
+      (scoped) =>
+        new MCPCatalogRepository(scoped as never).upsertRegistryEntry({
+          name: INTERLEAVED_SOURCES,
+          title: 'Fresh registry title',
+          version: '2',
+          registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+        }),
+      () =>
+        runWithSystemDatabaseScope(
+          db,
+          'interleaved stale curation writer',
+          (scoped) =>
+            new MCPCatalogRepository(scoped as never).upsertCuration({
+              name: INTERLEAVED_SOURCES,
+              category: 'dev-tools',
+              capabilities: ['code-repos'],
+              description: 'Curated description',
+              benefit: 'Benefit',
+              starter_prompt: 'Prompt',
+              permission_disclosure: 'Disclosure',
+              verified: true,
+            }),
+          { capability: 'mcp_catalog_ingestion' }
+        )
+    );
+
+    expect(await repository.findByName(INTERLEAVED_SOURCES)).toMatchObject({
+      title: 'Fresh registry title',
+      description: 'Curated description',
+      version: '2',
+      curated: true,
+    });
+  });
+
+  it('does not let a stale registry publication overwrite a newer one', async () => {
+    await runWithSystemDatabaseScope(
+      db,
+      'seed interleaved registry test',
+      (scoped) =>
+        new MCPCatalogRepository(scoped as never).upsertRegistryEntry({
+          name: INTERLEAVED_REGISTRY,
+          title: 'Initial registry title',
+          version: '1',
+          registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+        }),
+      { capability: 'mcp_catalog_ingestion' }
+    );
+
+    const outcomes = await interleaveCatalogWriters(
+      db,
+      INTERLEAVED_REGISTRY,
+      (scoped) =>
+        new MCPCatalogRepository(scoped as never).upsertRegistryEntry({
+          name: INTERLEAVED_REGISTRY,
+          title: 'Newest registry title',
+          version: '3',
+          registry_updated_at: new Date('2026-03-01T00:00:00.000Z'),
+        }),
+      () =>
+        runWithSystemDatabaseScope(
+          db,
+          'interleaved stale registry publication',
+          (scoped) =>
+            new MCPCatalogRepository(scoped as never).upsertRegistryEntry({
+              name: INTERLEAVED_REGISTRY,
+              title: 'Stale registry title',
+              version: '2',
+              registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+            }),
+          { capability: 'mcp_catalog_ingestion' }
+        )
+    );
+    expect(outcomes).toEqual(['updated', 'unchanged']);
+
+    expect(await repository.findByName(INTERLEAVED_REGISTRY)).toMatchObject({
+      title: 'Newest registry title',
+      version: '3',
+    });
   });
 
   it('refuses a write made without any system capability', async () => {

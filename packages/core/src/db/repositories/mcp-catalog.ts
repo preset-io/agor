@@ -25,7 +25,7 @@ import type {
 import { and, asc, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
 import { type MCPCatalogEntryInsert, type MCPCatalogEntryRow, mcpCatalogEntries } from '../schema';
 import { RepositoryError } from './base';
 
@@ -403,6 +403,23 @@ export class MCPCatalogRepository {
   }
 
   /**
+   * Serialize source-side read/merge/write operations for one natural key.
+   *
+   * Valid PostgreSQL catalog writes run inside the system-capability transaction,
+   * so this lock is held through the following reload and update. Reloading after
+   * the lock is essential: the optimistic read used to choose insert vs update
+   * may predate a peer daemon's committed registry or curation write.
+   */
+  private async lockedRawByName(name: string): Promise<MCPCatalogEntryRow> {
+    await lockRowForUpdate(this.db, this.db, mcpCatalogEntries, eq(mcpCatalogEntries.name, name));
+    const current = await this.rawByName(name);
+    if (!current) {
+      throw new RepositoryError(`MCP catalog entry ${name} disappeared while acquiring its lock`);
+    }
+    return current;
+  }
+
+  /**
    * Apply one registry record.
    *
    * Returns `'created'`, `'updated'`, or `'unchanged'`. A record whose
@@ -458,16 +475,13 @@ export class MCPCatalogRepository {
         .run();
       if (inserted.rowsAffected > 0) return 'created';
 
-      // Another daemon may have seeded the same natural key after our SELECT.
-      // Reload its row and merge this writer's source half instead of turning a
-      // harmless startup race into a unique-constraint failure.
-      existing = await this.rawByName(entry.name);
-      if (!existing) {
-        throw new RepositoryError(
-          `MCP catalog entry ${entry.name} conflicted during insert but could not be reloaded`
-        );
-      }
+      // Another daemon seeded the same natural key after our SELECT. Fall
+      // through to the same locked reload used for an already-existing row.
     }
+
+    // Do not derive shared/blob columns from the optimistic read above. A peer
+    // may have committed either source half since then; lock and reload first.
+    existing = await this.lockedRawByName(entry.name);
 
     const storedAt = existing.registry_updated_at
       ? new Date(existing.registry_updated_at).getTime()
@@ -561,15 +575,14 @@ export class MCPCatalogRepository {
         .run();
       if (inserted.rowsAffected > 0) return 'created';
 
-      // Every HA daemon reconciles curated.yaml on startup. A peer can insert
-      // this name between our read and write, so merge onto the winning row.
-      existing = await this.rawByName(entry.name);
-      if (!existing) {
-        throw new RepositoryError(
-          `MCP catalog entry ${entry.name} conflicted during insert but could not be reloaded`
-        );
-      }
+      // A peer inserted this name after our SELECT. Fall through to the same
+      // locked reload used for an already-existing row.
     }
+
+    // Registry ingestion and curated.yaml reconciliation own different halves
+    // of this row. Serialize and reload so neither can re-save a stale copy of
+    // the other's half.
+    existing = await this.lockedRawByName(entry.name);
 
     const existingData = existing.data ?? {};
     const shared = deriveSharedColumns(existingData.registry ?? {}, curationSide);
