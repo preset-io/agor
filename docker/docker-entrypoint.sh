@@ -243,7 +243,7 @@ echo "✅ Watch modes started (git, core, agentic tools, executor, and client wi
 # Initialize database and configure daemon settings for Docker
 # (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)
 echo "📦 Initializing Agor environment..."
-pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
+pnpm agor init --skip-if-exists --non-interactive --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
 
 # Run database migrations (idempotent: safe to run on every start)
 # This ensures schema is up-to-date even when using existing database volumes
@@ -251,74 +251,8 @@ pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}
 echo "🔄 Running database migrations..."
 pnpm agor db migrate --yes
 
-# Configure executor Unix user isolation if enabled
-if [ "$AGOR_USE_EXECUTOR" = "true" ]; then
-  echo "🔒 Enabling executor Unix user isolation..."
-  echo "   Executor will run as: ${AGOR_EXECUTOR_USERNAME:-agor_executor}"
-
-  # Add executor_unix_user to existing execution section (only if not already present)
-  if ! grep -q "executor_unix_user" /home/agor/.agor/config.yaml 2>/dev/null; then
-    # Use sed to add executor_unix_user under the existing execution: section
-    sed -i '/^execution:/a\  executor_unix_user: agor_executor' /home/agor/.agor/config.yaml
-    echo "✅ Executor Unix user configured"
-  else
-    echo "✅ Executor Unix user already configured"
-  fi
-fi
-
-# Translate public-facing RBAC env vars to the internal AGOR_SET_* contract the
-# sed logic below reads. The postgres entrypoint also performs this translation
-# before exec'ing us — doing it again here is idempotent (same export values)
-# and lets plain `docker-compose.yml` consumers set AGOR_RBAC_ENABLED /
-# AGOR_UNIX_USER_MODE directly, matching the names documented in the postgres
-# profile and CLAUDE.md.
-if [ "$AGOR_RBAC_ENABLED" = "true" ]; then
-  export AGOR_SET_RBAC_FLAG="true"
-fi
-if [ -n "$AGOR_UNIX_USER_MODE" ]; then
-  export AGOR_SET_UNIX_MODE="$AGOR_UNIX_USER_MODE"
-fi
-
-# Configure RBAC settings from environment (set by postgres entrypoint or by
-# the public-facing translation above).
-if [ "$AGOR_SET_RBAC_FLAG" = "true" ] || [ -n "$AGOR_SET_UNIX_MODE" ]; then
-  echo "🔐 Configuring RBAC settings..."
-
-  # Enable branch RBAC if flag is set
-  if [ "$AGOR_SET_RBAC_FLAG" = "true" ]; then
-    if ! grep -q "branch_rbac" /home/agor/.agor/config.yaml 2>/dev/null; then
-      sed -i '/^execution:/a\  branch_rbac: true' /home/agor/.agor/config.yaml
-      echo "✅ Branch RBAC enabled"
-    else
-      # Update existing value to true
-      sed -i 's/branch_rbac:.*/branch_rbac: true/' /home/agor/.agor/config.yaml
-      echo "✅ Branch RBAC updated to enabled"
-    fi
-  fi
-
-  # Set Unix user mode if provided
-  if [ -n "$AGOR_SET_UNIX_MODE" ]; then
-    if ! grep -q "unix_user_mode" /home/agor/.agor/config.yaml 2>/dev/null; then
-      sed -i "/^execution:/a\  unix_user_mode: $AGOR_SET_UNIX_MODE" /home/agor/.agor/config.yaml
-      echo "✅ Unix user mode set to: $AGOR_SET_UNIX_MODE"
-    else
-      # Update existing value
-      sed -i "s/unix_user_mode:.*/unix_user_mode: $AGOR_SET_UNIX_MODE/" /home/agor/.agor/config.yaml
-      echo "✅ Unix user mode updated to: $AGOR_SET_UNIX_MODE"
-    fi
-  fi
-
-  # Set daemon.unix_user when RBAC is enabled (required for sudo impersonation)
-  # The daemon runs as 'agor' user in Docker, so git operations via sudo su need to know this
-  # Check specifically for 'unix_user:' under the daemon section (not elsewhere in the file)
-  if ! grep -A10 "^daemon:" /home/agor/.agor/config.yaml 2>/dev/null | grep -q "unix_user:"; then
-    # Add unix_user under daemon section
-    sed -i '/^daemon:/a\  unix_user: agor' /home/agor/.agor/config.yaml
-    echo "✅ Daemon Unix user set to: agor"
-  else
-    echo "✅ Daemon Unix user already configured"
-  fi
-fi
+# Runtime deployment overrides are consumed directly from the environment by
+# the daemon. Never materialize them into the operator-owned config.yaml.
 
 # Always create/update admin user (safe: only upserts)
 echo "👤 Ensuring development admin user exists..."

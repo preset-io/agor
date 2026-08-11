@@ -141,15 +141,12 @@ describe('LocalUploadStagingStore boundary B', () => {
   });
 
   it('does not scan tenant storage while staging a new upload', async () => {
-    // Leave enough time for the staged upload to be created before cleanup;
-    // a 10ms TTL made this boundary test depend on filesystem/test-runner
-    // scheduling and occasionally removed both files.
-    const store = await setup({ ttlMs: 1000 });
+    const store = await setup({ ttlMs: 1_000 });
     const bucket = join(root, tenantA, 'objects', '00');
     await mkdir(bucket, { recursive: true });
     const stale = join(bucket, 'stale.partial');
     await writeFile(stale, 'x');
-    const old = new Date(Date.now() - 1000);
+    const old = new Date(Date.now() - 10_000);
     await utimes(stale, old, old);
 
     await stage(store);

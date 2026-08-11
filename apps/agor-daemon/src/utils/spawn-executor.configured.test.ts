@@ -205,6 +205,26 @@ describe('configured executor spawning', () => {
     expect(onExit).toHaveBeenCalledWith(17, { mode: 'templated' });
   });
 
+  it('observes async onExit rejection without logging sensitive error details', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const onExit = vi.fn(async () => {
+      throw new Error('bound token fingerprint must not be logged');
+    });
+    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+
+    configureExecutor({ executor_command_template: 'echo {command}' });
+    spawnExecutor({ command: 'git.clone' }, { onExit, logPrefix: '[test]' });
+
+    proc.emit('exit', 17);
+    await vi.waitFor(() => {
+      expect(console.error).toHaveBeenCalledWith('[test] Executor exit callback failed');
+    });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
+      'bound token fingerprint'
+    );
+  });
+
   it('keeps createConfiguredSpawner isolated from module-level defaults', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
@@ -422,6 +442,7 @@ describe('configured executor spawning', () => {
     );
 
     proc.emit('exit', 0);
+    proc.emit('close', 0);
 
     await expect(promise).resolves.toEqual({
       success: false,
@@ -435,6 +456,90 @@ describe('configured executor spawning', () => {
         },
       },
     });
+  });
+
+  // Regression: https://github.com/preset-io/agor/issues/2222 — a large browse
+  // result can outrun the child's `exit`, so parsing only there dropped whatever
+  // was still unread in the pipe and reported EXECUTOR_RESULT_MISSING.
+  it.each([
+    ['local', undefined],
+    ['configured-template', 'launch {command}'],
+  ])('waits for stdio close before parsing a large %s browse result', async (_name, template) => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+    const promise = runExecutorCommand(
+      { command: 'branch.files.browse' },
+      template ? { executorCommandTemplate: template } : {}
+    );
+
+    const files = Array.from({ length: 20_000 }, (_, i) => ({ path: `src/file-${i}.ts` }));
+    const line = `AGOR_EXECUTOR_RESULT ${JSON.stringify({ success: true, data: { files } })}\n`;
+    const split = Math.floor(line.length / 2);
+
+    // Only the first pipe-buffer's worth has been read when the child is reaped.
+    proc.stdout.emit('data', Buffer.from(line.slice(0, split)));
+    proc.emit('exit', 0);
+
+    let settled = false;
+    void promise.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    proc.stdout.emit('data', Buffer.from(line.slice(split)));
+    proc.emit('close', 0);
+
+    await expect(promise).resolves.toEqual({ success: true, data: { files } });
+  });
+
+  it('settles at exit without waiting for close when the result is already complete', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+
+    const promise = runExecutorCommand({ command: 'branch.files.browse' }, {});
+    proc.stdout.emit(
+      'data',
+      Buffer.from('AGOR_EXECUTOR_RESULT {"success":true,"data":{"files":[]}}\n')
+    );
+    // 'close' never arrives — a descendant that inherited stdout outlives the
+    // executor. A complete result must not wait on it.
+    proc.emit('exit', 0);
+
+    await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
+  });
+
+  it.each([
+    ['local', undefined],
+    ['configured-template', 'launch {command}'],
+  ])('keeps the timeout active for an incomplete %s result', async (_name, template) => {
+    vi.useFakeTimers();
+    try {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValue(proc);
+      const { runExecutorCommand } = await import('./spawn-executor');
+      const promise = runExecutorCommand(
+        { command: 'branch.files.browse' },
+        {
+          ...(template ? { executorCommandTemplate: template } : {}),
+          timeoutMs: 25,
+        }
+      );
+
+      proc.stdout.emit('data', Buffer.from('AGOR_EXECUTOR_RESULT {"success":true'));
+      proc.emit('exit', 0);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(promise).resolves.toMatchObject({
+        success: false,
+        error: { code: 'EXECUTOR_TIMEOUT' },
+      });
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refuses every unscoped executor launch when tenant context is required', async () => {
@@ -1119,6 +1224,22 @@ describe('substituteTemplateVariables', () => {
     });
 
     expect(result).toBe('launch --user agor_alice');
+  });
+
+  it('substitutes a trusted {user_id} used for identity-scoped storage', async () => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+    const userId = '019fda98-8206-7eb5-8e77-f95d6c8cd6c1';
+
+    expect(substituteTemplateVariables('launch --user-id {user_id}', { user_id: userId })).toBe(
+      `launch --user-id ${userId}`
+    );
+  });
+
+  it('refuses a path-shaped {user_id}', async () => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+    expect(() =>
+      substituteTemplateVariables('launch --user-id {user_id}', { user_id: '../other-user' })
+    ).toThrow('{user_id} value is not a valid Agor user UUID');
   });
 
   it.each([

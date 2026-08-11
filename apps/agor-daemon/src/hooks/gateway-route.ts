@@ -182,6 +182,7 @@ export const gatewayRouteHook = async (context: HookContext) => {
     gatewayService.routeMessageAfterCommit(
       {
         session_id: message.session_id,
+        message_id: message.message_id,
         message: messageText,
         metadata: message.metadata,
       },

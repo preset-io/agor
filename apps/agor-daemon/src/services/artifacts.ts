@@ -29,7 +29,7 @@ import {
   generateId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type {
   AgorGrants,
   AgorRuntimeConfig,
@@ -171,6 +171,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   private app: Application;
   /** Held for `resolveUserEnvironment` (scope-aware env-var resolution). */
   private dbRef: TenantScopeAwareDatabase;
+  private runtimeIntrospectionEnabled: boolean;
 
   /**
    * In-memory ring buffer for console logs.
@@ -228,7 +229,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
   > = new Map();
 
-  constructor(db: TenantScopeAwareDatabase, app: Application) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    app: Application,
+    options: { runtimeIntrospectionEnabled?: boolean } = {}
+  ) {
     const artifactRepo = bindRepositoryToTenantUnitOfWork(db, new ArtifactRepository(db));
     super(artifactRepo, {
       id: 'artifact_id',
@@ -244,6 +249,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     this.boardRepo = bindRepositoryToTenantUnitOfWork(db, new BoardRepository(db));
     this.app = app;
     this.dbRef = db;
+    this.runtimeIntrospectionEnabled = options.runtimeIntrospectionEnabled !== false;
+  }
+
+  private assertRuntimeIntrospectionEnabled(): void {
+    if (!this.runtimeIntrospectionEnabled) {
+      throw new Unavailable(
+        'Synchronous artifact runtime introspection is unavailable in HA support profile constrained-active-active',
+        { code: 'HA_FEATURE_UNSUPPORTED', feature: 'artifactRuntime' }
+      );
+    }
   }
 
   /**
@@ -1557,6 +1572,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     args: Record<string, unknown>;
     timeoutMs?: number;
   }): Promise<unknown> {
+    this.assertRuntimeIntrospectionEnabled();
     const artifact = await this.artifactRepo.findById(input.artifactId);
     if (!artifact) throw new Error(`Artifact ${input.artifactId} not found`);
     if (!this.isVisibleTo(artifact, input.userId)) {
@@ -1849,6 +1865,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * (see `viewerKey`); other viewers' captured output is never returned.
    */
   async getStatus(artifactId: string, userId?: UserID): Promise<ArtifactStatus> {
+    this.assertRuntimeIntrospectionEnabled();
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
     if (!this.isVisibleTo(artifact, userId)) {
@@ -1958,6 +1975,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   ): Promise<
     ArtifactStatus & { ok: boolean; observed: boolean; timed_out: boolean; note?: string }
   > {
+    this.assertRuntimeIntrospectionEnabled();
     if (!userId) {
       const status = await this.getStatus(artifactId, userId);
       return {
@@ -2434,7 +2452,8 @@ function escapeEnvValue(value: string): string {
 
 export function createArtifactsService(
   db: TenantScopeAwareDatabase,
-  app: Application
+  app: Application,
+  options: { runtimeIntrospectionEnabled?: boolean } = {}
 ): ArtifactsService {
-  return new ArtifactsService(db, app);
+  return new ArtifactsService(db, app, options);
 }

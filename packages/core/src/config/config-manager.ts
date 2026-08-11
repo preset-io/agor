@@ -4,13 +4,17 @@
  * Handles loading and saving YAML configuration file.
  */
 
+import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
+import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agentic-integrations';
+import type { AgenticToolName } from '../types';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
+import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
 import {
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
@@ -71,11 +75,8 @@ export function resolveTeammateFrameworkRepoUrl(config: AgorConfig): string | un
 // fresh deep clone of the parsed config. Cache miss → read + parse + cache.
 //
 // Why a clone and not the cached object itself?
-// Callers mutate the loaded config (`setConfigValue`, `unsetConfigValue`,
-// `ConfigService.patch`) and then call `saveConfig()`. If we returned the
-// shared cache object, a failed save would leave unsaved mutations visible
-// to every subsequent reader. Returning a clone makes the cache effectively
-// immutable from the outside.
+// Returning a clone makes the cached deployment input effectively immutable
+// from callers, including the explicitly guarded CLI rewrite path.
 //
 // Why size in addition to mtimeMs?
 // Some filesystems have coarse mtime resolution, and rapid same-tick rewrites
@@ -84,8 +85,8 @@ export function resolveTeammateFrameworkRepoUrl(config: AgorConfig): string | un
 // guarantee — a write that preserves size and mtime can still slip through —
 // but in practice the pair is more than enough.
 //
-// Why not fs.watch? Surprising behavior on atomic renames (which is what
-// saveConfig() effectively is), platform quirks, and stat is already free.
+// Why not fs.watch? Atomic replacement and platform quirks are surprising,
+// while stat is already cheap.
 //
 // Custom-path loads via loadConfigFromFile() are NOT cached — they're a
 // startup-only path and adding a Map<path, entry> isn't worth the complexity.
@@ -133,7 +134,7 @@ function statCacheKey(configPath: string): CacheKey | null {
  * re-read.
  *
  * The clone is what makes the cache safe to expose: callers mutate the result
- * before `saveConfig()` and we don't want those mutations bleeding into the
+ * before an explicit rewrite and we don't want mutations bleeding into the
  * next reader if the save fails.
  */
 function readCachedConfig(configPath: string): AgorConfig | null {
@@ -154,8 +155,7 @@ function writeCachedConfig(configPath: string, config: AgorConfig, key: CacheKey
 }
 
 /**
- * Invalidate the in-memory config cache. Called from saveConfig() so that
- * the daemon's next read sees the fresh value.
+ * Invalidate the cache after init creation or an explicit destructive rewrite.
  */
 function invalidateConfigCache(): void {
   cachedEntry = null;
@@ -276,9 +276,11 @@ function validateConfig(config: AgorConfig): void {
   }
 
   const knownTopLevelKeys = new Set([
+    'agentic_tools',
     'defaults',
     'display',
     'daemon',
+    'deployment',
     'ui',
     'database',
     'external_launch',
@@ -292,6 +294,7 @@ function validateConfig(config: AgorConfig): void {
     'onboarding',
     'multi_tenancy',
     'uploads',
+    'mcp_catalog',
   ]);
   const unknownTopLevelKeys = Object.keys(config).filter((key) => !knownTopLevelKeys.has(key));
   if (unknownTopLevelKeys.length > 0) {
@@ -308,11 +311,112 @@ function validateConfig(config: AgorConfig): void {
     }
   };
   const legacyConfig = config as LegacyConfig;
+  only(config.agentic_tools, 'agentic_tools', ['installed']);
+  if (config.agentic_tools?.installed !== undefined) {
+    if (!Array.isArray(config.agentic_tools.installed)) {
+      throw new Error("Config error: 'agentic_tools.installed' must be an array");
+    }
+    const unknown = config.agentic_tools.installed.filter(
+      (tool) => typeof tool !== 'string' || !isInstallableAgenticTool(tool)
+    );
+    if (unknown.length > 0) {
+      throw new Error(
+        `Config error: 'agentic_tools.installed' contains unsupported tool(s): ${unknown.join(', ')}`
+      );
+    }
+    const duplicates = config.agentic_tools.installed.filter(
+      (tool, index, tools) => tools.indexOf(tool) !== index
+    );
+    if (duplicates.length > 0) {
+      throw new Error(
+        `Config error: 'agentic_tools.installed' contains duplicate tool(s): ${[...new Set(duplicates)].join(', ')}`
+      );
+    }
+  }
   only(legacyConfig.defaults, 'defaults', RETIRED_CONFIG_KEYS.defaults);
   // Known upgrade-only keys remain loadable so the daemon can print its
   // dedicated deprecation guidance before ignoring them. `display` is not
   // part of AgorConfig anymore: all three settings were retired.
   only(legacyConfig.display, 'display', RETIRED_CONFIG_KEYS.display);
+  only(config.deployment, 'deployment', ['mode', 'redis', 'ha']);
+  only(config.deployment?.redis, 'deployment.redis', [
+    'url',
+    'key_prefix',
+    'connect_timeout_ms',
+    'startup_timeout_ms',
+    'request_timeout_ms',
+    'reconnect_base_delay_ms',
+    'reconnect_max_delay_ms',
+  ]);
+  only(config.deployment?.ha, 'deployment.ha', [
+    'support_profile',
+    'execution_topology',
+    'shared_filesystem',
+    'ingress_affinity',
+    'environment_health_monitor',
+  ]);
+  only(
+    config.deployment?.ha?.environment_health_monitor,
+    'deployment.ha.environment_health_monitor',
+    [
+      'scan_interval_ms',
+      'max_idle_interval_ms',
+      'startup_offset_max_ms',
+      'scan_batch_size',
+      'max_in_flight',
+      'http_timeout_ms',
+      'claim_lease_ms',
+      'shutdown_drain_timeout_ms',
+    ]
+  );
+  if (
+    config.deployment?.mode !== undefined &&
+    config.deployment.mode !== 'standalone' &&
+    config.deployment.mode !== 'ha'
+  ) {
+    throw new Error('Config error: deployment.mode must be one of: standalone, ha');
+  }
+  if (
+    config.deployment?.ha?.support_profile !== undefined &&
+    config.deployment.ha.support_profile !== 'constrained-active-active'
+  ) {
+    throw new Error(
+      'Config error: deployment.ha.support_profile must be constrained-active-active'
+    );
+  }
+  if (
+    config.deployment?.ha?.execution_topology !== undefined &&
+    config.deployment.ha.execution_topology !== 'shared-local' &&
+    config.deployment.ha.execution_topology !== 'external'
+  ) {
+    throw new Error(
+      'Config error: deployment.ha.execution_topology must be shared-local or external'
+    );
+  }
+  if (config.deployment?.redis?.url !== undefined) {
+    validateRedisUrl(config.deployment.redis.url);
+  }
+  if (config.deployment?.redis?.key_prefix !== undefined) {
+    validateRedisKeyPrefix(config.deployment.redis.key_prefix);
+  }
+  for (const key of [
+    'connect_timeout_ms',
+    'startup_timeout_ms',
+    'request_timeout_ms',
+    'reconnect_base_delay_ms',
+    'reconnect_max_delay_ms',
+  ] as const) {
+    const value = config.deployment?.redis?.[key];
+    if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+      throw new Error(`Config error: deployment.redis.${key} must be a positive integer`);
+    }
+  }
+  for (const key of ['shared_filesystem', 'ingress_affinity'] as const) {
+    const value = config.deployment?.ha?.[key];
+    if (value !== undefined && typeof value !== 'boolean') {
+      throw new Error(`Config error: deployment.ha.${key} must be a boolean`);
+    }
+  }
   only(config.daemon, 'daemon', [
     'port',
     'host',
@@ -423,6 +527,7 @@ function validateConfig(config: AgorConfig): void {
     'daemon_writes_user_message',
     'permission_timeout_ms',
     'executor_command_template',
+    'executor_storage',
     'executor_command_nonzero_may_have_dispatched',
     'required_user_env_vars',
     ...RETIRED_CONFIG_KEYS.execution,
@@ -452,7 +557,51 @@ function validateConfig(config: AgorConfig): void {
   only(config.execution?.branch_storage, 'execution.branch_storage', [
     'default_mode',
     'allowed_modes',
+    'allow_shallow_clones',
   ]);
+  only(config.execution?.executor_storage, 'execution.executor_storage', [
+    'user_home',
+    'branch_workspace',
+    'base_repository',
+  ]);
+  if (
+    config.execution?.executor_storage?.user_home !== undefined &&
+    !['replica-local', 'shared', 'persistent-per-user'].includes(
+      config.execution.executor_storage.user_home
+    )
+  ) {
+    throw new Error(
+      'Config error: execution.executor_storage.user_home must be replica-local, shared, or persistent-per-user'
+    );
+  }
+  if (
+    config.execution?.executor_storage?.branch_workspace !== undefined &&
+    !['replica-local', 'shared', 'persistent-per-branch'].includes(
+      config.execution.executor_storage.branch_workspace
+    )
+  ) {
+    throw new Error(
+      'Config error: execution.executor_storage.branch_workspace must be replica-local, shared, or persistent-per-branch'
+    );
+  }
+  if (
+    config.execution?.executor_storage?.base_repository !== undefined &&
+    !['replica-local', 'shared', 'unavailable'].includes(
+      config.execution.executor_storage.base_repository
+    )
+  ) {
+    throw new Error(
+      'Config error: execution.executor_storage.base_repository must be replica-local, shared, or unavailable'
+    );
+  }
+  if (
+    config.execution?.branch_storage?.allow_shallow_clones !== undefined &&
+    typeof config.execution.branch_storage.allow_shallow_clones !== 'boolean'
+  ) {
+    throw new Error(
+      'Config error: execution.branch_storage.allow_shallow_clones must be a boolean'
+    );
+  }
   only(config.security, 'security', ['csp', 'cors', 'git_config_parameters']);
   only(config.security?.csp, 'security.csp', [
     'extras',
@@ -529,6 +678,12 @@ function validateConfig(config: AgorConfig): void {
     'auth_claim',
     'trusted_header',
   ]);
+  only(config.mcp_catalog, 'mcp_catalog', [
+    'registry_sync_enabled',
+    'sync_interval_hours',
+    'probe_budget',
+    'registry_url',
+  ]);
   if (unknownPaths.length > 0) {
     throw new Error(
       `Config error: unrecognized ${unknownPaths.length === 1 ? 'key' : 'keys'}: ${unknownPaths.join(', ')}`
@@ -544,7 +699,7 @@ function validateConfig(config: AgorConfig): void {
         `  - 'insulated': Filesystem isolation via Unix groups (recommended)\n` +
         `  - 'strict': Full process impersonation required\n` +
         `\n` +
-        `To update: agor config set execution.unix_user_mode insulated`
+        `Edit ~/.agor/config.yaml and set execution.unix_user_mode: insulated`
     );
   }
 
@@ -717,19 +872,94 @@ export async function loadConfigFromFile(filePath: string): Promise<AgorConfig> 
  *
  * Invalidates the in-memory cache so the next load reflects the fresh value.
  */
-export async function saveConfig(config: AgorConfig): Promise<void> {
+export async function createInitialConfig(config: AgorConfig = getDefaultConfig()): Promise<void> {
   validateConfig(config);
   await ensureAgorHome();
-
   const configPath = getConfigPath();
-  const content = yaml.dump(config, {
-    indent: 2,
-    lineWidth: 120,
-    noRefs: true,
-  });
+  const content = [
+    '# Agor operator configuration',
+    '#',
+    '# This file is deployment-owned immutable runtime input. Agor will not',
+    '# rewrite it after initialization. Edit it (or its IaC source) explicitly',
+    '# and restart the daemon. Environment overrides take precedence where',
+    '# documented: https://agor.live/guide/config-yaml',
+    '#',
+    yaml.dump(config, { indent: 2, lineWidth: 120, noRefs: true }),
+  ].join('\n');
 
-  await fs.writeFile(configPath, content, 'utf-8');
+  let handle: fs.FileHandle | undefined;
+  try {
+    // `wx` is the important part of the config ownership contract: two initializers
+    // may race, but neither can replace a file created by the other (or by an
+    // operator/config-management system).
+    handle = await fs.open(configPath, 'wx', 0o600);
+    await handle.writeFile(content, 'utf-8');
+    await handle.sync();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error(`Refusing to overwrite existing config: ${configPath}`);
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
   invalidateConfigCache();
+}
+
+/**
+ * Destructively rewrite config.yaml.
+ *
+ * This deliberately awkward API is reserved for the explicitly-confirmed CLI
+ * escape hatch. Runtime, daemon, service, API, MCP, upgrade, and UI code must
+ * never call it. Atomic replacement avoids partial YAML and preserves the
+ * existing file's permission bits.
+ */
+async function rewriteConfigFile(
+  config: AgorConfig,
+  options: { acknowledgedFormattingLoss: true }
+): Promise<void> {
+  if (options.acknowledgedFormattingLoss !== true) {
+    throw new Error('Destructive config rewrite was not explicitly acknowledged');
+  }
+  validateConfig(config);
+  const configPath = getConfigPath();
+  const stat = await fs.stat(configPath);
+  const tempPath = `${configPath}.rewrite-${process.pid}-${randomUUID()}`;
+  const content = yaml.dump(config, { indent: 2, lineWidth: 120, noRefs: true });
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(tempPath, 'wx', stat.mode & 0o7777);
+    await handle.writeFile(content, 'utf-8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await fs.rename(tempPath, configPath);
+  } finally {
+    await handle?.close();
+    await fs.rm(tempPath, { force: true });
+  }
+  invalidateConfigCache();
+}
+
+/** Test-only coverage for atomic replacement semantics. */
+export async function rewriteConfigForTests(config: AgorConfig): Promise<void> {
+  if (process.env.NODE_ENV !== 'test')
+    throw new Error('rewriteConfigForTests is unavailable outside tests');
+  await rewriteConfigFile(config, { acknowledgedFormattingLoss: true });
+}
+
+/** Test-fixture helper. Production code must use createInitialConfig or the guarded CLI. */
+export async function saveConfigForTests(config: AgorConfig): Promise<void> {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('saveConfigForTests is unavailable outside tests');
+  }
+  try {
+    await createInitialConfig(config);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith('Refusing to overwrite'))
+      throw error;
+    await rewriteConfigFile(config, { acknowledgedFormattingLoss: true });
+  }
 }
 
 /**
@@ -770,6 +1000,91 @@ export function getDefaultConfig(): AgorConfig {
 }
 
 /**
+ * Materialize YAML plus supported deployment-environment overrides into one
+ * effective snapshot. This is read-only: callers may display/export the
+ * result, but Agor never writes it back automatically.
+ */
+export function resolveEffectiveConfig(
+  config: AgorConfig,
+  env: NodeJS.ProcessEnv = process.env
+): AgorConfig {
+  const defaults = getDefaultConfig();
+  const port = env.PORT ? Number.parseInt(env.PORT, 10) : undefined;
+  return {
+    ...defaults,
+    ...config,
+    daemon: {
+      ...defaults.daemon,
+      ...config.daemon,
+      ...(Number.isSafeInteger(port) ? { port } : {}),
+      ...(env.DAEMON_HOST ? { host: env.DAEMON_HOST } : {}),
+      ...(env.AGOR_DAEMON_UNIX_USER ? { unix_user: env.AGOR_DAEMON_UNIX_USER } : {}),
+      ...(env.AGOR_JWT_SECRET ? { jwtSecret: env.AGOR_JWT_SECRET } : {}),
+      ...(env.AGOR_MASTER_SECRET ? { masterSecret: env.AGOR_MASTER_SECRET } : {}),
+    },
+    ui: { ...defaults.ui, ...config.ui },
+    execution: {
+      ...defaults.execution,
+      ...config.execution,
+      ...(env.AGOR_EXECUTOR_USERNAME ? { executor_unix_user: env.AGOR_EXECUTOR_USERNAME } : {}),
+      ...(env.AGOR_RBAC_ENABLED === 'true' ? { branch_rbac: true } : {}),
+      ...(env.AGOR_UNIX_USER_MODE
+        ? {
+            unix_user_mode: env.AGOR_UNIX_USER_MODE as NonNullable<
+              AgorConfig['execution']
+            >['unix_user_mode'],
+          }
+        : {}),
+      ...(env.AGOR_USE_EXECUTOR === 'true' && !env.AGOR_EXECUTOR_USERNAME
+        ? { executor_unix_user: 'agor_executor' }
+        : {}),
+    },
+    paths: { ...defaults.paths, ...config.paths },
+    analytics: { ...defaults.analytics, ...config.analytics },
+    telemetry: {
+      ...defaults.telemetry,
+      ...config.telemetry,
+      ...(env.AGOR_TELEMETRY === '1' ? { enabled: true } : {}),
+      ...(env.AGOR_TELEMETRY === '0' || env.DO_NOT_TRACK === '1' ? { enabled: false } : {}),
+      ...(env.AGOR_TELEMETRY_ENDPOINT ? { endpoint: env.AGOR_TELEMETRY_ENDPOINT } : {}),
+      ...(env.AGOR_TELEMETRY_WRITE_KEY ? { write_key: env.AGOR_TELEMETRY_WRITE_KEY } : {}),
+    },
+    uploads: { ...defaults.uploads, ...config.uploads },
+    multi_tenancy: { ...defaults.multi_tenancy, ...config.multi_tenancy },
+  };
+}
+
+export function formatConfigYaml(config: AgorConfig): string {
+  return yaml.dump(config, { indent: 2, lineWidth: 120, noRefs: true });
+}
+
+export interface DeploymentAgenticToolPolicy {
+  managed: boolean;
+  installed: ReadonlySet<InstallableAgenticTool>;
+}
+
+/** Capture the instance-global package policy once during daemon startup. */
+export function resolveDeploymentAgenticToolPolicy(
+  config: AgorConfig,
+  env: NodeJS.ProcessEnv = process.env
+): DeploymentAgenticToolPolicy {
+  return {
+    managed: env.AGOR_MANAGED_AGENTIC_TOOLS === '1',
+    installed: new Set(config.agentic_tools?.installed ?? []),
+  };
+}
+
+/** Instance-global package gate; tenant settings may narrow but never expand it. */
+export function isDeploymentAgenticToolAvailable(
+  tool: AgenticToolName,
+  policy: DeploymentAgenticToolPolicy
+): boolean {
+  if (!policy.managed) return true;
+  if (!isInstallableAgenticTool(tool)) return false;
+  return policy.installed.has(tool);
+}
+
+/**
  * Expand a path that may start with ~/
  */
 export function expandHomePath(input: string): string {
@@ -793,7 +1108,7 @@ export async function initConfig(): Promise<void> {
     // File exists, don't overwrite
   } catch {
     // File doesn't exist, create with defaults
-    await saveConfig(getDefaultConfig());
+    await createInitialConfig(getDefaultConfig());
   }
 }
 
@@ -853,74 +1168,6 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
   }
 
   return value;
-}
-
-/**
- * Set a nested config value using dot notation
- *
- * @param key - Config key (e.g., "daemon.port")
- * @param value - Value to set
- */
-export async function setConfigValue(key: string, value: string | boolean | number): Promise<void> {
-  if (key === 'onboarding.frameworkRepoUrl') {
-    throw new Error(
-      'Configuration key onboarding.frameworkRepoUrl is deprecated; set teammates.framework_repo_url instead'
-    );
-  }
-  if (RETIRED_CONFIG_PATHS.has(key)) {
-    throw new Error(`Configuration key ${key} has been retired and no longer has any effect`);
-  }
-  const config = await loadConfig();
-  const parts = key.split('.');
-
-  if (parts.length === 1) {
-    // Top-level key - not supported (all config is nested)
-    throw new Error(
-      `Top-level config keys not supported. Use format: section.key (e.g., defaults.${parts[0]})`
-    );
-  }
-
-  // Nested key (e.g., "daemon.port")
-  const section = parts[0];
-
-  if (!(config as UnknownJson)[section]) {
-    (config as UnknownJson)[section] = {};
-  }
-
-  // Only support one level of nesting
-  if (parts.length === 2) {
-    (config as UnknownJson)[section][parts[1]] = value;
-  } else {
-    throw new Error(`Nested keys beyond one level not supported: ${key}`);
-  }
-
-  await saveConfig(config);
-}
-
-/**
- * Unset a nested config value using dot notation
- *
- * @param key - Config key to clear
- */
-export async function unsetConfigValue(key: string): Promise<void> {
-  const config = await loadConfig();
-  const parts = key.split('.');
-
-  if (parts.length === 1) {
-    // Top-level key - not supported
-    throw new Error(`Top-level config keys not supported. Use format: section.key`);
-  }
-
-  if (parts.length === 2) {
-    const section = parts[0];
-    const subKey = parts[1];
-
-    if ((config as UnknownJson)[section] && subKey in (config as UnknownJson)[section]) {
-      delete (config as UnknownJson)[section][subKey];
-    }
-  }
-
-  await saveConfig(config);
 }
 
 /**
@@ -1347,7 +1594,11 @@ export function resolveBranchStorageConfig(): ResolvedBranchStorageConfig {
   // back to the first allowed mode so we never hand out a default that the
   // gate would immediately reject.
   const defaultMode = allowed.includes(requestedDefault) ? requestedDefault : allowed[0];
-  return { defaultMode, allowedModes: allowed };
+  return {
+    defaultMode,
+    allowedModes: allowed,
+    allowShallowClones: raw?.allow_shallow_clones ?? true,
+  };
 }
 
 /**
@@ -1362,6 +1613,16 @@ export function ensureBranchStorageModeAllowed(mode: import('./types').BranchSto
       `storage_mode='${mode}' is not enabled on this Agor instance. ` +
         `Enable it by adding '${mode}' to execution.branch_storage.allowed_modes ` +
         `in ~/.agor/config.yaml. Currently allowed: ${allowedModes.map((m) => `'${m}'`).join(', ')}.`
+    );
+  }
+}
+
+/** Reject shallow branch clones when the operator requires complete history. */
+export function ensureBranchCloneDepthAllowed(cloneDepth: number | undefined): void {
+  if (cloneDepth === undefined) return;
+  if (!resolveBranchStorageConfig().allowShallowClones) {
+    throw new Error(
+      'clone_depth is unavailable on this Agor instance because execution.branch_storage.allow_shallow_clones is false. Omit clone_depth to create a full clone.'
     );
   }
 }

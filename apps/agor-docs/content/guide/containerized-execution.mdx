@@ -50,7 +50,10 @@ Running Agor in Kubernetes is fundamentally different from deploying static web 
 | Scale out replicas   | User-specific sessions  |
 | Ephemeral storage    | Persistent filesystem   |
 
-**Key insight**: Agor executors need access to a **shared filesystem** where git branches live. This is similar to how traditional development servers work, not like microservice deployments.
+**Key insight**: every executor command for a branch must see the same durable branch working copy
+at the absolute path recorded in PostgreSQL. That can be one shared filesystem, or an external
+launcher can attach one persistent per-branch volume to each short-lived executor. Daemon pods do
+not themselves need the branch mount in the external topology.
 
 ---
 
@@ -58,12 +61,13 @@ Running Agor in Kubernetes is fundamentally different from deploying static web 
 
 Containerized Agor requires infrastructure that most organizations already have for multi-server environments. **Agor assumes this infrastructure exists - it does not provide it.**
 
-### Two Requirements
+### Storage and identity requirements
 
 | Requirement           | What It Provides                        | Common Solutions                           |
 | --------------------- | --------------------------------------- | ------------------------------------------ |
-| **Shared Filesystem** | Same files accessible from all nodes    | EFS, NFS, GlusterFS, Ceph                  |
-| **Shared Identity**   | UID/GID → username/groupname resolution | LDAP, Active Directory, sssd, synced files |
+| **Durable branch workspace** | Same branch bytes for every relevant invocation | Per-branch PVC/volume or a shared filesystem |
+| **Persistent user home when native credentials are used** | Same isolated home for auth helpers and Tasks | Per-user PVC/home selected from trusted tenant/user identity |
+| **Consistent execution identity** | UID/GID or delegated identity maps predictably | Orchestrator identity mapping, LDAP/sssd, or synchronized IDs |
 
 These are standard requirements for any multi-server development environment. If your organization runs shared `/home` directories across servers, you likely already have both.
 
@@ -85,7 +89,9 @@ $ whoami
 alice
 ```
 
-Agor's Unix isolation features (per-user UIDs, per-branch GIDs) require that containers can resolve these IDs to names.
+Agor's `insulated`/`strict` Unix isolation features require containers to resolve these IDs to
+names. A hosted launcher can instead use `unix_user_mode: delegated`, where the substrate enforces
+the identity and mounts rather than the daemon impersonating a host account.
 
 ### How Identity Resolution Works
 
@@ -171,10 +177,10 @@ For production Agor deployments with containerized execution, we recommend:
 This is the single most common deployment foot-gun and worth calling out
 before the rest of the storage discussion.
 
-**If the Agor database is persistent, then `$HOME` (or whichever directory
-holds `repos/` and `branches/`) MUST also be persistent.** The database
-stores absolute paths to every repository clone and every branch on
-disk. If the database survives a pod restart but the filesystem does not
+**If the Agor database is persistent, every branch workspace it references must also be
+persistent.** A global `$HOME` mount is one implementation, not a requirement. The database stores
+absolute paths to every repository clone and branch. If the database survives a pod restart but
+the corresponding branch volume does not
 (for example, the database is backed by a `PersistentVolumeClaim` while
 `$HOME` is an `emptyDir`), then on redeploy the daemon will reference
 paths that no longer exist. Opening a terminal or running a session will
@@ -187,10 +193,12 @@ real fix is to restore the volume or, if the volume is unrecoverable,
 clean up the orphan database rows using
 `agor branch remove` / `agor repo remove` before re-cloning.
 
-Safe configurations:
+Safe configurations include:
 
-- **Both persistent**: Database on PVC, `$HOME` (or `data_home`) on
-  PVC/EFS/NFS. Recommended for production.
+- **Shared-local**: database plus `data_home` on shared persistent storage mounted at the same path
+  on each daemon.
+- **External executors**: database plus durable per-branch volumes mounted at each recorded branch
+  path. A persistent per-user home is additionally required for CLI-native credentials.
 - **Both ephemeral**: Database on `emptyDir`, `$HOME` on `emptyDir`. Fine
   for short-lived test pods. Everything resets together.
 - **Avoid mixing**: Persistent database + ephemeral filesystem is the
@@ -361,6 +369,7 @@ execution:
 | `{unix_user_gid}` | Target Unix GID                         | `1001`                |
 | `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
 | `{branch_id}`     | Branch ID (if available)                | `01xyz789...`         |
+| `{user_id}`       | Trusted authenticated Agor user UUID    | `01user789...`        |
 | `{tenant_id}`     | Trusted ambient tenant ID                | `tenant-abc`          |
 
 `{tenant_id}` comes from the authenticated operation's ambient tenant context
@@ -378,14 +387,13 @@ to execute the template when the value is malformed — it is rendered into a
 In `unix_user_mode: delegated` it carries the session user's `unix_username`;
 in `insulated`/`strict` it carries the resolved impersonation identity.
 
-> **Codex subscription credentials caveat:** daemon-side Codex login flows
-> (paste-import, device sign-in, logout) write `~/.codex/auth.json` on the
-> **daemon host**. When executors run through a command template, their home
-> directory is typically provided by the container/orchestration layer, so a
-> daemon-managed credential file may never reach the executor. In
-> `unix_user_mode: delegated` these flows are rejected with a clear message;
-> in `simple` with a template they still write the daemon-host file — sign in
-> to Codex from a branch terminal or inside a session instead.
+> **Codex subscription credentials caveat:** Codex auth-file operations already run through an
+> executor, but correctness requires every auth helper and Task for one trusted tenant/user identity
+> to receive the same persistent home. Declare that guarantee as
+> `execution.executor_storage.user_home: persistent-per-user`; the launcher must actually implement
+> it. The constrained HA profile admits auth-file check/import/logout only with a consistent
+> declared home. Declaring storage does not make the process-affine device-code poller durable, so
+> device sign-in remains gated.
 
 ### How It Works
 
@@ -621,9 +629,11 @@ At startup, the daemon calls `configureDaemonUrl()` which sets this URL globally
 
 ## High Availability
 
-### Current Status
+### Current status
 
-Agor's daemon currently runs as a **single instance**. For high availability with multiple daemon replicas, additional configuration is required.
+Agor has an explicit constrained active-active daemon mode using PostgreSQL, Redis realtime fanout,
+and sticky Engine.IO ingress. See [Daemon high availability](/guide/daemon-ha) for the supported
+surface and runnable Compose smoke topology.
 
 ### Shared Filesystem Simplifies HA
 
@@ -657,13 +667,9 @@ FeathersJS uses Socket.io for real-time UI updates. With multiple daemon replica
               └─────────────┘
 ```
 
-### Configuration (Future)
-
-HA support is not built into Agor configuration today. To implement HA:
-
-1. Mount `/home` and `AGOR_DATA_HOME` on shared storage (EFS/NFS)
-2. Configure Socket.io Redis adapter for event broadcasting
-3. Use a load balancer (sticky sessions optional with Redis)
+The external Cloud shape does not mount tenant workspaces into daemon pods. It declares
+`persistent-per-user` home and `persistent-per-branch` workspace guarantees, uses clone-only branch
+storage when the base repository is unavailable, and keeps Engine.IO affinity at ingress.
 
 **References:**
 

@@ -23,6 +23,10 @@ import {
   resolveMcpServerTemplates,
   TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
 } from './template-resolver';
+import {
+  canEnforceMcpToolPermissions,
+  type HandlerPermissionCapabilities,
+} from './tool-permissions';
 
 export interface MCPScopingServerRepository {
   findAll(filters?: MCPServerFilters, forUserId?: string): Promise<MCPServer[]>;
@@ -82,7 +86,20 @@ export interface MCPResolutionDeps {
    * When provided, MCP servers with per-user OAuth will have tokens injected.
    */
   forUserId?: string;
+  /**
+   * Told about each server the caller may not attach. An executor log is not a
+   * channel an operator reads, and a server vanishing without explanation is
+   * indistinguishable from it being broken.
+   */
+  onServerWithheld?: (server: MCPServer, reason: string) => void;
 }
+
+/**
+ * Config key the built-in Agor MCP server is installed under. Reserved: it
+ * carries the session's daemon bearer token and is auto-approved by name, so a
+ * user-configured server must never be able to claim it.
+ */
+export const AGOR_MCP_SERVER_NAME = 'agor';
 
 /**
  * Get MCP servers that should be attached to a session
@@ -107,7 +124,8 @@ export interface MCPResolutionDeps {
  */
 export async function getMcpServersForSession(
   sessionId: SessionID,
-  deps: MCPResolutionDeps
+  deps: MCPResolutionDeps,
+  caps: HandlerPermissionCapabilities
 ): Promise<MCPServerWithSource[]> {
   const servers: MCPServerWithSource[] = [];
 
@@ -251,6 +269,22 @@ export async function getMcpServersForSession(
       console.warn(
         `   ⚠️  Skipped ${serversSkipped} MCP server(s) due to unresolved required templates`
       );
+    }
+
+    // Admission gate: a handler that cannot honour a server's `tool_permissions`
+    // does not get the server. Refusing to attach is the only way to keep a
+    // `deny` meaningful on a handler with no per-tool control — the alternative
+    // is handing over the exact tools someone switched off.
+    for (let i = servers.length - 1; i >= 0; i--) {
+      const { server } = servers[i];
+      if (canEnforceMcpToolPermissions(server, caps)) continue;
+
+      servers.splice(i, 1);
+      const reason =
+        `it sets tool_permissions this agent cannot enforce (tool filtering: ` +
+        `${caps.toolFiltering}). Attach it to an agent that can, or clear the deny/ask entries.`;
+      console.warn(`   ⛔ Withholding MCP server "${server.name}": ${reason}`);
+      deps.onServerWithheld?.(server, reason);
     }
 
     const oauthServers = servers

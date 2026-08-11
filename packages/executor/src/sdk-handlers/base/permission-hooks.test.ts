@@ -8,6 +8,7 @@ vi.mock('@agor/core', () => ({
   shortId: vi.fn((id: string) => id),
 }));
 
+import { EMPTY_MCP_TOOL_PERMISSION_INDEX } from './mcp-tool-permissions.js';
 import { createCanUseToolCallback } from './permission-hooks.js';
 
 /**
@@ -49,6 +50,7 @@ describe('createCanUseToolCallback', () => {
       mcpServerRepo: {
         findById: vi.fn(),
       } as any,
+      mcpToolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX,
       sessionMCPRepo: {
         findBySessionId: vi.fn().mockResolvedValue([]),
         listServers: vi.fn().mockResolvedValue([]),
@@ -136,6 +138,15 @@ describe('createCanUseToolCallback', () => {
       expect(deps.tasksService.patch).toHaveBeenNthCalledWith(2, taskId, {
         status: 'running',
       });
+      expect(deps.messagesService.patch).toHaveBeenCalledWith(
+        'test-generated-id',
+        expect.objectContaining({
+          content: expect.objectContaining({
+            status: 'approved',
+            approved_by: 'test-user',
+          }),
+        })
+      );
       // Lock was acquired AND released.
       expect(deps.permissionLocks.size).toBe(0);
     });
@@ -164,7 +175,7 @@ describe('createCanUseToolCallback', () => {
       ]);
     });
 
-    it('denies the tool and cancels pending requests when the UI returns deny', async () => {
+    it('denies only the tool and restores active execution when the UI returns deny', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({
         allow: false,
@@ -178,11 +189,25 @@ describe('createCanUseToolCallback', () => {
 
       expect(result.behavior).toBe('deny');
       expect(result.message).toContain('Bash');
-      expect(deps.permissionService.cancelPendingRequests).toHaveBeenCalledWith(sessionId);
-      // Session driven back to idle so the user can re-prompt.
-      expect(deps.sessionsService.patch).toHaveBeenCalledWith(
-        sessionId,
-        expect.objectContaining({ status: 'idle' })
+      expect(deps.tasksService.patch).toHaveBeenNthCalledWith(1, taskId, {
+        status: 'awaiting_permission',
+      });
+      expect(deps.tasksService.patch).toHaveBeenNthCalledWith(2, taskId, {
+        status: 'running',
+      });
+      expect(deps.permissionService.cancelPendingRequests).not.toHaveBeenCalled();
+      expect(deps.sessionsService.patch).toHaveBeenLastCalledWith(sessionId, {
+        status: 'running',
+        ready_for_prompt: false,
+      });
+      expect(deps.messagesService.patch).toHaveBeenCalledWith(
+        'test-generated-id',
+        expect.objectContaining({
+          content: expect.objectContaining({
+            status: 'denied',
+            approved_by: 'test-user',
+          }),
+        })
       );
     });
 

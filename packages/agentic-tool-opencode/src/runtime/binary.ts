@@ -1,85 +1,127 @@
+import { spawn } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
-import { access, readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { access } from 'node:fs/promises';
+import { delimiter, join } from 'node:path';
+import { resolveManagedAgenticToolPackageDirectory } from '@agor/core/agentic-integrations';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
 
-type PackageLocation = { packageJsonPath: string; version: string };
+async function isExecutable(path: string): Promise<boolean> {
+  try {
+    await access(path, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-async function findPackageLocation(
-  entryPath: string,
-  packageName: string
-): Promise<PackageLocation> {
-  let current = dirname(entryPath);
-  for (;;) {
-    const packageJsonPath = join(current, 'package.json');
-    try {
-      const parsed = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
-        name?: string;
-        version?: string;
-      };
-      if (parsed.name === packageName && parsed.version) {
-        return { packageJsonPath, version: parsed.version };
+export async function readOpenCodeBinaryVersion(binary: string): Promise<string> {
+  return readOpenCodeCommandVersion({ executable: binary, argsPrefix: [] });
+}
+
+export type OpenCodeCommand = { executable: string; argsPrefix: readonly string[] };
+
+async function readOpenCodeCommandVersion(command: OpenCodeCommand): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.executable, [...command.argsPrefix, '--version'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`OpenCode version check timed out for ${command.executable}`));
+    }, 5_000);
+    child.stdout.on('data', (chunk) => {
+      output += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      output += String(chunk);
+    });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(`OpenCode version check exited with code ${code}`));
+        return;
       }
-    } catch {
-      // Keep walking toward the package root.
-    }
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  throw new Error(`OpenCode package ${packageName} is not installed correctly`);
+      const version = output.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/)?.[0];
+      if (!version) {
+        reject(
+          new Error(`Could not parse OpenCode version from: ${output.trim() || '(no output)'}`)
+        );
+        return;
+      }
+      resolve(version);
+    });
+  });
 }
 
-async function findPackageInLookupPaths(
-  resolver: NodeJS.Require,
-  packageName: string
-): Promise<PackageLocation> {
-  for (const lookupPath of resolver.resolve.paths(packageName) ?? []) {
+export async function assertOpenCodeBinaryCompatibility(binary: string): Promise<string> {
+  return assertOpenCodeCommandCompatibility({ executable: binary, argsPrefix: [] });
+}
+
+export async function assertOpenCodeCommandCompatibility(
+  command: OpenCodeCommand
+): Promise<string> {
+  const version = await readOpenCodeCommandVersion(command);
+  if (version !== OPENCODE_VERSION) {
+    throw new Error(
+      `OpenCode CLI ${version} is incompatible with Agor's pinned SDK ${OPENCODE_VERSION}. ` +
+        `Install OpenCode ${OPENCODE_VERSION}, or point AGOR_OPENCODE_PATH to that version.`
+    );
+  }
+  return version;
+}
+
+/** Resolve the user-installed OpenCode CLI without assuming how it was installed. */
+export async function resolvePackagedOpenCodeBinary(): Promise<OpenCodeCommand> {
+  if (process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
+    const agorVersion = process.env.AGOR_VERSION;
+    if (!agorVersion) throw new Error('AGOR_VERSION is missing from the packaged Agor runtime');
     try {
-      return await findPackageLocation(join(lookupPath, packageName, 'index.js'), packageName);
-    } catch {
-      // Try the next Node resolution path.
+      const packageDirectory = await resolveManagedAgenticToolPackageDirectory(
+        'opencode',
+        agorVersion,
+        'opencode-ai'
+      );
+      const wrapper = join(packageDirectory, 'bin', 'opencode');
+      if (!(await isExecutable(wrapper)))
+        throw new Error(`managed OpenCode wrapper is not accessible: ${wrapper}`);
+      const command = { executable: process.execPath, argsPrefix: [wrapper] };
+      await assertOpenCodeCommandCompatibility(command);
+      return command;
+    } catch (error) {
+      throw new Error(
+        `OpenCode support is not usable for Agor ${agorVersion}: ${error instanceof Error ? error.message : String(error)}. Run: agor install`
+      );
     }
   }
-  throw new Error(`OpenCode package ${packageName} is not installed correctly`);
-}
 
-export async function resolvePackagedOpenCodeBinary(): Promise<string> {
-  const packageRequire = createRequire(import.meta.url);
-  let cli: PackageLocation;
-  let sdk: PackageLocation;
-  try {
-    cli = await findPackageLocation(
-      packageRequire.resolve('opencode-ai/package.json'),
-      'opencode-ai'
-    );
-    sdk = await findPackageInLookupPaths(packageRequire, '@opencode-ai/sdk');
-  } catch (error) {
-    throw new Error(
-      `OpenCode ${OPENCODE_VERSION} is not fully installed; reinstall Agor with optional dependencies enabled`,
-      { cause: error }
-    );
+  const configured = process.env.AGOR_OPENCODE_PATH?.trim();
+  if (configured) {
+    if (await isExecutable(configured)) {
+      await assertOpenCodeBinaryCompatibility(configured);
+      return { executable: configured, argsPrefix: [] };
+    }
+    throw new Error(`AGOR_OPENCODE_PATH is not executable: ${configured}`);
   }
 
-  if (cli.version !== OPENCODE_VERSION || sdk.version !== OPENCODE_VERSION) {
-    throw new Error(
-      `OpenCode SDK/CLI mismatch: expected ${OPENCODE_VERSION}, found SDK ${sdk.version} and CLI ${cli.version}`
-    );
+  const names = process.platform === 'win32' ? ['opencode.exe', 'opencode.cmd'] : ['opencode'];
+  for (const directory of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
+    for (const name of names) {
+      const candidate = join(directory, name);
+      if (await isExecutable(candidate)) {
+        await assertOpenCodeBinaryCompatibility(candidate);
+        return { executable: candidate, argsPrefix: [] };
+      }
+    }
   }
 
-  const packageRoot = dirname(cli.packageJsonPath);
-  const binary =
-    process.platform === 'win32'
-      ? join(packageRoot, 'bin', 'opencode.exe')
-      : join(packageRoot, 'bin', '.opencode');
-  try {
-    await access(binary, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK);
-  } catch (error) {
-    throw new Error(
-      `Packaged OpenCode ${OPENCODE_VERSION} native binary is missing or not executable; reinstall Agor with optional dependencies enabled`,
-      { cause: error }
-    );
-  }
-  return binary;
+  throw new Error(
+    `OpenCode ${OPENCODE_VERSION} is not available to the Agor executor. ` +
+      'Install the OpenCode CLI using its official instructions, ensure `opencode` is on the daemon PATH, ' +
+      'or set AGOR_OPENCODE_PATH. See https://agor.live/guide/extended-install#agentic-tools'
+  );
 }

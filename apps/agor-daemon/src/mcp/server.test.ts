@@ -1,12 +1,17 @@
+import { execFile as execFileCallback } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
+import { promisify } from 'node:util';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
-import { getCurrentTenantId } from '@agor/core/db';
+import { getCurrentTenantId, SessionRepository } from '@agor/core/db';
+import { Server as SdkServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildRegistry, coerceJsonRecord, setupMCPRoutes } from './server.js';
 import { initMcpTokens, MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from './tokens.js';
+
+const execFile = promisify(execFileCallback);
 
 function testSqliteDb() {
   // Tenant scopes are transaction-free on SQLite. The MCP route tests mock the
@@ -380,23 +385,19 @@ describe('POST /mcp with personal API keys', () => {
     services: Record<string, unknown>,
     fn: (baseUrl: string) => Promise<void>,
     config: Parameters<typeof setupMCPRoutes>[3] = { multi_tenancy: undefined },
-    testOptions: Parameters<typeof setupMCPRoutes>[4] = {}
+    toolSearchEnabled = false,
+    serverVersion = 'test-product-version'
   ) {
     const webApp = express();
     webApp.use(express.json());
+    webApp.set('authentication', { secret: 'mcp-server-test-secret' });
     (webApp as unknown as { service: (name: string) => unknown }).service = (name: string) => {
       const svc = services[name];
       if (!svc) throw new Error(`Unexpected service lookup: ${name}`);
       return svc;
     };
 
-    setupMCPRoutes(
-      webApp as never,
-      testSqliteDb(),
-      /* toolSearchEnabled */ false,
-      config,
-      testOptions
-    );
+    setupMCPRoutes(webApp as never, testSqliteDb(), toolSearchEnabled, config, { serverVersion });
 
     const httpServer = webApp.listen(0);
     try {
@@ -420,131 +421,6 @@ describe('POST /mcp with personal API keys', () => {
       error?: { message: string };
     };
   }
-
-  async function initializeStatefulMcp(
-    baseUrl: string,
-    apiKey = 'agor_sk_valid',
-    extraHeaders: Record<string, string> = {}
-  ) {
-    const resp = await fetch(`${baseUrl}/mcp`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json, text/event-stream',
-        'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
-        ...extraHeaders,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 100,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2025-03-26',
-          capabilities: {},
-          clientInfo: { name: 'vitest', version: '1.0.0' },
-        },
-      }),
-    });
-    expect(resp.status).toBe(200);
-    const mcpSessionId = resp.headers.get('mcp-session-id');
-    expect(mcpSessionId).toBeTruthy();
-    await resp.text();
-    return mcpSessionId!;
-  }
-
-  async function markStatefulMcpInitialized(baseUrl: string, mcpSessionId: string) {
-    const resp = await fetch(`${baseUrl}/mcp`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json, text/event-stream',
-        'Content-Type': 'application/json',
-        'X-API-Key': 'agor_sk_valid',
-        'Mcp-Session-Id': mcpSessionId,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'notifications/initialized',
-      }),
-    });
-    expect(resp.status).toBeGreaterThanOrEqual(200);
-    expect(resp.status).toBeLessThan(300);
-    await resp.text();
-  }
-
-  async function callCurrentUserStatefully(baseUrl: string, mcpSessionId: string) {
-    const resp = await fetch(`${baseUrl}/mcp`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json, text/event-stream',
-        'Content-Type': 'application/json',
-        'X-API-Key': 'agor_sk_valid',
-        'Mcp-Session-Id': mcpSessionId,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 101,
-        method: 'tools/call',
-        params: { name: 'agor_users_get_current', arguments: {} },
-      }),
-    });
-    const parsed = parseMcpResponse(await resp.text());
-    return { resp, parsed };
-  }
-
-  it('debugs routine stateful MCP transport expiry without warning', async () => {
-    await mockPersonalApiKeyUser();
-    const getUser = vi.fn(async () => ({
-      user_id: 'user-1',
-      email: 'alice@example.com',
-      role: 'member',
-    }));
-
-    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      const mcpSessionId = await initializeStatefulMcp(baseUrl);
-      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
-      await markStatefulMcpInitialized(baseUrl, mcpSessionId);
-      const ttlTimerCall = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 30 * 60 * 1000);
-      setTimeoutSpy.mockRestore();
-      if (!ttlTimerCall || typeof ttlTimerCall[0] !== 'function') {
-        throw new Error('stateful MCP transport TTL was not re-armed');
-      }
-
-      const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      ttlTimerCall[0]();
-
-      expect(debug).toHaveBeenCalledTimes(1);
-      expect(debug).toHaveBeenCalledWith(`MCP streamable HTTP session expired: ${mcpSessionId}`);
-      expect(warn).not.toHaveBeenCalled();
-    });
-  });
-
-  it('warns exactly when stateful MCP transport capacity evicts the oldest session', async () => {
-    await mockPersonalApiKeyUser();
-    const getUser = vi.fn(async () => ({
-      user_id: 'user-1',
-      email: 'alice@example.com',
-      role: 'member',
-    }));
-
-    await withMcpServer(
-      { users: { get: getUser } },
-      async (baseUrl) => {
-        const oldestSessionId = await initializeStatefulMcp(baseUrl);
-        await initializeStatefulMcp(baseUrl);
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-        await initializeStatefulMcp(baseUrl);
-
-        expect(warn).toHaveBeenCalledTimes(1);
-        expect(warn).toHaveBeenCalledWith(
-          `⚠️  MCP streamable HTTP session limit reached; evicting ${oldestSessionId}`
-        );
-      },
-      undefined,
-      { statefulTransportMax: 2 }
-    );
-  });
 
   it('can call a non-session-scoped tool without X-Agor-Session-Id / ?sessionId', async () => {
     const { UserApiKeysRepository } = await import('@agor/core/db');
@@ -593,16 +469,12 @@ describe('POST /mcp with personal API keys', () => {
       });
 
       expect(resp.status).toBe(200);
+      // The v2 SDK's stateless legacy adapter keeps the 2025 wire contract:
+      // one bounded, request-scoped SSE response, with no retained session.
+      expect(resp.headers.get('content-type')).toMatch(/^text\/event-stream/);
+      expect(resp.headers.get('mcp-session-id')).toBeNull();
       const responseText = await resp.text();
-      const dataLine = responseText
-        .split('\n')
-        .find((line) => line.startsWith('data: '))
-        ?.slice('data: '.length);
-      if (!dataLine) throw new Error(`No SSE data line in response: ${responseText}`);
-      const body = JSON.parse(dataLine) as {
-        result?: { content: Array<{ text: string }> };
-        error?: { message: string };
-      };
+      const body = parseMcpResponse(responseText);
       expect(body.error).toBeUndefined();
       const result = JSON.parse(body.result!.content[0].text);
       expect(result.user_id).toBe('user-1');
@@ -900,78 +772,54 @@ describe('POST /mcp with personal API keys', () => {
     );
   });
 
-  it('rejects adding X-Agor-Session-Id to a sessionless stateful MCP session', async () => {
+  it('initializes legacy clients with a bounded response, no transport session, and immutable tool capabilities', async () => {
     await mockPersonalApiKeyUser();
     const getUser = vi.fn(async () => ({
       user_id: 'user-1',
       email: 'alice@example.com',
       role: 'member',
     }));
-    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
 
-    await withMcpServer(
-      { users: { get: getUser }, sessions: { get: getSession } },
-      async (baseUrl) => {
-        const mcpSessionId = await initializeStatefulMcp(baseUrl);
-        const resp = await fetch(`${baseUrl}/mcp`, {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json, text/event-stream',
-            'Content-Type': 'application/json',
-            'X-API-Key': 'agor_sk_valid',
-            'Mcp-Session-Id': mcpSessionId,
-            'X-Agor-Session-Id': 'session-full-id',
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'X-API-Key': 'agor_sk_valid',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 100,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            clientInfo: { name: 'vitest', version: '1.0.0' },
           },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 5,
-            method: 'tools/call',
-            params: { name: 'agor_users_get_current', arguments: {} },
-          }),
-        });
-
-        expect(resp.status).toBe(403);
-        const body = (await resp.json()) as { error?: { message?: string } };
-        expect(body.error?.message).toMatch(/initialized without/i);
-      }
-    );
-  });
-
-  it('rejects a stateful MCP request from a different API key user', async () => {
-    await mockPersonalApiKeyUser();
-    const getUser = vi.fn(async (id: string) => ({
-      user_id: id,
-      email: `${id}@example.com`,
-      role: 'member',
-    }));
-
-    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      const mcpSessionId = await initializeStatefulMcp(baseUrl, 'agor_sk_valid');
-      const resp = await fetch(`${baseUrl}/mcp`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json, text/event-stream',
-          'Content-Type': 'application/json',
-          'X-API-Key': 'agor_sk_other',
-          'Mcp-Session-Id': mcpSessionId,
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 6,
-          method: 'tools/call',
-          params: { name: 'agor_users_get_current', arguments: {} },
         }),
       });
 
-      expect(resp.status).toBe(403);
-      const body = (await resp.json()) as { error?: { message?: string } };
-      expect(body.error?.message).toMatch(/different user/i);
+      expect(resp.status).toBe(200);
+      expect(resp.headers.get('content-type')).toMatch(/^text\/event-stream/);
+      expect(resp.headers.get('mcp-session-id')).toBeNull();
+      const body = parseMcpResponse(await resp.text()) as {
+        result?: {
+          capabilities?: { tools?: { listChanged?: boolean }; logging?: unknown };
+          serverInfo?: { name?: string; version?: string };
+        };
+      };
+      expect(body.result?.capabilities).toEqual({ tools: { listChanged: false } });
+      expect(body.result?.serverInfo).toMatchObject({
+        name: 'agor',
+        version: 'test-product-version',
+      });
     });
   });
 
-  it('rejects a stateful MCP request when its personal API key is revoked', async () => {
+  it('supports the sessionless Streamable HTTP client initialize/list contract', async () => {
     await mockPersonalApiKeyUser();
-    const { UserApiKeysRepository } = await import('@agor/core/db');
+    const closeSpy = vi.spyOn(SdkServer.prototype, 'close');
     const getUser = vi.fn(async () => ({
       user_id: 'user-1',
       email: 'alice@example.com',
@@ -979,87 +827,554 @@ describe('POST /mcp with personal API keys', () => {
     }));
 
     await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      const mcpSessionId = await initializeStatefulMcp(baseUrl);
-      vi.mocked(UserApiKeysRepository.prototype.verifyKey).mockResolvedValue(null);
-
-      const { resp } = await callCurrentUserStatefully(baseUrl, mcpSessionId);
-      expect(resp.status).toBe(401);
-    });
-  });
-
-  it('rejects a stateful MCP request when credentials are omitted', async () => {
-    await mockPersonalApiKeyUser();
-    const getUser = vi.fn(async () => ({
-      user_id: 'user-1',
-      email: 'alice@example.com',
-      role: 'member',
-    }));
-
-    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      const mcpSessionId = await initializeStatefulMcp(baseUrl);
-      const resp = await fetch(`${baseUrl}/mcp`, {
+      const headers = {
+        Accept: 'application/json, text/event-stream',
+        'Content-Type': 'application/json',
+        'X-API-Key': 'agor_sk_valid',
+      };
+      const initialize = await fetch(`${baseUrl}/mcp`, {
         method: 'POST',
-        headers: {
-          Accept: 'application/json, text/event-stream',
-          'Content-Type': 'application/json',
-          'Mcp-Session-Id': mcpSessionId,
-        },
+        headers,
         body: JSON.stringify({
           jsonrpc: '2.0',
-          id: 60,
-          method: 'tools/call',
-          params: { name: 'agor_users_get_current', arguments: {} },
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-11-25',
+            capabilities: {},
+            clientInfo: { name: 'agor-contract-test', version: '1.0.0' },
+          },
         }),
       });
+      expect(initialize.status).toBe(200);
+      expect(initialize.headers.get('mcp-session-id')).toBeNull();
+      parseMcpResponse(await initialize.text());
 
-      expect(resp.status).toBe(401);
+      const initialized = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: { ...headers, 'MCP-Protocol-Version': '2025-11-25' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+      });
+      expect(initialized.status).toBe(202);
+      await initialized.text();
+
+      // Current clients may optimistically try the optional standalone SSE
+      // stream. A stateless server declines it and the client continues.
+      const stream = await fetch(`${baseUrl}/mcp`, {
+        method: 'GET',
+        headers: {
+          Accept: 'text/event-stream',
+          'MCP-Protocol-Version': '2025-11-25',
+          'X-API-Key': 'agor_sk_valid',
+        },
+      });
+      expect(stream.status).toBe(405);
+      await stream.text();
+
+      const list = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: { ...headers, 'MCP-Protocol-Version': '2025-11-25' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
+      });
+      const result = parseMcpResponse(await list.text()) as {
+        result: { tools: Array<{ name: string }> };
+      };
+      expect(result.result.tools.some(({ name }) => name === 'agor_users_get_current')).toBe(true);
+
+      // Initialize, initialized, and list are separate stateless exchanges.
+      // The SDK must close every request-local server once each response is
+      // consumed rather than retaining initialization-era transport state.
+      await vi.waitFor(() => expect(closeSpy.mock.calls.length).toBeGreaterThanOrEqual(3));
     });
   });
 
-  it('retains and re-authorizes an omitted Agor session binding on later requests', async () => {
+  it('interoperates end-to-end with the installed legacy TypeScript Streamable HTTP client', async () => {
     await mockPersonalApiKeyUser();
     const getUser = vi.fn(async () => ({
       user_id: 'user-1',
       email: 'alice@example.com',
       role: 'member',
-    }));
-    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
-
-    await withMcpServer(
-      { users: { get: getUser }, sessions: { get: getSession } },
-      async (baseUrl) => {
-        const mcpSessionId = await initializeStatefulMcp(baseUrl, 'agor_sk_valid', {
-          'X-Agor-Session-Id': 'session-full-id',
-        });
-
-        // Both continuation requests omit X-Agor-Session-Id. The immutable
-        // initialize-time binding is retained and checked through sessions.get.
-        await markStatefulMcpInitialized(baseUrl, mcpSessionId);
-        const { resp, parsed } = await callCurrentUserStatefully(baseUrl, mcpSessionId);
-
-        expect(resp.status).toBe(200);
-        expect(parsed.error).toBeUndefined();
-        expect(getSession).toHaveBeenCalledTimes(3);
-        expect(getSession).toHaveBeenLastCalledWith('session-full-id', expect.any(Object));
-      }
-    );
-  });
-
-  it('rejects a stateful MCP request replayed in another tenant for the same user id', async () => {
-    await mockPersonalApiKeyUser();
-    const getUser = vi.fn(async (id: string) => ({
-      user_id: id,
-      email: `${id}@example.com`,
-      role: 'member',
-      tenant_id: getCurrentTenantId(),
     }));
 
     await withMcpServer(
       { users: { get: getUser } },
       async (baseUrl) => {
-        const mcpSessionId = await initializeStatefulMcp(baseUrl, 'agor_sk_valid', {
-          'X-Agor-Tenant-Id': 'tenant-a',
+        // Run the installed SDK client under plain Node rather than Vitest's
+        // development export conditions (which select eventsource-parser's TS
+        // source build). This is still an end-to-end wire contract against the
+        // real Express route and fails the test on any client error.
+        const probe = `
+        import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+        import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+        const transport = new StreamableHTTPClientTransport(new URL(process.argv[1] + '/mcp'), {
+          requestInit: { headers: { 'X-API-Key': 'agor_sk_valid' } },
         });
+        const client = new Client({ name: 'agor-sdk-contract-test', version: '1.0.0' });
+        try {
+          await client.connect(transport);
+          const listed = await client.listTools();
+          const called = await client.callTool({ name: 'agor_users_get_current', arguments: {} });
+          console.log(JSON.stringify({ sessionId: transport.sessionId, listed, called }));
+        } finally {
+          await client.close();
+        }
+      `;
+        const { stdout } = await execFile(
+          process.execPath,
+          ['--input-type=module', '--eval', probe, baseUrl],
+          { cwd: process.cwd(), encoding: 'utf8', timeout: 10_000 }
+        );
+        const result = JSON.parse(stdout.trim()) as {
+          sessionId?: string;
+          listed: { tools: Array<{ name: string }> };
+          called: { content: Array<{ type: string; text?: string }> };
+        };
+
+        expect(result.sessionId).toBeUndefined();
+        expect(result.listed.tools.map(({ name }) => name).sort()).toEqual([
+          'agor_execute_tool',
+          'agor_get_tool_details',
+          'agor_search_tools',
+        ]);
+        expect(JSON.parse(result.called.content[0].text ?? '{}')).toMatchObject({
+          user_id: 'user-1',
+        });
+      },
+      { multi_tenancy: undefined },
+      /* toolSearchEnabled */ true
+    );
+  });
+
+  it('interoperates end-to-end with the v2 TypeScript client in modern auto-negotiation mode', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer(
+      { users: { get: getUser } },
+      async (baseUrl) => {
+        const probe = `
+          import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+          const exchanges = [];
+          const tracedFetch = async (input, init) => {
+            const request = new Request(input, init);
+            let rpcMethod;
+            if (request.method === 'POST') {
+              try { rpcMethod = (await request.clone().json()).method; } catch {}
+            }
+            const response = await fetch(input, init);
+            exchanges.push({
+              httpMethod: request.method,
+              rpcMethod,
+              protocolVersion: request.headers.get('mcp-protocol-version'),
+              mcpMethod: request.headers.get('mcp-method'),
+              mcpName: request.headers.get('mcp-name'),
+              status: response.status,
+              contentType: response.headers.get('content-type'),
+              sessionId: response.headers.get('mcp-session-id'),
+            });
+            return response;
+          };
+          const transport = new StreamableHTTPClientTransport(new URL(process.argv[1] + '/mcp'), {
+            fetch: tracedFetch,
+            requestInit: { headers: {
+              'X-API-Key': 'agor_sk_valid',
+              // A rolling-deployment remnant must not select transport state.
+              'Mcp-Session-Id': 'stale-pre-upgrade-session',
+            } },
+          });
+          const client = new Client(
+            { name: 'agor-v2-contract-test', version: '1.0.0' },
+            { versionNegotiation: { mode: 'auto' } },
+          );
+          try {
+            await client.connect(transport);
+            const listed = await client.listTools();
+            const called = await client.callTool({
+              name: 'agor_execute_tool',
+              arguments: { tool_name: 'agor_users_get_current', arguments: {} },
+            });
+            console.log(JSON.stringify({
+              era: client.getProtocolEra(),
+              version: client.getNegotiatedProtocolVersion(),
+              discover: client.getDiscoverResult(),
+              sessionId: transport.sessionId,
+              exchanges,
+              listed,
+              called,
+            }));
+          } finally {
+            await client.close();
+          }
+        `;
+        const { stdout } = await execFile(
+          process.execPath,
+          ['--input-type=module', '--eval', probe, baseUrl],
+          { cwd: process.cwd(), encoding: 'utf8', timeout: 10_000 }
+        );
+        const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as {
+          era?: string;
+          version?: string;
+          discover?: {
+            capabilities?: { tools?: { listChanged?: boolean } };
+            ttlMs?: number;
+            cacheScope?: string;
+          };
+          sessionId?: string;
+          exchanges: Array<{
+            httpMethod: string;
+            rpcMethod?: string;
+            protocolVersion?: string;
+            mcpMethod?: string;
+            mcpName?: string;
+            status: number;
+            contentType?: string;
+            sessionId?: string;
+          }>;
+          listed: {
+            tools: Array<{ name: string }>;
+            ttlMs?: number;
+            cacheScope?: string;
+          };
+          called: { content: Array<{ type: string; text?: string }> };
+        };
+
+        expect(result.era).toBe('modern');
+        expect(result.version).toBe('2026-07-28');
+        expect(result.sessionId).toBeUndefined();
+        expect(result.discover?.capabilities).toEqual({ tools: { listChanged: false } });
+        expect(result.discover).toMatchObject({ ttlMs: 60_000, cacheScope: 'private' });
+        expect(result.listed).toMatchObject({ ttlMs: 60_000, cacheScope: 'private' });
+        expect(result.exchanges.map(({ rpcMethod }) => rpcMethod)).toEqual([
+          'server/discover',
+          'tools/list',
+          'tools/call',
+        ]);
+        expect(result.exchanges).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              rpcMethod: 'server/discover',
+              protocolVersion: '2026-07-28',
+              mcpMethod: 'server/discover',
+              status: 200,
+            }),
+            expect.objectContaining({
+              rpcMethod: 'tools/call',
+              protocolVersion: '2026-07-28',
+              mcpMethod: 'tools/call',
+              mcpName: 'agor_execute_tool',
+              status: 200,
+            }),
+          ])
+        );
+        for (const exchange of result.exchanges) {
+          expect(exchange.httpMethod).toBe('POST');
+          expect(exchange.contentType).toMatch(/^application\/json/);
+          expect(exchange.sessionId).toBeNull();
+        }
+        expect(result.listed.tools.map(({ name }) => name).sort()).toEqual([
+          'agor_execute_tool',
+          'agor_get_tool_details',
+          'agor_search_tools',
+        ]);
+        expect(JSON.parse(result.called.content[0].text ?? '{}')).toMatchObject({
+          user_id: 'user-1',
+        });
+      },
+      { multi_tenancy: undefined },
+      /* toolSearchEnabled */ true
+    );
+  });
+
+  it('rejects a modern request that omits the required per-request metadata envelope', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'MCP-Protocol-Version': '2026-07-28',
+          'Mcp-Method': 'tools/list',
+          'X-API-Key': 'agor_sk_valid',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 102, method: 'tools/list' }),
+      });
+
+      expect(resp.status).toBe(400);
+      expect(await resp.text()).toMatch(/invalid params|_meta/i);
+    });
+  });
+
+  it.each(['GET', 'DELETE'])(
+    'authenticates but rejects %s lifecycle requests with 405',
+    async (method) => {
+      await mockPersonalApiKeyUser();
+      const getUser = vi.fn(async () => ({
+        user_id: 'user-1',
+        email: 'alice@example.com',
+        role: 'member',
+      }));
+
+      await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+        const resp = await fetch(`${baseUrl}/mcp`, {
+          method,
+          headers: {
+            Accept: 'text/event-stream',
+            'X-API-Key': 'agor_sk_valid',
+            'Mcp-Session-Id': 'legacy-session',
+          },
+        });
+
+        expect(resp.status).toBe(405);
+        expect(resp.headers.get('allow')).toBe('POST');
+        expect(getUser).toHaveBeenCalled();
+        expect((await resp.json()) as unknown).toMatchObject({
+          error: { message: expect.stringMatching(/not allowed/) },
+        });
+      });
+    }
+  );
+
+  it('ignores a valid legacy Mcp-Session-Id on POST without treating it as authority', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'X-API-Key': 'agor_sk_valid',
+          'Mcp-Session-Id': 'unknown-from-before-upgrade',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 101,
+          method: 'tools/call',
+          params: { name: 'agor_users_get_current', arguments: {} },
+        }),
+      });
+
+      expect(resp.status).toBe(200);
+      expect(resp.headers.get('mcp-session-id')).toBeNull();
+      const parsed = parseMcpResponse(await resp.text());
+      expect(parsed.error).toBeUndefined();
+      expect(JSON.parse(parsed.result!.content![0].text)).toMatchObject({ user_id: 'user-1' });
+    });
+  });
+
+  it('re-authenticates credentials and reloads user data on every POST', async () => {
+    const { UserApiKeysRepository } = await import('@agor/core/db');
+    let keyEnabled = true;
+    vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey').mockImplementation(async () =>
+      keyEnabled
+        ? {
+            id: 'key-1',
+            user_id: 'user-1',
+            name: 'orchestrator',
+            prefix: 'agor_sk_123',
+            key_hash: 'hash',
+            created_at: new Date(),
+            last_used_at: null,
+          }
+        : null
+    );
+    vi.spyOn(UserApiKeysRepository.prototype, 'updateLastUsed').mockResolvedValue();
+    let role = 'member';
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role,
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const call = async (id: number) =>
+        fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            'Content-Type': 'application/json',
+            'X-API-Key': 'agor_sk_valid',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id,
+            method: 'tools/call',
+            params: { name: 'agor_users_get_current', arguments: {} },
+          }),
+        });
+
+      const first = await call(120);
+      expect(first.status).toBe(200);
+      const firstBody = parseMcpResponse(await first.text());
+      expect(JSON.parse(firstBody.result!.content![0].text).role).toBe('member');
+
+      role = 'admin';
+      const second = await call(121);
+      expect(second.status).toBe(200);
+      const secondBody = parseMcpResponse(await second.text());
+      expect(JSON.parse(secondBody.result!.content![0].text).role).toBe('admin');
+
+      keyEnabled = false;
+      const revoked = await call(122);
+      expect(revoked.status).toBe(401);
+      expect(getUser).toHaveBeenCalledTimes(4); // auth + tool for each successful request
+    });
+  });
+
+  it('rejects ambiguous credential carriers before key lookup', async () => {
+    const { UserApiKeysRepository } = await import('@agor/core/db');
+    const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
+
+    await withMcpServer({}, async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          Authorization: 'Bearer agor_sk_valid',
+          'Content-Type': 'application/json',
+          'X-API-Key': 'agor_sk_other',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 102, method: 'tools/list' }),
+      });
+
+      expect(resp.status).toBe(400);
+      expect(verifyKey).not.toHaveBeenCalled();
+      expect((await resp.json()) as unknown).toMatchObject({
+        error: { message: expect.stringMatching(/exactly one credential/) },
+      });
+    });
+  });
+
+  it.each([
+    {
+      label: 'conflicting header and query Session IDs',
+      path: '/mcp?sessionId=session-query',
+      headers: { 'X-Agor-Session-Id': 'session-header' },
+      message: /must match/,
+    },
+    {
+      label: 'duplicate Session query parameters',
+      path: '/mcp?sessionId=session-a&sessionId=session-b',
+      headers: {},
+      message: /single non-empty string/,
+    },
+    {
+      label: 'malformed legacy transport Session ID',
+      path: '/mcp',
+      headers: { 'Mcp-Session-Id': 'contains space' },
+      message: /visible ASCII/,
+    },
+    {
+      label: 'empty credential header',
+      path: '/mcp',
+      headers: { 'X-API-Key': '' },
+      message: /non-empty string/,
+    },
+  ])('rejects $label before key lookup', async ({ path, headers, message }) => {
+    const { UserApiKeysRepository } = await import('@agor/core/db');
+    const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
+
+    await withMcpServer({}, async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          ...(!Object.hasOwn(headers, 'X-API-Key') ? { 'X-API-Key': 'agor_sk_valid' } : {}),
+          ...headers,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 152, method: 'tools/list' }),
+      });
+
+      expect(resp.status).toBe(400);
+      expect((await resp.json()) as unknown).toMatchObject({
+        error: { message: expect.stringMatching(message) },
+      });
+      expect(verifyKey).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { name: 'Authorization', values: ['Bearer first', 'Bearer second'] },
+    { name: 'X-API-Key', values: ['agor_sk_valid', 'agor_sk_other'] },
+    { name: 'X-Agor-Session-Id', values: ['session-a', 'session-b'] },
+    { name: 'Mcp-Session-Id', values: ['transport-a', 'transport-b'] },
+  ])('rejects duplicate on-wire $name headers before key lookup', async ({ name, values }) => {
+    const { UserApiKeysRepository } = await import('@agor/core/db');
+    const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
+
+    await withMcpServer({}, async (baseUrl) => {
+      const requestBody = JSON.stringify({ jsonrpc: '2.0', id: 103, method: 'tools/list' });
+      const response = await new Promise<{ status: number | undefined; body: string }>(
+        (resolve, reject) => {
+          const req = httpRequest(
+            `${baseUrl}/mcp`,
+            {
+              method: 'POST',
+              headers: {
+                Accept: 'application/json, text/event-stream',
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(requestBody),
+                'X-API-Key': name === 'X-API-Key' ? values : 'agor_sk_valid',
+                [name]: values,
+              },
+            },
+            (res) => {
+              let body = '';
+              res.setEncoding('utf8');
+              res.on('data', (chunk: string) => {
+                body += chunk;
+              });
+              res.on('end', () => resolve({ status: res.statusCode, body }));
+            }
+          );
+          req.on('error', reject);
+          req.end(requestBody);
+        }
+      );
+
+      expect(response.status, response.body).toBe(400);
+      expect(JSON.parse(response.body)).toMatchObject({
+        error: { message: expect.stringMatching(/must be sent at most once/) },
+      });
+      expect(verifyKey).not.toHaveBeenCalled();
+    });
+  });
+
+  it('rejects cross-tenant Agor session context on a fresh stateless request', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async (_userId: string, params: { tenant: { tenant_id: string } }) => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+      tenant_id: params.tenant.tenant_id,
+    }));
+    const getSession = vi.fn(
+      async (sessionId: string, params: { tenant: { tenant_id: string } }) => {
+        if (sessionId !== `${params.tenant.tenant_id}-session`) throw new Error('not found');
+        return { session_id: sessionId };
+      }
+    );
+
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
         const resp = await fetch(`${baseUrl}/mcp`, {
           method: 'POST',
           headers: {
@@ -1067,19 +1382,16 @@ describe('POST /mcp with personal API keys', () => {
             'Content-Type': 'application/json',
             'X-API-Key': 'agor_sk_valid',
             'X-Agor-Tenant-Id': 'tenant-b',
-            'Mcp-Session-Id': mcpSessionId,
+            'X-Agor-Session-Id': 'tenant-a-session',
           },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 61,
-            method: 'tools/call',
-            params: { name: 'agor_users_get_current', arguments: {} },
-          }),
+          body: JSON.stringify({ jsonrpc: '2.0', id: 104, method: 'tools/list' }),
         });
 
         expect(resp.status).toBe(403);
-        const body = (await resp.json()) as { error?: { message?: string } };
-        expect(body.error?.message).toMatch(/different tenant/i);
+        expect(getSession).toHaveBeenCalledWith(
+          'tenant-a-session',
+          expect.objectContaining({ tenant: { tenant_id: 'tenant-b', source: 'trusted_header' } })
+        );
       },
       {
         multi_tenancy: {
@@ -1090,103 +1402,140 @@ describe('POST /mcp with personal API keys', () => {
     );
   });
 
-  it('DELETE closes a stateful MCP session and subsequent use returns 404', async () => {
-    await mockPersonalApiKeyUser();
+  it('re-authorizes a signed token Session binding on every stateless POST', async () => {
+    initMcpTokens({
+      db: testSqliteDb(),
+      multiTenancy: resolveMultiTenancyConfig({}),
+    });
+    vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+
+    const now = Math.floor(Date.now() / 1000);
+    const token = jwt.sign(
+      {
+        sub: 'session-signed',
+        uid: 'user-1',
+        tid: 'default',
+        aud: MCP_TOKEN_AUDIENCE,
+        iss: MCP_TOKEN_ISSUER,
+        iat: now,
+        exp: now + 60,
+        jti: 'fresh-session-access-test',
+      },
+      'mcp-server-test-secret',
+      { algorithm: 'HS256' }
+    );
     const getUser = vi.fn(async () => ({
       user_id: 'user-1',
       email: 'alice@example.com',
       role: 'member',
     }));
-
-    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      const mcpSessionId = await initializeStatefulMcp(baseUrl);
-      const deleteResp = await fetch(`${baseUrl}/mcp`, {
-        method: 'DELETE',
-        headers: {
-          Accept: 'application/json, text/event-stream',
-          'X-API-Key': 'agor_sk_valid',
-          'Mcp-Session-Id': mcpSessionId,
-        },
-      });
-      expect(deleteResp.status).toBe(200);
-      await deleteResp.text();
-
-      const resp = await fetch(`${baseUrl}/mcp`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json, text/event-stream',
-          'Content-Type': 'application/json',
-          'X-API-Key': 'agor_sk_valid',
-          'Mcp-Session-Id': mcpSessionId,
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 7,
-          method: 'tools/call',
-          params: { name: 'agor_users_get_current', arguments: {} },
-        }),
-      });
-
-      expect(resp.status).toBe(404);
+    let accessible = true;
+    const getSession = vi.fn(async (sessionId: string) => {
+      if (sessionId !== 'session-signed') throw new Error('untrusted Session override used');
+      if (!accessible) throw new Error('branch access revoked');
+      return { session_id: 'session-signed' };
     });
+
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
+        const call = () =>
+          fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json, text/event-stream',
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              // An internal token's signed Session binding wins over this
+              // caller-controlled header.
+              'X-Agor-Session-Id': 'attacker-session',
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 150, method: 'tools/list' }),
+          });
+
+        const first = await call();
+        expect(first.status).toBe(200);
+        await first.text();
+
+        accessible = false;
+        const revoked = await call();
+        expect(revoked.status).toBe(403);
+        expect((await revoked.json()) as unknown).toMatchObject({
+          error: { message: expect.stringMatching(/no longer accessible/) },
+        });
+        expect(getSession).toHaveBeenCalledTimes(2);
+        expect(getSession).toHaveBeenNthCalledWith(1, 'session-signed', expect.any(Object));
+        expect(getSession).toHaveBeenNthCalledWith(2, 'session-signed', expect.any(Object));
+      }
+    );
   });
 
-  it('refreshes user role context on each stateful MCP request', async () => {
+  it('keeps authenticated user, tenant, and Agor session context isolated under concurrency', async () => {
     await mockPersonalApiKeyUser();
-    let role = 'superadmin';
-    const getUser = vi.fn(async () => ({
-      user_id: 'user-1',
-      email: 'alice@example.com',
-      role,
-    }));
-
-    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      const mcpSessionId = await initializeStatefulMcp(baseUrl);
-      await markStatefulMcpInitialized(baseUrl, mcpSessionId);
-
-      role = 'member';
-      const { resp, parsed } = await callCurrentUserStatefully(baseUrl, mcpSessionId);
-
-      expect(resp.status).toBe(200);
-      expect(parsed.error).toBeUndefined();
-      const result = JSON.parse(parsed.result!.content![0].text);
-      expect(result.role).toBe('member');
-      // initialize auth, initialized notification auth, tool-call auth, then
-      // the tool itself. The returned role proves the stateful tool context
-      // observed the freshly reloaded user rather than the initialize-time one.
-      expect(getUser).toHaveBeenCalledTimes(4);
-    });
-  });
-
-  it('keeps a stateful MCP session usable after a GET SSE disconnect', async () => {
-    await mockPersonalApiKeyUser();
-    const getUser = vi.fn(async () => ({
-      user_id: 'user-1',
-      email: 'alice@example.com',
+    const getUser = vi.fn(async (userId: string, params: { tenant: { tenant_id: string } }) => ({
+      user_id: userId,
+      email: `${userId}@example.com`,
       role: 'member',
+      tenant_id: params.tenant.tenant_id,
     }));
+    const getSession = vi.fn(
+      async (sessionId: string, params: { tenant: { tenant_id: string } }) => {
+        const delayMs = Number(sessionId.slice(-1)) % 4;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        if (!sessionId.startsWith(`${params.tenant.tenant_id}-`)) throw new Error('not found');
+        return { session_id: sessionId };
+      }
+    );
 
-    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      const mcpSessionId = await initializeStatefulMcp(baseUrl);
-      await markStatefulMcpInitialized(baseUrl, mcpSessionId);
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
+        const expected = Array.from({ length: 16 }, (_, index) => ({
+          tenantId: index % 2 === 0 ? 'tenant-a' : 'tenant-b',
+          apiKey: index % 3 === 0 ? 'agor_sk_other' : 'agor_sk_valid',
+          userId: index % 3 === 0 ? 'user-2' : 'user-1',
+          sessionId: `${index % 2 === 0 ? 'tenant-a' : 'tenant-b'}-session-${index}`,
+        }));
 
-      const sseResp = await fetch(`${baseUrl}/mcp`, {
-        method: 'GET',
-        headers: {
-          Accept: 'text/event-stream',
-          'X-API-Key': 'agor_sk_valid',
-          'Mcp-Session-Id': mcpSessionId,
+        const results = await Promise.all(
+          expected.map(async ({ tenantId, apiKey, sessionId }, index) => {
+            const resp = await fetch(`${baseUrl}/mcp`, {
+              method: 'POST',
+              headers: {
+                Accept: 'application/json, text/event-stream',
+                'Content-Type': 'application/json',
+                'X-API-Key': apiKey,
+                'X-Agor-Tenant-Id': tenantId,
+                'X-Agor-Session-Id': sessionId,
+                'Mcp-Session-Id': `ignored-legacy-${index}`,
+              },
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 200 + index,
+                method: 'tools/call',
+                params: { name: 'agor_users_get_current', arguments: {} },
+              }),
+            });
+            const parsed = parseMcpResponse(await resp.text());
+            return { status: resp.status, value: JSON.parse(parsed.result!.content![0].text) };
+          })
+        );
+
+        results.forEach(({ status, value }, index) => {
+          expect(status).toBe(200);
+          expect(value).toMatchObject({
+            user_id: expected[index].userId,
+            tenant_id: expected[index].tenantId,
+          });
+        });
+        expect(getSession).toHaveBeenCalledTimes(expected.length);
+      },
+      {
+        multi_tenancy: {
+          mode: 'required_from_auth',
+          trusted_header: 'x-agor-tenant-id',
         },
-      });
-      expect(sseResp.status).toBe(200);
-      await sseResp.body?.cancel();
-
-      const { resp, parsed } = await callCurrentUserStatefully(baseUrl, mcpSessionId);
-
-      expect(resp.status).toBe(200);
-      expect(parsed.error).toBeUndefined();
-      const result = JSON.parse(parsed.result!.content![0].text);
-      expect(result.user_id).toBe('user-1');
-    });
+      }
+    );
   });
 });

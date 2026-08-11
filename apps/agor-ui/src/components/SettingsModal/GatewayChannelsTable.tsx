@@ -3846,7 +3846,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           dataSource={channels}
           columns={columns}
           rowKey="id"
-          pagination={{ pageSize: 10, showSizeChanger: true }}
+          pagination={{ defaultPageSize: 10, showSizeChanger: true }}
           size="small"
         />
       )}

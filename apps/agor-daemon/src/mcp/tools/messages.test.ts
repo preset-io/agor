@@ -7,7 +7,7 @@
  * predicate (preventing cross-branch leakage via the `search` parameter).
  */
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Hoist-safe mocks must be declared before the module under test is imported.

@@ -5,12 +5,16 @@
 import {
   checkMigrationStatus,
   createDatabase,
-  runMigrations,
+  pendingOfflineCutoverMigrations,
   sanitizeDbError,
 } from '@agor/core/db';
 import { expandPath, extractDbFilePath } from '@agor/core/utils/path';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import {
+  requireOfflineCutoverAcknowledgement,
+  runConfirmedMigrations,
+} from '../../lib/offline-migration-cutover.js';
 
 export default class DbMigrate extends Command {
   static description = 'Run pending database migrations';
@@ -21,6 +25,11 @@ export default class DbMigrate extends Command {
     yes: Flags.boolean({
       char: 'y',
       description: 'Skip confirmation prompt (for non-interactive environments)',
+      default: false,
+    }),
+    'offline-cutover': Flags.boolean({
+      description:
+        'Acknowledge every daemon using this existing database is stopped for a non-rolling migration',
       default: false,
     }),
   };
@@ -58,6 +67,25 @@ export default class DbMigrate extends Command {
         this.log(`  ${chalk.yellow('+')} ${tag}`);
       });
       this.log('');
+
+      const offlineCutovers = pendingOfflineCutoverMigrations(status);
+      if (offlineCutovers.length > 0) {
+        this.log(chalk.red.bold('⛔ OFFLINE CUTOVER REQUIRED'));
+        this.log('');
+        this.log(
+          `${offlineCutovers.join(', ')} changes a distributed state/ownership protocol and is not rolling-compatible.`
+        );
+        this.log('Old and new daemons must not index this database concurrently.');
+        this.log('');
+        this.log('Required order:');
+        this.log('  1. Stop every daemon connected to this database.');
+        this.log(
+          `  2. Run ${chalk.cyan('agor db migrate --offline-cutover')} from the new release.`
+        );
+        this.log('  3. Start only daemons running the new release.');
+        this.log('');
+        requireOfflineCutoverAcknowledgement(status, flags['offline-cutover']);
+      }
 
       // Warn about backup
       this.log(chalk.bold('⚠️  IMPORTANT: Backup your database before proceeding!'));
@@ -98,7 +126,7 @@ export default class DbMigrate extends Command {
       this.log(chalk.bold('🔄 Running migrations...'));
       this.log('');
 
-      await runMigrations(db);
+      await runConfirmedMigrations(db, flags['offline-cutover']);
 
       // Verify all migrations applied
       const afterStatus = await checkMigrationStatus(db);

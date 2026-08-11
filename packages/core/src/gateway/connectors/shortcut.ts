@@ -42,7 +42,13 @@ import type {
   GatewayConnectionTestResult,
   GatewayEnvVar,
 } from '../../types/gateway';
-import type { GatewayConnector, InboundMessage } from '../connector';
+import type {
+  GatewayConnector,
+  GatewayInboundCallback,
+  GatewayListenerOptions,
+  InboundMessage,
+} from '../connector';
+import { GatewayListenerError } from '../listener-error';
 import { addToRingBuffer, escapeRegex } from './shared';
 
 // ============================================================================
@@ -119,6 +125,13 @@ interface ShortcutPollState {
 const SHORTCUT_API_BASE = 'https://api.app.shortcut.com/api/v3';
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_SEARCH_PAGE_SIZE = 25;
+const DEFAULT_STARTUP_LOOKBACK_MS = 5 * 60_000;
+
+class ShortcutHttpError extends Error {
+  constructor(readonly status: number) {
+    super('Shortcut API request failed');
+  }
+}
 
 // ============================================================================
 // Helpers
@@ -224,6 +237,26 @@ export class ShortcutConnector implements GatewayConnector {
   /** Resolved agent member id (mention target). Defaults to the API token's own member. */
   private agentMemberId: string | null = null;
 
+  private serializeCheckpoint(): Record<string, unknown> {
+    return {
+      version: 1,
+      lastPollAt: this.state.lastPollAt,
+      processedCommentIds: [...this.state.processedCommentIds],
+    };
+  }
+
+  private restoreCheckpoint(checkpoint: Record<string, unknown> | null | undefined): void {
+    if (!checkpoint || typeof checkpoint.lastPollAt !== 'string') return;
+    this.state = {
+      lastPollAt: checkpoint.lastPollAt,
+      processedCommentIds: new Set(
+        Array.isArray(checkpoint.processedCommentIds)
+          ? checkpoint.processedCommentIds.filter((id): id is number => Number.isSafeInteger(id))
+          : []
+      ),
+    };
+  }
+
   constructor(config: Record<string, unknown>) {
     this.config = config as unknown as ShortcutChannelConfig;
 
@@ -249,12 +282,7 @@ export class ShortcutConnector implements GatewayConnector {
     });
 
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(
-        `Shortcut API ${init?.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText}${
-          body ? ` — ${body.slice(0, 300)}` : ''
-        }`
-      );
+      throw new ShortcutHttpError(res.status);
     }
 
     if (res.status === 204) return undefined as T;
@@ -335,7 +363,10 @@ export class ShortcutConnector implements GatewayConnector {
 
   // ── Listening (poll loop) ─────────────────────────────────
 
-  async startListening(callback: (msg: InboundMessage) => void): Promise<void> {
+  async startListening(
+    callback: GatewayInboundCallback,
+    options: GatewayListenerOptions = {}
+  ): Promise<void> {
     console.log('[shortcut] startListening called');
 
     // Validate the token and resolve the agent's own identity (the token owner).
@@ -346,8 +377,18 @@ export class ShortcutConnector implements GatewayConnector {
       me = await this.request<ShortcutMember>('/member');
       console.log(`[shortcut] Authenticated (token member ${me.id})`);
     } catch (error) {
-      console.error('[shortcut] Failed to validate api_token:', error);
-      throw new Error('Shortcut authentication failed — check api_token');
+      if (error instanceof ShortcutHttpError && (error.status === 401 || error.status === 403)) {
+        throw new GatewayListenerError(
+          'shortcut_token_invalid',
+          'permanent',
+          'Replace the Shortcut API token and verify workspace access.'
+        );
+      }
+      throw new GatewayListenerError(
+        'shortcut_api_unavailable',
+        'transient',
+        'Shortcut is unavailable; Agor will retry automatically.'
+      );
     }
 
     // Mention target: explicit override, else the token owner.
@@ -376,28 +417,46 @@ export class ShortcutConnector implements GatewayConnector {
       }`
     );
 
+    // Distributed mode overlaps before its first checkpoint so an owner death
+    // cannot leave a poll gap. Standalone keeps its historical start-at-now
+    // behavior because it has no durable occurrence table to absorb the scan.
+    if (options.durableEventIdempotency) {
+      this.state.lastPollAt = new Date(Date.now() - DEFAULT_STARTUP_LOOKBACK_MS).toISOString();
+    }
+    this.restoreCheckpoint(options.checkpoint);
+
     const intervalMs = this.config.poll_interval_ms ?? DEFAULT_POLL_INTERVAL_MS;
     console.log(`[shortcut] Starting poll loop (interval: ${intervalMs}ms)`);
 
-    await this.pollTick(callback);
+    await this.pollTick(callback, options.saveCheckpoint);
     this.pollTimer = setInterval(() => {
-      void this.pollTick(callback);
+      void this.pollTick(callback, options.saveCheckpoint);
     }, intervalMs);
   }
 
   /** Single poll tick, guarded against overlap. */
-  private async pollTick(callback: (msg: InboundMessage) => void): Promise<void> {
+  private async pollTick(
+    callback: GatewayInboundCallback,
+    saveCheckpoint?: GatewayListenerOptions['saveCheckpoint']
+  ): Promise<void> {
     if (this.polling) {
       console.warn('[shortcut] Poll tick skipped (previous tick still running)');
       return;
     }
     this.polling = true;
+    const before = this.serializeCheckpoint();
     try {
       const messages = await this.poll();
       for (const msg of messages) {
-        callback(msg);
+        await callback(msg);
+      }
+      if (saveCheckpoint && !(await saveCheckpoint(this.serializeCheckpoint()))) {
+        this.restoreCheckpoint(before);
+        console.warn('[shortcut] Listener ownership lost while checkpointing; stopping poll loop');
+        await this.stopListening();
       }
     } catch (error) {
+      this.restoreCheckpoint(before);
       console.error('[shortcut] Poll tick error:', error);
     } finally {
       this.polling = false;
@@ -481,22 +540,6 @@ export class ShortcutConnector implements GatewayConnector {
         const threadId = buildThreadId(story.id, comment);
         const text = stripAgentMention(comment.text ?? '', agentMemberId, mentionName ?? undefined);
 
-        // Post an immediate "👀 on it" ack, threaded under the root. The gateway
-        // later edits this comment into the final reply (mirrors GitHub's
-        // Processing comment) so the thread stays a single bot comment.
-        // Non-fatal — if it fails, the final reply just posts as a new comment.
-        let processingCommentId: number | undefined;
-        try {
-          const ack = await this.request<{ id: number }>(`/stories/${story.id}/comments`, {
-            method: 'POST',
-            body: JSON.stringify({ text: '👀 on it', parent_id: rootCommentId }),
-          });
-          processingCommentId = ack.id;
-          addToRingBuffer(this.state.processedCommentIds, ack.id);
-        } catch (err) {
-          console.warn('[shortcut] Failed to post ack comment:', err);
-        }
-
         // Resolve author identity for alignment (only when aligning, like GitHub).
         // The user_map tier-1 lookup happens in the gateway (it reads fresh
         // channel config on every message); the connector only emits the
@@ -510,6 +553,7 @@ export class ShortcutConnector implements GatewayConnector {
         }
 
         messages.push({
+          providerEventId: `shortcut:comment:${story.id}:${comment.id}`,
           threadId,
           text,
           userId: authorId,
@@ -521,10 +565,24 @@ export class ShortcutConnector implements GatewayConnector {
             shortcut_story_name: story.name,
             shortcut_story_url: story.app_url,
             shortcut_root_comment_id: rootCommentId,
-            ...(processingCommentId ? { processing_comment_id: processingCommentId } : {}),
             ...(authorName ? { shortcut_user_name: authorName } : {}),
             ...(this.config.align_shortcut_users ? { align_shortcut_users: true } : {}),
             ...(authorEmail ? { shortcut_user_email: authorEmail } : {}),
+          },
+          // Only acknowledge after the gateway has won this provider event's
+          // durable occurrence. Shortcut has no create-comment idempotency key,
+          // so a provider-success/database-crash gap remains at-least-once.
+          prepareDelivery: async () => {
+            try {
+              const ack = await this.request<{ id: number }>(`/stories/${story.id}/comments`, {
+                method: 'POST',
+                body: JSON.stringify({ text: '👀 on it', parent_id: rootCommentId }),
+              });
+              addToRingBuffer(this.state.processedCommentIds, ack.id);
+              return { processing_comment_id: ack.id };
+            } catch (err) {
+              console.warn('[shortcut] Failed to post ack comment:', err);
+            }
           },
         });
 

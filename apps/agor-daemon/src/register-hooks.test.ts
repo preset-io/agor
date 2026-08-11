@@ -22,6 +22,7 @@ import { type HookContext, TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 
 import {
+  CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
@@ -252,6 +253,7 @@ describe('tenant-owned service registration', () => {
       branchRepository: {} as RegisterHooksContext['branchRepository'],
       usersRepository: {} as RegisterHooksContext['usersRepository'],
       sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
     });
 
     return registrations;
@@ -313,20 +315,25 @@ describe('tenant-owned service registration', () => {
     );
   });
 
-  it('wraps MCP OAuth/session helper services in tenant database scope', () => {
+  it('wraps MCP OAuth/session database helpers in tenant scope without holding network I/O open', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining([
         'sessions/:id/mcp-servers',
-        'mcp-servers/discover',
-        'mcp-servers/oauth-auth-headers',
-        'mcp-servers/oauth-complete',
+        'mcp-servers/oauth-attempt-status',
         'mcp-servers/oauth-disconnect',
-        'mcp-servers/oauth-refresh',
-        'mcp-servers/oauth-start',
         'mcp-servers/oauth-status',
-        'mcp-servers/test-oauth',
       ])
     );
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toEqual(
+      expect.arrayContaining(['mcp-servers/oauth-auth-headers', 'mcp-servers/oauth-refresh'])
+    );
+  });
+
+  it('fails closed for discovery that can enter the process-local MCP OAuth flow in HA', () => {
+    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
+      'mcp-servers/discover',
+      'mcpOAuth',
+    ]);
   });
 
   it('wraps Knowledge policy and indexing admin services in tenant database scope', () => {
@@ -636,5 +643,15 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
       path.startsWith('codex-auth/')
     );
     expect(codexPaths).toEqual(['codex-auth/device', 'codex-auth/import', 'codex-auth/logout']);
+  });
+
+  it.each([
+    'mcp-servers/discover',
+    'mcp-servers/oauth-complete',
+    'mcp-servers/oauth-start',
+    'mcp-servers/test-oauth',
+  ])('keeps provider/waiting endpoint %s out of an HTTP-long transaction', (path) => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
   });
 });

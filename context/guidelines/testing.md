@@ -328,9 +328,13 @@ pnpm test:postgres:docker
 
 The command uses the same published pgvector image as CI, applies
 `docker/postgres-init-app-user.sql`, verifies that `agor_app` is both
-`NOSUPERUSER` and `NOBYPASSRLS`, runs the suites serially, and removes the
-container. Serial execution is intentional: each suite asks Drizzle to apply
-the shared migration set, which is not safe to initialize concurrently.
+`NOSUPERUSER` and `NOBYPASSRLS`, gives each test file its own database, installs
+pgvector in that database through the bootstrap connection, and removes the
+container. Files run with bounded parallelism while migrations and application
+queries always use the database-owning application role. On Linux, the Docker
+command also interrupts a live runner and verifies that no marked descendant
+process, isolated database, or JSON report directory remains; other platforms
+report that this process-inspection harness is skipped.
 
 To use an already-running disposable database, set both gates explicitly and
 run the narrower test command:
@@ -342,9 +346,11 @@ AGOR_TEST_POSTGRES_ADMIN_URL='postgresql://<bootstrap-user>:<password>@127.0.0.1
 pnpm test:postgres:integration
 ```
 
-The admin URL is used only to create and drop a separate empty database for one
-catalog fail-closed fixture. All migrations, application queries, and RLS
-assertions connect through the non-superuser `AGOR_TEST_POSTGRES_URL`.
+The admin URL creates/drops each isolated database and installs pgvector. All
+migrations, application queries, and RLS assertions connect through the
+non-superuser `AGOR_TEST_POSTGRES_URL`; the isolated database is owned by that
+application role. Set `AGOR_POSTGRES_TEST_CONCURRENCY=1..8` to override the
+default file concurrency of three.
 
 PostgreSQL-only suites must use the `*.postgres.test.ts` suffix. The runner
 fails if it finds `AGOR_TEST_POSTGRES_URL` in a differently named test, finds no

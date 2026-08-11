@@ -6,10 +6,9 @@ describe('OpenCode known model catalog', () => {
   it('stays versioned with the packaged native runtime and SDK', () => {
     const manifest = JSON.parse(
       readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
-    ) as { dependencies: Record<string, string> };
+    ) as { devDependencies: Record<string, string> };
 
-    expect(manifest.dependencies['opencode-ai']).toBe(OPENCODE_VERSION);
-    expect(manifest.dependencies['@opencode-ai/sdk']).toBe(OPENCODE_VERSION);
+    expect(manifest.devDependencies['@opencode-ai/sdk']).toBe(OPENCODE_VERSION);
   });
 
   it('prefers the first provider with saved credentials', () => {

@@ -194,6 +194,8 @@ export class ServiceJWTStrategy extends JWTStrategy {
       }
       const sessionId = getExecutorSessionTokenSessionId(payload);
       const sessionInfo = await this.sessionTokenService.validateToken(token, {
+        tenantId: readRuntimeTenantClaim(payload, this.tenantClaim),
+        userId: typeof payload.sub === 'string' ? payload.sub : undefined,
         sessionId,
         taskId: payload.task_id,
         branchId: payload.branch_id,

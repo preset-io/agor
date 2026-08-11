@@ -21,6 +21,9 @@ export interface SessionQueueWorkerOptions {
   workIdentity: DistributedWorkIdentity;
   processSession: (sessionId: SessionID, params: AuthenticatedParams) => Promise<void>;
   scanBatchSize?: number;
+  maxPagesPerSweep?: number;
+  /** Delay between completed recovery sweeps. Ordinary queue draining is event-driven. */
+  recoveryIntervalMs?: number;
   random?: () => number;
   /** Test seam; production discovery always uses the repository/RLS path. */
   discover?: (after?: QueuedSessionCursor) => Promise<QueuedSessionRef[]>;
@@ -39,7 +42,11 @@ export class SessionQueueWorker {
   private stopped = false;
   private cursor: QueuedSessionCursor | undefined;
   private idleRounds = 0;
+  private sweepComplete = false;
+  private pagesInSweep = 0;
   private readonly scanBatchSize: number;
+  private readonly maxPagesPerSweep: number;
+  private readonly recoveryIntervalMs: number;
   private readonly random: () => number;
 
   constructor(
@@ -47,19 +54,29 @@ export class SessionQueueWorker {
     private readonly options: SessionQueueWorkerOptions
   ) {
     this.scanBatchSize = options.scanBatchSize ?? 25;
+    this.maxPagesPerSweep = options.maxPagesPerSweep ?? 10;
+    this.recoveryIntervalMs = options.recoveryIntervalMs ?? 60_000;
     this.random = options.random ?? Math.random;
   }
 
   start(): void {
     if (this.timer || this.running) return;
     this.stopped = false;
-    this.schedule(initialWorkOffset(30_000, this.random()));
+    const initialDelayMs = initialWorkOffset(30_000, this.random());
+    console.log(
+      `[distributed-work.task-queue] event="loop_started" instance_id=${JSON.stringify(this.options.workIdentity.instanceId)} boot_id=${JSON.stringify(this.options.workIdentity.bootId)} scan_batch_size=${this.scanBatchSize} initial_delay_ms=${initialDelayMs}`
+    );
+    this.schedule(initialDelayMs);
   }
 
   stop(): void {
+    if (this.stopped) return;
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    console.log(
+      `[distributed-work.task-queue] event="loop_stopped" instance_id=${JSON.stringify(this.options.workIdentity.instanceId)} boot_id=${JSON.stringify(this.options.workIdentity.bootId)}`
+    );
   }
 
   private schedule(delayMs: number): void {
@@ -77,7 +94,7 @@ export class SessionQueueWorker {
     let found = 0;
     try {
       found = await this.checkOnce();
-      this.idleRounds = found === 0 ? this.idleRounds + 1 : 0;
+      this.idleRounds = 0;
     } catch (error) {
       this.idleRounds += 1;
       console.warn(
@@ -87,8 +104,9 @@ export class SessionQueueWorker {
       this.running = false;
     }
 
-    const delay =
-      found >= this.scanBatchSize
+    const delay = this.sweepComplete
+      ? jitterDelay(this.recoveryIntervalMs, 0.1, this.random())
+      : found >= this.scanBatchSize
         ? jitterDelay(150, 2 / 3, this.random())
         : boundedBackoffDelay(
             this.idleRounds,
@@ -117,9 +135,13 @@ export class SessionQueueWorker {
 
   /** One bounded scan, exposed for deterministic tests and operational probes. */
   async checkOnce(): Promise<number> {
+    this.sweepComplete = false;
     const refs = await this.discover();
+    this.pagesInSweep += 1;
     if (refs.length === 0) {
       if (this.cursor) this.cursor = undefined;
+      this.pagesInSweep = 0;
+      this.sweepComplete = true;
       return 0;
     }
     const last = refs.at(-1)!;
@@ -148,6 +170,18 @@ export class SessionQueueWorker {
           `[distributed-work.task-queue] event=process_failed instance_id=${JSON.stringify(this.options.workIdentity.instanceId)} boot_id=${JSON.stringify(this.options.workIdentity.bootId)} tenant_id=${JSON.stringify(tenantId)} session_id=${JSON.stringify(ref.session_id)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
         );
       }
+    }
+    // A short keyset page is the end of this recovery sweep. Do not immediately
+    // reconsider known-blocked queue heads: normal terminal/session patch hooks
+    // wake them immediately, while the next sweep recovers missed events.
+    if (refs.length < this.scanBatchSize) {
+      this.cursor = undefined;
+      this.pagesInSweep = 0;
+      this.sweepComplete = true;
+    } else if (this.pagesInSweep >= this.maxPagesPerSweep) {
+      // Preserve the keyset cursor so the next bounded sweep resumes fairly.
+      this.pagesInSweep = 0;
+      this.sweepComplete = true;
     }
     return refs.length;
   }

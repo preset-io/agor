@@ -1,9 +1,5 @@
-import { loadConfig, saveConfig } from '@agor/core/config';
-import {
-  AGOR_TELEMETRY_DOCS_URL,
-  generateTelemetryInstanceId,
-  pruneDefaultOpenSourceTelemetryDestination,
-} from '@agor/core/telemetry';
+import { loadConfig } from '@agor/core/config';
+import { AGOR_TELEMETRY_DOCS_URL } from '@agor/core/telemetry';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 
@@ -23,20 +19,13 @@ export default class Telemetry extends Command {
     this.log(`Status: ${status}`);
     this.log(`Docs:   ${AGOR_TELEMETRY_DOCS_URL}`);
     this.log('');
-    this.log('Commands:');
-    this.log('  agor telemetry on');
-    this.log('  agor telemetry off');
-    this.log('  agor telemetry test');
+    this.log('Configure with AGOR_TELEMETRY=1/0 or telemetry.enabled in config.yaml.');
+    this.log('Test delivery with: agor telemetry test');
   }
 }
 
 export async function setTelemetryEnabled(enabled: boolean): Promise<void> {
-  const config = await loadConfig();
-  config.telemetry = {
-    ...config.telemetry,
-    enabled,
-    instance_id:
-      config.telemetry?.instance_id ?? (enabled ? generateTelemetryInstanceId() : undefined),
-  };
-  await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
+  throw new Error(
+    `Telemetry was not changed. Set AGOR_TELEMETRY=${enabled ? '1' : '0'} in the deployment environment, or edit telemetry.enabled in config.yaml through your config-management workflow and restart Agor.`
+  );
 }

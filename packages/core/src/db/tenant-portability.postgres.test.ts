@@ -19,13 +19,15 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { UUID } from '../types/id';
+import type { MCPServerID } from '../types/mcp';
 import { createDatabase, type Database } from './client';
-import { executeRaw, isPostgresDatabase, select, update } from './database-wrapper';
+import { executeRaw, insert, isPostgresDatabase, select, update } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import { BoardRepository } from './repositories/boards';
 import { BranchRepository } from './repositories/branches';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
+import { UserMCPOAuthTokenRepository } from './repositories/user-mcp-oauth-tokens';
 import * as pg from './schema.postgres';
 import {
   canonicalJson,
@@ -121,6 +123,88 @@ async function addSession(db: Database, tenantId: string): Promise<void> {
       agentic_tool: 'claude-code',
       created_by: 'tenant-portability-test-user',
     });
+  });
+}
+
+async function seedNonPortableExecutorAuthority(db: Database, tenantId: string): Promise<void> {
+  const fingerprint = generateId().replaceAll('-', '').repeat(2);
+  await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    await insert(scoped, pg.executorSessionTokenAuthorities)
+      .values({
+        tenant_id: tenantId,
+        token_fingerprint: fingerprint,
+        token_type: 'executor-session',
+        purpose: 'executor-task',
+        session_id: 'tenant-portability-non-portable-authority',
+        user_id: 'tenant-portability-test-user',
+        created_at: new Date(),
+        expires_at: new Date(Date.now() + 60_000),
+        max_uses: -1,
+        use_count: 0,
+      })
+      .run();
+  });
+}
+
+async function seedNonPortableOAuthGrant(
+  db: Database,
+  tenantId: string,
+  masterSecret: string
+): Promise<string> {
+  const serverId = generateId();
+  await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    await insert(scoped, pg.mcpServers)
+      .values({
+        tenant_id: tenantId,
+        mcp_server_id: serverId,
+        name: `oauth portability ${tenantId}`,
+        transport: 'http',
+        scope: 'global',
+        enabled: true,
+        source: 'user',
+        data: { url: 'https://mcp.example.test', auth: { type: 'oauth' } },
+        created_at: new Date(),
+      })
+      .run();
+    await new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
+      null,
+      serverId as MCPServerID,
+      {
+        accessToken: 'source-deployment-access-token',
+        refreshToken: 'source-deployment-refresh-token',
+        clientId: 'source-client',
+        clientSecret: 'source-client-secret',
+        expiresAt: new Date(Date.now() + 60_000),
+        grantBinding: {
+          generation: 1,
+          version: 1,
+          fingerprint: 'a'.repeat(64),
+          metadataUri: 'https://mcp.example.test/.well-known/oauth-protected-resource',
+          resourceUri: 'https://mcp.example.test/',
+          issuer: 'https://issuer.example.test/',
+          authorizationEndpoint: 'https://issuer.example.test/authorize',
+          tokenEndpoint: 'https://issuer.example.test/token',
+          redirectUri: 'https://agor.example.test/oauth/callback',
+        },
+      }
+    );
+  });
+  return serverId;
+}
+
+async function seedNonPortableGitHubInstallState(db: Database, tenantId: string): Promise<void> {
+  const stateHash = generateId().replaceAll('-', '').repeat(2);
+  await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    await insert(scoped, pg.githubInstallStates)
+      .values({
+        tenant_id: tenantId,
+        state_hash: stateHash,
+        user_id: 'tenant-portability-test-user',
+        intent: 'github-app-install',
+        created_at: new Date(),
+        expires_at: new Date(Date.now() + 60_000),
+      })
+      .run();
   });
 }
 
@@ -615,6 +699,93 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
 
     await deleteTenantData(db, source);
     await deleteTenantData(db, occupied);
+  });
+
+  it('models non-portable transient authorities explicitly and treats them as destination occupancy', async () => {
+    const source = `tpnp-src-${generateId()}`;
+    const occupied = `tpnp-dst-${generateId()}`;
+    await seedTenant(db, source);
+    const archive = join(scratch, `${source}-archive`);
+    await exportTenant(db, source, { archivePath: archive });
+
+    const manifest = await readManifest(archive);
+    expect(manifest.database.identity.nonPortableTenantTables).toEqual([
+      'executor_session_token_authorities',
+      'github_install_states',
+      'mcp_oauth_pending_flows',
+      'user_mcp_oauth_tokens',
+    ]);
+    expect(manifest.database.identity.tenantTables).not.toContain(
+      'executor_session_token_authorities'
+    );
+    expect(manifest.database.identity.tenantTables).not.toContain('mcp_oauth_pending_flows');
+    expect(manifest.database.identity.tenantTables).not.toContain('user_mcp_oauth_tokens');
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'executor_session_token_authorities'
+    );
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'mcp_oauth_pending_flows'
+    );
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'user_mcp_oauth_tokens'
+    );
+    expect(manifest.database.identity.tenantTables).not.toContain('github_install_states');
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'github_install_states'
+    );
+
+    // A destination containing only non-portable authority is not empty. An
+    // import must never retain that bearer policy beside newly restored rows.
+    await seedNonPortableExecutorAuthority(db, occupied);
+    await seedNonPortableGitHubInstallState(db, occupied);
+    await expect(importTenant(db, { archivePath: archive, tenantId: occupied })).rejects.toThrow(
+      /destination database is not empty/i
+    );
+
+    await deleteTenantData(db, source);
+    await deleteTenantData(db, occupied);
+  });
+
+  it('re-homes OAuth server configuration but omits grants across master secrets', async () => {
+    const source = `tpog-src-${generateId()}`;
+    const rehomed = `tpog-dst-${generateId()}`;
+    await seedTenant(db, source);
+    const serverId = await seedNonPortableOAuthGrant(
+      db,
+      source,
+      'source-master-secret-for-portability-test'
+    );
+    const archive = join(scratch, `${source}-oauth-grant-archive`);
+    await exportTenant(db, source, { archivePath: archive });
+
+    const manifest = await readManifest(archive);
+    expect(manifest.database.tables.map((table) => table.name)).toContain('mcp_servers');
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'user_mcp_oauth_tokens'
+    );
+    const serverArchive = await readFile(tableJsonlPath(archive, 'mcp_servers'), 'utf8');
+    expect(serverArchive).not.toContain('source-deployment-access-token');
+    expect(serverArchive).not.toContain('source-deployment-refresh-token');
+    expect(serverArchive).not.toContain('source-client-secret');
+
+    await deleteTenantData(db, source);
+    await importTenant(db, { archivePath: archive, tenantId: rehomed });
+
+    await runWithTenantDatabaseScope(db, rehomed, async (scoped) => {
+      const servers = await select(scoped)
+        .from(pg.mcpServers)
+        .where(eq(pg.mcpServers.mcp_server_id, serverId))
+        .all();
+      expect(servers).toHaveLength(1);
+      await expect(
+        new UserMCPOAuthTokenRepository(
+          scoped,
+          'different-destination-master-secret-for-portability-test'
+        ).getToken(null, serverId as MCPServerID)
+      ).resolves.toBeNull();
+    });
+
+    await deleteTenantData(db, rehomed);
   });
 
   it('preserves JSON/numeric precision beyond 2^53 through export → verify → import', async () => {

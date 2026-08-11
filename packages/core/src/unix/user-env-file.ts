@@ -17,11 +17,11 @@
 
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { escapeShellArg } from './run-as-user.js';
+import { escapeShellArg, isValidEnvVarName } from './run-as-user.js';
 import { splitSecretEnv } from './secret-env.js';
 import { isValidUnixUsername } from './user-manager.js';
 
@@ -80,7 +80,7 @@ export function writeUserEnvFile(asUser: string, env: Record<string, string>): s
   // else to avoid injection into the sourced file.
   const lines: string[] = [];
   for (const [key, value] of Object.entries(env)) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    if (!isValidEnvVarName(key)) {
       throw new Error(`writeUserEnvFile: invalid env var name: ${JSON.stringify(key)}`);
     }
     lines.push(`${key}=${escapeShellArg(value)}`);
@@ -180,6 +180,7 @@ export function attachEnvFileCleanup(
   const capturedPath = envFilePath;
   const capturedAsUser = asUser;
   const cleanup = () => {
+    if (!existsSync(capturedPath)) return;
     if (capturedAsUser) {
       tryUnlinkEnvFileAsUser(capturedAsUser, capturedPath);
     } else {
@@ -212,6 +213,11 @@ export function prepareImpersonationEnv(options: {
   env: Record<string, string | undefined>;
 }): PreparedImpersonationEnv {
   const { asUser, env } = options;
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && !isValidEnvVarName(key)) {
+      throw new Error(`prepareImpersonationEnv: invalid env var name: ${JSON.stringify(key)}`);
+    }
+  }
   const { secret, inline } = splitSecretEnv(env);
   const envFilePath = Object.keys(secret).length > 0 ? writeUserEnvFile(asUser, secret) : undefined;
   return { inlineEnv: inline, envFilePath };

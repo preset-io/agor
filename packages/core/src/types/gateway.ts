@@ -30,6 +30,9 @@ export type ThreadSessionMapID = UUID;
 /** Gateway outbound seed/audit message identifier */
 export type GatewayOutboundMessageID = UUID;
 
+/** Durable identity for one provider-delivered inbound gateway event. */
+export type GatewayInboundEventID = UUID;
+
 // ============================================================================
 // Enums
 // ============================================================================
@@ -44,8 +47,18 @@ export type ChannelType =
   | 'teams'
   | 'shortcut';
 
+/** Providers with an explicitly audited PostgreSQL listener ownership contract. */
+export const DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES = [
+  'slack',
+  'github',
+  'shortcut',
+] as const satisfies readonly ChannelType[];
+
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';
+
+/** Internal processing state for a provider event idempotency occurrence. */
+export type GatewayInboundEventStatus = 'processing' | 'completed';
 
 /** Sensitive gateway config fields that must be encrypted at rest and redacted in responses. */
 export const GATEWAY_SENSITIVE_CONFIG_FIELDS = [
@@ -417,4 +430,28 @@ export interface GatewayOutboundMessage {
 
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Durable provider-event occurrence used to deduplicate listener redelivery.
+ *
+ * The processing token is an internal fence and is never exposed through a
+ * public service. Provider payloads and credentials are deliberately not
+ * stored here; connectors recover them from the provider using their durable
+ * channel checkpoint.
+ */
+export interface GatewayInboundEvent {
+  id: GatewayInboundEventID;
+  gateway_channel_id: GatewayChannelID;
+  provider_event_id: string;
+  thread_id: string;
+  /** Provider acknowledgement/reply coordinates recorded after preparation. */
+  delivery_metadata: Record<string, unknown> | null;
+  status: GatewayInboundEventStatus;
+  processing_token: string;
+  processing_expires_at: string;
+  session_id: SessionID | null;
+  task_id: TaskID | null;
+  received_at: string;
+  completed_at: string | null;
 }

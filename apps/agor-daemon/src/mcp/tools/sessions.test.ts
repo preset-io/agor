@@ -14,7 +14,7 @@
  */
 
 import { AGENTIC_TOOL_NAMES } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../resolve-ids.js', () => ({

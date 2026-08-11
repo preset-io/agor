@@ -56,15 +56,9 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
   mv /tmp/gh_*/bin/gh /usr/local/bin/ && \
   rm -rf /tmp/gh_*
 
-# Install pnpm and AI coding agent CLIs
-# Pinned versions for reproducibility across dev and prod
-# NOTE: Update these versions when upgrading Agor SDKs (see packages/core/package.json)
-RUN npm install -g \
-  pnpm@11.17.0 \
-  @anthropic-ai/claude-code@2.1.197 \
-  @google/gemini-cli@0.31.0 \
-  @openai/codex@0.141.0 \
-  opencode-ai@1.2.15
+# Install only the workspace package manager in the shared image. Agentic-tool
+# runtimes are not part of production unless explicitly installed through Agor.
+RUN npm install -g pnpm@11.17.0
 
 # Arguments for matching host user UID/GID (default to 1000)
 ARG UID=1000
@@ -119,6 +113,10 @@ USER agor
 # Stage 2: Development (hot-reload for daemon and UI)
 # ============================================================================
 FROM base AS development
+
+# Source mode resolves OpenCode from PATH; keep its exact development runtime
+# out of the shared production base.
+RUN sudo npm install -g opencode-ai@1.14.33
 
 # Copy package files for dependency installation (as root, then chown)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -234,8 +232,8 @@ RUN node /opt/agor-live/scripts/postinstall.js \
 # ============================================================================
 # Stage 4b: Production from source (slim runtime — pinned to its git SHA)
 # ============================================================================
-# Same runtime shape as `production` (inherits base: Zellij, gh, and the
-# Claude/Codex/Gemini/OpenCode CLIs), but ships agor-live built from source
+# Same runtime shape as `production` (inherits the shared base with Zellij and
+# gh, but no agentic-tool runtimes), while shipping agor-live built from source
 # instead of `npm install -g agor-live@latest`. Only the deployed artifact is
 # copied in — the multi-GB builder (source + dev deps + store) is left behind.
 #
@@ -246,13 +244,15 @@ USER root
 
 # The one thing we keep from the builder: the self-contained agor-live tree.
 # Copied to the SAME path so its internal (relative) symlinks stay valid.
-COPY --from=source-builder /opt/agor-live /opt/agor-live
+COPY --chown=agor:agor --from=source-builder /opt/agor-live /opt/agor-live
 
 # Put the bins on PATH (shebang: #!/usr/bin/env node); they resolve deps + dist
-# entirely within /opt/agor-live.
+# entirely within /opt/agor-live. pnpm deploy preserves a restrictive workspace
+# umask in some environments, so explicitly make the scripts readable as well
+# as executable by the unprivileged runtime user.
 RUN ln -sf /opt/agor-live/bin/agor.js /usr/local/bin/agor \
   && ln -sf /opt/agor-live/bin/agor-daemon.js /usr/local/bin/agor-daemon \
-  && chmod +x /opt/agor-live/bin/agor.js /opt/agor-live/bin/agor-daemon.js
+  && chmod a+rx /opt/agor-live/bin/agor.js /opt/agor-live/bin/agor-daemon.js
 
 # Reuse the production entrypoint (agor init → db migrate → exec agor-daemon).
 COPY docker/docker-entrypoint-prod.sh /usr/local/bin/
@@ -263,3 +263,25 @@ USER agor
 
 EXPOSE ${DAEMON_PORT:-3030}
 ENTRYPOINT ["docker-entrypoint-prod.sh"]
+
+# ============================================================================
+# Stage 4c: Production-from-source HA smoke runtime
+# ============================================================================
+# Branch worktrees can be protected by host ACLs that the container's `agor`
+# user cannot read through a bind mount. Bake the non-secret HA configuration
+# into the image instead, then materialize it atomically into the shared Agor
+# home at container startup. Secrets remain runtime environment variables.
+FROM production-source AS production-source-ha
+
+USER root
+COPY docker/ha/config.yaml /tmp/agor-ha-config.yaml
+COPY docker/ha/docker-entrypoint.sh /tmp/agor-ha-entrypoint
+# COPY can preserve restrictive worktree ACLs, including on an implicitly
+# created parent directory. `install` creates clean files and permissions.
+RUN install -d -o root -g root -m 0755 /etc/agor \
+  && install -o root -g root -m 0444 /tmp/agor-ha-config.yaml /etc/agor/ha-config.yaml \
+  && install -o root -g root -m 0555 /tmp/agor-ha-entrypoint /usr/local/bin/agor-ha-entrypoint \
+  && rm /tmp/agor-ha-config.yaml /tmp/agor-ha-entrypoint
+USER agor
+
+ENTRYPOINT ["/usr/local/bin/agor-ha-entrypoint"]

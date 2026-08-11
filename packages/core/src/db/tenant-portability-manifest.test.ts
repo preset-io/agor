@@ -9,13 +9,17 @@ import { buildTenantDeletionManifest } from './tenant-deletion-manifest';
 import {
   buildTenantInsertOrder,
   derivedImperativeTableNames,
+  nonPortableTenantTableNames,
   tenantPortabilityForeignKeys,
   tenantPortabilityTableNames,
 } from './tenant-portability-manifest';
 
 describe('buildTenantInsertOrder', () => {
   it('is the exact reverse of the deletion (child-first) order', () => {
-    const deletion = buildTenantDeletionManifest().map((entry) => entry.name);
+    const nonPortable = new Set(nonPortableTenantTableNames());
+    const deletion = buildTenantDeletionManifest()
+      .map((entry) => entry.name)
+      .filter((name) => !nonPortable.has(name));
     const insert = buildTenantInsertOrder().map((entry) => entry.name);
     expect(insert).toEqual([...deletion].reverse());
   });
@@ -39,12 +43,26 @@ describe('buildTenantInsertOrder', () => {
       expect(insertNames.has(derived)).toBe(false);
     }
   });
+
+  it('deletes but never exports transient authorities or deployment-bound grants', () => {
+    const nonPortable = nonPortableTenantTableNames();
+    expect(nonPortable).toEqual([
+      'executor_session_token_authorities',
+      'github_install_states',
+      'mcp_oauth_pending_flows',
+      'user_mcp_oauth_tokens',
+    ]);
+    for (const tableName of nonPortable) {
+      expect(buildTenantDeletionManifest().map((entry) => entry.name)).toContain(tableName);
+      expect(buildTenantInsertOrder().map((entry) => entry.name)).not.toContain(tableName);
+    }
+  });
 });
 
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    expect(foreignKeys).toHaveLength(91);
+    expect(foreignKeys).toHaveLength(92);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -60,6 +78,40 @@ describe('tenantPortabilityForeignKeys', () => {
       expect(Object.isFrozen(foreignKey.childColumns)).toBe(true);
       expect(Object.isFrozen(foreignKey.parentColumns)).toBe(true);
     }
+  });
+
+  it('does not classify deployment-bound MCP OAuth grant relations as movable', () => {
+    expect(tenantPortabilityForeignKeys()).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ childTable: 'user_mcp_oauth_tokens' })])
+    );
+  });
+
+  it('moves inbound event relations with their channel, Session, and Task', () => {
+    expect(tenantPortabilityForeignKeys()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          childTable: 'gateway_inbound_events',
+          childColumns: ['gateway_channel_id'],
+          parentTable: 'gateway_channels',
+          parentColumns: ['id'],
+          onDelete: 'cascade',
+        }),
+        expect.objectContaining({
+          childTable: 'gateway_inbound_events',
+          childColumns: ['session_id'],
+          parentTable: 'sessions',
+          parentColumns: ['session_id'],
+          onDelete: 'set null',
+        }),
+        expect.objectContaining({
+          childTable: 'gateway_inbound_events',
+          childColumns: ['task_id'],
+          parentTable: 'tasks',
+          parentColumns: ['task_id'],
+          onDelete: 'set null',
+        }),
+      ])
+    );
   });
 
   it('includes both sides of the boards and branches cycle', () => {

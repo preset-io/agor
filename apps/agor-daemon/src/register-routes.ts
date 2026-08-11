@@ -9,6 +9,7 @@
 import { Transform } from 'node:stream';
 import {
   type AgorConfig,
+  type ResolvedDeploymentConfig,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
@@ -46,16 +47,13 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
-import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
   AuthenticatedParams,
   HookContext,
   Message,
   MessageID,
   MessageSource,
-  Paginated,
   Params,
-  PermissionRequestContent,
   ScheduleID,
   Session,
   SessionID,
@@ -103,6 +101,11 @@ import {
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
+import {
+  deliverPermissionDecision,
+  type PermissionDecisionSubmission,
+} from './permissions/deliver-permission-decision.js';
+import { assertExternalPermissionMessageCreateAllowed } from './permissions/permission-message-boundary.js';
 import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
@@ -236,13 +239,6 @@ function isServiceAccountRoute(params: RouteParams): boolean {
 }
 
 /**
- * Type guard to check if result is paginated
- */
-function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
-  return !Array.isArray(result) && 'data' in result && 'total' in result;
-}
-
-/**
  * Interface for dependencies needed by route registration.
  */
 export interface RegisterRoutesContext {
@@ -257,6 +253,8 @@ export interface RegisterRoutesContext {
   DB_PATH: string;
   DAEMON_PORT: number;
   DAEMON_VERSION: string;
+  /** User-facing agor-live release version advertised by protocol surfaces. */
+  AGOR_VERSION: string;
   /**
    * Resolved build info (sha + builtAt). Surfaced on /health so the UI can
    * detect FE/BE drift after a deploy. The SHA is the canonical version
@@ -268,6 +266,12 @@ export interface RegisterRoutesContext {
    * Used by /health to surface the effective policy to admin users.
    */
   resolvedSecurity: import('@agor/core/config').ResolvedSecurity;
+  realtimeRuntime?: Pick<
+    import('./realtime/redis-realtime.js').RedisRealtimeRuntime,
+    'health' | 'isReady'
+  >;
+  distributedWorkIdentity: import('@agor/core/coordination').DistributedWorkIdentity;
+  deployment: ResolvedDeploymentConfig;
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
@@ -323,8 +327,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     DB_PATH,
     DAEMON_PORT: _DAEMON_PORT,
     DAEMON_VERSION,
+    AGOR_VERSION,
     DAEMON_BUILD_INFO,
     resolvedSecurity,
+    realtimeRuntime,
+    distributedWorkIdentity,
+    deployment,
     sessionsService,
     messagesService,
     boardsService,
@@ -494,7 +502,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // no email, so we bucket purely by IP. Trust only Express's resolved
     // `req.ip` (which respects `app.set('trust proxy', n)`) — never
     // X-Forwarded-For directly.
-    keyGenerator: (req: Request): string => buildAuthRateLimitKey(req),
+    // express-rate-limit can resolve Feathers' Express 4 declaration copy
+    // alongside the daemon's Express 5 declarations. The runtime request is
+    // the same object; infer the middleware signature and narrow at our edge.
+    keyGenerator: (req): string => buildAuthRateLimitKey(req as unknown as Request),
     message: 'Too many authentication attempts. Please try again in 15 minutes.',
   });
 
@@ -705,10 +716,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const _reposRepo = new RepoRepository(db);
   const _tasksRepo = new TaskRepository(db);
 
-  const permissionService = new PermissionService((event, data) => {
-    app.service('sessions').emit(event, data);
-  });
-
   // ============================================================================
   // Messages bulk + streaming routes
   // ============================================================================
@@ -719,6 +726,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       async create(data: unknown, params: RouteParams) {
         assertExternalWidgetMessageCreateAllowed(data);
+        assertExternalPermissionMessageCreateAllowed(data);
         return messagesService.createMany(data as Message[]);
       },
     },
@@ -825,11 +833,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const forkedSession = await sessionsService.fork(id, data, params);
         console.log(`✅ Fork created: ${shortId(forkedSession.session_id)}`);
 
-        console.log('📡 [FORK] Manually broadcasting created event to all clients');
-
-        if (app.io) {
-          app.io.emit('sessions created', forkedSession);
-        }
+        // fork() persists through an internal service call, so emit the
+        // standard event explicitly with its tenant/auth context. A raw
+        // app.io.emit would bypass Feathers publication authorization and, in
+        // HA, the Redis adapter would fan it out cluster-wide.
+        emitServiceEvent(app, {
+          path: 'sessions',
+          event: 'created',
+          data: forkedSession,
+          params,
+          id: forkedSession.session_id,
+        });
 
         return forkedSession;
       },
@@ -851,11 +865,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const spawnedSession = await sessionsService.spawn(id, data, params);
         console.log(`✅ Spawn created: ${shortId(spawnedSession.session_id)}`);
 
-        console.log('📡 [SPAWN] Manually broadcasting created event to all clients');
-
-        if (app.io) {
-          app.io.emit('sessions created', spawnedSession);
-        }
+        emitServiceEvent(app, {
+          path: 'sessions',
+          event: 'created',
+          data: spawnedSession,
+          params,
+          id: spawnedSession.session_id,
+        });
 
         return spawnedSession;
       },
@@ -2817,22 +2833,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
+    // Recovery triggers carry trusted tenant routing but no request user. Restore
+    // the durable enqueuer identity before entering hooked Session reads/repairs
+    // so branch RBAC applies exactly as it did at admission time.
     const userId = nextTask.metadata?.queued_by_user_id ?? nextTask.created_by;
     const userRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
     const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
-
     const taskParams: RouteParams = queuedByUser
-      ? ({
-          ...params,
-          user: queuedByUser,
-        } as RouteParams)
+      ? ({ ...params, user: queuedByUser } as RouteParams)
       : params;
-
-    console.log(
-      `📬 Processing queued task ${shortId(nextTask.task_id)} ` +
-        `(position ${nextTask.queue_position}) ` +
-        `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
-    );
 
     const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
       sessionsService.get(sessionId, taskParams)
@@ -2840,10 +2849,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
 
     if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
-      console.log(
-        `⏸️  [Queue] Session ${shortId(sessionId)} is ${session.status}, task ${shortId(nextTask.task_id)} waiting in queue ` +
-          `(will be processed when session becomes IDLE via patch hook)`
-      );
       return;
     }
 
@@ -2885,7 +2890,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
     console.log(
-      `✅ Queue head ${shortId(admitted.task_id)} observed as ${admitted.status} for session ${shortId(sessionId)}`
+      `[task-queue] event=dispatched session_id=${JSON.stringify(sessionId)} task_id=${JSON.stringify(admitted.task_id)} status=${JSON.stringify(admitted.status)}`
     );
   }
 
@@ -2906,76 +2911,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/sessions/:id/permission-decision',
     {
-      async create(data: PermissionDecision, params: RouteParams) {
+      async create(data: PermissionDecisionSubmission, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        if (!data.requestId) throw new Error('requestId required');
-        if (typeof data.allow !== 'boolean') throw new Error('allow field required');
-
-        const messagesServiceInst = app.service('messages');
-        const messages = await messagesServiceInst.find({
-          query: {
-            session_id: id,
-            type: 'permission_request',
+        return deliverPermissionDecision({
+          app,
+          sessionId: id as SessionID,
+          data,
+          params,
+          authorization: {
+            branchRbacEnabled,
+            branchRepository,
+            allowSuperadmin: superadminOpts.allowSuperadmin,
           },
         });
-
-        const messageList = isPaginated(messages) ? messages.data : messages;
-        const permissionMessage = messageList.find((msg: Message) => {
-          const content = msg.content as PermissionRequestContent;
-          return content?.request_id === data.requestId;
-        });
-
-        if (!permissionMessage) {
-          throw new Error(`Permission request ${data.requestId} not found`);
-        }
-
-        const permissionContent = permissionMessage.content as PermissionRequestContent;
-
-        if (permissionContent?.status && permissionContent.status !== 'pending') {
-          return {
-            success: false,
-            alreadyResolved: true,
-            status: permissionContent.status,
-            message: `Permission request already ${permissionContent.status}`,
-          };
-        }
-
-        const resolvedTaskId = permissionContent.task_id || permissionMessage.task_id;
-
-        if (!resolvedTaskId) {
-          console.error(
-            `❌ [Permission] Cannot resolve permission: task_id missing from both content and message. requestId=${data.requestId}`
-          );
-          throw new Error(
-            'Cannot process permission decision: task_id is missing. This permission request may be corrupted.'
-          );
-        }
-
-        await messagesServiceInst.patch(permissionMessage.message_id, {
-          content: {
-            ...permissionContent,
-            status: data.allow ? 'approved' : 'denied',
-            scope: data.scope,
-            approved_by: data.decidedBy,
-            approved_at: new Date().toISOString(),
-          },
-        });
-
-        permissionService.resolvePermission(data);
-
-        app.service('messages').emit('permission_resolved', {
-          requestId: data.requestId,
-          taskId: resolvedTaskId,
-          sessionId: id,
-          allow: data.allow,
-          reason: data.reason,
-          remember: data.remember,
-          scope: data.scope,
-          decidedBy: data.decidedBy,
-        });
-
-        return { success: true };
       },
     },
     {
@@ -4187,7 +4136,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
       const dbProbe = await probeDatabase(db);
       const publicResponse = {
-        status: healthStatus(dbProbe),
+        status:
+          healthStatus(dbProbe) === 'ok' && (!realtimeRuntime || realtimeRuntime.isReady())
+            ? 'ok'
+            : 'degraded',
         db: publicHealthDb(dbProbe),
         timestamp: Date.now(),
         version: DAEMON_VERSION,
@@ -4205,6 +4157,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           label: config.daemon?.instanceLabel,
           description: config.daemon?.instanceDescription,
         },
+        realtime: realtimeRuntime
+          ? { required: true, ready: realtimeRuntime.isReady() }
+          : { required: false, ready: true },
         features: {
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),
           // Web terminal availability: UI should hide terminal buttons when false.
@@ -4280,6 +4235,26 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             managedEnvsExecutionMode:
               config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,
           },
+          deployment: {
+            mode: deployment.mode,
+            ...(deployment.mode === 'ha'
+              ? {
+                  // @agor/core's source owns these fields. The daemon package's
+                  // no-build typecheck can temporarily see the previous core
+                  // dist declaration while watch mode catches up.
+                  supportProfile: (deployment as typeof deployment & { supportProfile: string })
+                    .supportProfile,
+                  capabilities: (
+                    deployment as typeof deployment & {
+                      capabilities: Record<string, boolean>;
+                    }
+                  ).capabilities,
+                }
+              : {}),
+            instanceId: distributedWorkIdentity.instanceId,
+            bootId: distributedWorkIdentity.bootId,
+            realtime: realtimeRuntime?.health() ?? { required: false, ready: true },
+          },
           // Resolved security posture — admins can confirm in Settings → About
           // which CSP/CORS policy the daemon booted with, without tailing logs
           // or reading response headers by hand. Keep the shape tight: the
@@ -4314,7 +4289,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // Liveness (/livez) and readiness (/readyz) probes — see health/routes.ts.
-  registerHealthProbeRoutes(app, db);
+  registerHealthProbeRoutes(app, db, [
+    ...(realtimeRuntime ? [{ name: 'redis', isReady: () => realtimeRuntime.isReady() }] : []),
+    ...(deployment.mode === 'ha'
+      ? [
+          {
+            name: 'environment-health-monitor',
+            isReady: () => {
+              const monitor = app.get('environmentHealthMonitor') as
+                | { isReady?: () => boolean }
+                | undefined;
+              return monitor?.isReady?.() === true;
+            },
+          },
+        ]
+      : []),
+  ]);
 
   // ============================================================================
   // MCP routes
@@ -4323,7 +4313,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   if (config.daemon?.mcpEnabled !== false) {
     const { setupMCPRoutes } = await import('./mcp/server.js');
     const toolSearchEnabled = config.daemon?.mcpToolSearch !== false;
-    setupMCPRoutes(app, db, toolSearchEnabled, config);
+    setupMCPRoutes(app, db, toolSearchEnabled, config, { serverVersion: AGOR_VERSION });
     console.log(
       `✅ MCP server enabled at POST /mcp${toolSearchEnabled ? ' (tool search mode)' : ''}`
     );

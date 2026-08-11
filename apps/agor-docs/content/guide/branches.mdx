@@ -98,9 +98,16 @@ execution:
     default_mode: clone
     allowed_modes:
       - clone
+    # Optional: reject clone_depth and require complete history.
+    allow_shallow_clones: false
 ```
 
 If `branch_storage` is omitted, Agor keeps the backwards-compatible default: `worktree` is selected by default and both `worktree` and `clone` are available. When an operator restricts `allowed_modes`, the create-branch UI disables unavailable options and the daemon rejects disallowed API/MCP requests.
+
+`allow_shallow_clones` defaults to `true`. Setting it to `false` rejects any positive
+`clone_depth`; callers must omit the field to create a full clone. This is independent of mount
+topology: both full and shallow clones are self-standing, while a native worktree always requires
+the registered base repository's Git metadata.
 
 ---
 

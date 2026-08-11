@@ -9,4 +9,12 @@ describe('renderAgorSystemPrompt', () => {
     expect(prompt).toContain('Mermaid, math, and GitHub callouts');
     expect(prompt).toContain('gateways such as Slack support fewer constructs');
   });
+
+  it('points agents at the context tool for their configured model and reasoning effort', async () => {
+    const prompt = await renderAgorSystemPrompt();
+
+    expect(prompt).toContain('configured model and');
+    expect(prompt).toContain('reasoning effort');
+    expect(prompt).toContain('agor_sessions_get_current_context');
+  });
 });

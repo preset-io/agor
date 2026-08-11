@@ -10,7 +10,7 @@
  * the configured variant without any side-channel state.
  */
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../resolve-ids.js', () => ({

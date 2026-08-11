@@ -18,7 +18,6 @@
  * own slot, and the footer reads `validByTab[activeTab]`.
  */
 
-import { GOLD_SHIMMER_BOARD_BACKGROUND } from '@agor/core/design/board-backgrounds';
 import type { Repo } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -191,7 +190,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     }, ASYNC);
   });
 
-  it('submits Gold Shimmer as the default board background', async () => {
+  it('creates a board with no persisted background (uses the themed default)', async () => {
     const onCreateBoard = vi.fn();
     renderDialog({ defaultTab: 'board', onCreateBoard });
 
@@ -202,10 +201,12 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     await waitFor(() => expect(button).not.toBeDisabled(), ASYNC);
     fireEvent.click(button);
 
+    // New boards no longer force a stored background — they start on the
+    // theme-aware default, so background_color is cleared (null).
     await waitFor(
       () =>
         expect(onCreateBoard).toHaveBeenCalledWith(
-          expect.objectContaining({ background_color: GOLD_SHIMMER_BOARD_BACKGROUND })
+          expect.objectContaining({ name: 'Launch Board', background_color: null })
         ),
       ASYNC
     );

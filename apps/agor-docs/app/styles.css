@@ -36,6 +36,89 @@
   border: 1px solid rgba(46, 154, 146, 0.2);
 }
 
+/* Large contained Scalar reference. Nextra's persistent navbar remains the
+ * clear route back to agor.live, while Scalar's two panes scroll independently. */
+html:has(.agor-api-reference-page),
+body:has(.agor-api-reference-page) {
+  overflow: clip;
+}
+
+.agor-api-reference-page {
+  position: fixed;
+  inset: var(--nextra-navbar-height) 0 0;
+  display: flex;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 24px;
+  background: rgba(46, 154, 146, 0.04);
+  color: #17211f;
+}
+
+.dark .agor-api-reference-page {
+  background: rgba(46, 154, 146, 0.035);
+  color: #e4f4f0;
+}
+
+.agor-api-reference {
+  width: 100%;
+  max-width: calc(var(--nextra-content-width) - 3rem);
+  min-height: 0;
+  flex: 1;
+  margin-inline: auto;
+  overflow: clip;
+  border: 1px solid rgba(46, 154, 146, 0.18);
+  border-radius: 18px;
+  text-align: initial;
+}
+
+.dark .agor-api-reference {
+  border-color: rgba(127, 232, 223, 0.13);
+}
+
+.agor-api-reference .references-layout {
+  /* biome-ignore lint/complexity/noImportantStyles: Scalar sets viewport sizing in its component stylesheet; the embedded full-page shell must own the fixed scroll boundary. */
+  height: calc(100dvh - var(--nextra-navbar-height) - 32px) !important;
+  /* biome-ignore lint/complexity/noImportantStyles: See fixed scroll-boundary note above. */
+  min-height: 0 !important;
+  max-height: calc(100dvh - var(--nextra-navbar-height) - 32px);
+  /* biome-ignore lint/complexity/noImportantStyles: Scalar's grid rule otherwise expands the rendered pane to the full document height. */
+  grid-template-rows: var(--scalar-header-height, 0px) minmax(0, 1fr) auto !important;
+  overflow: clip;
+}
+
+.agor-api-reference .references-rendered {
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.agor-api-reference .t-doc__sidebar {
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 720px) {
+  .agor-api-reference-page {
+    padding: 8px;
+  }
+
+  .agor-api-reference {
+    border-radius: 14px;
+  }
+
+  .agor-api-reference .references-layout {
+    /* biome-ignore lint/complexity/noImportantStyles: Retains the fixed Scalar scroll boundary after reducing the mobile container inset. */
+    height: calc(100dvh - var(--nextra-navbar-height) - 16px) !important;
+    max-height: calc(100dvh - var(--nextra-navbar-height) - 16px);
+  }
+}
+
 /* Callout boxes with brand colors */
 .dark .nx-callout {
   border-left-color: var(--agor-teal);

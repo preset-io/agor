@@ -12,6 +12,7 @@ import {
   type AgorConfig,
   isUnixImpersonationEnabled,
   loadConfig,
+  type ResolvedDeploymentConfig,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
   resolveMultiTenancyDatabaseDialect,
@@ -28,6 +29,7 @@ import {
   type BranchRepository,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
+  isPostgresDatabaseHandle,
   runWithTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
@@ -51,6 +53,7 @@ import {
   boardObjectQueryValidator,
   boardQueryValidator,
   branchQueryValidator,
+  mcpCatalogQueryValidator,
   mcpServerQueryValidator,
   repoQueryValidator,
   sessionQueryValidator,
@@ -96,12 +99,16 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
+import { rejectInConstrainedHa } from './ha-support.js';
 import { classifyMissingCredentialFailure } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
+import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
+import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
+import { isMCPOAuthGrantBoundToServer } from './services/mcp-oauth-grant-binding.js';
 import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
@@ -397,6 +404,8 @@ export interface RegisterHooksContext {
   branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
+  realtimeRelay?: Pick<RedisRealtimeRuntime, 'relay' | 'setRelayHandler'>;
+  deployment: ResolvedDeploymentConfig;
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
@@ -433,14 +442,9 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'agentic-tool-settings',
   'agentic-tool-presets',
   'mcp-servers',
-  'mcp-servers/discover',
-  'mcp-servers/oauth-auth-headers',
-  'mcp-servers/oauth-complete',
+  'mcp-servers/oauth-attempt-status',
   'mcp-servers/oauth-disconnect',
-  'mcp-servers/oauth-refresh',
-  'mcp-servers/oauth-start',
   'mcp-servers/oauth-status',
-  'mcp-servers/test-oauth',
   'card-types',
   'cards',
   'artifacts',
@@ -470,6 +474,8 @@ export const TENANT_OWNED_SERVICE_PATHS = [
 // units of work at the call site instead of holding an HTTP-long transaction.
 export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'check-auth',
+  // Global catalog: no tenant column to scope, no writes to stamp.
+  'mcp-catalog',
   'codex-auth/device',
   'codex-auth/import',
   'codex-auth/logout',
@@ -479,7 +485,40 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'copilot-models',
   'cursor-models',
   'terminals',
+  // These OAuth/discovery endpoints perform provider network I/O or wait for
+  // a browser callback. Their durable one-shot claim must commit before any
+  // authorization-code exchange, so they must never inherit an HTTP-long
+  // tenant transaction. Each DB access opens a short tenant unit of work.
+  'mcp-servers/discover',
+  'mcp-servers/oauth-complete',
+  'mcp-servers/oauth-start',
+  'mcp-servers/oauth-auth-headers',
+  'mcp-servers/oauth-refresh',
+  'mcp-servers/test-oauth',
 ] as const;
+
+/**
+ * Service endpoints whose implementation retains process-local credentials,
+ * provider handshakes, or native runtime state. Keep this inventory exported
+ * so the constrained HA fail-closed boundary has direct regression coverage.
+ * `mcp-servers/discover` is included because an OAuth-protected probe can start
+ * the same pending PKCE/callback flow as the explicit OAuth endpoints.
+ */
+export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
+  ['mcp-servers/discover', 'mcpOAuth'],
+  ['mcp-servers/oauth-auth-headers', 'mcpOAuth'],
+  ['mcp-servers/oauth-complete', 'mcpOAuth'],
+  ['mcp-servers/oauth-disconnect', 'mcpOAuth'],
+  ['mcp-servers/oauth-refresh', 'mcpOAuth'],
+  ['mcp-servers/oauth-start', 'mcpOAuth'],
+  ['mcp-servers/oauth-status', 'mcpOAuth'],
+  ['mcp-servers/test-oauth', 'mcpOAuth'],
+  ['codex-auth/device', 'codexDeviceAuth'],
+  ['codex-auth/import', 'codexAuth'],
+  ['codex-auth/logout', 'codexAuth'],
+  ['opencode-auth', 'openCodeAuth'],
+  ['opencode-models', 'openCodeAuth'],
+] as const satisfies ReadonlyArray<readonly [string, Parameters<typeof rejectInConstrainedHa>[1]]>;
 
 const taskFieldSet = (...fields: (keyof Task)[]) => new Set<string>(fields);
 
@@ -562,6 +601,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     branchRepository,
     usersRepository,
     sessionsRepository,
+    realtimeRelay,
+    deployment,
   } = ctx;
 
   // Used by classifyMissingCredentialFailure to look up the acting user for
@@ -576,6 +617,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       return undefined;
     }
   };
+
+  if (deployment.mode === 'ha') {
+    for (const [path, feature] of CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES) {
+      safeService(path)?.hooks({ before: { all: [rejectInConstrainedHa(deployment, feature)] } });
+    }
+  }
 
   const multiTenancy = resolveMultiTenancyConfig(config);
   const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
@@ -935,6 +982,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const protectWidgetMessageWrites = protectExternalWidgetMessageWrites((messageId) =>
     messagesService.findByIdForScopeCheck(messageId as MessageID)
   );
+  const protectPermissionMessageWrites = protectExternalPermissionMessageWrites((messageId) =>
+    messagesService.findByIdForScopeCheck(messageId as MessageID)
+  );
 
   app.service('messages').hooks({
     before: {
@@ -958,6 +1008,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create messages'),
         protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
         ...(branchRbacEnabled
           ? [
               resolveSessionContext(),
@@ -977,7 +1028,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           AGENTIC_TOOL_DISPLAY_NAMES
         ),
       ],
-      update: [protectWidgetMessageWrites],
+      update: [protectWidgetMessageWrites, protectPermissionMessageWrites],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),
         ...(branchRbacEnabled
@@ -989,6 +1040,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
         protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete messages'),
@@ -1001,6 +1053,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
         protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
       ],
     },
     after: {
@@ -1682,39 +1735,25 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         if (!row) {
           return server;
         }
-
-        // JIT refresh — see `refreshAndPersistToken` for mutexing + invalid_grant cleanup.
-        let accessToken = row.oauth_access_token;
-        let expiresAt = row.oauth_token_expires_at;
-        const { needsRefresh, refreshAndPersistToken, InvalidGrantError } = await import(
-          '@agor/core/tools/mcp/oauth-refresh'
-        );
-        if (needsRefresh(row.oauth_token_expires_at) && row.oauth_refresh_token) {
-          console.log(`[MCP OAuth] Token near/past expiry for ${server.name} — refreshing`);
-          try {
-            accessToken = await refreshAndPersistToken({
-              db,
-              userId: tokenUserId,
-              mcpServerId: server.mcp_server_id,
-            });
-            // Re-read to pick up the rotated expiry for the UI.
-            const fresh = await userTokenRepo.getToken(tokenUserId, server.mcp_server_id);
-            if (fresh) expiresAt = fresh.oauth_token_expires_at;
-          } catch (refreshErr) {
-            if (refreshErr instanceof InvalidGrantError) {
-              console.warn(
-                `[MCP OAuth] invalid_grant refreshing ${server.name} — user must re-auth`
-              );
-              return server;
-            }
-            // Transient error: fall through with the stale access_token. The
-            // MCP call may still succeed or fail cleanly at the transport.
-            console.warn(
-              `[MCP OAuth] Refresh failed for ${server.name} (using stale token):`,
-              refreshErr instanceof Error ? refreshErr.message : refreshErr
-            );
-          }
+        if (
+          isPostgresDatabaseHandle(db) &&
+          !isMCPOAuthGrantBoundToServer(process.env.AGOR_MASTER_SECRET!, server, row)
+        ) {
+          console.warn('[MCP OAuth] grant_rejected category=binding_mismatch');
+          return server;
         }
+
+        // Response enrichment is a durable read only. Refresh is coordinated
+        // by oauth-auth-headers/manual refresh, never from an after hook that
+        // may hold an unrelated tenant transaction.
+        if (
+          row.refresh_status !== 'idle' ||
+          (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
+        ) {
+          return server;
+        }
+        const accessToken = row.oauth_access_token;
+        const expiresAt = row.oauth_token_expires_at;
 
         return {
           ...server,
@@ -1727,11 +1766,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               expiresAt instanceof Date ? expiresAt.getTime() : (expiresAt ?? undefined),
           },
         };
-      } catch (error) {
-        console.warn(
-          `[MCP OAuth] Failed to resolve OAuth token for ${server.name}:`,
-          error instanceof Error ? error.message : error
-        );
+      } catch {
+        console.warn('[MCP OAuth] grant_resolution_failed category=local_error');
       }
 
       return server;
@@ -1771,6 +1807,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
       create: [requireMinimumRole(ROLES.ADMIN, 'create MCP servers')],
       patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
+      update: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
     },
     after: {
@@ -1779,6 +1816,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [redactMCPServerSecretFields],
       patch: [redactMCPServerSecretFields],
       update: [redactMCPServerSecretFields],
+    },
+  });
+
+  // The MCP catalog mirrors a public registry plus a repo-checked-in curation
+  // file — no tenant data, and no writes through this service. Authentication
+  // still gates it so an unauthenticated visitor cannot enumerate the browse
+  // surface, and query validation is also the SQL-injection boundary because
+  // every catalog filter reaches the database.
+  safeService('mcp-catalog')?.hooks({
+    before: {
+      all: [typedValidateQuery(mcpCatalogQueryValidator), requireAuth],
     },
   });
 
@@ -1844,7 +1892,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     if (channelId) {
       deferWithTenantContext(
         context.params,
-        () => gw.stopChannelListener(channelId),
+        async () => {
+          await gw.stopChannelListener(channelId);
+        },
         (err) => console.warn(`[gateway] Failed to stop listener for channel ${channelId}:`, err)
       );
     }
@@ -2506,6 +2556,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     accessCache: realtimeAccessCache,
     allowSuperadmin: superadminOpts.allowSuperadmin,
     multiTenancy,
+    realtimeRelay,
   });
 
   // ============================================================================

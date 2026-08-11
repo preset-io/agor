@@ -5,6 +5,7 @@ function createMockDeps(overrides: Partial<OAuthDisconnectDeps> = {}): OAuthDisc
   return {
     userId: 'user-1234-abcd',
     mcpServerId: 'srv-5678-efgh',
+    isAdmin: false,
     userTokenRepo: {
       deleteToken: vi.fn().mockResolvedValue(true),
     },
@@ -13,10 +14,7 @@ function createMockDeps(overrides: Partial<OAuthDisconnectDeps> = {}): OAuthDisc
         url: 'https://mcp.example.com/api',
         auth: {},
       }),
-      update: vi.fn().mockResolvedValue(undefined),
     },
-    oauthTokenCache: new Map(),
-    clearCoreTokenCache: vi.fn(),
     ...overrides,
   };
 }
@@ -44,22 +42,6 @@ describe('performOAuthDisconnect', () => {
     expect(deps.userTokenRepo.deleteToken).toHaveBeenCalledWith('user-1234-abcd', 'srv-5678-efgh');
   });
 
-  it('clears daemon cache by origin', async () => {
-    const cache = new Map<string, unknown>();
-    cache.set('https://mcp.example.com', { token: 'old' });
-    const deps = createMockDeps({ oauthTokenCache: cache });
-
-    await performOAuthDisconnect(deps);
-
-    expect(cache.has('https://mcp.example.com')).toBe(false);
-  });
-
-  it('calls clearCoreTokenCache', async () => {
-    const deps = createMockDeps();
-    await performOAuthDisconnect(deps);
-    expect(deps.clearCoreTokenCache).toHaveBeenCalled();
-  });
-
   it('deletes the shared-mode row from the unified token table when mode is shared', async () => {
     const deleteToken = vi.fn().mockResolvedValue(true);
     const deps = createMockDeps({
@@ -69,15 +51,35 @@ describe('performOAuthDisconnect', () => {
           url: 'https://mcp.example.com/api',
           auth: { type: 'oauth', oauth_mode: 'shared' },
         }),
-        update: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+
+    const result = await performOAuthDisconnect(deps);
+
+    expect(deleteToken).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      error: 'Shared OAuth grants can only be disconnected by an admin',
+    });
+  });
+
+  it('allows an admin to delete only the shared-mode row', async () => {
+    const deleteToken = vi.fn().mockResolvedValue(true);
+    const deps = createMockDeps({
+      isAdmin: true,
+      userTokenRepo: { deleteToken },
+      mcpServerRepo: {
+        findById: vi.fn().mockResolvedValue({
+          url: 'https://mcp.example.com/api',
+          auth: { type: 'oauth', oauth_mode: 'shared' },
+        }),
       },
     });
 
     await performOAuthDisconnect(deps);
 
-    // Per-user deletion happens first, then shared-row deletion with user_id=null.
-    expect(deleteToken).toHaveBeenCalledWith('user-1234-abcd', 'srv-5678-efgh');
     expect(deleteToken).toHaveBeenCalledWith(null, 'srv-5678-efgh');
+    expect(deleteToken).not.toHaveBeenCalledWith('user-1234-abcd', 'srv-5678-efgh');
   });
 
   it('does not touch the shared-mode row for per_user servers', async () => {
@@ -89,7 +91,6 @@ describe('performOAuthDisconnect', () => {
           url: 'https://mcp.example.com/api',
           auth: { type: 'oauth', oauth_mode: 'per_user' },
         }),
-        update: vi.fn().mockResolvedValue(undefined),
       },
     });
 
@@ -108,19 +109,19 @@ describe('performOAuthDisconnect', () => {
 
     const result = await performOAuthDisconnect(deps);
     expect(result.success).toBe(true);
-    expect(result.message).toBe('OAuth connection removed');
+    expect(result.message).toBe(
+      'OAuth connection removed locally; provider access was not revoked'
+    );
   });
 
-  it('skips cache clear when server has no URL', async () => {
+  it('supports a server with no URL', async () => {
     const deps = createMockDeps({
       mcpServerRepo: {
         findById: vi.fn().mockResolvedValue({ auth: {} }),
-        update: vi.fn(),
       },
     });
 
     const result = await performOAuthDisconnect(deps);
     expect(result.success).toBe(true);
-    expect(deps.clearCoreTokenCache).not.toHaveBeenCalled();
   });
 });

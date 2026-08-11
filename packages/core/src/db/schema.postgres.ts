@@ -11,6 +11,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  MCPCatalogEntryData,
   Message,
   PermissionMode,
   SandpackConfig,
@@ -25,6 +26,7 @@ import {
   bigint,
   boolean,
   customType,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -418,6 +420,69 @@ export const tasks = pgTable(
 );
 
 /**
+ * Durable authority for executor-session JWTs in shared PostgreSQL deployments.
+ *
+ * The bearer JWT is never stored. `token_fingerprint` is SHA-256 over the
+ * high-entropy signed token and is useful only as an exact authority lookup;
+ * authentication still requires a valid JWT signature and matching claims.
+ * `session_id` is intentionally not a foreign key because this token family is
+ * also used for executor-backed branch/environment operations with synthetic
+ * session labels (for example `environment-start`).
+ */
+export const executorSessionTokenAuthorities = pgTable(
+  'executor_session_token_authorities',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    token_fingerprint: varchar('token_fingerprint', { length: 64 }).primaryKey(),
+    token_type: text('token_type').notNull(),
+    purpose: text('purpose').notNull(),
+    session_id: text('session_id').notNull(),
+    task_id: text('task_id'),
+    branch_id: text('branch_id'),
+    user_id: text('user_id').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    max_uses: integer('max_uses').notNull(),
+    use_count: integer('use_count').notNull().default(0),
+    last_used_at: t.timestamp('last_used_at'),
+    revoked_at: t.timestamp('revoked_at'),
+  },
+  (table) => ({
+    tenantSessionIdx: index('executor_session_token_authorities_tenant_session_idx').on(
+      table.tenant_id,
+      table.session_id
+    ),
+    expiresIdx: index('executor_session_token_authorities_expires_idx').on(table.expires_at),
+    revokedIdx: index('executor_session_token_authorities_revoked_idx')
+      .on(table.revoked_at)
+      .where(sql`${table.revoked_at} IS NOT NULL`),
+  })
+);
+
+/**
+ * Short-lived GitHub App installation setup authority.
+ *
+ * The browser-visible state bearer is never persisted. `state_hash` is a
+ * SHA-256 exact-lookup fingerprint of a 256-bit random value. The row retains
+ * the trusted tenant/admin/intent binding established by the authenticated
+ * initiation request so any daemon can atomically consume the callback.
+ */
+export const githubInstallStates = pgTable(
+  'github_install_states',
+  {
+    tenant_id: text('tenant_id').notNull(),
+    state_hash: varchar('state_hash', { length: 64 }).primaryKey(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    intent: text('intent').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+  },
+  (table) => ({
+    expiresIdx: index('github_install_states_expires_idx').on(table.expires_at),
+  })
+);
+
+/**
  * Messages table - Conversation messages within sessions
  *
  * Stores individual messages (user, assistant, system) for full conversation replay.
@@ -674,6 +739,20 @@ export const branches = pgTable(
     // References a key under repo.environment.variants. Null for pre-v2 branches.
     environment_variant: text('environment_variant'),
 
+    // PostgreSQL is the correctness authority for HA environment health
+    // observations. Instance/boot IDs are diagnostic; the opaque token and
+    // lifecycle generation fence every result mutation.
+    environment_generation: integer('environment_generation').notNull().default(0),
+    environment_health_claim_token: text('environment_health_claim_token'),
+    environment_health_claimed_at: t.timestamp('environment_health_claimed_at'),
+    environment_health_claim_expires_at: t.timestamp('environment_health_claim_expires_at'),
+    environment_health_next_observation_at: t.timestamp('environment_health_next_observation_at'),
+    environment_health_claim_instance_id: text('environment_health_claim_instance_id'),
+    environment_health_claim_boot_id: text('environment_health_claim_boot_id'),
+    environment_health_claim_generation: integer('environment_health_claim_generation')
+      .notNull()
+      .default(0),
+
     // Board relationship (nullable - branches can exist without boards)
     board_id: varchar('board_id', { length: 36 }).references((): AnyPgColumn => boards.board_id, {
       onDelete: 'set null', // If board is deleted, branch remains but loses board association
@@ -786,6 +865,11 @@ export const branches = pgTable(
     boardIdx: index('branches_board_idx').on(table.board_id),
     createdIdx: index('branches_created_idx').on(table.created_at),
     updatedIdx: index('branches_updated_idx').on(table.updated_at),
+    environmentHealthDiscoveryIdx: index('branches_environment_health_discovery_idx')
+      .on(table.tenant_id, table.branch_id)
+      .where(
+        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running')`
+      ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
   })
@@ -1374,6 +1458,9 @@ export const mcpServers = pgTable(
             required?: boolean;
           }>;
         }>;
+
+        // Tool permissions configuration
+        tool_permissions?: Record<string, 'ask' | 'allow' | 'deny'>;
       }>()
       .notNull(),
   },
@@ -1383,6 +1470,117 @@ export const mcpServers = pgTable(
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
+  })
+);
+
+/**
+ * MCP Catalog Entries table - browsable index of connectable MCP servers
+ *
+ * A mirror of the official MCP registry (breadth + reverse-DNS identity) with a
+ * curated overlay from `packages/core/src/mcp-catalog/curated.yaml` (category,
+ * capabilities, benefit copy, starter prompt, permission disclosure) joined on
+ * by `name`.
+ *
+ * This table is deliberately global rather than tenant-scoped, and is the only
+ * entry in `GLOBAL_TABLES`. Every field originates from a public unauthenticated
+ * HTTP registry or from a file checked into this repository, so there is no
+ * tenant data to isolate; and Agor has no tenant registry to enumerate, so a
+ * per-tenant mirror of 4,000+ rows could never be kept in sync. Postgres RLS
+ * still guards it: reads are open, writes require the
+ * `mcp_catalog_ingestion` system capability, so no tenant-scoped request path
+ * can mutate the shared catalog.
+ *
+ * Columns are materialized when the marketplace filters or sorts on them; the
+ * rest lives in `data`, matching `mcp_servers`.
+ */
+export const mcpCatalogEntries = pgTable(
+  'mcp_catalog_entries',
+  {
+    // Primary identity
+    catalog_entry_id: varchar('catalog_entry_id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+
+    // Registry identity. `name` is the join key between the registry mirror and
+    // the curated overlay, so it is unique.
+    name: text('name').notNull(),
+    version: text('version'),
+    registry_updated_at: t.timestamp('registry_updated_at'),
+
+    // Registry presentation (materialized for search)
+    title: text('title'),
+    description: text('description'),
+    website_url: text('website_url'),
+    repository_url: text('repository_url'),
+
+    // Connect surface
+    transport: text('transport', {
+      enum: ['streamable-http', 'sse', 'stdio'],
+    }),
+    remote_url: text('remote_url'),
+    has_remote: t.bool('has_remote').notNull().default(false),
+    has_package: t.bool('has_package').notNull().default(false),
+
+    // Curation overlay
+    curated: t.bool('curated').notNull().default(false),
+    category: text('category'),
+    /**
+     * Curated capability tags as a delimiter-wrapped lowercase string
+     * (`|issues|repos|ci|`), matched with `LIKE '%|issues|%'`.
+     *
+     * The structured array lives in `data.capabilities`. This denormalization
+     * exists so a capability filter is a single-table SQL predicate that behaves
+     * identically on SQLite and Postgres — a jsonb containment operator has no
+     * SQLite equivalent, and a join table would cost a second read on every
+     * keystroke for a low-cardinality field only ~50 curated rows carry.
+     */
+    capability_tags: text('capability_tags'),
+    benefit: text('benefit'),
+    starter_prompt: text('starter_prompt'),
+    permission_disclosure: text('permission_disclosure'),
+    icon_url: text('icon_url'),
+    verified: t.bool('verified').notNull().default(false),
+    /** 1 = most popular. Null sorts last. */
+    popularity_rank: integer('popularity_rank'),
+
+    // Auth probe results, cached so the connect UI knows which branch to render
+    // before the user clicks.
+    probed_auth_type: text('probed_auth_type', {
+      enum: ['none', 'oauth', 'credentials', 'unreachable', 'unknown'],
+    })
+      .notNull()
+      .default('unknown'),
+    probed_at: t.timestamp('probed_at'),
+    auth_server_origin: text('auth_server_origin'),
+
+    /**
+     * Registry lifecycle state, e.g. `active` or `deleted`.
+     *
+     * A real column rather than a blob key because the browse read filters on
+     * it: a withdrawn server left only in the blob still matches every query
+     * and, being curated, still sorts to the top of the catalog.
+     */
+    registry_status: text('registry_status'),
+
+    /**
+     * When a registry walk last returned this server.
+     *
+     * Stamped on every observation, including the `unchanged` fast path, so it
+     * answers "is this still published" rather than "when did this last
+     * change". A hard deletion leaves no record behind for a walk to notice, so
+     * a staleness sweep is the only way to reconcile one — and the column has to
+     * exist from the start, because adding it later leaves every row NULL and
+     * unable to distinguish "never observed" from "the registry dropped it".
+     */
+    last_registry_seen_at: t.timestamp('last_registry_seen_at'),
+
+    data: t.json<MCPCatalogEntryData>('data').notNull(),
+  },
+  (table) => ({
+    nameIdx: uniqueIndex('mcp_catalog_entries_name_unique').on(table.name),
+    categoryIdx: index('mcp_catalog_entries_category_idx').on(table.category),
+    popularityIdx: index('mcp_catalog_entries_popularity_idx').on(table.popularity_rank),
+    probedAtIdx: index('mcp_catalog_entries_probed_at_idx').on(table.probed_at),
   })
 );
 
@@ -1643,16 +1841,121 @@ export const userMcpOauthTokens = pgTable(
     // Must be preserved across refreshes.
     oauth_client_id: text('oauth_client_id'),
     oauth_client_secret: text('oauth_client_secret'),
+    // Durable grant/config identity and database-coordinated refresh fencing.
+    grant_generation: bigint('grant_generation', { mode: 'number' }).notNull().default(0),
+    grant_binding_version: integer('grant_binding_version'),
+    grant_binding_fingerprint: varchar('grant_binding_fingerprint', { length: 64 }),
+    oauth_metadata_uri: text('oauth_metadata_uri'),
+    oauth_resource_uri: text('oauth_resource_uri'),
+    oauth_issuer: text('oauth_issuer'),
+    oauth_authorization_endpoint: text('oauth_authorization_endpoint'),
+    oauth_token_endpoint: text('oauth_token_endpoint'),
+    oauth_redirect_uri: text('oauth_redirect_uri'),
+    refresh_status: text('refresh_status').notNull().default('idle'),
+    refresh_generation: bigint('refresh_generation', { mode: 'number' }).notNull().default(0),
+    // Highest refresh generation whose rotated token committed successfully.
+    // An idle row with success < generation records a known failed attempt.
+    refresh_success_generation: bigint('refresh_success_generation', { mode: 'number' })
+      .notNull()
+      .default(0),
+    refresh_claim_id: varchar('refresh_claim_id', { length: 36 }),
+    refresh_claimed_at: t.timestamp('refresh_claimed_at'),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    tenantUserFk: foreignKey({
+      name: 'user_mcp_oauth_tokens_tenant_user_fk',
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('cascade'),
+    tenantServerFk: foreignKey({
+      name: 'user_mcp_oauth_tokens_tenant_server_fk',
+      columns: [table.tenant_id, table.mcp_server_id],
+      foreignColumns: [mcpServers.tenant_id, mcpServers.mcp_server_id],
+    }).onDelete('cascade'),
     tenantIdx: index('user_mcp_oauth_tokens_tenant_id_idx').on(table.tenant_id),
     // Composite lookup indexes. Uniqueness enforced via partial unique indexes
     // created in the migration (one for per-user rows, one for the shared row).
     pk: index('user_mcp_oauth_tokens_pk').on(table.user_id, table.mcp_server_id),
     userIdx: index('user_mcp_oauth_tokens_user_idx').on(table.user_id),
     serverIdx: index('user_mcp_oauth_tokens_server_idx').on(table.mcp_server_id),
+  })
+);
+
+/**
+ * Durable, short-lived authority for browser-based MCP OAuth attempts.
+ *
+ * The provider `state` value is represented only by `state_hash`. PKCE,
+ * client credentials, and exchange endpoints live in `sealed_material`, an
+ * authenticated encrypted envelope bound to the tenant/user/server/attempt.
+ * Provider authorization codes and token responses are never stored here.
+ */
+export const mcpOauthPendingFlows = pgTable(
+  'mcp_oauth_pending_flows',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    attempt_id: varchar('attempt_id', { length: 36 }).primaryKey(),
+    state_hash: varchar('state_hash', { length: 64 }).notNull(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    mcp_server_id: varchar('mcp_server_id', { length: 36 }).notNull(),
+    oauth_mode: text('oauth_mode', { enum: ['per_user', 'shared'] }).notNull(),
+    // NULL for a shared grant; equal to user_id for a per-user grant.
+    subject_user_id: varchar('subject_user_id', { length: 36 }),
+    grant_generation: bigint('grant_generation', { mode: 'number' }).notNull(),
+    config_fingerprint_version: integer('config_fingerprint_version').notNull(),
+    config_fingerprint: varchar('config_fingerprint', { length: 64 }).notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: boolean('is_current').notNull().default(true),
+    status: text('status', {
+      enum: ['pending', 'exchanging', 'succeeded', 'failed', 'ambiguous', 'expired'],
+    })
+      .notNull()
+      .default('pending'),
+    // NULL after every terminal transition to minimize retained secret material.
+    sealed_material: text('sealed_material'),
+    exchange_claim_id: varchar('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    tenantUserFk: foreignKey({
+      name: 'mcp_oauth_pending_flows_tenant_user_fk',
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('cascade'),
+    tenantServerFk: foreignKey({
+      name: 'mcp_oauth_pending_flows_tenant_server_fk',
+      columns: [table.tenant_id, table.mcp_server_id],
+      foreignColumns: [mcpServers.tenant_id, mcpServers.mcp_server_id],
+    }).onDelete('cascade'),
+    stateHashUnique: uniqueIndex('mcp_oauth_pending_flows_state_hash_unique').on(table.state_hash),
+    tenantUserIdx: index('mcp_oauth_pending_flows_tenant_user_idx').on(
+      table.tenant_id,
+      table.user_id,
+      table.created_at
+    ),
+    tenantServerIdx: index('mcp_oauth_pending_flows_tenant_server_idx').on(
+      table.tenant_id,
+      table.mcp_server_id
+    ),
+    grantIdx: index('mcp_oauth_pending_flows_grant_idx').on(
+      table.tenant_id,
+      table.mcp_server_id,
+      table.oauth_mode,
+      table.subject_user_id,
+      table.grant_generation
+    ),
+    maintenanceIdx: index('mcp_oauth_pending_flows_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
   })
 );
 
@@ -1828,6 +2131,17 @@ export const gatewayChannels = pgTable(
       { onDelete: 'restrict' }
     ),
     mcp_server_ids: t.json<string[]>('mcp_server_ids'),
+
+    // Durable ownership for long-lived provider listeners. Daemon identity is
+    // diagnostic; the opaque token + generation are the correctness fence.
+    listener_claim_token: text('listener_claim_token'),
+    listener_claimed_at: t.timestamp('listener_claimed_at'),
+    listener_lease_expires_at: t.timestamp('listener_lease_expires_at'),
+    listener_instance_id: text('listener_instance_id'),
+    listener_boot_id: text('listener_boot_id'),
+    listener_generation: integer('listener_generation').notNull().default(0),
+    listener_checkpoint: t.json<Record<string, unknown> | null>('listener_checkpoint'),
+    listener_checkpoint_updated_at: t.timestamp('listener_checkpoint_updated_at'),
   },
   (table) => ({
     tenantIdx: index('gateway_channels_tenant_id_idx').on(table.tenant_id),
@@ -1840,6 +2154,57 @@ export const gatewayChannels = pgTable(
       table.channel_key
     ),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
+    listenerLeaseIdx: index('gateway_channels_listener_lease_idx').on(
+      table.tenant_id,
+      table.enabled,
+      table.listener_lease_expires_at,
+      table.id
+    ),
+    listenerDiscoveryIdx: index('gateway_channels_listener_discovery_idx').on(
+      table.enabled,
+      table.tenant_id,
+      table.id
+    ),
+  })
+);
+
+/** Durable provider event identities; payload recovery remains provider-owned. */
+export const gatewayInboundEvents = pgTable(
+  'gateway_inbound_events',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    id: varchar('id', { length: 36 }).primaryKey(),
+    gateway_channel_id: varchar('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    provider_event_id: text('provider_event_id').notNull(),
+    thread_id: text('thread_id').notNull(),
+    delivery_metadata: t.json<Record<string, unknown> | null>('delivery_metadata'),
+    status: text('status', { enum: ['processing', 'completed'] }).notNull(),
+    processing_token: text('processing_token').notNull(),
+    processing_expires_at: t.timestamp('processing_expires_at').notNull(),
+    session_id: varchar('session_id', { length: 36 }).references(() => sessions.session_id, {
+      onDelete: 'set null',
+    }),
+    task_id: varchar('task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
+    received_at: t.timestamp('received_at').notNull(),
+    completed_at: t.timestamp('completed_at'),
+  },
+  (table) => ({
+    tenantIdx: index('gateway_inbound_events_tenant_id_idx').on(table.tenant_id),
+    providerEventUnique: uniqueIndex('gateway_inbound_events_tenant_provider_unique').on(
+      table.tenant_id,
+      table.gateway_channel_id,
+      table.provider_event_id
+    ),
+    recoveryIdx: index('gateway_inbound_events_recovery_idx').on(
+      table.tenant_id,
+      table.status,
+      table.processing_expires_at,
+      table.id
+    ),
   })
 );
 
@@ -2220,6 +2585,19 @@ export const kbDocumentUnits = pgTable(
     embedding_dimensions: integer('embedding_dimensions'),
     embedding_hash: text('embedding_hash'),
     embedding_error: text('embedding_error'),
+    // Durable, expiring ownership for provider-backed embedding work. The
+    // opaque token plus monotonically increasing generation fences a stale
+    // daemon after expiry/reclaim; daemon identity is diagnostic only.
+    embedding_claim_token: text('embedding_claim_token'),
+    embedding_claim_generation: integer('embedding_claim_generation').notNull().default(0),
+    embedding_claimed_at: t.timestamp('embedding_claimed_at'),
+    embedding_claim_expires_at: t.timestamp('embedding_claim_expires_at'),
+    embedding_claim_instance_id: text('embedding_claim_instance_id'),
+    embedding_claim_boot_id: text('embedding_claim_boot_id'),
+    // Provider failures remain visible while retry_at supplies durable,
+    // database-time retry pacing instead of a process-local timer.
+    embedding_failure_count: integer('embedding_failure_count').notNull().default(0),
+    embedding_retry_at: t.timestamp('embedding_retry_at'),
     metadata: t.json<Record<string, unknown>>('metadata'),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
@@ -2234,6 +2612,11 @@ export const kbDocumentUnits = pgTable(
     ),
     contentHashIdx: index('kb_document_units_content_hash_idx').on(table.content_md5),
     embeddingStatusIdx: index('kb_document_units_embedding_status_idx').on(table.embedding_status),
+    embeddingWorkScanIdx: index('kb_document_units_embedding_work_scan_idx')
+      .on(table.created_at, table.tenant_id, table.unit_id)
+      .where(
+        sql`${table.content_text} IS NOT NULL AND ${table.embedding_status} IN ('pending', 'stale', 'error')`
+      ),
   })
 );
 
@@ -2433,6 +2816,11 @@ export type SessionRelationshipRow = typeof sessionRelationships.$inferSelect;
 export type SessionRelationshipInsert = typeof sessionRelationships.$inferInsert;
 export type TaskRow = typeof tasks.$inferSelect;
 export type TaskInsert = typeof tasks.$inferInsert;
+export type ExecutorSessionTokenAuthorityRow = typeof executorSessionTokenAuthorities.$inferSelect;
+export type ExecutorSessionTokenAuthorityInsert =
+  typeof executorSessionTokenAuthorities.$inferInsert;
+export type GitHubInstallStateRow = typeof githubInstallStates.$inferSelect;
+export type GitHubInstallStateInsert = typeof githubInstallStates.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
 export type BoardRow = typeof boards.$inferSelect;
@@ -2459,12 +2847,16 @@ export type BoardOwnerRow = typeof boardOwners.$inferSelect;
 export type BranchGroupGrantInsert = typeof branchGroupGrants.$inferInsert;
 export type MCPServerRow = typeof mcpServers.$inferSelect;
 export type MCPServerInsert = typeof mcpServers.$inferInsert;
+export type MCPCatalogEntryRow = typeof mcpCatalogEntries.$inferSelect;
+export type MCPCatalogEntryInsert = typeof mcpCatalogEntries.$inferInsert;
 export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;
 export type SessionMCPServerInsert = typeof sessionMcpServers.$inferInsert;
 export type SessionEnvSelectionRow = typeof sessionEnvSelections.$inferSelect;
 export type SessionEnvSelectionInsert = typeof sessionEnvSelections.$inferInsert;
 export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
+export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
+export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;
 export type CardTypeInsert = typeof cardTypes.$inferInsert;
 export type CardRow = typeof cards.$inferSelect;
@@ -2479,6 +2871,8 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
+export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;
+export type GatewayInboundEventInsert = typeof gatewayInboundEvents.$inferInsert;
 export type UploadRow = typeof uploads.$inferSelect;
 export type UploadInsert = typeof uploads.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;

@@ -30,7 +30,7 @@
  * to any agent/LLM context. Callers act only on their own credentials.
  */
 
-import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
+import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -228,6 +228,7 @@ interface DeviceAuthAttempt {
   tenantId: TenantID | string;
   authUser: NonNullable<AuthenticatedParams['user']>;
   targetUnixUser: string | null;
+  reportedUnixUser: string | null;
   phase: CodexDeviceAuthStatus['phase'];
   deviceAuthId: string;
   userCode: string;
@@ -332,6 +333,7 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
           app,
           normalized: buildDeviceAuthJson(tokens),
           targetUnixUser: attempt.targetUnixUser,
+          reportedUnixUser: attempt.reportedUnixUser,
           userId: attempt.userId,
           authUser: attempt.authUser,
         })
@@ -393,12 +395,6 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
     async create(_data: unknown, params?: AuthenticatedParams): Promise<CodexDeviceAuthStatus> {
       const { authUser, userId, tenantId, key } = await requireContext(params);
 
-      const config = loadConfigSync();
-      if (config.multi_tenancy?.mode === 'required_from_auth') {
-        throw new BadRequest(
-          'Codex subscription login is unavailable in hosted multi-tenant mode — use an OpenAI API key instead.'
-        );
-      }
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
       if (
@@ -428,6 +424,7 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         tenantId,
         authUser,
         targetUnixUser: identity.unixUser,
+        reportedUnixUser: identity.reportedUnixUser,
         phase: 'pending',
         deviceAuthId: '',
         userCode: '',

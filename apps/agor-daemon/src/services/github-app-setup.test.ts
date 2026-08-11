@@ -10,11 +10,7 @@
 
 import type express from 'express';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  __resetInstallStateForTests,
-  consumeInstallState,
-  issueInstallState,
-} from './github-install-state.js';
+import { GitHubInstallStateService } from './github-install-state.js';
 
 // --- Stub GatewayChannelRepository before importing the module under test --
 
@@ -48,6 +44,11 @@ import { __testables, registerGitHubAppSetupRoutes } from './github-app-setup.js
 // --- Helpers ------------------------------------------------------------
 
 const staticConfig = { multi_tenancy: { mode: 'static' as const, static_tenant_id: 'tenant-1' } };
+let installStates: GitHubInstallStateService;
+
+beforeEach(() => {
+  installStates = new GitHubInstallStateService({ startCleanupTimer: false });
+});
 
 function mockRes() {
   const res: Partial<express.Response> & {
@@ -148,6 +149,7 @@ describe('registerGitHubAppSetupRoutes', () => {
       daemonUrl: 'http://localhost:3030',
       db: {} as never,
       config: staticConfig,
+      installStates,
     });
     expect(Object.keys(app._routes).sort()).toEqual([
       'GET /api/github/installations',
@@ -160,13 +162,12 @@ describe('registerGitHubAppSetupRoutes', () => {
 
 describe('POST /api/github/setup/state', () => {
   beforeEach(() => {
-    __resetInstallStateForTests();
     vi.clearAllMocks();
   });
 
   it('returns 401 when Authorization header is missing', async () => {
     const app = mockApp(null);
-    const handler = __testables.handleIssueState(app, staticConfig);
+    const handler = __testables.handleIssueState(app, staticConfig, installStates);
     const res = mockRes();
     await handler(mockReq(), res as express.Response);
     expect(res.statusCode).toBe(401);
@@ -175,7 +176,7 @@ describe('POST /api/github/setup/state', () => {
 
   it('returns 401 when JWT strategy rejects the token', async () => {
     const app = mockApp(null, /* authShouldThrow */ true);
-    const handler = __testables.handleIssueState(app, staticConfig);
+    const handler = __testables.handleIssueState(app, staticConfig, installStates);
     const res = mockRes();
     await handler(mockReq({ headers: { authorization: 'Bearer bogus' } }), res as express.Response);
     expect(res.statusCode).toBe(401);
@@ -183,7 +184,7 @@ describe('POST /api/github/setup/state', () => {
 
   it('returns 403 when the user is not admin/owner', async () => {
     const app = mockApp({ user: { user_id: 'u-member', role: 'member' } });
-    const handler = __testables.handleIssueState(app, staticConfig);
+    const handler = __testables.handleIssueState(app, staticConfig, installStates);
     const res = mockRes();
     await handler(mockReq({ headers: { authorization: 'Bearer ok' } }), res as express.Response);
     expect(res.statusCode).toBe(403);
@@ -192,17 +193,34 @@ describe('POST /api/github/setup/state', () => {
 
   it('returns 200 + state for admin users', async () => {
     const app = mockApp({ user: { user_id: 'u-admin', role: 'admin' } });
-    const handler = __testables.handleIssueState(app, staticConfig);
+    const handler = __testables.handleIssueState(app, staticConfig, installStates);
     const res = mockRes();
     await handler(mockReq({ headers: { authorization: 'Bearer ok' } }), res as express.Response);
     expect(res.statusCode).toBe(200);
     const body = res.body as { state?: string };
     expect(body.state).toMatch(/^[a-f0-9]+$/);
+    expect(res.headers['Cache-Control']).toBe('no-store');
+    expect(res.headers['Referrer-Policy']).toBe('no-referrer');
+  });
+
+  it('fails closed when durable state issuance is unavailable', async () => {
+    vi.spyOn(installStates, 'issueInstallState').mockRejectedValueOnce(
+      new Error('database failed')
+    );
+    const app = mockApp({ user: { user_id: 'u-admin', role: 'admin' } });
+    const handler = __testables.handleIssueState(app, staticConfig, installStates);
+    const res = mockRes();
+
+    await handler(mockReq({ headers: { authorization: 'Bearer ok' } }), res as express.Response);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual({ error: 'GitHub App install setup is temporarily unavailable' });
+    expect(JSON.stringify(res.body)).not.toContain('database failed');
   });
 
   it('returns 200 + state for owner users (legacy alias for superadmin)', async () => {
     const app = mockApp({ user: { user_id: 'u-owner', role: 'owner' } });
-    const handler = __testables.handleIssueState(app, staticConfig);
+    const handler = __testables.handleIssueState(app, staticConfig, installStates);
     const res = mockRes();
     await handler(mockReq({ headers: { authorization: 'Bearer ok' } }), res as express.Response);
     expect(res.statusCode).toBe(200);
@@ -211,7 +229,7 @@ describe('POST /api/github/setup/state', () => {
 
   it('returns 200 + state for superadmin users (canonical elevated role)', async () => {
     const app = mockApp({ user: { user_id: 'u-super', role: 'superadmin' } });
-    const handler = __testables.handleIssueState(app, staticConfig);
+    const handler = __testables.handleIssueState(app, staticConfig, installStates);
     const res = mockRes();
     await handler(mockReq({ headers: { authorization: 'Bearer ok' } }), res as express.Response);
     expect(res.statusCode).toBe(200);
@@ -231,7 +249,7 @@ describe('POST /api/github/setup/state', () => {
         trusted_header: 'x-tenant-id',
       },
     };
-    const handler = __testables.handleIssueState(app, config);
+    const handler = __testables.handleIssueState(app, config, installStates);
     const res = mockRes();
 
     await handler(
@@ -246,7 +264,7 @@ describe('POST /api/github/setup/state', () => {
 
     expect(res.statusCode).toBe(200);
     const state = (res.body as { state: string }).state;
-    expect(consumeInstallState(state)).toMatchObject({
+    await expect(installStates.consumeInstallState(state)).resolves.toMatchObject({
       ok: true,
       tenantId: 'tenant-from-token',
     });
@@ -485,10 +503,6 @@ describe('GET /api/github/installations', () => {
 });
 
 describe('GET /api/github/setup/new', () => {
-  beforeEach(() => {
-    __resetInstallStateForTests();
-  });
-
   it('returns 401 HTML if the state query param is missing', () => {
     const handler = __testables.handleNewApp('http://ui', 'http://daemon');
     const res = mockRes();
@@ -498,12 +512,14 @@ describe('GET /api/github/setup/new', () => {
     expect(String(res.body)).toMatch(/install session missing/i);
   });
 
-  it('embeds state in the setup_url sent to GitHub', () => {
-    const state = issueInstallState('u-admin', 'tenant-1');
+  it('embeds state in the setup_url sent to GitHub', async () => {
+    const state = await installStates.issueInstallState('u-admin', 'tenant-1');
     const handler = __testables.handleNewApp('http://ui', 'http://daemon');
     const res = mockRes();
     handler(mockReq({ query: { state, name: 'Agor' } }), res as express.Response);
     expect(res.statusCode).toBe(200);
+    expect(res.headers['Cache-Control']).toBe('no-store');
+    expect(res.headers['Referrer-Policy']).toBe('no-referrer');
     const html = String(res.body);
     // The setup_url query parameter is URL-encoded inside the GitHub link.
     const setupUrlEncoded = encodeURIComponent(
@@ -515,21 +531,38 @@ describe('GET /api/github/setup/new', () => {
 
 describe('GET /api/github/setup/callback', () => {
   beforeEach(() => {
-    __resetInstallStateForTests();
     vi.clearAllMocks();
   });
 
   it('returns 401 HTML when state is missing', async () => {
-    const handler = __testables.handleSetupCallback('http://ui');
+    const handler = __testables.handleSetupCallback('http://ui', installStates);
     const res = mockRes();
     await handler(mockReq({ query: { installation_id: '1234' } }), res as express.Response);
     expect(res.statusCode).toBe(401);
     expect(res.headers['Content-Type']).toContain('text/html');
+    expect(res.headers['Cache-Control']).toBe('no-store');
     expect(String(res.body)).toMatch(/install session missing/i);
   });
 
+  it('fails closed without reflecting a durable consumption error', async () => {
+    vi.spyOn(installStates, 'consumeInstallState').mockRejectedValueOnce(
+      new Error('database params contained a hash')
+    );
+    const handler = __testables.handleSetupCallback('http://ui', installStates);
+    const res = mockRes();
+
+    await handler(
+      mockReq({ query: { installation_id: '1234', state: 'a'.repeat(64) } }),
+      res as express.Response
+    );
+
+    expect(res.statusCode).toBe(503);
+    expect(String(res.body)).toMatch(/setup unavailable/i);
+    expect(String(res.body)).not.toContain('database params');
+  });
+
   it('returns 400 HTML when state is unknown', async () => {
-    const handler = __testables.handleSetupCallback('http://ui');
+    const handler = __testables.handleSetupCallback('http://ui', installStates);
     const res = mockRes();
     await handler(
       mockReq({ query: { installation_id: '1234', state: 'not-a-real-state' } }),
@@ -540,8 +573,8 @@ describe('GET /api/github/setup/callback', () => {
   });
 
   it('returns 400 HTML on a second (re-use) attempt — state is one-shot', async () => {
-    const state = issueInstallState('u-admin', 'tenant-1');
-    const handler = __testables.handleSetupCallback('http://ui');
+    const state = await installStates.issueInstallState('u-admin', 'tenant-1');
+    const handler = __testables.handleSetupCallback('http://ui', installStates);
 
     // First call consumes the state.
     const res1 = mockRes();
@@ -554,30 +587,40 @@ describe('GET /api/github/setup/callback', () => {
     expect(res2.statusCode).toBe(400);
   });
 
-  it('rejects when installation_id is missing (after valid state)', async () => {
-    const state = issueInstallState('u-admin', 'tenant-1');
-    const handler = __testables.handleSetupCallback('http://ui');
+  it('rejects a missing installation_id without consuming valid state', async () => {
+    const state = await installStates.issueInstallState('u-admin', 'tenant-1');
+    const handler = __testables.handleSetupCallback('http://ui', installStates);
     const res = mockRes();
     await handler(mockReq({ query: { state } }), res as express.Response);
     expect(res.statusCode).toBe(400);
     expect(String(res.body)).toMatch(/installation_id/);
+
+    const retry = mockRes();
+    await handler(mockReq({ query: { state, installation_id: '42' } }), retry as express.Response);
+    expect(retry.statusCode).toBe(200);
   });
 
-  it('rejects non-integer installation_id', async () => {
-    const state = issueInstallState('u-admin', 'tenant-1');
-    const handler = __testables.handleSetupCallback('http://ui');
-    const res = mockRes();
-    await handler(
-      mockReq({ query: { state, installation_id: 'not-a-number' } }),
-      res as express.Response
-    );
-    expect(res.statusCode).toBe(400);
+  it('rejects non-decimal installation_id values without consuming valid state', async () => {
+    const handler = __testables.handleSetupCallback('http://ui', installStates);
+    for (const bad of ['not-a-number', '1e3', '0x10', ' 42 ']) {
+      const state = await installStates.issueInstallState('u-admin', 'tenant-1');
+      const res = mockRes();
+      await handler(mockReq({ query: { state, installation_id: bad } }), res as express.Response);
+      expect(res.statusCode).toBe(400);
+
+      const retry = mockRes();
+      await handler(
+        mockReq({ query: { state, installation_id: '42' } }),
+        retry as express.Response
+      );
+      expect(retry.statusCode).toBe(200);
+    }
   });
 
   it('rejects negative or zero installation_id', async () => {
-    const handler = __testables.handleSetupCallback('http://ui');
+    const handler = __testables.handleSetupCallback('http://ui', installStates);
     for (const bad of ['-1', '0']) {
-      const state = issueInstallState('u-admin', 'tenant-1');
+      const state = await installStates.issueInstallState('u-admin', 'tenant-1');
       const res = mockRes();
       await handler(mockReq({ query: { state, installation_id: bad } }), res as express.Response);
       expect(res.statusCode).toBe(400);
@@ -586,8 +629,8 @@ describe('GET /api/github/setup/callback', () => {
   });
 
   it('rejects unsafe-large installation_id (beyond Number.MAX_SAFE_INTEGER)', async () => {
-    const state = issueInstallState('u-admin', 'tenant-1');
-    const handler = __testables.handleSetupCallback('http://ui');
+    const state = await installStates.issueInstallState('u-admin', 'tenant-1');
+    const handler = __testables.handleSetupCallback('http://ui', installStates);
     const res = mockRes();
     await handler(
       mockReq({ query: { state, installation_id: '99999999999999999999' } }),
@@ -597,18 +640,20 @@ describe('GET /api/github/setup/callback', () => {
   });
 
   it('returns the installation ID without selecting or mutating a channel', async () => {
-    const state = issueInstallState('u-admin', 'tenant-1');
-    const handler = __testables.handleSetupCallback('http://ui');
+    const state = await installStates.issueInstallState('u-admin', 'tenant-1');
+    const handler = __testables.handleSetupCallback('http://ui', installStates);
     const res = mockRes();
     await handler(mockReq({ query: { state, installation_id: '9001' } }), res as express.Response);
     expect(res.statusCode).toBe(200);
     const html = String(res.body);
     expect(html).toContain('<code>9001</code>');
+    expect(html).toMatch(/unverified installation ID/i);
+    expect(html).not.toMatch(/GitHub App Installed/i);
     expect(mockFindById).not.toHaveBeenCalled();
     expect(mockRunWithTenantDatabaseScope).not.toHaveBeenCalled();
   });
 });
 
 afterEach(() => {
-  __resetInstallStateForTests();
+  installStates.close();
 });

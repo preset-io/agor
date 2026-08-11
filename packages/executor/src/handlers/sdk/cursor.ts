@@ -8,6 +8,7 @@
  * Cursor run when Agor stops the executor.
  */
 
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { generateId, shortId } from '@agor/core/db';
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
@@ -24,15 +25,20 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/sdk';
+import type { McpServerConfig, Run, SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
+import {
+  collectWithheldMcpServers,
+  reportWithheldMcpServers,
+} from '../../sdk-handlers/base/withheld-mcp-report.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import {
   captureGitStateAtTaskEnd,
   createStreamingCallbacks,
+  settleTaskFailure,
   stampGitStateAtTaskStart,
 } from './base-executor.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
@@ -188,6 +194,7 @@ async function resolveCursorApiKey(client: AgorClient, taskId: TaskID): Promise<
 
 async function buildCursorMcpServers(args: {
   sessionId: SessionID;
+  taskId: TaskID;
   mcpToken?: string;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
   forUserId?: string;
@@ -207,11 +214,24 @@ async function buildCursorMcpServers(args: {
     };
   }
 
-  const serversWithSource = await getMcpServersForSession(args.sessionId, {
-    sessionMCPRepo: args.repos.sessionMCP,
-    mcpServerRepo: args.repos.mcpServers,
-    mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
-    forUserId: args.forUserId,
+  const reporter = collectWithheldMcpServers();
+  const serversWithSource = await getMcpServersForSession(
+    args.sessionId,
+    {
+      sessionMCPRepo: args.repos.sessionMCP,
+      mcpServerRepo: args.repos.mcpServers,
+      mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
+      forUserId: args.forUserId,
+      onServerWithheld: reporter.onServerWithheld,
+    },
+    // Cursor's MCP config carries no per-tool filter, so a server with gated
+    // tools cannot be honoured and is withheld whole.
+    { toolFiltering: 'none' }
+  );
+  await reportWithheldMcpServers(args.repos.messages, {
+    sessionId: args.sessionId,
+    taskId: args.taskId,
+    withheld: reporter.withheld,
   });
 
   for (const { server } of serversWithSource) {
@@ -258,10 +278,6 @@ async function getSessionMessages(client: AgorClient, sessionId: SessionID): Pro
 
 function getNextMessageIndexFrom(messages: ReadonlyArray<Message>): number {
   return messages.length;
-}
-
-async function getNextMessageIndex(client: AgorClient, sessionId: SessionID): Promise<number> {
-  return getNextMessageIndexFrom(await getSessionMessages(client, sessionId));
 }
 
 async function createUserMessage(args: {
@@ -402,26 +418,6 @@ async function updateToolMessage(args: {
   });
 }
 
-async function createSystemErrorMessage(args: {
-  client: AgorClient;
-  sessionId: SessionID;
-  taskId: TaskID;
-  message: string;
-}): Promise<void> {
-  const index = await getNextMessageIndex(args.client, args.sessionId);
-  await args.client.service('messages').create({
-    message_id: generateId() as MessageID,
-    session_id: args.sessionId,
-    task_id: args.taskId,
-    type: 'system',
-    role: MessageRole.SYSTEM,
-    index,
-    timestamp: new Date().toISOString(),
-    content: args.message,
-    content_preview: args.message.substring(0, 200),
-  });
-}
-
 /**
  * Execute Cursor task (Feathers/WebSocket architecture).
  */
@@ -444,6 +440,7 @@ export async function executeCursorTask(params: {
     );
   }
 
+  const { Agent } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
   let currentRun: Run | undefined;
   const abortHandler = () => {
     if (!currentRun) return;
@@ -476,6 +473,7 @@ export async function executeCursorTask(params: {
     const model = toCursorModel(configuredModel);
     const mcpServers = await buildCursorMcpServers({
       sessionId,
+      taskId,
       mcpToken: session.mcp_token,
       repos,
       forUserId: session.created_by,
@@ -627,7 +625,7 @@ export async function executeCursorTask(params: {
     }
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
-    console.error('[cursor] Execution failed:', err);
+    console.error('[cursor] execution failed category=task_execution');
     const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
     const taskPatch: Partial<Task> = {
       status: 'failed',
@@ -641,8 +639,7 @@ export async function executeCursorTask(params: {
         sha_at_end: gitStateAtEnd.sha,
       };
     }
-    await client.service('tasks').patch(taskId, taskPatch);
-    await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
+    await settleTaskFailure(client, sessionId, taskId, err, taskPatch);
     throw err;
   } finally {
     params.abortController.signal.removeEventListener('abort', abortHandler);

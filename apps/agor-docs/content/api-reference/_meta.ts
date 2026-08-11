@@ -1,4 +1,8 @@
 export default {
-  index: 'Overview',
+  index: {
+    title: 'Reference',
+    theme: { layout: 'full' },
+  },
+  'using-the-api': 'Using the API',
   websockets: 'WebSocket Events',
 };

@@ -512,6 +512,69 @@
       "when": 1786060800000,
       "tag": "0073_task_runtime_reconciliation",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1786150000000,
+      "tag": "0074_knowledge_embedding_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1786150100000,
+      "tag": "0075_executor_session_token_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1786150200000,
+      "tag": "0076_gateway_listener_ha",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1786320000000,
+      "tag": "0077_environment_health_ha",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1786321000000,
+      "tag": "0078_mcp_oauth_pending_flows",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1786400000000,
+      "tag": "0079_mcp_catalog_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1786500000000,
+      "tag": "0080_mcp_catalog_registry_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1786600000000,
+      "tag": "0081_mcp_catalog_last_seen",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1786700000000,
+      "tag": "0082_github_install_state",
+      "breakpoints": true
     }
   ]
 }

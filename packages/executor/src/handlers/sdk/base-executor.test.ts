@@ -3,6 +3,7 @@ import {
   executeToolTask,
   installProviderConnection,
   resolveApiKeyForTask,
+  settleTaskFailure,
 } from './base-executor.js';
 
 vi.mock('./git-safe-directory.js', () => ({
@@ -86,6 +87,44 @@ describe('resolveApiKeyForTask', () => {
         'codex' as never
       )
     ).rejects.toThrow('fetch failed');
+  });
+});
+
+describe('settleTaskFailure', () => {
+  it('does not persist Drizzle query parameters in task or transcript diagnostics', async () => {
+    const secret = 'secret-binary-tool-result';
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const messageCreate = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service(name: string) {
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') {
+          return {
+            find: vi.fn().mockResolvedValue({ total: 0, data: [] }),
+            create: messageCreate,
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const failure = Object.assign(new Error(`Failed query: update messages params: ${secret}`), {
+      query: 'update messages',
+      params: [secret],
+      cause: { code: '22P05' },
+    });
+
+    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, failure, {
+      status: 'failed',
+      error_message: failure.message,
+    });
+
+    const persisted = JSON.stringify({
+      message: messageCreate.mock.calls,
+      task: taskPatch.mock.calls,
+    });
+    expect(persisted).not.toContain(secret);
+    expect(persisted).not.toContain('update messages');
+    expect(persisted).toContain('Database operation failed');
   });
 });
 

@@ -1,4 +1,9 @@
-import { CommentOutlined, RobotOutlined, UnorderedListOutlined } from '@ant-design/icons';
+import {
+  BranchesOutlined,
+  CommentOutlined,
+  RobotOutlined,
+  UnorderedListOutlined,
+} from '@ant-design/icons';
 import { Badge, theme } from 'antd';
 import type React from 'react';
 import { memo } from 'react';
@@ -13,6 +18,7 @@ interface RailItem {
 const RAIL_ITEMS: RailItem[] = [
   { key: 'teammate', label: 'Teammate', icon: <RobotOutlined /> },
   { key: 'all-sessions', label: 'Sessions', icon: <UnorderedListOutlined /> },
+  { key: 'all-branches', label: 'Branches', icon: <BranchesOutlined /> },
   { key: 'comments', label: 'Comments', icon: <CommentOutlined /> },
 ];
 

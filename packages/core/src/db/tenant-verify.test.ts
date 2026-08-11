@@ -36,6 +36,11 @@ vi.mock('./tenant-catalog', () => ({
     schemaVersion: identity.schemaVersion,
     migrations: ['0001_test'],
     tenantTables: ['sessions'],
+    nonPortableTenantTables: [
+      'executor_session_token_authorities',
+      'mcp_oauth_pending_flows',
+      'user_mcp_oauth_tokens',
+    ],
     presentImperativeTables: [],
     fingerprint: identity.fingerprint,
   })),
@@ -87,6 +92,11 @@ function manifest(options: {
         schemaVersion: identity.schemaVersion,
         migrations: ['0001_test'],
         tenantTables: ['sessions'],
+        nonPortableTenantTables: [
+          'executor_session_token_authorities',
+          'mcp_oauth_pending_flows',
+          'user_mcp_oauth_tokens',
+        ],
         presentImperativeTables: [],
         fingerprint: identity.fingerprint,
       },

@@ -22,7 +22,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ArtifactParams, ArtifactsService } from '../../services/artifacts.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';

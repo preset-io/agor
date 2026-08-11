@@ -9,6 +9,7 @@ export interface SanitizedDbError {
   message: string;
   code?: string;
   constraint?: string;
+  routine?: string;
 }
 
 type ErrorRecord = Record<string, unknown>;
@@ -21,6 +22,36 @@ function asRecord(value: unknown): ErrorRecord | undefined {
   return typeof value === 'object' && value !== null ? (value as ErrorRecord) : undefined;
 }
 
+/** Detect a PostgreSQL or SQLite unique/primary-key violation through wrappers. */
+export function isDatabaseUniqueConstraintError(error: unknown): boolean {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+
+  while (current !== undefined && current !== null && !seen.has(current)) {
+    seen.add(current);
+    const record = asRecord(current);
+    const code = typeof record?.code === 'string' ? record.code : '';
+    if (
+      code === '23505' ||
+      code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+      code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
+    ) {
+      return true;
+    }
+
+    const message = typeof record?.message === 'string' ? record.message.toLowerCase() : '';
+    if (
+      message.includes('unique constraint') ||
+      message.includes('sqlite_constraint_unique') ||
+      message.includes('sqlite_constraint_primarykey')
+    ) {
+      return true;
+    }
+    current = record?.cause;
+  }
+  return false;
+}
+
 /**
  * Convert an unknown database failure to log-safe scalar metadata.
  *
@@ -31,6 +62,7 @@ function asRecord(value: unknown): ErrorRecord | undefined {
 export function sanitizeDbError(error: unknown): SanitizedDbError {
   let code: string | undefined;
   let constraint: string | undefined;
+  let routine: string | undefined;
   let current: unknown = error;
   const seen = new Set<unknown>();
 
@@ -52,6 +84,13 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
     ) {
       constraint = candidateConstraint;
     }
+    if (
+      !routine &&
+      typeof record?.routine === 'string' &&
+      DATABASE_IDENTIFIER.test(record.routine)
+    ) {
+      routine = record.routine;
+    }
 
     current = record?.cause;
   }
@@ -68,5 +107,6 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
     message,
     ...(code ? { code } : {}),
     ...(constraint ? { constraint } : {}),
+    ...(routine ? { routine } : {}),
   };
 }
