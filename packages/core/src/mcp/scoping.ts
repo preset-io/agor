@@ -152,6 +152,11 @@ export async function getMcpServersForSession(
     const seenServerIds = new Set<string>();
 
     const addServer = (server: MCPServer, source: MCPServerWithSource['source']) => {
+      if (server.owner_user_id && !deps.sessionOwnerId) {
+        console.warn(
+          `   ⚠️  Skipping private MCP server because session owner identity is missing: ${server.name}`
+        );
+      }
       if (!isMCPServerUsableBy(server, deps.sessionOwnerId)) {
         mcpDebug(`   🔒 Skipping private MCP server not owned by session creator: ${server.name}`);
         return;

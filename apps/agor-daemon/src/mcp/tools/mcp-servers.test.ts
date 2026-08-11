@@ -58,7 +58,11 @@ async function captureTool(
     userId: ctx.userId as any,
     sessionId: ctx.sessionId as any,
     authenticatedUser: { user_id: ctx.userId, role: 'member' } as any,
-    baseServiceParams: {},
+    baseServiceParams: {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: ctx.userId, role: 'member' },
+    } as any,
   });
   if (!handler) throw new Error(`Tool ${toolName} not registered`);
   return handler;
@@ -310,6 +314,33 @@ describe('agor_mcp_servers_list', () => {
     await expect(authStatus({ mcpServerId: 'foreign-server' })).rejects.toThrow(
       'MCP server not found'
     );
+  });
+
+  it('allows an owner to check auth status for their session-scoped user server', async () => {
+    const app = makeFakeApp({
+      'mcp-servers': {
+        get: async () => ({
+          mcp_server_id: 'owned-server',
+          name: 'private-owned',
+          transport: 'http',
+          scope: 'session',
+          source: 'user',
+          owner_user_id: 'user-1',
+          enabled: true,
+          auth: { type: 'oauth' },
+        }),
+      },
+    });
+    const authStatus = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      'agor_mcp_servers_auth_status'
+    );
+
+    const result = await authStatus({ mcpServerId: 'owned-server' });
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      mcp_server_id: 'owned-server',
+      oauth_authenticated: false,
+    });
   });
 });
 

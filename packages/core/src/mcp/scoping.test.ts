@@ -116,6 +116,34 @@ describe('getMcpServersForSession', () => {
     expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['shared']);
   });
 
+  it('warns when a private server is withheld because session owner identity is missing', async () => {
+    const privateServer = {
+      ...makeServer('private', 'session'),
+      owner_user_id: 'owner-a',
+    } as MCPServer;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const servers = await getMcpServersForSession(
+        'session-a' as SessionID,
+        {
+          mcpServerRepo: { findAll: vi.fn() } as never,
+          sessionMCPRepo: {
+            listEffectiveServers: vi.fn().mockResolvedValue([privateServer]),
+          } as never,
+        },
+        ENFORCING
+      );
+
+      expect(servers).toEqual([]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('session owner identity is missing')
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('passes the session owner to global repository filtering', async () => {
     const findAll = vi.fn().mockResolvedValue([makeServer('shared', 'global')]);
     const listServers = vi.fn().mockResolvedValue([]);

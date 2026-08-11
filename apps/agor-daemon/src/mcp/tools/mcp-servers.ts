@@ -12,6 +12,7 @@ import type {
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -183,8 +184,8 @@ function isMcpCatalogServerVisible(ctx: McpContext, mcpServer: MCPServer): boole
   );
 }
 
-function assertMcpCatalogServerVisible(ctx: McpContext, mcpServer: MCPServer): void {
-  if (!isMcpCatalogServerVisible(ctx, mcpServer)) {
+function assertMcpServerUsableByCaller(ctx: McpContext, mcpServer: MCPServer): void {
+  if (!isMcpServerUsableByCaller(mcpServer, ctx.baseServiceParams)) {
     // Do not turn a caller-supplied server ID into an existence oracle.
     throw new NotFound('MCP server not found');
   }
@@ -730,7 +731,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       const mcpServer: MCPServer = await ctx.app
         .service('mcp-servers')
         .get(args.mcpServerId, ctx.baseServiceParams);
-      assertMcpCatalogServerVisible(ctx, mcpServer);
+      assertMcpServerUsableByCaller(ctx, mcpServer);
 
       const authType = mcpServer.auth?.type || 'none';
       const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';

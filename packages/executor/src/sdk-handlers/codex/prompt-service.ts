@@ -651,18 +651,13 @@ export class CodexPromptService {
   private async buildMcpServersConfig(
     sessionId: SessionID,
     mcpToken: string | undefined,
-    forUserId: UserID | undefined,
-    sessionOwnerIdOrRequireMcpServers: UserID | boolean | undefined,
-    requireMcpServers = false
+    context: {
+      forUserId?: UserID;
+      sessionOwnerId: UserID;
+      requireMcpServers?: boolean;
+    }
   ): Promise<{ servers: CodexConfigObject; total: number }> {
-    // Keep the old four-argument private-call shape working for older tests
-    // and integrations while the fifth argument carries session ownership.
-    const legacyRequireMcpServers = typeof sessionOwnerIdOrRequireMcpServers === 'boolean';
-    const sessionOwnerId = legacyRequireMcpServers ? undefined : sessionOwnerIdOrRequireMcpServers;
-    const shouldRequireMcpServers =
-      typeof sessionOwnerIdOrRequireMcpServers === 'boolean'
-        ? sessionOwnerIdOrRequireMcpServers
-        : requireMcpServers;
+    const { forUserId, sessionOwnerId, requireMcpServers = false } = context;
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
     codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
@@ -708,7 +703,7 @@ export class CodexPromptService {
         bearer_token_env_var: agorBearerEnvVar,
         ...MCP_AUTO_APPROVE,
       };
-      applyGatewayMcpStartupGuard(result.agor as CodexConfigObject, shouldRequireMcpServers);
+      applyGatewayMcpStartupGuard(result.agor as CodexConfigObject, requireMcpServers);
       codexDebug(
         `   📝 [Codex MCP] Configuring built-in Agor MCP server (HTTP) at ${daemonUrl}/mcp`
       );
@@ -723,7 +718,7 @@ export class CodexPromptService {
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
       applyMcpToolPermissions(serverConfig, server);
-      applyGatewayMcpStartupGuard(serverConfig, shouldRequireMcpServers);
+      applyGatewayMcpStartupGuard(serverConfig, requireMcpServers);
       codexDebug(`   📝 [Codex MCP] Configuring STDIO server: ${server.name} -> ${serverName}`);
       if (server.command) {
         serverConfig.command = server.command;
@@ -750,7 +745,7 @@ export class CodexPromptService {
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
       applyMcpToolPermissions(serverConfig, server);
-      let canRequireServer = shouldRequireMcpServers;
+      let canRequireServer = requireMcpServers;
       codexDebug(`   📝 [Codex MCP] Configuring HTTP server: ${server.name} -> ${serverName}`);
       if (server.url) {
         serverConfig.url = server.url;
@@ -1093,9 +1088,11 @@ export class CodexPromptService {
     const { servers: mcpServersConfig, total: mcpServerCount } = await this.buildMcpServersConfig(
       sessionId,
       mcpToken,
-      forUserId,
-      session.created_by as UserID,
-      requireMcpServers
+      {
+        forUserId,
+        sessionOwnerId: session.created_by as UserID,
+        requireMcpServers,
+      }
     );
 
     const codexConfigPayload: CodexConfigObject = {
