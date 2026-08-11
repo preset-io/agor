@@ -166,9 +166,14 @@ describe('HTML-first vanilla artifact rendering', () => {
       '/index.js': '// generated entry intentionally left empty\n',
       '/index.html': `<!doctype html>
 <html>
-  <head><style>body { font-family: Inter, sans-serif; }</style></head>
-  <body><main class="hero">Styled artifact</main></body>
+  <head>
+    <link rel="stylesheet" href="/external.css">
+    <style>body { font-family: Inter, sans-serif; }</style>
+  </head>
+  <body><main class="hero">Styled artifact</main><script src="/external.js"></script></body>
 </html>`,
+      '/external.css': '.hero { color: rebeccapurple; }',
+      '/external.js': 'document.body.dataset.loaded = "yes";',
     },
   };
 
@@ -186,6 +191,8 @@ describe('HTML-first vanilla artifact rendering', () => {
       customSetup: { entry: '/index.html' },
     });
     expect(affectedShape.files['/index.html']).toContain('font-family: Inter');
+    expect(affectedShape.files['/index.html']).toContain('/external.css');
+    expect(affectedShape.files['/index.html']).toContain('/external.js');
     expect(affectedShape.files['/index.js']).toContain('intentionally left empty');
   });
 
@@ -209,6 +216,71 @@ describe('HTML-first vanilla artifact rendering', () => {
     expect(artifact.sandpack_config.customSetup.environment).toBe('parcel');
   });
 
+  it('does not guess static for missing, malformed, or alternate entry paths', () => {
+    const html = '<main>HTML content</main>';
+
+    expect(
+      renderTemplateForArtifact({
+        template: 'vanilla',
+        files: { '/index.html': html },
+      })
+    ).toBe('vanilla');
+    expect(
+      renderTemplateForArtifact({
+        template: 'vanilla',
+        files: { '/index.js': '/* unterminated', '/index.html': html },
+      })
+    ).toBe('vanilla');
+    expect(
+      renderTemplateForArtifact({
+        template: 'vanilla',
+        sandpack_config: { customSetup: { entry: '/alternate.js' } },
+        files: {
+          '/alternate.js': '// empty',
+          '/index.js': '// conventional entry is also empty',
+          '/index.html': html,
+        },
+      })
+    ).toBe('vanilla');
+    expect(
+      renderTemplateForArtifact({
+        template: 'vanilla',
+        sandpack_config: { customSetup: { entry: '/alternate.html' } },
+        files: {
+          '/alternate.html': html,
+          '/index.js': '// conventional entry is also empty',
+          '/index.html': html,
+        },
+      })
+    ).toBe('vanilla');
+  });
+
+  it('gives an explicit static template its deterministic HTML entry', () => {
+    const normalized = normalizeSandpackConfigForRender({
+      template: 'static',
+      files: { '/index.html': '<main>static</main>' },
+    });
+
+    expect(normalized).toEqual({
+      template: 'static',
+      sandpack_config: {
+        template: 'static',
+        customSetup: { entry: '/index.html' },
+      },
+    });
+  });
+
+  it('is idempotent when normalizing a repaired artifact repeatedly', () => {
+    const first = normalizeSandpackConfigForRender(affectedShape);
+    const second = normalizeSandpackConfigForRender({
+      ...affectedShape,
+      template: first.template,
+      sandpack_config: first.sandpack_config,
+    });
+
+    expect(second).toEqual(first);
+  });
+
   it('keeps executable vanilla JavaScript on the vanilla template', () => {
     expect(
       renderTemplateForArtifact({
@@ -225,6 +297,12 @@ describe('HTML-first vanilla artifact rendering', () => {
         files: affectedShape.files,
       })
     ).toBe('react');
+    expect(
+      renderTemplateForArtifact({
+        template: 'vue3',
+        files: affectedShape.files,
+      })
+    ).toBe('vue3');
   });
 });
 

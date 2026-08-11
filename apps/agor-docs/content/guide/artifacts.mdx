@@ -219,7 +219,7 @@ its own hard-coded allowlist (CRA only inlines `REACT_APP_*`, Vite only inlines
 | `static`                  | Static browser server                | n/a           | not supported             | verified                             |
 | `vanilla`, `vanilla-ts`   | Static / Parcel                      | n/a           | not supported             | verified                             |
 
-HTML-first vanilla artifacts that have an empty (or comment-only) JavaScript entry are served through Sandpack's `static` template automatically. This keeps the original `index.html` markup, inline styles, linked CSS, and scripts intact while preserving the normal vanilla path for artifacts with executable JavaScript.
+For new HTML/CSS-first artifacts, use the `static` template with `/index.html` as the entry and keep browser JavaScript in linked or inline scripts. Existing `vanilla` artifacts with a present, empty (or comment-only) conventional JavaScript entry are repaired to Sandpack's `static` template automatically. This keeps the original `index.html` markup, inline styles, linked CSS, and scripts intact while preserving the normal vanilla path for artifacts with executable JavaScript. Missing or alternate entry paths are not guessed at.
 
 Right now only the `react` / `react-ts` mapping has been exercised against a live artifact. The other rows are inherited from the original artifact-format proposal and may need adjustment when an artifact in that template family is first published; treat them as a starting point, not a contract.
 

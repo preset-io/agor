@@ -798,7 +798,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       dbUpdates.sandpack_config = normalizedConfig.sandpack_config;
       if (normalizedConfig.template !== existing.template) {
         dbUpdates.template = normalizedConfig.template;
-        dbUpdates.entry = normalizedConfig.sandpack_config?.customSetup?.entry ?? existing.entry;
+      }
+      const normalizedEntry = normalizedConfig.sandpack_config?.customSetup?.entry;
+      if (normalizedEntry !== undefined && normalizedEntry !== existing.entry) {
+        dbUpdates.entry = normalizedEntry;
       }
     }
 
@@ -1436,15 +1439,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       ...cachedDeps,
       ...((userPkg.dependencies as Record<string, string> | undefined) ?? {}),
     };
+    const exportEntry =
+      exportRenderConfig.sandpack_config?.customSetup?.entry ??
+      artifact.entry ??
+      userPkg.main ??
+      (exportRenderConfig.template === 'static' ? '/index.html' : 'src/index.js');
     const finalPkg: Record<string, unknown> = {
       name: 'artifact-export',
       version: '0.0.0',
-      main:
-        exportRenderConfig.sandpack_config?.customSetup?.entry ??
-        artifact.entry ??
-        userPkg.main ??
-        'src/index.js',
       ...userPkg,
+      main: exportEntry,
       dependencies: mergedDeps,
     };
     filesPayload['package.json'] = { content: JSON.stringify(finalPkg, null, 2) };

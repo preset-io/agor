@@ -135,6 +135,20 @@ describe('artifact MCP tool input schemas', () => {
     expect(parsed?.success).toBe(true);
   });
 
+  it('accepts the static template for HTML-first artifacts', () => {
+    const parsed = captureConfig('agor_artifacts_publish').inputSchema?.safeParse({
+      branchId: 'branch-1',
+      subpath: 'artifact',
+      template: 'static',
+      sandpackConfig: {
+        template: 'static',
+        customSetup: { entry: '/index.html' },
+      },
+    });
+
+    expect(parsed?.success).toBe(true);
+  });
+
   it('registers validate_folder as the clearer build-check alias', () => {
     const parsed = captureConfig('agor_artifacts_validate_folder').inputSchema?.safeParse({
       branchId: 'branch-1',

@@ -414,6 +414,45 @@ describe('ArtifactsService.updateMetadata', () => {
     expect(placed && placed.type === 'artifact' && placed.x).toBe(111);
     expect(placed && placed.type === 'artifact' && placed.width).toBe(333);
   });
+
+  dbTest('persists HTML-first normalization when Sandpack config is updated', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'HTML-first update',
+      template: 'vanilla',
+      entry: '/index.js',
+      files: {
+        '/index.js': '// generated entry intentionally left empty\n',
+        '/index.html': '<main>Updated HTML-first artifact</main>',
+      },
+      sandpack_config: {
+        customSetup: { entry: '/index.js', environment: 'parcel' },
+      },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const updated = await service.updateMetadata(
+      created.artifact_id,
+      {
+        sandpack_config: {
+          customSetup: { entry: '/index.js', environment: 'parcel' },
+        },
+      },
+      'user-owner'
+    );
+
+    expect(updated.template).toBe('static');
+    expect(updated.entry).toBe('/index.html');
+    expect(updated.sandpack_config).toEqual({
+      template: 'static',
+      customSetup: { entry: '/index.html' },
+    });
+  });
 });
 
 describe('ArtifactsService.patch (board move routing)', () => {
@@ -1285,6 +1324,66 @@ describe('ArtifactsService.getPayload agor-runtime injection', () => {
         ).toBe(true);
       } else {
         expect(persistedResources).toBeUndefined();
+      }
+    }
+  );
+});
+
+describe('ArtifactsService.exportToCodeSandbox', () => {
+  dbTest(
+    'exports repaired HTML-first artifacts with index.html as package main',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifactRepo = new ArtifactRepository(db);
+      const created = await artifactRepo.create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: 'HTML-first export',
+        template: 'vanilla',
+        entry: '/index.js',
+        files: {
+          '/index.js': '// generated entry intentionally left empty\n',
+          '/index.html': '<main>Exported HTML</main>',
+          '/styles.css': '.hero { color: rebeccapurple; }',
+          '/package.json': JSON.stringify({ main: 'index.js', dependencies: {} }),
+        },
+        public: true,
+        created_by: 'user-owner',
+      });
+
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: () => 'application/json' },
+        json: async () => ({ sandbox_id: 'sandbox-html-first' }),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        const result = await service.exportToCodeSandbox(
+          created.artifact_id,
+          'user-owner' as never
+        );
+
+        expect(result.sandboxId).toBe('sandbox-html-first');
+        const request = fetchMock.mock.calls[0]?.[0];
+        expect(request).toBe('https://codesandbox.io/api/v1/sandboxes/define?json=1');
+        const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        const body = JSON.parse(String(requestInit.body)) as {
+          files: Record<string, { content: string }>;
+        };
+        const exportedPackage = JSON.parse(body.files['package.json'].content) as {
+          main: string;
+        };
+
+        expect(exportedPackage.main).toBe('/index.html');
+        expect(body.files['index.html'].content).toBe('<main>Exported HTML</main>');
+        expect(body.files['styles.css'].content).toBe('.hero { color: rebeccapurple; }');
+        expect(body.files['.env']).toBeUndefined();
+      } finally {
+        globalThis.fetch = originalFetch;
       }
     }
   );
