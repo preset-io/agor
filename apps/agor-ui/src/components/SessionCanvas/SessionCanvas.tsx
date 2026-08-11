@@ -2720,10 +2720,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('select');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'select'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
+                      ...(activeTool === 'select'
+                        ? isSlim
+                          ? { background: token.colorFillSecondary }
+                          : {
+                              borderLeft: `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`,
+                            }
+                        : {}),
                     }}
                   >
                     <SelectOutlined style={{ fontSize: '16px' }} />
@@ -2743,10 +2746,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('zone');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'zone'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
+                      ...(activeTool === 'zone'
+                        ? isSlim
+                          ? { background: token.colorFillSecondary }
+                          : {
+                              borderLeft: `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`,
+                            }
+                        : {}),
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2770,10 +2776,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('comment');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'comment'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
+                      ...(activeTool === 'comment'
+                        ? isSlim
+                          ? { background: token.colorFillSecondary }
+                          : {
+                              borderLeft: `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`,
+                            }
+                        : {}),
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2800,10 +2809,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('markdown');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'markdown'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
+                      ...(activeTool === 'markdown'
+                        ? isSlim
+                          ? { background: token.colorFillSecondary }
+                          : {
+                              borderLeft: `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`,
+                            }
+                        : {}),
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2829,8 +2841,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'eraser' ? `3px solid ${token.colorError}` : 'none',
+                      ...(activeTool === 'eraser' && !isSlim
+                        ? { borderLeft: `3px solid ${token.colorError}` }
+                        : {}),
                       color: activeTool === 'eraser' ? token.colorError : 'inherit',
                       backgroundColor:
                         activeTool === 'eraser' ? `${token.colorError}15` : 'transparent',
