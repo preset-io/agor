@@ -34,6 +34,13 @@ describe('JSON persistence sanitizer', () => {
     expect(result.first).not.toBe(result.second);
   });
 
+  it('preserves sparse-array JSON semantics and rejects custom array properties', () => {
+    expect(sanitizeJsonValue(new Array(3))).toEqual([null, null, null]);
+    const custom = ['value'] as string[] & { extra?: string };
+    custom.extra = 'not JSON array data';
+    expect(() => sanitizeJsonValue(custom)).toThrow(/unsupported/);
+  });
+
   it('rejects cycles, excessive depth, unsupported values, and excessive strings predictably', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;

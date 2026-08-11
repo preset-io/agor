@@ -48,7 +48,15 @@ type ExitFrame = { kind: 'exit'; source: object };
 function boundedEnumerableKeys(source: object, remaining: number): string[] {
   if (Array.isArray(source)) {
     if (source.length > remaining) throw new JsonSanitizationError('size');
-    return Object.keys(source);
+    const keys: string[] = [];
+    for (const key in source) {
+      if (!Object.hasOwn(source, key)) continue;
+      const index = Number(key);
+      if (!Number.isInteger(index) || index < 0 || index >= source.length || String(index) !== key)
+        throw new JsonSanitizationError('unsupported');
+      keys.push(key);
+    }
+    return keys;
   }
   const keys: string[] = [];
   for (const key in source) {
@@ -92,7 +100,7 @@ export function sanitizeJsonValue<T>(input: T): T {
   }
   if (typeof input !== 'object') throw new JsonSanitizationError('unsupported');
 
-  const root: JsonContainer = Array.isArray(input) ? [] : {};
+  const root: JsonContainer = Array.isArray(input) ? new Array(input.length).fill(null) : {};
   const stack: Array<EnterFrame | ExitFrame> = [
     { kind: 'enter', source: input, target: root, depth: 0 },
   ];
@@ -137,7 +145,7 @@ export function sanitizeJsonValue<T>(input: T): T {
           throw new JsonSanitizationError('unsupported');
         sanitized = value;
       } else if (typeof value === 'object') {
-        const child: JsonContainer = Array.isArray(value) ? [] : {};
+        const child: JsonContainer = Array.isArray(value) ? new Array(value.length).fill(null) : {};
         sanitized = child;
         stack.push({ kind: 'enter', source: value, target: child, depth: frame.depth + 1 });
       } else throw new JsonSanitizationError('unsupported');

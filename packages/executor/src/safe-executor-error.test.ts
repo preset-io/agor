@@ -14,6 +14,15 @@ describe('formatExecutorFailure', () => {
     expect(output).not.toContain('update messages');
   });
 
+  it('recognizes a transported Drizzle error from its message alone', () => {
+    const secret = 'transported-secret';
+    const output = formatExecutorFailure(
+      new Error(`Failed query: update messages set data=$1\nparams: ${secret}`)
+    );
+    expect(output).toBe('Database operation failed');
+    expect(output).not.toContain(secret);
+  });
+
   it('preserves ordinary provider failures within a bounded length', () => {
     expect(formatExecutorFailure(new Error('Provider authentication failed'))).toBe(
       'Provider authentication failed'

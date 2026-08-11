@@ -2,6 +2,11 @@ import { sanitizeDbError } from '@agor/core/db';
 
 const MAX_FAILURE_MESSAGE_LENGTH = 1_024;
 
+function hasDrizzleMessageShape(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return value.startsWith('Failed query:') && value.includes('params:');
+}
+
 function isDatabaseFailure(error: unknown): boolean {
   let current: unknown = error;
   const seen = new Set<unknown>();
@@ -12,6 +17,7 @@ function isDatabaseFailure(error: unknown): boolean {
     if (
       'query' in value ||
       'params' in value ||
+      hasDrizzleMessageShape(value.message) ||
       (typeof value.code === 'string' && /^[0-9A-Z]{5}$/.test(value.code))
     )
       return true;

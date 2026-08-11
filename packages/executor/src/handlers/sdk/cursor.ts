@@ -38,6 +38,7 @@ import type { AgorClient } from '../../services/feathers-client.js';
 import {
   captureGitStateAtTaskEnd,
   createStreamingCallbacks,
+  settleTaskFailure,
   stampGitStateAtTaskStart,
 } from './base-executor.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
@@ -279,10 +280,6 @@ function getNextMessageIndexFrom(messages: ReadonlyArray<Message>): number {
   return messages.length;
 }
 
-async function getNextMessageIndex(client: AgorClient, sessionId: SessionID): Promise<number> {
-  return getNextMessageIndexFrom(await getSessionMessages(client, sessionId));
-}
-
 async function createUserMessage(args: {
   client: AgorClient;
   sessionId: SessionID;
@@ -418,26 +415,6 @@ async function updateToolMessage(args: {
   await args.client.service('messages').patch(args.messageId, {
     content,
     content_preview: preview.substring(0, 200),
-  });
-}
-
-async function createSystemErrorMessage(args: {
-  client: AgorClient;
-  sessionId: SessionID;
-  taskId: TaskID;
-  message: string;
-}): Promise<void> {
-  const index = await getNextMessageIndex(args.client, args.sessionId);
-  await args.client.service('messages').create({
-    message_id: generateId() as MessageID,
-    session_id: args.sessionId,
-    task_id: args.taskId,
-    type: 'system',
-    role: MessageRole.SYSTEM,
-    index,
-    timestamp: new Date().toISOString(),
-    content: args.message,
-    content_preview: args.message.substring(0, 200),
   });
 }
 
@@ -648,7 +625,7 @@ export async function executeCursorTask(params: {
     }
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
-    console.error('[cursor] Execution failed:', err);
+    console.error('[cursor] execution failed category=task_execution');
     const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
     const taskPatch: Partial<Task> = {
       status: 'failed',
@@ -662,8 +639,7 @@ export async function executeCursorTask(params: {
         sha_at_end: gitStateAtEnd.sha,
       };
     }
-    await client.service('tasks').patch(taskId, taskPatch);
-    await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
+    await settleTaskFailure(client, sessionId, taskId, err, taskPatch);
     throw err;
   } finally {
     params.abortController.signal.removeEventListener('abort', abortHandler);
