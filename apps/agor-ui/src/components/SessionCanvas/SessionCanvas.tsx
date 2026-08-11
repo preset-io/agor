@@ -21,6 +21,7 @@ import type {
 import {
   BorderOutlined,
   CommentOutlined,
+  CompassOutlined,
   DeleteOutlined,
   FileMarkdownOutlined,
   MinusOutlined,
@@ -63,6 +64,7 @@ import {
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useUIMode } from '../../contexts/UIModeContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -540,6 +542,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const [activeTool, setActiveTool] = useState<
       'select' | 'zone' | 'comment' | 'eraser' | 'markdown'
     >('select');
+
+    const [miniMapVisible, setMiniMapVisible] = useLocalStorage<boolean>(
+      'agor:board-minimap-visible',
+      true
+    );
 
     // Zone drawing state (drag-to-draw)
     const [drawingZone, setDrawingZone] = useState<{
@@ -2835,20 +2842,42 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   </ControlButton>
                 </span>
               </Tooltip>
+              <Tooltip
+                title={miniMapVisible ? 'Hide Minimap' : 'Show Minimap'}
+                placement="right"
+                mouseEnterDelay={0.3}
+              >
+                <span>
+                  <ControlButton
+                    aria-label={miniMapVisible ? 'Hide Minimap' : 'Show Minimap'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMiniMapVisible(!miniMapVisible);
+                    }}
+                    style={{
+                      background: miniMapVisible ? token.colorFillSecondary : 'transparent',
+                    }}
+                  >
+                    <CompassOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
+              </Tooltip>
             </Controls>
-            <MiniMap
-              nodeColor={miniMapNodeColor}
-              onClick={handleMiniMapClick}
-              pannable
-              zoomable
-              style={{
-                backgroundColor: token.colorBgElevated,
-                border: `1px solid ${token.colorBorder}`,
-              }}
-              maskColor="rgba(0, 0, 0, 0.5)"
-              maskStrokeColor={token.colorPrimary}
-              maskStrokeWidth={2}
-            />
+            {miniMapVisible && (
+              <MiniMap
+                nodeColor={miniMapNodeColor}
+                onClick={handleMiniMapClick}
+                pannable
+                zoomable
+                style={{
+                  backgroundColor: token.colorBgElevated,
+                  border: `1px solid ${token.colorBorder}`,
+                }}
+                maskColor="rgba(0, 0, 0, 0.5)"
+                maskStrokeColor={token.colorPrimary}
+                maskStrokeWidth={2}
+              />
+            )}
             <RemoteCursorLayer
               client={client}
               boardId={(board?.board_id as BoardID | null) ?? null}
