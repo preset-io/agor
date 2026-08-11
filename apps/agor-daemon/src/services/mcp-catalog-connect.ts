@@ -257,7 +257,9 @@ export function createMCPCatalogConnectService(
 
       // Provenance is named on params rather than in the payload: the write
       // authorizer refuses a stamp that arrived from a request, so this is the
-      // one path that can produce one. See `McpCatalogInstallParams`.
+      // one path that can produce one. Saying so is also what makes the row
+      // private to the caller — an install is theirs whatever the tenant's
+      // `mcp_member_policy` says. See `McpCatalogInstallParams`.
       const mcpServer =
         existing ??
         ((await service('mcp-servers').create(createInput, {

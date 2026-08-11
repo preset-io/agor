@@ -76,7 +76,6 @@ import type {
   GroupID,
   HookContext,
   MCPServer,
-  MCPTransport,
   MessageID,
   Paginated,
   Params,
@@ -157,10 +156,7 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
-import {
-  authorizeMcpServerWrite,
-  loadMcpServerForWrite,
-} from './utils/mcp-server-authorization.js';
+import { createMcpServerWriteAuthorizationHook } from './utils/mcp-server-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
   type RealtimeAccessBranchRepository,
@@ -1816,31 +1812,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // alone — see `authorizeMcpServerWrite`. Reads are narrowed to the servers
   // the caller may use, because a private server is another user's
   // configuration and credential, not shared tenant configuration.
-  const authorizeMcpServerWriteHook = async (context: HookContext): Promise<HookContext> => {
-    const method = context.method as 'create' | 'update' | 'patch' | 'remove';
-    const items = Array.isArray(context.data) ? context.data : [context.data];
-    const existing =
-      method === 'create' ? undefined : await loadMcpServerForWrite(db, context.id ?? undefined);
-
-    for (const item of items) {
-      const data = (item ?? undefined) as
-        | { transport?: MCPTransport; owner_user_id?: string | null; catalog_entry_name?: string }
-        | undefined;
-      const decision = await authorizeMcpServerWrite(db, context.params, {
-        method,
-        existing,
-        data,
-      });
-      if (decision.owner_user_id !== undefined && data) {
-        data.owner_user_id = decision.owner_user_id;
-      }
-      if (decision.catalog_entry_name !== undefined && data) {
-        data.catalog_entry_name = decision.catalog_entry_name;
-      }
-    }
-
-    return context;
-  };
+  const authorizeMcpServerWriteHook = createMcpServerWriteAuthorizationHook(db) as unknown as (
+    context: HookContext
+  ) => Promise<HookContext>;
 
   const scopeMcpServerFindToUsable = async (context: HookContext): Promise<HookContext> => {
     if (!context.params.provider) return context;

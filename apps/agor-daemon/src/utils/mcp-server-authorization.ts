@@ -59,13 +59,18 @@ export interface McpServerWriteDecision {
  * `POST /mcp-servers` unless it says so out of band. A request cannot: Feathers
  * builds external params from the route, query, headers, and authentication,
  * so a top-level key like this one is only ever set by daemon code.
+ *
+ * It carries the entry and nothing else. The caller's identity is already on
+ * `params.user`, and reading the owner from there rather than from this key is
+ * what keeps "installed by" from becoming a field a daemon-side caller states.
  */
 export interface McpCatalogInstallParams {
   mcpCatalogInstall?: { entry_name: string };
 }
 
 /**
- * The catalog provenance this write may persist, refusing any the client sent.
+ * What a marketplace install writes that an ordinary write does not: the
+ * catalog provenance, and the owner.
  *
  * Provenance is a fact about how a row got here, not a field its owner
  * maintains. The registry name is printed on every card in the marketplace and
@@ -80,13 +85,28 @@ export interface McpCatalogInstallParams {
  * field at all — so a stamp arriving from a request is a confused client or a
  * hostile one, and silence would serve neither. Admins are refused too: this
  * is not an operator-maintained field.
+ *
+ * Ownership is decided here rather than left to {@link decidePolicyAndOwnership}
+ * because an install is not an ordinary create. Connect writes a `session`-scoped
+ * row from a fixed payload that names no owner, so under the ordinary rules two
+ * callers end up with a shared server: `allow_crud` reads "no owner requested"
+ * as opting into one, and an admin skips the ownership rules entirely. An
+ * unowned row is usable by every user in the tenant (`isMCPServerUsableBy`),
+ * which is the opposite of what installing from the marketplace asks for. So a
+ * catalog install belongs to whoever installed it, under every policy and at
+ * every role. Publishing a server the whole tenant may use is still available
+ * — it is what `POST /mcp-servers` is for.
+ *
+ * The owner is read from the authenticated caller, not from the install params:
+ * connect only ever installs for its own caller, and taking it from `params.user`
+ * means no daemon-side caller can name someone else's identity by mistake.
  */
-function resolveCatalogProvenance(
+function resolveCatalogInstall(
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
-): string | undefined {
+): { entry_name: string; owner_user_id: UserID } | undefined {
   // Internal daemon calls and service accounts are trusted by their route and
-  // write the column directly, the way any other server-side field is written.
+  // write the columns directly, the way any other server-side field is written.
   if (!params?.provider) return undefined;
   if ((params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true) {
     return undefined;
@@ -99,7 +119,12 @@ function resolveCatalogProvenance(
   }
 
   if (request.method !== 'create') return undefined;
-  return (params as McpCatalogInstallParams).mcpCatalogInstall?.entry_name;
+  const entryName = (params as McpCatalogInstallParams).mcpCatalogInstall?.entry_name;
+  if (entryName === undefined) return undefined;
+
+  const userId = params.user?.user_id as UserID | undefined;
+  if (!userId) throw new NotAuthenticated('Authentication required');
+  return { entry_name: entryName, owner_user_id: userId };
 }
 
 /**
@@ -139,10 +164,14 @@ export async function authorizeMcpServerWrite(
   request: McpServerWriteRequest
 ): Promise<McpServerWriteDecision> {
   const decision = await decidePolicyAndOwnership(db, params, request);
-  const catalogEntryName = resolveCatalogProvenance(params, request);
-  return catalogEntryName === undefined
+  const install = resolveCatalogInstall(params, request);
+  return install === undefined
     ? decision
-    : { ...decision, catalog_entry_name: catalogEntryName };
+    : {
+        ...decision,
+        catalog_entry_name: install.entry_name,
+        owner_user_id: install.owner_user_id,
+      };
 }
 
 async function decidePolicyAndOwnership(
@@ -214,6 +243,53 @@ async function decidePolicyAndOwnership(
   }
 
   return {};
+}
+
+/**
+ * The `mcp-servers` write hook, as a factory rather than a closure inside the
+ * service registration.
+ *
+ * A guard that is correct and a guard that runs are different claims, and the
+ * second one is the one that was missing: every test of this module called the
+ * authorizer directly, so nothing would have noticed the hook being dropped
+ * from the service or a caller reaching the repository around it. Building the
+ * hook here lets a test stand up the real service with the real hook and assert
+ * the row that lands in the database — see `mcp-catalog-connect.install.test.ts`.
+ */
+export function createMcpServerWriteAuthorizationHook(
+  db: TenantScopeAwareDatabase
+): (context: McpServerWriteHookContext) => Promise<McpServerWriteHookContext> {
+  return async (context) => {
+    const method = context.method as McpServerWriteMethod;
+    const items = Array.isArray(context.data) ? context.data : [context.data];
+    const existing =
+      method === 'create' ? undefined : await loadMcpServerForWrite(db, context.id ?? undefined);
+
+    for (const item of items) {
+      const data = (item ?? undefined) as McpServerWriteRequest['data'];
+      const decision = await authorizeMcpServerWrite(db, context.params, {
+        method,
+        existing,
+        data,
+      });
+      if (decision.owner_user_id !== undefined && data) {
+        data.owner_user_id = decision.owner_user_id;
+      }
+      if (decision.catalog_entry_name !== undefined && data) {
+        data.catalog_entry_name = decision.catalog_entry_name;
+      }
+    }
+
+    return context;
+  };
+}
+
+/** The slice of a Feathers hook context {@link createMcpServerWriteAuthorizationHook} reads. */
+export interface McpServerWriteHookContext {
+  method: string;
+  id?: unknown;
+  data?: unknown;
+  params: AuthenticatedParams;
 }
 
 /** Load the row a patch/update/remove targets, for {@link authorizeMcpServerWrite}. */

@@ -260,6 +260,28 @@ describe('authorizeMcpServerWrite', () => {
     ).resolves.toEqual({ owner_user_id: ALICE, catalog_entry_name: 'com.linear/linear' });
   });
 
+  it.each([
+    ['allow_crud', 'member'],
+    ['allow_crud', 'admin'],
+    ['allow_private_only', 'admin'],
+  ] as const)(
+    'gives a marketplace install to its installer under %s, at role %s',
+    async (policy, role) => {
+      resolveMcpMemberPolicy.mockResolvedValue(policy);
+
+      const installParams = {
+        ...paramsFor(ALICE, role),
+        mcpCatalogInstall: { entry_name: 'com.linear/linear' },
+      } as AuthenticatedParams;
+
+      // Without this the row lands unowned, and an unowned row is usable by
+      // every user in the tenant — an install nobody asked to share.
+      await expect(
+        authorizeMcpServerWrite(db, installParams, { method: 'create', data: remoteCreate })
+      ).resolves.toEqual({ owner_user_id: ALICE, catalog_entry_name: 'com.linear/linear' });
+    }
+  );
+
   it('leaves an internal caller free to record provenance directly', async () => {
     await expect(
       authorizeMcpServerWrite(db, undefined, {
