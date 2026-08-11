@@ -61,6 +61,7 @@ describe('SessionQueueWorker', () => {
 
   it('waits for the recovery cadence after a short page instead of hot-polling a blocker', async () => {
     vi.useFakeTimers();
+    const info = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const discover = vi.fn(async () => [ref('tenant-a', 'session-a')]);
     const processSession = vi.fn(async () => undefined);
     const worker = new SessionQueueWorker({} as never, {
@@ -78,6 +79,7 @@ describe('SessionQueueWorker', () => {
     expect(processSession).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(processSession).toHaveBeenCalledTimes(2);
+    expect(info.mock.calls.flat().join('\n')).not.toContain('recovery_sweep_found_work');
     worker.stop();
   });
 

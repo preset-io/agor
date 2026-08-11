@@ -54,5 +54,7 @@ describe('prompt and widget transaction scopes', () => {
     expect(drain).toContain(
       'reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams)'
     );
+    expect(drain).not.toContain('event=drain_started');
+    expect(drain).toContain('event=dispatched');
   });
 });

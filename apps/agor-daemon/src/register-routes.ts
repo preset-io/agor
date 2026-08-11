@@ -2861,10 +2861,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    console.log(
-      `[task-queue] event=drain_started session_id=${JSON.stringify(sessionId)} task_id=${JSON.stringify(nextTask.task_id)} queue_position=${nextTask.queue_position ?? 'null'}`
-    );
-
     // Re-read the task — defend against the case where it was already drained
     // by a concurrent caller, or removed by an admin via DELETE /tasks/:id.
     const stillQueued = await taskRepo.findById(nextTask.task_id);

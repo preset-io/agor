@@ -43,7 +43,6 @@ export class SessionQueueWorker {
   private cursor: QueuedSessionCursor | undefined;
   private idleRounds = 0;
   private sweepComplete = false;
-  private sweepFound = 0;
   private pagesInSweep = 0;
   private readonly scanBatchSize: number;
   private readonly maxPagesPerSweep: number;
@@ -96,12 +95,6 @@ export class SessionQueueWorker {
     try {
       found = await this.checkOnce();
       this.idleRounds = 0;
-      if (this.sweepComplete && this.sweepFound > 0) {
-        console.log(
-          `[distributed-work.task-queue] event=recovery_sweep_found_work instance_id=${JSON.stringify(this.options.workIdentity.instanceId)} boot_id=${JSON.stringify(this.options.workIdentity.bootId)} session_refs_examined=${this.sweepFound}`
-        );
-        this.sweepFound = 0;
-      }
     } catch (error) {
       this.idleRounds += 1;
       console.warn(
@@ -144,7 +137,6 @@ export class SessionQueueWorker {
   async checkOnce(): Promise<number> {
     this.sweepComplete = false;
     const refs = await this.discover();
-    this.sweepFound += refs.length;
     this.pagesInSweep += 1;
     if (refs.length === 0) {
       if (this.cursor) this.cursor = undefined;
