@@ -232,17 +232,20 @@ describe('authorizeMcpServerWrite', () => {
     }
   );
 
-  it('refuses a caller-supplied catalog stamp on a patch', async () => {
-    resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
+  it.each(['patch', 'update'] as const)(
+    'refuses a caller-supplied catalog stamp on %s',
+    async (method) => {
+      resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
 
-    await expect(
-      authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
-        method: 'patch',
-        existing: serverOwnedBy(ALICE),
-        data: { ...remoteCreate, catalog_entry_name: 'io.github.github/github-mcp-server' },
-      })
-    ).rejects.toThrow(/catalog provenance cannot be set/i);
-  });
+      await expect(
+        authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+          method,
+          existing: serverOwnedBy(ALICE),
+          data: { ...remoteCreate, catalog_entry_name: 'io.github.github/github-mcp-server' },
+        })
+      ).rejects.toThrow(/catalog provenance cannot be set/i);
+    }
+  );
 
   it('stamps provenance when the marketplace install path names the entry', async () => {
     resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');

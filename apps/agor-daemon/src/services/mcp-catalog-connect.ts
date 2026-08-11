@@ -91,26 +91,43 @@ function sameEndpoint(a: string | undefined, b: string): boolean {
 }
 
 /**
- * Whether `server` is still an install of `entry`.
+ * Whether `server` still carries the configuration the catalog described.
  *
  * The stamp records where a row came from; this asks whether it is still that.
- * The two come apart because a member may point their own private server
- * wherever they like — which is theirs to do — so a stamp on its own would let
- * a redirected row stand in for the catalog's, and reuse would hand the next
- * caller an endpoint the catalog never named. A stamp nobody but the install
- * path can write (see `authorizeMcpServerWrite`) closes the forged half; this
- * closes the half where a legitimately stamped row is edited afterwards.
+ * The two come apart because a member may edit their own server — which is
+ * theirs to do — so a stamp on its own would let an edited row stand in for
+ * the catalog's, and reuse would hand the next caller something the catalog
+ * never described. A stamp nobody but the install path can write (see
+ * `authorizeMcpServerWrite`) closes the forged half; this closes the half
+ * where a legitimately stamped row is changed afterwards.
  *
- * Only the endpoint is compared, because only the endpoint is the catalog's to
- * fix. Name, labels, `enabled`, scope, headers, and credentials are the
- * owner's to tune, and a second row for a benign edit would be a worse outcome
- * than the duplicate reuse exists to prevent.
+ * What is compared is everything that decides where the session's traffic goes
+ * and what it carries: the endpoint, and the credential routing. Connect only
+ * serves entries whose probe said `none` and creates them with no headers and
+ * `auth: { type: 'none' }`, so any of either means the row is no longer this
+ * entry's install. `auth.type` is the load-bearing field — `resolveMCPAuthHeaders`
+ * contributes nothing for `none` and switches on it for the rest — so an
+ * `oauth` row with a caller-chosen authorization endpoint is exactly the drift
+ * that must not be reused.
+ *
+ * Custom headers are refused wholesale rather than screened for the
+ * dangerous-looking ones. Agor redacts every custom header value on read and
+ * documents them as secret-bearing; the only names it classifies are the
+ * reserved ones it refuses to store at all. There is no notion of a harmless
+ * header anywhere in the codebase, and reuse is the wrong place to invent one
+ * — a rule that has to guess which headers carry secrets is a rule that will
+ * eventually guess wrong.
+ *
+ * Genuinely cosmetic fields stay the owner's: name, labels, description, and
+ * scope. A second row for a benign edit would be its own bug.
  */
 function isInstallOf(server: MCPServer, entry: MCPCatalogEntry & { remote_url: string }): boolean {
   return (
     server.catalog_entry_name === entry.name &&
     server.transport === toServerTransport(entry) &&
-    sameEndpoint(server.url, entry.remote_url)
+    sameEndpoint(server.url, entry.remote_url) &&
+    (server.auth?.type ?? 'none') === 'none' &&
+    Object.keys(server.headers ?? {}).length === 0
   );
 }
 
@@ -177,9 +194,17 @@ export function createMCPCatalogConnectService(
    * unique on, so there is no second normalisation to keep in step.
    *
    * The name alone does not settle it, though: see {@link isInstallOf}. A row
-   * that has stopped pointing at the entry's endpoint is passed over rather
+   * that no longer carries the entry's configuration is passed over rather
    * than handed back, so a caller who has one of those and a real install gets
    * the real one.
+   *
+   * A disabled row is passed over too, which is a different question with the
+   * same answer. Reusing one would attach a server the session resolves away
+   * (`enabledOnly`), reporting success while handing back an agent that never
+   * sees it; re-enabling it would let a connect flip a decision somebody else
+   * made deliberately about a possibly-shared row. Creating a fresh one grants
+   * nothing the caller's `mcp_member_policy` did not already grant, and leaves
+   * the disabled row exactly as its owner left it.
    */
   const findExistingInstall = async (
     entry: MCPCatalogEntry & { remote_url: string },
@@ -192,7 +217,7 @@ export function createMCPCatalogConnectService(
       query: { ...(userId ? { usableByUserId: userId } : {}), $limit: 1000 },
     });
     const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
-    return servers.find((server) => isInstallOf(server, entry));
+    return servers.find((server) => server.enabled && isInstallOf(server, entry));
   };
 
   return {

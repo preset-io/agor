@@ -39,6 +39,8 @@ function installOf(overrides: Record<string, unknown> = {}) {
     catalog_entry_name: LINEAR,
     transport: 'http',
     url: 'https://mcp.linear.app/mcp',
+    auth: { type: 'none' },
+    enabled: true,
     ...overrides,
   };
 }
@@ -210,17 +212,86 @@ describe('mcp-catalog/connect', () => {
     expect(created.mcpServers).toHaveLength(1);
   });
 
-  it('reuses an install the owner has renamed, relabelled, or disabled', async () => {
-    // The endpoint is what the catalog fixes. Everything a user can sensibly
-    // adjust about their own install must not cost them the install — a second
-    // row for a benign edit would be a worse bug than the one reuse guards.
+  it('does not reuse an install whose auth configuration has drifted', async () => {
+    // Connect only serves entries whose probe said `none`, and creates them
+    // with `auth: { type: 'none' }`, so any auth at all means the row stopped
+    // being this entry's install. Left tunable it would be the sharpest edge
+    // here: `oauth` with a caller-chosen authorization endpoint sends the
+    // user's browser somewhere the catalog never named, and under `allow_crud`
+    // the row is shared, so one member's edit is served to another member.
+    const reAuthed = installOf({
+      mcp_server_id: 'server-reauthed',
+      auth: { type: 'oauth', oauth_authorization_url: 'https://evil.example/authorize' },
+    });
+    const { app, created } = buildApp(CURATED, [reAuthed]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+    expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'none' } });
+  });
+
+  it('does not reuse an install carrying custom headers', async () => {
+    // Agor redacts every custom header value on read and documents them as
+    // secret-bearing; it has no notion of a harmless one. Reuse cannot draw a
+    // line the rest of the codebase declines to draw, so a catalog install —
+    // which is created with no headers — keeps none.
+    const withHeaders = installOf({
+      mcp_server_id: 'server-headers',
+      headers: { 'X-Api-Key': 'sk-live-1' },
+    });
+    const { app, created } = buildApp(CURATED, [withHeaders]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+  });
+
+  it('does not reuse a disabled install', async () => {
+    // A session resolves its servers with `enabledOnly`, so attaching a
+    // disabled row would report success and hand back a session whose agent
+    // never sees the server. Connect declines to re-enable it instead: the row
+    // may be shared and switched off deliberately, and flipping somebody
+    // else's decision is not what "connect this entry" asked for.
+    const disabled = installOf({ mcp_server_id: 'server-disabled', enabled: false });
+    const { app, created } = buildApp(CURATED, [disabled]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+    expect(created.mcpServers[0]).not.toMatchObject({ enabled: false });
+  });
+
+  it('passes over a drifted row and takes the caller’s real install', async () => {
+    // Drift disqualifies one row, not the search. Somebody who has both an
+    // edited row and a genuine install gets the genuine one rather than a
+    // third row beside them.
+    const drifted = installOf({
+      mcp_server_id: 'server-drifted',
+      auth: { type: 'bearer', token: 'sk-1' },
+    });
+    const intact = installOf({ mcp_server_id: 'server-intact' });
+    const { app, created } = buildApp(CURATED, [drifted, intact]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(created.mcpServers).toHaveLength(0);
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe('server-intact');
+  });
+
+  it('reuses an install the owner has renamed or relabelled', async () => {
+    // What is genuinely cosmetic stays the owner's to change. This is the
+    // guard against over-correcting: a second row for a benign edit would be
+    // its own bug, so nothing here may cost somebody their install.
     const tuned = installOf({
       name: 'my-linear',
       display_name: 'Linear (work)',
       description: 'my notes',
-      enabled: false,
       scope: 'global',
-      headers: { 'X-Trace': '1' },
       url: 'https://mcp.linear.app/mcp/',
     });
     const { app, created } = buildApp(CURATED, [tuned]);
