@@ -619,8 +619,9 @@ export class MCPCatalogRepository {
    * until they do, the file remains the source of truth for what is offered.
    */
   async retireWithdrawnEntry(name: string): Promise<'deleted' | 'retired-curated' | 'absent'> {
-    const existing = await this.rawByName(name);
-    if (!existing) return 'absent';
+    const observed = await this.rawByName(name);
+    if (!observed) return 'absent';
+    const existing = await this.lockedRawByName(name);
 
     if (!existing.curated) {
       await deleteFrom(this.db, mcpCatalogEntries)
@@ -670,8 +671,9 @@ export class MCPCatalogRepository {
    * exactly the stale-verdict-on-a-new-endpoint case the invalidation prevents.
    */
   async recordProbeResult(name: string, result: MCPCatalogProbeResult): Promise<void> {
-    const existing = await this.rawByName(name);
-    if (!existing) return;
+    const observed = await this.rawByName(name);
+    if (!observed) return;
+    const existing = await this.lockedRawByName(name);
     if (existing.remote_url !== result.probed_url) return;
 
     await update(this.db, mcpCatalogEntries)
@@ -717,8 +719,10 @@ export class MCPCatalogRepository {
    * outright — there is nothing underneath it to fall back to.
    */
   async retireCuration(name: string): Promise<'deleted' | 'uncurated' | 'absent'> {
-    const existing = await this.rawByName(name);
-    if (!existing?.curated) return 'absent';
+    const observed = await this.rawByName(name);
+    if (!observed?.curated) return 'absent';
+    const existing = await this.lockedRawByName(name);
+    if (!existing.curated) return 'absent';
 
     const data = existing.data ?? {};
     // "Live", not "ever mirrored": a withdrawn registry source clears all three

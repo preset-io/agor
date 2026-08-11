@@ -40,6 +40,7 @@ const TX_PREFIX = `test.tx-${suffix}`;
 const CONCURRENT_SEED = `test.concurrent-seed-${suffix}/mcp`;
 const INTERLEAVED_SOURCES = `test.interleaved-sources-${suffix}/mcp`;
 const INTERLEAVED_REGISTRY = `test.interleaved-registry-${suffix}/mcp`;
+const INTERLEAVED_PROBE = `test.interleaved-probe-${suffix}/mcp`;
 
 async function waitForBlockedCatalogRowLock(db: Database): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -288,6 +289,50 @@ describePostgres('mcp_catalog_entries row-level security', () => {
     expect(await repository.findByName(INTERLEAVED_REGISTRY)).toMatchObject({
       title: 'Newest registry title',
       version: '3',
+    });
+  });
+
+  it('discards a stale probe result after a concurrent endpoint move', async () => {
+    const oldUrl = 'https://old.example.test/mcp';
+    const newUrl = 'https://new.example.test/mcp';
+    await runWithSystemDatabaseScope(
+      db,
+      'seed interleaved probe test',
+      (scoped) =>
+        new MCPCatalogRepository(scoped as never).upsertRegistryEntry({
+          name: INTERLEAVED_PROBE,
+          remote_url: oldUrl,
+          registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+        }),
+      { capability: 'mcp_catalog_ingestion' }
+    );
+
+    await interleaveCatalogWriters(
+      db,
+      INTERLEAVED_PROBE,
+      (scoped) =>
+        new MCPCatalogRepository(scoped as never).upsertRegistryEntry({
+          name: INTERLEAVED_PROBE,
+          remote_url: newUrl,
+          registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+        }),
+      () =>
+        runWithSystemDatabaseScope(
+          db,
+          'interleaved stale probe writer',
+          (scoped) =>
+            new MCPCatalogRepository(scoped as never).recordProbeResult(INTERLEAVED_PROBE, {
+              probed_auth_type: 'none',
+              probed_at: new Date('2026-01-15T00:00:00.000Z'),
+              probed_url: oldUrl,
+            }),
+          { capability: 'mcp_catalog_ingestion' }
+        )
+    );
+
+    expect(await repository.findByName(INTERLEAVED_PROBE)).toMatchObject({
+      remote_url: newUrl,
+      probed_auth_type: 'unknown',
     });
   });
 
