@@ -41,6 +41,7 @@ const CONCURRENT_SEED = `test.concurrent-seed-${suffix}/mcp`;
 const INTERLEAVED_SOURCES = `test.interleaved-sources-${suffix}/mcp`;
 const INTERLEAVED_REGISTRY = `test.interleaved-registry-${suffix}/mcp`;
 const INTERLEAVED_PROBE = `test.interleaved-probe-${suffix}/mcp`;
+const INTERLEAVED_RETIREMENT = `test.interleaved-retirement-${suffix}/mcp`;
 
 async function waitForBlockedCatalogRowLock(db: Database): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -334,6 +335,41 @@ describePostgres('mcp_catalog_entries row-level security', () => {
       remote_url: newUrl,
       probed_auth_type: 'unknown',
     });
+  });
+
+  it('treats a concurrent retirement deletion as already absent', async () => {
+    await runWithSystemDatabaseScope(
+      db,
+      'seed interleaved retirement test',
+      (scoped) =>
+        new MCPCatalogRepository(scoped as never).upsertCuration({
+          name: INTERLEAVED_RETIREMENT,
+          category: 'dev-tools',
+          capabilities: ['code-repos'],
+          benefit: 'Benefit',
+          starter_prompt: 'Prompt',
+          permission_disclosure: 'Disclosure',
+          verified: true,
+        }),
+      { capability: 'mcp_catalog_ingestion' }
+    );
+
+    const outcomes = await interleaveCatalogWriters(
+      db,
+      INTERLEAVED_RETIREMENT,
+      (scoped) => new MCPCatalogRepository(scoped as never).retireCuration(INTERLEAVED_RETIREMENT),
+      () =>
+        runWithSystemDatabaseScope(
+          db,
+          'interleaved duplicate curation retirement',
+          (scoped) =>
+            new MCPCatalogRepository(scoped as never).retireCuration(INTERLEAVED_RETIREMENT),
+          { capability: 'mcp_catalog_ingestion' }
+        )
+    );
+
+    expect(outcomes).toEqual(['deleted', 'absent']);
+    expect(await repository.findByName(INTERLEAVED_RETIREMENT)).toBeNull();
   });
 
   it('refuses a write made without any system capability', async () => {

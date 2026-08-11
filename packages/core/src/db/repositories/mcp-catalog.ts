@@ -410,9 +410,14 @@ export class MCPCatalogRepository {
    * the lock is essential: the optimistic read used to choose insert vs update
    * may predate a peer daemon's committed registry or curation write.
    */
-  private async lockedRawByName(name: string): Promise<MCPCatalogEntryRow> {
+  private async lockedRawByNameOrNull(name: string): Promise<MCPCatalogEntryRow | null> {
     await lockRowForUpdate(this.db, this.db, mcpCatalogEntries, eq(mcpCatalogEntries.name, name));
-    const current = await this.rawByName(name);
+    return this.rawByName(name);
+  }
+
+  /** An upsert that observed or lost an insert race expects the row to remain. */
+  private async requireLockedRawByName(name: string): Promise<MCPCatalogEntryRow> {
+    const current = await this.lockedRawByNameOrNull(name);
     if (!current) {
       throw new RepositoryError(`MCP catalog entry ${name} disappeared while acquiring its lock`);
     }
@@ -481,7 +486,7 @@ export class MCPCatalogRepository {
 
     // Do not derive shared/blob columns from the optimistic read above. A peer
     // may have committed either source half since then; lock and reload first.
-    existing = await this.lockedRawByName(entry.name);
+    existing = await this.requireLockedRawByName(entry.name);
 
     const storedAt = existing.registry_updated_at
       ? new Date(existing.registry_updated_at).getTime()
@@ -582,7 +587,7 @@ export class MCPCatalogRepository {
     // Registry ingestion and curated.yaml reconciliation own different halves
     // of this row. Serialize and reload so neither can re-save a stale copy of
     // the other's half.
-    existing = await this.lockedRawByName(entry.name);
+    existing = await this.requireLockedRawByName(entry.name);
 
     const existingData = existing.data ?? {};
     const shared = deriveSharedColumns(existingData.registry ?? {}, curationSide);
@@ -621,7 +626,8 @@ export class MCPCatalogRepository {
   async retireWithdrawnEntry(name: string): Promise<'deleted' | 'retired-curated' | 'absent'> {
     const observed = await this.rawByName(name);
     if (!observed) return 'absent';
-    const existing = await this.lockedRawByName(name);
+    const existing = await this.lockedRawByNameOrNull(name);
+    if (!existing) return 'absent';
 
     if (!existing.curated) {
       await deleteFrom(this.db, mcpCatalogEntries)
@@ -673,7 +679,8 @@ export class MCPCatalogRepository {
   async recordProbeResult(name: string, result: MCPCatalogProbeResult): Promise<void> {
     const observed = await this.rawByName(name);
     if (!observed) return;
-    const existing = await this.lockedRawByName(name);
+    const existing = await this.lockedRawByNameOrNull(name);
+    if (!existing) return;
     if (existing.remote_url !== result.probed_url) return;
 
     await update(this.db, mcpCatalogEntries)
@@ -721,7 +728,8 @@ export class MCPCatalogRepository {
   async retireCuration(name: string): Promise<'deleted' | 'uncurated' | 'absent'> {
     const observed = await this.rawByName(name);
     if (!observed?.curated) return 'absent';
-    const existing = await this.lockedRawByName(name);
+    const existing = await this.lockedRawByNameOrNull(name);
+    if (!existing) return 'absent';
     if (!existing.curated) return 'absent';
 
     const data = existing.data ?? {};
