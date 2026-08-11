@@ -32,6 +32,7 @@ import {
 import { Bubble } from '@ant-design/x';
 import { Alert, Button, Collapse, Flex, Spin, Typography, theme } from 'antd';
 import React, { useMemo, useRef, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
@@ -482,6 +483,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     client = null,
   }) => {
     const { token } = theme.useToken();
+    const { isSlim } = useUIMode();
 
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
@@ -845,7 +847,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         placement="start"
                         avatar={
                           teammateEmoji ? (
-                            <AgorAvatar>{teammateEmoji}</AgorAvatar>
+                            isSlim ? (
+                              <AgorAvatar
+                                icon={<RobotOutlined />}
+                                style={{ backgroundColor: token.colorSuccess }}
+                              />
+                            ) : (
+                              <AgorAvatar>{teammateEmoji}</AgorAvatar>
+                            )
                           ) : agentic_tool ? (
                             <ToolIcon tool={agentic_tool} size={32} />
                           ) : (

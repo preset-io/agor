@@ -27,6 +27,7 @@ import {
 } from '@ant-design/icons';
 import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
@@ -854,6 +855,9 @@ export const EntityPill: React.FC<EntityPillProps> = ({
   style,
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
+  // Slim mode ignores emoji overrides — entity pills always show their icon.
+  const effectiveEmoji = isSlim ? undefined : emoji;
   const hasLabel = label !== undefined && label !== null && label !== '';
   const interactive = Boolean(onClick);
   const resolvedAriaLabel = ariaLabelProp ?? ariaLabel;
@@ -866,7 +870,7 @@ export const EntityPill: React.FC<EntityPillProps> = ({
 
   return (
     <Tag
-      icon={emoji ? undefined : icon}
+      icon={effectiveEmoji ? undefined : icon}
       color={color}
       title={title}
       aria-label={resolvedAriaLabel}
@@ -886,7 +890,7 @@ export const EntityPill: React.FC<EntityPillProps> = ({
           style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: emoji ? 4 : undefined,
+            gap: effectiveEmoji ? 4 : undefined,
             maxWidth: compact ? maxWidth : undefined,
             overflow: compact ? 'hidden' : undefined,
             textOverflow: compact ? 'ellipsis' : undefined,
@@ -895,7 +899,7 @@ export const EntityPill: React.FC<EntityPillProps> = ({
             fontFamily: code ? token.fontFamilyCode : token.fontFamily,
           }}
         >
-          {emoji && <span style={{ fontFamily: token.fontFamily }}>{emoji}</span>}
+          {effectiveEmoji && <span style={{ fontFamily: token.fontFamily }}>{effectiveEmoji}</span>}
           {label}
         </span>
       )}
