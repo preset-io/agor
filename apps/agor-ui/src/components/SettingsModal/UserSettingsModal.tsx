@@ -19,6 +19,7 @@ import {
   ROLES,
 } from '@agor-live/client';
 import {
+  ArrowLeftOutlined,
   BellOutlined,
   CheckCircleFilled,
   CloseOutlined,
@@ -39,6 +40,7 @@ import {
   Checkbox,
   ConfigProvider,
   Divider,
+  Flex,
   Form,
   Input,
   Layout,
@@ -216,6 +218,14 @@ export interface UserSettingsModalProps {
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onRestartOnboarding?: () => void | Promise<void>;
   initialTab?: string;
+  /**
+   * Render inline (no outer Modal) as a drill-in inside the Workspace Settings
+   * shell, with a "Back" affordance instead of a modal close. Default false →
+   * the standalone Modal used elsewhere is unchanged.
+   */
+  embedded?: boolean;
+  /** Label for the embedded back button (e.g. "Back to Users"). */
+  backLabel?: string;
 }
 
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
@@ -227,6 +237,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   onUpdate,
   onRestartOnboarding,
   initialTab,
+  embedded = false,
+  backLabel = 'Back',
 }) => {
   const { token } = theme.useToken();
 
@@ -1899,6 +1911,109 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </Button>,
       ];
 
+  // Keep inactive form instances connected to Ant Form. Without these
+  // lightweight hidden connectors, calling form methods while switching panels
+  // can produce noisy "useForm is not connected" console warnings.
+  const hiddenForms = (
+    <div hidden aria-hidden="true">
+      {!MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number]) && (
+        <Form component={false} form={form} />
+      )}
+      {activeKey !== 'preferences' && <Form component={false} form={audioForm} />}
+      {visibleAgenticToolTabs.map((tool) =>
+        activeTool === tool ? null : (
+          <Form key={tool} component={false} form={agenticFormByTool[tool]} />
+        )
+      )}
+    </div>
+  );
+
+  const layoutBody = (
+    <ConfigProvider theme={scopedTheme}>
+      <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+        <Sider
+          width={220}
+          style={{
+            background: token.colorBgElevated,
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            overflow: 'auto',
+            padding: '20px 0',
+          }}
+        >
+          <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>{siderTitle}</div>
+          <div style={{ padding: `0 ${token.marginXXS}px ${token.marginSM}px` }}>
+            <Input
+              allowClear
+              placeholder="Search settings"
+              prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          {searchActive ? (
+            searchResults.length === 0 ? (
+              <div style={{ padding: '8px 16px' }}>
+                <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
+              </div>
+            ) : (
+              <Menu
+                mode="inline"
+                selectedKeys={[]}
+                onClick={({ key }) => handleSearchResultClick(key)}
+                items={searchMenuItems}
+                style={{ borderInlineEnd: 'none', background: 'transparent' }}
+              />
+            )
+          ) : (
+            <Menu
+              mode="inline"
+              selectedKeys={activeInNav ? [activeKey] : []}
+              onClick={({ key }) => setActiveKey(key)}
+              items={menuItems}
+              style={{ borderInlineEnd: 'none', background: 'transparent' }}
+            />
+          )}
+        </Sider>
+        <Content style={{ padding: '28px 32px', overflow: 'auto' }}>{renderContent()}</Content>
+      </Layout>
+    </ConfigProvider>
+  );
+
+  // Drill-in mode: no outer Modal. A Back affordance replaces the modal close,
+  // and this component keeps its own footer (its inline-save caption differs
+  // per panel) rendered as a bottom bar.
+  if (embedded) {
+    return (
+      <Flex vertical style={{ height: '100%', background: token.colorBgContainer }}>
+        <div
+          style={{
+            padding: '10px 16px',
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          }}
+        >
+          <Button type="text" icon={<ArrowLeftOutlined />} onClick={handleClose}>
+            {backLabel}
+          </Button>
+        </div>
+        {hiddenForms}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>{layoutBody}</div>
+        <div
+          style={{
+            padding: '12px 24px',
+            background: token.colorBgContainer,
+            borderTop: `1px solid ${token.colorBorderSecondary}`,
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            gap: token.marginXS,
+          }}
+        >
+          {footer}
+        </div>
+      </Flex>
+    );
+  }
+
   return (
     <Modal
       open={open}
@@ -1936,70 +2051,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         },
       }}
     >
-      {/* Keep inactive form instances connected to Ant Form. Without these
-          lightweight hidden connectors, calling form methods while switching
-          panels can produce noisy "useForm is not connected" console warnings. */}
-      <div hidden aria-hidden="true">
-        {!MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number]) && (
-          <Form component={false} form={form} />
-        )}
-        {activeKey !== 'preferences' && <Form component={false} form={audioForm} />}
-        {visibleAgenticToolTabs.map((tool) =>
-          activeTool === tool ? null : (
-            <Form key={tool} component={false} form={agenticFormByTool[tool]} />
-          )
-        )}
-      </div>
-      <ConfigProvider theme={scopedTheme}>
-        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
-          <Sider
-            width={220}
-            style={{
-              background: token.colorBgElevated,
-              borderRight: `1px solid ${token.colorBorderSecondary}`,
-              overflow: 'auto',
-              padding: '20px 0',
-            }}
-          >
-            <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>
-              {siderTitle}
-            </div>
-            <div style={{ padding: `0 ${token.marginXXS}px ${token.marginSM}px` }}>
-              <Input
-                allowClear
-                placeholder="Search settings"
-                prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-            {searchActive ? (
-              searchResults.length === 0 ? (
-                <div style={{ padding: '8px 16px' }}>
-                  <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
-                </div>
-              ) : (
-                <Menu
-                  mode="inline"
-                  selectedKeys={[]}
-                  onClick={({ key }) => handleSearchResultClick(key)}
-                  items={searchMenuItems}
-                  style={{ borderInlineEnd: 'none', background: 'transparent' }}
-                />
-              )
-            ) : (
-              <Menu
-                mode="inline"
-                selectedKeys={activeInNav ? [activeKey] : []}
-                onClick={({ key }) => setActiveKey(key)}
-                items={menuItems}
-                style={{ borderInlineEnd: 'none', background: 'transparent' }}
-              />
-            )}
-          </Sider>
-          <Content style={{ padding: '28px 32px', overflow: 'auto' }}>{renderContent()}</Content>
-        </Layout>
-      </ConfigProvider>
+      {hiddenForms}
+      {layoutBody}
     </Modal>
   );
 };
