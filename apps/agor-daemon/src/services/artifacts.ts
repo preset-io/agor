@@ -148,6 +148,21 @@ interface ArtifactValidationResult {
   diagnostics: ArtifactValidationDiagnostic[];
 }
 
+/**
+ * Public Artifact transport surface. `update` is deliberately absent: the
+ * service's own `update()` strips provenance, but leaving the verb off the wire
+ * is what keeps `PUT /artifacts/:id` unreachable rather than merely gated.
+ */
+export const ARTIFACTS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+  'publishFromExecutor',
+  'validateFromExecutor',
+] as const;
+
 export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
   branch_id?: BranchID;

@@ -47,6 +47,17 @@ export interface KnowledgeNamespaceGraphRequest {
   includeOtherUserDrafts?: boolean;
 }
 
+/**
+ * Public knowledge-graph transport surface. The service is not a
+ * DrizzleService and defines no `update`; pinning the list keeps it that way.
+ */
+export const KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'create',
+  'link',
+  'neighbors',
+] as const;
+
 export type KnowledgeGraphParams = QueryParams<
   KnowledgeGraphNeighborsQuery & KnowledgeNamespaceGraphRequest
 > &

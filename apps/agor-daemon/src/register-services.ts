@@ -93,7 +93,10 @@ import {
   tenantUserChannelName,
 } from './realtime/routing.js';
 import { createAgenticToolPresetsService } from './services/agentic-tool-presets.js';
-import { createArtifactsService } from './services/artifacts.js';
+import {
+  ARTIFACTS_SERVICE_TRANSPORT_METHODS,
+  createArtifactsService,
+} from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { setupBoardOwnersService } from './services/board-owners.js';
@@ -114,13 +117,17 @@ import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
-import { createGatewayChannelsService } from './services/gateway-channels.js';
+import {
+  createGatewayChannelsService,
+  GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS,
+} from './services/gateway-channels.js';
 import { createGatewayChannelsAppInfoService } from './services/gateway-channels-app-info.js';
 import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
   createGroupsService,
+  GROUPS_SERVICE_TRANSPORT_METHODS,
   setupBoardAlignedBranchesService,
   setupBoardGroupGrantsService,
   setupBranchEffectiveAccessService,
@@ -129,7 +136,10 @@ import {
 } from './services/groups.js';
 import { createKnowledgeDocumentEditsService } from './services/knowledge-document-edits.js';
 import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
-import { createKnowledgeGraphService } from './services/knowledge-graph.js';
+import {
+  createKnowledgeGraphService,
+  KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS,
+} from './services/knowledge-graph.js';
 import { createKnowledgeIndexingStatusService } from './services/knowledge-indexing.js';
 import { createKnowledgeNamespacesService } from './services/knowledge-namespaces.js';
 import { createKnowledgeReindexService } from './services/knowledge-reindex.js';
@@ -155,18 +165,21 @@ import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
-import { createSchedulesService } from './services/schedules.js';
+import {
+  createSchedulesService,
+  SCHEDULES_SERVICE_TRANSPORT_METHODS,
+} from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
-import { createTasksService } from './services/tasks.js';
+import { createTasksService, TASKS_SERVICE_TRANSPORT_METHODS } from './services/tasks.js';
 import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
-import { createUsersService } from './services/users.js';
+import { createUsersService, USERS_SERVICE_TRANSPORT_METHODS } from './services/users.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
@@ -284,17 +297,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/session-streams').publish(() => []);
 
   app.use('/tasks', createTasksService(db, app), {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'patch',
-      'remove',
-      'connectExecutor',
-      'reportTerminationComplete',
-      'reportRuntimeTelemetry',
-      'reportSdkHealthFailure',
-    ],
+    methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
     // clients. Keep this in sync with every `app.service('tasks').emit(...)`
@@ -397,15 +400,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     }),
     {
       events: ['agor-query'],
-      methods: [
-        'find',
-        'get',
-        'create',
-        'patch',
-        'remove',
-        'publishFromExecutor',
-        'validateFromExecutor',
-      ],
+      methods: [...ARTIFACTS_SERVICE_TRANSPORT_METHODS],
     }
   );
   app.use('/board-comments', createBoardCommentsService(db));
@@ -451,7 +446,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   app.use('/groups', createGroupsService(db), {
-    methods: ['find', 'get', 'create', 'patch', 'remove'],
+    methods: [...GROUPS_SERVICE_TRANSPORT_METHODS],
   });
   app.use('/group-memberships', createGroupMembershipsService(db), {
     methods: ['find', 'create', 'remove'],
@@ -472,7 +467,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // First-class schedules. RBAC hooks wired in register-hooks.ts.
   // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
   app.use('/schedules', createSchedulesService(db), {
-    methods: ['find', 'get', 'create', 'patch', 'remove'],
+    methods: [...SCHEDULES_SERVICE_TRANSPORT_METHODS],
   });
 
   // ============================================================================
@@ -520,7 +515,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: ['create'],
   });
   app.use('/kb/graph', createKnowledgeGraphService(db), {
-    methods: ['find', 'create', 'link', 'neighbors'],
+    methods: [...KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS],
   });
 
   // ============================================================================
@@ -550,7 +545,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   {
     app.use('/gateway-channels', createGatewayChannelsService(db), {
-      methods: ['find', 'get', 'create', 'patch', 'remove', 'uploadFileStreamFromExecutor'],
+      methods: [...GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS],
     });
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit
@@ -783,17 +778,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
   app.use('/users', usersService, {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'patch',
-      'remove',
-      'getGitEnvironment',
-      'getAvatarSettings',
-      'updateAvatarSettings',
-      'syncAvatars',
-    ],
+    methods: [...USERS_SERVICE_TRANSPORT_METHODS],
   });
 
   // Bootstrap superadmin users
