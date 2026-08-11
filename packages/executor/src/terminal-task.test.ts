@@ -40,6 +40,44 @@ describe('executor settlement reporting', () => {
     });
   });
 
+  it('sanitizes and bounds durable failure diagnostics before settlement', async () => {
+    const { client, reportExecutorSettlement } = makeClient(TaskStatus.FAILED);
+    const secret = 'secret-opencode-tool-result';
+    const databaseFailure = Object.assign(
+      new Error(`Failed query: update tasks set data=$1 params: ${secret}`),
+      {
+        query: 'update tasks set data=$1',
+        params: [secret],
+        cause: { code: '22P05' },
+      }
+    );
+
+    await finalizeTask(client, 't1', {
+      result: 'failure',
+      failureCause: 'runtime_failure',
+      taskPatch: { error_message: databaseFailure.message },
+      error: databaseFailure,
+    });
+
+    const databaseSettlement = reportExecutorSettlement.mock.calls[0]?.[0];
+    expect(databaseSettlement?.task_patch?.error_message).toBe('Database operation failed (22P05)');
+    expect(JSON.stringify(databaseSettlement)).not.toContain(secret);
+    expect(JSON.stringify(databaseSettlement)).not.toContain('update tasks');
+
+    const oversizedFailure = new Error('x'.repeat(2_000));
+    await finalizeTask(client, 't2', {
+      result: 'failure',
+      failureCause: 'runtime_failure',
+      taskPatch: { error_message: oversizedFailure.message },
+      error: oversizedFailure,
+    });
+
+    const oversizedDiagnostic =
+      reportExecutorSettlement.mock.calls[1]?.[0].task_patch?.error_message;
+    expect(oversizedDiagnostic).toHaveLength(1_024);
+    expect(oversizedDiagnostic).toMatch(/…$/);
+  });
+
   it('requests containment instead of terminality when cleanup is uncertain', async () => {
     const { client, reportExecutorSettlement } = makeClient(TaskStatus.STOPPING);
 

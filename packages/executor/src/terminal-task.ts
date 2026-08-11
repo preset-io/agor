@@ -60,6 +60,16 @@ export async function finalizeTask(
   taskId: string,
   outcome: AgenticToolOutcome
 ): Promise<Task> {
+  const taskPatch =
+    outcome.result === 'failure' && outcome.taskPatch?.error_message
+      ? {
+          ...outcome.taskPatch,
+          error_message: formatExecutorFailure(
+            outcome.error ?? new Error(outcome.taskPatch.error_message)
+          ),
+        }
+      : outcome.taskPatch;
+
   return client.service('tasks').reportExecutorSettlement(
     outcome.result === 'success'
       ? { task_id: taskId, kind: 'quiesced', result: 'success', task_patch: outcome.taskPatch }
@@ -68,7 +78,7 @@ export async function finalizeTask(
           kind: 'quiesced',
           result: 'failure',
           failure_cause: outcome.failureCause ?? 'runtime_failure',
-          task_patch: outcome.taskPatch,
+          task_patch: taskPatch,
         }
   );
 }
