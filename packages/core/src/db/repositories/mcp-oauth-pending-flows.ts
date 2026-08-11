@@ -333,6 +333,30 @@ export class MCPOAuthPendingFlowRepository {
     }
   }
 
+  /** Non-consuming inspection for an authenticated manual-complete request. */
+  async inspectForUser(
+    tenantId: string,
+    userId: UserID,
+    stateHash: string
+  ): Promise<MCPOAuthPendingFlowRecord | null> {
+    assertStateHash(stateHash);
+    try {
+      const row = await select(this.db)
+        .from(mcpOauthPendingFlows)
+        .where(
+          and(
+            eq(mcpOauthPendingFlows.tenant_id, tenantId),
+            eq(mcpOauthPendingFlows.user_id, userId),
+            eq(mcpOauthPendingFlows.state_hash, stateHash)
+          )
+        )
+        .one();
+      return row ? mapRow(row as unknown as Record<string, unknown>) : null;
+    } catch (error) {
+      throw databaseFailure('authenticated completion inspection', error);
+    }
+  }
+
   /** Claim from an authenticated manual-complete request in its tenant scope. */
   async claimForUser(
     tenantId: string,

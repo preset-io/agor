@@ -8,7 +8,11 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
-import type { MCPOAuthCompatibilityMode, MCPOAuthDCRMode } from '../../types/mcp.js';
+import type {
+  MCPOAuthCallbackBinding,
+  MCPOAuthCompatibilityMode,
+  MCPOAuthDCRMode,
+} from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
@@ -104,6 +108,7 @@ export class OAuthCallbackValidationError extends Error {
       | 'callback_state_mismatch'
       | 'callback_issuer_missing'
       | 'callback_issuer_mismatch'
+      | 'callback_redirect_mismatch'
   ) {
     super(`OAuth callback validation failed (${failureCode})`);
     this.name = 'OAuthCallbackValidationError';
@@ -1214,47 +1219,74 @@ export interface OAuthFlowContext {
   state: string;
   authorizationUrl: string;
   compatibilityMode: MCPOAuthCompatibilityMode;
+  callbackBinding?: MCPOAuthCallbackBinding;
   /**
-   * Require RFC 9207 `iss` unless strict same-origin endpoint binding provides
-   * the authorization-server mix-up defense.
+   * Rolling-deploy guard for replicas predating callbackBinding. New strict
+   * flows keep this true even when callbackBinding is issuer-distinct.
    */
   requiresCallbackIssuer?: boolean;
   /** Narrow standalone-development exception; durable daemon flows leave this false. */
   allowLocalhostHttp: boolean;
 }
 
-function assertStrictSameOriginMixupDefense(
-  issuer: string,
-  authorizationEndpoint: string,
-  tokenEndpoint: string
-): void {
-  const issuerOrigin = new URL(issuer).origin;
-  if (new URL(authorizationEndpoint).origin !== issuerOrigin) {
-    throw new Error(
-      'Strict MCP OAuth requires the authorization endpoint to share the issuer origin when RFC 9207 is unavailable'
-    );
-  }
-  if (new URL(tokenEndpoint).origin !== issuerOrigin) {
-    throw new Error(
-      'Strict MCP OAuth requires the token endpoint to share the issuer origin when RFC 9207 is unavailable'
-    );
-  }
+function issuerRedirectBinding(issuer: string): string {
+  return crypto.createHash('sha256').update(issuer, 'utf8').digest('base64url');
 }
 
-/** Validate RFC 9207 issuer identification before any callback is consumed. */
-export function validateMCPOAuthCallbackIssuer(
-  context: Pick<OAuthFlowContext, 'issuer' | 'compatibilityMode' | 'requiresCallbackIssuer'>,
-  issuer: string | undefined
+/**
+ * Produce a redirect endpoint unique to one exact authorization-server issuer.
+ * RFC 9700 recognizes distinct redirect URIs as a mix-up countermeasure when
+ * authorization responses do not carry RFC 9207 `iss`.
+ */
+export function bindMCPOAuthRedirectUriToIssuer(redirectUri: string, issuer: string): string {
+  const url = new URL(redirectUri);
+  if (url.search || url.hash) {
+    throw new Error('Issuer-distinct MCP OAuth redirect URI must not contain query or fragment');
+  }
+  url.pathname = `${url.pathname.replace(/\/$/, '')}/issuer/${issuerRedirectBinding(issuer)}`;
+  return url.toString();
+}
+
+/** Validate the selected mix-up countermeasure before any callback is consumed. */
+export function validateMCPOAuthCallbackBinding(
+  context: Pick<
+    OAuthFlowContext,
+    'issuer' | 'redirectUri' | 'compatibilityMode' | 'callbackBinding' | 'requiresCallbackIssuer'
+  >,
+  issuer: string | undefined,
+  callbackUrl?: string
 ): void {
-  // Durable strict flows created before the capability bit existed keep their
-  // original require-issuer contract during rolling upgrades.
+  const usesIssuerDistinctRedirect =
+    context.compatibilityMode === 'strict' &&
+    context.callbackBinding === 'issuer_distinct_redirect';
+  // A new issuer-distinct flow deliberately keeps requiresCallbackIssuer=true
+  // so an older replica rejects without consuming it during a rolling deploy.
+  // Strict contexts without the new explicit binding always require `iss`.
   const requiresCallbackIssuer =
-    context.requiresCallbackIssuer ?? context.compatibilityMode === 'strict';
+    context.compatibilityMode === 'strict' && !usesIssuerDistinctRedirect;
   if (requiresCallbackIssuer && issuer == null) {
     throw new OAuthCallbackValidationError('callback_issuer_missing');
   }
   if (issuer != null && issuer !== context.issuer) {
     throw new OAuthCallbackValidationError('callback_issuer_mismatch');
+  }
+  if (usesIssuerDistinctRedirect) {
+    try {
+      const expected = new URL(context.redirectUri);
+      const issuerSuffix = `/issuer/${issuerRedirectBinding(context.issuer)}`;
+      if (!expected.pathname.endsWith(issuerSuffix) || !callbackUrl) {
+        throw new Error('missing issuer-distinct redirect');
+      }
+      const actualCallback = new URL(callbackUrl, context.redirectUri);
+      if (
+        actualCallback.origin !== expected.origin ||
+        actualCallback.pathname !== expected.pathname
+      ) {
+        throw new Error('issuer-distinct redirect mismatch');
+      }
+    } catch {
+      throw new OAuthCallbackValidationError('callback_redirect_mismatch');
+    }
   }
 }
 
@@ -1304,6 +1336,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   compatibilityMode: MCPOAuthCompatibilityMode;
   dcrMode: MCPOAuthDCRMode;
   allowLocalhostHttp: boolean;
+  useIssuerDistinctRedirectUri: boolean;
 }): Promise<OAuthFlowContext> {
   const {
     authServerMetadata,
@@ -1319,6 +1352,7 @@ async function startMCPOAuthFlowWithAS(opts: {
     compatibilityMode,
     dcrMode,
     allowLocalhostHttp,
+    useIssuerDistinctRedirectUri,
   } = opts;
 
   const hasFullOverrides = !!(authorizationUrlOverride && tokenUrlOverride);
@@ -1327,7 +1361,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   const pkce = generatePKCE();
 
   // Redirect URI default — preserved for legacy CLI callers
-  const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
+  let actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
   // Validate before registration: DCR sends this value to an external service
   // and must not turn an unsafe configured callback into durable provider-side
   // client metadata.
@@ -1363,10 +1397,9 @@ async function startMCPOAuthFlowWithAS(opts: {
 
   assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
   assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
-  const requiresCallbackIssuer =
-    compatibilityMode === 'strict'
-      ? authServerMetadata?.authorization_response_iss_parameter_supported === true
-      : undefined;
+  let requiresCallbackIssuer: boolean | undefined;
+  let callbackBinding: MCPOAuthCallbackBinding =
+    compatibilityMode === 'legacy' ? 'legacy' : 'rfc9207';
   if (compatibilityMode === 'strict') {
     if (!authServerMetadata) {
       throw new Error('Strict MCP OAuth requires authorization-server metadata');
@@ -1386,12 +1419,21 @@ async function startMCPOAuthFlowWithAS(opts: {
     if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
       throw new Error('Strict MCP OAuth token endpoint override does not match metadata');
     }
-    // RFC 9207 issuer identification is the preferred mix-up defense. Servers
-    // such as Notion do not advertise it, so strict mode instead pins both
-    // code-producing and code-consuming endpoints to the validated issuer
-    // origin. Legacy mode remains the explicit escape hatch.
+    requiresCallbackIssuer =
+      authServerMetadata.authorization_response_iss_parameter_supported === true;
     if (!requiresCallbackIssuer) {
-      assertStrictSameOriginMixupDefense(issuer, authorizationEndpoint, tokenEndpoint);
+      if (!useIssuerDistinctRedirectUri) {
+        throw new Error(
+          'Strict MCP OAuth requires RFC 9207 issuer responses or an issuer-distinct redirect URI'
+        );
+      }
+      actualRedirectUri = bindMCPOAuthRedirectUriToIssuer(actualRedirectUri, issuer);
+      assertSafeOAuthUrl(actualRedirectUri, { allowLocalhostHttp });
+      // Keep the legacy boolean true so an older callback replica safely
+      // rejects this new path instead of consuming it without recognizing the
+      // issuer-distinct binding.
+      requiresCallbackIssuer = true;
+      callbackBinding = 'issuer_distinct_redirect';
     }
   }
 
@@ -1473,6 +1515,7 @@ async function startMCPOAuthFlowWithAS(opts: {
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,
+    callbackBinding,
     requiresCallbackIssuer,
     allowLocalhostHttp,
   };
@@ -1515,6 +1558,8 @@ export async function startMCPOAuthFlow(
     dcrMode?: MCPOAuthDCRMode;
     /** Exact loopback HTTP exception for standalone development only. */
     allowLocalhostHttp?: boolean;
+    /** Use an issuer-distinct callback endpoint when RFC 9207 is unavailable. */
+    useIssuerDistinctRedirectUri?: boolean;
   }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
@@ -1557,6 +1602,7 @@ export async function startMCPOAuthFlow(
       compatibilityMode,
       dcrMode,
       allowLocalhostHttp,
+      useIssuerDistinctRedirectUri: options?.useIssuerDistinctRedirectUri === true,
     });
   }
 
@@ -1642,6 +1688,7 @@ export async function startMCPOAuthFlow(
     compatibilityMode,
     dcrMode,
     allowLocalhostHttp,
+    useIssuerDistinctRedirectUri: options?.useIssuerDistinctRedirectUri === true,
   });
 }
 
@@ -1660,7 +1707,7 @@ export async function completeMCPOAuthFlow(
   context: OAuthFlowContext,
   code: string,
   state: string,
-  options: { cacheToken?: boolean; issuer?: string } = {}
+  options: { cacheToken?: boolean; issuer?: string; callbackUrl?: string } = {}
 ): Promise<OAuthTokenResponse> {
   console.log('[MCP OAuth] Completing OAuth flow with authorization code');
 
@@ -1668,7 +1715,7 @@ export async function completeMCPOAuthFlow(
   if (state !== context.state) {
     throw new OAuthCallbackValidationError('callback_state_mismatch');
   }
-  validateMCPOAuthCallbackIssuer(context, options.issuer);
+  validateMCPOAuthCallbackBinding(context, options.issuer, options.callbackUrl);
 
   // Exchange code for token
   const tokenResponse = await exchangeCodeForToken(

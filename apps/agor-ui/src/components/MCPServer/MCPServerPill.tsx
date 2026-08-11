@@ -96,9 +96,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
     try {
       const data = (await client
         .service('mcp-servers/oauth-start')
-        .create(
-          buildMCPOAuthStartRequest(server.url, server.mcp_server_id, server.auth?.oauth_client_id)
-        )) as MCPOAuthStartResult;
+        .create(buildMCPOAuthStartRequest(server.mcp_server_id))) as MCPOAuthStartResult;
 
       if (data.success && data.authorizationUrl && data.attempt_id) {
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');

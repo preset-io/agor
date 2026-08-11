@@ -11,7 +11,7 @@ import type { SessionID, UserID, UUID } from './id';
 /**
  * MCP Server ID (branded UUID)
  */
-export type MCPServerID = UUID & { readonly __brand: 'MCPServerID' };
+export type MCPServerID = UUID & { readonly __entity: 'MCPServer' };
 
 /**
  * Durable identity for one browser-based MCP OAuth authorization attempt.
@@ -20,7 +20,7 @@ export type MCPServerID = UUID & { readonly __brand: 'MCPServerID' };
  * It is not the OAuth `state` capability: PostgreSQL stores only a SHA-256
  * fingerprint of that high-entropy, one-time value.
  */
-export type MCPOAuthAttemptID = UUID & { readonly __brand: 'MCPOAuthAttemptID' };
+export type MCPOAuthAttemptID = UUID & { readonly __entity: 'MCPOAuthAttempt' };
 
 /** Durable lifecycle of a browser-based MCP OAuth authorization attempt. */
 export type MCPOAuthPendingFlowStatus =
@@ -55,20 +55,29 @@ export interface MCPOAuthRefreshResult {
 export type MCPOAuthMode = 'per_user' | 'shared';
 export type MCPOAuthCompatibilityMode = 'strict' | 'legacy';
 export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
+export type MCPOAuthCallbackBinding = 'rfc9207' | 'issuer_distinct_redirect' | 'legacy';
 
 /** Authenticated Feathers payload shared by Settings and conversation-footer OAuth starts. */
-export interface MCPOAuthStartRequest {
-  mcp_url: string;
-  mcp_server_id?: string;
-  client_id?: string;
-}
+export type MCPOAuthStartRequest =
+  | {
+      /** Saved-server starts resolve every provider field from this tenant-owned row. */
+      mcp_server_id: MCPServerID;
+      mcp_url?: never;
+      client_id?: never;
+    }
+  | {
+      /** Standalone SQLite compatibility path for an unsaved server. */
+      mcp_server_id?: undefined;
+      mcp_url: string;
+      client_id?: string;
+    };
 
 export interface MCPOAuthStartResult {
   success: boolean;
   error?: string;
   message?: string;
   authorizationUrl?: string;
-  attempt_id?: string;
+  attempt_id?: MCPOAuthAttemptID;
   state?: string;
 }
 
@@ -99,10 +108,12 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   clientId: string;
   clientSecret?: string;
   compatibilityMode: MCPOAuthCompatibilityMode;
+  callbackBinding?: MCPOAuthCallbackBinding;
   /**
    * Whether this flow relies on RFC 9207 callback issuer identification.
-   * `false` is valid only when strict same-origin AS endpoint binding supplies
-   * the mix-up defense. Missing values preserve the older require-issuer rule.
+   * New strict flows keep this `true` even for issuer-distinct redirects so an
+   * older replica safely rejects rather than consumes such a callback. Missing
+   * callbackBinding values preserve the older require-issuer rule.
    */
   requiresCallbackIssuer?: boolean;
   allowLocalhostHttp: boolean;

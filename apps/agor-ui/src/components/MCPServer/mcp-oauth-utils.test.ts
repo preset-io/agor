@@ -1,3 +1,4 @@
+import type { MCPServerID } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import {
   buildAuthFromValues,
@@ -11,13 +12,9 @@ import {
 
 describe('buildMCPOAuthStartRequest', () => {
   it('keeps footer and Settings on the same server-bound request shape', () => {
-    expect(buildMCPOAuthStartRequest('https://mcp.example.com/mcp', 'server-1', undefined)).toEqual(
-      {
-        mcp_url: 'https://mcp.example.com/mcp',
-        mcp_server_id: 'server-1',
-        client_id: undefined,
-      }
-    );
+    expect(buildMCPOAuthStartRequest('server-1' as MCPServerID)).toEqual({
+      mcp_server_id: 'server-1',
+    });
   });
 });
 
@@ -129,6 +126,34 @@ describe('extractOAuthConfig', () => {
 
     expect(result.oauth_token_url).toBeUndefined();
     expect(result.oauth_client_id).toBeUndefined();
+  });
+});
+
+describe('buildAuthFromValues', () => {
+  it('preserves a legacy absent DCR field across an unrelated edit', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_dcr_mode: 'advertised',
+          oauth_scope: 'unchanged',
+        },
+        { preserveAbsentDcrMode: true }
+      )
+    ).toEqual(
+      expect.not.objectContaining({
+        oauth_dcr_mode: expect.anything(),
+      })
+    );
+  });
+
+  it('materializes DCR after the operator changes the policy', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'oauth', oauth_dcr_mode: 'fallback' },
+        { preserveAbsentDcrMode: true }
+      )
+    ).toMatchObject({ oauth_dcr_mode: 'fallback' });
   });
 });
 

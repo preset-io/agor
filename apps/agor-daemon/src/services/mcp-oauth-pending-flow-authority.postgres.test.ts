@@ -26,6 +26,10 @@ import {
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
+import {
+  bindMCPOAuthRedirectUriToIssuer,
+  validateMCPOAuthCallbackBinding,
+} from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { MCPServerID, UserID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { lockMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
@@ -137,7 +141,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
     it('starts on daemon A, claims on daemon B, and never stores raw capability material', async () => {
       const bound = await seed('peer-callback');
-      const context = { ...flowContext(crypto.randomUUID()), requiresCallbackIssuer: false };
+      const context = {
+        ...flowContext(crypto.randomUUID()),
+        callbackBinding: 'issuer_distinct_redirect' as const,
+        requiresCallbackIssuer: true,
+      };
+      context.redirectUri = bindMCPOAuthRedirectUriToIssuer(context.redirectUri, context.issuer);
       const attemptId = await authorityA.create({
         context,
         tenantId: bound.tenantId,
@@ -166,7 +175,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       if (!inspected) throw new Error('Expected peer callback inspection');
       expect(authorityB.openPendingCallback(inspected, context.state).context).toMatchObject({
         issuer: context.issuer,
-        requiresCallbackIssuer: false,
+        callbackBinding: 'issuer_distinct_redirect',
+        requiresCallbackIssuer: true,
       });
 
       const claimed = await authorityB.claimForCallback(context.state);
@@ -209,7 +219,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         pkceVerifier: context.pkceVerifier,
         clientId: context.clientId,
         clientSecret: context.clientSecret,
-        requiresCallbackIssuer: false,
+        requiresCallbackIssuer: true,
       });
       await expect(
         authorityA.getForUser(bound.tenantId, bound.userId, attemptId as never)
@@ -229,6 +239,43 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauth_refresh_token: 'peer-callback-refresh-token',
         grant_generation: claimed.flow.grantGeneration,
       });
+    });
+
+    it('inspects authenticated completion without consuming or crossing tenant/user scope', async () => {
+      const bound = await seed('manual-complete-inspection');
+      const context = flowContext(crypto.randomUUID());
+      await authorityA.create({
+        context,
+        tenantId: bound.tenantId,
+        userId: bound.userId,
+        mcpServerId: bound.serverId,
+        oauthMode: 'per_user',
+        configFingerprint: '9'.repeat(64),
+      });
+
+      await expect(
+        authorityB.inspectForUser(bound.tenantId, crypto.randomUUID() as UserID, context.state)
+      ).resolves.toBeNull();
+      await expect(
+        authorityB.inspectForUser('foreign-tenant', bound.userId, context.state)
+      ).resolves.toBeNull();
+
+      const inspected = await authorityB.inspectForUser(
+        bound.tenantId,
+        bound.userId,
+        context.state
+      );
+      if (!inspected) throw new Error('Expected authenticated pending-flow inspection');
+      const opened = authorityB.openPendingCallback(inspected, context.state);
+      expect(() => validateMCPOAuthCallbackBinding(opened.context, undefined)).toThrowError(
+        expect.objectContaining({ failureCode: 'callback_issuer_missing' })
+      );
+
+      // Validation failure occurred before a claim, so the legitimate callback
+      // can still atomically claim on a different daemon.
+      await expect(
+        authorityA.claimForUser(bound.tenantId, bound.userId, context.state)
+      ).resolves.toMatchObject({ outcome: 'claimed' });
     });
 
     it('preserves the legacy absent callback-issuer capability across replicas', async () => {

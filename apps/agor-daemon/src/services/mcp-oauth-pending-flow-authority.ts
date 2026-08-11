@@ -74,6 +74,10 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
     (material.compatibilityMode === 'strict' || material.compatibilityMode === 'legacy') &&
+    (material.callbackBinding === undefined ||
+      material.callbackBinding === 'rfc9207' ||
+      material.callbackBinding === 'issuer_distinct_redirect' ||
+      material.callbackBinding === 'legacy') &&
     (material.requiresCallbackIssuer === undefined ||
       typeof material.requiresCallbackIssuer === 'boolean') &&
     typeof material.allowLocalhostHttp === 'boolean'
@@ -144,6 +148,7 @@ export class MCPOAuthPendingFlowAuthority {
         clientId: input.context.clientId,
         ...(input.context.clientSecret ? { clientSecret: input.context.clientSecret } : {}),
         compatibilityMode: input.context.compatibilityMode,
+        callbackBinding: input.context.callbackBinding,
         requiresCallbackIssuer: input.context.requiresCallbackIssuer,
         allowLocalhostHttp: input.context.allowLocalhostHttp,
       };
@@ -222,6 +227,16 @@ export class MCPOAuthPendingFlowAuthority {
         userId,
         fingerprintMCPOAuthState(rawState),
         randomUUID()
+      )
+    );
+  }
+
+  async inspectForUser(tenantId: string, userId: UserID, rawState: string) {
+    return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
+      new MCPOAuthPendingFlowRepository(scoped).inspectForUser(
+        tenantId,
+        userId,
+        fingerprintMCPOAuthState(rawState)
       )
     );
   }
@@ -307,6 +322,7 @@ export class MCPOAuthPendingFlowAuthority {
         // secret-bearing authorization URL after the browser has opened it.
         authorizationUrl: '',
         compatibilityMode: material.compatibilityMode,
+        callbackBinding: material.callbackBinding,
         requiresCallbackIssuer: material.requiresCallbackIssuer,
         allowLocalhostHttp: material.allowLocalhostHttp,
       },

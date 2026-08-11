@@ -6,6 +6,7 @@ import type {
   MCPOAuthCompatibilityMode,
   MCPOAuthDCRMode,
   MCPOAuthStartRequest,
+  MCPServerID,
 } from '@agor-live/client';
 
 /**
@@ -98,16 +99,8 @@ export interface TestConfig {
 }
 
 /** Shared Socket.IO/Feathers payload used by Settings and the session footer. */
-export function buildMCPOAuthStartRequest(
-  mcpUrl: string,
-  mcpServerId: string | undefined,
-  clientId: string | undefined
-): MCPOAuthStartRequest {
-  return {
-    mcp_url: mcpUrl,
-    mcp_server_id: mcpServerId,
-    client_id: clientId,
-  };
+export function buildMCPOAuthStartRequest(mcpServerId: MCPServerID): MCPOAuthStartRequest {
+  return { mcp_server_id: mcpServerId };
 }
 
 /**
@@ -191,7 +184,10 @@ export interface BuiltAuth {
  * so callers can do `payload.auth = buildAuthFromValues(values)` without
  * an outer if/else.
  */
-export function buildAuthFromValues(values: Record<string, unknown>): BuiltAuth | undefined {
+export function buildAuthFromValues(
+  values: Record<string, unknown>,
+  options: { preserveAbsentDcrMode?: boolean } = {}
+): BuiltAuth | undefined {
   const authType = values.auth_type;
   if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') return undefined;
 
@@ -204,6 +200,9 @@ export function buildAuthFromValues(values: Record<string, unknown>): BuiltAuth 
     if (typeof values.jwt_api_secret === 'string') auth.api_secret = values.jwt_api_secret;
   } else {
     Object.assign(auth, extractOAuthConfig(values));
+    if (options.preserveAbsentDcrMode && auth.oauth_dcr_mode === 'advertised') {
+      delete auth.oauth_dcr_mode;
+    }
   }
   return auth;
 }

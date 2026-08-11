@@ -1569,6 +1569,9 @@ async function registerMCPServices(
       compatibilityMode: opts.compatibilityMode,
       dcrMode: opts.dcrMode,
       allowLocalhostHttp: !durableOAuthFlows,
+      // Providers such as Notion omit RFC 9207. A stable issuer-derived
+      // callback path is the RFC 9700 mix-up countermeasure for those flows.
+      useIssuerDistinctRedirectUri: true,
     });
 
     const attemptId = durableBinding
@@ -2011,10 +2014,11 @@ async function registerMCPServices(
       }
 
       try {
-        const { validateMCPOAuthCallbackIssuer } = await import(
+        const { validateMCPOAuthCallbackBinding } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
         );
-        validateMCPOAuthCallbackIssuer(callbackContext, issuer);
+        const callbackUrl = new URL(req.originalUrl, callbackContext.redirectUri).toString();
+        validateMCPOAuthCallbackBinding(callbackContext, issuer, callbackUrl);
       } catch {
         console.warn('[OAuth Callback] Callback issuer validation failed');
         res
@@ -2099,6 +2103,7 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state, {
           cacheToken: false,
           issuer,
+          callbackUrl: new URL(req.originalUrl, pendingFlow.context.redirectUri).toString(),
         });
 
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback');
@@ -2669,15 +2674,16 @@ async function registerMCPServices(
         let scopeOverride: string | undefined;
         let compatibilityMode: MCPOAuthCompatibilityMode = 'strict';
         let dcrMode: MCPOAuthDCRMode | undefined;
-        const savedServer = data.mcp_server_id
+        const savedServerId = data.mcp_server_id;
+        const savedServer = savedServerId
           ? await runInOAuthTenantScope(db, tenantId, () => {
               const mcpServerRepo = new MCPServerRepository(db);
-              return mcpServerRepo.findById(data.mcp_server_id as string);
+              return mcpServerRepo.findById(savedServerId);
             })
           : null;
 
         if (
-          data.mcp_server_id &&
+          savedServerId &&
           (!savedServer?.enabled || !savedServer.url || savedServer.auth?.type !== 'oauth')
         ) {
           return {
@@ -2690,7 +2696,10 @@ async function registerMCPServices(
         // A saved-server ID is the authority for provider URL and client
         // configuration. Caller-supplied duplicates are accepted only for
         // backward wire compatibility and never drive outbound requests.
-        const effectiveMcpUrl = savedServer?.url ?? data.mcp_url;
+        const effectiveMcpUrl = savedServer?.url ?? ('mcp_url' in data ? data.mcp_url : undefined);
+        if (!effectiveMcpUrl) {
+          return { success: false, error: 'MCP URL is required to start OAuth.' };
+        }
 
         // PostgreSQL is the shared authority, so reject transient or stale
         // server input before the first outbound probe. Doing this only in the
@@ -2781,10 +2790,10 @@ async function registerMCPServices(
               discovery.kind === 'resource-metadata' ? discovery.metadataUrl : undefined,
             prefetchedAuthServerMetadata:
               discovery.kind === 'authorization-server' ? discovery.authServerMetadata : undefined,
-            mcpServerId: data.mcp_server_id,
+            mcpServerId: savedServerId,
             userId,
             oauthMode,
-            clientId: savedServer ? clientIdFromConfig : data.client_id,
+            clientId: savedServer || !('client_id' in data) ? clientIdFromConfig : data.client_id,
             clientSecret: clientSecretOverride,
             authorizationUrlOverride,
             tokenUrlOverride,
@@ -2830,13 +2839,14 @@ async function registerMCPServices(
       let pendingFlow: PendingOAuthFlow | undefined;
       let completionStatus: 'failed' | 'ambiguous' | undefined;
       try {
-        const { completeMCPOAuthFlow, parseOAuthCallback } = await import(
-          '@agor/core/tools/mcp/oauth-mcp-transport'
-        );
+        const { completeMCPOAuthFlow, parseOAuthCallback, validateMCPOAuthCallbackBinding } =
+          await import('@agor/core/tools/mcp/oauth-mcp-transport');
         let code: string;
         let state: string;
         let issuer: string | undefined;
+        let callbackUrl: string | undefined;
         if ('callback_url' in data) {
+          callbackUrl = data.callback_url;
           const parsed = parseOAuthCallback(data.callback_url);
           code = parsed.code;
           state = parsed.state;
@@ -2853,6 +2863,23 @@ async function registerMCPServices(
           if (!activeTenantId || !activeUserId) {
             throw new Error('OAuth completion is missing authenticated tenant/user context');
           }
+          const inspected = await durableOAuthFlows.inspectForUser(
+            activeTenantId,
+            activeUserId,
+            state
+          );
+          if (inspected?.status !== 'pending') {
+            return {
+              success: inspected?.status === 'succeeded',
+              error:
+                inspected?.status === 'succeeded'
+                  ? undefined
+                  : terminalMessageForStatus(inspected?.status ?? 'expired'),
+              tokenObtained: inspected?.status === 'succeeded',
+            };
+          }
+          const inspectedFlow = durableOAuthFlows.openPendingCallback(inspected, state);
+          validateMCPOAuthCallbackBinding(inspectedFlow.context, issuer, callbackUrl);
           const claimed = await durableOAuthFlows.claimForUser(activeTenantId, activeUserId, state);
           if (claimed.outcome === 'not_claimed') {
             return {
@@ -2885,6 +2912,7 @@ async function registerMCPServices(
               error: 'OAuth flow belongs to a different user. Please restart the OAuth flow.',
             };
           }
+          validateMCPOAuthCallbackBinding(pendingFlow.context, issuer, callbackUrl);
           pendingOAuthFlows.delete(state);
           markLocalOAuthAttempt(pendingFlow, 'exchanging');
         }
@@ -2893,6 +2921,7 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state, {
           cacheToken: false,
           issuer,
+          callbackUrl,
         });
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
         if (!pendingFlow.durableRecord) markLocalOAuthAttempt(pendingFlow, 'succeeded');

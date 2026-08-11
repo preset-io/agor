@@ -1,4 +1,4 @@
-import type { AgorClient, MCPOAuthStartResult } from '@agor-live/client';
+import type { AgorClient, MCPOAuthStartResult, MCPServerID } from '@agor-live/client';
 import { ApiOutlined, DownOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import {
@@ -45,7 +45,7 @@ export interface MCPServerFormFieldsProps {
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
   form: FormInstance;
   client: AgorClient | null;
-  serverId?: string;
+  serverId?: MCPServerID;
   onTestConnection?: () => Promise<void>;
   testing?: boolean;
   testResult?: {
@@ -59,7 +59,7 @@ export interface MCPServerFormFieldsProps {
     prompts?: Array<{ name: string; description: string }>;
   } | null;
   /** Callback to save server first before OAuth flow (for new servers) */
-  onSaveFirst?: () => Promise<string | null>;
+  onSaveFirst?: () => Promise<MCPServerID | null>;
 }
 
 /**
@@ -120,7 +120,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   }, [client]);
 
   // Track effective server ID (may differ from prop after onSaveFirst creates a new server)
-  const [effectiveServerId, setEffectiveServerId] = useState<string | undefined>(serverId);
+  const [effectiveServerId, setEffectiveServerId] = useState<MCPServerID | undefined>(serverId);
   useEffect(() => {
     setEffectiveServerId(serverId);
   }, [serverId]);
@@ -171,6 +171,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       targetServerId = newServerId;
       setEffectiveServerId(newServerId);
     }
+    if (!targetServerId) {
+      showError('Save the MCP server before starting OAuth');
+      return;
+    }
 
     const values = form.getFieldsValue(true);
     const requestData = extractOAuthConfigForTesting(values);
@@ -186,9 +190,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
       const data = (await client
         .service('mcp-servers/oauth-start')
-        .create(
-          buildMCPOAuthStartRequest(requestData.mcp_url, targetServerId, requestData.client_id)
-        )) as MCPOAuthStartResult;
+        .create(buildMCPOAuthStartRequest(targetServerId))) as MCPOAuthStartResult;
 
       if (data.success && data.authorizationUrl && data.attempt_id) {
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');

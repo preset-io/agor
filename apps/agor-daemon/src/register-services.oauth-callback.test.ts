@@ -102,7 +102,7 @@ describe('register-services OAuth callback URL regression', () => {
       rawSource.indexOf("app.use('/mcp-servers',")
     );
     const inspectIndex = callbackBody.indexOf('inspectForCallback(state)');
-    const validateIndex = callbackBody.indexOf('validateMCPOAuthCallbackIssuer');
+    const validateIndex = callbackBody.indexOf('validateMCPOAuthCallbackBinding');
     const providerErrorIndex = callbackBody.indexOf('if (error)');
     const failIndex = callbackBody.indexOf('failPendingCallback');
     const claimIndex = callbackBody.indexOf('claimForCallback(state)');
@@ -112,6 +112,25 @@ describe('register-services OAuth callback URL regression', () => {
     expect(providerErrorIndex).toBeGreaterThan(validateIndex);
     expect(failIndex).toBeGreaterThan(providerErrorIndex);
     expect(claimIndex).toBeGreaterThan(validateIndex);
+  });
+
+  it('validates authenticated manual completion before claiming or deleting state', () => {
+    const start = rawSource.indexOf("app.use('/mcp-servers/oauth-complete'");
+    const end = rawSource.indexOf("app.service('mcp-servers/oauth-complete').hooks", start);
+    const completionBody = rawSource.slice(start, end);
+    const inspectIndex = completionBody.indexOf('inspectForUser(');
+    const durableValidateIndex = completionBody.indexOf('validateMCPOAuthCallbackBinding(');
+    const claimIndex = completionBody.indexOf('claimForUser(');
+    const localValidateIndex = completionBody.indexOf(
+      'validateMCPOAuthCallbackBinding(pendingFlow.context'
+    );
+    const deleteIndex = completionBody.indexOf('pendingOAuthFlows.delete(state)');
+
+    expect(inspectIndex).toBeGreaterThanOrEqual(0);
+    expect(durableValidateIndex).toBeGreaterThan(inspectIndex);
+    expect(claimIndex).toBeGreaterThan(durableValidateIndex);
+    expect(localValidateIndex).toBeGreaterThan(claimIndex);
+    expect(deleteIndex).toBeGreaterThan(localValidateIndex);
   });
 
   it('uses one phase-aware failure classifier for callback and manual completion', () => {

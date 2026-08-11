@@ -1,4 +1,9 @@
-import { type CreateMCPServerInput, type MCPServer, shortId } from '@agor-live/client';
+import {
+  type CreateMCPServerInput,
+  type MCPServer,
+  type MCPServerID,
+  shortId,
+} from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Badge,
@@ -101,7 +106,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   };
 
   // Save server first for OAuth flow in create mode (returns new server ID)
-  const handleSaveFirstForCreate = async (): Promise<string | null> => {
+  const handleSaveFirstForCreate = async (): Promise<MCPServerID | null> => {
     if (!client) return null;
     try {
       await createForm.validateFields();

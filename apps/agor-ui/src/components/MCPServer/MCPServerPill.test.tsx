@@ -58,9 +58,7 @@ describe('MCPServerPill OAuth start', () => {
 
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith({
-        mcp_url: 'https://mcp.notion.com/mcp',
         mcp_server_id: 'server-1',
-        client_id: undefined,
       })
     );
     expect(open).toHaveBeenCalledWith(

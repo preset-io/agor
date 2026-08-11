@@ -43,6 +43,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [preserveAbsentDcrMode, setPreserveAbsentDcrMode] = useState(false);
 
   // Hydrate the form when the modal opens or the user swaps to a different
   // server. Intentionally NOT keyed on `server` itself — that would clobber
@@ -53,6 +54,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     if (!open || !server) return;
 
     setTestResult(null);
+    setPreserveAbsentDcrMode(false);
     const serverAuthType = (server.auth?.type as 'none' | 'bearer' | 'jwt' | 'oauth') || 'none';
     setAuthType(serverAuthType);
     setTransport(server.transport || (server.url ? 'http' : 'stdio'));
@@ -83,6 +85,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       formValues.jwt_api_token = server.auth?.api_token;
       formValues.jwt_api_secret = server.auth?.api_secret;
     } else if (serverAuthType === 'oauth') {
+      setPreserveAbsentDcrMode(server.auth?.oauth_dcr_mode === undefined);
       formValues.oauth_authorization_url = server.auth?.oauth_authorization_url;
       formValues.oauth_token_url = server.auth?.oauth_token_url;
       formValues.oauth_client_id = server.auth?.oauth_client_id;
@@ -102,6 +105,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     setTransport('stdio');
     setAuthType('none');
     setTestResult(null);
+    setPreserveAbsentDcrMode(false);
     onClose();
   };
 
@@ -209,7 +213,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       const env = parseEnvJSON(values.env);
       if (env) updates.env = env;
 
-      updates.auth = buildAuthFromValues(values);
+      updates.auth = buildAuthFromValues(values, { preserveAbsentDcrMode });
 
       await client.service('mcp-servers').patch(server.mcp_server_id, updates);
 
@@ -231,7 +235,14 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       width={600}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+      <Form
+        form={form}
+        layout="vertical"
+        style={{ marginTop: 16 }}
+        onValuesChange={(changedValues) => {
+          if ('oauth_dcr_mode' in changedValues) setPreserveAbsentDcrMode(false);
+        }}
+      >
         <MCPServerFormFields
           mode="edit"
           transport={transport}
