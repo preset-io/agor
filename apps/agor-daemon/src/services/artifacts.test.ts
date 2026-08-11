@@ -739,6 +739,32 @@ describe('ArtifactsService.getPayload trust + .env synthesis', () => {
       expect(payload.files['/.env']).toBeUndefined();
     }
   );
+
+  dbTest('non-static payloads retain their persisted top-level entry', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'react-custom-entry',
+      template: 'react',
+      entry: '/src/index.js',
+      files: {
+        '/src/index.js': 'console.log("persisted entry")',
+        '/src/alternate.js': 'console.log("custom setup entry")',
+      },
+      sandpack_config: { customSetup: { entry: '/src/alternate.js' } },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+
+    expect(payload.template).toBe('react');
+    expect(payload.entry).toBe('/src/index.js');
+    expect(payload.sandpack_config?.customSetup?.entry).toBe('/src/alternate.js');
+  });
 });
 
 describe('ArtifactsService.grantTrust', () => {
@@ -1443,7 +1469,7 @@ describe('ArtifactsService.exportToCodeSandbox', () => {
           main: string;
         };
 
-        expect(exportedPackage.main).toBe('/index.html');
+        expect(exportedPackage.main).toBe('index.html');
         expect(body.files['index.html'].content).toBe('<main>Exported HTML</main>');
         expect(body.files['styles.css'].content).toBe('.hero { color: rebeccapurple; }');
         expect(body.files['.env']).toBeUndefined();

@@ -1099,7 +1099,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       files: filesOut,
       sandpack_config: servedSandpackConfig,
       dependencies: artifact.dependencies,
-      entry: renderConfig.sandpack_config?.customSetup?.entry ?? artifact.entry,
+      entry:
+        renderConfig.template === 'static'
+          ? (renderConfig.sandpack_config?.customSetup?.entry ?? artifact.entry)
+          : artifact.entry,
       content_hash: contentHash,
       runtime_report_hash: this.computeRuntimeReportHash(artifact),
       required_env_vars: requiredEnvVars.length > 0 ? requiredEnvVars : undefined,
@@ -1471,11 +1474,15 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       artifact.entry ??
       userPkg.main ??
       (exportRenderConfig.template === 'static' ? '/index.html' : 'src/index.js');
+    const packageEntry =
+      typeof exportEntry === 'string' && exportEntry.startsWith('/')
+        ? exportEntry.slice(1)
+        : exportEntry;
     const finalPkg: Record<string, unknown> = {
       name: 'artifact-export',
       version: '0.0.0',
       ...userPkg,
-      main: exportEntry,
+      main: packageEntry,
       dependencies: mergedDeps,
     };
     filesPayload['package.json'] = { content: JSON.stringify(finalPkg, null, 2) };
