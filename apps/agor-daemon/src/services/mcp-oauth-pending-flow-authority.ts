@@ -74,6 +74,8 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
     (material.compatibilityMode === 'strict' || material.compatibilityMode === 'legacy') &&
+    (material.requiresCallbackIssuer === undefined ||
+      typeof material.requiresCallbackIssuer === 'boolean') &&
     typeof material.allowLocalhostHttp === 'boolean'
   );
 }
@@ -142,6 +144,7 @@ export class MCPOAuthPendingFlowAuthority {
         clientId: input.context.clientId,
         ...(input.context.clientSecret ? { clientSecret: input.context.clientSecret } : {}),
         compatibilityMode: input.context.compatibilityMode,
+        requiresCallbackIssuer: input.context.requiresCallbackIssuer,
         allowLocalhostHttp: input.context.allowLocalhostHttp,
       };
       const sealedMaterial = sealMCPOAuthSecret(
@@ -279,6 +282,7 @@ export class MCPOAuthPendingFlowAuthority {
         // secret-bearing authorization URL after the browser has opened it.
         authorizationUrl: '',
         compatibilityMode: material.compatibilityMode,
+        requiresCallbackIssuer: material.requiresCallbackIssuer,
         allowLocalhostHttp: material.allowLocalhostHttp,
       },
     };

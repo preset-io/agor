@@ -66,6 +66,7 @@ function flowContext(label: string): DurableMCPOAuthFlowContext {
     state: `state-capability-${label}`,
     authorizationUrl: `https://provider.example.test/${label}/authorize?state=state-capability-${label}`,
     compatibilityMode: 'strict',
+    requiresCallbackIssuer: true,
     allowLocalhostHttp: false,
   };
 }
@@ -194,12 +195,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         pkceVerifier: opened.context.pkceVerifier,
         clientId: opened.context.clientId,
         clientSecret: opened.context.clientSecret,
+        requiresCallbackIssuer: opened.context.requiresCallbackIssuer,
       };
       expect(completed).toMatchObject({
         outcome: 'claimed',
         pkceVerifier: context.pkceVerifier,
         clientId: context.clientId,
         clientSecret: context.clientSecret,
+        requiresCallbackIssuer: true,
       });
       await expect(
         authorityA.getForUser(bound.tenantId, bound.userId, attemptId as never)

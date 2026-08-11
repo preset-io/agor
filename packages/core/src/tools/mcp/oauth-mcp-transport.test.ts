@@ -217,6 +217,24 @@ describe('completeMCPOAuthFlow token exchange', () => {
     }
   );
 
+  it('accepts a missing callback issuer only when a new flow did not advertise RFC 9207', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ access_token: 'provider-token' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    ) as unknown as typeof fetch;
+
+    await expect(
+      completeMCPOAuthFlow(
+        { ...context, compatibilityMode: 'strict', requiresCallbackIssuer: false },
+        'single-use-code',
+        context.state,
+        { cacheToken: false }
+      )
+    ).resolves.toMatchObject({ access_token: 'provider-token' });
+  });
+
   it.each([
     ['network outcome', () => Promise.reject(new Error('connection reset'))],
     ['provider 5xx', () => Promise.resolve(new Response('', { status: 503 }))],
@@ -839,7 +857,7 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     vi.restoreAllMocks();
   });
 
-  it('skips RFC 9728 fetch and uses prefetched AS metadata + DCR', async () => {
+  it('uses an advertised DCR endpoint by default without probing a guessed endpoint', async () => {
     const fetchCalls: string[] = [];
     globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       fetchCalls.push(url);
@@ -868,7 +886,6 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
       cacheKey: 'https://mcp.reo.dev/mcp',
       resourceUri: 'https://mcp.reo.dev/mcp',
       compatibilityMode: 'legacy',
-      dcrMode: 'fallback',
       allowLocalhostHttp: true,
     });
 
@@ -883,6 +900,78 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(authUrl.searchParams.get('code_challenge')).toBeTruthy();
     expect(authUrl.searchParams.get('state')).toBeTruthy();
     expect(authUrl.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9999/oauth/callback');
+  });
+
+  it('does not guess a DCR endpoint in the default advertised-only mode', async () => {
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+
+    await expect(
+      startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://auth.reo.dev',
+          authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+          token_endpoint: 'https://auth.reo.dev/oauth/token',
+        },
+        cacheKey: 'https://mcp.reo.dev/mcp',
+        resourceUri: 'https://mcp.reo.dev/mcp',
+        compatibilityMode: 'legacy',
+        allowLocalhostHttp: true,
+      })
+    ).rejects.toThrow('does not advertise');
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('honours an explicit DCR disable even when metadata advertises registration', async () => {
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+
+    await expect(
+      startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://auth.reo.dev',
+          authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+          token_endpoint: 'https://auth.reo.dev/oauth/token',
+          registration_endpoint: 'https://auth.reo.dev/oauth/register',
+        },
+        cacheKey: 'https://mcp.reo.dev/mcp',
+        resourceUri: 'https://mcp.reo.dev/mcp',
+        compatibilityMode: 'legacy',
+        dcrMode: 'disabled',
+        allowLocalhostHttp: true,
+      })
+    ).rejects.toThrow('Dynamic Client Registration is disabled');
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('does not expose an untrusted DCR provider error body in errors or logs', async () => {
+    const untrustedBody = 'state=private-state access_token=private-token raw-header=value';
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(untrustedBody, { status: 400 })) as unknown as typeof fetch;
+
+    let caught: unknown;
+    try {
+      await startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://auth.reo.dev',
+          authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+          token_endpoint: 'https://auth.reo.dev/oauth/token',
+          registration_endpoint: 'https://auth.reo.dev/oauth/register',
+        },
+        cacheKey: 'https://mcp.reo.dev/mcp',
+        resourceUri: 'https://mcp.reo.dev/mcp',
+        compatibilityMode: 'legacy',
+        allowLocalhostHttp: true,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).not.toContain(untrustedBody);
+    const logs = vi.mocked(console.log).mock.calls.flat().map(String).join('\n');
+    expect(logs).not.toContain(untrustedBody);
   });
 
   it('throws when cacheKey is missing (would silently break token reuse)', async () => {
@@ -1096,15 +1185,18 @@ describe('strict current MCP OAuth profile', () => {
     await expect(startStrict()).rejects.toThrow('Failed to fetch authorization server metadata');
   });
 
-  it('rejects missing S256 and authorization-response issuer support', async () => {
+  it('requires S256 and opportunistically records RFC 9207 support', async () => {
     globalThis.fetch = strictFetch({ s256: false });
     await expect(startStrict()).rejects.toThrow('required PKCE S256');
 
     globalThis.fetch = strictFetch({ responseIssuer: false });
-    await expect(startStrict()).rejects.toThrow('required callback issuer');
+    await expect(startStrict()).resolves.toMatchObject({ requiresCallbackIssuer: false });
+
+    globalThis.fetch = strictFetch({ responseIssuer: true });
+    await expect(startStrict()).resolves.toMatchObject({ requiresCallbackIssuer: true });
   });
 
-  it('does not silently fall back to DCR or insecure endpoints', async () => {
+  it('requires a client ID when DCR is not advertised and rejects insecure endpoints', async () => {
     globalThis.fetch = strictFetch();
     await expect(
       startMCPOAuthFlow(
@@ -1113,7 +1205,7 @@ describe('strict current MCP OAuth profile', () => {
         'https://agor.example.com/mcp-servers/oauth-callback',
         { resourceUri }
       )
-    ).rejects.toThrow('pre-registered client');
+    ).rejects.toThrow('does not advertise');
 
     globalThis.fetch = strictFetch();
     await expect(

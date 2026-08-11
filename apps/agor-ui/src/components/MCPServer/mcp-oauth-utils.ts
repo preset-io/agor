@@ -27,7 +27,7 @@ export interface OAuthConfig {
   oauth_grant_type?: string;
   oauth_mode?: 'per_user' | 'shared';
   oauth_compatibility_mode?: 'strict' | 'legacy';
-  oauth_dcr_mode?: 'disabled' | 'fallback';
+  oauth_dcr_mode?: 'disabled' | 'advertised' | 'fallback';
 }
 
 /**
@@ -73,7 +73,10 @@ export function extractOAuthConfig(values: Record<string, unknown>): OAuthConfig
   config.oauth_mode = values.oauth_mode === 'shared' ? 'shared' : 'per_user';
   config.oauth_compatibility_mode =
     values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
-  config.oauth_dcr_mode = values.oauth_dcr_mode === 'fallback' ? 'fallback' : 'disabled';
+  config.oauth_dcr_mode =
+    values.oauth_dcr_mode === 'disabled' || values.oauth_dcr_mode === 'fallback'
+      ? values.oauth_dcr_mode
+      : 'advertised';
 
   return config;
 }
@@ -86,7 +89,26 @@ export interface TestConfig {
   scope?: string;
   grant_type?: string;
   compatibility_mode?: 'strict' | 'legacy';
-  dcr_mode?: 'disabled' | 'fallback';
+  dcr_mode?: 'disabled' | 'advertised' | 'fallback';
+}
+
+export interface MCPOAuthStartRequest {
+  mcp_url: string | undefined;
+  mcp_server_id: string | undefined;
+  client_id: string | undefined;
+}
+
+/** Shared Socket.IO/Feathers payload used by Settings and the session footer. */
+export function buildMCPOAuthStartRequest(
+  mcpUrl: string | undefined,
+  mcpServerId: string | undefined,
+  clientId: string | undefined
+): MCPOAuthStartRequest {
+  return {
+    mcp_url: mcpUrl,
+    mcp_server_id: mcpServerId,
+    client_id: clientId,
+  };
 }
 
 /**
@@ -134,7 +156,10 @@ export function extractOAuthConfigForTesting(values: Record<string, unknown>): T
     config.grant_type = values.oauth_grant_type;
   }
   config.compatibility_mode = values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
-  config.dcr_mode = values.oauth_dcr_mode === 'fallback' ? 'fallback' : 'disabled';
+  config.dcr_mode =
+    values.oauth_dcr_mode === 'disabled' || values.oauth_dcr_mode === 'fallback'
+      ? values.oauth_dcr_mode
+      : 'advertised';
 
   return config;
 }
@@ -158,7 +183,7 @@ export interface BuiltAuth {
   oauth_grant_type?: string;
   oauth_mode?: 'per_user' | 'shared';
   oauth_compatibility_mode?: 'strict' | 'legacy';
-  oauth_dcr_mode?: 'disabled' | 'fallback';
+  oauth_dcr_mode?: 'disabled' | 'advertised' | 'fallback';
 }
 
 /**

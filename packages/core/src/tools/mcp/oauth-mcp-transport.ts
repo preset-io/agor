@@ -1212,6 +1212,8 @@ export interface OAuthFlowContext {
   state: string;
   authorizationUrl: string;
   compatibilityMode: 'strict' | 'legacy';
+  /** Require and verify RFC 9207 `iss` when the provider advertised support. */
+  requiresCallbackIssuer?: boolean;
   /** Narrow standalone-development exception; durable daemon flows leave this false. */
   allowLocalhostHttp: boolean;
 }
@@ -1260,7 +1262,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   resourceUri: string;
   issuer: string;
   compatibilityMode: 'strict' | 'legacy';
-  dcrMode: 'disabled' | 'fallback';
+  dcrMode: 'disabled' | 'advertised' | 'fallback';
   allowLocalhostHttp: boolean;
 }): Promise<OAuthFlowContext> {
   const {
@@ -1304,9 +1306,13 @@ async function startMCPOAuthFlowWithAS(opts: {
   let actualClientId = clientId;
   let resolvedClientSecret = opts.clientSecret;
 
-  if (!actualClientId && dcrMode === 'fallback') {
+  if (!actualClientId && dcrMode !== 'disabled') {
+    // An endpoint explicitly advertised by validated authorization-server
+    // metadata is safe to use by default. Guessing `${issuer}/register`
+    // remains a legacy compatibility opt-in.
     const registrationEndpoint =
-      authServerMetadata?.registration_endpoint || fallbackRegistrationEndpoint;
+      authServerMetadata?.registration_endpoint ||
+      (dcrMode === 'fallback' ? fallbackRegistrationEndpoint : undefined);
     if (registrationEndpoint) {
       console.log('[MCP OAuth] Using Dynamic Client Registration');
       try {
@@ -1342,7 +1348,7 @@ async function startMCPOAuthFlowWithAS(opts: {
     }
   } else if (!actualClientId) {
     throw new Error(
-      'OAuth client_id is required. Configure a pre-registered client, or explicitly enable Dynamic Client Registration fallback for this server.'
+      'OAuth client_id is required because Dynamic Client Registration is disabled for this server.'
     );
   }
 
@@ -1378,11 +1384,6 @@ async function startMCPOAuthFlowWithAS(opts: {
     }
     if (!authServerMetadata.code_challenge_methods_supported?.includes('S256')) {
       throw new Error('Authorization server does not advertise required PKCE S256 support');
-    }
-    if (authServerMetadata.authorization_response_iss_parameter_supported !== true) {
-      throw new Error(
-        'Authorization server does not advertise the required callback issuer parameter'
-      );
     }
     if (
       authorizationUrlOverride &&
@@ -1420,6 +1421,9 @@ async function startMCPOAuthFlowWithAS(opts: {
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,
+    requiresCallbackIssuer:
+      compatibilityMode === 'strict' &&
+      authServerMetadata?.authorization_response_iss_parameter_supported === true,
     allowLocalhostHttp,
   };
 }
@@ -1458,14 +1462,14 @@ export async function startMCPOAuthFlow(
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
     compatibilityMode?: 'strict' | 'legacy';
-    dcrMode?: 'disabled' | 'fallback';
+    dcrMode?: 'disabled' | 'advertised' | 'fallback';
     /** Exact loopback HTTP exception for standalone development only. */
     allowLocalhostHttp?: boolean;
   }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
   const compatibilityMode = options?.compatibilityMode ?? 'strict';
-  const dcrMode = options?.dcrMode ?? 'disabled';
+  const dcrMode = options?.dcrMode ?? 'advertised';
   const allowLocalhostHttp = options?.allowLocalhostHttp === true;
   const resourceUri = options?.resourceUri;
   if (!resourceUri) throw new Error('MCP OAuth requires an exact protected resource URI');
@@ -1614,10 +1618,15 @@ export async function completeMCPOAuthFlow(
   if (state !== context.state) {
     throw new OAuthCallbackValidationError('callback_state_mismatch');
   }
-  if (context.compatibilityMode === 'strict' && options.issuer == null) {
+  // Old durable strict contexts did not persist this capability bit and keep
+  // their original require-issuer contract. New flows require RFC 9207 only
+  // when the provider advertised it; MCP OAuth does not mandate RFC 9207.
+  const requiresCallbackIssuer =
+    context.requiresCallbackIssuer ?? context.compatibilityMode === 'strict';
+  if (requiresCallbackIssuer && options.issuer == null) {
     throw new OAuthCallbackValidationError('callback_issuer_missing');
   }
-  if (context.compatibilityMode === 'strict' && options.issuer !== context.issuer) {
+  if (options.issuer != null && options.issuer !== context.issuer) {
     throw new OAuthCallbackValidationError('callback_issuer_mismatch');
   }
 

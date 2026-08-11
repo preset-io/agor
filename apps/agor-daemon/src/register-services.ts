@@ -1455,7 +1455,7 @@ async function registerMCPServices(
     tokenUrlOverride?: string;
     scope?: string;
     compatibilityMode?: 'strict' | 'legacy';
-    dcrMode?: 'disabled' | 'fallback';
+    dcrMode?: 'disabled' | 'advertised' | 'fallback';
     socketId?: string;
   };
 
@@ -2230,7 +2230,7 @@ async function registerMCPServices(
         grant_type?: string;
         start_browser_flow?: boolean;
         compatibility_mode?: 'strict' | 'legacy';
-        dcr_mode?: 'disabled' | 'fallback';
+        dcr_mode?: 'disabled' | 'advertised' | 'fallback';
       },
       params?: { connection?: { id?: string } }
     ) {
@@ -2331,7 +2331,7 @@ async function registerMCPServices(
                   clientSecret: data.client_secret,
                   scope: data.scope,
                   compatibilityMode,
-                  dcrMode: data.dcr_mode ?? 'disabled',
+                  dcrMode: data.dcr_mode,
                 });
               } catch (err) {
                 if (err instanceof PublicBaseUrlNotConfiguredError) {
@@ -2602,7 +2602,7 @@ async function registerMCPServices(
         let clientIdFromConfig: string | undefined;
         let scopeOverride: string | undefined;
         let compatibilityMode: 'strict' | 'legacy' = 'strict';
-        let dcrMode: 'disabled' | 'fallback' = 'disabled';
+        let dcrMode: 'disabled' | 'advertised' | 'fallback' | undefined;
         const savedServer = data.mcp_server_id
           ? await runInOAuthTenantScope(db, tenantId, () => {
               const mcpServerRepo = new MCPServerRepository(db);
@@ -2635,7 +2635,7 @@ async function registerMCPServices(
           clientSecretOverride = savedServer.auth.oauth_client_secret;
           scopeOverride = savedServer.auth.oauth_scope;
           compatibilityMode = savedServer.auth.oauth_compatibility_mode ?? 'strict';
-          dcrMode = savedServer.auth.oauth_dcr_mode ?? 'disabled';
+          dcrMode = savedServer.auth.oauth_dcr_mode;
           if (oauthMode === 'shared') {
             const currentUser =
               durableOAuthFlows && tenantId && userId
@@ -3621,7 +3621,7 @@ async function registerMCPServices(
               tokenUrlOverride: serverConfig.auth?.oauth_token_url,
               scope: serverConfig.auth?.oauth_scope,
               compatibilityMode,
-              dcrMode: serverConfig.auth?.oauth_dcr_mode ?? 'disabled',
+              dcrMode: serverConfig.auth?.oauth_dcr_mode,
               tenantId,
               socketId: connection?.id,
             });

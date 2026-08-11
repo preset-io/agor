@@ -81,6 +81,8 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   clientId: string;
   clientSecret?: string;
   compatibilityMode: 'strict' | 'legacy';
+  /** RFC 9207 was advertised when this flow was created. */
+  requiresCallbackIssuer?: boolean;
   allowLocalhostHttp: boolean;
 }
 
@@ -121,8 +123,12 @@ export interface MCPAuth {
   oauth_grant_type?: string;
   /** Strict current MCP Authorization behavior is the default. */
   oauth_compatibility_mode?: 'strict' | 'legacy';
-  /** Dynamic Client Registration is disabled unless explicitly enabled. */
-  oauth_dcr_mode?: 'disabled' | 'fallback';
+  /**
+   * Dynamic Client Registration policy. Missing values use `advertised` for
+   * compatibility with servers that publish an RFC 7591 endpoint. The
+   * `fallback` mode additionally permits the legacy guessed `/register` URL.
+   */
+  oauth_dcr_mode?: 'disabled' | 'advertised' | 'fallback';
   // OAuth 2.1 runtime tokens (obtained via browser flow)
   oauth_access_token?: string;
   oauth_token_expires_at?: number; // Unix timestamp in milliseconds

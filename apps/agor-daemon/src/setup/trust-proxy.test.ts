@@ -113,6 +113,15 @@ describe('trust proxy wiring', () => {
     expect(captured?.ip).toMatch(/127\.0\.0\.1|::ffff:127\.0\.0\.1|::1/);
   });
 
+  it('ignores malformed forwarded values from an untrusted direct client', async () => {
+    let captured: Request | undefined;
+    harness = await startApp(0, (req) => {
+      captured = req;
+    });
+    await get(harness.port, { 'x-forwarded-for': 'undefined, not-an-ip' });
+    expect(captured?.ip).toMatch(/127\.0\.0\.1|::ffff:127\.0\.0\.1|::1/);
+  });
+
   it('honours X-Forwarded-For when trust_proxy_hops > 0', async () => {
     let captured: Request | undefined;
     harness = await startApp(1, (req) => {

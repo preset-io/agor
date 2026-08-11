@@ -45,7 +45,7 @@ function authBinding(auth: MCPAuth | undefined): Record<string, unknown> {
     type: auth?.type ?? 'none',
     mode: auth?.oauth_mode ?? 'per_user',
     compatibility: auth?.oauth_compatibility_mode ?? 'strict',
-    dcr: auth?.oauth_dcr_mode ?? 'disabled',
+    dcr: auth?.oauth_dcr_mode ?? 'advertised',
     authorizationOverride: auth?.oauth_authorization_url ?? null,
     tokenOverride: auth?.oauth_token_url ?? null,
     configuredClientId: auth?.oauth_client_id ?? null,

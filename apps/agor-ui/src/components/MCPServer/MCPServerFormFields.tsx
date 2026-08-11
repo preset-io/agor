@@ -25,7 +25,11 @@ import {
   waitForMCPOAuthAttempt,
 } from '@/utils/mcpOAuthAttempt';
 import { useThemedMessage } from '@/utils/message';
-import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
+import {
+  buildMCPOAuthStartRequest,
+  extractOAuthConfigForTesting,
+  validateHeadersJSON,
+} from './mcp-oauth-utils';
 
 const { TextArea } = Input;
 
@@ -180,11 +184,11 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     try {
       showInfo('Starting OAuth authentication flow...');
 
-      const data = (await client.service('mcp-servers/oauth-start').create({
-        mcp_url: requestData.mcp_url,
-        mcp_server_id: targetServerId,
-        client_id: requestData.client_id,
-      })) as {
+      const data = (await client
+        .service('mcp-servers/oauth-start')
+        .create(
+          buildMCPOAuthStartRequest(requestData.mcp_url, targetServerId, requestData.client_id)
+        )) as {
         success: boolean;
         error?: string;
         message?: string;
@@ -774,7 +778,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Client ID"
                     name="oauth_client_id"
-                    tooltip="Register an OAuth app with the provider and paste its client ID. Dynamic Client Registration is used only when explicitly enabled below."
+                    tooltip="Register an OAuth app with the provider and paste its client ID. Otherwise Agor can use a registration endpoint advertised by the provider."
                   >
                     <Input
                       placeholder="Enter client ID or {{ user.env.OAUTH_CLIENT_ID }}"
@@ -784,14 +788,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Dynamic Client Registration"
                     name="oauth_dcr_mode"
-                    initialValue="disabled"
-                    tooltip="Pre-registration is preferred. Enable fallback only for a server that explicitly advertises a compatible registration endpoint."
+                    initialValue="advertised"
+                    tooltip="Advertised registration uses only provider metadata. Legacy fallback additionally guesses an issuer-relative /register endpoint."
                   >
                     <Select>
+                      <Select.Option value="advertised">
+                        Advertised endpoint (recommended)
+                      </Select.Option>
                       <Select.Option value="disabled">
                         Disabled — pre-registered client
                       </Select.Option>
-                      <Select.Option value="fallback">Explicit DCR fallback</Select.Option>
+                      <Select.Option value="fallback">Legacy /register fallback</Select.Option>
                     </Select>
                   </Form.Item>
                   <Form.Item

@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildAuthFromValues,
+  buildMCPOAuthStartRequest,
   extractOAuthConfig,
   extractOAuthConfigForTesting,
   isTemplateValue,
   parseEnvJSON,
   validateHeadersJSON,
 } from './mcp-oauth-utils';
+
+describe('buildMCPOAuthStartRequest', () => {
+  it('keeps footer and Settings on the same server-bound request shape', () => {
+    expect(buildMCPOAuthStartRequest('https://mcp.example.com/mcp', 'server-1', undefined)).toEqual(
+      {
+        mcp_url: 'https://mcp.example.com/mcp',
+        mcp_server_id: 'server-1',
+        client_id: undefined,
+      }
+    );
+  });
+});
 
 describe('isTemplateValue', () => {
   it('returns true for template strings', () => {
@@ -52,7 +65,7 @@ describe('extractOAuthConfig', () => {
       oauth_grant_type: 'authorization_code',
       oauth_mode: 'per_user',
       oauth_compatibility_mode: 'strict',
-      oauth_dcr_mode: 'disabled',
+      oauth_dcr_mode: 'advertised',
     });
   });
 
@@ -76,14 +89,17 @@ describe('extractOAuthConfig', () => {
     expect(result.oauth_mode).toBe('shared');
   });
 
-  it('defaults to strict OAuth without dynamic registration', () => {
+  it('defaults to strict OAuth with advertised-endpoint-only registration', () => {
     expect(extractOAuthConfig({})).toMatchObject({
       oauth_compatibility_mode: 'strict',
-      oauth_dcr_mode: 'disabled',
+      oauth_dcr_mode: 'advertised',
     });
   });
 
-  it('preserves explicit legacy and DCR fallback opt-ins', () => {
+  it('preserves explicit disabled and legacy fallback policies', () => {
+    expect(extractOAuthConfig({ oauth_dcr_mode: 'disabled' })).toMatchObject({
+      oauth_dcr_mode: 'disabled',
+    });
     expect(
       extractOAuthConfig({
         oauth_compatibility_mode: 'legacy',

@@ -14,6 +14,7 @@ import { formatAbsoluteTime } from '../../utils/time';
 import { ENTITY_PILL_COLORS } from '../Pill';
 import { Tag } from '../Tag';
 import { MCPServerEditModal } from './MCPServerEditModal';
+import { buildMCPOAuthStartRequest } from './mcp-oauth-utils';
 
 interface MCPServerPillProps {
   server: MCPServer;
@@ -89,11 +90,11 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
   const handleOAuthClick = async () => {
     if (!client) return;
     try {
-      const data = (await client.service('mcp-servers/oauth-start').create({
-        mcp_url: server.url,
-        mcp_server_id: server.mcp_server_id,
-        client_id: server.auth?.oauth_client_id,
-      })) as {
+      const data = (await client
+        .service('mcp-servers/oauth-start')
+        .create(
+          buildMCPOAuthStartRequest(server.url, server.mcp_server_id, server.auth?.oauth_client_id)
+        )) as {
         success: boolean;
         error?: string;
         authorizationUrl?: string;
