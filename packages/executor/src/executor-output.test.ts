@@ -82,8 +82,59 @@ describe('executor result output', () => {
       success: true,
       data: payload,
     });
-    // ...and it exited via the flush callback (well under the 5s failsafe, and nowhere
-    // near the old 60s hang).
+    // ...and it exited promptly via the flush callback, nowhere near the old 60s hang.
     expect(elapsedMs).toBeLessThan(5000);
   }, 20000);
+
+  it('waits for a backpressured reader instead of truncating', async () => {
+    const modulePath = fileURLToPath(new URL('./executor-output.ts', import.meta.url));
+    // Far larger than the 64KB kernel pipe buffer, so the write cannot complete until the
+    // (deliberately paused) reader drains it.
+    const size = 8 * 1024 * 1024;
+    // Pair the large result with a lingering handle: the real one-shot case (open socket)
+    // plus a slow reader — exactly what a fixed-timer failsafe would truncate.
+    const script = [
+      `import { completeExecutorResult } from ${JSON.stringify(modulePath)};`,
+      `setInterval(() => {}, 1000);`,
+      `completeExecutorResult({ success: true, data: 'z'.repeat(${size}) });`,
+    ].join('\n');
+
+    const child = spawn(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '--eval', script],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+
+    // Apply backpressure: capture the first chunk, then pause the reader for 6s (longer
+    // than the removed 5s failsafe) before draining the rest.
+    let pausedOnce = false;
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
+      if (!pausedOnce) {
+        pausedOnce = true;
+        child.stdout.pause();
+        setTimeout(() => child.stdout.resume(), 6000);
+      }
+    });
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+    });
+    const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+    const stderr = Buffer.concat(stderrChunks).toString('utf8');
+
+    expect(exitCode, stderr).toBe(0);
+    expect(stdout.startsWith(EXECUTOR_RESULT_PREFIX)).toBe(true);
+    // The entire result must survive the pause — no truncation, no early exit.
+    expect(JSON.parse(stdout.slice(EXECUTOR_RESULT_PREFIX.length))).toEqual({
+      success: true,
+      data: 'z'.repeat(size),
+    });
+  }, 30000);
 });

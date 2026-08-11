@@ -7,17 +7,21 @@ export function emitExecutorResult(result: unknown): void {
 export function completeExecutorResult<T extends { success: boolean }>(result: T): void {
   const code = result.success ? 0 : 1;
   const line = `${EXECUTOR_RESULT_PREFIX}${JSON.stringify(result)}\n`;
+  // Emit the full result, then force-exit — but ONLY from the write callback, i.e. once
+  // stdout has actually flushed. Two failure modes this threads between:
+  //   * Truncation: console.log to a pipe is async on Linux; a bare process.exit() drops
+  //     anything past the 64KB kernel pipe buffer. Exiting in the write callback instead
+  //     guarantees the whole result reached the kernel, even for a slow/backpressured
+  //     reader that takes a while to drain.
+  //   * Hang: one-shot commands leave a Feathers/socket.io client open whose timers keep
+  //     the event loop alive, so `process.exitCode = code` alone never terminates. The
+  //     callback exit tears the process down despite those lingering handles.
+  //
+  // Deliberately NO wall-clock failsafe: any timer short enough to be useful is also
+  // short enough to fire mid-flush under backpressure and re-truncate the result — the
+  // exact bug this function prevents. If stdout is genuinely wedged and the callback
+  // never fires, the daemon's existing 60s executor supervisor is the correct place to
+  // enforce a deadline (it reports a timeout rather than a false success-with-truncation).
   process.exitCode = code;
-  // Force-exit once the (possibly piped) stdout has flushed. Setting exitCode alone
-  // is not enough for one-shot commands: lingering handles (daemon WS clients,
-  // socket.io timers) keep the event loop alive, so the process would hang until the
-  // daemon's 60s timeout. Writing then exiting in the drain callback flushes the full
-  // result (even past the 64KB pipe buffer) AND terminates deterministically.
   process.stdout.write(line, () => process.exit(code));
-  // Failsafe for the rare case the write callback never fires (e.g. stdout wedged
-  // without erroring). A failed/EPIPE write still invokes the callback (with an error
-  // we ignore) and exits, so this only covers the truly-stuck case. 5s is generous
-  // enough that a legitimately slow reader always finishes flushing first, yet well
-  // under the daemon's 60s executor timeout. unref() so this timer can't keep us alive.
-  setTimeout(() => process.exit(code), 5000).unref();
 }
