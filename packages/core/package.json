@@ -160,6 +160,12 @@
       "import": "./dist/environment/render-snapshot.js",
       "require": "./dist/environment/render-snapshot.cjs"
     },
+    "./environment/health-transition": {
+      "source": "./src/environment/health-transition.ts",
+      "types": "./dist/environment/health-transition.d.ts",
+      "import": "./dist/environment/health-transition.js",
+      "require": "./dist/environment/health-transition.cjs"
+    },
     "./utils/errors": {
       "source": "./src/utils/errors.ts",
       "types": "./dist/utils/errors.d.ts",

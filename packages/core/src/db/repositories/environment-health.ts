@@ -1,5 +1,6 @@
 import { and, asc, eq, gt, or, sql } from 'drizzle-orm';
 import type { DistributedWorkIdentity } from '../../coordination';
+import { decideEnvironmentHealthTransition } from '../../environment/health-transition';
 import type { BranchEnvironmentInstance, BranchID, TenantID } from '../../types';
 import type { Database, SystemDatabase } from '../client';
 import {
@@ -53,7 +54,7 @@ export type EnvironmentHealthCommitResult =
       outcome: 'committed';
       mutated: boolean;
       stateChanged: boolean;
-      environmentStatus: 'starting' | 'running';
+      environmentStatus: 'starting' | 'running' | 'error';
     };
 
 /**
@@ -94,7 +95,14 @@ export class EnvironmentHealthDiscoveryRepository {
     })
       .from(branches)
       .where(
-        and(eq(branches.archived, false), or(eq(status, 'starting'), eq(status, 'running')), after)
+        and(
+          eq(branches.archived, false),
+          // `error` is observable too: a demoted environment has to keep being
+          // probed, otherwise demotion is a one-way door and it can never be
+          // seen recovering.
+          or(eq(status, 'starting'), eq(status, 'running'), eq(status, 'error')),
+          after
+        )
       )
       .orderBy(asc(tenantColumn), asc(branches.branch_id))
       .limit(options.limit)
@@ -164,7 +172,11 @@ export class EnvironmentHealthRepository {
         const status = (
           row?.data as { environment_instance?: BranchEnvironmentInstance } | undefined
         )?.environment_instance?.status;
-        if (!row || row.archived || (status !== 'starting' && status !== 'running')) {
+        if (
+          !row ||
+          row.archived ||
+          (status !== 'starting' && status !== 'running' && status !== 'error')
+        ) {
           return { outcome: 'unavailable' };
         }
         const now = await this.mutationNow(txDb, input.branchId);
@@ -251,7 +263,7 @@ export class EnvironmentHealthRepository {
         if (
           !row ||
           row.archived ||
-          (status !== 'starting' && status !== 'running') ||
+          (status !== 'starting' && status !== 'running' && status !== 'error') ||
           row.environment_generation !== input.environmentGeneration ||
           row.environment_health_claim_token !== input.claimToken
         ) {
@@ -304,7 +316,10 @@ export class EnvironmentHealthRepository {
         and(
           eq(branches.branch_id, input.branchId),
           eq(branches.archived, false),
-          or(eq(status, 'starting'), eq(status, 'running')),
+          // `error` is observable too: a demoted environment has to keep being
+          // probed, otherwise demotion is a one-way door and it can never be seen
+          // recovering.
+          or(eq(status, 'starting'), eq(status, 'running'), eq(status, 'error')),
           eq(branches.environment_generation, input.environmentGeneration),
           eq(branches.environment_health_claim_token, input.claimToken),
           expiry
@@ -324,6 +339,8 @@ export class EnvironmentHealthRepository {
     claimToken: string;
     environmentGeneration: number;
     observation: EnvironmentHealthObservation;
+    /** Poll cadence, so the startup budget stays expressed in wall-clock time. */
+    probeIntervalMs: number;
   }): Promise<EnvironmentHealthCommitResult> {
     return runDatabaseTransaction(
       this.db,
@@ -342,7 +359,7 @@ export class EnvironmentHealthRepository {
         if (
           !row ||
           row.archived ||
-          (status !== 'starting' && status !== 'running') ||
+          (status !== 'starting' && status !== 'running' && status !== 'error') ||
           row.environment_generation !== input.environmentGeneration ||
           row.environment_health_claim_token !== input.claimToken ||
           !row.environment_health_claim_expires_at ||
@@ -354,10 +371,22 @@ export class EnvironmentHealthRepository {
 
         const shouldRecord =
           status === 'running' ||
+          status === 'error' ||
           input.observation.status === 'healthy' ||
           input.observation.recordWhileStarting;
-        const nextStatus =
-          status === 'starting' && input.observation.status === 'healthy' ? 'running' : status;
+        // Same rules the standalone monitor applies, so an environment reaches
+        // the same status under either monitor. Previously this promoted
+        // `starting -> running` on a SINGLE healthy observation and never
+        // demoted or timed out at all, so a resuming tunnel's one stale 200
+        // could report an environment live while it was still booting, and one
+        // that went away stayed green forever.
+        const decision = decideEnvironmentHealthTransition({
+          currentStatus: status,
+          observation: input.observation.status,
+          previous: activeEnvironment.last_health_check,
+          probeIntervalMs: input.probeIntervalMs,
+        });
+        const nextStatus = decision.nextStatus ?? status;
         const previousHealth = activeEnvironment.last_health_check;
         const stateChanged =
           shouldRecord &&
@@ -372,6 +401,7 @@ export class EnvironmentHealthRepository {
                 timestamp: now.toISOString(),
                 status: input.observation.status,
                 message: input.observation.message,
+                consecutive: decision.consecutive,
               },
             }
           : activeEnvironment;

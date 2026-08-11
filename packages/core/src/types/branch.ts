@@ -483,6 +483,21 @@ export interface BranchEnvironmentInstance {
     timestamp: string;
     status: 'healthy' | 'unhealthy' | 'unknown';
     message?: string;
+    /**
+     * How many consecutive observations have now reported {@link status}.
+     *
+     * Readiness and demotion are deliberately streak-based — one stale 200 from
+     * a resuming tunnel must not promote, and one dropped packet must not
+     * demote. The count lives HERE, next to the observation that produced it,
+     * rather than in daemon memory, because the distributed monitor moves an
+     * environment's observation lease between daemons: in-process counters
+     * would reset on every handoff (and on every restart), so the streak rules
+     * could never be applied there at all.
+     *
+     * Absent on rows written before this existed, and on a probe that changed
+     * status; both are read as a streak of 1 for the reported status.
+     */
+    consecutive?: number;
   };
 
   /**

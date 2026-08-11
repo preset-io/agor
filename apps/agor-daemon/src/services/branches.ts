@@ -27,6 +27,11 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import {
+  decideEnvironmentHealthTransition,
+  ENVIRONMENT_STARTUP_TIMEOUT_MS,
+  type EnvironmentObservationStatus,
+} from '@agor/core/environment/health-transition';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
   MANAGED_ENV_EXECUTION_MODE_DEFAULT,
@@ -133,36 +138,10 @@ interface ManagedProcess {
 }
 
 /**
- * Consecutive failed health probes before a `running` environment is demoted to
- * `error`. At the monitor's 5s interval this is ~15s of continuous
- * unreachability — long enough to ride out a blip, short enough that a
- * shut-down Codespace stops being advertised as live.
+ * Health transition thresholds and the rule that applies them live in
+ * `@agor/core/environment/health-transition`, shared with the distributed
+ * monitor so an environment reaches the same status under either monitor.
  */
-const ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD = 3;
-
-/**
- * Consecutive successful health probes before an environment is promoted to
- * `running`. At the monitor's 5s interval this is ~10s of sustained
- * reachability, which is enough to reject the transient single 200 a resuming
- * Codespace tunnel can emit while the app behind it is still booting.
- */
-const ENVIRONMENT_READY_PROBE_THRESHOLD = 2;
-
-/**
- * How long an environment may stay `starting` while its health probe keeps
- * failing, before it is demoted to `error`.
- *
- * Without a bound, `starting` has NO exit: a probe failure during startup just
- * returns and retries forever. A create that dies partway — a failed
- * postCreate, a container that never boots — would spin indefinitely with no
- * error, and the UI disables Start while `isStarting`, so the board offers no
- * way out. That is the same trap as the stale-`running` case, mirrored.
- *
- * Generous on purpose: a measured cold Codespace create takes 12–27 min, and
- * this must never fire during a legitimate build. One hour of CONTINUOUS
- * failure means something is genuinely wrong, not slow.
- */
-const ENVIRONMENT_STARTUP_TIMEOUT_MS = 60 * 60 * 1000;
 
 /**
  * Extended branches service with custom methods
@@ -173,18 +152,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
-  /**
-   * Consecutive failed health probes per branch, used to demote a `running`
-   * environment that has actually gone away. In-memory on purpose: losing the
-   * count on daemon restart only costs us re-observing a few probes.
-   */
-  private healthFailureStreak = new Map<BranchID, number>();
-  /**
-   * Consecutive successful health probes per branch, used to require sustained
-   * reachability before promoting to `running`. Same in-memory rationale as
-   * {@link healthFailureStreak}.
-   */
-  private healthSuccessStreak = new Map<BranchID, number>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
@@ -1971,7 +1938,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         Object.hasOwn(environmentUpdate, key) &&
         (environmentUpdate[key] === undefined || environmentUpdate[key] === null)
       ) {
-        (updatedEnvironment as Record<string, unknown>)[key] = null;
+        (updatedEnvironment as unknown as Record<string, unknown>)[key] = null;
       }
     }
 
@@ -1992,13 +1959,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const oldState = { ...existing.environment_instance };
     const newState = { ...updatedEnvironment };
 
-    // Remove timestamps for comparison - create new objects without timestamp
+    // Drop the observation's bookkeeping fields for this comparison. The
+    // timestamp advances on every probe, and `consecutive` advances on every
+    // probe that repeats a verdict — neither is a user-visible change, so
+    // including them would send a `patched` payload to every authorized browser
+    // every five seconds for an environment that is simply still up (or still
+    // building).
     if (oldState?.last_health_check) {
-      const { timestamp, ...healthCheck } = oldState.last_health_check;
+      const { timestamp, consecutive, ...healthCheck } = oldState.last_health_check;
       oldState.last_health_check = healthCheck as typeof oldState.last_health_check;
     }
     if (newState?.last_health_check) {
-      const { timestamp, ...healthCheck } = newState.last_health_check;
+      const { timestamp, consecutive, ...healthCheck } = newState.last_health_check;
       newState.last_health_check = healthCheck as typeof newState.last_health_check;
     }
 
@@ -2632,11 +2604,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // resuming Codespace was observed answering one 200 through its tunnel and
       // then immediately 502-ing, which flipped the environment to `running`
       // while the app was in fact still booting.
-      const readyStreak = this.trackHealthProbeSuccess(id, isHealthy);
-      const shouldTransitionToRunning =
-        isHealthy &&
-        (currentStatus === 'starting' || currentStatus === 'error') &&
-        readyStreak >= ENVIRONMENT_READY_PROBE_THRESHOLD;
+      const decision = this.decideHealthTransition(branch, currentStatus, newHealthStatus);
+      const shouldTransitionToRunning = decision.nextStatus === 'running';
 
       if (shouldTransitionToRunning) {
         console.log(`✅ Successful health check for ${branch.name} - transitioning to 'running'`);
@@ -2659,7 +2628,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // An HTTP error (e.g. the 404 GitHub serves for a shut-down Codespace)
       // does NOT throw, so unreachability has to be handled here too, not only
       // in the catch below.
-      const shouldDemote = this.trackHealthProbeResult(id, isHealthy, currentStatus);
+      const shouldDemote = decision.nextStatus === 'error';
       if (shouldDemote) {
         console.warn(
           `🔌 ${branch.name}: environment ${
@@ -2678,6 +2647,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             message: isHealthy
               ? `HTTP ${response.status}`
               : `HTTP ${response.status} ${response.statusText}`,
+            consecutive: decision.consecutive,
           },
         },
         params
@@ -2693,15 +2663,33 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       // Count the failure BEFORE the `starting` early-return below, so a startup
       // that never succeeds can eventually time out instead of retrying forever.
-      const shouldDemoteOnThrow = this.trackHealthProbeResult(id, false, currentStatus);
+      const decision = this.decideHealthTransition(branch, currentStatus, 'unhealthy');
+      const shouldDemoteOnThrow = decision.nextStatus === 'error';
 
       // During 'starting', keep retrying quietly — an environment may legitimately
-      // be building for many minutes and should not flash unhealthy meanwhile.
-      // The exception is the startup timeout, handled just above.
+      // be building for many minutes and should not be flipped out of `starting`
+      // meanwhile. The exception is the startup timeout, handled just above.
+      //
+      // The observation is still PERSISTED, because the streak that eventually
+      // fires that timeout now lives in `last_health_check.consecutive` rather
+      // than in daemon memory. Returning early without writing would leave the
+      // count permanently at 1 and `starting` unbounded again — the bug the
+      // timeout exists to prevent. Repeated identical failures do not publish
+      // (updateEnvironment treats the count as bookkeeping, like the
+      // timestamp), so this does not spam the realtime channel.
       if (currentStatus === 'starting' && !shouldDemoteOnThrow) {
-        // Don't update health check during startup - wait for first success
-        // This prevents the UI from showing unhealthy state while environment is still starting
-        return branch;
+        return await this.updateEnvironment(
+          id,
+          {
+            last_health_check: {
+              timestamp: new Date().toISOString(),
+              status: 'unhealthy',
+              message,
+              consecutive: decision.consecutive,
+            },
+          },
+          params
+        );
       }
 
       if (shouldDemoteOnThrow) {
@@ -2731,6 +2719,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             timestamp: new Date().toISOString(),
             status: 'unhealthy',
             message: shouldDemote ? `Environment unreachable: ${message}` : message,
+            consecutive: decision.consecutive,
           },
         },
         params
@@ -2757,54 +2746,23 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * it needs an explicit start, which is exactly what we have re-enabled.
    */
   /**
-   * Track consecutive SUCCESSFUL probes and return the current streak length.
-   * Reset on any failure, so only sustained reachability accumulates.
+   * Apply the shared transition rules to one observation.
+   *
+   * The streak comes from the PERSISTED previous observation rather than from
+   * daemon memory, so it survives a restart and means the same thing to the
+   * distributed monitor, which observes the same branch from another node.
    */
-  private trackHealthProbeSuccess(id: BranchID, probeSucceeded: boolean): number {
-    if (!probeSucceeded) {
-      this.healthSuccessStreak.delete(id);
-      return 0;
-    }
-    const streak = (this.healthSuccessStreak.get(id) ?? 0) + 1;
-    this.healthSuccessStreak.set(id, streak);
-    return streak;
-  }
-
-  private trackHealthProbeResult(
-    id: BranchID,
-    probeSucceeded: boolean,
-    currentStatus: string | undefined
-  ): boolean {
-    if (probeSucceeded) {
-      this.healthFailureStreak.delete(id);
-      return false;
-    }
-
-    const streak = (this.healthFailureStreak.get(id) ?? 0) + 1;
-    this.healthFailureStreak.set(id, streak);
-
-    // Only a `running` environment can be demoted. `starting` keeps retrying
-    // (that is the readiness gate) and `error` is already where we would land.
-    // A `running` environment that goes unreachable is demoted quickly.
-    if (currentStatus === 'running') {
-      if (streak < ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD) return false;
-      this.healthFailureStreak.delete(id);
-      return true;
-    }
-
-    // A `starting` one gets a long grace period — it may legitimately be
-    // building for 12–27 min — but it must not spin forever. Expressed in time
-    // rather than probe count so it survives a change to the poll interval.
-    if (currentStatus === 'starting') {
-      const allowed = Math.ceil(
-        ENVIRONMENT_STARTUP_TIMEOUT_MS / Math.max(1, ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS)
-      );
-      if (streak < allowed) return false;
-      this.healthFailureStreak.delete(id);
-      return true;
-    }
-
-    return false;
+  private decideHealthTransition(
+    branch: Branch,
+    currentStatus: string | undefined,
+    observation: EnvironmentObservationStatus
+  ) {
+    return decideEnvironmentHealthTransition({
+      currentStatus,
+      observation,
+      previous: branch.environment_instance?.last_health_check,
+      probeIntervalMs: ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS,
+    });
   }
 
   /**

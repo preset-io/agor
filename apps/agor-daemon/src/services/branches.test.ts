@@ -2201,14 +2201,13 @@ describe('BranchesService environment health recovery', () => {
     const service = new BranchesService(createTenantScopeTestDb() as never, app);
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
     const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      async (_id, update) =>
-        ({
-          ...branch,
-          environment_instance: {
-            ...branch.environment_instance,
-            ...(update as Record<string, unknown>),
-          },
-        }) as never
+      // Mutates rather than clones: the readiness/demotion streak is persisted
+      // in last_health_check.consecutive, so a mock that discards each write
+      // would leave every probe looking like the first one.
+      async (_id, update) => {
+        Object.assign(branch.environment_instance, update as Record<string, unknown>);
+        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
+      }
     );
     globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
 
@@ -2354,14 +2353,13 @@ describe('BranchesService remote environment readiness gate', () => {
     const branch = remoteBranch();
     const service = serviceFor(branch);
     const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      async (_id, update) =>
-        ({
-          ...branch,
-          environment_instance: {
-            ...branch.environment_instance,
-            ...(update as Record<string, unknown>),
-          },
-        }) as never
+      // Mutates rather than clones: the readiness/demotion streak is persisted
+      // in last_health_check.consecutive, so a mock that discards each write
+      // would leave every probe looking like the first one.
+      async (_id, update) => {
+        Object.assign(branch.environment_instance, update as Record<string, unknown>);
+        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
+      }
     );
     const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
     globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
@@ -2383,14 +2381,13 @@ describe('BranchesService remote environment readiness gate', () => {
     const branch = remoteBranch();
     const service = serviceFor(branch);
     const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      async (_id, update) =>
-        ({
-          ...branch,
-          environment_instance: {
-            ...branch.environment_instance,
-            ...(update as Record<string, unknown>),
-          },
-        }) as never
+      // Mutates rather than clones: the readiness/demotion streak is persisted
+      // in last_health_check.consecutive, so a mock that discards each write
+      // would leave every probe looking like the first one.
+      async (_id, update) => {
+        Object.assign(branch.environment_instance, update as Record<string, unknown>);
+        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
+      }
     );
     const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
     globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
@@ -2417,7 +2414,12 @@ describe('BranchesService remote environment readiness gate', () => {
   it('holds at starting while the app is not yet serving, and does not sync', async () => {
     const branch = remoteBranch();
     const service = serviceFor(branch);
-    const updateEnvironment = vi.spyOn(service, 'updateEnvironment');
+    const updateEnvironment = vi
+      .spyOn(service, 'updateEnvironment')
+      .mockImplementation(async (_id, update) => {
+        Object.assign(branch.environment_instance, update as Record<string, unknown>);
+        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
+      });
     const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
     // Connection refused: the codespace exists but the app is still building.
     globalThis.fetch = vi.fn(async () => {
@@ -2429,22 +2431,27 @@ describe('BranchesService remote environment readiness gate', () => {
     // This is the whole point of the gate: a start that "succeeded" must NOT
     // be reported as running until the app actually answers.
     expect(result.environment_instance?.status).toBe('starting');
-    expect(updateEnvironment).not.toHaveBeenCalled();
     expect(syncEnvironment).not.toHaveBeenCalled();
+    // The failure IS recorded — the startup timeout counts these — but it must
+    // not carry a status change out of `starting`.
+    expect(updateEnvironment).toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.not.objectContaining({ status: expect.anything() }),
+      undefined
+    );
   });
 
   it('times out a startup that never becomes reachable, instead of spinning forever', async () => {
     const branch = remoteBranch();
     const service = serviceFor(branch);
     const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      async (_id, update) =>
-        ({
-          ...branch,
-          environment_instance: {
-            ...branch.environment_instance,
-            ...(update as Record<string, unknown>),
-          },
-        }) as never
+      // Mutates rather than clones: the readiness/demotion streak is persisted
+      // in last_health_check.consecutive, so a mock that discards each write
+      // would leave every probe looking like the first one.
+      async (_id, update) => {
+        Object.assign(branch.environment_instance, update as Record<string, unknown>);
+        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
+      }
     );
     globalThis.fetch = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
@@ -2456,7 +2463,13 @@ describe('BranchesService remote environment readiness gate', () => {
       const r = await service.checkHealth(branch.branch_id);
       expect(r.environment_instance?.status).toBe('starting');
     }
-    expect(updateEnvironment).not.toHaveBeenCalled();
+    // Each failure is persisted (that is what the timeout counts), but none of
+    // them may change status while the environment is still within its budget.
+    expect(updateEnvironment).not.toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({ status: expect.anything() }),
+      undefined
+    );
 
     // Past the one-hour budget it must give up, so the UI re-enables Start
     // (which is disabled while `isStarting`) rather than spinning indefinitely.
@@ -2472,14 +2485,13 @@ describe('BranchesService remote environment readiness gate', () => {
     const branch = remoteBranch();
     const service = serviceFor(branch);
     vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      async (_id, update) =>
-        ({
-          ...branch,
-          environment_instance: {
-            ...branch.environment_instance,
-            ...(update as Record<string, unknown>),
-          },
-        }) as never
+      // Mutates rather than clones: the readiness/demotion streak is persisted
+      // in last_health_check.consecutive, so a mock that discards each write
+      // would leave every probe looking like the first one.
+      async (_id, update) => {
+        Object.assign(branch.environment_instance, update as Record<string, unknown>);
+        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
+      }
     );
     vi.spyOn(service, 'syncEnvironment').mockRejectedValue(
       new Error('Environment variant "local" defines no sync command')
@@ -2764,5 +2776,119 @@ describe('BranchesService.updateEnvironment clear semantics', () => {
     const env = persistedEnv(patchSpy);
     expect(env.facts).toEqual({ url: 'https://cs-abc-8088.app.github.dev' });
     expect(env.status).toBe('stopped');
+  });
+});
+
+describe('environment health transition thresholds (characterization)', () => {
+  /**
+   * Pins the EXACT transition thresholds as observed behaviour, driving real
+   * consecutive probes through checkHealth. These exist so the transition rules
+   * can be moved (out of in-process streak Maps, into shared durable state that
+   * the distributed monitor can also apply) without changing what they decide.
+   *
+   * If a refactor changes a threshold, one of these goes red.
+   */
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /** Service whose environment_instance actually persists between probes. */
+  const statefulService = (initialStatus: string) => {
+    const env: Record<string, unknown> = { status: initialStatus };
+    const branch = {
+      branch_id: 'wt-thresholds' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-thresholds',
+      path: '/tmp/wt-thresholds',
+      branch_unique_id: 1,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: env,
+    };
+    const app = {
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockImplementation(
+      async () => ({ ...branch, environment_instance: { ...env } }) as never
+    );
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
+      Object.assign(env, update as Record<string, unknown>);
+      return { ...branch, environment_instance: { ...env } } as never;
+    });
+    vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
+    return { service, branch, env };
+  };
+
+  const setProbe = (ok: boolean) => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        ({
+          ok,
+          status: ok ? 200 : 503,
+          statusText: ok ? 'OK' : 'Service Unavailable',
+        }) as Response
+    );
+  };
+
+  const probe = async (service: BranchesService, ok: boolean, times: number) => {
+    setProbe(ok);
+    for (let i = 0; i < times; i += 1) {
+      await service.checkHealth('wt-thresholds' as BranchID);
+    }
+  };
+
+  it('promotes starting -> running only on the SECOND consecutive success', async () => {
+    const { service, env } = statefulService('starting');
+
+    await probe(service, true, 1);
+    expect(env.status).toBe('starting');
+
+    await probe(service, true, 1);
+    expect(env.status).toBe('running');
+  });
+
+  it('demotes running -> error only on the THIRD consecutive failure', async () => {
+    const { service, env } = statefulService('running');
+
+    await probe(service, false, 1);
+    expect(env.status).toBe('running');
+    await probe(service, false, 1);
+    expect(env.status).toBe('running');
+
+    await probe(service, false, 1);
+    expect(env.status).toBe('error');
+  });
+
+  it('resets the failure streak on any success, so blips cannot accumulate', async () => {
+    const { service, env } = statefulService('running');
+
+    await probe(service, false, 2);
+    expect(env.status).toBe('running');
+    await probe(service, true, 1); // one good probe clears the streak
+    await probe(service, false, 2); // two more failures must NOT be enough
+    expect(env.status).toBe('running');
+  });
+
+  it('recovers error -> running only on the SECOND consecutive success', async () => {
+    const { service, env } = statefulService('error');
+
+    await probe(service, true, 1);
+    expect(env.status).toBe('error');
+
+    await probe(service, true, 1);
+    expect(env.status).toBe('running');
+  });
+
+  it('resets the success streak on any failure, so flapping cannot promote', async () => {
+    const { service, env } = statefulService('starting');
+
+    await probe(service, true, 1);
+    await probe(service, false, 1); // clears the success streak
+    await probe(service, true, 1); // back to a streak of one
+    expect(env.status).toBe('starting');
   });
 });

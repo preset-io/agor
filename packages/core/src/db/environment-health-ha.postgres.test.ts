@@ -27,7 +27,7 @@ let branchUnique = (Date.now() % 1_000_000) + 8_000_000;
 async function seedBranch(
   db: Database,
   tenantId: TenantID,
-  status: 'starting' | 'running' | 'stopped' = 'running'
+  status: 'starting' | 'running' | 'stopped' | 'error' = 'running'
 ) {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     const user = await new UsersRepository(scoped).create({
@@ -169,6 +169,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               message: 'stale',
               recordWhileStarting: true,
             },
+            probeIntervalMs: 5_000,
           })
         ).toEqual({ outcome: 'stale' });
         expect(await health.release(branch.branch_id, winner.claim.claim_token)).toBe(false);
@@ -215,6 +216,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             message: 'must expire behind lock',
             recordWhileStarting: true,
           },
+          probeIntervalMs: 5_000,
         })
       );
       await new Promise((resolve) => setTimeout(resolve, 400));
@@ -246,6 +248,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               message: 'HTTP 200',
               recordWhileStarting: true,
             },
+            probeIntervalMs: 5_000,
           })
         ).toMatchObject({ outcome: 'committed', environmentStatus: 'running' });
 
@@ -271,6 +274,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             message: 'Timeout',
             recordWhileStarting: false,
           },
+          probeIntervalMs: 5_000,
         });
         expect(
           (await new BranchRepository(scoped).findById(branch.branch_id))?.environment_instance
@@ -297,6 +301,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               message: 'late HTTP 200',
               recordWhileStarting: true,
             },
+            probeIntervalMs: 5_000,
           })
         ).toEqual({ outcome: 'stale' });
         await new BranchRepository(scoped).update(branch.branch_id, {
@@ -317,6 +322,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantA = `env-a-${generateId()}` as TenantID;
       const tenantB = `env-b-${generateId()}` as TenantID;
       const active = await seedBranch(dbA, tenantA, 'running');
+      // A demoted environment must stay discoverable, or it is never probed
+      // again and can never be seen recovering — demotion would be a one-way
+      // door.
+      const demoted = await seedBranch(dbA, tenantA, 'error');
       const stopped = await seedBranch(dbA, tenantA, 'stopped');
       const archived = await seedBranch(dbA, tenantB, 'running');
       await runWithTenantDatabaseScope(dbA, tenantB, (scoped) =>
@@ -331,6 +340,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         { capability: 'environment_health_discovery' }
       );
       expect(refs).toContainEqual({ branch_id: active.branch_id, tenant_id: tenantA });
+      expect(refs).toContainEqual({ branch_id: demoted.branch_id, tenant_id: tenantA });
       expect(refs.some((ref) => ref.branch_id === stopped.branch_id)).toBe(false);
       expect(refs.some((ref) => ref.branch_id === archived.branch_id)).toBe(false);
 
@@ -354,6 +364,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               message: 'must not cross tenants',
               recordWhileStarting: true,
             },
+            probeIntervalMs: 5_000,
           })
         ).toEqual({ outcome: 'stale' });
       });
