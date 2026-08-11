@@ -764,7 +764,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           )
         );
       }
-      let query = select({
+      let query = select(db, {
         session_id: sessionMcpServers.session_id,
         mcp_server_id: sessionMcpServers.mcp_server_id,
         enabled: sessionMcpServers.enabled,
