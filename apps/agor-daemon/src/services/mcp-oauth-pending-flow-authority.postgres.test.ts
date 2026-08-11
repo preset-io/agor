@@ -27,6 +27,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { MCPServerID, UserID } from '@agor/core/types';
+import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { lockMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
 import {
@@ -163,6 +164,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       const claimed = await authorityB.claimForCallback(context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected peer callback claim');
+      if (!isMCPOAuthGrantBindingVersion(claimed.flow.configFingerprintVersion)) {
+        throw new Error('Expected a supported grant binding version');
+      }
       const opened = authorityB.openClaim(claimed.flow, context.state);
       await runWithTenantDatabaseScope(dbB, bound.tenantId, async (scoped) => {
         await new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
@@ -176,7 +180,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             expiresAt: new Date(Date.now() + 3_600_000),
             grantBinding: {
               generation: claimed.flow.grantGeneration,
-              version: 1,
+              version: claimed.flow.configFingerprintVersion,
               fingerprint: claimed.flow.configFingerprint,
               metadataUri: opened.context.metadataUrl,
               resourceUri: opened.context.resourceUri,
