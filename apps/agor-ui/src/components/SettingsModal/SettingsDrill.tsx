@@ -17,8 +17,8 @@ import type { SettingsSection } from '../../hooks/useSettingsRoute';
 export interface DrillTarget {
   /** Which section owns the drill-in — always the active nav section. */
   kind: SettingsSection;
-  mode: 'create' | 'edit';
-  /** Record being edited (omitted for `create`). */
+  mode: 'create' | 'edit' | 'view';
+  /** Record being edited/viewed (omitted for `create`). */
   recordId?: string;
 }
 

@@ -6,7 +6,6 @@ import {
   Descriptions,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Space,
   Table,
@@ -21,6 +20,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
@@ -47,29 +47,28 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
-  const [viewModalOpen, setViewModalOpen] = useState(false);
-  const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
-  const [viewingServer, setViewingServer] = useState<MCPServer | null>(null);
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
   const [createForm] = Form.useForm();
   const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
   const [alreadyCreatedInOAuthFlow, setAlreadyCreatedInOAuthFlow] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [createDirty, setCreateDirty] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Sync editing server when mcpServerById updates (real-time WebSocket updates).
-  // Also keeps the open edit modal in sync if the underlying record changes.
-  useEffect(() => {
-    if (editingServer && mcpServerById.has(editingServer.mcp_server_id)) {
-      const updatedServer = mcpServerById.get(editingServer.mcp_server_id);
-      if (updatedServer && updatedServer !== editingServer) {
-        setEditingServer(updatedServer);
-      }
-    }
-  }, [mcpServerById, editingServer]);
+  // Create / edit / view swap the Content pane for a drill-in instead of
+  // stacking a modal. Edit and view resolve the record live from the store, so
+  // they stay in sync with real-time updates automatically.
+  const editingServer =
+    drill?.kind === 'mcp' && drill.mode === 'edit' && drill.recordId
+      ? (mcpServerById.get(drill.recordId) ?? null)
+      : null;
+  const viewingServer =
+    drill?.kind === 'mcp' && drill.mode === 'view' && drill.recordId
+      ? (mcpServerById.get(drill.recordId) ?? null)
+      : null;
+  const isCreating = drill?.kind === 'mcp' && drill.mode === 'create';
 
   const buildCreateData = (values: Record<string, unknown>): CreateMCPServerInput => {
     const data: CreateMCPServerInput = {
@@ -116,12 +115,32 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const resetCreateModal = () => {
     createForm.resetFields();
-    setCreateModalOpen(false);
     setTransport('stdio');
     setAuthType('none');
     setTestResult(null);
     setAlreadyCreatedInOAuthFlow(false);
+    setCreateDirty(false);
+    closeDrill();
   };
+
+  // Reset the create form fields when the create drill-in opens.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: seed on open only
+  useEffect(() => {
+    if (isCreating) {
+      createForm.resetFields();
+      setTransport('stdio');
+      setAuthType('none');
+      setTestResult(null);
+      setAlreadyCreatedInOAuthFlow(false);
+      setCreateDirty(false);
+    }
+  }, [isCreating]);
+
+  const openView = (server: MCPServer) =>
+    openDrill({ kind: 'mcp', mode: 'view', recordId: server.mcp_server_id });
+  const openEdit = (server: MCPServer) =>
+    openDrill({ kind: 'mcp', mode: 'edit', recordId: server.mcp_server_id });
+  const openCreate = () => openDrill({ kind: 'mcp', mode: 'create' });
 
   const handleCreate = () => {
     if (alreadyCreatedInOAuthFlow) {
@@ -220,21 +239,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     }
   };
 
-  const handleEdit = (server: MCPServer) => {
-    setEditingServer(server);
-    setEditModalOpen(true);
-  };
-
-  const handleEditClose = () => {
-    setEditModalOpen(false);
-    setEditingServer(null);
-  };
-
-  const handleView = (server: MCPServer) => {
-    setViewingServer(server);
-    setViewModalOpen(true);
-  };
-
   const handleDelete = (serverId: string) => {
     onDelete?.(serverId);
   };
@@ -271,10 +275,15 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       width: 180,
       render: (_: string, server: MCPServer) => (
         <div>
-          <div>
+          <Typography.Link
+            strong
+            ellipsis
+            title={server.display_name || server.name}
+            onClick={() => openEdit(server)}
+          >
             <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
-          </div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          </Typography.Link>
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
             <HighlightMatch text={server.name} query={searchTerm} />
           </Typography.Text>
         </div>
@@ -345,14 +354,14 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             type="text"
             size="small"
             icon={<EyeOutlined />}
-            onClick={() => handleView(server)}
+            onClick={() => openView(server)}
             title="View details"
           />
           <Button
             type="text"
             size="small"
             icon={<EditOutlined />}
-            onClick={() => handleEdit(server)}
+            onClick={() => openEdit(server)}
             title="Edit"
           />
           <Popconfirm
@@ -389,6 +398,129 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     ]);
   }, [mcpServerById, searchTerm]);
 
+  if (editingServer) {
+    return (
+      <MCPServerEditModal
+        embedded
+        server={editingServer}
+        open
+        client={client}
+        onClose={closeDrill}
+      />
+    );
+  }
+
+  if (viewingServer) {
+    return (
+      <DrillInFrame title="MCP Server Details">
+        <Descriptions bordered column={1} size="small" style={{ maxWidth: 720 }}>
+          <Descriptions.Item label="ID">
+            {shortId(viewingServer.mcp_server_id as string)}
+          </Descriptions.Item>
+          <Descriptions.Item label="Name">{viewingServer.name}</Descriptions.Item>
+          {viewingServer.display_name && (
+            <Descriptions.Item label="Display Name">{viewingServer.display_name}</Descriptions.Item>
+          )}
+          {viewingServer.description && (
+            <Descriptions.Item label="Description">{viewingServer.description}</Descriptions.Item>
+          )}
+          <Descriptions.Item label="Transport">
+            <Tag color={viewingServer.transport === 'stdio' ? 'blue' : 'green'}>
+              {viewingServer.transport.toUpperCase()}
+            </Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="Scope">
+            <Tag>{viewingServer.scope}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="Source">{viewingServer.source}</Descriptions.Item>
+          <Descriptions.Item label="Status">
+            {viewingServer.enabled ? (
+              <Badge status="success" text="Enabled" />
+            ) : (
+              <Badge status="default" text="Disabled" />
+            )}
+          </Descriptions.Item>
+          {viewingServer.command && (
+            <Descriptions.Item label="Command">{viewingServer.command}</Descriptions.Item>
+          )}
+          {viewingServer.args && viewingServer.args.length > 0 && (
+            <Descriptions.Item label="Arguments">{viewingServer.args.join(', ')}</Descriptions.Item>
+          )}
+          {viewingServer.url && (
+            <Descriptions.Item label="URL">{viewingServer.url}</Descriptions.Item>
+          )}
+          {viewingServer.headers && Object.keys(viewingServer.headers).length > 0 && (
+            <Descriptions.Item label="Custom HTTP Headers">
+              <pre style={{ margin: 0, fontSize: 12 }}>
+                {JSON.stringify(viewingServer.headers, null, 2)}
+              </pre>
+            </Descriptions.Item>
+          )}
+          {viewingServer.env && Object.keys(viewingServer.env).length > 0 && (
+            <Descriptions.Item label="Environment Variables">
+              <pre style={{ margin: 0, fontSize: 12 }}>
+                {JSON.stringify(viewingServer.env, null, 2)}
+              </pre>
+            </Descriptions.Item>
+          )}
+          {viewingServer.tools && viewingServer.tools.length > 0 && (
+            <Descriptions.Item label="Tools">{viewingServer.tools.length} tools</Descriptions.Item>
+          )}
+          {viewingServer.resources && viewingServer.resources.length > 0 && (
+            <Descriptions.Item label="Resources">
+              {viewingServer.resources.length} resources
+            </Descriptions.Item>
+          )}
+          {viewingServer.prompts && viewingServer.prompts.length > 0 && (
+            <Descriptions.Item label="Prompts">
+              {viewingServer.prompts.length} prompts
+            </Descriptions.Item>
+          )}
+          <Descriptions.Item label="Created">
+            {new Date(viewingServer.created_at).toLocaleString()}
+          </Descriptions.Item>
+          {viewingServer.updated_at && (
+            <Descriptions.Item label="Updated">
+              {new Date(viewingServer.updated_at).toLocaleString()}
+            </Descriptions.Item>
+          )}
+        </Descriptions>
+      </DrillInFrame>
+    );
+  }
+
+  if (isCreating) {
+    return (
+      <DrillInFrame
+        title="Add MCP Server"
+        dirty={createDirty}
+        saveLabel={alreadyCreatedInOAuthFlow ? 'Done' : 'Create'}
+        onSave={handleCreate}
+      >
+        <Form
+          form={createForm}
+          layout="vertical"
+          style={{ maxWidth: 560 }}
+          onValuesChange={() => setCreateDirty(true)}
+        >
+          <MCPServerFormFields
+            mode="create"
+            transport={transport}
+            onTransportChange={setTransport}
+            authType={authType}
+            onAuthTypeChange={setAuthType}
+            form={createForm}
+            client={client}
+            onTestConnection={handleCreateTestConnection}
+            testing={testing}
+            testResult={testResult}
+            onSaveFirst={handleSaveFirstForCreate}
+          />
+        </Form>
+      </DrillInFrame>
+    );
+  }
+
   return (
     <div>
       <div
@@ -410,7 +542,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 360 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             New MCP Server
           </Button>
         </Space>
@@ -423,142 +555,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         pagination={{ pageSize: 10, showSizeChanger: true }}
         size="small"
       />
-
-      {/* Create MCP Server Modal */}
-      <Modal
-        title="Add MCP Server"
-        open={createModalOpen}
-        onOk={handleCreate}
-        onCancel={resetCreateModal}
-        okText={alreadyCreatedInOAuthFlow ? 'Done' : 'Create'}
-        width={600}
-      >
-        <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}>
-          <MCPServerFormFields
-            mode="create"
-            transport={transport}
-            onTransportChange={setTransport}
-            authType={authType}
-            onAuthTypeChange={setAuthType}
-            form={createForm}
-            client={client}
-            onTestConnection={handleCreateTestConnection}
-            testing={testing}
-            testResult={testResult}
-            onSaveFirst={handleSaveFirstForCreate}
-          />
-        </Form>
-      </Modal>
-
-      {/* Edit MCP Server Modal — self-contained */}
-      <MCPServerEditModal
-        server={editingServer}
-        open={editModalOpen}
-        client={client}
-        onClose={handleEditClose}
-      />
-
-      {/* View MCP Server Modal */}
-      <Modal
-        title="MCP Server Details"
-        open={viewModalOpen}
-        onCancel={() => {
-          setViewModalOpen(false);
-          setViewingServer(null);
-        }}
-        footer={[
-          <Button key="close" onClick={() => setViewModalOpen(false)}>
-            Close
-          </Button>,
-        ]}
-        width={700}
-      >
-        {viewingServer && (
-          <Descriptions bordered column={1} size="small" style={{ marginTop: 16 }}>
-            <Descriptions.Item label="ID">
-              {shortId(viewingServer.mcp_server_id as string)}
-            </Descriptions.Item>
-            <Descriptions.Item label="Name">{viewingServer.name}</Descriptions.Item>
-            {viewingServer.display_name && (
-              <Descriptions.Item label="Display Name">
-                {viewingServer.display_name}
-              </Descriptions.Item>
-            )}
-            {viewingServer.description && (
-              <Descriptions.Item label="Description">{viewingServer.description}</Descriptions.Item>
-            )}
-            <Descriptions.Item label="Transport">
-              <Tag color={viewingServer.transport === 'stdio' ? 'blue' : 'green'}>
-                {viewingServer.transport.toUpperCase()}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="Scope">
-              <Tag>{viewingServer.scope}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="Source">{viewingServer.source}</Descriptions.Item>
-            <Descriptions.Item label="Status">
-              {viewingServer.enabled ? (
-                <Badge status="success" text="Enabled" />
-              ) : (
-                <Badge status="default" text="Disabled" />
-              )}
-            </Descriptions.Item>
-
-            {viewingServer.command && (
-              <Descriptions.Item label="Command">{viewingServer.command}</Descriptions.Item>
-            )}
-            {viewingServer.args && viewingServer.args.length > 0 && (
-              <Descriptions.Item label="Arguments">
-                {viewingServer.args.join(', ')}
-              </Descriptions.Item>
-            )}
-            {viewingServer.url && (
-              <Descriptions.Item label="URL">{viewingServer.url}</Descriptions.Item>
-            )}
-
-            {viewingServer.headers && Object.keys(viewingServer.headers).length > 0 && (
-              <Descriptions.Item label="Custom HTTP Headers">
-                <pre style={{ margin: 0, fontSize: 12 }}>
-                  {JSON.stringify(viewingServer.headers, null, 2)}
-                </pre>
-              </Descriptions.Item>
-            )}
-
-            {viewingServer.env && Object.keys(viewingServer.env).length > 0 && (
-              <Descriptions.Item label="Environment Variables">
-                <pre style={{ margin: 0, fontSize: 12 }}>
-                  {JSON.stringify(viewingServer.env, null, 2)}
-                </pre>
-              </Descriptions.Item>
-            )}
-
-            {viewingServer.tools && viewingServer.tools.length > 0 && (
-              <Descriptions.Item label="Tools">
-                {viewingServer.tools.length} tools
-              </Descriptions.Item>
-            )}
-            {viewingServer.resources && viewingServer.resources.length > 0 && (
-              <Descriptions.Item label="Resources">
-                {viewingServer.resources.length} resources
-              </Descriptions.Item>
-            )}
-            {viewingServer.prompts && viewingServer.prompts.length > 0 && (
-              <Descriptions.Item label="Prompts">
-                {viewingServer.prompts.length} prompts
-              </Descriptions.Item>
-            )}
-
-            <Descriptions.Item label="Created">
-              {new Date(viewingServer.created_at).toLocaleString()}
-            </Descriptions.Item>
-            {viewingServer.updated_at && (
-              <Descriptions.Item label="Updated">
-                {new Date(viewingServer.updated_at).toLocaleString()}
-              </Descriptions.Item>
-            )}
-          </Descriptions>
-        )}
-      </Modal>
     </div>
   );
 };

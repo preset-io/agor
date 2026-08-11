@@ -2,6 +2,7 @@ import type { AgorClient, MCPServer, UpdateMCPServerInput } from '@agor-live/cli
 import { Form, Modal } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
+import { DrillInFrame } from '../SettingsModal/SettingsDrill';
 import { MCPServerFormFields } from './MCPServerFormFields';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from './mcp-oauth-utils';
 
@@ -11,6 +12,12 @@ export interface MCPServerEditModalProps {
   open: boolean;
   client: AgorClient | null;
   onClose: () => void;
+  /**
+   * Render inline (no outer Modal) as a Workspace Settings drill-in; the shared
+   * shell footer drives Save/Cancel. Default false → standalone Modal (used by
+   * MCPServerPill) is unchanged.
+   */
+  embedded?: boolean;
 }
 
 interface TestResult {
@@ -36,6 +43,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   open,
   client,
   onClose,
+  embedded = false,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [form] = Form.useForm();
@@ -43,6 +51,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // Hydrate the form when the modal opens or the user swaps to a different
   // server. Intentionally NOT keyed on `server` itself — that would clobber
@@ -93,6 +103,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     }
 
     form.setFieldsValue(formValues);
+    setDirty(false);
   }, [open, server?.mcp_server_id, form]);
 
   const closeAndReset = () => {
@@ -184,6 +195,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   const handleSave = async () => {
     if (!server || !client) return;
 
+    setSaving(true);
     try {
       await form.validateFields();
       const values = form.getFieldsValue(true);
@@ -216,8 +228,41 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to update server';
       showError(errorMessage);
+    } finally {
+      setSaving(false);
     }
   };
+
+  const formBody = (
+    <Form
+      form={form}
+      layout="vertical"
+      style={{ marginTop: embedded ? 0 : 16, maxWidth: embedded ? 560 : undefined }}
+      onValuesChange={() => setDirty(true)}
+    >
+      <MCPServerFormFields
+        mode="edit"
+        transport={transport}
+        onTransportChange={setTransport}
+        authType={authType}
+        onAuthTypeChange={setAuthType}
+        form={form}
+        client={client}
+        serverId={server?.mcp_server_id}
+        onTestConnection={handleTestConnection}
+        testing={testing}
+        testResult={testResult}
+      />
+    </Form>
+  );
+
+  if (embedded) {
+    return (
+      <DrillInFrame title="Edit MCP Server" dirty={dirty} saving={saving} onSave={handleSave}>
+        {formBody}
+      </DrillInFrame>
+    );
+  }
 
   return (
     <Modal
