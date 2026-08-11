@@ -23,11 +23,13 @@ import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons'
 import { Alert, Button, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStickToBottom } from 'use-stick-to-bottom';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
 import { TaskBlock } from '../TaskBlock';
+import { CallbackEventRow } from '../TaskBlock/CallbackEventRow';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
@@ -157,6 +159,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     onOpenAgenticToolSettings,
   }) => {
     const { token } = theme.useToken();
+    const { isSlim } = useUIMode();
     const [copied, copy] = useCopyToClipboard();
 
     // use-stick-to-bottom owns the entire auto-scroll lifecycle. It keeps a
@@ -481,34 +484,60 @@ export const ConversationView = React.memo<ConversationViewProps>(
           <GenealogyBanner />
 
           {/* Task-organized conversation */}
-          {tasks.map((task, taskIndex) => (
-            <TaskBlock
-              key={task.task_id}
-              task={task}
-              agentic_tool={agentic_tool}
-              sessionModel={sessionModel}
-              userById={userById}
-              currentUserId={currentUserId}
-              isExpanded={forceExpandAll || expandedTaskIds.has(task.task_id)}
-              onExpandChange={handleTaskExpandChange}
-              sessionId={sessionId}
-              onPermissionDecision={onPermissionDecision}
-              branchName={branchName}
-              scheduledFromBranch={scheduledFromBranch}
-              scheduledRunAt={scheduledRunAt}
-              streamingMessages={streamingMessagesByTask.get(task.task_id)}
-              taskMessages={
-                currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
-              }
-              taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
-              onLoadTaskMessages={handleLoadTaskMessages}
-              onUnloadTaskMessages={handleUnloadTaskMessages}
-              teammateEmoji={teammateEmoji}
-              isLatestTask={taskIndex === tasks.length - 1}
-              client={client}
-              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-            />
-          ))}
+          {tasks.map((task, taskIndex) => {
+            // Daemon-synthesized callbacks (child session finished) render as
+            // one-line system events until expanded. The latest task keeps the
+            // full block: its agent reply may still be streaming.
+            const isTaskExpanded = forceExpandAll || expandedTaskIds.has(task.task_id);
+            const isTerminal =
+              task.status === TaskStatus.COMPLETED ||
+              task.status === TaskStatus.FAILED ||
+              task.status === TaskStatus.STOPPED;
+            if (
+              isSlim &&
+              task.metadata?.is_agor_callback &&
+              isTerminal &&
+              !isTaskExpanded &&
+              taskIndex !== tasks.length - 1
+            ) {
+              return (
+                <CallbackEventRow
+                  key={task.task_id}
+                  task={task}
+                  onExpandChange={handleTaskExpandChange}
+                />
+              );
+            }
+            return (
+              <TaskBlock
+                key={task.task_id}
+                task={task}
+                agentic_tool={agentic_tool}
+                sessionModel={sessionModel}
+                previousTaskModel={taskIndex > 0 ? tasks[taskIndex - 1].model : undefined}
+                userById={userById}
+                currentUserId={currentUserId}
+                isExpanded={forceExpandAll || expandedTaskIds.has(task.task_id)}
+                onExpandChange={handleTaskExpandChange}
+                sessionId={sessionId}
+                onPermissionDecision={onPermissionDecision}
+                branchName={branchName}
+                scheduledFromBranch={scheduledFromBranch}
+                scheduledRunAt={scheduledRunAt}
+                streamingMessages={streamingMessagesByTask.get(task.task_id)}
+                taskMessages={
+                  currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
+                }
+                taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
+                onLoadTaskMessages={handleLoadTaskMessages}
+                onUnloadTaskMessages={handleUnloadTaskMessages}
+                teammateEmoji={teammateEmoji}
+                isLatestTask={taskIndex === tasks.length - 1}
+                client={client}
+                onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+              />
+            );
+          })}
         </div>
       </div>
     );

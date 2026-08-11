@@ -72,6 +72,8 @@ interface TaskBlockProps {
   task: Task;
   agentic_tool?: string;
   sessionModel?: string;
+  /** Model of the preceding task; suppresses the per-task model chip when unchanged. */
+  previousTaskModel?: string;
   userById?: Map<string, User>;
   currentUserId?: string;
   isExpanded: boolean;
@@ -463,6 +465,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     task,
     agentic_tool,
     sessionModel,
+    previousTaskModel,
     userById = EMPTY_USER_MAP,
     currentUserId,
     isExpanded,
@@ -573,20 +576,32 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     // Task header shows when collapsed
     const taskHeader = (
       <Flex gap={token.sizeUnit * 2} style={{ width: '100%' }}>
-        {/* Left column: Icons stacked vertically */}
-        <Flex
-          vertical
-          align="center"
-          gap={token.sizeUnit / 2}
-          style={{ width: 'auto', paddingTop: token.sizeUnit }}
-        >
-          {isExpanded ? (
-            <UpOutlined style={{ color: token.colorPrimary }} />
-          ) : (
-            <DownOutlined style={{ color: token.colorPrimary }} />
-          )}
-          <TaskStatusIcon status={task.status} size={16} />
-        </Flex>
+        {/* Left column. Slim: one gutter icon — status when collapsed (the
+            row itself is the expand affordance), collapse chevron when
+            expanded. Classic: chevron + status stacked. */}
+        {isSlim ? (
+          <Flex vertical align="center" style={{ width: 'auto', paddingTop: token.sizeUnit }}>
+            {isExpanded ? (
+              <UpOutlined style={{ color: token.colorPrimary, fontSize: 14 }} />
+            ) : (
+              <TaskStatusIcon status={task.status} size={16} />
+            )}
+          </Flex>
+        ) : (
+          <Flex
+            vertical
+            align="center"
+            gap={token.sizeUnit / 2}
+            style={{ width: 'auto', paddingTop: token.sizeUnit }}
+          >
+            {isExpanded ? (
+              <UpOutlined style={{ color: token.colorPrimary }} />
+            ) : (
+              <DownOutlined style={{ color: token.colorPrimary }} />
+            )}
+            <TaskStatusIcon status={task.status} size={16} />
+          </Flex>
+        )}
 
         {/* Right column: Content */}
         <Flex vertical flex={1} style={{ minWidth: 0 }}>
@@ -631,7 +646,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             {scheduledFromBranch && scheduledRunAt && (
               <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
             )}
-            {task.created_by && (
+            {/* Noise budget: collapsed rows show only chips that carry signal
+                for THIS task (who else ran it, how long, context pressure,
+                commits made). Steady-state facts (own user, token counts,
+                unchanged model/SHA) appear when expanded or when they change. */}
+            {task.created_by && (!isSlim || task.created_by !== currentUserId) && (
               <CreatedByTag
                 createdBy={task.created_by}
                 currentUserId={currentUserId}
@@ -639,7 +658,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 prefix="By"
               />
             )}
-            {normalized && (
+            {normalized && (!isSlim || isExpanded) && (
               <TokenCountPill
                 count={normalized.tokenUsage.totalTokens}
                 inputTokens={normalized.tokenUsage.inputTokens}
@@ -661,33 +680,42 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 }}
               />
             )}
-            {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
-            {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
-              <Flex gap={token.sizeUnit / 2} align="center">
-                <GitStatePill
-                  branch={task.git_state.ref_at_start}
-                  sha={task.git_state.sha_at_start}
-                  branchName={branchName}
-                  style={{ fontSize: 11 }}
-                />
-                {task.git_state.sha_at_end &&
+            {task.model &&
+              task.model !== (isSlim ? (previousTaskModel ?? sessionModel) : sessionModel) && (
+                <ModelPill model={task.model} />
+              )}
+            {task.git_state.sha_at_start &&
+              task.git_state.sha_at_start !== 'unknown' &&
+              (!isSlim ||
+                isExpanded ||
+                (task.git_state.sha_at_end &&
                   task.git_state.sha_at_end !== 'unknown' &&
-                  task.git_state.sha_at_end !== task.git_state.sha_at_start && (
-                    <>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                        →
-                      </Typography.Text>
-                      <GitStatePill
-                        branch={task.git_state.ref_at_end}
-                        sha={task.git_state.sha_at_end}
-                        branchName={branchName}
-                        showDirtyIndicator={true}
-                        style={{ fontSize: 11 }}
-                      />
-                    </>
-                  )}
-              </Flex>
-            )}
+                  task.git_state.sha_at_end !== task.git_state.sha_at_start)) && (
+                <Flex gap={token.sizeUnit / 2} align="center">
+                  <GitStatePill
+                    branch={task.git_state.ref_at_start}
+                    sha={task.git_state.sha_at_start}
+                    branchName={branchName}
+                    style={{ fontSize: 11 }}
+                  />
+                  {task.git_state.sha_at_end &&
+                    task.git_state.sha_at_end !== 'unknown' &&
+                    task.git_state.sha_at_end !== task.git_state.sha_at_start && (
+                      <>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          →
+                        </Typography.Text>
+                        <GitStatePill
+                          branch={task.git_state.ref_at_end}
+                          sha={task.git_state.sha_at_end}
+                          branchName={branchName}
+                          showDirtyIndicator={true}
+                          style={{ fontSize: 11 }}
+                        />
+                      </>
+                    )}
+                </Flex>
+              )}
             {task.report && (
               <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>
                 Report

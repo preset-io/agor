@@ -722,15 +722,18 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                       }}
                     >
                       {textBeforeTools.map((text) => {
-                        // Use CollapsibleMarkdown for long text blocks (15+ lines)
-                        const shouldTruncate = text.split('\n').length > 15;
+                        // Callback prompt echoes (child-session notifications)
+                        // duplicate what the collapsed summary already says —
+                        // cap them hard. Regular text truncates at 15+ lines.
+                        const truncateAt = isSlim && isCallback ? 4 : 15;
+                        const shouldTruncate = text.split('\n').length > truncateAt;
 
                         return (
                           <div key={`text-${text.length}-${text.substring(0, 32)}`}>
                             {shouldTruncate ? (
                               <CollapsibleMarkdown
-                                maxLines={10}
-                                defaultExpanded={isLatestMessage}
+                                maxLines={isSlim && isCallback ? 3 : 10}
+                                defaultExpanded={isLatestMessage && !(isSlim && isCallback)}
                                 isStreaming={isStreaming}
                               >
                                 {text}
@@ -860,12 +863,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                     <div style={{ wordWrap: 'break-word' }}>
                       {(() => {
                         const combinedText = textAfterTools.join('\n\n');
-                        const shouldTruncate = combinedText.split('\n').length > 15;
+                        const truncateAt = isSlim && isCallback ? 4 : 15;
+                        const shouldTruncate = combinedText.split('\n').length > truncateAt;
 
                         return shouldTruncate ? (
                           <CollapsibleMarkdown
-                            maxLines={10}
-                            defaultExpanded={isLatestMessage}
+                            maxLines={isSlim && isCallback ? 3 : 10}
+                            defaultExpanded={isLatestMessage && !(isSlim && isCallback)}
                             isStreaming={isStreaming}
                           >
                             {combinedText}

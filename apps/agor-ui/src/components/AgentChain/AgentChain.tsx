@@ -37,6 +37,7 @@ import {
 } from '@ant-design/icons';
 import { Popover, Space, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -134,9 +135,38 @@ function getToolIcon(toolName: string): React.ReactElement {
   }
 }
 
+/**
+ * One-line preview for a thought row. Structured thoughts (JSON tool
+ * references / payload echoes) read as line noise in a collapsed row —
+ * summarize them; the full content stays available on expand.
+ */
+function thoughtPreview(thought: string): string {
+  const trimmed = thought.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      const items = (Array.isArray(parsed) ? parsed : [parsed]).filter(
+        (it): it is Record<string, unknown> => !!it && typeof it === 'object'
+      );
+      const toolNames = items
+        .map((it) => (typeof it.tool_name === 'string' ? it.tool_name : null))
+        .filter((name): name is string => !!name);
+      if (toolNames.length > 0) return `Considering ${toolNames.join(', ')}`;
+      const keys = Object.keys(items[0] ?? {});
+      return keys.length > 0
+        ? `Structured note (${keys.slice(0, 3).join(', ')})`
+        : 'Structured note';
+    } catch {
+      // Not valid JSON — fall through to the raw one-liner.
+    }
+  }
+  return trimmed.replace(/\s+/g, ' ');
+}
+
 export const AgentChain = React.memo<AgentChainProps>(
   ({ messages, isTaskRunning = false, isLatest }) => {
     const { token } = theme.useToken();
+    const { isSlim } = useUIMode();
     const [expanded, setExpanded] = useState(true);
 
     // Extract chain items (thoughts and tools) from messages
@@ -412,7 +442,9 @@ export const AgentChain = React.memo<AgentChainProps>(
     const renderChainItem = (item: ChainItem, index: number) => {
       if (item.type === 'thought') {
         const thoughtContent = item.content as string;
-        const oneLine = thoughtContent.replace(/\s+/g, ' ').trim();
+        const oneLine = isSlim
+          ? thoughtPreview(thoughtContent)
+          : thoughtContent.replace(/\s+/g, ' ').trim();
 
         return (
           <ToolBlock
@@ -583,53 +615,97 @@ export const AgentChain = React.memo<AgentChainProps>(
     }
 
     return (
-      <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
-        {/* Collapsed summary - clickable */}
-        <div
-          onClick={() => setExpanded(!expanded)}
-          style={{
-            padding: token.sizeUnit * 1.5,
-            borderRadius: token.borderRadius,
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorder}`,
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = token.colorPrimaryBorder;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = token.colorBorder;
-          }}
-        >
-          <div
-            style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit, flexWrap: 'wrap' }}
-          >
-            {/* Expand/collapse icon */}
-            {expanded ? (
-              <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            ) : (
-              <RightOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            )}
+      <div style={{ margin: isSlim ? `${token.sizeUnit}px 0` : `${token.sizeUnit * 1.5}px 0` }}>
+        {isSlim ? (
+          <>
+            {/* Collapsed summary — borderless hover row: one chevron carries the
+            affordance, the error icon appears only when something failed. */}
+            <div
+              onClick={() => setExpanded(!expanded)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: token.sizeUnit,
+                flexWrap: 'wrap',
+                padding: `${token.sizeUnit / 2}px ${token.sizeUnit}px`,
+                borderRadius: token.borderRadiusSM,
+                background: 'transparent',
+                cursor: 'pointer',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = token.colorFillQuaternary;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              {expanded ? (
+                <DownOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
+              ) : (
+                <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
+              )}
+              {hasErrors && (
+                <CloseCircleOutlined style={{ color: token.colorError, fontSize: 14 }} />
+              )}
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
+                {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
+                {stats.toolCount > 0 && `${stats.toolCount} tools`}
+              </Typography.Text>
 
-            {/* Status icon */}
-            {hasErrors ? (
-              <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
-            ) : (
-              <CheckCircleOutlined style={{ color: token.colorTextSecondary, fontSize: 16 }} />
-            )}
-
-            {/* Summary text */}
-            <Typography.Text strong>
-              <BulbOutlined /> {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
-              {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
-              {stats.toolCount > 0 && `${stats.toolCount} tools`}
-            </Typography.Text>
-
-            {/* Only show details when collapsed */}
-            {!expanded && summaryDescription}
-          </div>
-        </div>
+              {/* Only show details when collapsed */}
+              {!expanded && summaryDescription}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Collapsed summary - clickable */}
+            <div
+              onClick={() => setExpanded(!expanded)}
+              style={{
+                padding: token.sizeUnit * 1.5,
+                borderRadius: token.borderRadius,
+                background: token.colorBgContainer,
+                border: `1px solid ${token.colorBorder}`,
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = token.colorPrimaryBorder;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = token.colorBorder;
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: token.sizeUnit,
+                  flexWrap: 'wrap',
+                }}
+              >
+                {expanded ? (
+                  <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+                ) : (
+                  <RightOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+                )}
+                {hasErrors ? (
+                  <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
+                ) : (
+                  <CheckCircleOutlined style={{ color: token.colorTextSecondary, fontSize: 16 }} />
+                )}
+                <Typography.Text strong>
+                  <BulbOutlined /> {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
+                  {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
+                  {stats.toolCount > 0 && `${stats.toolCount} tools`}
+                </Typography.Text>
+                {!expanded && summaryDescription}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Expanded chain */}
         {expanded && (
