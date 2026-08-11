@@ -392,6 +392,9 @@ function oneLineForPrompt(text: string, maxChars = 900): string {
 const SLACK_GATEWAY_REPLY_NOTE =
   'Note: Any assistant message you send in this current Agor session is streamed back directly to the Slack conversation. Only use outbound gateway tools when you intentionally need to start a separate thread, DM, or message.';
 
+const GATEWAY_STARTUP_BOOTSTRAP_HINT =
+  'Startup/bootstrap note: Follow any startup/bootstrap instructions defined by the working directory before answering the gateway message above.';
+
 function prependSlackGatewayReplyNote(prompt: string): string {
   if (prompt.includes(SLACK_GATEWAY_REPLY_NOTE)) return prompt;
   return `${SLACK_GATEWAY_REPLY_NOTE}\n\n${prompt}`;
@@ -2756,6 +2759,13 @@ export class GatewayService {
       ) {
         throw new Error('Gateway listener ownership lost before Task admission');
       }
+
+      // Best-effort nudge for initial gateway delivery. Keep this after all
+      // other transformations so the hint remains the final prompt block.
+      if (created) {
+        promptText = `${promptText}\n\n${GATEWAY_STARTUP_BOOTSTRAP_HINT}`;
+      }
+
       const task = await promptService.create(
         {
           prompt: promptText,
