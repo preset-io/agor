@@ -62,7 +62,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, TaskStatus } from '@agor/core/types';
+import { hasMinimumRole, isMCPOAuthGrantBindingVersion, ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
@@ -149,7 +149,6 @@ import {
   hasMCPOAuthRelevantServerConfigurationChanged,
   isMCPOAuthGrantBoundToServer,
   lockMCPOAuthGrantConfiguration,
-  MCP_OAUTH_GRANT_BINDING_VERSION,
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { createMCPServersService } from './services/mcp-servers.js';
@@ -1779,7 +1778,7 @@ async function registerMCPServices(
           server.auth?.type !== 'oauth' ||
           (server.auth.oauth_mode ?? 'per_user') !== record.oauthMode ||
           server.url !== pendingFlow.context.resourceUri ||
-          record.configFingerprintVersion !== MCP_OAUTH_GRANT_BINDING_VERSION
+          !isMCPOAuthGrantBindingVersion(record.configFingerprintVersion)
         ) {
           throw new Error('MCP OAuth server configuration changed; restart authorization');
         }
@@ -1798,7 +1797,8 @@ async function registerMCPServices(
             redirectUri: pendingFlow.context.redirectUri,
             clientId: pendingFlow.context.clientId,
             clientSecret: pendingFlow.context.clientSecret,
-          }
+          },
+          record.configFingerprintVersion
         );
         if (fingerprint !== record.configFingerprint) {
           throw new Error('MCP OAuth grant binding changed; restart authorization');
@@ -1814,6 +1814,16 @@ async function registerMCPServices(
     pendingFlow: PendingOAuthFlow,
     logPrefix: string
   ): Promise<void> => {
+    const durableRecord = pendingFlow.durableRecord;
+    const durableGrantBindingVersion = durableRecord
+      ? (() => {
+          const version = durableRecord.configFingerprintVersion;
+          if (!isMCPOAuthGrantBindingVersion(version)) {
+            throw new Error('Unsupported MCP OAuth grant binding version');
+          }
+          return version;
+        })()
+      : undefined;
     const work = () =>
       persistOAuthToken(
         db,
@@ -1828,7 +1838,7 @@ async function registerMCPServices(
             ? {
                 grantBinding: {
                   generation: pendingFlow.durableRecord.grantGeneration,
-                  version: MCP_OAUTH_GRANT_BINDING_VERSION,
+                  version: durableGrantBindingVersion!,
                   fingerprint: pendingFlow.durableRecord.configFingerprint,
                   metadataUri: pendingFlow.context.metadataUrl,
                   resourceUri: pendingFlow.context.resourceUri,

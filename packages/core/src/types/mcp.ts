@@ -54,6 +54,17 @@ export interface MCPOAuthRefreshResult {
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
 export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
+export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2] as const;
+export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
+
+export function isMCPOAuthGrantBindingVersion(
+  value: unknown
+): value is MCPOAuthGrantBindingVersion {
+  return (
+    typeof value === 'number' &&
+    MCP_OAUTH_GRANT_BINDING_VERSIONS.includes(value as MCPOAuthGrantBindingVersion)
+  );
+}
 
 /**
  * Secret-bearing material required to exchange an authorization code.
@@ -70,7 +81,7 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   mcpServerId: MCPServerID;
   oauthMode: MCPOAuthMode;
   grantGeneration: number;
-  configFingerprintVersion: 1;
+  configFingerprintVersion: MCPOAuthGrantBindingVersion;
   configFingerprint: string;
   resourceUri: string;
   issuer: string;

@@ -1119,6 +1119,22 @@ describe('strict current MCP OAuth profile', () => {
     await expect(startStrict()).rejects.toThrow('required callback issuer');
   });
 
+  it('validates strict metadata before creating a dynamic client', async () => {
+    globalThis.fetch = strictFetch({ registrationEndpoint: true, s256: false });
+    await expect(
+      startMCPOAuthFlow(
+        `Bearer resource_metadata="${metadataUri}"`,
+        undefined,
+        'https://agor.example.com/mcp-servers/oauth-callback',
+        { resourceUri }
+      )
+    ).rejects.toThrow('required PKCE S256');
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
+      `${issuer}/register`,
+      expect.objectContaining({ method: 'POST' })
+    );
+  });
+
   it.each([undefined, 'advertised' as const])(
     'uses an advertised registration endpoint with DCR mode %s',
     async (dcrMode) => {

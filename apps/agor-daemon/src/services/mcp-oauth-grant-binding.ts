@@ -6,9 +6,15 @@ import {
   type TenantScopedDatabase,
   type UserMCPOAuthToken,
 } from '@agor/core/db';
-import type { MCPAuth, MCPServer, MCPServerID } from '@agor/core/types';
+import type {
+  MCPAuth,
+  MCPOAuthGrantBindingVersion,
+  MCPServer,
+  MCPServerID,
+} from '@agor/core/types';
+import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
 
-export const MCP_OAUTH_GRANT_BINDING_VERSION = 1 as const;
+export const MCP_OAUTH_GRANT_BINDING_VERSION = 2 as const;
 
 /**
  * Serialize an MCP server's OAuth configuration with grant creation and
@@ -40,15 +46,18 @@ export interface MCPOAuthResolvedGrantBinding {
   clientSecret?: string;
 }
 
-function authBinding(auth: MCPAuth | undefined): Record<string, unknown> {
+function authBinding(
+  auth: MCPAuth | undefined,
+  version: MCPOAuthGrantBindingVersion
+): Record<string, unknown> {
   return {
     type: auth?.type ?? 'none',
     mode: auth?.oauth_mode ?? 'per_user',
     compatibility: auth?.oauth_compatibility_mode ?? 'strict',
-    // Version 1 shipped with missing values canonicalized as `disabled`.
-    // Keep that representation stable for existing grants and pending flows;
-    // effective OAuth-start behavior may still default missing to `advertised`.
-    dcr: auth?.oauth_dcr_mode ?? 'disabled',
+    // Preserve version 1 for existing grants and pending flows. New bindings
+    // record the effective default so an explicit switch to disabled revokes a
+    // DCR-created grant just like any other relevant policy change.
+    dcr: auth?.oauth_dcr_mode ?? (version === 1 ? 'disabled' : 'advertised'),
     authorizationOverride: auth?.oauth_authorization_url ?? null,
     tokenOverride: auth?.oauth_token_url ?? null,
     configuredClientId: auth?.oauth_client_id ?? null,
@@ -62,20 +71,21 @@ function authBinding(auth: MCPAuth | undefined): Record<string, unknown> {
 export function fingerprintMCPOAuthGrantConfiguration(
   masterSecret: string,
   server: Pick<MCPServer, 'mcp_server_id' | 'transport' | 'url' | 'enabled' | 'auth'>,
-  resolved: MCPOAuthResolvedGrantBinding
+  resolved: MCPOAuthResolvedGrantBinding,
+  version: MCPOAuthGrantBindingVersion = MCP_OAUTH_GRANT_BINDING_VERSION
 ): string {
   if (!masterSecret) throw new Error('MCP OAuth grant binding requires AGOR_MASTER_SECRET');
   const canonical = JSON.stringify({
-    version: MCP_OAUTH_GRANT_BINDING_VERSION,
+    version,
     serverId: server.mcp_server_id,
     enabled: server.enabled,
     transport: server.transport,
     serverUrl: server.url ?? null,
-    auth: authBinding(server.auth),
+    auth: authBinding(server.auth, version),
     resolved,
   });
   return createHmac('sha256', masterSecret)
-    .update('agor:mcp-oauth:grant-configuration:v1\0', 'utf8')
+    .update(`agor:mcp-oauth:grant-configuration:v${version}\0`, 'utf8')
     .update(canonical, 'utf8')
     .digest('hex');
 }
@@ -87,7 +97,7 @@ function relevantServerConfiguration(server: Partial<MCPServer> | null | undefin
     enabled: server.enabled,
     transport: server.transport,
     url: server.url ?? null,
-    auth: authBinding(server.auth),
+    auth: authBinding(server.auth, MCP_OAUTH_GRANT_BINDING_VERSION),
   });
 }
 
@@ -109,7 +119,7 @@ export function isMCPOAuthGrantBoundToServer(
   grant: UserMCPOAuthToken
 ): boolean {
   if (
-    grant.grant_binding_version !== MCP_OAUTH_GRANT_BINDING_VERSION ||
+    !isMCPOAuthGrantBindingVersion(grant.grant_binding_version) ||
     !grant.grant_binding_fingerprint ||
     !grant.oauth_metadata_uri ||
     !grant.oauth_resource_uri ||
@@ -123,16 +133,21 @@ export function isMCPOAuthGrantBoundToServer(
   }
   try {
     return (
-      fingerprintMCPOAuthGrantConfiguration(masterSecret, server, {
-        resourceUri: grant.oauth_resource_uri,
-        metadataUrl: grant.oauth_metadata_uri,
-        issuer: grant.oauth_issuer,
-        authorizationEndpoint: grant.oauth_authorization_endpoint,
-        tokenEndpoint: grant.oauth_token_endpoint,
-        redirectUri: grant.oauth_redirect_uri,
-        clientId: grant.oauth_client_id,
-        clientSecret: grant.oauth_client_secret,
-      }) === grant.grant_binding_fingerprint
+      fingerprintMCPOAuthGrantConfiguration(
+        masterSecret,
+        server,
+        {
+          resourceUri: grant.oauth_resource_uri,
+          metadataUrl: grant.oauth_metadata_uri,
+          issuer: grant.oauth_issuer,
+          authorizationEndpoint: grant.oauth_authorization_endpoint,
+          tokenEndpoint: grant.oauth_token_endpoint,
+          redirectUri: grant.oauth_redirect_uri,
+          clientId: grant.oauth_client_id,
+          clientSecret: grant.oauth_client_secret,
+        },
+        grant.grant_binding_version
+      ) === grant.grant_binding_fingerprint
     );
   } catch {
     return false;

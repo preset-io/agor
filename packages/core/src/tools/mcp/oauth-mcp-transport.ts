@@ -971,29 +971,12 @@ export async function performMCPOAuthFlow(
         actualClientId = registration.client_id;
         clientSecret = registration.client_secret;
       } else {
-        // No DCR support and no client_id provided - check for well-known MCP registration endpoint
-        // Some MCP servers use /register at the auth server URL
-        const mcpRegisterEndpoint = `${authServerUrl}/register`;
-        try {
-          const registration = await registerDynamicClient(
-            mcpRegisterEndpoint,
-            callback.url,
-            'Agor MCP Client',
-            scopeString,
-            true,
-            true
-          );
-          actualClientId = registration.client_id;
-          clientSecret = registration.client_secret;
-        } catch {
-          throw new Error(
-            'OAuth client_id is required but the authorization server does not support ' +
-              'Dynamic Client Registration.\n\n' +
-              "Register an OAuth app in the provider's developer portal and enter " +
-              'the Client ID (and Client Secret if required) in the MCP server configuration.\n\n' +
-              'The registration attempt was rejected.'
-          );
-        }
+        throw new Error(
+          'OAuth client_id is required but the authorization server does not advertise ' +
+            'a Dynamic Client Registration endpoint (RFC 7591).\n\n' +
+            "Register an OAuth app in the provider's developer portal and enter " +
+            'the Client ID (and Client Secret if required) in the MCP server configuration.'
+        );
       }
     }
 
@@ -1301,6 +1284,54 @@ async function startMCPOAuthFlowWithAS(opts: {
       ? resourceScopesSupported.join(' ')
       : undefined;
 
+  // Validate the authorization contract before DCR creates durable state at
+  // the provider. A strict-profile rejection must not leave an unused client
+  // registration behind.
+  const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
+  if (!tokenEndpoint) {
+    throw new Error(
+      'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
+        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+    );
+  }
+  const authorizationEndpoint =
+    authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
+  if (!authorizationEndpoint) {
+    throw new Error(
+      'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
+        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+    );
+  }
+  console.log('[MCP OAuth] OAuth endpoints resolved');
+
+  assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
+  assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
+  if (compatibilityMode === 'strict') {
+    if (!authServerMetadata) {
+      throw new Error('Strict MCP OAuth requires authorization-server metadata');
+    }
+    if (authServerMetadata.issuer !== issuer) {
+      throw new Error('Authorization server issuer mismatch');
+    }
+    if (!authServerMetadata.code_challenge_methods_supported?.includes('S256')) {
+      throw new Error('Authorization server does not advertise required PKCE S256 support');
+    }
+    if (authServerMetadata.authorization_response_iss_parameter_supported !== true) {
+      throw new Error(
+        'Authorization server does not advertise the required callback issuer parameter'
+      );
+    }
+    if (
+      authorizationUrlOverride &&
+      authorizationUrlOverride !== authServerMetadata.authorization_endpoint
+    ) {
+      throw new Error('Strict MCP OAuth authorization endpoint override does not match metadata');
+    }
+    if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
+      throw new Error('Strict MCP OAuth token endpoint override does not match metadata');
+    }
+  }
+
   // Client ID resolution (DCR if available)
   let actualClientId = clientId;
   let resolvedClientSecret = opts.clientSecret;
@@ -1350,52 +1381,6 @@ async function startMCPOAuthFlowWithAS(opts: {
 
   // CSRF state
   const state = crypto.randomUUID();
-
-  // Resolve token + auth endpoints
-  const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
-  if (!tokenEndpoint) {
-    throw new Error(
-      'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
-    );
-  }
-  const authorizationEndpoint =
-    authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
-  if (!authorizationEndpoint) {
-    throw new Error(
-      'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
-    );
-  }
-  console.log('[MCP OAuth] OAuth endpoints resolved');
-
-  assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
-  assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
-  if (compatibilityMode === 'strict') {
-    if (!authServerMetadata) {
-      throw new Error('Strict MCP OAuth requires authorization-server metadata');
-    }
-    if (authServerMetadata.issuer !== issuer) {
-      throw new Error('Authorization server issuer mismatch');
-    }
-    if (!authServerMetadata.code_challenge_methods_supported?.includes('S256')) {
-      throw new Error('Authorization server does not advertise required PKCE S256 support');
-    }
-    if (authServerMetadata.authorization_response_iss_parameter_supported !== true) {
-      throw new Error(
-        'Authorization server does not advertise the required callback issuer parameter'
-      );
-    }
-    if (
-      authorizationUrlOverride &&
-      authorizationUrlOverride !== authServerMetadata.authorization_endpoint
-    ) {
-      throw new Error('Strict MCP OAuth authorization endpoint override does not match metadata');
-    }
-    if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
-      throw new Error('Strict MCP OAuth token endpoint override does not match metadata');
-    }
-  }
 
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');

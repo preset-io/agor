@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { MCPServerID, UserID } from '@agor/core/types';
+import type { MCPOAuthGrantBindingVersion, MCPServerID, UserID } from '@agor/core/types';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { deleteFrom, executeRaw, insert, select, update } from '../database-wrapper';
@@ -94,7 +94,7 @@ export interface SaveTokenInput {
   /** Required for every new PostgreSQL grant and checked on replacement. */
   grantBinding?: {
     generation: number;
-    version: 1;
+    version: MCPOAuthGrantBindingVersion;
     fingerprint: string;
     metadataUri: string;
     resourceUri: string;
