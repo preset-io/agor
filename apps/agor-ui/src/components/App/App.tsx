@@ -19,7 +19,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
-import { Layout, Upload } from 'antd';
+import { Empty, Layout, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ImperativePanelHandle } from 'react-resizable-panels';
 import { useLocation, useParams } from 'react-router-dom';
@@ -488,11 +488,20 @@ export const App: React.FC<AppProps> = ({
   // is a valid no-board route, so do not auto-select localStorage/first board.
   const [currentBoardId, setCurrentBoardIdInternal] = useState(() => initialBoardId || '');
 
-  // Initialize comments panel state from localStorage (collapsed by default)
-  const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useLocalStorage<boolean>(
+  // Classic persists the expanded/collapsed state across loads; slim always
+  // starts as a rail and only expands on user action (no auto-expansion after
+  // the home-exit deferral clears).
+  const [commentsPanelCollapsedStored, setCommentsPanelCollapsedStored] = useLocalStorage<boolean>(
     'agor:commentsPanelCollapsed',
     false
   );
+  const [commentsPanelCollapsedSession, setCommentsPanelCollapsedSession] = useState(true);
+  const commentsPanelCollapsed = isSlim
+    ? commentsPanelCollapsedSession
+    : commentsPanelCollapsedStored;
+  const setCommentsPanelCollapsed = isSlim
+    ? setCommentsPanelCollapsedSession
+    : setCommentsPanelCollapsedStored;
 
   // Left panel size persistence (percentage of available width), scoped per user.
   const [commentsPanelSize, setCommentsPanelSize] = useUserLocalStorage<number>(
@@ -641,11 +650,20 @@ export const App: React.FC<AppProps> = ({
   const [logsModalBranchId, setLogsModalBranchId] = useState<string | null>(null);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 
-  // Initialize event stream panel state from localStorage (collapsed by default)
-  const [eventStreamPanelCollapsed, setEventStreamPanelCollapsed] = useLocalStorage<boolean>(
+  // Classic persists the Live Events panel open state; slim scopes it to the
+  // session so the event stream never resurrects itself in the session slot
+  // across reloads.
+  const [eventStreamCollapsedStored, setEventStreamCollapsedStored] = useLocalStorage<boolean>(
     'agor:eventStreamPanelCollapsed',
     true
   );
+  const [eventStreamCollapsedSession, setEventStreamCollapsedSession] = useState(true);
+  const eventStreamPanelCollapsed = isSlim
+    ? eventStreamCollapsedSession
+    : eventStreamCollapsedStored;
+  const setEventStreamPanelCollapsed = isSlim
+    ? setEventStreamCollapsedSession
+    : setEventStreamCollapsedStored;
 
   // Recent-board visit tracking + the id list HomePage consumes. AppHeader owns
   // its own pill derivation from the store (so it isn't fed an unstable array),
@@ -1646,7 +1664,7 @@ export const App: React.FC<AppProps> = ({
                     setPendingToolChoiceBranchId(null);
                   }}
                 />
-              ) : (
+              ) : !eventStreamPanelCollapsed ? (
                 <EventStreamPanel
                   collapsed={false}
                   onToggleCollapse={() => setEventStreamPanelCollapsed(true)}
@@ -1658,6 +1676,19 @@ export const App: React.FC<AppProps> = ({
                   client={client}
                   branchActions={eventStreamBranchActions}
                 />
+              ) : (
+                // Transient fallback (slot open with nothing selected) — a
+                // plain empty state instead of the event stream.
+                <div
+                  style={{
+                    height: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No session selected" />
+                </div>
               )
             }
           />
