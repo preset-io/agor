@@ -18,6 +18,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectBranchById,
@@ -137,6 +138,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   client,
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const { message } = AntApp.useApp();
   // Subscribe to entity maps by slice from the store: each selector only wakes
   // this panel when its own slice changes.
@@ -379,7 +381,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               >
                 {isCreating ? (
                   <Spin />
-                ) : teammateConfig?.emoji ? (
+                ) : teammateConfig?.emoji && !isSlim ? (
                   <span style={{ fontSize: 30 }}>{teammateConfig.emoji}</span>
                 ) : (
                   <RobotOutlined style={{ fontSize: 30, color: token.colorInfo }} />

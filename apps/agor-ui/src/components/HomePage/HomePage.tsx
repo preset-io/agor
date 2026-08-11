@@ -243,8 +243,11 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     () =>
       Array.from(boardById.values())
         .filter((b) => !b.archived)
-        .map((b) => ({ value: b.board_id, label: `${b.icon || '📋'} ${b.name}` })),
-    [boardById]
+        .map((b) => ({
+          value: b.board_id,
+          label: isSlim ? b.name : `${b.icon || '📋'} ${b.name}`,
+        })),
+    [boardById, isSlim]
   );
 
   const [createOpen, setCreateOpen] = useState(false);

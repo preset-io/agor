@@ -628,7 +628,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           // Task tools: render as text message (spinner is shown in the tool chain)
           const subagentType = toolUse.input.subagent_type || 'Task';
           const description = toolUse.input.description || '';
-          const taskText = `🔧 **Task (${subagentType}):** ${description}`;
+          const taskText = isSlim
+            ? `**Task (${subagentType}):** ${description}`
+            : `🔧 **Task (${subagentType}):** ${description}`;
 
           textBeforeTools.push(taskText);
         } else {

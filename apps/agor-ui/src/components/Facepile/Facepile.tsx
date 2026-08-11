@@ -10,6 +10,7 @@
 import type { ActiveUser, Board, BoardID } from '@agor-live/client';
 import { Avatar, Flex, Tooltip, theme } from 'antd';
 import type { CSSProperties } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { slackAvatarRadius, UserIdentityAvatar } from '../UserIdentityAvatar';
 
 export interface FacepileProps {
@@ -38,6 +39,7 @@ export const Facepile: React.FC<FacepileProps> = ({
   style,
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
 
   // Show first N users, with overflow count
   const visibleUsers = activeUsers.slice(0, maxVisible);
@@ -58,7 +60,7 @@ export const Facepile: React.FC<FacepileProps> = ({
       {visibleUsers.map(({ user, cursor, boardId }) => {
         const board = boardId && boardById ? boardById.get(boardId) : null;
         const boardName = board?.name || 'Unknown Board';
-        const boardIcon = board?.icon || '📋';
+        const boardIcon = isSlim ? '' : board?.icon || '📋';
         const canClick = onUserClick && boardId;
 
         return (

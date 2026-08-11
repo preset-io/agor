@@ -12,6 +12,7 @@ import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useProgressiveMount } from '../../hooks/useProgressiveMount';
 import { readCollapsedBranchNode } from '../../utils/collapsedBranchNodes';
@@ -107,6 +108,7 @@ const BranchCardComponent = ({
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const connectionDisabled = useConnectionDisabled();
 
   const branchBoardId = (branch as { board_id?: string | null }).board_id;
@@ -384,7 +386,7 @@ const BranchCardComponent = ({
             >
               {isCreating || hasRunningSession ? (
                 <Spin size="large" />
-              ) : isAgent && teammateConfig?.emoji ? (
+              ) : isAgent && teammateConfig?.emoji && !isSlim ? (
                 <span style={{ fontSize: 32 }}>{teammateConfig.emoji}</span>
               ) : isAgent ? (
                 <RobotOutlined

@@ -27,6 +27,7 @@ import {
   resolveUiBranchStorageConfig,
 } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useUIMode } from '../../contexts/UIModeContext';
 
 /**
  * Default depth pre-filled into the "Depth" input when the user selects
@@ -76,6 +77,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
   onUseSameBranchNameChange,
   branchStorageConfig,
 }) => {
+  const { isSlim } = useUIMode();
   const [internalUseSameBranchName, setInternalUseSameBranchName] = useState(true);
   const [refType, setRefType] = useState<'branch' | 'tag'>('branch');
 
@@ -169,7 +171,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
               .sort((a: Board, b: Board) => a.name.localeCompare(b.name))
               .map((board: Board) => ({
                 value: board.board_id,
-                label: `${board.icon || '📋'} ${board.name}`,
+                label: isSlim ? board.name : `${board.icon || '📋'} ${board.name}`,
               }))}
             onChange={onFormChange}
           />

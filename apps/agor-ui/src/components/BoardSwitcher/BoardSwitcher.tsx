@@ -1,5 +1,11 @@
 import type { AgorClient, Board, Branch, User } from '@agor-live/client';
-import { DownOutlined, EditOutlined, HomeOutlined, SearchOutlined } from '@ant-design/icons';
+import {
+  ApartmentOutlined,
+  DownOutlined,
+  EditOutlined,
+  HomeOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import {
   Badge,
@@ -15,6 +21,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { BoardEditModal } from '../BoardEditModal';
 
@@ -62,6 +69,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   onUpdateBoard,
 }) => {
   const { token } = useToken();
+  const { isSlim } = useUIMode();
   const [filterText, setFilterText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -141,7 +149,11 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
             }}
           >
             <Space size={8}>
-              <span style={{ fontSize: 18 }}>{board.icon || '📋'}</span>
+              {isSlim ? (
+                <ApartmentOutlined style={{ fontSize: 14, opacity: 0.65 }} />
+              ) : (
+                <span style={{ fontSize: 18 }}>{board.icon || '📋'}</span>
+              )}
               <Text strong={isActive}>{board.name}</Text>
             </Space>
             <Badge
@@ -154,7 +166,16 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
         onClick: () => handleBoardClick(board.board_id),
       };
     });
-  }, [boards, currentBoardId, branchCountByBoard, handleBoardClick, token, filterText, showFilter]);
+  }, [
+    boards,
+    currentBoardId,
+    branchCountByBoard,
+    handleBoardClick,
+    token,
+    filterText,
+    showFilter,
+    isSlim,
+  ]);
 
   const homeRow = (
     <Button
@@ -273,9 +294,17 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
             }}
           >
             <Space size={8} style={{ minWidth: 0, overflow: 'hidden' }}>
-              <span style={{ fontSize: 18 }}>
-                {currentBoard ? currentBoard.icon || '📋' : '🏠'}
-              </span>
+              {isSlim ? (
+                currentBoard ? (
+                  <ApartmentOutlined style={{ fontSize: 14, opacity: 0.65 }} />
+                ) : (
+                  <HomeOutlined style={{ fontSize: 14, opacity: 0.65 }} />
+                )
+              ) : (
+                <span style={{ fontSize: 18 }}>
+                  {currentBoard ? currentBoard.icon || '📋' : '🏠'}
+                </span>
+              )}
               <Text strong ellipsis style={{ minWidth: 0 }}>
                 {currentBoard?.name || 'Home'}
               </Text>
