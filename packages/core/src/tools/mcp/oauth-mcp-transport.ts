@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import type { MCPOAuthDCRMode } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
@@ -1260,7 +1261,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   resourceUri: string;
   issuer: string;
   compatibilityMode: 'strict' | 'legacy';
-  dcrMode: 'disabled' | 'fallback';
+  dcrMode: MCPOAuthDCRMode;
   allowLocalhostHttp: boolean;
 }): Promise<OAuthFlowContext> {
   const {
@@ -1304,9 +1305,10 @@ async function startMCPOAuthFlowWithAS(opts: {
   let actualClientId = clientId;
   let resolvedClientSecret = opts.clientSecret;
 
-  if (!actualClientId && dcrMode === 'fallback') {
+  if (!actualClientId && dcrMode !== 'disabled') {
     const registrationEndpoint =
-      authServerMetadata?.registration_endpoint || fallbackRegistrationEndpoint;
+      authServerMetadata?.registration_endpoint ||
+      (dcrMode === 'fallback' ? fallbackRegistrationEndpoint : undefined);
     if (registrationEndpoint) {
       console.log('[MCP OAuth] Using Dynamic Client Registration');
       try {
@@ -1342,7 +1344,7 @@ async function startMCPOAuthFlowWithAS(opts: {
     }
   } else if (!actualClientId) {
     throw new Error(
-      'OAuth client_id is required. Configure a pre-registered client, or explicitly enable Dynamic Client Registration fallback for this server.'
+      'OAuth client_id is required because Dynamic Client Registration is disabled for this server.'
     );
   }
 
@@ -1458,14 +1460,14 @@ export async function startMCPOAuthFlow(
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
     compatibilityMode?: 'strict' | 'legacy';
-    dcrMode?: 'disabled' | 'fallback';
+    dcrMode?: MCPOAuthDCRMode;
     /** Exact loopback HTTP exception for standalone development only. */
     allowLocalhostHttp?: boolean;
   }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
   const compatibilityMode = options?.compatibilityMode ?? 'strict';
-  const dcrMode = options?.dcrMode ?? 'disabled';
+  const dcrMode = options?.dcrMode ?? 'advertised';
   const allowLocalhostHttp = options?.allowLocalhostHttp === true;
   const resourceUri = options?.resourceUri;
   if (!resourceUri) throw new Error('MCP OAuth requires an exact protected resource URI');

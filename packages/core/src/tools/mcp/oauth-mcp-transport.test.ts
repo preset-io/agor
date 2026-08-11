@@ -1001,6 +1001,7 @@ describe('strict current MCP OAuth profile', () => {
   const issuer = 'https://auth.example.com';
 
   beforeEach(() => {
+    clearAuthCodeTokenCache();
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
@@ -1015,9 +1016,10 @@ describe('strict current MCP OAuth profile', () => {
       metadataIssuer?: string;
       s256?: boolean;
       responseIssuer?: boolean;
+      registrationEndpoint?: boolean;
     } = {}
   ) {
-    return vi.fn().mockImplementation(async (input: string | URL) => {
+    return vi.fn().mockImplementation(async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === metadataUri) {
         return new Response(
@@ -1035,10 +1037,23 @@ describe('strict current MCP OAuth profile', () => {
             issuer: overrides.metadataIssuer ?? issuer,
             authorization_endpoint: `${issuer}/authorize`,
             token_endpoint: `${issuer}/token`,
+            registration_endpoint: overrides.registrationEndpoint
+              ? `${issuer}/register`
+              : undefined,
             code_challenge_methods_supported: overrides.s256 === false ? ['plain'] : ['S256'],
             authorization_response_iss_parameter_supported: overrides.responseIssuer !== false,
           }),
           { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      if (url === `${issuer}/register` && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            client_id: 'dcr-client',
+            redirect_uris: ['https://agor.example.com/mcp-servers/oauth-callback'],
+            token_endpoint_auth_method: 'none',
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } }
         );
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -1104,17 +1119,72 @@ describe('strict current MCP OAuth profile', () => {
     await expect(startStrict()).rejects.toThrow('required callback issuer');
   });
 
-  it('does not silently fall back to DCR or insecure endpoints', async () => {
+  it.each([undefined, 'advertised' as const])(
+    'uses an advertised registration endpoint with DCR mode %s',
+    async (dcrMode) => {
+      globalThis.fetch = strictFetch({ registrationEndpoint: true });
+      const context = await startMCPOAuthFlow(
+        `Bearer resource_metadata="${metadataUri}"`,
+        undefined,
+        'https://agor.example.com/mcp-servers/oauth-callback',
+        { resourceUri, dcrMode }
+      );
+
+      expect(context.clientId).toBe('dcr-client');
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        `${issuer}/register`,
+        expect.objectContaining({ method: 'POST' })
+      );
+    }
+  );
+
+  it('requires a pre-registered client when DCR is explicitly disabled', async () => {
+    globalThis.fetch = strictFetch({ registrationEndpoint: true });
+    await expect(
+      startMCPOAuthFlow(
+        `Bearer resource_metadata="${metadataUri}"`,
+        undefined,
+        'https://agor.example.com/mcp-servers/oauth-callback',
+        { resourceUri, dcrMode: 'disabled' }
+      )
+    ).rejects.toThrow('Dynamic Client Registration is disabled');
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
+      `${issuer}/register`,
+      expect.objectContaining({ method: 'POST' })
+    );
+  });
+
+  it('guesses issuer-relative /register only for explicit legacy fallback', async () => {
     globalThis.fetch = strictFetch();
     await expect(
       startMCPOAuthFlow(
         `Bearer resource_metadata="${metadataUri}"`,
         undefined,
         'https://agor.example.com/mcp-servers/oauth-callback',
-        { resourceUri }
+        { resourceUri, compatibilityMode: 'legacy', dcrMode: 'advertised' }
       )
-    ).rejects.toThrow('pre-registered client');
+    ).rejects.toThrow('does not advertise');
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
+      `${issuer}/register`,
+      expect.objectContaining({ method: 'POST' })
+    );
 
+    globalThis.fetch = strictFetch();
+    await expect(
+      startMCPOAuthFlow(
+        `Bearer resource_metadata="${metadataUri}"`,
+        undefined,
+        'https://agor.example.com/mcp-servers/oauth-callback',
+        { resourceUri, compatibilityMode: 'legacy', dcrMode: 'fallback' }
+      )
+    ).resolves.toMatchObject({ clientId: 'dcr-client' });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      `${issuer}/register`,
+      expect.objectContaining({ method: 'POST' })
+    );
+  });
+
+  it('does not relax outbound endpoint safety', async () => {
     globalThis.fetch = strictFetch();
     await expect(
       startMCPOAuthFlow(

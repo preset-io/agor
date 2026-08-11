@@ -52,7 +52,7 @@ describe('extractOAuthConfig', () => {
       oauth_grant_type: 'authorization_code',
       oauth_mode: 'per_user',
       oauth_compatibility_mode: 'strict',
-      oauth_dcr_mode: 'disabled',
+      oauth_dcr_mode: 'advertised',
     });
   });
 
@@ -76,14 +76,17 @@ describe('extractOAuthConfig', () => {
     expect(result.oauth_mode).toBe('shared');
   });
 
-  it('defaults to strict OAuth without dynamic registration', () => {
+  it('defaults to strict OAuth with advertised registration', () => {
     expect(extractOAuthConfig({})).toMatchObject({
       oauth_compatibility_mode: 'strict',
-      oauth_dcr_mode: 'disabled',
+      oauth_dcr_mode: 'advertised',
     });
   });
 
-  it('preserves explicit legacy and DCR fallback opt-ins', () => {
+  it('preserves explicit disabled and legacy fallback policies', () => {
+    expect(extractOAuthConfig({ oauth_dcr_mode: 'disabled' })).toMatchObject({
+      oauth_dcr_mode: 'disabled',
+    });
     expect(
       extractOAuthConfig({
         oauth_compatibility_mode: 'legacy',
@@ -169,6 +172,28 @@ describe('extractOAuthConfigForTesting', () => {
 });
 
 describe('buildAuthFromValues', () => {
+  it('preserves a legacy absent DCR field across an unrelated edit', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_dcr_mode: 'advertised',
+          oauth_scope: 'unchanged',
+        },
+        { preserveAbsentDcrMode: true }
+      )
+    ).not.toHaveProperty('oauth_dcr_mode');
+  });
+
+  it('materializes DCR after the operator changes the policy', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'oauth', oauth_dcr_mode: 'fallback' },
+        { preserveAbsentDcrMode: true }
+      )
+    ).toMatchObject({ oauth_dcr_mode: 'fallback' });
+  });
+
   it('returns undefined when auth_type is none / missing / unrecognized', () => {
     expect(buildAuthFromValues({})).toBeUndefined();
     expect(buildAuthFromValues({ auth_type: 'none' })).toBeUndefined();

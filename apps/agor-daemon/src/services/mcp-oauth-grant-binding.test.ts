@@ -67,6 +67,26 @@ function tokenFor(fingerprint: string): UserMCPOAuthToken {
 }
 
 describe('MCP OAuth grant configuration binding', () => {
+  it('preserves the version-1 missing DCR fingerprint across upgrades', () => {
+    const withoutPolicy: ServerBinding = {
+      ...server,
+      auth: { ...server.auth, oauth_dcr_mode: undefined },
+    };
+    const advertised: ServerBinding = {
+      ...server,
+      auth: { ...server.auth, oauth_dcr_mode: 'advertised' },
+    };
+    const disabled: ServerBinding = {
+      ...server,
+      auth: { ...server.auth, oauth_dcr_mode: 'disabled' },
+    };
+
+    const fingerprint = (candidate: ServerBinding) =>
+      fingerprintMCPOAuthGrantConfiguration(masterSecret, candidate, resolved);
+    expect(fingerprint(withoutPolicy)).toBe(fingerprint(disabled));
+    expect(fingerprint(withoutPolicy)).not.toBe(fingerprint(advertised));
+  });
+
   it('binds every provider, client, callback, server, mode, and version input', () => {
     const original = fingerprintMCPOAuthGrantConfiguration(masterSecret, server, resolved);
     const variants: Array<[string, ServerBinding, MCPOAuthResolvedGrantBinding]> = [

@@ -45,6 +45,9 @@ function authBinding(auth: MCPAuth | undefined): Record<string, unknown> {
     type: auth?.type ?? 'none',
     mode: auth?.oauth_mode ?? 'per_user',
     compatibility: auth?.oauth_compatibility_mode ?? 'strict',
+    // Version 1 shipped with missing values canonicalized as `disabled`.
+    // Keep that representation stable for existing grants and pending flows;
+    // effective OAuth-start behavior may still default missing to `advertised`.
     dcr: auth?.oauth_dcr_mode ?? 'disabled',
     authorizationOverride: auth?.oauth_authorization_url ?? null,
     tokenOverride: auth?.oauth_token_url ?? null,
