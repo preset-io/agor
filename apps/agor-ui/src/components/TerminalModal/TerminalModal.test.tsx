@@ -22,6 +22,7 @@ vi.mock('@xterm/addon-clipboard', () => ({ ClipboardAddon: class {} }));
 vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }));
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 
+import { UIModeProvider } from '../../contexts/UIModeContext';
 import { TerminalModal } from './TerminalModal';
 
 const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111';
@@ -149,5 +150,38 @@ describe('TerminalModal reconnect + readiness', () => {
     });
     await Promise.resolve();
     expect(screen.getByText(/Reconnecting/)).toBeInTheDocument();
+  });
+});
+
+describe('TerminalModal — slim mode', () => {
+  it('renders as a drawer instead of a modal', () => {
+    localStorage.setItem('agor:uiMode', 'slim');
+    try {
+      const socket = makeFakeSocket();
+      const create = vi.fn().mockResolvedValue({
+        userId: ALICE,
+        channel: `user/${ALICE}/terminal`,
+        sessionName: 'agor-x',
+        isNew: true,
+        ready: false,
+      });
+
+      render(
+        <UIModeProvider>
+          <TerminalModal
+            open
+            onClose={() => {}}
+            client={makeClient(socket, create)}
+            user={memberUser}
+            initialCommands={NO_COMMANDS}
+          />
+        </UIModeProvider>
+      );
+
+      expect(document.querySelector('.ant-drawer')).toBeInTheDocument();
+      expect(document.querySelector('.ant-modal')).toBeNull();
+    } finally {
+      localStorage.removeItem('agor:uiMode');
+    }
   });
 });

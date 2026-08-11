@@ -6,9 +6,11 @@ import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import { App, Badge, Modal } from 'antd';
+import { App, Badge } from 'antd';
 import { useEffect, useRef, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { loadWebglRenderer } from '../../utils/xtermWebgl';
+import { ModalOrDrawer } from '../ModalOrDrawer';
 import '@xterm/xterm/css/xterm.css';
 import { WEB_TERMINAL_MIN_ROLE } from './constants';
 
@@ -88,6 +90,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   initialCommands = [],
 }) => {
   const { modal } = App.useApp();
+  const { isSlim } = useUIMode();
   const terminalDivRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -440,21 +443,38 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     }
   };
 
+  // Classic: auto-sized centered modal. Slim: bottom drawer (no mask) so the
+  // terminal coexists with the board, like an IDE terminal panel.
   return (
-    <Modal
+    <ModalOrDrawer
       title={`Terminal${sessionInfo.branchName ? ` - ${sessionInfo.branchName}` : ''}`}
       open={open}
-      onCancel={handleClose}
+      onClose={handleClose}
       afterOpenChange={setModalReady}
-      footer={null}
-      width="auto"
-      styles={{
-        body: {
-          padding: '16px',
-          background: '#000',
+      modal={{
+        footer: null,
+        width: 'auto',
+        centered: true,
+        styles: {
+          body: {
+            padding: '16px',
+            background: '#000',
+          },
         },
       }}
-      centered
+      drawer={{
+        placement: 'bottom',
+        size: '65vh',
+        mask: false,
+        styles: {
+          body: {
+            padding: '16px',
+            background: '#000',
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        },
+      }}
     >
       {!canUseTerminal ? (
         <div style={{ padding: '24px', color: '#fff' }}>
@@ -495,17 +515,33 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           </p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, color: '#fff' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+            color: '#fff',
+            ...(isSlim ? { flex: 1, minHeight: 0 } : {}),
+          }}
+        >
           {reconnecting ? (
             <Badge status="warning" text="Reconnecting…" />
           ) : !isConnected ? (
             <Badge status="processing" text="Connecting to terminal…" />
           ) : null}
-          {/* Concrete size gives @xterm/addon-fit a box to measure; the
-              width="auto" Modal then sizes itself to the terminal. */}
-          <div ref={terminalDivRef} style={{ width: '80vw', maxWidth: 1100, height: '70vh' }} />
+          {/* Classic: a concrete size gives @xterm/addon-fit a box to measure
+              and the width="auto" Modal sizes itself to the terminal. Slim:
+              the terminal fills the fixed-height drawer body instead. */}
+          <div
+            ref={terminalDivRef}
+            style={
+              isSlim
+                ? { width: '100%', flex: 1, minHeight: 0 }
+                : { width: '80vw', maxWidth: 1100, height: '70vh' }
+            }
+          />
         </div>
       )}
-    </Modal>
+    </ModalOrDrawer>
   );
 };
