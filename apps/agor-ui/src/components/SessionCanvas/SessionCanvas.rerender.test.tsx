@@ -4,6 +4,7 @@ import type {
   BoardEntityObject,
   Branch,
   CardWithType,
+  MCPServer,
   Repo,
   Session,
   User,
@@ -254,7 +255,7 @@ describe('SessionCanvas store-selector re-render isolation', () => {
     expect(cardNodeRenders).toBe(cardNodeBaseline);
   });
 
-  it('a patch to a slice SessionCanvas does not select leaves the whole canvas un-rendered', async () => {
+  it('patches to unselected or modal-only slices leave the closed canvas un-rendered', async () => {
     render(
       <ConnectionProvider
         value={{
@@ -295,6 +296,22 @@ describe('SessionCanvas store-selector re-render isolation', () => {
 
     // The memo+selector boundary holds: SessionCanvas itself — not just the leaf
     // node memos — was insulated from the unrelated store change.
+    expect(sessionCanvasRenders).toBe(canvasBaseline);
+    expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
+    expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
+    expect(cardNodeRenders).toBe(cardNodeBaseline);
+
+    // MCP data is consumed only by the conditional zone-trigger modal. Keeping
+    // that subscription at the modal boundary means marketplace/auth updates
+    // cannot wake the entire canvas while the modal is closed.
+    act(() => {
+      agorStore.setState({
+        mcpServerById: new Map<string, MCPServer>([
+          ['mcp-1', { mcp_server_id: 'mcp-1', name: 'MCP' } as unknown as MCPServer],
+        ]),
+      });
+    });
+
     expect(sessionCanvasRenders).toBe(canvasBaseline);
     expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
     expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
