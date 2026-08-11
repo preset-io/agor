@@ -778,6 +778,26 @@ export async function startup(ctx: StartupContext): Promise<void> {
     }
   }
 
+  // The distributed monitor observes environments across daemons, but its
+  // status transitions are weaker than the standalone monitor's, whose rules
+  // live in BranchesService.checkHealth. Those rules depend on consecutive-probe
+  // streaks held in process memory, which cannot survive an observation lease
+  // moving between nodes, so they are not applied here. Warn rather than let a
+  // deployment discover the difference through a stuck or falsely-green
+  // environment card. See context/explorations/codespaces-env-qa-plan.md.
+  if (ctx.environmentHealthMonitorPolicy !== 'standalone') {
+    console.warn(
+      '\x1b[33m⚠️  Environment health is running in distributed (HA) mode with reduced transition rules.\x1b[0m\n' +
+        '   Compared with standalone: an environment is promoted starting → running on a\n' +
+        '   SINGLE healthy probe (no consecutive-success gate), a running environment that\n' +
+        '   goes unreachable is not demoted, a demoted environment is not re-observed, and\n' +
+        "   'starting' is not bounded by a startup timeout.\n" +
+        '   Managed/remote environments (e.g. the codespaces variant) are the most affected,\n' +
+        '   because their address is only reachable through a tunnel that can answer one\n' +
+        '   stale 200 while still coming up.'
+    );
+  }
+
   // 5. Start the Task-owned runtime reconciler. In shared mode every daemon
   // may discover the same routing refs; repository fences choose the winner.
   const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);
