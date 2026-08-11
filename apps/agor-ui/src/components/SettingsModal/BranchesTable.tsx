@@ -331,13 +331,15 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               <BranchesOutlined />
             )}
             <Space orientation="vertical" size={0} style={{ minWidth: 0, flex: 1 }}>
-              <Typography.Text
+              <Typography.Link
                 strong
-                ellipsis={{ tooltip: name }}
+                ellipsis
+                title={name}
+                onClick={() => onRowClick?.(record)}
                 style={{ display: 'block', maxWidth: '100%' }}
               >
                 <HighlightMatch text={name} query={searchTerm} />
-              </Typography.Text>
+              </Typography.Link>
               {!nameMatchesRef && (
                 <Typography.Text
                   code
@@ -456,27 +458,31 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               setArchiveDeleteModalOpen(true);
             }}
           />
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRowClick?.(record);
-            }}
-          />
-          <Button
-            type="text"
-            size="small"
-            icon={<DeleteOutlined />}
-            danger
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedBranch(record);
-              setInitialArchiveDeleteAction('delete');
-              setArchiveDeleteModalOpen(true);
-            }}
-          />
+          <Tooltip title="Edit branch">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRowClick?.(record);
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="Delete branch">
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined />}
+              danger
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedBranch(record);
+                setInitialArchiveDeleteAction('delete');
+                setArchiveDeleteModalOpen(true);
+              }}
+            />
+          </Tooltip>
         </SettingsActionGroup>
       ),
     },
@@ -619,10 +625,6 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           rowKey="branch_id"
           pagination={{ pageSize: 10 }}
           size="small"
-          onRow={(record) => ({
-            onClick: () => onRowClick?.(record),
-            style: { cursor: onRowClick ? 'pointer' : 'default' },
-          })}
         />
       )}
 

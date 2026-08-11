@@ -102,6 +102,8 @@ export interface DrillInFrameProps {
   saveLabel?: string;
   /** Overrides the default back behavior (guarded close). */
   onBack?: () => void;
+  /** Right-aligned node in the header row (e.g. a Reset action). */
+  extra?: ReactNode;
   children: ReactNode;
 }
 
@@ -118,6 +120,7 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
   onSave,
   saveLabel,
   onBack,
+  extra,
   children,
 }) => {
   const { token } = theme.useToken();
@@ -148,9 +151,10 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
           aria-label="Back"
           style={{ marginInlineStart: -token.marginXS }}
         />
-        <Typography.Title level={4} style={{ margin: 0 }}>
+        <Typography.Title level={4} style={{ margin: 0, flex: 1 }}>
           {title}
         </Typography.Title>
+        {extra}
       </Flex>
       <div style={{ flex: 1, minHeight: 0 }}>{children}</div>
     </Flex>

@@ -10,7 +10,6 @@ import type {
   GatewayChannelCreateData,
   GatewayChannelPatchData,
   Repo,
-  Session,
   TenantAgenticToolName,
   UpdateUserInput,
   User,
@@ -203,39 +202,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const agenticToolSettingsByName = useAgorStore((state) => state.agenticToolSettingsByName);
   const boardObjects = useMemo(() => mapToArray(boardObjectById), [boardObjectById]);
 
-  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
-  const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
-  const [branchSessions, setBranchSessions] = useState<Session[]>([]);
-  const [branchModalOpen, setBranchModalOpen] = useState(false);
-
-  const handleBranchRowClick = (branch: Branch) => {
-    // Snapshot the data when opening modal
-    setSelectedBranch(branch);
-    setSelectedRepo(repoById.get(branch.repo_id) || null);
-    setBranchSessions(sessionsByBranch.get(branch.branch_id) || []);
-    setBranchModalOpen(true);
-  };
-
-  const handleBranchModalClose = () => {
-    setBranchModalOpen(false);
-    // Clear after modal closes
-    setSelectedBranch(null);
-    setSelectedRepo(null);
-    setBranchSessions([]);
-  };
-
-  // Wrapper to close modal after archive/delete
-  const handleArchiveOrDeleteBranchWithClose = async (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => {
-    await onArchiveOrDeleteBranch?.(branchId, options);
-    handleBranchModalClose();
-  };
-
   const { token } = theme.useToken();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
@@ -269,6 +235,29 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     setDrill(null);
     setController(null);
   }, [setController]);
+
+  // Branches and Teammates edit the same entity (a branch) via the shared
+  // BranchModal, now rendered in-place (embedded) as the section's drill-in
+  // instead of a stacked modal. The record is resolved live from the store so
+  // it stays fresh while open.
+  const branchDrill =
+    drill?.mode === 'edit' && (drill.kind === 'branches' || drill.kind === 'teammates')
+      ? (branchById.get(drill.recordId ?? '') ?? null)
+      : null;
+
+  const handleArchiveOrDeleteBranchFromDrill = useCallback(
+    async (
+      branchId: string,
+      options: {
+        metadataAction: 'archive' | 'delete';
+        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
+      }
+    ) => {
+      await onArchiveOrDeleteBranch?.(branchId, options);
+      closeDrill();
+    },
+    [onArchiveOrDeleteBranch, closeDrill]
+  );
 
   // Any external section change (deep link, prop-controlled tab) abandons an
   // open drill-in; leaving the section is the same as backing out of it.
@@ -502,6 +491,29 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     [isAdmin, token, agenticToolSettingsByName]
   );
 
+  // The shared BranchModal, rendered in-place as the drill-in for both the
+  // Branches and Teammates sections (embedded → no stacked modal).
+  const branchEditor = branchDrill ? (
+    <BranchModal
+      embedded
+      open
+      onClose={closeDrill}
+      branch={branchDrill}
+      repo={repoById.get(branchDrill.repo_id) ?? null}
+      sessions={sessionsByBranch.get(branchDrill.branch_id) ?? []}
+      boardObjects={boardObjects}
+      client={client}
+      currentUser={currentUser}
+      onUpdateBranch={onUpdateBranch}
+      onUpdateRepo={onUpdateRepo}
+      onArchiveOrDelete={handleArchiveOrDeleteBranchFromDrill}
+      onOpenSettings={() => {
+        closeDrill();
+        onTabChange?.('repos');
+      }}
+    />
+  ) : null;
+
   // Render content based on active section
   const renderContent = () => {
     switch (activeTab) {
@@ -531,35 +543,43 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         );
       case 'branches':
         return (
-          <BranchesTable
-            client={client}
-            branchById={branchById}
-            repoById={repoById}
-            boardById={boardById}
-            sessionsByBranch={sessionsByBranch}
-            onArchiveOrDelete={onArchiveOrDeleteBranch}
-            onUnarchive={onUnarchiveBranch}
-            onCreate={onCreateBranch}
-            onRowClick={handleBranchRowClick}
-            onStartEnvironment={onStartEnvironment}
-            onStopEnvironment={onStopEnvironment}
-            onClose={onClose}
-            branchStorageConfig={branchStorageConfig}
-          />
+          branchEditor ?? (
+            <BranchesTable
+              client={client}
+              branchById={branchById}
+              repoById={repoById}
+              boardById={boardById}
+              sessionsByBranch={sessionsByBranch}
+              onArchiveOrDelete={onArchiveOrDeleteBranch}
+              onUnarchive={onUnarchiveBranch}
+              onCreate={onCreateBranch}
+              onRowClick={(branch) =>
+                openDrill({ kind: 'branches', mode: 'edit', recordId: branch.branch_id })
+              }
+              onStartEnvironment={onStartEnvironment}
+              onStopEnvironment={onStopEnvironment}
+              onClose={onClose}
+              branchStorageConfig={branchStorageConfig}
+            />
+          )
         );
       case 'teammates':
         return (
-          <TeammatesTable
-            branchById={branchById}
-            repoById={repoById}
-            boardById={boardById}
-            sessionsByBranch={sessionsByBranch}
-            userById={userById}
-            onArchiveOrDelete={onArchiveOrDeleteBranch}
-            onRowClick={handleBranchRowClick}
-            onCreateTeammate={onCreateTeammate ?? onCreateTeammate}
-            onClose={onClose}
-          />
+          branchEditor ?? (
+            <TeammatesTable
+              branchById={branchById}
+              repoById={repoById}
+              boardById={boardById}
+              sessionsByBranch={sessionsByBranch}
+              userById={userById}
+              onArchiveOrDelete={onArchiveOrDeleteBranch}
+              onRowClick={(branch) =>
+                openDrill({ kind: 'teammates', mode: 'edit', recordId: branch.branch_id })
+              }
+              onCreateTeammate={onCreateTeammate}
+              onClose={onClose}
+            />
+          )
         );
       case 'cards':
         return (
@@ -724,20 +744,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           </Content>
         </Layout>
       </SettingsDrillProvider>
-      <BranchModal
-        open={branchModalOpen}
-        onClose={handleBranchModalClose}
-        branch={selectedBranch}
-        repo={selectedRepo}
-        sessions={branchSessions}
-        boardObjects={boardObjects}
-        client={client}
-        currentUser={currentUser}
-        onUpdateBranch={onUpdateBranch}
-        onUpdateRepo={onUpdateRepo}
-        onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
-        onOpenSettings={onClose} // Close branch modal and keep settings modal open
-      />
     </Modal>
   );
 };

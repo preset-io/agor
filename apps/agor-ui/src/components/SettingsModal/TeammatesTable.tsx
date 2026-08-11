@@ -109,9 +109,14 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
             ) : (
               <RobotOutlined style={{ color: token.colorInfo }} />
             )}
-            <Typography.Text strong>
+            <Typography.Link
+              strong
+              ellipsis
+              title={config?.displayName ?? record.name}
+              onClick={() => onRowClick?.(record)}
+            >
               <HighlightMatch text={config?.displayName ?? record.name} query={searchTerm} />
-            </Typography.Text>
+            </Typography.Link>
           </Space>
         );
       },
@@ -283,10 +288,6 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
           rowKey="branch_id"
           pagination={{ pageSize: 10 }}
           size="small"
-          onRow={(record) => ({
-            onClick: () => onRowClick?.(record),
-            style: { cursor: onRowClick ? 'pointer' : 'default' },
-          })}
         />
       )}
 
