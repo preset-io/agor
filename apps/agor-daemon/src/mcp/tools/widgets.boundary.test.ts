@@ -48,14 +48,19 @@ vi.mock('../../utils/append-system-message.js', () => ({
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { registerWidgetTools } from './widgets.js';
 
-function makeBoundaryApp() {
+function makeBoundaryApp(options: { createFailures?: number } = {}) {
   const rows = new Map<string, Message>();
   const createdEvents: Message[] = [];
   const taskPatchParams: unknown[] = [];
+  let remainingCreateFailures = options.createFailures ?? 0;
   const app = feathers();
 
   app.use('messages', {
     async create(data: Message) {
+      if (remainingCreateFailures > 0) {
+        remainingCreateFailures -= 1;
+        throw new Error('synthetic widget create failure');
+      }
       rows.set(data.message_id, data);
       createdEvents.push(data);
       return data;
@@ -222,6 +227,58 @@ describe('widget MCP/service boundary', () => {
     expect(row?.metadata?.widget?.widget_type).toBe('gateway_token');
     expect(row?.metadata?.widget?.widget_id).toBe(widgetId);
     expect(row?.metadata?.widget?.widget_id).not.toBe('pending');
+  });
+
+  it('does not publish a failed create and retries with a new final ID', async () => {
+    const fixture = makeBoundaryApp({ createFailures: 1 });
+
+    const failed = await callThroughMcp(fixture.app, 'agor_widgets_request_env_vars', {
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      auto_resume: true,
+    });
+
+    expect(failed).toMatchObject({ isError: true });
+    expect(failed.content[0].text).toContain('synthetic widget create failure');
+    expect(fixture.rows.size).toBe(0);
+    expect(fixture.createdEvents).toHaveLength(0);
+
+    const retry = await callThroughMcp(fixture.app, 'agor_widgets_request_env_vars', {
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      auto_resume: true,
+    });
+    const retryId = JSON.parse(retry.content[0].text).widget_id as string;
+
+    expect(retryId).not.toBe('pending');
+    expect(fixture.rows.get(retryId)?.metadata?.widget?.widget_id).toBe(retryId);
+    expect(fixture.createdEvents).toHaveLength(1);
+    expect(fixture.createdEvents[0].metadata?.widget?.widget_id).toBe(retryId);
+  });
+
+  it('keeps concurrent widget creates bound to their final IDs', async () => {
+    const fixture = makeBoundaryApp();
+    const results = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        callThroughMcp(fixture.app, 'agor_widgets_request_env_vars', {
+          names: ['HUBSPOT_API_KEY'],
+          reason: 'call hubspot',
+          auto_resume: true,
+        })
+      )
+    );
+    const widgetIds = results.map(
+      (result) => JSON.parse(result.content[0].text).widget_id as string
+    );
+
+    expect(new Set(widgetIds).size).toBe(widgetIds.length);
+    expect(widgetIds).not.toContain('pending');
+    expect(new Set(fixture.createdEvents.map((event) => event.message_id))).toEqual(
+      new Set(widgetIds)
+    );
+    expect(
+      fixture.createdEvents.every((event) => event.metadata?.widget?.widget_id === event.message_id)
+    ).toBe(true);
   });
 
   it('still rejects a direct MCP widget create at the Feathers boundary', async () => {
