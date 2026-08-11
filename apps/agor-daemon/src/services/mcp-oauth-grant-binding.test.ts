@@ -102,7 +102,7 @@ describe('MCP OAuth grant configuration binding', () => {
       ['auth mode', { ...server, auth: { ...server.auth, oauth_mode: 'shared' } }, resolved],
       [
         'compatibility mode',
-        { ...server, auth: { ...server.auth, oauth_compatibility_mode: 'legacy' } },
+        { ...server, auth: { ...server.auth, oauth_compatibility_mode: 'issuer_redirect' } },
         resolved,
       ],
       ['DCR policy', { ...server, auth: { ...server.auth, oauth_dcr_mode: 'fallback' } }, resolved],

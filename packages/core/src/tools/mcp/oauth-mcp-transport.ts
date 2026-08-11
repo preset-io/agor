@@ -1220,10 +1220,7 @@ export interface OAuthFlowContext {
   authorizationUrl: string;
   compatibilityMode: MCPOAuthCompatibilityMode;
   callbackBinding?: MCPOAuthCallbackBinding;
-  /**
-   * Rolling-deploy guard for replicas predating callbackBinding. New strict
-   * flows keep this true even when callbackBinding is issuer-distinct.
-   */
+  /** Serialized compatibility marker for pending flows created before callbackBinding. */
   requiresCallbackIssuer?: boolean;
   /** Narrow standalone-development exception; durable daemon flows leave this false. */
   allowLocalhostHttp: boolean;
@@ -1251,19 +1248,18 @@ export function bindMCPOAuthRedirectUriToIssuer(redirectUri: string, issuer: str
 export function validateMCPOAuthCallbackBinding(
   context: Pick<
     OAuthFlowContext,
-    'issuer' | 'redirectUri' | 'compatibilityMode' | 'callbackBinding' | 'requiresCallbackIssuer'
+    'issuer' | 'redirectUri' | 'compatibilityMode' | 'callbackBinding'
   >,
   issuer: string | undefined,
   callbackUrl?: string
 ): void {
   const usesIssuerDistinctRedirect =
-    context.compatibilityMode === 'strict' &&
+    context.compatibilityMode === 'issuer_redirect' &&
     context.callbackBinding === 'issuer_distinct_redirect';
-  // A new issuer-distinct flow deliberately keeps requiresCallbackIssuer=true
-  // so an older replica rejects without consuming it during a rolling deploy.
-  // Strict contexts without the new explicit binding always require `iss`.
+  // Non-legacy contexts without the explicit weaker binding always require
+  // an authorization-server identity in the response.
   const requiresCallbackIssuer =
-    context.compatibilityMode === 'strict' && !usesIssuerDistinctRedirect;
+    context.compatibilityMode !== 'legacy' && !usesIssuerDistinctRedirect;
   if (requiresCallbackIssuer && issuer == null) {
     throw new OAuthCallbackValidationError('callback_issuer_missing');
   }
@@ -1400,7 +1396,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   let requiresCallbackIssuer: boolean | undefined;
   let callbackBinding: MCPOAuthCallbackBinding =
     compatibilityMode === 'legacy' ? 'legacy' : 'rfc9207';
-  if (compatibilityMode === 'strict') {
+  if (compatibilityMode !== 'legacy') {
     if (!authServerMetadata) {
       throw new Error('Strict MCP OAuth requires authorization-server metadata');
     }
@@ -1422,17 +1418,17 @@ async function startMCPOAuthFlowWithAS(opts: {
     requiresCallbackIssuer =
       authServerMetadata.authorization_response_iss_parameter_supported === true;
     if (!requiresCallbackIssuer) {
-      if (!useIssuerDistinctRedirectUri) {
+      if (compatibilityMode === 'strict') {
         throw new Error(
-          'Strict MCP OAuth requires RFC 9207 issuer responses or an issuer-distinct redirect URI'
+          'Strict MCP OAuth requires RFC 9207 issuer responses. This provider requires the explicit issuer-distinct callback compatibility policy.'
         );
+      }
+      if (!useIssuerDistinctRedirectUri) {
+        throw new Error('Issuer-distinct MCP OAuth requires its dedicated callback endpoint');
       }
       actualRedirectUri = bindMCPOAuthRedirectUriToIssuer(actualRedirectUri, issuer);
       assertSafeOAuthUrl(actualRedirectUri, { allowLocalhostHttp });
-      // Keep the legacy boolean true so an older callback replica safely
-      // rejects this new path instead of consuming it without recognizing the
-      // issuer-distinct binding.
-      requiresCallbackIssuer = true;
+      requiresCallbackIssuer = false;
       callbackBinding = 'issuer_distinct_redirect';
     }
   }
@@ -1620,7 +1616,7 @@ export async function startMCPOAuthFlow(
   // Step 2: Fetch Protected Resource Metadata (RFC 9728)
   const resourceMetadata = await fetchResourceMetadata(metadataUrl, { allowLocalhostHttp });
 
-  if (compatibilityMode === 'strict' && resourceMetadata.resource !== resourceUri) {
+  if (compatibilityMode !== 'legacy' && resourceMetadata.resource !== resourceUri) {
     throw new Error('Protected resource metadata does not match the MCP resource URI');
   }
 

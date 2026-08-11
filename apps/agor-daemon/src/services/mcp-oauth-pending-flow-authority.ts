@@ -31,6 +31,14 @@ import type {
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
 
+/**
+ * Database lookup namespace for raw OAuth state. Versioned separately from
+ * callback validation because an issuer-redirect policy can still use RFC 9207
+ * when the selected provider advertises it. The policy always uses the v2
+ * namespace so a pre-v2 replica cannot find or consume the flow.
+ */
+export type MCPOAuthStateNamespace = 'default_v1' | 'issuer_redirect_v1';
+
 export type DurableMCPOAuthFlowContext = OAuthFlowContext;
 
 export interface DurableMCPOAuthFlowCreate {
@@ -47,8 +55,13 @@ export interface ClaimedDurableMCPOAuthFlow {
   context: DurableMCPOAuthFlowContext;
 }
 
-export function fingerprintMCPOAuthState(state: string): string {
-  return createHash('sha256').update(state, 'utf8').digest('hex');
+export function fingerprintMCPOAuthState(
+  state: string,
+  namespace: MCPOAuthStateNamespace = 'default_v1'
+): string {
+  const domain =
+    namespace === 'issuer_redirect_v1' ? 'agor:mcp-oauth:issuer-redirect-state:v1\0' : '';
+  return createHash('sha256').update(domain, 'utf8').update(state, 'utf8').digest('hex');
 }
 
 function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingFlowSealedMaterial {
@@ -73,7 +86,9 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.pkceVerifier === 'string' &&
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
-    (material.compatibilityMode === 'strict' || material.compatibilityMode === 'legacy') &&
+    (material.compatibilityMode === 'strict' ||
+      material.compatibilityMode === 'issuer_redirect' ||
+      material.compatibilityMode === 'legacy') &&
     (material.callbackBinding === undefined ||
       material.callbackBinding === 'rfc9207' ||
       material.callbackBinding === 'issuer_distinct_redirect' ||
@@ -168,7 +183,12 @@ export class MCPOAuthPendingFlowAuthority {
       await repository.create({
         tenantId: input.tenantId,
         attemptId,
-        stateHash: fingerprintMCPOAuthState(input.context.state),
+        stateHash: fingerprintMCPOAuthState(
+          input.context.state,
+          input.context.compatibilityMode === 'issuer_redirect'
+            ? 'issuer_redirect_v1'
+            : 'default_v1'
+        ),
         userId: input.userId,
         mcpServerId: input.mcpServerId,
         oauthMode: input.oauthMode,
@@ -184,8 +204,11 @@ export class MCPOAuthPendingFlowAuthority {
     return attemptId;
   }
 
-  async claimForCallback(rawState: string): Promise<MCPOAuthPendingFlowClaimResult> {
-    const stateHash = fingerprintMCPOAuthState(rawState);
+  async claimForCallback(
+    rawState: string,
+    namespace: MCPOAuthStateNamespace = 'default_v1'
+  ): Promise<MCPOAuthPendingFlowClaimResult> {
+    const stateHash = fingerprintMCPOAuthState(rawState, namespace);
     return runWithSystemDatabaseScope(
       this.db,
       'MCP OAuth provider callback claim',
@@ -195,8 +218,11 @@ export class MCPOAuthPendingFlowAuthority {
     );
   }
 
-  async inspectForCallback(rawState: string): Promise<MCPOAuthPendingFlowRecord | null> {
-    const stateHash = fingerprintMCPOAuthState(rawState);
+  async inspectForCallback(
+    rawState: string,
+    namespace: MCPOAuthStateNamespace = 'default_v1'
+  ): Promise<MCPOAuthPendingFlowRecord | null> {
+    const stateHash = fingerprintMCPOAuthState(rawState, namespace);
     return runWithSystemDatabaseScope(
       this.db,
       'MCP OAuth provider callback issuer validation',
@@ -205,8 +231,12 @@ export class MCPOAuthPendingFlowAuthority {
     );
   }
 
-  async failPendingCallback(rawState: string, failureCode: string): Promise<boolean> {
-    const stateHash = fingerprintMCPOAuthState(rawState);
+  async failPendingCallback(
+    rawState: string,
+    failureCode: string,
+    namespace: MCPOAuthStateNamespace = 'default_v1'
+  ): Promise<boolean> {
+    const stateHash = fingerprintMCPOAuthState(rawState, namespace);
     return runWithSystemDatabaseScope(
       this.db,
       'MCP OAuth provider callback authorization failure',
@@ -219,24 +249,30 @@ export class MCPOAuthPendingFlowAuthority {
   async claimForUser(
     tenantId: string,
     userId: UserID,
-    rawState: string
+    rawState: string,
+    namespace: MCPOAuthStateNamespace = 'default_v1'
   ): Promise<MCPOAuthPendingFlowClaimResult> {
     return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
       new MCPOAuthPendingFlowRepository(scoped).claimForUser(
         tenantId,
         userId,
-        fingerprintMCPOAuthState(rawState),
+        fingerprintMCPOAuthState(rawState, namespace),
         randomUUID()
       )
     );
   }
 
-  async inspectForUser(tenantId: string, userId: UserID, rawState: string) {
+  async inspectForUser(
+    tenantId: string,
+    userId: UserID,
+    rawState: string,
+    namespace: MCPOAuthStateNamespace = 'default_v1'
+  ) {
     return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
       new MCPOAuthPendingFlowRepository(scoped).inspectForUser(
         tenantId,
         userId,
-        fingerprintMCPOAuthState(rawState)
+        fingerprintMCPOAuthState(rawState, namespace)
       )
     );
   }
@@ -261,7 +297,8 @@ export class MCPOAuthPendingFlowAuthority {
       record.status !== expectedStatus ||
       (expectedStatus === 'exchanging' && !record.exchangeClaimId) ||
       !record.sealedMaterial ||
-      record.stateHash !== fingerprintMCPOAuthState(rawState)
+      (record.stateHash !== fingerprintMCPOAuthState(rawState) &&
+        record.stateHash !== fingerprintMCPOAuthState(rawState, 'issuer_redirect_v1'))
     ) {
       throw new Error('MCP OAuth pending-flow callback material is unavailable');
     }
@@ -303,6 +340,11 @@ export class MCPOAuthPendingFlowAuthority {
       !record.isCurrent
     ) {
       throw new Error('MCP OAuth pending-flow material binding is invalid');
+    }
+    const expectedStateNamespace =
+      material.compatibilityMode === 'issuer_redirect' ? 'issuer_redirect_v1' : 'default_v1';
+    if (record.stateHash !== fingerprintMCPOAuthState(rawState, expectedStateNamespace)) {
+      throw new Error('MCP OAuth pending-flow state domain is invalid');
     }
 
     return {

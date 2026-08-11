@@ -539,7 +539,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
   // OAuth callback middleware stub — handler is wired by registerServices()
   const appRecord = app as unknown as Record<string, unknown>;
-  app.use('/mcp-servers/oauth-callback', ((
+  const oauthCallbackMiddleware = (
     req: express.Request,
     res: express.Response,
     next: express.NextFunction
@@ -552,7 +552,11 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     } else {
       next();
     }
-  }) as never);
+  };
+  app.use('/mcp-servers/oauth-callback', oauthCallbackMiddleware as never);
+  // Kept outside the legacy prefix so pre-upgrade replicas cannot route new
+  // issuer-distinct flows into their claim-before-validation handler.
+  app.use('/mcp-oauth-v2/callback', oauthCallbackMiddleware as never);
 
   // Compress dynamic REST/API responses after static file serving. The filter
   // deliberately skips streaming/event-stream routes.

@@ -139,12 +139,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     }
 
-    it('starts on daemon A, claims on daemon B, and never stores raw capability material', async () => {
+    it('shares issuer-redirect flows across current replicas but hides them from origin/main state lookup', async () => {
       const bound = await seed('peer-callback');
       const context = {
         ...flowContext(crypto.randomUUID()),
+        compatibilityMode: 'issuer_redirect' as const,
         callbackBinding: 'issuer_distinct_redirect' as const,
-        requiresCallbackIssuer: true,
+        requiresCallbackIssuer: false,
       };
       context.redirectUri = bindMCPOAuthRedirectUriToIssuer(context.redirectUri, context.issuer);
       const attemptId = await authorityA.create({
@@ -165,21 +166,30 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         );
         return rowsOf(result)[0];
       });
-      expect(stored?.state_hash).toBe(fingerprintMCPOAuthState(context.state));
+      expect(stored?.state_hash).toBe(
+        fingerprintMCPOAuthState(context.state, 'issuer_redirect_v1')
+      );
       expect(isMCPOAuthSecretEnvelope(String(stored?.sealed_material))).toBe(true);
       expect(JSON.stringify(stored)).not.toContain(context.state);
       expect(JSON.stringify(stored)).not.toContain(context.pkceVerifier);
       expect(JSON.stringify(stored)).not.toContain(context.clientSecret);
 
-      const inspected = await authorityB.inspectForCallback(context.state);
+      // This is the exact state lookup used by the origin/main replica. The
+      // domain separation prevents it from finding or consuming a flow whose
+      // callback contract it cannot validate during a rolling deployment.
+      await expect(authorityB.claimForCallback(context.state)).resolves.toMatchObject({
+        outcome: 'not_claimed',
+      });
+
+      const inspected = await authorityB.inspectForCallback(context.state, 'issuer_redirect_v1');
       if (!inspected) throw new Error('Expected peer callback inspection');
       expect(authorityB.openPendingCallback(inspected, context.state).context).toMatchObject({
         issuer: context.issuer,
         callbackBinding: 'issuer_distinct_redirect',
-        requiresCallbackIssuer: true,
+        requiresCallbackIssuer: false,
       });
 
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForCallback(context.state, 'issuer_redirect_v1');
       if (claimed.outcome !== 'claimed') throw new Error('Expected peer callback claim');
       const opened = authorityB.openClaim(claimed.flow, context.state);
       await runWithTenantDatabaseScope(dbB, bound.tenantId, async (scoped) => {
@@ -219,7 +229,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         pkceVerifier: context.pkceVerifier,
         clientId: context.clientId,
         clientSecret: context.clientSecret,
-        requiresCallbackIssuer: true,
+        requiresCallbackIssuer: false,
       });
       await expect(
         authorityA.getForUser(bound.tenantId, bound.userId, attemptId as never)

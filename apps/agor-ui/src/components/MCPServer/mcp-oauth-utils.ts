@@ -78,7 +78,10 @@ export function extractOAuthConfig(values: Record<string, unknown>): OAuthConfig
   // initialValue actually applies, this default is a defensive fallback.)
   config.oauth_mode = values.oauth_mode === 'shared' ? 'shared' : 'per_user';
   config.oauth_compatibility_mode =
-    values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
+    values.oauth_compatibility_mode === 'legacy' ||
+    values.oauth_compatibility_mode === 'issuer_redirect'
+      ? values.oauth_compatibility_mode
+      : 'strict';
   config.oauth_dcr_mode =
     values.oauth_dcr_mode === 'disabled' || values.oauth_dcr_mode === 'fallback'
       ? values.oauth_dcr_mode
@@ -147,7 +150,11 @@ export function extractOAuthConfigForTesting(values: Record<string, unknown>): T
   if (values.oauth_grant_type && typeof values.oauth_grant_type === 'string') {
     config.grant_type = values.oauth_grant_type;
   }
-  config.compatibility_mode = values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
+  config.compatibility_mode =
+    values.oauth_compatibility_mode === 'legacy' ||
+    values.oauth_compatibility_mode === 'issuer_redirect'
+      ? values.oauth_compatibility_mode
+      : 'strict';
   config.dcr_mode =
     values.oauth_dcr_mode === 'disabled' || values.oauth_dcr_mode === 'fallback'
       ? values.oauth_dcr_mode

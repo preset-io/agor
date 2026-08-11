@@ -1497,7 +1497,12 @@ async function registerMCPServices(
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
     const baseUrl = await requirePublicBaseUrl();
-    const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
+    const redirectUri = new URL(
+      opts.compatibilityMode === 'issuer_redirect'
+        ? '/mcp-oauth-v2/callback'
+        : '/mcp-servers/oauth-callback',
+      baseUrl
+    ).toString();
 
     const hasRfc9728 = !!opts.resourceMetadataUrl;
     const hasAsDirect = !!opts.prefetchedAuthServerMetadata;
@@ -1569,9 +1574,9 @@ async function registerMCPServices(
       compatibilityMode: opts.compatibilityMode,
       dcrMode: opts.dcrMode,
       allowLocalhostHttp: !durableOAuthFlows,
-      // Providers such as Notion omit RFC 9207. A stable issuer-derived
-      // callback path is the RFC 9700 mix-up countermeasure for those flows.
-      useIssuerDistinctRedirectUri: true,
+      // This weaker fallback is available only through the explicit policy;
+      // strict mode always requires RFC 9207 response issuer identification.
+      useIssuerDistinctRedirectUri: opts.compatibilityMode === 'issuer_redirect',
     });
 
     const attemptId = durableBinding
@@ -1963,6 +1968,9 @@ async function registerMCPServices(
       const state = req.query.state as string | undefined;
       const issuer = req.query.iss as string | undefined;
       const error = req.query.error as string | undefined;
+      const callbackStateNamespace = req.originalUrl.startsWith('/mcp-oauth-v2/callback')
+        ? ('issuer_redirect_v1' as const)
+        : ('default_v1' as const);
 
       if (!state) {
         res.status(400).send(oauthResultPage(false, 'Missing state parameter'));
@@ -1974,7 +1982,7 @@ async function registerMCPServices(
       // A spoofed/mismatched callback must not terminate the legitimate flow.
       let callbackContext: OAuthFlowContext | undefined;
       if (durableOAuthFlows) {
-        const inspected = await durableOAuthFlows.inspectForCallback(state);
+        const inspected = await durableOAuthFlows.inspectForCallback(state, callbackStateNamespace);
         if (!inspected) {
           res
             .status(400)
@@ -2032,7 +2040,11 @@ async function registerMCPServices(
         // Reject any awaitToken() promise from the originating flow so the
         // caller (discover / test-oauth) can surface the failure.
         if (durableOAuthFlows) {
-          await durableOAuthFlows.failPendingCallback(state, 'authorization_denied');
+          await durableOAuthFlows.failPendingCallback(
+            state,
+            'authorization_denied',
+            callbackStateNamespace
+          );
         } else {
           const pending = pendingOAuthFlows.get(state);
           pending?.tokenReject?.(new Error('Authorization was not completed'));
@@ -2052,7 +2064,7 @@ async function registerMCPServices(
 
       let pendingFlow: PendingOAuthFlow | undefined;
       if (durableOAuthFlows) {
-        const claimed = await durableOAuthFlows.claimForCallback(state);
+        const claimed = await durableOAuthFlows.claimForCallback(state, callbackStateNamespace);
         if (claimed.outcome === 'not_claimed') {
           if (claimed.flow?.status === 'succeeded') {
             res.send(oauthResultPage(true, terminalMessageForStatus('succeeded')));
@@ -2814,6 +2826,7 @@ async function registerMCPServices(
         return {
           success: true,
           authorizationUrl: result.authorizationUrl,
+          redirectUri: result.redirectUri,
           attempt_id: result.attemptId,
           state: result.state,
           message:
@@ -2845,8 +2858,14 @@ async function registerMCPServices(
         let state: string;
         let issuer: string | undefined;
         let callbackUrl: string | undefined;
+        let callbackStateNamespace: 'default_v1' | 'issuer_redirect_v1' = 'default_v1';
         if ('callback_url' in data) {
           callbackUrl = data.callback_url;
+          callbackStateNamespace = new URL(data.callback_url).pathname.startsWith(
+            '/mcp-oauth-v2/callback'
+          )
+            ? 'issuer_redirect_v1'
+            : 'default_v1';
           const parsed = parseOAuthCallback(data.callback_url);
           code = parsed.code;
           state = parsed.state;
@@ -2863,11 +2882,21 @@ async function registerMCPServices(
           if (!activeTenantId || !activeUserId) {
             throw new Error('OAuth completion is missing authenticated tenant/user context');
           }
-          const inspected = await durableOAuthFlows.inspectForUser(
+          let inspected = await durableOAuthFlows.inspectForUser(
             activeTenantId,
             activeUserId,
-            state
+            state,
+            callbackStateNamespace
           );
+          if (!('callback_url' in data) && !inspected) {
+            callbackStateNamespace = 'issuer_redirect_v1';
+            inspected = await durableOAuthFlows.inspectForUser(
+              activeTenantId,
+              activeUserId,
+              state,
+              callbackStateNamespace
+            );
+          }
           if (inspected?.status !== 'pending') {
             return {
               success: inspected?.status === 'succeeded',
@@ -2880,7 +2909,12 @@ async function registerMCPServices(
           }
           const inspectedFlow = durableOAuthFlows.openPendingCallback(inspected, state);
           validateMCPOAuthCallbackBinding(inspectedFlow.context, issuer, callbackUrl);
-          const claimed = await durableOAuthFlows.claimForUser(activeTenantId, activeUserId, state);
+          const claimed = await durableOAuthFlows.claimForUser(
+            activeTenantId,
+            activeUserId,
+            state,
+            callbackStateNamespace
+          );
           if (claimed.outcome === 'not_claimed') {
             return {
               success: claimed.flow?.status === 'succeeded',

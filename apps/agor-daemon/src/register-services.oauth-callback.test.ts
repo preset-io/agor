@@ -25,6 +25,7 @@ import { describe, expect, it } from 'vitest';
  */
 describe('register-services OAuth callback URL regression', () => {
   const rawSource = readFileSync(join(__dirname, 'register-services.ts'), 'utf8');
+  const indexSource = readFileSync(join(__dirname, 'index.ts'), 'utf8');
 
   /**
    * Strip comments and string literals so the structural checks below can't be
@@ -60,6 +61,10 @@ describe('register-services OAuth callback URL regression', () => {
     // to localhost in dev).
     expect(codeOnly).toMatch(/requirePublicBaseUrl\s*\(/);
     expect(codeOnly).toMatch(/['"]\/mcp-servers\/oauth-callback['"]/);
+    expect(codeOnly).toMatch(/['"]\/mcp-oauth-v2\/callback['"]/);
+    expect(indexSource).toMatch(
+      /app\.use\(['"]\/mcp-oauth-v2\/callback['"],\s*oauthCallbackMiddleware/
+    );
   });
 
   it('preserves tenant scope across unauthenticated OAuth callbacks', () => {
@@ -75,7 +80,9 @@ describe('register-services OAuth callback URL regression', () => {
   });
 
   it('uses durable hashed state claims on PostgreSQL and never broadcasts raw flow state', () => {
-    expect(codeOnly).toMatch(/durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/);
+    expect(codeOnly).toMatch(
+      /durableOAuthFlows\.claimForCallback\s*\(\s*state\s*,\s*callbackStateNamespace\s*\)/
+    );
     expect(codeOnly).toMatch(/cacheToken:\s*false/);
     expect(codeOnly).toMatch(/attempt_id:\s*pendingFlow\.attemptId/);
     expect(codeOnly).toMatch(
@@ -101,11 +108,11 @@ describe('register-services OAuth callback URL regression', () => {
       rawSource.indexOf('const oauthCallbackHandler'),
       rawSource.indexOf("app.use('/mcp-servers',")
     );
-    const inspectIndex = callbackBody.indexOf('inspectForCallback(state)');
+    const inspectIndex = callbackBody.indexOf('inspectForCallback(state, callbackStateNamespace)');
     const validateIndex = callbackBody.indexOf('validateMCPOAuthCallbackBinding');
     const providerErrorIndex = callbackBody.indexOf('if (error)');
     const failIndex = callbackBody.indexOf('failPendingCallback');
-    const claimIndex = callbackBody.indexOf('claimForCallback(state)');
+    const claimIndex = callbackBody.indexOf('claimForCallback(state, callbackStateNamespace)');
 
     expect(inspectIndex).toBeGreaterThanOrEqual(0);
     expect(validateIndex).toBeGreaterThan(inspectIndex);

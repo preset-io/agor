@@ -229,9 +229,9 @@ describe('completeMCPOAuthFlow token exchange', () => {
 
     const issuerBoundContext = {
       ...context,
-      compatibilityMode: 'strict' as const,
+      compatibilityMode: 'issuer_redirect' as const,
       callbackBinding: 'issuer_distinct_redirect' as const,
-      requiresCallbackIssuer: true,
+      requiresCallbackIssuer: false,
       redirectUri: bindMCPOAuthRedirectUriToIssuer(context.redirectUri, context.issuer),
     };
     await expect(
@@ -256,18 +256,11 @@ describe('completeMCPOAuthFlow token exchange', () => {
       expect.objectContaining({ failureCode: 'callback_issuer_missing' })
     );
     expect(() =>
-      validateMCPOAuthCallbackBinding(
-        { ...context, requiresCallbackIssuer: false },
-        'https://attacker.example.test'
-      )
+      validateMCPOAuthCallbackBinding(context, 'https://attacker.example.test')
     ).toThrowError(expect.objectContaining({ failureCode: 'callback_issuer_mismatch' }));
 
     expect(() =>
-      validateMCPOAuthCallbackBinding(
-        { ...context, compatibilityMode: 'strict', requiresCallbackIssuer: false },
-        undefined,
-        context.redirectUri
-      )
+      validateMCPOAuthCallbackBinding(strictContext, undefined, context.redirectUri)
     ).toThrowError(expect.objectContaining({ failureCode: 'callback_issuer_missing' }));
   });
 
@@ -1274,25 +1267,29 @@ describe('strict current MCP OAuth profile', () => {
     await expect(startStrict()).rejects.toThrow('Failed to fetch authorization server metadata');
   });
 
-  it('requires S256 and selects RFC 9207 or issuer-distinct callback binding', async () => {
+  it('keeps issuer-distinct binding behind an explicit compatibility policy', async () => {
     globalThis.fetch = strictFetch({ s256: false });
     await expect(startStrict()).rejects.toThrow('required PKCE S256');
 
     globalThis.fetch = strictFetch({ responseIssuer: false });
-    await expect(startStrict()).rejects.toThrow('issuer responses or an issuer-distinct redirect');
+    await expect(startStrict()).rejects.toThrow('requires RFC 9207 issuer responses');
 
     await expect(
       startMCPOAuthFlow(
         `Bearer resource_metadata="${metadataUri}"`,
         'pre-registered-client',
-        'https://agor.example.com/mcp-servers/oauth-callback',
-        { resourceUri, useIssuerDistinctRedirectUri: true }
+        'https://agor.example.com/mcp-oauth-v2/callback',
+        {
+          resourceUri,
+          compatibilityMode: 'issuer_redirect',
+          useIssuerDistinctRedirectUri: true,
+        }
       )
     ).resolves.toMatchObject({
       callbackBinding: 'issuer_distinct_redirect',
-      requiresCallbackIssuer: true,
+      requiresCallbackIssuer: false,
       redirectUri: bindMCPOAuthRedirectUriToIssuer(
-        'https://agor.example.com/mcp-servers/oauth-callback',
+        'https://agor.example.com/mcp-oauth-v2/callback',
         issuer
       ),
     });
@@ -1305,7 +1302,7 @@ describe('strict current MCP OAuth profile', () => {
     globalThis.fetch = strictFetch({
       responseIssuer: false,
     });
-    await expect(startStrict()).rejects.toThrow('issuer responses or an issuer-distinct redirect');
+    await expect(startStrict()).rejects.toThrow('requires RFC 9207 issuer responses');
 
     globalThis.fetch = strictFetch({
       responseIssuer: true,
@@ -1320,18 +1317,22 @@ describe('strict current MCP OAuth profile', () => {
     const context = await startMCPOAuthFlow(
       `Bearer resource_metadata="${metadataUri}"`,
       undefined,
-      'https://agor.example.com/mcp-servers/oauth-callback',
-      { resourceUri, useIssuerDistinctRedirectUri: true }
+      'https://agor.example.com/mcp-oauth-v2/callback',
+      {
+        resourceUri,
+        compatibilityMode: 'issuer_redirect',
+        useIssuerDistinctRedirectUri: true,
+      }
     );
     const expected = bindMCPOAuthRedirectUriToIssuer(
-      'https://agor.example.com/mcp-servers/oauth-callback',
+      'https://agor.example.com/mcp-oauth-v2/callback',
       issuer
     );
     expect(context).toMatchObject({
       clientId: 'dcr-client',
       redirectUri: expected,
       callbackBinding: 'issuer_distinct_redirect',
-      requiresCallbackIssuer: true,
+      requiresCallbackIssuer: false,
     });
     expect(new URL(context.authorizationUrl).searchParams.get('redirect_uri')).toBe(expected);
   });

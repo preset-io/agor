@@ -800,13 +800,27 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="OAuth Compatibility"
                     name="oauth_compatibility_mode"
                     initialValue="strict"
-                    tooltip="Legacy mode narrowly permits older discovery and metadata deviations. It never relaxes outbound network protections."
+                    tooltip="Strict mode requires RFC 9207 issuer responses. Issuer-distinct callback mode is an explicit, weaker mix-up-defense compatibility policy. Legacy mode also permits older discovery and metadata deviations. Outbound network protections are never relaxed."
                   >
                     <Select>
-                      <Select.Option value="strict">Strict current MCP OAuth</Select.Option>
+                      <Select.Option value="strict">
+                        Strict (requires RFC 9207 issuer)
+                      </Select.Option>
+                      <Select.Option value="issuer_redirect">
+                        Issuer-distinct callback compatibility
+                      </Select.Option>
                       <Select.Option value="legacy">Legacy provider compatibility</Select.Option>
                     </Select>
                   </Form.Item>
+                  {watchedCompatibilityMode === 'issuer_redirect' && (
+                    <Alert
+                      message="Weaker OAuth mix-up protection"
+                      description="Use this only when the provider does not support RFC 9207 issuer responses. Issuer-distinct callbacks have a documented Dynamic Client Registration bypass and are not equivalent to strict mode."
+                      type="warning"
+                      showIcon
+                      style={{ marginBottom: 16 }}
+                    />
+                  )}
                   <Form.Item
                     label="Client Secret"
                     name="oauth_client_secret"

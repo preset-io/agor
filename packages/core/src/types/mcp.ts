@@ -53,7 +53,7 @@ export interface MCPOAuthRefreshResult {
 
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
-export type MCPOAuthCompatibilityMode = 'strict' | 'legacy';
+export type MCPOAuthCompatibilityMode = 'strict' | 'issuer_redirect' | 'legacy';
 export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
 export type MCPOAuthCallbackBinding = 'rfc9207' | 'issuer_distinct_redirect' | 'legacy';
 
@@ -77,6 +77,8 @@ export interface MCPOAuthStartResult {
   error?: string;
   message?: string;
   authorizationUrl?: string;
+  /** Exact public callback URI selected for this flow; safe for OAuth app registration. */
+  redirectUri?: string;
   attempt_id?: MCPOAuthAttemptID;
   state?: string;
 }
@@ -110,10 +112,9 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   compatibilityMode: MCPOAuthCompatibilityMode;
   callbackBinding?: MCPOAuthCallbackBinding;
   /**
-   * Whether this flow relies on RFC 9207 callback issuer identification.
-   * New strict flows keep this `true` even for issuer-distinct redirects so an
-   * older replica safely rejects rather than consumes such a callback. Missing
-   * callbackBinding values preserve the older require-issuer rule.
+   * Serialized compatibility marker used by pending flows created before the
+   * explicit callbackBinding contract. Current validation derives its rule from
+   * compatibilityMode and callbackBinding instead.
    */
   requiresCallbackIssuer?: boolean;
   allowLocalhostHttp: boolean;

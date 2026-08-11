@@ -108,6 +108,24 @@ describe('extractOAuthConfig', () => {
     });
   });
 
+  it('preserves the explicit issuer-distinct callback compatibility policy', () => {
+    expect(
+      extractOAuthConfig({
+        oauth_compatibility_mode: 'issuer_redirect',
+      })
+    ).toMatchObject({
+      oauth_compatibility_mode: 'issuer_redirect',
+    });
+    expect(
+      extractOAuthConfigForTesting({
+        url: 'https://mcp.example.com',
+        oauth_compatibility_mode: 'issuer_redirect',
+      })
+    ).toMatchObject({
+      compatibility_mode: 'issuer_redirect',
+    });
+  });
+
   it('omits falsy string fields', () => {
     const result = extractOAuthConfig({
       oauth_token_url: '',

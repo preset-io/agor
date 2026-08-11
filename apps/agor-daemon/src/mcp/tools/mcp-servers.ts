@@ -190,9 +190,11 @@ const mcpAuthInputSchema = z
       .optional()
       .describe("OAuth token ownership. Defaults to 'per_user' (recommended)."),
     oauth_compatibility_mode: z
-      .enum(['strict', 'legacy'])
+      .enum(['strict', 'issuer_redirect', 'legacy'])
       .optional()
-      .describe("OAuth discovery policy. Defaults to 'strict'."),
+      .describe(
+        "OAuth security policy. 'strict' requires RFC 9207 issuer responses; 'issuer_redirect' explicitly selects the weaker issuer-distinct callback compatibility defense; 'legacy' also permits older discovery deviations. Defaults to 'strict'."
+      ),
     oauth_dcr_mode: z
       .enum(['disabled', 'advertised', 'fallback'])
       .optional()
