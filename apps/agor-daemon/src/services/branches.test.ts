@@ -2968,3 +2968,107 @@ describe('checkHealth concurrency', () => {
     expect((env.last_health_check as { consecutive?: number }).consecutive).toBe(2);
   });
 });
+
+describe('syncEnvironment concurrency', () => {
+  /**
+   * Sync force-pushes a scratch ref, then SSHes into the environment to
+   * `git reset --hard` onto it plus a recursive submodule update. Two of those
+   * at once means two git processes mutating ONE working tree — index.lock
+   * contention and half-updated submodules — and each run reports the SHA it
+   * captured, not the one that actually landed.
+   *
+   * It is reachable concurrently: task-completion auto-sync fires per finished
+   * task (several sessions can share a branch), the readiness catch-up sync
+   * fires on starting -> running, and both race a manual sync from the API or
+   * the MCP tool.
+   */
+  const harness = () => {
+    const branch = {
+      branch_id: 'wt-sync-race' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-sync-race',
+      path: '/tmp/wt-sync-race',
+      branch_unique_id: 1,
+      environment_variant: 'codespaces',
+      environment_instance: { status: 'running', facts: { name: 'cs-1' } },
+    };
+    const app = {
+      service(path: string) {
+        if (path === 'repos') {
+          return {
+            get: vi.fn(async () => ({
+              repo_id: 'repo-1',
+              slug: 'org/repo',
+              environment: {
+                version: 2,
+                default: 'codespaces',
+                variants: {
+                  codespaces: { start: 'echo up', stop: 'echo down', sync: 'echo sync' },
+                },
+              },
+            })),
+          };
+        }
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service as never, 'loadEnvironmentForAction').mockResolvedValue(branch as never);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+
+    let active = 0;
+    let maxActive = 0;
+    // Models the real dispatch: it schedules the executor and RETURNS
+    // IMMEDIATELY, reporting completion later via onSettled. An earlier version
+    // of this test awaited the dispatch itself, which made a broken fix look
+    // correct — the live run then showed three overlapping executors.
+    const dispatch = vi
+      .spyOn(service as never, 'dispatchEnvironmentExecutor')
+      .mockImplementation(async (options: unknown) => {
+        const { onSettled } = options as { onSettled?: () => void };
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active -= 1;
+          onSettled?.();
+        }, 20);
+        return undefined as never;
+      });
+    return { service, dispatch, maxActive: () => maxActive };
+  };
+
+  it('never runs two syncs against one branch at the same time', async () => {
+    const { service, dispatch, maxActive } = harness();
+
+    await Promise.all([
+      service.syncEnvironment('wt-sync-race' as BranchID),
+      service.syncEnvironment('wt-sync-race' as BranchID),
+      service.syncEnvironment('wt-sync-race' as BranchID),
+    ]);
+    // Let the queued executors drain.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    // Every caller's commits still get pushed — none is dropped — but the
+    // executors are serialized rather than interleaved in one working tree.
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    expect(maxActive()).toBe(1);
+  });
+
+  it('does not let one failed sync break the ones queued behind it', async () => {
+    const { service } = harness();
+    const dispatch = vi.spyOn(service as never, 'dispatchEnvironmentExecutor');
+    dispatch.mockRejectedValueOnce(new Error('push rejected'));
+    dispatch.mockImplementation(async (options: unknown) => {
+      (options as { onSettled?: () => void }).onSettled?.();
+      return undefined as never;
+    });
+
+    const [first, second] = await Promise.allSettled([
+      service.syncEnvironment('wt-sync-race' as BranchID),
+      service.syncEnvironment('wt-sync-race' as BranchID),
+    ]);
+
+    expect(first.status).toBe('rejected');
+    expect(second.status).toBe('fulfilled');
+  });
+});

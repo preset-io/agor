@@ -158,6 +158,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * the guard belongs with the state rather than in one of them.
    */
   private healthChecksInFlight = new Set<BranchID>();
+  /**
+   * Tail of the per-branch sync queue. Syncs mutate one working tree inside the
+   * environment, so they must not overlap; see syncEnvironment.
+   */
+  private syncChain = new Map<BranchID, Promise<unknown>>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
@@ -440,6 +445,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     action: EnvironmentLifecycleAction;
     params?: BranchParams;
     syncCommand?: string;
+    /**
+     * Invoked when the executor PROCESS exits, not when it is spawned.
+     *
+     * Both dispatch and spawnExecutor return as soon as the process exists —
+     * the lifecycle verbs deliberately answer early and let callers observe
+     * `environment_instance` — so anything that must not overlap the real work
+     * has to hang off this, not off either return value.
+     */
+    onSettled?: () => void;
   }): Promise<void> {
     const { branch, action, params } = options;
     const { payload, delegatedHomeKey, env } = await this.createEnvironmentExecutorPayload(options);
@@ -454,6 +468,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           templateVariables: {
             branch_id: branch.branch_id,
           },
+          // spawnExecutor returns as soon as the process exists, so the only
+          // truthful completion signal is the process exiting. Chaining on the
+          // spawn instead reports "done" immediately and serializes nothing.
+          ...(options.onSettled ? { onExit: () => options.onSettled?.() } : {}),
         });
       } catch (error) {
         const message =
@@ -477,6 +495,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     deferWithTenantContext(params, spawnLifecycleExecutor, (error) => {
       console.error(`${logPrefix} Failed to dispatch executor:`, error);
+      // Never strand a caller waiting on a run that never started.
+      options.onSettled?.();
     });
   }
 
@@ -2371,6 +2391,57 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * free; variants without a `sync` command reject the call.
    */
   async syncEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    // Authorize before queueing, so an unauthorized caller fails immediately
+    // rather than after waiting behind someone else's sync.
+    await this.loadEnvironmentForAction(id, params, 'sync branch environments');
+
+    // Serialize syncs per branch. A sync force-pushes a scratch ref and then
+    // drives `git reset --hard` plus a recursive submodule update inside the
+    // environment; two at once are two git processes mutating ONE working tree
+    // (index.lock contention, half-updated submodules), and each reports the
+    // SHA it captured rather than the one that actually landed.
+    //
+    // Concurrency is routine, not exotic: task-completion auto-sync fires per
+    // finished task and several sessions can share a branch, the readiness
+    // catch-up sync fires on starting -> running, and either can race a manual
+    // sync from the REST route or the MCP tool.
+    //
+    // Chained rather than dropped, because a later caller may carry commits the
+    // in-flight run will not include — skipping it would silently leave the
+    // environment behind. Each run re-reads the branch, so a queued sync pushes
+    // HEAD as of when it actually starts.
+    // The chain link must represent the EXECUTOR's lifetime, not the dispatch
+    // call. Dispatch schedules the work and returns immediately (lifecycle
+    // verbs answer early by design and callers watch `environment_instance`),
+    // so chaining on it would serialize nothing — verified live: three
+    // concurrent syncs still produced three overlapping executor runs.
+    const previous = this.syncChain.get(id);
+    let settle!: () => void;
+    const executorFinished = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    this.syncChain.set(id, executorFinished);
+    void executorFinished.finally(() => {
+      // Only clear if nobody has chained behind us in the meantime.
+      if (this.syncChain.get(id) === executorFinished) this.syncChain.delete(id);
+    });
+
+    try {
+      if (previous) await previous.catch(() => {});
+      return await this.runEnvironmentSync(id, params, settle);
+    } catch (error) {
+      // Never leave the chain wedged on a sync that failed before it spawned.
+      settle();
+      throw error;
+    }
+  }
+
+  /** One sync run. Callers must go through syncEnvironment, which serializes these. */
+  private async runEnvironmentSync(
+    id: BranchID,
+    params: BranchParams | undefined,
+    onExecutorSettled: () => void
+  ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'sync branch environments');
 
     const reposService = this.app.service('repos');
@@ -2420,6 +2491,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       action: 'sync',
       params,
       syncCommand: snapshot.sync,
+      onSettled: onExecutorSettled,
     });
 
     return await this.withTenantDatabase(params, () => this.get(id, params));
