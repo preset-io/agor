@@ -20,17 +20,18 @@ If you're tempted to add a long prose doc here — write it as a guide in `apps/
 
 Tight, code-pointer-heavy notes on internals.
 
-| File                                                      | What it's for                                                             |
-| --------------------------------------------------------- | ------------------------------------------------------------------------- |
-| [`core.md`](concepts/core.md)                             | The five primitives (Branch, Board, Session, Task, Report). Mental model. |
-| [`architecture.md`](concepts/architecture.md)             | System shape: services / repos / executor / storage. Where to look first. |
-| [`branches.md`](concepts/branches.md)                     | Branch-centric architecture (read before touching boards).                |
-| [`security.md`](concepts/security.md)                     | Web-layer hardening: CSP, CORS, recipes, debugging.                       |
-| [`multitenancy.md`](concepts/multitenancy.md)             | Triggers, resource classification, code owners, and proportional proof.   |
-| [`id-management.md`](concepts/id-management.md)           | UUIDv7, branded ID types, short-ID resolution.                            |
-| [`task-queueing.md`](concepts/task-queueing.md)           | Task lifecycle and queue-on-busy semantics.                               |
-| [`task-runtime-state.md`](concepts/task-runtime-state.md) | Task states, executor liveness, SDK pulses, watchdogs, and containment.   |
-| [`mcp-session-tools.md`](concepts/mcp-session-tools.md)   | `agor_sessions_*` MCP tool surface and override semantics.                |
+| File                                                                      | What it's for                                                             |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`core.md`](concepts/core.md)                                             | The five primitives (Branch, Board, Session, Task, Report). Mental model. |
+| [`architecture.md`](concepts/architecture.md)                             | System shape: services / repos / executor / storage. Where to look first. |
+| [`branches.md`](concepts/branches.md)                                     | Branch-centric architecture (read before touching boards).                |
+| [`security.md`](concepts/security.md)                                     | Web-layer hardening: CSP, CORS, recipes, debugging.                       |
+| [`multitenancy.md`](concepts/multitenancy.md)                             | Triggers, resource classification, code owners, and proportional proof.   |
+| [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md) | Daemon-host filesystem capability guard, registry, and limitations.       |
+| [`id-management.md`](concepts/id-management.md)                           | UUIDv7, branded ID types, short-ID resolution.                            |
+| [`task-queueing.md`](concepts/task-queueing.md)                           | Task lifecycle and queue-on-busy semantics.                               |
+| [`task-runtime-state.md`](concepts/task-runtime-state.md)                 | Task states, executor liveness, SDK pulses, watchdogs, and containment.   |
+| [`mcp-session-tools.md`](concepts/mcp-session-tools.md)                   | `agor_sessions_*` MCP tool surface and override semantics.                |
 
 ### `guides/` — how-tos
 
@@ -43,6 +44,7 @@ Step-by-step implementation guides referenced from code.
 ### `guidelines/` — house rules
 
 - [`frontend.md`](guidelines/frontend.md) — AntD-first components, theme tokens, accessibility, and exact-color exceptions.
+- [`logging.md`](guidelines/logging.md) — Safe, bounded operational logging and its boundary with analytics, telemetry, and usage accounting.
 - [`testing.md`](guidelines/testing.md) — Vitest patterns and conventions.
 - [`toasts.md`](guidelines/toasts.md) — Toast/message pattern. Always `useThemedMessage()` — never static `message.x()`.
 

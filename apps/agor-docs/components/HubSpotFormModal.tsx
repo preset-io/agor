@@ -9,12 +9,17 @@ interface HubSpotFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
+  /** Attribution tag for the hidden `source_page` field — which specific CTA
+   * (nav bar, landing hero, footer, a given blog post, etc.) opened this
+   * modal. Forwarded to `HubSpotForm`. */
+  sourceCta?: string;
 }
 
 export function HubSpotFormModal({
   isOpen,
   onClose,
   title = 'Contact us about Agor Cloud',
+  sourceCta,
 }: HubSpotFormModalProps) {
   // "Prefer a chat first?" swaps the modal body to the meeting scheduler
   // instead of bouncing to the (Preset-branded) hubspot.com page.
@@ -60,7 +65,7 @@ export function HubSpotFormModal({
         {view === 'meeting' ? (
           <MeetingEmbed />
         ) : (
-          <HubSpotForm onBookDemo={() => setView('meeting')} />
+          <HubSpotForm sourceCta={sourceCta} onBookDemo={() => setView('meeting')} />
         )}
       </div>
     </div>

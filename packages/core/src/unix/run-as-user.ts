@@ -49,6 +49,11 @@ export function escapeShellArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
+/** Check whether a name is a valid shell environment-variable identifier. */
+export function isValidEnvVarName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+}
+
 /**
  * Options for runAsUser
  */
@@ -146,7 +151,7 @@ export interface BuildSpawnArgsOptions {
    *
    * WARNING: values passed this way end up in the process's argv and are
    * visible via `ps`, `/proc/<pid>/cmdline`, audit logs, etc. Never pass
-   * secrets (API keys, tokens) via `env` alone when impersonating — use
+   * secrets (API keys, tokens) via `env` when impersonating — use
    * `writeUserEnvFile` + `envFilePath` instead.
    */
   env?: Record<string, string>;
@@ -156,8 +161,9 @@ export interface BuildSpawnArgsOptions {
    *
    * When set together with `asUser`, the generated command sources this file
    * inside the impersonated shell, then removes it, then `exec`s the real
-   * command. The env values never appear in argv. The path itself is in argv
-   * but it is not secret.
+   * command. Values sourced from the file never appear in argv. Non-secret
+   * values passed separately through `env` do appear in argv. The path itself
+   * is in argv but it is not secret.
    *
    * Use `writeUserEnvFile` to produce a path that is owned by the target
    * user with mode 0600.
@@ -170,7 +176,7 @@ export interface BuildSpawnArgsOptions {
   /**
    * Treat `command` as a shell string (like `sh -c`) rather than an argv
    * entry. Affects the impersonated + `envFilePath` code path only — where
-   * the default emits `exec "$@"` (argv mode, suitable for `buildSpawnArgs(
+   * the default emits `exec env "$@"` (argv mode, suitable for `buildSpawnArgs(
    * 'node', ['executor.js'], ...)`) and shell-mode emits `exec bash -c "$CMD"`
    * (suitable for user-authored commands like
    * `docker compose -p $NAME up -d --build` that embed env prefixes, `$(...)`
@@ -206,9 +212,9 @@ export interface BuildSpawnArgsOptions {
  * // Spawn zellij as another user with env vars
  * const { cmd, args } = buildSpawnArgs('zellij', ['attach', 'session1'], {
  *   asUser: 'alice',
- *   env: { GITHUB_TOKEN: 'xxx', TERM: 'xterm-256color' }
+ *   env: { DAEMON_URL: 'http://localhost:3030', TERM: 'xterm-256color' }
  * });
- * // Inner command: env GITHUB_TOKEN='xxx' TERM='xterm-256color' zellij 'attach' 'session1'
+ * // Inner command: env DAEMON_URL='http://localhost:3030' TERM='xterm-256color' zellij 'attach' 'session1'
  * pty.spawn(cmd, args, { cwd });
  *
  * // No impersonation - env should be passed to spawn() directly
@@ -247,6 +253,13 @@ export function buildSpawnArgs(
     throw new Error(`buildSpawnArgs: invalid Unix username: ${JSON.stringify(asUser)}`);
   }
 
+  const envEntries = Object.entries(env ?? {});
+  for (const [key] of envEntries) {
+    if (!isValidEnvVarName(key)) {
+      throw new Error(`buildSpawnArgs: invalid env var name: ${JSON.stringify(key)}`);
+    }
+  }
+
   // Prefer env-file sourcing: secrets stay out of argv entirely.
   if (envFilePath) {
     // Structural validation only. The path is passed as a positional argv
@@ -278,11 +291,11 @@ export function buildSpawnArgs(
       // Non-secret env vars are prepended via `env KEY='val' ...` so they
       // reach the process without bypassing the envFilePath secret path.
       let envPrefix = '';
-      if (env && Object.keys(env).length > 0) {
-        const envEntries = Object.entries(env)
+      if (envEntries.length > 0) {
+        const serializedEnvEntries = envEntries
           .map(([key, value]) => `${key}=${escapeShellArg(value)}`)
           .join(' ');
-        envPrefix = `env ${envEntries} `;
+        envPrefix = `env ${serializedEnvEntries} `;
       }
       const escapedArgs = args.map(escapeShellArg).join(' ');
       const userCommand =
@@ -312,18 +325,33 @@ export function buildSpawnArgs(
     // binary with a known argv shape.
     //
     // Inner bash script:
-    //   $1 = env file path, $2... = real command + args
+    //   $1 = env file path, $2... = non-secret KEY=value entries + real command + args
     //   - set -eu: if source fails, abort BEFORE rm+exec so we never
     //     launch the real process with missing secrets
     //   - source env into current shell (set -a auto-exports)
     //   - unlink file before exec so it does not linger on disk
-    //   - exec preserves env into the target process
+    //   - `env "$@"` applies non-secret values passed as positional arguments
+    //     without interpolating them into the shell script
+    //   - exec preserves both sourced secrets and explicit env into the target process
+    const envArgs = envEntries.map(([key, value]) => `${key}=${value}`);
     const innerScript =
-      'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec "$@"';
+      'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec env "$@"';
 
     return {
       cmd: 'sudo',
-      args: ['-n', '-u', asUser, 'bash', '-c', innerScript, '--', envFilePath, command, ...args],
+      args: [
+        '-n',
+        '-u',
+        asUser,
+        'bash',
+        '-c',
+        innerScript,
+        '--',
+        envFilePath,
+        ...envArgs,
+        command,
+        ...args,
+      ],
     };
   }
 

@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Database } from './client';
 import { insert } from './database-wrapper';
+import { UserMCPOAuthTokenRepository } from './repositories';
 import {
   createTenantScopedDatabaseProxy,
   enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
+  isPostgresDatabaseHandle,
   MissingTenantDatabaseScopeError,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
@@ -72,6 +74,30 @@ describe('tenant operation context', () => {
 });
 
 describe('tenant-scoped database proxy', () => {
+  it('inspects a guarded handle dialect without requiring tenant scope', () => {
+    const sqlite = createTenantScopedDatabaseProxy({ run: vi.fn() } as unknown as Database, {
+      requireScope: true,
+    });
+    const postgres = createTenantScopedDatabaseProxy(
+      { transaction: vi.fn() } as unknown as Database,
+      { requireScope: true }
+    );
+
+    expect(isPostgresDatabaseHandle(sqlite)).toBe(false);
+    expect(isPostgresDatabaseHandle(postgres)).toBe(true);
+  });
+
+  it('constructs the OAuth grant repository without touching a guarded database', () => {
+    const guardedPostgres = createTenantScopedDatabaseProxy(
+      { transaction: vi.fn() } as unknown as Database,
+      { requireScope: true, label: 'guarded OAuth repository test database' }
+    );
+
+    expect(
+      () => new UserMCPOAuthTokenRepository(guardedPostgres, 'test-master-secret')
+    ).not.toThrow();
+  });
+
   it('routes repository-style calls to the active tenant transaction', async () => {
     const tx = {
       execute: vi.fn(async () => []),

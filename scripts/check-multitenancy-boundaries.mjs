@@ -38,8 +38,12 @@ const checks = [
     // tenant-aware realtime facade instead of adding more raw emits/rooms.
     baseline: {
       'apps/agor-daemon/src/register-hooks.ts': 1,
-      'apps/agor-daemon/src/register-services.ts': 11,
-      'apps/agor-daemon/src/register-routes.ts': 10,
+      // OAuth HA hints use the audited native-event inventory; authorization
+      // URLs and standalone socket hints are explicitly local-only.
+      'apps/agor-daemon/src/register-services.ts': 5,
+      // HA fork/spawn now use the tenant-aware Feathers event helper instead
+      // of raw global Socket.IO broadcasts.
+      'apps/agor-daemon/src/register-routes.ts': 6,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
@@ -51,8 +55,13 @@ const checks = [
       // leave paths so they never materialize a room), and both leave-all
       // helpers live here on purpose. Executor control rooms are explicitly
       // tenant-namespaced and can only be joined from a verified scoped JWT.
-      'apps/agor-daemon/src/utils/realtime-publish.ts': 9,
-      'apps/agor-daemon/src/setup/socketio.ts': 17,
+      // Includes the centralized tenant-channel eviction helper used on
+      // logout/live authentication replacement.
+      'apps/agor-daemon/src/utils/realtime-publish.ts': 10,
+      // Raw Socket.IO presence/user rooms are deliberately centralized here.
+      // Every join/leave/broadcast is tenant-namespaced, including logout
+      // cleanup, and cross-tenant negative tests cover same user/board IDs.
+      'apps/agor-daemon/src/setup/socketio.ts': 15,
     },
   },
 
@@ -126,6 +135,10 @@ const checks = [
       // the supported no-tenant path for guarded proxies.
       'apps/agor-daemon/src/health/db-probe.ts': 1,
       'apps/agor-daemon/src/health/routes.ts': 1,
+      // Deployment-local maintenance accepts the raw runtime handle from the
+      // CLI, uses system scope only for tenant-ID discovery, and re-enters
+      // ordinary tenant scope before reading or deleting upload rows.
+      'apps/agor-daemon/src/uploads-maintenance.ts': 1,
       // Widget renderer accepts both tenant-aware and repository-compatible database shapes.
       'apps/agor-daemon/src/widgets/env-vars/index.ts': 1,
     },
@@ -137,12 +150,10 @@ const checks = [
     // Baseline of existing raw transaction call sites. New work should use the
     // Agor store/tenant transaction wrapper once introduced.
     baseline: {
-      'packages/core/src/db/database-wrapper.ts': 1,
       // Tenant scopes use one transaction for agor.tenant_id. Narrow system
       // capabilities use a second transaction path so their RLS GUC is local
       // to one pooled connection checkout and cannot leak after discovery.
       'packages/core/src/db/tenant-scope.ts': 2,
-      'packages/core/src/db/repositories/tasks.ts': 1,
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
       'packages/core/src/db/repositories/repos.ts': 3,

@@ -8,42 +8,28 @@
  * automation. Human audit logging goes to stderr so stdout stays parseable.
  */
 
+import { createDatabase, getDatabaseUrl } from '@agor/core/db';
 import {
   assertValidTenantId,
-  createDatabase,
-  deleteTenantData,
-  getDatabaseUrl,
+  deleteTenant,
   InvalidTenantIdError,
   TenantDeletionUnsupportedError,
   TenantDeletionVerificationError,
-} from '@agor/core/db';
+  TenantFilesystemDeletionPendingError,
+} from '@agor/core/tenant-portability';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import {
+  EXIT_FAILURE,
+  EXIT_INVALID_INPUT,
+  flushStderr,
+  formatPortabilityError,
+  resolveTenantFilesystem,
+  writeStdoutJson,
+} from '../../lib/tenant-portability.js';
 
-/** Exit code for a rejected / invalid `--tenant-id`. */
-const EXIT_INVALID_INPUT = 2;
-/** Exit code for any failure after input validation. */
-const EXIT_FAILURE = 1;
-
-/**
- * Best-effort redaction of connection-string credentials from an error message
- * before it is written to stderr, so an audit log never leaks a DB password.
- */
-function redactSecrets(message: string): string {
-  return message.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^@\s/]+@/gi, '$1[redacted]@');
-}
-
-/** Convert any thrown value to a secret-safe stderr message. */
-export function tenantDeleteErrorMessage(error: unknown): string {
-  return redactSecrets(error instanceof Error ? error.message : String(error));
-}
-
-/** Wait until every stderr write queued so far has completed. */
-function flushStderr(): Promise<void> {
-  return new Promise((resolve) => {
-    process.stderr.write('', () => resolve());
-  });
-}
+/** Named export retained for focused CLI contract coverage. */
+export const tenantDeleteErrorMarker = formatPortabilityError;
 
 export default class TenantDelete extends Command {
   static override description =
@@ -67,6 +53,14 @@ export default class TenantDelete extends Command {
       description: 'Report the row counts that would be deleted without deleting anything',
       default: false,
     }),
+    'database-only': Flags.boolean({
+      description: 'Delete only the database rows, leaving the tenant filesystem tree in place',
+      default: false,
+    }),
+    'assert-gate-generation': Flags.string({
+      description:
+        'Require the tenant write gate to be held at this generation inside the deletion transaction; abort if lost or replaced',
+    }),
   };
 
   async run(): Promise<void> {
@@ -79,7 +73,7 @@ export default class TenantDelete extends Command {
       assertValidTenantId(tenantId);
     } catch (error) {
       if (error instanceof InvalidTenantIdError) {
-        this.logToStderr(chalk.red(`✗ ${error.message}`));
+        this.logToStderr(formatPortabilityError(error));
         await flushStderr();
         process.exit(EXIT_INVALID_INPUT);
       }
@@ -93,20 +87,31 @@ export default class TenantDelete extends Command {
         )
       );
 
+      const filesystem = flags['database-only'] ? null : await resolveTenantFilesystem(tenantId);
+      if (!flags['database-only'] && !filesystem) {
+        this.logToStderr(
+          chalk.dim('  Filesystem isolation is disabled; leaving the shared data home untouched.')
+        );
+      }
+
       const db = createDatabase({ url: getDatabaseUrl() });
-      const result = await deleteTenantData(db, tenantId, {
+      const result = await deleteTenant(db, tenantId, {
         dryRun,
+        databaseOnly: flags['database-only'],
+        filesystem,
         log: (message) => this.logToStderr(chalk.dim(`  ${message}`)),
+        ...(flags['assert-gate-generation']
+          ? { assertGateGeneration: flags['assert-gate-generation'] }
+          : {}),
       });
 
-      // Stable machine-readable contract on stdout — the only thing on stdout.
-      // Await the write so the payload is fully flushed to a pipe before the
-      // process.exit(0) below (needed to terminate the lingering postgres-js
-      // pool); process.exit can otherwise truncate an in-flight async write.
-      const json = `${JSON.stringify(result)}\n`;
-      await new Promise<void>((resolve, reject) => {
-        process.stdout.write(json, (err) => (err ? reject(err) : resolve()));
-      });
+      // Stable combined database + filesystem proof on stdout. Await the write
+      // before process.exit so a piped caller always receives the full object.
+      await writeStdoutJson(result);
+
+      if (result.filesystem.status === 'deleted') {
+        this.logToStderr(chalk.dim('  deleted tenant filesystem tree'));
+      }
 
       const totalRows = Object.values(result.rowCounts).reduce((sum, value) => sum + value, 0);
       this.logToStderr(
@@ -117,10 +122,16 @@ export default class TenantDelete extends Command {
       await flushStderr();
       process.exit(0);
     } catch (error) {
-      const message = tenantDeleteErrorMessage(error);
-      this.logToStderr(chalk.red(`✗ ${message}`));
+      const marker = tenantDeleteErrorMarker(error);
+      if (error instanceof TenantFilesystemDeletionPendingError) {
+        // The database is already committed. Emit bounded recovery state even
+        // though the command exits non-zero, so automation can distinguish this
+        // retryable DB-done/files-pending tail from a pre-commit failure.
+        await writeStdoutJson(error.result);
+      }
+      this.logToStderr(marker);
       if (error instanceof TenantDeletionVerificationError) {
-        this.logToStderr(chalk.red(`  Remaining tables: ${error.tables.join(', ')}`));
+        this.logToStderr(chalk.red('  Deletion verification did not prove tenant absence.'));
       }
       if (error instanceof TenantDeletionUnsupportedError) {
         this.logToStderr(

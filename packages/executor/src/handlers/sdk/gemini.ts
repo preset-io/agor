@@ -4,8 +4,8 @@
  * Executes prompts using Google Gemini SDK with Feathers/WebSocket architecture
  */
 
+import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
-import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import { GeminiTool } from '../../sdk-handlers/gemini/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 

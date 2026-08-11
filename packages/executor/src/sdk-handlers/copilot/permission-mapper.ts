@@ -342,32 +342,9 @@ export function createPermissionHandler(
         };
       }
 
-      // Handle denial
-      if (!decision.allow) {
-        console.log(
-          `🛑 [Copilot Permission] Permission denied for ${toolName}, stopping execution...`
-        );
-
-        // Cancel all pending permission requests for this session
-        deps.permissionService.cancelPendingRequests(sessionId);
-
-        await deps.tasksService.patch(taskId, {
-          status: TaskStatus.FAILED,
-        });
-
-        if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: 'idle' as const,
-          });
-        }
-
-        return {
-          kind: 'denied-interactively-by-user',
-          feedback: decision.reason || `Permission denied for: ${toolName}`,
-        };
-      }
-
-      // Approved — restore running status
+      // The permission decision settles this tool call, not the conversational turn.
+      // Restore active state for both outcomes and leave terminality to the
+      // provider's normal task finalization path.
       await deps.tasksService.patch(taskId, {
         status: TaskStatus.RUNNING,
       });
@@ -375,7 +352,19 @@ export function createPermissionHandler(
       if (deps.sessionsService) {
         await deps.sessionsService.patch(sessionId, {
           status: 'running' as const,
+          ready_for_prompt: false,
         });
+      }
+
+      // A denial rejects only this tool call. Copilot decides how to continue
+      // the turn after receiving the interactive-denial result.
+      if (!decision.allow) {
+        console.log(`🛑 [Copilot Permission] Permission denied for ${toolName}; continuing turn`);
+
+        return {
+          kind: 'denied-interactively-by-user',
+          feedback: decision.reason || `Permission denied for: ${toolName}`,
+        };
       }
 
       console.log(`✅ [Copilot Permission] Permission approved for ${toolName}`);

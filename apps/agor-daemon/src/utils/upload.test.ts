@@ -10,12 +10,14 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import type { UploadStagingStore } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ALLOWED_UPLOAD_MIME_TYPES,
   createUploadMiddleware,
-  enforceParsedTotalUploadSize,
+  createUploadStorage,
   enforceTotalUploadSize,
   getUploadDirectory,
   MAX_UPLOAD_FILE_SIZE,
@@ -23,6 +25,11 @@ import {
   MAX_UPLOAD_TOTAL_SIZE,
   validateUploadDestinationQuery,
 } from './upload';
+
+const fakeStore = {
+  stage: vi.fn(),
+  delete: vi.fn(async () => undefined),
+} as unknown as UploadStagingStore;
 
 function mockRes() {
   const res: Partial<Response> & { _status?: number; _body?: unknown } = {};
@@ -58,7 +65,7 @@ describe('upload allowlist', () => {
   it('multer instance carries the configured limits', () => {
     // Tiny stand-ins for the repos — the limit fields are read off the multer
     // instance directly, so the storage callbacks never run.
-    const mw = createUploadMiddleware();
+    const mw = createUploadMiddleware(fakeStore);
     // multer attaches the original options under `.limits`
     const limits = (mw as unknown as { limits?: Record<string, number> }).limits;
     expect(limits?.fileSize).toBe(MAX_UPLOAD_FILE_SIZE);
@@ -127,46 +134,83 @@ describe('enforceTotalUploadSize (pre-multer Content-Length)', () => {
   });
 });
 
-describe('enforceParsedTotalUploadSize (post-multer file-size sum)', () => {
-  it('passes through when no files are present', async () => {
-    const mw = enforceParsedTotalUploadSize();
-    const req = {} as Request;
-    const res = mockRes();
-    const next = vi.fn() as NextFunction;
-    await mw(req, res, next);
-    expect(next).toHaveBeenCalled();
+describe('streaming upload storage', () => {
+  it('passes file.stream directly to the staging port without a Buffer/path result', async () => {
+    const stage = vi.fn(async (input: { body: NodeJS.ReadableStream }) => {
+      let body = '';
+      for await (const chunk of input.body) body += chunk;
+      expect(body).toBe('streamed');
+      return {
+        ref: 'upl_00000000-0000-4000-8000-000000000001',
+        name: 'a.txt',
+        mimeType: 'text/plain',
+        size: 8,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 1000).toISOString(),
+        provenance: 'browser',
+      };
+    });
+    const storage = createUploadStorage({ ...fakeStore, stage } as UploadStagingStore);
+    const req = {
+      feathers: { tenant: { tenant_id: 'tenant-a' } },
+      params: { sessionId: '00000000-0000-0000-0000-000000000001' },
+      _uploadOwner: {
+        tenantId: 'tenant-a',
+        sessionId: '00000000-0000-0000-0000-000000000001',
+        branchId: '00000000-0000-0000-0000-000000000002',
+        createdBy: '00000000-0000-0000-0000-000000000003',
+      },
+    };
+    const info = await new Promise<Record<string, unknown>>((resolve, reject) =>
+      storage._handleFile(
+        req as never,
+        {
+          originalname: 'a.txt',
+          mimetype: 'text/plain',
+          stream: Readable.from('streamed'),
+        } as never,
+        (error, result) => (error ? reject(error) : resolve(result as Record<string, unknown>))
+      )
+    );
+    expect(info.ref).toMatch(/^upl_/);
+    expect(info).not.toHaveProperty('buffer');
+    expect(info).not.toHaveProperty('path');
   });
 
-  it('passes through when sum of file sizes is within ceiling', async () => {
-    const mw = enforceParsedTotalUploadSize();
+  it('rejects actual aggregate streamed bytes before staging succeeds', async () => {
+    const store = {
+      ...fakeStore,
+      stage: async (input: { body: NodeJS.ReadableStream }) => {
+        for await (const _chunk of input.body) {
+          // consume
+        }
+        throw new Error('unreachable');
+      },
+    } as UploadStagingStore;
+    const storage = createUploadStorage(store);
     const req = {
-      files: [
-        { size: 10, path: '/tmp/a' },
-        { size: 20, path: '/tmp/b' },
-      ],
-    } as unknown as Request;
-    const res = mockRes();
-    const next = vi.fn() as NextFunction;
-    await mw(req, res, next);
-    expect(next).toHaveBeenCalled();
-    expect(res._status).toBeUndefined();
-  });
-
-  // We don't actually want the test to write to disk; the rejection path
-  // calls fs.unlink on the file paths, so use a non-existent path and let
-  // Promise.allSettled swallow the ENOENT rejections.
-  it('rejects 413 and attempts cleanup when sum exceeds ceiling', async () => {
-    const mw = enforceParsedTotalUploadSize();
-    const req = {
-      files: [
-        { size: MAX_UPLOAD_TOTAL_SIZE, path: '/tmp/__nope_a' },
-        { size: 1, path: '/tmp/__nope_b' },
-      ],
-    } as unknown as Request;
-    const res = mockRes();
-    const next = vi.fn() as NextFunction;
-    await mw(req, res, next);
-    expect(next).not.toHaveBeenCalled();
-    expect(res._status).toBe(413);
+      feathers: { tenant: { tenant_id: 'tenant-a' } },
+      params: { sessionId: '00000000-0000-0000-0000-000000000001' },
+      _stagedUploadBytes: MAX_UPLOAD_TOTAL_SIZE,
+      _uploadOwner: {
+        tenantId: 'tenant-a',
+        sessionId: '00000000-0000-0000-0000-000000000001',
+        branchId: '00000000-0000-0000-0000-000000000002',
+        createdBy: '00000000-0000-0000-0000-000000000003',
+      },
+    };
+    await expect(
+      new Promise((resolve, reject) =>
+        storage._handleFile(
+          req as never,
+          {
+            originalname: 'a.txt',
+            mimetype: 'text/plain',
+            stream: Readable.from('x'),
+          } as never,
+          (error, result) => (error ? reject(error) : resolve(result))
+        )
+      )
+    ).rejects.toThrow(/combined upload size/i);
   });
 });

@@ -29,11 +29,6 @@ function createSessionData(branchId: UUID, overrides?: Partial<Session>): Partia
     created_by: overrides?.created_by ?? 'test-user',
     created_at: overrides?.created_at ?? new Date().toISOString(),
     last_updated: overrides?.last_updated ?? new Date().toISOString(),
-    git_state: overrides?.git_state ?? {
-      ref: 'main',
-      base_sha: 'abc123',
-      current_sha: 'def456',
-    },
     tasks: overrides?.tasks ?? [],
     contextFiles: overrides?.contextFiles ?? [],
     genealogy: overrides?.genealogy ?? {
@@ -135,6 +130,17 @@ describe('SessionMCPServerRepository.addServer', () => {
     const servers = await repo.listServers(session.session_id);
     expect(servers).toHaveLength(1);
     expect(servers[0].mcp_server_id).toBe(server1.mcp_server_id);
+  });
+
+  dbTest('deduplicates five concurrent attachments', async ({ db }) => {
+    const { session, server1 } = await setupTestData(db);
+    const repo = new SessionMCPServerRepository(db);
+
+    await Promise.all(
+      Array.from({ length: 5 }, () => repo.addServer(session.session_id, server1.mcp_server_id))
+    );
+
+    expect(await repo.listServers(session.session_id)).toHaveLength(1);
   });
 
   dbTest('should re-enable disabled server when added again', async ({ db }) => {

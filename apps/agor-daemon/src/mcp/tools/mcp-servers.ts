@@ -8,10 +8,12 @@ import type {
   MCPServer,
   UpdateMCPServerInput,
 } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
 import {
+  mcpLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNonEmptyString,
   mcpOptionalString,
@@ -541,17 +543,23 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
           .boolean()
           .optional()
           .describe('Include disabled MCP servers (default: false)'),
+        limit: mcpLimit(25, 100),
+        offset: mcpOffset(0),
       }),
     },
     async (args) => {
       const includeDisabled = args.includeDisabled === true;
+      const limit = args.limit ?? 25;
+      const offset = args.offset ?? 0;
 
       const result = await ctx.app.service('mcp-servers').find({
         ...ctx.baseServiceParams,
         query: {
           scope: 'global',
           ...(includeDisabled ? {} : { enabled: true }),
-          $limit: 100,
+          $limit: limit,
+          $skip: offset,
+          $sort: { created_at: -1, mcp_server_id: 1 },
         },
       });
       const data = (Array.isArray(result) ? result : result.data) as MCPServer[];
@@ -563,6 +571,17 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
 
       return textResult({
         mcp_servers: servers,
+        pagination: {
+          total: Array.isArray(result) ? servers.length : result.total,
+          limit,
+          offset,
+          hasMore:
+            !Array.isArray(result) && offset + servers.length < (result.total ?? servers.length),
+          nextOffset:
+            !Array.isArray(result) && offset + servers.length < (result.total ?? servers.length)
+              ? offset + servers.length
+              : null,
+        },
         summary: {
           total: servers.length,
           oauth_servers: servers.filter((s) => s.auth_type === 'oauth').length,

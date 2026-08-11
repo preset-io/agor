@@ -1,5 +1,5 @@
 import type { SessionID } from '@agor/core/types';
-import { buildGitConfigParameters } from '../../git/index.js';
+import { appendGitConfigParameterPairs } from '../../git/config-parameters.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 type BranchForSafeDirectory = {
@@ -21,20 +21,10 @@ function gitSafeDirectoryDebug(...args: unknown[]): void {
   }
 }
 
-function appendGitConfigParameterPairs(pairs: readonly string[]): void {
-  const encoded = buildGitConfigParameters(pairs);
-  if (!encoded) return;
-
-  const existing = process.env.GIT_CONFIG_PARAMETERS?.trim();
-  process.env.GIT_CONFIG_PARAMETERS = existing ? `${existing} ${encoded}` : encoded;
-}
-
 /**
  * Trust the managed checkout paths for every git subprocess the SDK agent starts.
  *
- * The daemon/executor itself already routes branch inspection through executor
- * commands with explicit `-c safe.directory=...` arguments, but interactive
- * agents can still run plain `git status` inside their sessions. In insulated
+ * Interactive agents can run plain `git status` inside their sessions. In insulated
  * and strict Unix modes the session user may be a group member rather than the
  * checkout owner, so git's ownership check rejects the repo unless the session
  * process environment preconfigures these directories as safe.

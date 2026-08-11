@@ -14,7 +14,8 @@
  *     creation.
  */
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { MessageID } from '@agor/core/types';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../utils/append-system-message.js', () => ({
@@ -22,6 +23,7 @@ vi.mock('../../utils/append-system-message.js', () => ({
 }));
 
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { widgetAutoResumeTaskId } from '../../utils/durable-task-id.js';
 import { registerWidgetTools } from './widgets.js';
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -454,11 +456,17 @@ describe('agor_widgets_request_env_vars', () => {
       (c) => c.service === '/sessions/:id/prompt' && c.method === 'create'
     );
     expect(promptCall).toBeDefined();
-    const promptData = promptCall?.args[0] as { prompt: string; metadata: Record<string, unknown> };
+    const promptData = promptCall?.args[0] as {
+      prompt: string;
+      idempotencyTaskId: string;
+      metadata: Record<string, unknown>;
+    };
     expect(promptData.prompt).toContain('HUBSPOT_API_KEY');
     expect(promptData.prompt.toLowerCase()).toContain('already configured');
     expect(promptData.metadata.system_authored).toBe(true);
     expect(promptData.metadata.widget_id).toBe('widget-msg-1');
+    expect(promptData.idempotencyTaskId).toBe(widgetAutoResumeTaskId('widget-msg-1' as MessageID));
+    expect(promptData.idempotencyTaskId).not.toBe('widget-msg-1');
   });
 
   it('does NOT short-circuit when even one requested name is missing', async () => {

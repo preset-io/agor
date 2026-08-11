@@ -29,7 +29,7 @@ vi.mock('../SessionCanvas', () => ({
 // tests can drive the create flow.
 vi.mock('../SessionPanel/PendingToolChoicePanel', () => ({
   PendingToolChoicePanel: ({ onChoose }: { onChoose: (tool: string) => void }) => (
-    <button type="button" data-testid="tool-picker" onClick={() => onChoose('claude-code')}>
+    <button type="button" data-testid="tool-picker" onClick={() => onChoose('opencode')}>
       tool picker
     </button>
   ),
@@ -125,6 +125,7 @@ const branch = {
 const AVAILABLE_AGENTS = [
   { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: '' },
   { id: 'codex', name: 'Codex', icon: '💻', description: '' },
+  { id: 'opencode', name: 'OpenCode', icon: '⌨️', description: '' },
 ] as never[];
 
 const USER = {
@@ -360,5 +361,30 @@ describe('App quick-start — always shows the tool picker', () => {
 
     expect(screen.getByTestId('tool-picker')).toBeInTheDocument();
     expect(screen.queryByTestId('session-panel')).not.toBeInTheDocument();
+  });
+
+  it('passes only the selected tool user default into quick start', async () => {
+    const onCreateSession = vi.fn(async () => null);
+    renderShell(
+      {
+        ...USER,
+        default_agentic_selection: {
+          codex: { source: 'workspace_default' },
+          opencode: { source: 'inline' },
+        },
+      },
+      onCreateSession
+    );
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => fireEvent.click(await screen.findByTestId('tool-picker')));
+
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'opencode',
+        agenticToolPresetId: '__user_default__',
+      }),
+      BOARD_ID
+    );
   });
 });

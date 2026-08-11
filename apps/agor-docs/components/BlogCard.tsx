@@ -22,7 +22,9 @@ export function BlogCard({ post }: { post: BlogPost }) {
         <img src={imageSrc} alt={post.title} className={styles.image} />
       </div>
       <div className={styles.content}>
-        <span className={styles.date}>{formatDate(post.date)}</span>
+        <span className={styles.date}>
+          {post.author} · {formatDate(post.date)}
+        </span>
         <h3 className={styles.cardTitle}>{post.title}</h3>
       </div>
     </Link>

@@ -69,11 +69,10 @@ export function curateModelOptions(
 /** Resolve a stored model id to its friendly display name for inline summaries. */
 export function getModelDisplayName(tool: AgenticToolName, modelId: string): string {
   if (!modelId) return modelId;
-  const base = modelId.replace('[1m]', '');
   if (CLAUDE_TOOLS.has(tool)) {
-    const found = AVAILABLE_CLAUDE_MODEL_ALIASES.find((m) => m.id === modelId || m.id === base);
+    const found = AVAILABLE_CLAUDE_MODEL_ALIASES.find((m) => m.id === modelId);
     if (!found) return modelId;
-    return modelId.includes('[1m]') ? `${found.displayName} (1M context)` : found.displayName;
+    return found.displayName;
   }
   const named = (metadata: Record<string, { name?: string; displayName?: string }>): string =>
     metadata[modelId]?.name ?? metadata[modelId]?.displayName ?? modelId;

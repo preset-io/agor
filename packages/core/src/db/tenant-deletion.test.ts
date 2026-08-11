@@ -11,14 +11,12 @@ import { runWithTenantDatabaseScope } from './tenant-scope';
 import { dbTest } from './test-helpers';
 
 describe('assertValidTenantId', () => {
-  it.each([
-    'acme-corp',
-    'default',
-    '0192f0c4-6f1e-7a2b-9c3d-4e5f60718293',
-    'tenant_42',
-  ])('accepts concrete id %s', (id) => {
-    expect(() => assertValidTenantId(id)).not.toThrow();
-  });
+  it.each(['acme-corp', 'default', '0192f0c4-6f1e-7a2b-9c3d-4e5f60718293', 'tenant_42'])(
+    'accepts concrete id %s',
+    (id) => {
+      expect(() => assertValidTenantId(id)).not.toThrow();
+    }
+  );
 
   it.each([
     ['', 'empty'],

@@ -596,7 +596,7 @@ describe('createClient', () => {
       });
     });
 
-    // Regression: PR #1088 added users.getGitEnvironment + repos/branches.initializeUnixGroup
+    // Executor lifecycle callbacks use explicitly registered custom methods.
     // server-side via `app.use(path, service, { methods })`, but the Feathers Socket.io
     // client only wires standard CRUD at construction time. Without an explicit
     // service.methods(...) call on the client, calling these threw
@@ -615,14 +615,6 @@ describe('createClient', () => {
       );
     });
 
-    it('registers repos.initializeUnixGroup custom method on client', () => {
-      const client = createClient();
-      const reposService = client.service('repos') as unknown as {
-        methods: MockedFunction<(...names: string[]) => unknown>;
-      };
-      expect(reposService.methods).toHaveBeenCalledWith('initializeUnixGroup');
-    });
-
     it('registers branches custom methods on client', () => {
       const client = createClient();
       const branchesService = client.service('branches') as unknown as {
@@ -630,7 +622,6 @@ describe('createClient', () => {
       };
       expect(branchesService.methods).toHaveBeenCalledWith(
         'updateEnvironment',
-        'initializeUnixGroup',
         'ensureTeammateKnowledgeNamespace'
       );
     });

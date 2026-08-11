@@ -5,16 +5,14 @@
  * Uses DrizzleService adapter with GatewayChannelRepository.
  */
 
-import {
-  assertInlineAgenticConfigurationAllowed,
-  PAGINATION,
-  resolveAgenticConfigurationReference,
-  resolveAgenticToolPreset,
-} from '@agor/core/config';
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
+import { AgenticConfigurationResolutionError, PAGINATION } from '@agor/core/config';
 import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { getConnector, isSlackWriteTargetAllowed } from '@agor/core/gateway';
+import { isInvalidModelConfigError } from '@agor/core/models';
 import {
+  type AgenticToolConfigurationSource,
   type AuthenticatedParams,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   type GatewayChannel,
@@ -22,16 +20,37 @@ import {
   type GatewayChannelPatchData,
   type NullableId,
   type Params,
+  type PersistedGatewayAgenticConfig,
   resolveSlackAgentTools,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  type UserID,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import {
+  gatewayAgenticConfigToInlineConfiguration,
+  hasDefinedGatewayAgenticConfigInlineFields,
+  materializedAgenticToolConfigurationToGatewayConfig,
+} from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
-import { MAX_UPLOAD_FILE_SIZE } from '../utils/upload.js';
+import { getUploadLimits } from '../utils/upload.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
+
+type PersistedGatewayChannelCreateData = Omit<GatewayChannelCreateData, 'agentic_config'> & {
+  agentic_config?: PersistedGatewayAgenticConfig | null;
+  created_by?: GatewayChannel['created_by'];
+};
+
+type PersistedGatewayChannelPatchData = Omit<GatewayChannelPatchData, 'agentic_config'> & {
+  agentic_config?: PersistedGatewayAgenticConfig | null;
+};
+
+type PersistedGatewayChannelWriteData =
+  | PersistedGatewayChannelCreateData
+  | PersistedGatewayChannelPatchData;
 
 export class GatewayChannelsService extends DrizzleService<
   GatewayChannel,
-  GatewayChannelPatchData
+  PersistedGatewayChannelWriteData
 > {
   private db: TenantScopeAwareDatabase;
 
@@ -48,48 +67,59 @@ export class GatewayChannelsService extends DrizzleService<
     this.db = db;
   }
 
-  private async validateConfig(config: GatewayChannelPatchData['agentic_config']): Promise<void> {
-    if (!config) {
-      await assertInlineAgenticConfigurationAllowed(this.db, 'claude-code');
-      return;
-    }
-    requireActiveAgenticTool(config.agent);
-    if (config.presetId) {
-      await resolveAgenticToolPreset(this.db, config.agent, config.presetId);
-      const hasOverrides = Object.entries(config).some(
-        ([key, value]) => !['agent', 'presetId', 'envVars'].includes(key) && value !== undefined
-      );
-      if (hasOverrides) {
-        throw new BadRequest('Preset-backed gateway channels cannot contain inline overrides');
-      }
-    } else await assertInlineAgenticConfigurationAllowed(this.db, config.agent);
+  private hasStableExecutionOwner(
+    channel: Pick<GatewayChannel, 'agor_user_id' | 'config'>
+  ): boolean {
+    const config = channel.config as Record<string, unknown>;
+    return Boolean(
+      channel.agor_user_id &&
+        config.align_slack_users !== true &&
+        config.align_github_users !== true &&
+        config.align_shortcut_users !== true
+    );
   }
 
-  private async normalizeConfig(
-    config: GatewayChannelPatchData['agentic_config'],
-    params?: Params
-  ): Promise<GatewayChannelPatchData['agentic_config']> {
-    if (!config?.presetId) return config;
-    const resolved = await resolveAgenticConfigurationReference(
-      this.db,
-      config.agent,
-      config.presetId,
-      (params as { user?: { user_id?: import('@agor/core/types').UserID } } | undefined)?.user
-        ?.user_id
-    );
-    const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
-    if (resolved.preset) {
-      return {
-        agent: config.agent,
-        presetId: resolved.preset.preset_id,
-        ...(config.envVars ? { envVars: config.envVars } : {}),
-      };
+  private async validateConfig(
+    config: GatewayChannelPatchData['agentic_config'] | GatewayChannel['agentic_config'],
+    channel: Pick<GatewayChannel, 'agor_user_id' | 'config'>,
+    allowMaterializedSnapshot = false
+  ): Promise<PersistedGatewayAgenticConfig | null> {
+    if (!config) return null;
+    const tool = requireActiveAgenticTool(config?.agent ?? 'claude-code');
+    const hasInline = hasDefinedGatewayAgenticConfigInlineFields(config);
+    if (config?.presetId && hasInline && !allowMaterializedSnapshot) {
+      throw new BadRequest('Referenced gateway channels cannot contain inline values');
     }
-    return {
-      agent: config.agent,
-      ...configuration,
-      ...(config.envVars ? { envVars: config.envVars } : {}),
-    };
+    if (
+      config?.presetId === USER_DEFAULT_AGENTIC_CONFIGURATION &&
+      !this.hasStableExecutionOwner(channel)
+    ) {
+      throw new BadRequest(
+        'Gateway channels without a stable execution owner cannot use My default'
+      );
+    }
+
+    const source: AgenticToolConfigurationSource = config?.presetId
+      ? { reference: config.presetId }
+      : { configuration: gatewayAgenticConfigToInlineConfiguration(config) };
+    try {
+      const materialized = await materializeAgenticToolConfiguration(this.db, {
+        tool,
+        source,
+        executionOwnerId: this.hasStableExecutionOwner(channel)
+          ? (channel.agor_user_id as UserID)
+          : undefined,
+      });
+      return materializedAgenticToolConfigurationToGatewayConfig(config, materialized);
+    } catch (error) {
+      if (
+        isInvalidModelConfigError(error) ||
+        error instanceof AgenticConfigurationResolutionError
+      ) {
+        throw new BadRequest(error.message);
+      }
+      throw error;
+    }
   }
 
   async create(data: GatewayChannelCreateData, params?: Params) {
@@ -103,19 +133,19 @@ export class GatewayChannelsService extends DrizzleService<
     );
     data = pickWriteFields<GatewayChannelCreateData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
 
-    await this.validateConfig(data.agentic_config ?? null);
-    const agenticConfig = await this.normalizeConfig(data.agentic_config ?? null, params);
-    data = { ...data, agentic_config: agenticConfig };
+    const materializedAgenticConfig = await this.validateConfig(data.agentic_config ?? null, {
+      agor_user_id: data.agor_user_id as GatewayChannel['agor_user_id'],
+      config: data.config ?? {},
+    });
     const creatorId = (params as AuthenticatedParams | undefined)?.user?.user_id;
     const trustedCreatedBy =
       creatorId ?? (prepared ? (rawData.created_by as string | undefined) : undefined);
-    return super.create(
-      {
-        ...data,
-        ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
-      },
-      params
-    );
+    const persistedData: PersistedGatewayChannelCreateData = {
+      ...data,
+      agentic_config: materializedAgenticConfig,
+      ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
+    };
+    return super.create(persistedData, params);
   }
 
   async patch(id: NullableId, data: GatewayChannelPatchData, params?: Params) {
@@ -123,22 +153,39 @@ export class GatewayChannelsService extends DrizzleService<
     assertServiceWriteFields('Gateway channel', rawData, GATEWAY_CHANNEL_WRITE_FIELDS, params);
     data = pickWriteFields<GatewayChannelPatchData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
 
-    if (data.agentic_config !== undefined) {
-      await this.validateConfig(data.agentic_config);
-      data = { ...data, agentic_config: await this.normalizeConfig(data.agentic_config, params) };
+    let persistedData: PersistedGatewayChannelPatchData = data;
+    if (
+      data.agentic_config !== undefined ||
+      data.agor_user_id !== undefined ||
+      data.config !== undefined
+    ) {
+      if (id === null || Array.isArray(id)) {
+        throw new BadRequest('Gateway agentic configuration cannot be multi-patched');
+      }
+      const current = await this.get(String(id), params);
+      const materializedAgenticConfig = await this.validateConfig(
+        data.agentic_config === undefined ? current.agentic_config : data.agentic_config,
+        {
+          agor_user_id: data.agor_user_id ?? current.agor_user_id,
+          config: { ...current.config, ...data.config },
+        },
+        data.agentic_config === undefined
+      );
+      persistedData = { ...data, agentic_config: materializedAgenticConfig };
     }
-    return super.patch(id, data, params);
+    return super.patch(id, persistedData, params);
   }
 
-  async uploadFileFromExecutor(
+  async uploadFileStreamFromExecutor(
     data: {
       gatewayChannelId: string;
       channel: string;
       threadTs?: string;
-      fileBase64: string;
       filename: string;
       comment?: string;
+      size: number;
     },
+    file: NodeJS.ReadableStream | Buffer,
     params?: AuthenticatedParams
   ): Promise<unknown> {
     const caller = params?.user;
@@ -172,18 +219,9 @@ export class GatewayChannelsService extends DrizzleService<
       throw new Forbidden('Slack channel is not an allowed write target');
     }
 
-    const normalizedBase64 = data.fileBase64;
-    if (normalizedBase64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalizedBase64)) {
-      throw new BadRequest('File content must be valid Base64');
-    }
-    const padding = normalizedBase64.endsWith('==') ? 2 : normalizedBase64.endsWith('=') ? 1 : 0;
-    const decodedSize = (normalizedBase64.length / 4) * 3 - padding;
-    if (decodedSize > MAX_UPLOAD_FILE_SIZE) {
-      throw new BadRequest(`File exceeds the ${MAX_UPLOAD_FILE_SIZE}-byte upload limit`);
-    }
-    const file = Buffer.from(normalizedBase64, 'base64');
-    if (file.toString('base64') !== normalizedBase64) {
-      throw new BadRequest('File content must be canonical Base64');
+    const maxFileBytes = getUploadLimits().maxFileBytes;
+    if (!Number.isSafeInteger(data.size) || data.size < 0 || data.size > maxFileBytes) {
+      throw new BadRequest(`File exceeds the ${maxFileBytes}-byte upload limit`);
     }
 
     const connector = getConnector('slack', gatewayChannel.config);
@@ -191,7 +229,7 @@ export class GatewayChannelsService extends DrizzleService<
       uploadFile?: (input: {
         channel: string;
         threadTs?: string;
-        file: Buffer;
+        file: NodeJS.ReadableStream | Buffer;
         filename: string;
         comment?: string;
       }) => Promise<unknown>;

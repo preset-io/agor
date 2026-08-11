@@ -134,11 +134,6 @@ export default class SessionLoadClaude extends BaseCommand {
         last_updated: new Date().toISOString(),
         created_by: 'cli-import',
         branch_id: branch.branch_id,
-        git_state: {
-          ref: 'unknown',
-          base_sha: '',
-          current_sha: '',
-        },
         genealogy: {
           children: [],
         },
@@ -164,7 +159,7 @@ export default class SessionLoadClaude extends BaseCommand {
         const end = Math.min(i + batchSize, totalMessages);
         const batch = messages.slice(i, end);
 
-        await messagesBulkService.createMany(batch);
+        await messagesBulkService.create(batch);
 
         this.log(`${chalk.blue('●')} Processed ${end}/${totalMessages} messages...`);
       }

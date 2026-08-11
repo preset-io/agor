@@ -17,7 +17,14 @@ import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, like, lt } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
 import { type ThreadSessionMapInsert, type ThreadSessionMapRow, threadSessionMap } from '../schema';
 import {
   AmbiguousIdError,
@@ -354,6 +361,31 @@ export class ThreadSessionMapRepository
         error
       );
     }
+  }
+
+  /** Merge metadata under a short row lock without overwriting concurrent fields. */
+  async mergeMetadata(
+    id: ThreadSessionMapID,
+    patch: Record<string, unknown>
+  ): Promise<ThreadSessionMap> {
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, threadSessionMap, eq(threadSessionMap.id, id));
+        const row = await select(txDb)
+          .from(threadSessionMap)
+          .where(eq(threadSessionMap.id, id))
+          .one();
+        if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
+        const updated = await update(txDb, threadSessionMap)
+          .set({ metadata: { ...((row.metadata as Record<string, unknown>) ?? {}), ...patch } })
+          .where(eq(threadSessionMap.id, id))
+          .returning()
+          .one();
+        return this.rowToMapping(updated);
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**

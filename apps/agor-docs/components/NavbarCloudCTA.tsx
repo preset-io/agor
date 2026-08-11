@@ -1,20 +1,14 @@
-'use client';
+import Link from 'next/link';
 
-import { useState } from 'react';
-import { HubSpotFormModal } from './HubSpotFormModal';
-
-// Navbar "Agor Cloud" entry — pops the beta-signup modal (same flow as the
-// landing-page CTAs) instead of navigating. Rendered as <Navbar> children;
-// styles.css slots it left of the search input via flex order.
+// Navbar "Agor Cloud" entry: links to the Agor Cloud landing page (/cloud)
+// instead of popping the beta modal. The request-invite form now lives behind
+// the CTAs on that page. Rendered as <Navbar> children; styles.css slots it
+// left of the search input via flex order (`.navbar-cloud-cta`), including an
+// anchor-specific override so switching from <button> to <a> keeps its place.
 export function NavbarCloudCTA() {
-  const [isOpen, setIsOpen] = useState(false);
-
   return (
-    <>
-      <button type="button" className="navbar-cloud-cta" onClick={() => setIsOpen(true)}>
-        Agor Cloud
-      </button>
-      <HubSpotFormModal isOpen={isOpen} onClose={() => setIsOpen(false)} />
-    </>
+    <Link href="/cloud" className="navbar-cloud-cta">
+      Agor Cloud
+    </Link>
   );
 }

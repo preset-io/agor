@@ -25,7 +25,11 @@
  * resolvers share the same permission/model walk.
  */
 
-import { resolveModelConfigWithFallback } from '../models/resolve-config.js';
+import {
+  type AgenticToolModelConfigurationPolicy,
+  type ModelConfigInput,
+  resolveModelConfigWithFallback,
+} from '../models/resolve-config.js';
 import type { AgenticToolName, Session, User } from '../types/index.js';
 import {
   resolvePermissionConfig,
@@ -47,9 +51,24 @@ export interface ResolveSessionDefaultsArgs {
   user?: Pick<User, 'default_agentic_config' | 'default_mcp_server_ids'> | null;
   /** Optional branch for MCP server inheritance (branch-level overrides user defaults). */
   branch?: { mcp_server_ids?: string[] | null } | null;
+  /** Child-only fallback, gated on an exact parent/child tool match. */
+  parent?: Pick<Session, 'agentic_tool' | 'permission_config' | 'model_config'> | null;
   overrides?: SessionDefaultsOverrides;
   /** Override `new Date()` for deterministic tests. */
   now?: Date;
+  /** Tool-owned model semantics supplied by the integration registry. */
+  modelConfiguration?: AgenticToolModelConfigurationPolicy;
+  /** Dynamic integration default, considered only after configured sources. */
+  modelFallback?: ModelConfigInput;
+}
+
+export interface ResolveSessionMcpServerIdsArgs {
+  /** Explicit per-call selection. An empty array means "no MCPs". */
+  explicit?: string[];
+  /** Optional branch inheritance, considered before user defaults. */
+  branch?: { mcp_server_ids?: string[] | null } | null;
+  /** User whose MCP defaults provide the final configured fallback. */
+  user?: Pick<User, 'default_mcp_server_ids'> | null;
 }
 
 export interface ResolvedSessionDefaults {
@@ -67,33 +86,56 @@ export interface ResolvedSessionDefaults {
   mcp_server_ids: string[];
 }
 
+/** Resolve MCP inheritance independently from agent/model configuration ownership. */
+export function resolveSessionMcpServerIds({
+  explicit,
+  branch,
+  user,
+}: ResolveSessionMcpServerIdsArgs): string[] {
+  if (explicit !== undefined) return explicit;
+  if (branch?.mcp_server_ids && branch.mcp_server_ids.length > 0) {
+    return branch.mcp_server_ids;
+  }
+  return user?.default_mcp_server_ids ?? [];
+}
+
 export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): ResolvedSessionDefaults {
-  const { agenticTool, user, branch, overrides, now } = args;
+  const { agenticTool, user, branch, parent, overrides, now, modelConfiguration, modelFallback } =
+    args;
   const userToolDefaults = user?.default_agentic_config?.[agenticTool];
+  const sameToolParent = parent?.agentic_tool === agenticTool ? parent : undefined;
+  const parentLayer = sameToolParent
+    ? {
+        permissionMode: sameToolParent.permission_config?.mode,
+        codexSandboxMode: sameToolParent.permission_config?.codex?.sandboxMode,
+        codexApprovalPolicy: sameToolParent.permission_config?.codex?.approvalPolicy,
+        codexNetworkAccess: sameToolParent.permission_config?.codex?.networkAccess,
+      }
+    : undefined;
 
   const permission_config = resolvePermissionConfig({
     effectiveTool: agenticTool,
     overrides,
     userToolDefaults,
-    // No parent layer for fresh-session defaults.
+    parentLayer,
   });
 
   const model_config = resolveModelConfigWithFallback(
     agenticTool,
-    [overrides?.modelConfig, userToolDefaults?.modelConfig],
-    { now }
+    [
+      overrides?.modelConfig,
+      sameToolParent?.model_config,
+      userToolDefaults?.modelConfig,
+      modelFallback,
+    ],
+    { now, policy: modelConfiguration }
   );
 
-  // mcp_server_ids: explicit override wins (incl. empty array = "no MCPs"),
-  // then branch config, then user defaults, then [].
-  let mcp_server_ids: string[];
-  if (overrides?.mcpServerIds !== undefined) {
-    mcp_server_ids = overrides.mcpServerIds;
-  } else if (branch?.mcp_server_ids && branch.mcp_server_ids.length > 0) {
-    mcp_server_ids = branch.mcp_server_ids;
-  } else {
-    mcp_server_ids = user?.default_mcp_server_ids ?? [];
-  }
+  const mcp_server_ids = resolveSessionMcpServerIds({
+    explicit: overrides?.mcpServerIds,
+    branch,
+    user,
+  });
 
   return { permission_config, model_config, mcp_server_ids };
 }

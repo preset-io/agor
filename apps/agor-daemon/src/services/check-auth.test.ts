@@ -1,10 +1,11 @@
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
-import { Claude } from '@agor/core/sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCheckAuthService } from './check-auth';
 import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
+
+const claudeQueryMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -15,11 +16,15 @@ vi.mock('@agor/core/config', async () => {
   };
 });
 
-vi.mock('@agor/core/sdk', () => ({
-  Claude: {
-    query: vi.fn(),
-  },
-}));
+vi.mock('@agor/core/agentic-integrations', async () => {
+  const actual = await vi.importActual<typeof import('@agor/core/agentic-integrations')>(
+    '@agor/core/agentic-integrations'
+  );
+  return {
+    ...actual,
+    loadManagedAgenticToolSdk: vi.fn(async () => ({ query: claudeQueryMock })),
+  };
+});
 
 vi.mock('../utils/executor-codex-auth.js', async () => {
   const actual = await vi.importActual<typeof import('../utils/executor-codex-auth.js')>(
@@ -37,7 +42,6 @@ vi.mock('./codex-auth-shared.js', () => ({
 
 const resolveApiKeyMock = vi.mocked(resolveApiKey);
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
-const claudeQueryMock = vi.mocked(Claude.query);
 const inspectCodexAuthViaExecutorMock = vi.mocked(inspectCodexAuthViaExecutor);
 const resolveCodexUnixIdentityMock = vi.mocked(resolveCodexUnixIdentity);
 const TEST_DB = { run: vi.fn() } as never;
@@ -151,6 +155,17 @@ describe('check-auth Claude subscription tokens', () => {
 describe('check-auth tri-state', () => {
   const params = { user: { user_id: 'user-1' } } as never;
 
+  it('rejects unsupported tools before reading tenant settings', async () => {
+    await expect(service().create({ tool: 'unsupported' }, params)).resolves.toEqual({
+      status: 'unknown',
+      authenticated: false,
+      method: 'none',
+      hint: 'Unsupported tool',
+    });
+    expect(isTenantAgenticToolEnabledMock).not.toHaveBeenCalled();
+    expect(resolveApiKeyMock).not.toHaveBeenCalled();
+  });
+
   it('claude stored API key rejected with 401 → unauthenticated', async () => {
     resolveApiKeyMock.mockResolvedValue({ apiKey: 'sk-bad', source: 'user', useNativeAuth: false });
     const fetchMock = vi
@@ -236,7 +251,12 @@ describe('check-auth codex auth.json probe', () => {
 
   beforeEach(() => {
     resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'user', useNativeAuth: true });
-    resolveCodexUnixIdentityMock.mockResolvedValue({ ok: true, unixUser: null });
+    resolveCodexUnixIdentityMock.mockResolvedValue({
+      ok: true,
+      unixUser: null,
+      reportedUnixUser: null,
+      userId: 'user-1' as never,
+    });
   });
 
   it('reports persisted native auth as unverified without launching an executor by default', async () => {

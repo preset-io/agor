@@ -11,6 +11,7 @@
 
 import path from 'node:path';
 import {
+  ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
   getBranchesDir,
@@ -32,7 +33,7 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, BadRequest } from '@agor/core/feathers';
 import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
@@ -46,9 +47,11 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -256,18 +259,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // token ensures hooks like requireAdminForEnvConfig bypass via
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
-    const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
-    );
-
     // Unix group initialization is a filesystem concern controlled by
     // unix_user_mode, not by app-level branch RBAC.
     const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
 
-    // Sudo wrap (asUser) is gated inside the resolver — returns undefined
-    // in simple/no-RBAC mode so hosts without passwordless sudoers work
-    // (#1140, #1143). Callers no longer duplicate the gate.
-    const asUser = await resolveExecutorReadAsUser(this.db, userId);
+    // A managed clone is lifecycle storage beneath the daemon-owned repo
+    // root, not a read/probe in the requesting user's home. Run it as the Git
+    // lifecycle identity; the post-clone group initialization grants the
+    // creator access. Requesting-user impersonation cannot create the first
+    // slug directory in strict mode.
+    const asUser = await resolveGitImpersonationForUser(this.db, userId);
 
     // Pre-create the repo row with `clone_status: 'cloning'` so failures stay
     // queryable via `agor_repos_get(repoId)`. Pre-#1126 the row was only
@@ -297,11 +298,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       params
     )) as Repo;
     const repoId = placeholder.repo_id;
+    const sessionToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      { command: 'git.clone', repo_id: repoId, user_id: userId }
+    );
 
     // Fire and forget - spawn executor and return immediately.
     // Executor handles: git clone, .agor.yml parsing, repo row patching.
     // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment).
-    // Unix group init (groupadd/chgrp/setfacl) runs daemon-side via repos.initializeUnixGroup RPC.
+    // Unix permissions are applied synchronously inside that lifecycle executor.
     const app = this.app;
     // Capture the Feathers service so the `onExit` safety net (below) writes
     // through the same service layer the executor uses — that way clients
@@ -324,11 +329,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           createDbRecord: true,
           userId: userId as string | undefined,
           initUnixGroup,
+          ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
         },
       },
       {
         logPrefix: `[clone ${slug}]`,
         asUser, // Run as resolved user (fresh groups via sudo -u)
+        templateVariables: {
+          user_id: userId,
+        },
         onExit: (code) => {
           if (code !== 0 && code !== null) {
             // Broadcast clone failure to all connected clients (the existing
@@ -336,9 +345,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             console.error(
               `[clone ${slug}] Clone failed with exit code ${code}, broadcasting error`
             );
-            const io = (app as unknown as { io?: { emit: (event: string, data: unknown) => void } })
-              .io;
-            if (io) {
+            const io = (
+              app as unknown as {
+                io?: {
+                  to: (room: string) => { emit: (event: string, data: unknown) => void };
+                };
+              }
+            ).io;
+            if (io && tenantId) {
               // Include the pinned branch in the message so an operator who
               // typo'd the Default Branch can self-diagnose. `git clone
               // --branch <X>` failure is one of the most common reasons a
@@ -349,12 +363,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
               const branchHint = data.default_branch
                 ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
                 : '';
-              io.emit('repo:cloneError', {
+              emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
                 slug,
                 url: remoteUrl,
                 error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
                 repo_id: repoId,
               });
+            } else if (io) {
+              // Never fall back to a global raw Socket.IO broadcast. The
+              // durable repos.patched event below remains the source of truth.
+              console.warn(`[clone ${slug}] Missing tenant scope; skipping clone-error toast`);
             }
 
             // Safety net: if the executor crashed before it could patch the
@@ -394,36 +412,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Return immediately - callers can poll `agor_repos_get(repoId)` for
     // `clone_status: 'ready' | 'failed'` to discover the final outcome.
     return { status: 'pending', slug, repo_id: repoId };
-  }
-
-  /**
-   * Custom method: Initialize Unix group for a repo (daemon-side privileged operation).
-   *
-   * Called by the executor via Feathers RPC after cloning a repo, so that
-   * groupadd/chgrp/setfacl run with daemon sudo privileges regardless of
-   * executor impersonation mode.
-   *
-   * Auth: only service accounts (executor JWTs) may invoke this externally.
-   * Internal calls (no `provider`) pass through.
-   */
-  async initializeUnixGroup(
-    data: { repoId: string; userId?: string },
-    params?: RepoParams
-  ): Promise<{ unixGroup: string }> {
-    if (params?.provider) {
-      const caller = (params as AuthenticatedParams | undefined)?.user;
-      if (!caller) {
-        throw new NotAuthenticated('Authentication required');
-      }
-      const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
-      if (!isService) {
-        throw new Forbidden('Only the executor service account may initialize Unix groups');
-      }
-    }
-
-    const { initializeRepoUnixGroup } = await import('../utils/unix-group-init.js');
-    const unixGroup = await initializeRepoUnixGroup(this.db, this.app, data.repoId, data.userId);
-    return { unixGroup };
   }
 
   /**
@@ -697,6 +685,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             `Omit to make a full clone, or pass a positive int for --depth.`
         );
       }
+      ensureBranchCloneDepthAllowed(cloneDepth);
     }
     // Auth hooks (`requireMinimumRole`) guarantee `params.user` exists by
     // the time we get here. The identity is forwarded so executor-local Git
@@ -925,10 +914,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // materialization of admin-defined templates.
     //
     // Per-user credentials: Feathers RPC (users.getGitEnvironment)
-    // Unix group init: Feathers RPC (branches.initializeUnixGroup) — runs daemon-side
+    // Unix permissions: fail-closed inside the tenant-mounted lifecycle executor.
     try {
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
       );
 
       // Unix group initialization is a filesystem concern controlled by
@@ -936,13 +926,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       const executionMode = resolveExecutionSecurityMode();
       const initUnixGroup = executionMode.shouldInitUnixGroups;
 
-      // Sudo wrap (asUser) is gated inside the resolver — returns undefined
-      // in simple/no-RBAC mode so hosts without passwordless sudoers work
-      // (#1140, #1143). Callers no longer duplicate the gate.
-      // Git/materialization runs as the requesting user in strict mode. Any
-      // privileged group/ACL setup is a separate daemon RPC below; in simple
-      // Cloud mode the pod/mount is the filesystem security boundary.
-      const asUser = await resolveExecutorReadAsUser(this.db, userId);
+      // Managed Git lifecycle operations must run as the daemon lifecycle
+      // identity. In strict mode the requesting user can read an initialized
+      // branch through its group/ACL, but cannot create a child beneath the
+      // daemon-owned worktree root or mutate the base repo's .git/worktrees.
+      // Keep resolveExecutorReadAsUser for read/probe commands only.
+      const asUser = await resolveGitImpersonationForUser(this.db, userId);
 
       spawnExecutorFireAndForget(
         {
@@ -955,6 +944,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             userId: userId as string | undefined,
             // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
+            ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
             fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
             useReference:
               storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
@@ -962,7 +952,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         },
         {
           logPrefix: `[ReposService.createBranch ${data.name}]`,
-          asUser, // Run as resolved user (fresh groups via sudo -u)
+          asUser, // Run as lifecycle identity with fresh supplemental groups
+          templateVariables: {
+            branch_id: branch.branch_id,
+            user_id: userId,
+          },
         }
       );
     } catch (error) {

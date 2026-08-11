@@ -5,6 +5,7 @@
  * whose current scoped connection resolves no credential.
  */
 
+import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { resolveApiKey } from '@agor/core/config';
 import type { SessionRepository, TaskRepository, TenantScopeAwareDatabase } from '@agor/core/db';
 import type { AgenticToolName, HookContext, Message, TaskID, UserID } from '@agor/core/types';
@@ -13,7 +14,6 @@ import {
   isAgenticToolName,
   MessageRole,
   PROVIDER_CREDENTIAL_FIELDS,
-  TOOL_API_KEY_NAMES,
 } from '@agor/core/types';
 import { hasExecutorRuntimeScope } from '../auth/executor-runtime-scope.js';
 

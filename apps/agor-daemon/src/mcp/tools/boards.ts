@@ -5,15 +5,18 @@ import type {
   BoardObjectType,
   BranchID,
 } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import {
-  mcpLimit,
+  mcpListLimit,
+  mcpOffset,
   mcpOptionalNonNegativeInt,
   mcpOptionalPositiveInt,
   mcpOptionalString,
+  mcpPageResult,
   mcpRequiredId,
   mcpRequiredString,
 } from '../schema.js';
@@ -184,10 +187,11 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     'agor_boards_list',
     {
       description:
-        'List all boards accessible to the current user. Each board includes a `url` field with a clickable link to view the board in the UI. By default, archived boards are excluded.',
+        'List a lean page of boards accessible to the current user (heavy canvas objects and custom CSS are omitted; use agor_boards_get for details). By default archived boards are excluded. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        limit: mcpLimit(50),
+        limit: mcpListLimit(),
+        offset: mcpOffset(),
         includeArchived: z
           .boolean()
           .optional()
@@ -203,15 +207,21 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const query: Record<string, unknown> = {};
-      if (args.limit) query.$limit = args.limit;
+      const limit = args.limit ?? 25;
+      const offset = args.offset ?? 0;
+      const query: Record<string, unknown> = {
+        $limit: limit,
+        $skip: offset,
+        lean: true,
+        $sort: { created_at: -1, board_id: 1 },
+      };
       if (args.archived === true) {
         query.archived = true;
       } else if (!args.includeArchived) {
         query.archived = false;
       }
       const boards = await ctx.app.service('boards').find({ query, ...ctx.baseServiceParams });
-      return textResult(boards);
+      return textResult(mcpPageResult(boards, limit, offset));
     }
   );
 
@@ -240,6 +250,13 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           'Custom CSS for board canvas animations (@keyframes, animation, background-size, etc.). Rendered in a scoped <style> tag. Dangerous patterns like url(), expression(), @import are blocked.'
         ),
         slug: mcpOptionalString('slug', 'URL-friendly slug (optional)'),
+        defaultOthersCan: z
+          .enum(BRANCH_PERMISSION_LEVELS)
+          .optional()
+          .describe(
+            'Default app-layer permission for non-owners of aligned branches. "none" denies the public fallback; owners and explicit group grants still apply on shared boards.'
+          ),
+        defaultOthersFsAccess: z.enum(['none', 'read', 'write']).optional(),
         customContext: z
           .object({})
           .passthrough()
@@ -272,6 +289,10 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         metadataUpdates.background_color = args.backgroundColor;
       if (args.customCss !== undefined) metadataUpdates.custom_css = args.customCss;
       if (args.slug !== undefined) metadataUpdates.slug = args.slug;
+      if (args.defaultOthersCan !== undefined)
+        metadataUpdates.default_others_can = args.defaultOthersCan;
+      if (args.defaultOthersFsAccess !== undefined)
+        metadataUpdates.default_others_fs_access = args.defaultOthersFsAccess;
       if (args.customContext !== undefined) metadataUpdates.custom_context = args.customContext;
 
       if (Object.keys(metadataUpdates).length > 0) {
@@ -344,6 +365,8 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           'customCss',
           'Custom CSS for board canvas animations (@keyframes, animation, etc.). Optional.'
         ),
+        defaultOthersCan: z.enum(BRANCH_PERMISSION_LEVELS).optional(),
+        defaultOthersFsAccess: z.enum(['none', 'read', 'write']).optional(),
       }),
     },
     async (args) => {
@@ -361,6 +384,9 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       if (args.backgroundColor !== undefined)
         boardData.background_color = coerceString(args.backgroundColor);
       if (args.customCss !== undefined) boardData.custom_css = coerceString(args.customCss);
+      if (args.defaultOthersCan !== undefined) boardData.default_others_can = args.defaultOthersCan;
+      if (args.defaultOthersFsAccess !== undefined)
+        boardData.default_others_fs_access = args.defaultOthersFsAccess;
 
       const board = await ctx.app.service('boards').create(boardData, ctx.baseServiceParams);
       return textResult(board);

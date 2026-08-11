@@ -54,3 +54,18 @@ describe('useSessionActions archive helpers', () => {
     expect(sessionsPatch).not.toHaveBeenCalled();
   });
 });
+
+it('preserves the session create failure for its caller', async () => {
+  const failure = new Error('Select an exact provider and model');
+  const client = makeClient({
+    sessions: { create: vi.fn(async () => Promise.reject(failure)) },
+  });
+  const { result } = renderHook(() => useSessionActions(client));
+
+  await act(async () => {
+    await expect(
+      result.current.createSession({ branch_id: 'branch-1', agent: 'opencode' })
+    ).rejects.toBe(failure);
+  });
+  expect(result.current.error).toBe(failure.message);
+});

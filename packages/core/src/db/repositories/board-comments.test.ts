@@ -80,7 +80,6 @@ async function createAttachedCommentTarget(
     agentic_tool: 'claude-code',
     status: SessionStatus.IDLE,
     created_by: generateId() as UUID,
-    git_state: { ref: 'main', base_sha: 'abc123', current_sha: 'def456' },
   });
   const task = await taskRepo.create({
     task_id: generateId(),

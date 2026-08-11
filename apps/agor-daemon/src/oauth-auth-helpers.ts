@@ -7,7 +7,7 @@
  */
 
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { runWithTenantDatabaseScope } from '@agor/core/db';
+import { assertTenantWritable, runWithTenantDatabaseScope } from '@agor/core/db';
 
 /**
  * Runs `work` inside a tenant database scope when `tenantId` is provided.
@@ -24,6 +24,25 @@ export async function runInOAuthTenantScope<T>(
 ): Promise<T> {
   if (!tenantId) return work();
   return runWithTenantDatabaseScope(db, tenantId, work);
+}
+
+/**
+ * Tenant-scoped OAuth mutation boundary for callback/manual-complete writes.
+ *
+ * Those services intentionally carry only tenant identity while provider I/O
+ * runs, so they do not pass through the request transaction's write-gate hook.
+ * Check the gate inside the same short transaction that persists the grant.
+ */
+export async function runInOAuthTenantWriteScope<T>(
+  db: TenantScopeAwareDatabase,
+  tenantId: string | undefined,
+  work: () => Promise<T>
+): Promise<T> {
+  if (!tenantId) return work();
+  return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    await assertTenantWritable(scoped, tenantId);
+    return work();
+  });
 }
 
 /**

@@ -1,5 +1,7 @@
 node_modules
 .next
+out
+public/_pagefind
 .turbo
 *.log
 .DS_Store

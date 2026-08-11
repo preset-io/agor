@@ -1,55 +1,129 @@
 # Task Queueing
 
-**Tasks are the queueable unit. Sessions accept prompts. The Task entity itself
-encodes whether the prompt ran or got queued.**
+**Tasks are the queueable unit. Sessions accept prompts. PostgreSQL is the
+durable authority for admission, ordering, and dispatch across daemons.**
 
 ## Wire shape
 
-`POST /sessions/:id/prompt` always returns a `Task`. Callers inspect:
+`POST /sessions/:id/prompt` always returns the persisted `Task`. Callers inspect:
 
-- `task.status === 'queued'` → session was busy; the task is waiting and will
-  drain automatically when the session goes idle.
-- `task.status === 'dispatching'` → daemon persisted launch intent and is starting an executor.
-- `task.status === 'running'` → the executor connected and claimed the task.
-- `task.queue_position` → ordering within the session's queue (lowest drains
-  first), populated only while QUEUED.
+- `task.status === 'queued'` — the task has a durable position and is waiting;
+- `task.status === 'dispatching'` — launch intent is durable and an executor is
+  being started;
+- `task.status === 'running'` — the authenticated executor claimed the task;
+- `task.queue_position` — ordering within the Session queue (lowest first),
+  populated only while `queued`.
 
-There is no separate "queued vs ran" envelope. The route does not take a
-`queue: true` flag. Callers don't ask, the response answers.
+There is no separate “queued vs ran” envelope and no `queue: true` request flag.
+The response is the result of the admission attempt, not a decision based on a
+client's earlier Session GET.
 
-## Lifecycle
+## Durable admission and dispatch
 
-1. **Materialize** — the route always creates a Task via
-   `TaskRepository.createPending({ status })`. CREATED if the session is idle
-   with no queue, QUEUED otherwise. Sentinel values (`message_range.start_index = -1`,
-   `git_state.sha_at_start = ''`) are stamped here and stay until the
-   QUEUED → DISPATCHING/RUNNING launch transition.
-2. **Drain** — when a session reaches a terminal task state, the queue
-   processor picks the lowest `queue_position` and hands it to
-   `spawnTaskExecutor`, which is the _sole_ place that pins
-   `message_range`/`git_state`, writes the initial user-message row, persists
-   DISPATCHING, and spawns the executor. After authentication, the executor
-   atomically claims DISPATCHING → RUNNING.
-3. **Race safety** — `createPending` wraps the `max(queue_position) + 1`
-   read-then-insert in a transaction so concurrent writers can't collide on
-   identical positions.
+1. **Admit** — every prompt first creates a `queued` Task. While holding a
+   short lock on the owning Session row, `TaskRepository.createPending`
+   assigns `max(queue_position) + 1`. The Session row is the per-queue
+   sequencer; an ordinary transaction without this lock is insufficient under
+   PostgreSQL `READ COMMITTED`. A partial unique index is defense in depth.
+   The prompt endpoint carries tenant identity through a long-route scope;
+   admission itself is a bound short repository unit, so the Session lock is
+   released before title/config work, claim preparation, or event delivery.
+2. **Attempt the head** — the prompt route immediately offers that Task to
+   `spawnTaskExecutor`. If the Session is promptable and the Task is the
+   durable queue head, it may leave the queue without waiting for a later scan.
+   Otherwise the route returns the still-queued Task and its actual position.
+3. **Claim** — `claimDispatchAndProjectSession` locks Session first, then Task,
+   and atomically checks the queue head, absence of another executing Task,
+   Session promptability, and the expected Task state. The winning transaction
+   writes `queued|created -> dispatching` and the Session's running projection.
+4. **Launch after commit** — only `outcome: 'claimed'` may schedule executor
+   launch (a loser may only perform deterministic transcript repair after the
+   winner has crossed the fence). No transaction is held while spawning an
+   executor or doing external work. The authenticated executor later claims
+   `dispatching -> running`.
+
+`created` remains supported for the explicit `POST /tasks/:id` then
+`POST /tasks/:id/run` workflow. It cannot jump an existing queued prompt or a
+different executing Task.
+
+## Fleet-wide draining and recovery
+
+Every daemon runs a bounded `SessionQueueWorker`. It discovers routing-only
+queued Session refs and then reloads/processes each Session inside its trusted
+tenant scope. There is no permanent leader and no worker lease: overlapping
+scans are expected, while the Session+Task claim elects the only launcher.
+
+Ordinary draining is event-driven by the committed terminal/Session projection.
+The worker is a missed-event and restart recovery sweep, not a low-latency poller:
+it pages quickly through at most 250 Session refs per sweep, preserves its
+keyset cursor when saturated, then waits about one minute before continuing. A
+known-busy queue head is therefore not fully hydrated every few seconds, while
+a missed wakeup remains durably recoverable.
+
+The scan cursor, startup offset, bounded backoff, and jitter are contention
+etiquette and fairness only. A process-local `SessionTurnLocks` map and
+`queueRetryScheduled` set similarly coalesce work inside one daemon; process
+death or duplicate triggers cannot affect correctness.
+
+Queued rows survive daemon restart. Completion, Stop, callbacks, widgets,
+scheduled initialization, and the recovery worker may all trigger draining;
+duplicate triggers converge at the same durable claim. Callback and widget
+occurrences use deterministic Task IDs so competing producers converge on one
+queued row and one position. Their stable initial-message identity is persisted
+in `Task.metadata.initial_message_id`; a later drainer therefore writes exactly
+the same transcript row. A losing admission that still observes `queued` writes
+no transcript row.
+
+Widget submit/dismiss uses a separate short Message-row claim before registry
+or connector work. Only `pending -> resolving` may perform that work; the
+opaque claim token alone may publish `submitted|dismissed`. An interrupted
+attempt remains durably `resolving` and is not replayed automatically because
+the prior side effect may already have happened. Only an `applySubmit` handler
+that explicitly reports failure before returning releases the widget to
+`pending` with a secret-free failure code for an explicit retry; handlers must
+make that reported-error retry idempotent. Prompt-admission or completion
+failures after `applySubmit` succeeds leave the claim `resolving` so the effect
+cannot be replayed. Widget creation and lifecycle metadata are daemon-owned:
+generic external Message create/update/patch cannot mint or alter a widget,
+and pending/resolving widgets cannot be externally removed.
+
+## Invariants
+
+1. At most one Task is in an executing state for a Session.
+2. Concurrent enqueue produces one durable order decision per Task.
+3. Only the durable queue head may claim dispatch.
+4. A Task claim has one winner; losing daemons do not launch.
+5. Terminal Task state is immutable.
+6. Queue state survives daemon/process loss.
+7. System discovery exposes only routing refs; mutation always re-enters the
+   discovered tenant scope.
+8. SQLite preserves the same user-visible ordering and lifecycle without
+   pretending to provide multi-daemon authority.
+
+## Runtime supervision handoff
+
+- Queued Tasks are durable user intent and survive daemon startup in both
+  standalone and shared PostgreSQL modes. Replica startup is never a queue
+  outcome.
+- Shared PostgreSQL startup also leaves active Tasks and their Session
+  projection untouched; bounded runtime reconciliation acts only on expired
+  dispatch facts, stale executor heartbeats, or existing durable termination
+  requests.
+- Queue release follows authoritative Task settlement and the resulting
+  Session projection. It is not keyed to daemon identity or restart notices.
+- Verified containment may make the Session promptable and show a new-Task
+  Resume action. Unverified containment remains `stopping` and guarded behind
+  owner/admin force-fail.
 
 ## Key files
 
-- Repo: `packages/core/src/db/repositories/tasks.ts` (`createPending`,
-  `findQueued`, `getNextQueued`)
-- Route: `apps/agor-daemon/src/register-routes.ts` (`/sessions/:id/prompt`,
-  `spawnTaskExecutor`, `processNextQueuedTask`)
-- Reactive client: `packages/client/src/reactive-session.ts` (handles
-  `tasks:created`/`tasks:queued`/`tasks:patched` events)
+- Persistence: `packages/core/src/db/repositories/tasks.ts`
+- Admission/launch/drain: `apps/agor-daemon/src/register-routes.ts`
+- Fleet recovery: `apps/agor-daemon/src/services/session-queue-worker.ts`
+- Local coalescer: `apps/agor-daemon/src/utils/session-turn-lock.ts`
+- Producer identities: `apps/agor-daemon/src/utils/durable-task-id.ts`
+- Widget resolution fence: `apps/agor-daemon/src/widgets/resolution-store.ts`
+- Reactive client: `packages/client/src/reactive-session.ts`
 
-## Rationale
-
-The queue was originally implemented at the message layer (`messages.status='queued'`).
-Tasks are the natural queueable unit: each prompt is exactly one task, the task
-already carries the prompt + metadata + lifecycle, and the executor only needs
-to know "give me the next task to run." Migration to task-level queueing
-landed in `never-lose-prompt` (sqlite/0040, postgres/0030).
-
-For the post-launch lifecycle, executor heartbeat, SDK pulse/watchdog, and
+For post-claim executor lifecycle, heartbeat, SDK pulse/watchdog, and
 termination ownership, see [task-runtime-state.md](task-runtime-state.md).

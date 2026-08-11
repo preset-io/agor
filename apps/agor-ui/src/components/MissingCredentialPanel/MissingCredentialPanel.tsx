@@ -4,8 +4,8 @@
  * re-checks auth live for the current viewer via the `check-auth` service.
  */
 
+import { AGENTIC_TOOL_DISPLAY_NAMES, AGENTIC_TOOL_KEY_CREATION_URL } from '@agor/agentic-tools';
 import type { AgenticToolName, AgorClient, AuthCheckResult } from '@agor-live/client';
-import { AGENTIC_TOOL_DISPLAY_NAMES, AGENTIC_TOOL_KEY_CREATION_URL } from '@agor-live/client';
 import { CheckCircleOutlined } from '@ant-design/icons';
 import { Button, Space, Spin, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';

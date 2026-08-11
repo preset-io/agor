@@ -10,9 +10,10 @@
  * The executor handles the complete transaction:
  * 1. Filesystem operations (git clone, git worktree add/remove)
  * 2. Database record creation via Feathers services
- * 3. Privileged Unix group/ACL setup is delegated to the daemon via Feathers RPC
- *    (`repos.initializeUnixGroup`, `branches.initializeUnixGroup`) so it runs
- *    with daemon sudo privileges regardless of executor impersonation mode.
+ * 3. Privileged Unix group/ACL setup runs in this same tenant-mounted Git
+ *    lifecycle executor, before the resource is marked ready. This avoids a
+ *    nested executor-capacity dependency while keeping tenant paths out of the
+ *    daemon process.
  *
  * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
  */
@@ -20,8 +21,10 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { parseAgorYml, writeAgorYml } from '@agor/core/config';
+import { getReposDir } from '@agor/core/config';
+import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
+import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
   categorizeGitError,
   cleanBranch,
@@ -35,7 +38,6 @@ import {
   ensureGitRemoteUrl,
   getDefaultBranch,
   getRemoteUrl,
-  getReposDir,
   isValidGitRepo,
   redactGitUrlCredentials,
   removeGitWorktree,
@@ -48,7 +50,6 @@ import type {
   BranchAgorYmlExportPayload,
   BranchAgorYmlImportPayload,
   BranchFilesListPayload,
-  BranchInspectPayload,
   ExecutorResult,
   GitBranchAddPayload,
   GitBranchCleanPayload,
@@ -62,7 +63,11 @@ import type {
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
-import { fixBranchGitDirPermissionsBasic } from './unix.js';
+import {
+  fixBranchGitDirPermissionsBasic,
+  handleUnixSyncBranch,
+  handleUnixSyncRepo,
+} from './unix.js';
 
 /**
  * Self-hosted compatibility operation. The daemon authorizes the request and
@@ -146,10 +151,10 @@ export async function handleGitManagedCredentialsReconcile(
     for (const repo of repos.filter((item) => item.repo_type === 'remote')) {
       if (!options.dryRun && repo.local_path)
         findings += (await scrubGitConfigRemoteCredentials(repo.local_path)).findings.length;
-      const branches = await fetchAll('branches', {
-        repo_id: repo.repo_id,
-        archived: { $in: [true, false] },
-      });
+      // Omitting `archived` intentionally returns both active and archived
+      // branches. The public branch query contract accepts an exact boolean,
+      // not a Feathers `$in` operator for this field.
+      const branches = await fetchAll('branches', { repo_id: repo.repo_id });
       for (const branch of branches) {
         if (!options.dryRun && branch.path)
           findings += (await scrubGitConfigRemoteCredentials(branch.path)).findings.length;
@@ -326,76 +331,6 @@ export async function handleBranchFilesList(
   }
 }
 
-/**
- * Handle branch.inspect command.
- * Reads current git SHA/ref from the branch checkout.
- */
-export async function handleBranchInspect(
-  payload: BranchInspectPayload,
-  options: CommandOptions
-): Promise<ExecutorResult> {
-  const branchId = payload.params.branchId;
-
-  if (options.dryRun) {
-    return {
-      success: true,
-      data: {
-        dryRun: true,
-        command: 'branch.inspect',
-        branchId,
-      },
-    };
-  }
-
-  let client: AgorClient | null = null;
-
-  try {
-    const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
-    client = await createExecutorClient(daemonUrl, payload.sessionToken);
-
-    const branch = await client.service('branches').get(branchId);
-    if (!branch?.path) {
-      throw new Error(`Branch ${branchId} has no path`);
-    }
-
-    const repo = await prepareBranchInspectionGitConfig(client, branch);
-    const { currentSha, currentRef } = await readBranchInspectState({
-      branchPath: branch.path,
-      repoPath: repo?.local_path,
-      fallbackRef: branch.name || '',
-      logPrefix: `[branch.inspect ${branchId}]`,
-    });
-
-    return {
-      success: true,
-      data: {
-        branchId,
-        currentSha,
-        currentRef,
-      },
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[branch.inspect] Failed:', errorMessage);
-    return {
-      success: false,
-      error: {
-        code: 'BRANCH_INSPECT_FAILED',
-        message: errorMessage,
-        details: { branchId },
-      },
-    };
-  } finally {
-    if (client) {
-      try {
-        client.io.disconnect();
-      } catch {
-        // Ignore disconnect errors
-      }
-    }
-  }
-}
-
 async function fetchBranchForRepo(client: AgorClient, repoId: string, branchId: string) {
   const branch = await client.service('branches').get(branchId);
   if (!branch?.path) {
@@ -434,94 +369,6 @@ async function fetchAllBranchesForRepo(
   }
 
   return branches;
-}
-
-async function addSafeDirectoryForCurrentUser(pathToTrust: string): Promise<void> {
-  try {
-    const { git } = createGit();
-    await git.addConfig('safe.directory', pathToTrust, true, 'global');
-  } catch (error) {
-    console.warn(
-      `[branch.inspect] Failed to add safe.directory for ${pathToTrust}:`,
-      error instanceof Error ? error.message : String(error)
-    );
-  }
-}
-
-async function prepareBranchInspectionGitConfig(
-  client: AgorClient,
-  branch: { path: string; repo_id?: string }
-): Promise<{ local_path?: string } | null> {
-  await addSafeDirectoryForCurrentUser(branch.path);
-
-  if (!branch.repo_id) return null;
-  try {
-    const repo = await client.service('repos').get(branch.repo_id);
-    if (repo?.local_path) {
-      await addSafeDirectoryForCurrentUser(repo.local_path);
-    }
-    return repo ?? null;
-  } catch (error) {
-    console.warn(
-      `[branch.inspect] Failed to load repo ${branch.repo_id} for safe.directory setup:`,
-      error instanceof Error ? error.message : String(error)
-    );
-    return null;
-  }
-}
-
-async function readBranchInspectState({
-  branchPath,
-  repoPath,
-  fallbackRef,
-  logPrefix,
-}: {
-  branchPath: string;
-  repoPath?: string;
-  fallbackRef: string;
-  logPrefix: string;
-}): Promise<{ currentSha: string; currentRef: string }> {
-  const { git } = createGit(branchPath);
-  const safeArgs = [
-    '-c',
-    `safe.directory=${branchPath}`,
-    ...(repoPath ? ['-c', `safe.directory=${repoPath}`] : []),
-  ];
-
-  let currentSha = 'unknown';
-  try {
-    currentSha = (await git.raw([...safeArgs, 'rev-parse', 'HEAD'])).trim() || 'unknown';
-  } catch (error) {
-    console.warn(
-      `${logPrefix} Failed to read HEAD SHA; returning currentSha=unknown:`,
-      error instanceof Error ? error.message : String(error)
-    );
-  }
-
-  if (currentSha !== 'unknown') {
-    try {
-      const status = await git.raw([...safeArgs, 'status', '--porcelain']);
-      if (status.trim().length > 0) currentSha = `${currentSha}-dirty`;
-    } catch (error) {
-      console.warn(
-        `${logPrefix} Failed to read dirty state; returning clean SHA:`,
-        error instanceof Error ? error.message : String(error)
-      );
-    }
-  }
-
-  let currentRef = fallbackRef;
-  try {
-    currentRef =
-      (await git.raw([...safeArgs, 'rev-parse', '--abbrev-ref', 'HEAD'])).trim() || currentRef;
-  } catch (error) {
-    console.warn(
-      `${logPrefix} Failed to read current branch; falling back to DB branch name:`,
-      error instanceof Error ? error.message : String(error)
-    );
-  }
-
-  return { currentSha, currentRef };
 }
 
 /**
@@ -833,6 +680,13 @@ export async function handleGitClone(
     const reposDir = getReposDir();
     const outputPath = cloneOutputPath;
 
+    // The daemon selects this canonical, tenant-scoped destination. Trust only
+    // that exact path for this one-purpose executor process so an existing
+    // daemon-owned clone can be inspected/reused under Unix impersonation.
+    if (outputPath) {
+      appendGitConfigParameterPairs([`safe.directory=${outputPath}`]);
+    }
+
     // Clone the repository. If the caller pinned a default_branch, forward
     // it as `branch` so the working tree lands on that branch — otherwise
     // `.agor.yml` on a non-default branch wouldn't be visible at parse time
@@ -845,7 +699,7 @@ export async function handleGitClone(
     );
     const cloneResult = await cloneRepo({
       url: safeCloneUrl,
-      targetDir: outputPath, // undefined = let cloneRepo compute path
+      targetDir: outputPath ?? join(reposDir, extractRepoName(safeCloneUrl)),
       bare: payload.params.bare,
       branch: pinnedBranch,
       env,
@@ -889,10 +743,11 @@ export async function handleGitClone(
 
       if (payload.params.repoId) {
         // Daemon pre-created the row in `cloneRepository` so failures stay
-        // queryable. Patch it to `ready` and fill in the post-clone fields.
+        // queryable. Fill post-clone fields but keep it `cloning` until the
+        // synchronous operator permission handoff below completes.
         repoId = payload.params.repoId;
         console.log(
-          `[git.clone] Patching pre-created repo ${shortId(repoId)} to ready: ` +
+          `[git.clone] Patching pre-created repo ${shortId(repoId)} with cloned metadata: ` +
             `slug=${slug} default_branch=${defaultBranch}` +
             (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
         );
@@ -900,7 +755,7 @@ export async function handleGitClone(
           name: repoName,
           local_path: cloneResult.path,
           default_branch: defaultBranch,
-          clone_status: 'ready',
+          clone_status: 'cloning',
           // Explicit null clears any prior `clone_error` (e.g. from a retry
           // through the daemon's failed-row replace path). `deepMerge` in
           // `RepoRepository.update` propagates the null; `repoToInsert`
@@ -926,31 +781,42 @@ export async function handleGitClone(
           remote_url: safeCloneUrl,
           local_path: cloneResult.path,
           default_branch: defaultBranch,
-          clone_status: 'ready',
+          clone_status: 'cloning',
           ...(environment ? { environment } : {}),
         });
         repoId = repoRecord.repo_id;
         console.log(`[git.clone] Repo record created: ${repoId}`);
       }
 
-      // Initialize Unix group for repo isolation via daemon RPC (if requested).
-      // Runs daemon-side so that groupadd/chgrp/setfacl execute with daemon
-      // sudo privileges regardless of executor impersonation mode.
+      // Apply Unix isolation in this tenant-mounted lifecycle executor. Do not
+      // dispatch a nested executor: bounded hosted pools can deadlock when all
+      // outer Git jobs wait for inner permission jobs. Isolation is required
+      // in insulated/strict mode, so failure must prevent `ready`.
       if (payload.params.initUnixGroup && repoId) {
-        try {
-          console.log(`[git.clone] Initializing Unix group for repo ${shortId(repoId)}`);
-          const result = await client
-            .service('repos')
-            .initializeUnixGroup({ repoId, userId: payload.params.userId });
-          unixGroup = result.unixGroup;
-          console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
-        } catch (error) {
-          // Log but don't fail the entire operation
-          console.error(
-            `[git.clone] Failed to initialize Unix group:`,
-            error instanceof Error ? error.message : String(error)
-          );
+        console.log(`[git.clone] Initializing Unix group for repo ${shortId(repoId)}`);
+        const result = await handleUnixSyncRepo(
+          {
+            ...payload,
+            command: 'unix.sync-repo',
+            params: {
+              repoId,
+              daemonUser: payload.params.daemonUser,
+              initialize: true,
+              ...(payload.params.userId ? { creatorUserId: payload.params.userId } : {}),
+            },
+          },
+          options
+        );
+        if (!result.success) {
+          throw new Error(result.error?.message ?? 'Unix repository permission sync failed');
         }
+        unixGroup = (result.data as { groupName?: string } | undefined)?.groupName;
+        if (!unixGroup) throw new Error('Unix repository permission sync returned no group');
+        console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
+      }
+
+      if (repoId) {
+        await client.service('repos').patch(repoId, { clone_status: 'ready' });
       }
     }
 
@@ -1131,7 +997,6 @@ export async function handleGitBranchAdd(
   let resolvedRepoPath: string | undefined;
   let resolvedBranchPath: string | undefined;
   let resolvedBranchName: string | undefined;
-  let resolvedOthersAccess: 'none' | 'read' | 'write' = 'read';
 
   // Dry run mode
   if (options.dryRun) {
@@ -1176,7 +1041,6 @@ export async function handleGitBranchAdd(
     resolvedRepoPath = repoPath;
     resolvedBranchPath = branchPath;
     resolvedBranchName = branchName;
-    resolvedOthersAccess = branchRecord.others_fs_access || 'read';
     const branch = branchRecord.ref || branchName;
     const shouldCreateBranch = branchRecord.new_branch ?? false;
     const sourceBranch = branchRecord.base_ref || repo.default_branch || 'main';
@@ -1258,26 +1122,28 @@ export async function handleGitBranchAdd(
 
     console.log(`[git.branch.add] Branch created at ${branchPath}`);
 
-    // Initialize Unix group for branch isolation via daemon RPC (if requested).
-    // Runs daemon-side so that groupadd/chgrp/setfacl execute with daemon
-    // sudo privileges regardless of executor impersonation mode.
+    // Apply Unix isolation in this same tenant-mounted lifecycle executor.
+    // This is awaited and fail-closed so the branch cannot become ready first.
     let unixGroup: string | undefined;
     if (payload.params.initUnixGroup && branchId) {
-      try {
-        const othersAccess = resolvedOthersAccess;
-        console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
-        const result = await client
-          .service('branches')
-          .initializeUnixGroup({ branchId, othersAccess });
-        unixGroup = result.unixGroup;
-        console.log(`[git.branch.add] Unix group initialized: ${unixGroup}`);
-      } catch (error) {
-        // Log but don't fail the entire operation
-        console.error(
-          `[git.branch.add] Failed to initialize Unix group:`,
-          error instanceof Error ? error.message : String(error)
-        );
+      console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
+      const result = await handleUnixSyncBranch(
+        {
+          ...payload,
+          command: 'unix.sync-branch',
+          params: {
+            branchId,
+            daemonUser: payload.params.daemonUser,
+          },
+        },
+        options
+      );
+      if (!result.success) {
+        throw new Error(result.error?.message ?? 'Unix branch permission sync failed');
       }
+      unixGroup = (result.data as { groupName?: string } | undefined)?.groupName;
+      if (!unixGroup) throw new Error('Unix branch permission sync returned no group');
+      console.log(`[git.branch.add] Unix group initialized: ${unixGroup}`);
     } else if (payload.params.fixBasicPermissions && storageMode === 'worktree') {
       // RBAC is explicitly disabled — set basic permissions for the base
       // repo's .git/worktrees/<name>/ entry so git operations work even
@@ -1388,12 +1254,24 @@ export async function handleGitBranchAdd(
         }
       }
 
-      // Step 2: Apply perms/ACLs via daemon RPC (runs even if dir already existed from a prior attempt)
+      // Step 2: synchronously run idempotent repair in this lifecycle
+      // executor, even when a prior attempt already created the directory.
       if (existsSync(fallbackPath) && payload.params.initUnixGroup && branchId && client) {
         try {
-          await client
-            .service('branches')
-            .initializeUnixGroup({ branchId, othersAccess: resolvedOthersAccess });
+          const result = await handleUnixSyncBranch(
+            {
+              ...payload,
+              command: 'unix.sync-branch',
+              params: {
+                branchId,
+                daemonUser: payload.params.daemonUser,
+              },
+            },
+            options
+          );
+          if (!result.success) {
+            throw new Error(result.error?.message ?? 'Unix branch permission repair failed');
+          }
           console.log(`[git.branch.add] Fallback: applied Unix group permissions`);
           fallbackPermissionsApplied = true;
         } catch (permError) {

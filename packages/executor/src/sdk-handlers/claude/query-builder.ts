@@ -5,20 +5,26 @@
  * Manages MCP server configuration, resume/fork/spawn logic, and working directory validation.
  */
 
-import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
-import { shortId, validateDirectory } from '@agor/core';
-import { Claude } from '@agor/core/sdk';
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
+import { shortId } from '@agor/core/db';
+import { validateDirectory } from '@agor/core/lib/validation';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import { isGatewaySession } from '@agor/core/types';
+import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 
-const { query } = Claude;
-type PermissionMode = Claude.PermissionMode;
-type Options = Claude.Options;
+type PermissionMode = ClaudeSdk.PermissionMode;
+type Options = ClaudeSdk.Options;
 
-import { getDaemonUrl, resolveUserEnvironment } from '../../config.js';
+import {
+  AGOR_MCP_SERVER_NAME,
+  getMcpServersForSession,
+  listMcpToolsWithPermission,
+  PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+} from '@agor/core/mcp';
+import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
   MCPOAuthAuthHeadersRepository,
@@ -33,35 +39,16 @@ import type { PermissionService } from '../../permissions/permission-service.js'
 import type { MCPServersConfig, SessionID, TaskID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
-import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import { createMcpToolPermissionHook } from '../base/mcp-tool-permission-hook.js';
+import {
+  buildMcpToolPermissionIndex,
+  EMPTY_MCP_TOOL_PERMISSION_INDEX,
+  mcpToolNameAliasesForServer,
+  mcpToolNameAliasesForTool,
+} from '../base/mcp-tool-permissions.js';
+import { createCanUseToolCallback } from '../base/permission-hooks.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
-import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
-import { createCanUseToolCallback } from './permissions/permission-hooks.js';
-
-function summarizeMcpConfigCounts(config: unknown): string {
-  if (!config || typeof config !== 'object') return 'none';
-
-  let total = 0;
-  let remote = 0;
-  let stdio = 0;
-  let withEnv = 0;
-
-  for (const server of Object.values(config as MCPServersConfig)) {
-    total += 1;
-    const type = server.type || 'stdio';
-    if (type === 'stdio') {
-      stdio += 1;
-    } else {
-      remote += 1;
-    }
-    if (server.env && Object.keys(server.env).length > 0) {
-      withEnv += 1;
-    }
-  }
-
-  return `total=${total} remote=${remote} stdio=${stdio} with_env=${withEnv}`;
-}
 
 export function formatListForLog(items: string[], maxItems = 5): string {
   if (items.length <= maxItems) {
@@ -71,49 +58,10 @@ export function formatListForLog(items: string[], maxItems = 5): string {
 }
 
 /**
- * Get path to Claude Code executable
- * Uses `which claude` to find it in PATH
- */
-function getClaudeCodePath(): string {
-  try {
-    const path = execSync('which claude', { encoding: 'utf-8' }).trim();
-    if (path) return path;
-  } catch {
-    // which failed, try common paths
-  }
-
-  // Fallback to common installation paths
-  const commonPaths = [
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-    `${process.env.HOME}/.nvm/versions/node/v20.19.4/bin/claude`,
-  ];
-
-  for (const path of commonPaths) {
-    try {
-      execSync(`test -x "${path}"`, { encoding: 'utf-8' });
-      return path;
-    } catch {}
-  }
-
-  throw new Error(
-    'Claude Code executable not found. Install with: npm install -g @anthropic-ai/claude-code'
-  );
-}
-
-/**
  * Log prompt start with context
  */
-function logPromptStart(
-  sessionId: SessionID,
-  _prompt: string,
-  _cwd: string,
-  agentSessionId?: string
-) {
+function logPromptStart(sessionId: SessionID) {
   console.log(`🤖 Prompting Claude for session ${shortId(sessionId)}...`);
-  if (agentSessionId) {
-    console.log(`   Resuming session: ${agentSessionId}`);
-  }
 }
 
 export interface QuerySetupDeps {
@@ -187,14 +135,14 @@ export async function setupQuery(
     taskId,
     tasksService: deps.tasksService,
   });
-  console.log(`[Query Builder] Resolved contextUserId: ${contextUserId || 'NOT SET'}`);
 
   // Determine model to use (session config or default)
-  // Models may include [1m] suffix for extended context — strip it for SDK and add beta flag
+  // `[1m]` is a first-class Claude Code model-selection suffix. Keep it on
+  // the SDK model option so Claude Code can apply provider/account entitlement,
+  // compaction, and routing consistently; it strips the suffix at the provider
+  // boundary itself.
   const modelConfig = session.model_config;
-  const rawModel = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
-  const { model, betas } = parseModelWithBetas(rawModel);
-  const sdkBetas = new Set(betas);
+  const model = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
 
   // Determine CWD from branch (if session has one)
   let cwd = process.cwd();
@@ -203,7 +151,6 @@ export async function setupQuery(
       const branch = await deps.branchesRepo.findById(session.branch_id);
       if (branch) {
         cwd = branch.path;
-        console.log(`✅ Using branch path as cwd: ${cwd}`);
       } else {
         console.warn(
           `⚠️  Session ${sessionId} references non-existent branch ${session.branch_id}, using process.cwd(): ${cwd}`
@@ -217,7 +164,7 @@ export async function setupQuery(
     console.warn(`⚠️  Session ${sessionId} has no branch_id, using process.cwd(): ${cwd}`);
   }
 
-  logPromptStart(sessionId, prompt, cwd, resume ? session.sdk_session_id : undefined);
+  logPromptStart(sessionId);
 
   // Validate CWD exists before calling SDK
   try {
@@ -229,9 +176,6 @@ export async function setupQuery(
       const hasGit = files.includes('.git');
       const hasClaude = files.includes('.claude');
       const hasCLAUDEmd = files.includes('CLAUDE.md');
-      console.log(
-        `✅ Working directory validated: ${cwd} (${fileCount} files/dirs${hasGit ? ', has .git' : ', NO .git!'}${hasClaude ? ', has .claude/' : ''}${hasCLAUDEmd ? ', has CLAUDE.md' : ''})`
-      );
       if (fileCount === 0) {
         console.warn(`⚠️  Working directory is EMPTY - branch may be from bare repo!`);
       } else if (!hasGit) {
@@ -256,7 +200,6 @@ export async function setupQuery(
   }
 
   // Get Claude Code path
-  const claudeCodePath = getClaudeCodePath();
 
   // Buffer to capture stderr for better error messages
   let stderrBuffer = '';
@@ -275,20 +218,13 @@ export async function setupQuery(
     // Defensive copy — the const is readonly but the SDK option is typed `string[]`.
     disallowedTools: [...CLAUDE_CODE_DISALLOWED_TOOLS],
     model, // Use configured model or default
-    pathToClaudeCodeExecutable: claudeCodePath,
     // Allow access to common directories outside CWD (e.g., /tmp)
     additionalDirectories: ['/tmp', '/var/tmp'],
     // Enable token-level streaming (yields partial messages as tokens arrive)
     includePartialMessages: true,
-    // Enable debug logging to see what's happening
-    debug: true,
     // Capture stderr to get actual error messages (not just "exit code 1")
     stderr: (data: string) => {
       stderrBuffer += data;
-      // Log in real-time for debugging
-      if (data.trim()) {
-        console.error(`[Claude stderr] ${data.trim()}`);
-      }
     },
   };
 
@@ -297,7 +233,6 @@ export async function setupQuery(
   // See: https://platform.claude.com/docs/en/agent-sdk/typescript
   if (abortController) {
     queryOptions.abortController = abortController;
-    console.log(`🛑 AbortController attached to query for cancellation support`);
   }
 
   // Add permissionMode if provided, otherwise fall back to session's permission_config
@@ -306,9 +241,6 @@ export async function setupQuery(
   const effectivePermissionMode = permissionMode || session.permission_config?.mode;
   if (effectivePermissionMode) {
     queryOptions.permissionMode = effectivePermissionMode;
-    console.log(
-      `🔐 Permission mode: ${queryOptions.permissionMode}${permissionMode ? ' (from request)' : ' (from session config)'}`
-    );
   }
 
   // Configure effort level — controls reasoning depth via SDK's effort parameter
@@ -316,9 +248,6 @@ export async function setupQuery(
   const effort = session.model_config?.effort;
   if (effort) {
     queryOptions.effort = effort;
-    console.log(`🧠 Effort level: ${effort}`);
-  } else {
-    console.log(`🧠 Effort level: high (default)`);
   }
 
   // Configure Claude Code's server-side advisor tool model when a session-level
@@ -338,46 +267,9 @@ export async function setupQuery(
   // >= 2.1.175) and writes no settings file, so it sidesteps the collision entirely.
   const rawAdvisorModel = session.model_config?.advisorModel?.trim();
   if (rawAdvisorModel) {
-    const { model: advisorModel, betas: advisorBetas } = parseModelWithBetas(rawAdvisorModel);
-    for (const beta of advisorBetas) sdkBetas.add(beta);
     const extraArgs = (queryOptions.extraArgs as Record<string, string | null> | undefined) ?? {};
-    extraArgs.advisor = advisorModel;
+    extraArgs.advisor = rawAdvisorModel;
     queryOptions.extraArgs = extraArgs;
-    console.log(`🧭 Advisor model: ${advisorModel} (via --advisor)`);
-  }
-
-  // Add beta flags (e.g., 1M context window for [1m] model variants)
-  const betaList = [...sdkBetas];
-  if (betaList.length > 0) {
-    queryOptions.betas = betaList;
-    console.log(`🔬 Beta flags: ${betaList.join(', ')}`);
-  }
-
-  // Add canUseTool callback if permission service is available and taskId provided.
-  // This enables Agor's custom permission UI (WebSocket-based) when the SDK would
-  // show a prompt. Fires AFTER the SDK checks settings.json — respects user's
-  // existing Claude CLI permissions.
-  //
-  // Skip in bypassPermissions mode: the SDK skips canUseTool there anyway, and
-  // we no longer need a workaround to intercept AskUserQuestion (now disallowed).
-  if (
-    deps.permissionService &&
-    taskId &&
-    deps.sessionMCPRepo &&
-    deps.mcpServerRepo &&
-    effectivePermissionMode !== 'bypassPermissions'
-  ) {
-    queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
-      permissionService: deps.permissionService,
-      tasksService: deps.tasksService!,
-      messagesRepo: deps.messagesRepo!,
-      messagesService: deps.messagesService,
-      sessionsService: deps.sessionsService,
-      permissionLocks: deps.permissionLocks,
-      mcpServerRepo: deps.mcpServerRepo,
-      sessionMCPRepo: deps.sessionMCPRepo,
-    });
-    console.log(`✅ canUseTool callback added (permission mode: ${effectivePermissionMode})`);
   }
 
   // Add optional apiKey if provided
@@ -386,28 +278,6 @@ export async function setupQuery(
   // If deps.apiKey is provided, use it directly (no need to check process.env)
   if (deps.apiKey) {
     queryOptions.apiKey = deps.apiKey;
-  }
-
-  // Resolve user environment variables
-  // In executor mode, environment is inherited from the executor process
-  const userEnv = resolveUserEnvironment();
-  const originalProcessEnv = { ...process.env };
-  let userEnvCount = 0;
-
-  if (contextUserId) {
-    try {
-      // Count how many user env vars we're using (from inherited environment)
-      const systemVarCount = Object.keys(originalProcessEnv).length;
-      const totalVarCount = Object.keys(userEnv.env).length;
-      userEnvCount = totalVarCount - systemVarCount;
-
-      if (userEnvCount > 0) {
-        console.log(`🔐 Using ${userEnvCount} environment vars for user ${shortId(contextUserId)}`);
-      }
-    } catch (err) {
-      console.error(`⚠️  Failed to resolve user environment:`, err);
-      // Continue without user env vars - non-fatal error
-    }
   }
 
   // Handle resume, fork, and spawn cases
@@ -427,8 +297,6 @@ export async function setupQuery(
       if (parentSession?.sdk_session_id) {
         queryOptions.resume = parentSession.sdk_session_id;
         queryOptions.forkSession = true; // SDK will create new session ID from parent's history
-        console.log(`🍴 Forking from parent session: ${shortId(parentSession.sdk_session_id)}`);
-        console.log(`   SDK will return new session ID for this fork`);
       } else {
         console.warn(
           `⚠️  Parent session ${shortId(forkedFromSessionId)} has no sdk_session_id - starting fresh`
@@ -438,10 +306,6 @@ export async function setupQuery(
     // CASE 1b: Spawn on first prompt (has parent_session_id but NOT forked_from_session_id)
     else if (parentSessionId && !forkedFromSessionId && !session.sdk_session_id) {
       // This is a SPAWN - start FRESH, do NOT resume from parent
-      console.log(
-        `🌱 Spawning fresh session (parent: ${shortId(parentSessionId)}) - NOT forking SDK session`
-      );
-      console.log(`   Child will start with clean context (spawns don't inherit parent history)`);
       // Don't set queryOptions.resume - let it start completely fresh
     }
     // CASE 2: Normal resume (session has its own sdk_session_id)
@@ -517,7 +381,6 @@ export async function setupQuery(
           // Don't set queryOptions.resume - start fresh
         } else {
           queryOptions.resume = session.sdk_session_id;
-          console.log(`   Resuming SDK session: ${shortId(session.sdk_session_id)}`);
         }
       }
     }
@@ -533,7 +396,6 @@ export async function setupQuery(
       // Get daemon URL from config
       const daemonUrl = await getDaemonUrl();
 
-      console.log(`🔌 Configuring Agor MCP server at ${daemonUrl}/mcp`);
       const mcpConfig = {
         agor: {
           type: 'http' as const,
@@ -552,36 +414,60 @@ export async function setupQuery(
     }
   }
 
+  // Whether this query will have a live approval channel back to the UI.
+  // Decided up front because MCP `tool_permissions` need it: an "ask" tool with
+  // nowhere to ask has to fail closed rather than silently become "allow".
+  const canPromptForPermission = Boolean(
+    deps.permissionService &&
+      taskId &&
+      deps.sessionMCPRepo &&
+      deps.mcpServerRepo &&
+      effectivePermissionMode !== 'bypassPermissions'
+  );
+
   // Fetch and configure MCP servers for this session
+  let mcpToolPermissions = EMPTY_MCP_TOOL_PERMISSION_INDEX;
   if (deps.sessionMCPRepo && deps.mcpServerRepo) {
     try {
       // Use shared MCP scoping utility
       // Pass forUserId to enable per-user OAuth token injection
-      const serversWithSource = await getMcpServersForSession(sessionId, {
-        sessionMCPRepo: deps.sessionMCPRepo,
-        mcpServerRepo: deps.mcpServerRepo,
-        mcpOAuthAuthHeadersRepo: deps.mcpOAuthAuthHeadersRepo,
-        forUserId: contextUserId,
+      const serversWithSource = await getMcpServersForSession(
+        sessionId,
+        {
+          sessionMCPRepo: deps.sessionMCPRepo,
+          mcpServerRepo: deps.mcpServerRepo,
+          mcpOAuthAuthHeadersRepo: deps.mcpOAuthAuthHeadersRepo,
+          forUserId: contextUserId,
+        },
+        { toolFiltering: 'exclude' }
+      );
+
+      // The built-in Agor server carries this session's daemon bearer token and
+      // is auto-approved by name in canUseTool. Drop any DB server claiming that
+      // name before anything reads the list, so it can neither be configured nor
+      // contribute permissions that would gate the genuine built-in's tools.
+      const attachableServers = serversWithSource.filter(({ server }) => {
+        if (server.name !== AGOR_MCP_SERVER_NAME) return true;
+        console.warn(
+          `   ⚠️  Skipping MCP server "${server.name}": reserved for the built-in Agor MCP server`
+        );
+        return false;
       });
 
-      if (serversWithSource.length > 0) {
+      mcpToolPermissions = buildMcpToolPermissionIndex(
+        attachableServers.map(({ server }) => server)
+      );
+
+      if (attachableServers.length > 0) {
         // Convert to SDK format
         const mcpConfig: MCPServersConfig = {};
-        const allowedTools: string[] = [];
-        let remoteServerCount = 0;
-        let stdioServerCount = 0;
-        let serversWithHeaders = 0;
+        const deniedTools: string[] = [];
         const missingAuthServers: string[] = [];
         const unresolvedAuthServers: string[] = [];
 
-        for (const { server } of serversWithSource) {
+        for (const { server } of attachableServers) {
           // Infer transport if missing (backwards compatibility)
           const transport = server.transport || (server.url ? 'sse' : 'stdio');
-          if (transport === 'stdio') {
-            stdioServerCount += 1;
-          } else {
-            remoteServerCount += 1;
-          }
 
           // Build server config (convert 'transport' field to 'type' for Claude Code)
           const serverConfig: Record<string, unknown> = {
@@ -611,7 +497,6 @@ export async function setupQuery(
             const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (headers && transport !== 'stdio') {
               serverConfig.headers = headers;
-              serversWithHeaders += 1;
             }
             if (missingRequiredAuth) {
               // Auth-backed remote server but no usable token. Track one concise summary below.
@@ -630,10 +515,22 @@ export async function setupQuery(
 
           mcpConfig[server.name] = serverConfig;
 
-          // Add tools to allowlist
-          if (server.tools) {
-            for (const tool of server.tools) {
-              allowedTools.push(tool.name);
+          // Denied tools are blocked at the SDK layer as well as in canUseTool,
+          // so the model is never even offered a tool the user switched off.
+          // Without an approval channel an "ask" tool is unanswerable, so it
+          // joins them rather than degrading to "allow".
+          const blocked = canPromptForPermission
+            ? (['deny'] as const)
+            : PERMISSIONS_BLOCKED_WITHOUT_PROMPT;
+          for (const tool of listMcpToolsWithPermission(server, blocked)) {
+            // The CLI rewrites BOTH halves into the tool-name alphabet before a
+            // name reaches a rule, so either half carrying punctuation would
+            // never match if only the raw form were listed. Every combination is
+            // emitted; a rule that matches nothing is inert.
+            for (const serverAlias of new Set(mcpToolNameAliasesForServer(server.name))) {
+              for (const toolAlias of new Set(mcpToolNameAliasesForTool(tool))) {
+                deniedTools.push(`mcp__${serverAlias}__${toolAlias}`);
+              }
             }
           }
         }
@@ -643,12 +540,6 @@ export async function setupQuery(
           ...(queryOptions.mcpServers || {}),
           ...mcpConfig,
         };
-        // Log one safe summary line. Env/header values may contain secrets after template resolution.
-        console.log(
-          `   🔧 MCP servers configured: total=${serversWithSource.length} remote=${remoteServerCount} ` +
-            `stdio=${stdioServerCount} headers=${serversWithHeaders} missing_auth=${missingAuthServers.length} ` +
-            `auth_errors=${unresolvedAuthServers.length}`
-        );
         if (missingAuthServers.length > 0) {
           console.warn(
             `   ⚠️  ${missingAuthServers.length} MCP server(s) have configured auth but no valid token: ` +
@@ -661,9 +552,11 @@ export async function setupQuery(
               formatListForLog(unresolvedAuthServers, 3)
           );
         }
-        if (allowedTools.length > 0) {
-          queryOptions.allowedTools = allowedTools;
-          console.log(`   🔧 MCP tools allowlist: ${allowedTools.length} tool(s)`);
+        if (deniedTools.length > 0) {
+          queryOptions.disallowedTools = [
+            ...(queryOptions.disallowedTools as string[]),
+            ...deniedTools,
+          ];
         }
       }
     } catch (error) {
@@ -672,11 +565,43 @@ export async function setupQuery(
     }
   }
 
-  console.log('📤 Calling query() with:');
-  console.log(`   prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
-  console.log(`   queryOptions keys: ${Object.keys(queryOptions).join(', ')}`);
-  // Log safe MCP counts only. Per-server names/details are intentionally omitted from this per-query log.
-  console.log(`   MCP servers: ${summarizeMcpConfigCounts(queryOptions.mcpServers)}`);
+  // PreToolUse runs ahead of settings.json rule matching, so this is what stops
+  // a stale persisted `allow` rule from skipping an `ask` gate entirely.
+  if (mcpToolPermissions.byServer.size > 0) {
+    queryOptions.hooks = {
+      ...(queryOptions.hooks as Record<string, unknown> | undefined),
+      PreToolUse: [
+        { hooks: [createMcpToolPermissionHook(mcpToolPermissions, canPromptForPermission)] },
+      ],
+    };
+  }
+
+  // Add canUseTool callback if permission service is available and taskId provided.
+  // This enables Agor's custom permission UI (WebSocket-based) when the SDK would
+  // show a prompt. Fires AFTER the SDK checks settings.json — respects user's
+  // existing Claude CLI permissions.
+  //
+  // Skip in bypassPermissions mode: the SDK skips canUseTool there anyway, and
+  // we no longer need a workaround to intercept AskUserQuestion (now disallowed).
+  if (
+    deps.permissionService &&
+    taskId &&
+    deps.sessionMCPRepo &&
+    deps.mcpServerRepo &&
+    effectivePermissionMode !== 'bypassPermissions'
+  ) {
+    queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
+      permissionService: deps.permissionService,
+      tasksService: deps.tasksService!,
+      messagesRepo: deps.messagesRepo!,
+      messagesService: deps.messagesService,
+      sessionsService: deps.sessionsService,
+      permissionLocks: deps.permissionLocks,
+      mcpServerRepo: deps.mcpServerRepo,
+      sessionMCPRepo: deps.sessionMCPRepo,
+      mcpToolPermissions,
+    });
+  }
 
   // Wrap the string prompt in an AsyncIterable so the SDK treats this as a
   // streaming-input query.  When a plain string is passed, the SDK sets
@@ -706,17 +631,16 @@ export async function setupQuery(
 
   let result: AsyncGenerator<unknown>;
   try {
-    result = query({
+    const Claude = await loadManagedAgenticToolSdk<typeof ClaudeSdk>('claude-code');
+    result = Claude.query({
       prompt: asUserMessageIterable(prompt),
-      // queryOptions uses Record<string,unknown> to accommodate undocumented fields (debug, apiKey)
-      // that are valid at runtime but not in the public Options type
+      // queryOptions uses Record<string,unknown> to accommodate apiKey, which is valid at
+      // runtime but not in the public Options type.
       options: queryOptions as unknown as Options,
     });
-    console.log(`✅ query() returned AsyncGenerator successfully`);
   } catch (syncError) {
     // This is rare - SDK usually returns AsyncGenerator that throws later
     console.error(`❌ CRITICAL: query() threw synchronous error (very unusual):`, syncError);
-    console.error(`   Claude Code path: ${claudeCodePath}`);
     console.error(`   CWD: ${cwd}`);
     console.error(`   API key set: ${deps.apiKey ? 'YES' : 'NO'}`);
     console.error(`   Resume session: ${queryOptions.resume || 'none (fresh session)'}`);

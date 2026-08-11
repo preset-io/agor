@@ -10,6 +10,8 @@ const repoRoot = resolve(__dirname, '..');
 
 const targetManifest = 'packages/agor-live/package.json';
 const sourceManifests = [
+  'packages/agentic-tool-opencode/package.json',
+  'packages/agentic-tools/package.json',
   'packages/core/package.json',
   'packages/git/package.json',
   'apps/agor-cli/package.json',
@@ -19,7 +21,13 @@ const sourceManifests = [
 
 // Internal workspace packages are bundled/copied into agor-live dist.
 // They are not publishable npm dependencies and should not be synced into dependencies.
-const skipDeps = new Set(['@agor/core', '@agor/daemon', '@agor/git']);
+const skipDeps = new Set([
+  '@agor/agentic-tool-opencode',
+  '@agor/agentic-tools',
+  '@agor/core',
+  '@agor/daemon',
+  '@agor/git',
+]);
 const mode = process.argv.includes('--check') ? 'check' : 'write';
 
 const readJson = (relPath) => JSON.parse(readFileSync(resolve(repoRoot, relPath), 'utf8'));
@@ -28,6 +36,9 @@ const writeJson = (relPath, data) =>
 
 const target = readJson(targetManifest);
 const targetDeps = { ...(target.dependencies ?? {}) };
+// This is the only dependency owned directly by the publishable wrapper.
+// Everything else is derived from the copied workspace packages below.
+const targetOnlyDependencies = new Set(['@agor-live/client']);
 
 const aggregated = new Map();
 const conflicts = [];
@@ -56,6 +67,12 @@ if (conflicts.length) {
 }
 
 const updates = [];
+for (const dep of Object.keys(targetDeps)) {
+  if (!targetOnlyDependencies.has(dep) && !aggregated.has(dep)) {
+    updates.push({ dep, from: targetDeps[dep], to: undefined });
+    if (mode === 'write') delete targetDeps[dep];
+  }
+}
 for (const [dep, version] of aggregated) {
   const current = targetDeps[dep];
   if (current !== version) {
@@ -70,7 +87,7 @@ if (mode === 'check') {
   if (updates.length) {
     console.error('packages/agor-live/package.json is missing dependency updates:');
     for (const update of updates) {
-      console.error(` - ${update.dep}: expected ${update.to}, found ${update.from ?? '∅'}`);
+      console.error(` - ${update.dep}: expected ${update.to ?? '∅'}, found ${update.from ?? '∅'}`);
     }
     console.error('Run pnpm sync:agor-live-deps to fix.');
     process.exit(1);
@@ -94,5 +111,5 @@ writeJson(targetManifest, target);
 
 console.log(`Updated ${targetManifest} with ${updates.length} change(s):`);
 for (const update of updates) {
-  console.log(` - ${update.dep}: ${update.from ?? '∅'} -> ${update.to}`);
+  console.log(` - ${update.dep}: ${update.from ?? '∅'} -> ${update.to ?? '∅'}`);
 }

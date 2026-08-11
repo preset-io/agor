@@ -3,6 +3,7 @@ import {
   executeToolTask,
   installProviderConnection,
   resolveApiKeyForTask,
+  settleTaskFailure,
 } from './base-executor.js';
 
 vi.mock('./git-safe-directory.js', () => ({
@@ -89,10 +90,49 @@ describe('resolveApiKeyForTask', () => {
   });
 });
 
-describe('executeToolTask credential preflight', () => {
-  it('persists an explicit missing-credential failure before invoking the tool', async () => {
+describe('settleTaskFailure', () => {
+  it('does not persist Drizzle query parameters in task or transcript diagnostics', async () => {
+    const secret = 'secret-binary-tool-result';
     const taskPatch = vi.fn().mockResolvedValue(undefined);
     const messageCreate = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service(name: string) {
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') {
+          return {
+            find: vi.fn().mockResolvedValue({ total: 0, data: [] }),
+            create: messageCreate,
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const failure = Object.assign(new Error(`Failed query: update messages params: ${secret}`), {
+      query: 'update messages',
+      params: [secret],
+      cause: { code: '22P05' },
+    });
+
+    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, failure, {
+      status: 'failed',
+      error_message: failure.message,
+    });
+
+    const persisted = JSON.stringify({
+      message: messageCreate.mock.calls,
+      task: taskPatch.mock.calls,
+    });
+    expect(persisted).not.toContain(secret);
+    expect(persisted).not.toContain('update messages');
+    expect(persisted).toContain('Database operation failed');
+  });
+});
+
+describe('executeToolTask credential preflight', () => {
+  it('persists an explicit missing-credential failure before invoking the tool', async () => {
+    const order: string[] = [];
+    const taskPatch = vi.fn(async () => order.push('task'));
+    const messageCreate = vi.fn(async () => order.push('message'));
     const client = {
       service(name: string) {
         if (name === 'config/resolve-api-key') {
@@ -146,6 +186,7 @@ describe('executeToolTask credential preflight', () => {
         },
       })
     );
+    expect(order).toEqual(['message', 'task']);
   });
 
   it('does not launch provider work when cancellation arrives before tool execution', async () => {

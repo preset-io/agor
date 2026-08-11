@@ -6,10 +6,41 @@ import {
 } from '../types';
 import {
   InvalidScheduleAgenticToolConfigError,
+  normalizePersistedScheduleAgenticToolConfig,
   normalizeScheduleAgenticToolConfig,
 } from './schedule-agentic-tool-config';
 
 const LEGACY_WORKSPACE_DEFAULT = '___workspace_default___';
+
+describe('normalizePersistedScheduleAgenticToolConfig', () => {
+  it.each([
+    [USER_DEFAULT_AGENTIC_CONFIGURATION, USER_DEFAULT_AGENTIC_CONFIGURATION, undefined],
+    [WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION, WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION, undefined],
+    [LEGACY_WORKSPACE_DEFAULT, WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION, undefined],
+    [
+      LEGACY_WORKSPACE_DEFAULT,
+      USER_DEFAULT_AGENTIC_CONFIGURATION,
+      USER_DEFAULT_AGENTIC_CONFIGURATION,
+    ],
+  ] as const)(
+    'canonicalizes stored preset reference %s without dropping its snapshot',
+    (presetId, expected, canonical) => {
+      const normalized = normalizePersistedScheduleAgenticToolConfig({
+        agentic_tool: 'codex',
+        preset_id: presetId as ScheduleAgenticToolConfig['preset_id'],
+        ...(canonical ? { configuration_reference: canonical } : {}),
+        context_files: ['AGENTS.md'],
+        model_config: { mode: 'exact', model: 'gpt-5.4' },
+      });
+      expect(normalized).toEqual({
+        agentic_tool: 'codex',
+        configuration_reference: expected,
+        context_files: ['AGENTS.md'],
+        model_config: { mode: 'exact', model: 'gpt-5.4' },
+      });
+    }
+  );
+});
 
 describe('normalizeScheduleAgenticToolConfig', () => {
   it('rejects removed runtime identifiers preserved in historical rows', () => {

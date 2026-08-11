@@ -68,7 +68,7 @@ jobs:
             github.event.pull_request.head.repo.full_name == github.repository &&
             github.event.pull_request.user.login != 'dependabot[bot]'
           )
-        uses: docker/login-action@v4
+        uses: docker/login-action@v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -120,7 +120,10 @@ jobs:
       # can't see.
       - name: Smoke test
         run: |
-          docker run -d --name agor-smoke -p 3030:3030 ${{ env.IMAGE }}:smoke
+          docker run -d --name agor-smoke -p 3030:3030 \
+            -e AGOR_JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+            -e AGOR_MASTER_SECRET=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789 \
+            ${{ env.IMAGE }}:smoke
           for i in $(seq 1 60); do
             if curl -fsS http://localhost:3030/health > /dev/null 2>&1; then
               echo "Daemon healthy."

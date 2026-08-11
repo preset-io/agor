@@ -393,9 +393,6 @@ export class ClaudeTool implements ITool {
                 skills: event.skills,
               },
             });
-            console.log(
-              `📋 Stored ${event.slashCommands.length} slash commands and ${event.skills.length} skills on session`
-            );
           } catch (error) {
             console.warn('Failed to persist slash commands to session:', error);
           }
@@ -535,9 +532,7 @@ export class ClaudeTool implements ITool {
         const systemCompleteEvent = event as Extract<ProcessedEvent, { type: 'system_complete' }>;
         if (systemCompleteEvent.systemType === 'compaction') {
           const metadata = systemCompleteEvent.metadata;
-          console.log(
-            `✅ Compaction complete (trigger: ${metadata?.trigger || 'unknown'}, pre_tokens: ${metadata?.pre_tokens || 'unknown'})`
-          );
+          console.log(`✅ Compaction complete (trigger: ${metadata?.trigger || 'unknown'})`);
 
           // Create a NEW system message for compaction complete
           // This preserves the event stream and allows UI to aggregate

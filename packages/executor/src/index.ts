@@ -29,6 +29,7 @@ import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import { formatExecutorFailure } from './safe-executor-error.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
@@ -54,6 +55,8 @@ export interface ExecutorConfig {
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;
+  /** Opaque, daemon-authorized context interpreted by the selected integration. */
+  agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. See payload-types.ResolvedConfigSliceSchema. */
   resolvedConfig?: ResolvedConfigSlice;
 }
@@ -128,11 +131,8 @@ export class AgorExecutor {
         process.exit(0);
         return;
       }
-      console.error('[executor] Fatal error:', error);
-      await this.tryMarkTaskTerminal(
-        TaskStatus.FAILED,
-        error instanceof Error ? error.message : String(error)
-      );
+      console.error('[executor] fatal error category=task_startup');
+      await this.tryMarkTaskTerminal(TaskStatus.FAILED, formatExecutorFailure(error));
       process.exit(1);
     }
   }
@@ -158,6 +158,7 @@ export class AgorExecutor {
       const event = data as {
         requestId: string;
         taskId: string;
+        sessionId: string;
         allow: boolean;
         reason?: string;
         remember: boolean;
@@ -166,7 +167,7 @@ export class AgorExecutor {
       };
       console.log('[executor] Received permission_resolved event:', event);
 
-      if (event.taskId === this.config.taskId) {
+      if (event.taskId === this.config.taskId && event.sessionId === this.config.sessionId) {
         this.recordPulse('sdk_started', 'permission.resolved');
         // Forward to global permission manager
         globalPermissionManager.resolvePermission({
@@ -262,6 +263,7 @@ export class AgorExecutor {
       taskId: this.config.taskId,
       enabled: heartbeatConfig?.enabled ?? true,
       intervalMs: heartbeatConfig?.interval_ms,
+      onTask: (task) => this.handleTaskLifecycleUpdate(task),
     });
     const watchdogConfig =
       this.config.resolvedConfig?.execution?.sdk_watchdog ?? resolveSdkWatchdogConfig();
@@ -295,6 +297,7 @@ export class AgorExecutor {
         permissionMode: this.config.permissionMode,
         abortController: this.abortController,
         messageSource: this.config.messageSource,
+        agenticToolContext: this.config.agenticToolContext,
         resolvedConfig: this.config.resolvedConfig,
         onPulse: (kind, detail) => this.recordPulse(kind, detail),
       });

@@ -40,6 +40,32 @@ describe('startExecutorHeartbeat', () => {
     }
   });
 
+  it('forwards the durable Task response so a replacement daemon can request stop', async () => {
+    vi.useFakeTimers();
+    try {
+      const stopping = {
+        task_id: 'task-1',
+        status: 'stopping',
+        termination_request: { cause: 'user_stop', requested_at: '2026-08-06T12:00:00.000Z' },
+      };
+      const reportRuntimeTelemetry = vi.fn().mockResolvedValue(stopping);
+      const onTask = vi.fn();
+      const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
+      const handle = startExecutorHeartbeat({
+        client,
+        taskId: 'task-1',
+        intervalMs: 1000,
+        onTask,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onTask).toHaveBeenCalledWith(stopping);
+      handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('coalesces many pulses into the latest fact at heartbeat cadence', async () => {
     vi.useFakeTimers();
     try {

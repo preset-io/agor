@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 import { registerBoardTools } from './boards.js';
 
@@ -81,6 +81,59 @@ function registerAndCaptureConfig(
   if (!config) throw new Error(`${toolName} was not registered`);
   return config;
 }
+
+describe('agor_boards_list pagination', () => {
+  const baseServiceParams = { authenticated: true, provider: 'mcp' };
+
+  it('uses a lean bounded default and reports how to advance pages', async () => {
+    const find = vi.fn(async ({ query }: { query: Record<string, unknown> }) => ({
+      total: 30,
+      limit: query.$limit,
+      skip: query.$skip,
+      data: Array.from({ length: 25 }, (_, i) => ({ board_id: `board-${i}` })),
+    }));
+    const list = registerAndCaptureHandler('agor_boards_list', {
+      app: { service: () => ({ find }) },
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const parsed = JSON.parse((await list({})).content[0].text);
+    expect(find).toHaveBeenCalledWith({
+      query: {
+        $limit: 25,
+        $skip: 0,
+        lean: true,
+        archived: false,
+        $sort: { created_at: -1, board_id: 1 },
+      },
+      ...baseServiceParams,
+    });
+    expect(parsed).toMatchObject({
+      total: 30,
+      limit: 25,
+      offset: 0,
+      hasMore: true,
+      nextOffset: 25,
+    });
+  });
+
+  it('supports explicit and empty final pages and caps limits in the schema', async () => {
+    const find = vi.fn(async () => ({ total: 4, limit: 2, skip: 4, data: [] }));
+    const ctx = {
+      app: { service: () => ({ find }) },
+      userId: 'user-1',
+      baseServiceParams,
+    };
+    const list = registerAndCaptureHandler('agor_boards_list', ctx);
+    const parsed = JSON.parse((await list({ limit: 2, offset: 4 })).content[0].text);
+    expect(parsed).toMatchObject({ total: 4, data: [], hasMore: false, nextOffset: null });
+
+    const schema = registerAndCaptureConfig('agor_boards_list', ctx).inputSchema!;
+    expect(schema.safeParse({ limit: 100 }).success).toBe(true);
+    expect(schema.safeParse({ limit: 101 }).success).toBe(false);
+  });
+});
 
 describe('agor_boards_get', () => {
   const baseServiceParams = {
@@ -467,9 +520,39 @@ describe('agor_boards_create schema', () => {
       expect(result.error.issues[0]?.message).toMatch(/name cannot be empty/i);
     }
   });
+
+  it('accepts None as a board branch-permission default', () => {
+    const config = registerAndCaptureConfig('agor_boards_create', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(
+      config.inputSchema?.safeParse({ name: 'Private fallback', defaultOthersCan: 'none' }).success
+    ).toBe(true);
+  });
 });
 
 describe('agor_boards_update realtime events', () => {
+  it('persists None as the default for aligned branches', async () => {
+    const patch = vi.fn(async (_id, data) => ({ board_id: 'board-1', ...data }));
+    const get = vi.fn(async () => ({ board_id: 'board-1', default_others_can: 'none' }));
+    const app = {
+      service(name: string) {
+        if (name === 'boards') return { patch, get, emit: vi.fn() };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const updateBoard = registerAndCaptureHandler('agor_boards_update', {
+      app,
+      userId: 'user-1',
+      baseServiceParams: {},
+    });
+
+    await updateBoard({ boardId: 'board-1', defaultOthersCan: 'none' });
+    expect(patch).toHaveBeenCalledWith('board-1', { default_others_can: 'none' }, {});
+  });
+
   it('emits custom object mutations with a correctly-shaped HookContext', async () => {
     const params = {
       authenticated: true,

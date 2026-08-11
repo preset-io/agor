@@ -15,7 +15,6 @@ import {
   SUPPRESSED_CLAUDE_STATUSES,
   shouldSuppressClaudeSystemEvent,
 } from '@agor/core/client/claude-system-suppression';
-import { shortId } from '@agor/core/db';
 import type {
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
@@ -28,15 +27,6 @@ import type {
 } from '@agor/core/sdk';
 import type { SessionID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-
-const DEBUG_CLAUDE_MESSAGES =
-  process.env.AGOR_DEBUG_CLAUDE_MESSAGES === '1' || process.env.DEBUG?.includes('claude-messages');
-
-function claudeMessageDebug(...args: unknown[]): void {
-  if (DEBUG_CLAUDE_MESSAGES) {
-    console.debug(...args);
-  }
-}
 
 /**
  * Content block interface for SDK messages
@@ -249,17 +239,6 @@ export class SDKMessageProcessor {
   async process(msg: SDKMessage): Promise<ProcessedEvent[]> {
     this.state.messageCount++;
 
-    // Log message type for debugging (skip stream_event as it's too verbose)
-    if (this.state.messageCount % 10 === 0 && msg.type !== 'stream_event') {
-      claudeMessageDebug(`📨 SDK message ${this.state.messageCount}: type=${msg.type}`);
-    }
-
-    // Add detailed logging for debugging SDK behavior
-    if (process.env.DEBUG_SDK_MESSAGES === 'true') {
-      console.log(`🔍 [DEBUG] Full SDK message ${this.state.messageCount}:`);
-      console.log(JSON.stringify(msg, null, 2));
-    }
-
     // Capture session ID from first message that has it
     if (!this.state.capturedAgentSessionId && 'session_id' in msg && msg.session_id) {
       const events = this.captureSessionId(msg.session_id);
@@ -351,12 +330,10 @@ export class SDKMessageProcessor {
   private handleUser(msg: SDKUserMessage | SDKUserMessageReplay): ProcessedEvent[] {
     // Check if this is a replay message (already processed)
     if ('isReplay' in msg && msg.isReplay) {
-      console.debug(`🔄 User message replay (uuid: ${msg.uuid ? shortId(msg.uuid) : 'unknown'})`);
       return []; // Skip replays - already in our database
     }
 
     const content = msg.message?.content as ContentBlock[] | undefined;
-    const uuid = 'uuid' in msg ? msg.uuid : undefined;
 
     // Check what type of content this user message has
     const hasToolResult = Array.isArray(content) && content.some((b) => b.type === 'tool_result');
@@ -365,11 +342,6 @@ export class SDKMessageProcessor {
     if (hasToolResult) {
       // Tool result messages - save to database for conversation continuity
       const toolResults = content.filter((b) => b.type === 'tool_result');
-      const errorCount = toolResults.filter((tr) => tr.is_error).length;
-      const successCount = toolResults.length - errorCount;
-      claudeMessageDebug(
-        `🔧 SDK user message with ${toolResults.length} tool result(s) (✅ ${successCount}, ❌ ${errorCount})`
-      );
 
       // A tool is complete when Claude reports its result, not when the
       // preceding tool-use content block finishes streaming.
@@ -396,12 +368,6 @@ export class SDKMessageProcessor {
         },
       ];
     } else if (hasText) {
-      const textBlocks = content.filter((b) => b.type === 'text');
-      const textPreview = textBlocks[0]?.text?.substring(0, 100) || '';
-      claudeMessageDebug(
-        `👤 SDK user message (uuid: ${uuid ? shortId(uuid) : 'unknown'}): "${textPreview}"`
-      );
-
       // Regular user text messages - also save for completeness
       return [
         {
@@ -415,12 +381,7 @@ export class SDKMessageProcessor {
         },
       ];
     } else {
-      claudeMessageDebug(`👤 SDK user message (uuid: ${uuid ? shortId(uuid) : 'unknown'})`);
-      claudeMessageDebug(
-        `   Content types:`,
-        Array.isArray(content) ? content.map((b) => b.type) : 'no content'
-      );
-      return []; // Unknown user message type - log only
+      return []; // Unknown user message type
     }
   }
 
@@ -437,7 +398,6 @@ export class SDKMessageProcessor {
 
     // Message start event
     if (event?.type === 'message_start') {
-      claudeMessageDebug(`🎬 Message start`);
       events.push({
         type: 'message_start',
         agentSessionId: this.state.capturedAgentSessionId,
@@ -468,7 +428,6 @@ export class SDKMessageProcessor {
           agentSessionId: this.state.capturedAgentSessionId,
         });
       } else if (block?.type === 'thinking') {
-        claudeMessageDebug(`🧠 Thinking block start`);
         // Track thinking blocks
         this.state.contentBlockStack.push({
           index: blockIndex,
@@ -534,8 +493,6 @@ export class SDKMessageProcessor {
           type: 'thinking_complete',
           agentSessionId: this.state.capturedAgentSessionId,
         });
-      } else {
-        claudeMessageDebug(`🏁 Content block ${blockIndex} complete`);
       }
 
       // Remove from stack
@@ -546,7 +503,6 @@ export class SDKMessageProcessor {
 
     // Message stop event
     if (event?.type === 'message_stop') {
-      claudeMessageDebug(`🏁 Message complete`);
       events.push({
         type: 'message_complete',
         agentSessionId: this.state.capturedAgentSessionId,
@@ -566,24 +522,6 @@ export class SDKMessageProcessor {
    * Handle result messages (end of conversation)
    */
   private handleResult(msg: SDKResultMessage): ProcessedEvent[] {
-    const subtype = msg.subtype || 'unknown';
-    const duration = msg.duration_ms;
-    const cost = msg.total_cost_usd;
-
-    console.log(
-      `✅ SDK result: ${subtype}${duration ? ` (${duration}ms)` : ''}${cost ? ` ($${cost})` : ''}`
-    );
-
-    // Log additional metadata if available
-    if ('usage' in msg && msg.usage) {
-      console.log(`   Token usage:`, msg.usage);
-    }
-
-    // Log modelUsage (should contain contextWindow per TypeScript types)
-    if ('modelUsage' in msg && msg.modelUsage) {
-      console.log(`   Model usage (with contextWindow):`, JSON.stringify(msg.modelUsage, null, 2));
-    }
-
     const events: ProcessedEvent[] = [];
 
     // The SDK puts final output text in result.result for both normal prompts and local commands.
@@ -598,9 +536,6 @@ export class SDKMessageProcessor {
       msg.result.trim().length > 0
     ) {
       const hasAssistantMessages = this.state.assistantMessageCount > 0;
-      console.log(
-        `📋 SDK result text (${msg.result.length} chars, hasAssistantMessages=${hasAssistantMessages})`
-      );
       if (!hasAssistantMessages) {
         events.push({
           type: 'complete',
@@ -641,7 +576,6 @@ export class SDKMessageProcessor {
   private handleSystem(msg: SDKSystemMessage | SDKCompactBoundaryMessage): ProcessedEvent[] {
     if ('subtype' in msg && msg.subtype === 'compact_boundary') {
       console.log(`📦 SDK compact_boundary (compaction finished)`);
-      console.log(`📊 Full compact_boundary message:`, JSON.stringify(msg, null, 2));
 
       // Extract metadata from compact_boundary message
       const metadata = 'compact_metadata' in msg ? msg.compact_metadata : undefined;
@@ -697,16 +631,6 @@ export class SDKMessageProcessor {
 
     if ('subtype' in msg && msg.subtype === 'init') {
       const initMsg = msg as SDKSystemMessage;
-      console.debug(`ℹ️  SDK system init:`, {
-        model: initMsg.model,
-        permissionMode: initMsg.permissionMode,
-        cwd: initMsg.cwd,
-        tools: initMsg.tools?.length,
-        mcp_servers: initMsg.mcp_servers?.length,
-        slash_commands: initMsg.slash_commands?.length,
-        skills: initMsg.skills?.length,
-      });
-
       const events: ProcessedEvent[] = [];
 
       // Capture model from init message
@@ -718,9 +642,6 @@ export class SDKMessageProcessor {
       if (initMsg.slash_commands || initMsg.skills) {
         this.state.slashCommands = initMsg.slash_commands || [];
         this.state.skills = initMsg.skills || [];
-        console.log(
-          `📋 Available commands: ${this.state.slashCommands.length} slash commands, ${this.state.skills.length} skills`
-        );
 
         // Emit event so claude-tool can persist to session for UI autocomplete
         events.push({
@@ -774,12 +695,7 @@ export class SDKMessageProcessor {
     const overageStatus = info.overageStatus as string | undefined;
     const isUsingOverage = info.isUsingOverage as boolean | undefined;
 
-    // Always log rate limit events
-    if (status === 'allowed') {
-      console.log(
-        `⏳ Rate limit event: allowed (type: ${rateLimitType || 'unknown'}, overage: ${overageStatus || 'unknown'})`
-      );
-    } else {
+    if (status !== 'allowed') {
       console.warn(
         `🚫 Rate limit event: ${status} (type: ${rateLimitType || 'unknown'}, resets: ${resetsAt ? new Date(resetsAt * 1000).toISOString() : 'unknown'})`
       );
@@ -825,7 +741,6 @@ export class SDKMessageProcessor {
     const msgType = msg.type || 'unknown';
 
     if (SDKMessageProcessor.SUPPRESSED_MESSAGE_TYPES.has(msgType)) {
-      claudeMessageDebug(`🔇 Suppressed SDK message type: ${msgType}`);
       return [];
     }
 

@@ -94,15 +94,6 @@ export function buildBranchShellTabName(branch: Pick<Branch, 'branch_id' | 'name
   return `${branch.name} · ${shortId(branch.branch_id)}`;
 }
 
-export function resolveBranchShellCwd(
-  branch: Pick<Branch, 'name' | 'path'>,
-  _finalUnixUser: string | null
-): string {
-  // Path existence/canonicalisation belongs to the executor identity. Passing
-  // the tenant-derived branch path also avoids name-keyed convenience symlinks.
-  return branch.path;
-}
-
 /**
  * Terminals service - manages Zellij sessions via executor
  *
@@ -313,7 +304,7 @@ export class TerminalsService {
     }
     this.readyExecutors.add(userId);
     this.settleReadyWaiters(userId, true);
-    this.app.io?.to(`user/${userId}/terminal`).emit('terminal:ready', { userId });
+    this.app.io?.local.to(`user/${userId}/terminal`).emit('terminal:ready', { userId });
   }
 
   /**
@@ -323,7 +314,7 @@ export class TerminalsService {
   handleExecutorError(userId: UserID, message?: string): void {
     this.readyExecutors.delete(userId);
     this.settleReadyWaiters(userId, false);
-    this.app.io?.to(`user/${userId}/terminal`).emit('terminal:error', { userId, message });
+    this.app.io?.local.to(`user/${userId}/terminal`).emit('terminal:error', { userId, message });
   }
 
   /** Settle and clear every pending readiness waiter for a user. */
@@ -374,7 +365,7 @@ export class TerminalsService {
     const { focusTabName, skipTabName } = opts;
     const channel = `user/${userId}/terminal`;
     if (focusTabName && focusTabName !== skipTabName) {
-      this.app.io?.to(channel).emit('terminal:tab', {
+      this.app.io?.local.to(channel).emit('terminal:tab', {
         userId,
         action: 'focus',
         tabName: focusTabName,
@@ -444,6 +435,7 @@ export class TerminalsService {
         if (branch) {
           const branchTabName = buildBranchShellTabName(branch);
           const channel = `user/${userId}/terminal`;
+          const unixUserMode = (await loadConfig()).execution?.unix_user_mode ?? 'simple';
 
           // Gate ALL executor-directed choreography on readiness. For a normal
           // warm reuse (the executor acked ready this daemon session) this
@@ -462,17 +454,17 @@ export class TerminalsService {
               );
               return;
             }
-            this.app.io?.to(channel).emit('terminal:tab', {
+            this.app.io?.local.to(channel).emit('terminal:tab', {
               userId,
               action: 'create',
               tabName: branchTabName,
-              cwd: branch.path,
+              ...(unixUserMode === 'simple' ? { cwd: branch.path } : {}),
             });
             this.dispatchTabFocus(userId, {
               focusTabName: data.focusTabName,
               skipTabName: branchTabName,
             });
-            this.app.io?.to(channel).emit('terminal:redraw', { userId });
+            this.app.io?.local.to(channel).emit('terminal:redraw', { userId });
           });
 
           return {
@@ -488,7 +480,7 @@ export class TerminalsService {
 
       void this.awaitExecutorReady(userId).then((isReady) => {
         if (isReady) {
-          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
+          this.app.io?.local.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
         }
       });
 
@@ -561,8 +553,7 @@ export class TerminalsService {
         throw err;
       }
 
-      // Determine cwd and branch info
-      let cwd: string | undefined;
+      // Branch info for the tab.
       let branchName: string | undefined;
       let branchTabName: string | undefined;
 
@@ -580,8 +571,10 @@ export class TerminalsService {
       if (branch) {
         branchName = branch.name;
         branchTabName = buildBranchShellTabName(branch);
-        cwd = resolveBranchShellCwd(branch, finalUnixUser);
       }
+      // Simple mode has no per-user home isolation, so keep the shell in the branch
+      // checkout; impersonation modes (delegated/insulated/strict) open $HOME.
+      const cwd = unixUserMode === 'simple' ? (branch?.path ?? undefined) : undefined;
 
       // Build Zellij session name
       const sessionName = buildZellijSessionName(userId);
@@ -629,6 +622,7 @@ export class TerminalsService {
             // insulated/strict, the caller's unix_username in delegated (no
             // sudo), and unset in simple.
             unix_user: impersonationResult.reportedUnixUser || undefined,
+            executor_type: 'shell',
           },
           // Clean up map when executor exits (handles crashes too)
           onExit: () => this.handleExecutorExit(userId),

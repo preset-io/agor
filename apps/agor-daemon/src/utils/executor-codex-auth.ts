@@ -1,5 +1,10 @@
 import { runExecutorCommand } from './spawn-executor.js';
 
+export interface ExecutorCodexAuthRouting {
+  reportedUnixUser: string | null;
+  userId: string;
+}
+
 export type ExecutorCodexAuthInspection =
   | {
       ok: true;
@@ -10,19 +15,26 @@ export type ExecutorCodexAuthInspection =
     }
   | { ok: false; reason: 'not-found' | 'malformed' | 'unreadable' };
 
-const options = (asUser: string | null) => ({
+const options = (asUser: string | null, routing?: ExecutorCodexAuthRouting) => ({
   asUser,
+  templateVariables: routing
+    ? {
+        unix_user: routing.reportedUnixUser ?? undefined,
+        user_id: routing.userId,
+      }
+    : undefined,
   sensitiveOutput: true,
   timeoutMs: 10_000,
   logPrefix: '[CodexAuthExecutor]',
 });
 
 export async function inspectCodexAuthViaExecutor(
-  asUser: string | null
+  asUser: string | null,
+  routing?: ExecutorCodexAuthRouting
 ): Promise<ExecutorCodexAuthInspection> {
   const result = await runExecutorCommand(
     { command: 'codex.auth-file', params: { operation: 'inspect' } },
-    options(asUser)
+    options(asUser, routing)
   );
   if (!result.success) return { ok: false, reason: 'unreadable' };
   const data = result.data as Record<string, unknown>;
@@ -46,11 +58,12 @@ export async function inspectCodexAuthViaExecutor(
 
 export async function writeCodexAuthViaExecutor(
   content: string,
-  asUser: string | null
+  asUser: string | null,
+  routing?: ExecutorCodexAuthRouting
 ): Promise<{ authMode: 'chatgpt' | 'api_key'; planType?: string; lastRefresh?: string }> {
   const result = await runExecutorCommand(
     { command: 'codex.auth-file', params: { operation: 'write', content } },
-    options(asUser)
+    options(asUser, routing)
   );
   if (!result.success) throw new Error('Executor credential write failed');
   const data = result.data as Record<string, unknown>;
@@ -64,10 +77,13 @@ export async function writeCodexAuthViaExecutor(
   };
 }
 
-export async function deleteCodexAuthViaExecutor(asUser: string | null): Promise<void> {
+export async function deleteCodexAuthViaExecutor(
+  asUser: string | null,
+  routing?: ExecutorCodexAuthRouting
+): Promise<void> {
   const result = await runExecutorCommand(
     { command: 'codex.auth-file', params: { operation: 'delete' } },
-    options(asUser)
+    options(asUser, routing)
   );
   if (!result.success) throw new Error('Executor credential delete failed');
 }

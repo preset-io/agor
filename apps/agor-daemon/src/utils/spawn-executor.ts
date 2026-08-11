@@ -28,6 +28,10 @@ import { fileURLToPath } from 'node:url';
 import type { AgorExecutionSettings } from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
 import {
+  EXECUTOR_RESULT_PREFIX,
+  INTERACTIVE_EXECUTOR_EVENT_PREFIX,
+} from '@agor/core/executor-protocol';
+import {
   attachEnvFileCleanup,
   buildSpawnArgs,
   escapeShellArg,
@@ -38,6 +42,13 @@ import {
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  containExecutorProcess,
+  markExecutorProcessExited,
+  retainExecutorContainmentFence,
+  trackExecutorProcess,
+  untrackExecutorProcess,
+} from '../executor-tracking.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
 
 let configuredDaemonUrl: string | null = null;
@@ -97,7 +108,10 @@ export interface ExecutorTemplateVariables {
   unix_user_gid?: number;
   session_id?: string;
   branch_id?: string;
+  /** Trusted Agor user UUID used by external launchers for identity-scoped storage. */
+  user_id?: string;
   log_level?: string;
+  executor_type?: string;
   /**
    * Trusted runtime tenant identity. This is populated from the ambient tenant
    * context, shell-escaped during substitution, and is not caller-overridable
@@ -125,9 +139,9 @@ export interface SpawnExecutorOptions {
    * excluded: it must come from the ambient tenant context.
    */
   templateVariables?: Omit<ExecutorTemplateVariables, 'tenant_id'>;
-  onExit?: (code: number | null, context: ExecutorSpawnContext) => void;
+  onExit?: (code: number | null, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
-  onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void;
+  onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
   preparedEnv?: Record<string, string>;
   /** Pre-written 0600 env file; bypasses prepareImpersonationEnv(). Only with asUser. */
@@ -144,6 +158,29 @@ export interface ExecutorCommandResult {
   };
 }
 
+/**
+ * Invoke a fire-and-forget lifecycle callback while observing both synchronous
+ * throws and asynchronous rejections. The spawn API deliberately remains void,
+ * but callback failures must never become process-level unhandled rejections.
+ * Error objects are not logged because database failures can carry bound token
+ * fingerprints or other sensitive parameters.
+ */
+function observeExitCallback(
+  callback: SpawnExecutorOptions['onExit'],
+  code: number | null,
+  context: ExecutorSpawnContext,
+  logPrefix: string
+): void {
+  if (!callback) return;
+  try {
+    void Promise.resolve(callback(code, context)).catch(() => {
+      console.error(`${logPrefix} Executor exit callback failed`);
+    });
+  } catch {
+    console.error(`${logPrefix} Executor exit callback failed`);
+  }
+}
+
 export interface RunExecutorCommandOptions
   extends Omit<SpawnExecutorOptions, 'onExit' | 'onSpawn'> {
   /** Optional timeout for short-lived command execution. */
@@ -152,6 +189,40 @@ export interface RunExecutorCommandOptions
   sensitiveOutput?: boolean;
 }
 
+export interface InteractiveExecutorHandle {
+  result: Promise<ExecutorCommandResult>;
+  cancel(): Promise<ExecutorCommandResult>;
+  deliver(value: unknown, end?: boolean): Promise<boolean>;
+  endInput(): boolean;
+  verifyAbsence(): Promise<boolean>;
+  retainContainmentFence(key: string): Promise<void>;
+}
+
+export interface ContainedExecutorCommandHandle {
+  result: Promise<ExecutorCommandResult>;
+  verifyAbsence(): Promise<boolean>;
+  retainContainmentFence(key: string): Promise<void>;
+}
+
+export interface InteractiveExecutorFailures {
+  localProcessRequired: ExecutorCommandResult;
+  spawn: ExecutorCommandResult;
+  stdin: ExecutorCommandResult;
+  timeout: ExecutorCommandResult;
+  cancelled: ExecutorCommandResult;
+  cleanupUnverified: ExecutorCommandResult;
+  missingResult(stderrSeen: boolean): ExecutorCommandResult;
+}
+
+export interface StartInteractiveExecutorOptions extends RunExecutorCommandOptions {
+  failures: InteractiveExecutorFailures;
+  /** Close stdin after the initial payload when no later control frame is expected. */
+  closeInputAfterPayload?: boolean;
+  onEvent?: (
+    event: unknown,
+    input: Pick<InteractiveExecutorHandle, 'deliver' | 'endInput'>
+  ) => void;
+}
 /**
  * Substitute template variables in the executor command template.
  *
@@ -182,6 +253,14 @@ export function substituteTemplateVariables(
       'executor_command_template {unix_user} value is not a valid Unix username; refusing to execute'
     );
   }
+  if (
+    variables.user_id !== undefined &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(variables.user_id)
+  ) {
+    throw new Error(
+      'executor_command_template {user_id} value is not a valid Agor user UUID; refusing to execute'
+    );
+  }
 
   let result = template;
 
@@ -193,7 +272,9 @@ export function substituteTemplateVariables(
     unix_user_gid: variables.unix_user_gid,
     session_id: variables.session_id,
     branch_id: variables.branch_id,
+    user_id: variables.user_id,
     log_level: variables.log_level,
+    executor_type: variables.executor_type,
     tenant_id: variables.tenant_id,
   };
 
@@ -310,6 +391,7 @@ export function spawnExecutor(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
+        executor_type: 'executor',
         ...templateVariables,
         tenant_id: tenantId,
       },
@@ -320,116 +402,67 @@ export function spawnExecutor(
   }
 }
 
+function sendExecutorPayload(
+  executorProcess: ChildProcess,
+  payload: Record<string, unknown>,
+  spawnReady: void | Promise<void>,
+  logPrefix: string,
+  reportExit: (code: number | null) => void
+): void {
+  const writePayload = () => {
+    executorProcess.stdin?.write(JSON.stringify(payload));
+    executorProcess.stdin?.end();
+  };
+  if (!spawnReady) {
+    writePayload();
+    return;
+  }
+  void spawnReady.then(writePayload).catch((error) => {
+    console.error(`${logPrefix} Spawn readiness failed:`, error);
+    try {
+      executorProcess.kill();
+    } finally {
+      reportExit(127);
+    }
+  });
+}
+
 /**
  * Spawn executor as a local subprocess.
  * stdout/stderr are inherited so logs appear in daemon output.
  */
 function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
-  const executorPath = findExecutorPath();
+  const location = resolveLocalExecutorLocation(options);
+  const cwdFailure = resolveLocalExecutorCwdFailure(location);
+  const logPrefix = options.logPrefix ?? '[Executor]';
+  if (cwdFailure) {
+    console.error(
+      `${logPrefix} ${cwdFailure.error?.message}. ` +
+        `This usually means the branch or repo directory was deleted out-of-band. ` +
+        `Verify that the volume backing the working directory persists across restarts.`
+    );
+    observeExitCallback(options.onExit, 127, { mode: 'local' }, logPrefix);
+    return;
+  }
 
-  // Default cwd to executor package directory for proper module resolution
-  // ESM imports resolve relative to the file location, and pnpm's node_modules
-  // structure requires running from the package directory
-  const executorDir = path.dirname(path.dirname(executorPath)); // Go up from bin/agor-executor or dist/cli.js
-
-  const {
-    cwd = executorDir,
-    env = process.env as Record<string, string>,
-    logPrefix = '[Executor]',
-    asUser: rawAsUser,
-    onSpawn,
-    preparedEnv,
-    preparedEnvFilePath,
-  } = options;
-  const asUser = rawAsUser || undefined;
-
-  const daemonUrl = getDaemonUrl();
-
-  const envWithDaemonUrl: Record<string, string> = preparedEnv
-    ? withDaemonExecutorEnv(preparedEnv, daemonUrl)
-    : asUser
-      ? withDaemonExecutorEnv(
-          Object.fromEntries(
-            Object.entries({
-              PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-              NODE_ENV: env.NODE_ENV,
-              LOG_LEVEL: env.LOG_LEVEL,
-              // HOME: not set - sudo will set it to the target user's home directory
-              ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-              ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-              ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-              CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
-              OPENAI_API_KEY: env.OPENAI_API_KEY,
-              OPENAI_BASE_URL: env.OPENAI_BASE_URL,
-              GEMINI_API_KEY: env.GEMINI_API_KEY,
-              GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-              // Forward git hardening pairs across the sudo boundary (sudoers
-              // env_keep is the belt; this is the suspenders for this path).
-              GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
-            }).filter(([_, v]) => v !== undefined)
-          ),
-          daemonUrl
-        )
-      : withDaemonExecutorEnv(env as Record<string, string>, daemonUrl);
-
-  const prepared = asUser
-    ? preparedEnvFilePath
-      ? {
-          inlineEnv: Object.fromEntries(
-            Object.entries(envWithDaemonUrl).filter(([k]) => !isSecretEnvKey(k))
-          ),
-          envFilePath: preparedEnvFilePath,
-        }
-      : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
-    : { inlineEnv: undefined, envFilePath: undefined };
-
-  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
-    asUser,
-    env: asUser ? prepared.inlineEnv : undefined, // Non-secret env only; secrets are sourced from envFilePath
-    envFilePath: prepared.envFilePath,
-  });
+  const { executorPath, cwd, asUser, envWithDaemonUrl, envFilePath, inlineEnv, cmd, args } =
+    prepareLocalExecutorSpawn(options, '--stdin', location);
 
   if (asUser) {
     // Safe summary only — never log secret values or their key names.
-    const safeEnvKeys = Object.keys(prepared.inlineEnv ?? {}).filter((k) => !isSecretEnvKey(k));
+    const safeEnvKeys = Object.keys(inlineEnv ?? {}).filter((key) => !isSecretEnvKey(key));
     console.log(
-      `${logPrefix} Spawning executor as user=${asUser} tool=${payload.command ?? '?'} envKeys=[${safeEnvKeys.join(',')}]${prepared.envFilePath ? ' (secrets in env-file)' : ''}`
+      `${logPrefix} Spawning executor as user=${asUser} tool=${payload.command ?? '?'} envKeys=[${safeEnvKeys.join(',')}]${envFilePath ? ' (secrets in env-file)' : ''}`
     );
   }
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
 
-  // Detect missing-cwd up front (issue #1109). Without this, node's
-  // child_process surfaces `spawn /usr/local/bin/node ENOENT` — reported
-  // against the executable path, not the cwd that's actually gone — and
-  // operators end up debugging the wrong layer. The most common cause is
-  // running with a persistent database while `$HOME` is on an ephemeral
-  // volume (e.g. Kubernetes emptyDir): on pod redeploy the DB still
-  // references branch/repo paths that no longer exist on disk. We
-  // surface that clearly here; recovery is left to the operator
-  // (restore the volume, or use the branch/repo lifecycle commands to
-  // remove the orphan rows).
-  if (cwd && !existsSync(cwd)) {
-    console.error(
-      `${logPrefix} Refusing to spawn: cwd does not exist on disk: ${cwd}. ` +
-        `This usually means the branch or repo directory was deleted ` +
-        `out-of-band — for example a Kubernetes pod redeploy with an ` +
-        `ephemeral $HOME but a persistent database. Verify that the volume ` +
-        `backing $HOME persists across restarts. See issue #1109.`
-    );
-    // Surface failure through the normal exit-code path so onExit handlers
-    // (e.g. the clone-safety-net in repos.ts) run as expected. 127 is the
-    // conventional "command not found" exit code; close enough semantically
-    // for "the cwd is gone" without inventing a new one.
-    options.onExit?.(127, { mode: 'local' });
-    return;
-  }
-
   let reportedExit = false;
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code, { mode: 'local' });
+    observeExitCallback(options.onExit, code, { mode: 'local' }, logPrefix);
   };
 
   const executorProcess = spawn(cmd, args, {
@@ -443,9 +476,9 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // file before exec, but if sudo/bash failed to launch — or `set -eu`
   // aborted the source step — the file may remain. attachEnvFileCleanup
   // uses `sudo -u <asUser> rm -f` so it works under sticky /tmp.
-  attachEnvFileCleanup(executorProcess, { envFilePath: prepared.envFilePath, asUser });
+  attachEnvFileCleanup(executorProcess, { envFilePath, asUser });
 
-  onSpawn?.(executorProcess, { mode: 'local' });
+  const spawnReady = options.onSpawn?.(executorProcess, { mode: 'local' });
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
@@ -465,8 +498,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     reportExit(code);
   });
 
-  executorProcess.stdin?.write(JSON.stringify(payload));
-  executorProcess.stdin?.end();
+  sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
 }
 
 function spawnExecutorWithTemplate(
@@ -490,7 +522,7 @@ function spawnExecutorWithTemplate(
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code, { mode: 'templated' });
+    observeExitCallback(options.onExit, code, { mode: 'templated' }, logPrefix);
   };
 
   const executorProcess = spawn('sh', ['-c', command], {
@@ -498,7 +530,7 @@ function spawnExecutorWithTemplate(
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
-  options.onSpawn?.(executorProcess, { mode: 'templated' });
+  const spawnReady = options.onSpawn?.(executorProcess, { mode: 'templated' });
 
   executorProcess.stdout?.on('data', (data) => {
     console.log(`${logPrefix} ${data.toString().trim()}`);
@@ -526,11 +558,8 @@ function spawnExecutorWithTemplate(
     reportExit(code);
   });
 
-  executorProcess.stdin?.write(JSON.stringify(payload));
-  executorProcess.stdin?.end();
+  sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
 }
-
-const EXECUTOR_RESULT_PREFIX = 'AGOR_EXECUTOR_RESULT ';
 
 function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | null {
   const lines = stdout
@@ -559,6 +588,49 @@ function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | 
   return null;
 }
 
+/**
+ * Settle once the executor's result is complete, not merely once it has exited.
+ *
+ * `exit` fires as soon as the process is reaped, while bytes it wrote can still
+ * be sitting unread in the pipe — parsing there loses up to a full pipe buffer
+ * of output, which is the daemon-side half of #2222. `close` fires only after
+ * every stdio stream has ended, so it is the final missing-result fence.
+ *
+ * Exiting with an already-parseable result is the common case and settles
+ * immediately, so a descendant that inherited stdio and outlives the executor
+ * cannot add latency. Only an incomplete result waits for `close`, backstopped
+ * by the caller's command timeout — better a late accurate answer than a prompt
+ * EXECUTOR_RESULT_MISSING for output that was still in flight.
+ */
+function settleOnExecutorResultComplete(
+  child: ChildProcess,
+  readStdout: () => string,
+  settle: (result: ExecutorCommandResult | null, code: number | null) => void
+): void {
+  let done = false;
+  let parsed: ExecutorCommandResult | null = null;
+
+  const finish = (code: number | null) => {
+    if (done) return;
+    done = true;
+    settle(parsed, code);
+  };
+
+  child.on('exit', (code) => {
+    // Already settled (spawn error, or a close that preceded exit) — skip the
+    // parse, which walks the whole accumulated stdout.
+    if (done) return;
+    parsed = parseExecutorResultFromStdout(readStdout());
+    if (parsed) finish(code);
+  });
+
+  child.on('close', (code) => {
+    if (done) return;
+    parsed ??= parseExecutorResultFromStdout(readStdout());
+    finish(code);
+  });
+}
+
 function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Buffer): void {
   const text = chunk.toString();
   for (const line of text.split(/\r?\n/)) {
@@ -572,6 +644,442 @@ function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Bu
       console.error(`${prefix} ${line}`);
     }
   }
+}
+
+function resolveLocalExecutorLocation(options: Pick<SpawnExecutorOptions, 'cwd'> = {}) {
+  const executorPath = findExecutorPath();
+  return {
+    executorPath,
+    // Default to the executor package directory for proper module resolution.
+    // ESM imports resolve relative to the file location, and pnpm's node_modules
+    // structure requires running from the package directory.
+    cwd: options.cwd ?? path.dirname(path.dirname(executorPath)),
+  };
+}
+
+function resolveLocalExecutorCwdFailure(
+  location: ReturnType<typeof resolveLocalExecutorLocation>
+): ExecutorCommandResult | undefined {
+  if (!location.cwd || existsSync(location.cwd)) return undefined;
+  return {
+    success: false,
+    error: {
+      code: 'EXECUTOR_CWD_MISSING',
+      message: `Refusing to spawn: cwd does not exist on disk: ${location.cwd}`,
+    },
+  };
+}
+
+function definedEnvironment(values: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  );
+}
+
+function executorEnvironmentForImpersonation(env: Record<string, string>): Record<string, string> {
+  return definedEnvironment({
+    PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+    NODE_ENV: env.NODE_ENV,
+    LOG_LEVEL: env.LOG_LEVEL,
+    // Version-aligned agentic tool packages are system runtime metadata, not
+    // tenant credentials. Preserve their absolute read-only location when an
+    // executor crosses a Unix identity boundary.
+    AGOR_VERSION: env.AGOR_VERSION,
+    AGOR_AGENTIC_TOOLS_DIR: env.AGOR_AGENTIC_TOOLS_DIR,
+    AGOR_MANAGED_AGENTIC_TOOLS: env.AGOR_MANAGED_AGENTIC_TOOLS,
+    ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+    ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+    ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
+    CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
+    OPENAI_API_KEY: env.OPENAI_API_KEY,
+    OPENAI_BASE_URL: env.OPENAI_BASE_URL,
+    GEMINI_API_KEY: env.GEMINI_API_KEY,
+    GOOGLE_API_KEY: env.GOOGLE_API_KEY,
+    GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
+  });
+}
+
+function resolveLocalExecutorEnvironment(
+  options: Pick<SpawnExecutorOptions, 'env' | 'preparedEnv'>,
+  asUser: string | undefined
+): Record<string, string> {
+  const env = options.env ?? (process.env as Record<string, string>);
+  const source = options.preparedEnv ?? (asUser ? executorEnvironmentForImpersonation(env) : env);
+  return withDaemonExecutorEnv(source, getDaemonUrl());
+}
+
+function prepareLocalExecutorImpersonation(
+  asUser: string | undefined,
+  env: Record<string, string>,
+  preparedEnvFilePath: string | undefined
+): { inlineEnv?: Record<string, string>; envFilePath?: string } {
+  if (!asUser) return {};
+  if (!preparedEnvFilePath) return prepareImpersonationEnv({ asUser, env });
+  return {
+    inlineEnv: Object.fromEntries(Object.entries(env).filter(([key]) => !isSecretEnvKey(key))),
+    envFilePath: preparedEnvFilePath,
+  };
+}
+
+function prepareLocalExecutorSpawn(
+  options: SpawnExecutorOptions,
+  mode: '--stdin' | '--interactive-command',
+  location = resolveLocalExecutorLocation(options)
+) {
+  const { executorPath, cwd } = location;
+  const asUser = options.asUser || undefined;
+  const envWithDaemonUrl = resolveLocalExecutorEnvironment(options, asUser);
+  const prepared = prepareLocalExecutorImpersonation(
+    asUser,
+    envWithDaemonUrl,
+    options.preparedEnvFilePath
+  );
+  const command = buildSpawnArgs('node', [executorPath, mode], {
+    asUser,
+    env: asUser ? prepared.inlineEnv : undefined,
+    envFilePath: prepared.envFilePath,
+  });
+  return {
+    ...command,
+    executorPath,
+    cwd,
+    asUser,
+    envWithDaemonUrl,
+    inlineEnv: prepared.inlineEnv,
+    envFilePath: prepared.envFilePath,
+  };
+}
+
+function parseInteractiveExecutorEvent(line: string): unknown | undefined {
+  if (!line.startsWith(INTERACTIVE_EXECUTOR_EVENT_PREFIX)) return undefined;
+  try {
+    return JSON.parse(line.slice(INTERACTIVE_EXECUTOR_EVENT_PREFIX.length)) as unknown;
+  } catch {
+    // Invalid protocol output is ignored and becomes a missing-result failure.
+  }
+  return undefined;
+}
+
+function failedInteractiveExecutorHandle(
+  failure: ExecutorCommandResult
+): InteractiveExecutorHandle {
+  return {
+    result: Promise.resolve(failure),
+    cancel: async () => failure,
+    deliver: async () => false,
+    endInput: () => false,
+    verifyAbsence: async () => true,
+    retainContainmentFence: async () => {
+      throw new Error('Cannot retain a containment fence for an executor that did not start');
+    },
+  };
+}
+
+interface JsonLineInput {
+  deliver(value: unknown, end?: boolean): Promise<boolean>;
+  end(): boolean;
+  failPending(transportFailure: boolean): void;
+}
+
+function createJsonLineInput(
+  child: ChildProcess,
+  isFinalized: () => boolean,
+  onTransportFailure: () => void
+): JsonLineInput {
+  let pendingFailure: ((transportFailure: boolean) => void) | undefined;
+
+  const failPending = (transportFailure: boolean) => {
+    pendingFailure?.(transportFailure);
+  };
+  const end = (): boolean => {
+    const stream = child.stdin;
+    if (!stream || stream.destroyed) {
+      onTransportFailure();
+      return false;
+    }
+    if (stream.writableEnded || stream.writableFinished) return true;
+    try {
+      stream.end();
+      return true;
+    } catch {
+      failPending(true);
+      onTransportFailure();
+      return false;
+    }
+  };
+  const deliver = (value: unknown, shouldEnd = false): Promise<boolean> => {
+    const stream = child.stdin;
+    if (
+      !stream?.writable ||
+      stream.destroyed ||
+      stream.writableEnded ||
+      stream.writableFinished ||
+      isFinalized()
+    ) {
+      onTransportFailure();
+      return Promise.resolve(false);
+    }
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        if (pendingFailure === fail) pendingFailure = undefined;
+        resolve(true);
+      };
+      const fail = (transportFailure: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (pendingFailure === fail) pendingFailure = undefined;
+        if (transportFailure) onTransportFailure();
+        resolve(false);
+      };
+      pendingFailure = fail;
+
+      try {
+        stream.write(`${JSON.stringify(value)}\n`, (error?: Error | null) => {
+          if (error) return fail(true);
+          if (settled) return;
+          if (!shouldEnd) return succeed();
+          try {
+            stream.end((endError?: Error | null) => {
+              if (endError) return fail(true);
+              succeed();
+            });
+          } catch {
+            fail(true);
+          }
+        });
+      } catch {
+        fail(true);
+      }
+    });
+  };
+
+  return { deliver, end, failPending };
+}
+
+/**
+ * Starts one bounded local executor using JSON-lines input and event framing.
+ *
+ * This host transport owns process spawning, containment, and framing only.
+ * Callers own command-specific payloads, event interpretation, and failures.
+ */
+export function startInteractiveExecutor(
+  payload: Record<string, unknown>,
+  options: StartInteractiveExecutorOptions
+): InteractiveExecutorHandle {
+  const { failures, onEvent } = options;
+  const executorCommandTemplate =
+    options.executorCommandTemplate !== undefined
+      ? options.executorCommandTemplate || undefined
+      : configuredExecutorDefaults.executorCommandTemplate;
+  if (executorCommandTemplate) {
+    return failedInteractiveExecutorHandle(failures.localProcessRequired);
+  }
+
+  const { timeoutMs = 10 * 60_000 } = options;
+  const rawAsUser = options.asUser;
+  const asUser =
+    rawAsUser !== undefined
+      ? rawAsUser || undefined
+      : configuredExecutorDefaults.asUser || undefined;
+  const attemptId = crypto.randomUUID();
+  const taskId = generateTaskId();
+  const location = resolveLocalExecutorLocation(options);
+  const cwdFailure = resolveLocalExecutorCwdFailure(location);
+  if (cwdFailure) return failedInteractiveExecutorHandle(cwdFailure);
+  const prepared = prepareLocalExecutorSpawn(
+    { ...options, asUser },
+    '--interactive-command',
+    location
+  );
+  const { cmd, args, cwd, envWithDaemonUrl, envFilePath } = prepared;
+  const child = spawn(cmd, args, {
+    cwd,
+    env: asUser ? undefined : { ...envWithDaemonUrl },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
+  });
+  attachEnvFileCleanup(child, { envFilePath, asUser });
+
+  let resolveResult!: (result: ExecutorCommandResult) => void;
+  const result = new Promise<ExecutorCommandResult>((resolve) => {
+    resolveResult = resolve;
+  });
+  let stdout = '';
+  let lineBuffer = '';
+  let stderrSeen = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let finalization: Promise<ExecutorCommandResult> | undefined;
+  let resolveClose!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClose = resolve;
+  });
+  let input!: JsonLineInput;
+
+  const finalize = (
+    fallback?: ExecutorCommandResult,
+    leaderExited = false
+  ): Promise<ExecutorCommandResult> => {
+    finalization ??= (async () => {
+      input.failPending(false);
+      if (timer) clearTimeout(timer);
+      if (leaderExited) markExecutorProcessExited(attemptId, child.pid);
+      const containment = await containExecutorProcess(attemptId, taskId);
+      if (containment.status !== 'verified_absent') {
+        return failures.cleanupUnverified;
+      }
+      await closed;
+      untrackExecutorProcess(attemptId, taskId);
+      return (
+        fallback ?? parseExecutorResultFromStdout(stdout) ?? failures.missingResult(stderrSeen)
+      );
+    })();
+    void finalization.then(resolveResult);
+    return finalization;
+  };
+
+  const stdinFailure = failures.stdin;
+  input = createJsonLineInput(
+    child,
+    () => Boolean(finalization),
+    () => void finalize(stdinFailure)
+  );
+
+  if (!child.pid) {
+    const spawnFailure = failures.spawn;
+    resolveResult(spawnFailure);
+    return failedInteractiveExecutorHandle(spawnFailure);
+  }
+  trackExecutorProcess({ sessionId: attemptId, taskId, pid: child.pid, asUser });
+
+  const controls = {
+    deliver: input.deliver,
+    endInput: input.end,
+  };
+
+  child.stdout?.on('data', (chunk: Buffer) => {
+    const text = chunk.toString();
+    stdout += text;
+    lineBuffer += text;
+    const lines = lineBuffer.split(/\r?\n/);
+    lineBuffer = lines.pop() ?? '';
+    for (const rawLine of lines) {
+      const event = parseInteractiveExecutorEvent(rawLine.trim());
+      if (event !== undefined) onEvent?.(event, controls);
+    }
+  });
+  child.stderr?.on('data', () => {
+    stderrSeen = true;
+  });
+  child.stdin?.on('error', () => {
+    input.failPending(true);
+    void finalize(stdinFailure);
+  });
+  child.on('error', () => {
+    void finalize(failures.spawn);
+  });
+  child.on('exit', () => {
+    input.failPending(false);
+    void finalize(undefined, true);
+  });
+  child.on('close', () => {
+    input.failPending(false);
+    markExecutorProcessExited(attemptId, child.pid);
+    resolveClose();
+    void finalize(undefined, true);
+  });
+
+  timer = setTimeout(() => {
+    void finalize(failures.timeout);
+  }, timeoutMs);
+  void input.deliver(withResolvedConfig(payload), options.closeInputAfterPayload);
+
+  return {
+    result,
+    cancel: () => finalize(failures.cancelled),
+    deliver: input.deliver,
+    endInput: input.end,
+    verifyAbsence: async () => {
+      const containment = await containExecutorProcess(attemptId, taskId);
+      if (containment.status !== 'verified_absent') return false;
+      untrackExecutorProcess(attemptId, taskId);
+      return true;
+    },
+    retainContainmentFence: (key) => retainExecutorContainmentFence(key, attemptId, taskId),
+  };
+}
+
+/**
+ * Starts a short local executor command and releases its result only after the
+ * tracked process group is absent. Native-state operations deliberately reject
+ * templated launchers until remote execution has an equivalent cleanup proof.
+ */
+export function startContainedExecutorCommand(
+  payload: Record<string, unknown>,
+  options: RunExecutorCommandOptions = {}
+): ContainedExecutorCommandHandle {
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  const command = String(payload.command ?? '?');
+  const transport = startInteractiveExecutor(payload, {
+    ...options,
+    timeoutMs,
+    closeInputAfterPayload: true,
+    failures: {
+      localProcessRequired: {
+        success: false,
+        error: {
+          code: 'EXECUTOR_LOCAL_PROCESS_REQUIRED',
+          message: 'This executor command requires verifiable local process containment',
+        },
+      },
+      spawn: {
+        success: false,
+        error: { code: 'EXECUTOR_SPAWN_ERROR', message: 'Executor process did not start' },
+      },
+      stdin: {
+        success: false,
+        error: { code: 'EXECUTOR_STDIN_ERROR', message: 'Executor command input failed' },
+      },
+      timeout: {
+        success: false,
+        error: {
+          code: 'EXECUTOR_TIMEOUT',
+          message: `Executor command timed out after ${timeoutMs}ms`,
+          details: { command },
+        },
+      },
+      cancelled: {
+        success: false,
+        error: { code: 'EXECUTOR_CANCELLED', message: 'Executor command was cancelled' },
+      },
+      cleanupUnverified: {
+        success: false,
+        error: {
+          code: 'EXECUTOR_CLEANUP_UNVERIFIED',
+          message: 'Executor command cleanup could not be verified',
+        },
+      },
+      missingResult: (stderrSeen) => ({
+        success: false,
+        error: {
+          code: 'EXECUTOR_RESULT_MISSING',
+          message: 'Executor exited without a JSON result',
+          details: {
+            command,
+            stderr: stderrSeen ? '[redacted; enable executor debug logs]' : '',
+          },
+        },
+      }),
+    },
+  });
+  return {
+    result: transport.result,
+    verifyAbsence: transport.verifyAbsence,
+    retainContainmentFence: transport.retainContainmentFence,
+  };
 }
 
 /**
@@ -608,6 +1116,7 @@ export async function runExecutorCommand(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
+        executor_type: 'executor',
         ...templateVariables,
         tenant_id: tenantId,
       },
@@ -622,71 +1131,14 @@ function runExecutorCommandLocal(
   payload: Record<string, unknown>,
   options: RunExecutorCommandOptions
 ): Promise<ExecutorCommandResult> {
-  const executorPath = findExecutorPath();
-  const executorDir = path.dirname(path.dirname(executorPath));
-
-  const {
-    cwd = executorDir,
-    env = process.env as Record<string, string>,
-    logPrefix = '[Executor]',
-    asUser: rawAsUser,
-    preparedEnv,
-    preparedEnvFilePath,
-    timeoutMs = 60_000,
-  } = options;
+  const { logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
+  const rawAsUser = options.asUser;
   const asUser = rawAsUser || undefined;
-
-  if (cwd && !existsSync(cwd)) {
-    return Promise.resolve({
-      success: false,
-      error: {
-        code: 'EXECUTOR_CWD_MISSING',
-        message: `Refusing to spawn: cwd does not exist on disk: ${cwd}`,
-      },
-    });
-  }
-
-  const daemonUrl = getDaemonUrl();
-  const envWithDaemonUrl: Record<string, string> = preparedEnv
-    ? withDaemonExecutorEnv(preparedEnv, daemonUrl)
-    : asUser
-      ? withDaemonExecutorEnv(
-          Object.fromEntries(
-            Object.entries({
-              PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-              NODE_ENV: env.NODE_ENV,
-              LOG_LEVEL: env.LOG_LEVEL,
-              ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-              ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-              ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-              CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
-              OPENAI_API_KEY: env.OPENAI_API_KEY,
-              OPENAI_BASE_URL: env.OPENAI_BASE_URL,
-              GEMINI_API_KEY: env.GEMINI_API_KEY,
-              GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-              GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
-            }).filter(([_, v]) => v !== undefined)
-          ),
-          daemonUrl
-        )
-      : withDaemonExecutorEnv(env as Record<string, string>, daemonUrl);
-
-  const prepared = asUser
-    ? preparedEnvFilePath
-      ? {
-          inlineEnv: Object.fromEntries(
-            Object.entries(envWithDaemonUrl).filter(([k]) => !isSecretEnvKey(k))
-          ),
-          envFilePath: preparedEnvFilePath,
-        }
-      : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
-    : { inlineEnv: undefined, envFilePath: undefined };
-
-  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
-    asUser,
-    env: asUser ? prepared.inlineEnv : undefined,
-    envFilePath: prepared.envFilePath,
-  });
+  const location = resolveLocalExecutorLocation(options);
+  const cwdFailure = resolveLocalExecutorCwdFailure(location);
+  if (cwdFailure) return Promise.resolve(cwdFailure);
+  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--stdin', location);
+  const { cmd, args, cwd, envWithDaemonUrl, envFilePath } = prepared;
 
   console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);
 
@@ -702,7 +1154,7 @@ function runExecutorCommandLocal(
       detached: false,
     });
 
-    attachEnvFileCleanup(child, { envFilePath: prepared.envFilePath, asUser });
+    attachEnvFileCleanup(child, { envFilePath, asUser });
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -742,12 +1194,11 @@ function runExecutorCommandLocal(
       });
     });
 
-    child.on('exit', (code) => {
+    const finish = (result: ExecutorCommandResult | null, code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
 
-      const result = parseExecutorResultFromStdout(stdout);
       if (result) {
         resolve(result);
         return;
@@ -765,7 +1216,9 @@ function runExecutorCommandLocal(
           },
         },
       });
-    });
+    };
+
+    settleOnExecutorResultComplete(child, () => stdout, finish);
 
     child.stdin?.write(JSON.stringify(payload));
     child.stdin?.end();
@@ -838,12 +1291,11 @@ function runExecutorCommandWithTemplate(
       });
     });
 
-    child.on('exit', (code) => {
+    const finish = (result: ExecutorCommandResult | null, code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
 
-      const result = parseExecutorResultFromStdout(stdout);
       if (result) {
         resolve(result);
         return;
@@ -861,7 +1313,9 @@ function runExecutorCommandWithTemplate(
           },
         },
       });
-    });
+    };
+
+    settleOnExecutorResultComplete(child, () => stdout, finish);
 
     child.stdin?.write(JSON.stringify(payload));
     child.stdin?.end();

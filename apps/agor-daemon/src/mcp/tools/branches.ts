@@ -14,7 +14,7 @@ import type {
 import { BRANCH_PERMISSION_LEVELS, getTeammateConfig, isTeammate } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type {
   BoardsServiceImpl,
@@ -305,7 +305,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Filter by whether the recorded branch path currently exists. This checks the exact stored path; it does not scan the filesystem.'
           ),
-        limit: mcpLimit(50),
+        limit: mcpLimit(50, 100),
         skip: mcpOptionalNonNegativeInt(
           'skip',
           'Number of filtered candidates to skip (default: 0)'
@@ -948,6 +948,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               '"prompt" = can prompt ANY session (including other users\'), "all" = full access. ' +
               'Always effective regardless of Unix isolation mode. Single-user setups can ignore this.'
           ),
+        permissionSource: z
+          .enum(['board', 'override'])
+          .optional()
+          .describe(
+            'Choose whether effective non-owner access is inherited from the board or read from this branch override. Set "override" with othersCan="none" for an explicit private fallback.'
+          ),
         othersFsAccess: z
           .enum(['none', 'read', 'write'])
           .optional()
@@ -1043,6 +1049,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       if (args.othersCan !== undefined) {
         fieldsProvided++;
         updates.others_can = args.othersCan;
+      }
+      if (args.permissionSource !== undefined) {
+        fieldsProvided++;
+        updates.permission_source = args.permissionSource;
       }
       if (args.othersFsAccess !== undefined) {
         fieldsProvided++;
@@ -1531,8 +1541,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  const listTeammatesHandler = async (args: { repoId?: string; limit?: number }) => {
-    const limit = args.limit || 200;
+  const listTeammatesHandler = async (args: {
+    repoId?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const limit = args.limit ?? 25;
+    const offset = args.offset ?? 0;
     const repoId = args.repoId ? await resolveRepoId(ctx, args.repoId) : undefined;
 
     const userScoped = await shouldScopeTeammateDiscoveryToUser(ctx);
@@ -1541,7 +1556,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         archived: false,
         ...(repoId ? { repo_id: repoId as UUID } : {}),
         ...(userScoped ? { userId: ctx.userId as UUID } : {}),
-        limit,
+        // One-row look-ahead supplies hasMore without loading the full set.
+        // Tenant/RBAC predicates are applied by the repository before paging.
+        limit: limit + 1,
+        offset,
       })
     );
 
@@ -1559,9 +1577,15 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       };
     });
 
+    const hasMore = shaped.length > limit;
+    const page = shaped.slice(0, limit);
     return textResult({
-      total: shaped.length,
-      teammates: shaped,
+      total: hasMore ? null : offset + page.length,
+      limit,
+      offset,
+      hasMore,
+      nextOffset: hasMore ? offset + page.length : null,
+      teammates: page,
     });
   };
 
@@ -1570,11 +1594,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_teammates_list',
     {
       description:
-        "List all teammates (long-lived AI teammates with schedules). Returns each teammate's name, description, schedule status, and last activity timestamp. Use this to discover other teammates on the platform.",
+        'List a page of teammates (long-lived AI teammates with schedules). Authorization is applied before paging. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Filter teammates by repository ID'),
-        limit: mcpLimit(200),
+        limit: mcpLimit(25, 100),
+        offset: mcpOffset(0),
       }),
     },
     listTeammatesHandler

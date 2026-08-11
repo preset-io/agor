@@ -457,6 +457,9 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           mcpServerById={mcpServerById}
           currentUser={currentUser}
           client={client ?? null}
+          branchId={session.branch_id}
+          catalogEnabled={session.created_by === currentUser?.user_id}
+          validateModelSelection
           enableSaveAsDefault
           showEffort
         />

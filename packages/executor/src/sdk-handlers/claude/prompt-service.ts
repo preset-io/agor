@@ -283,9 +283,6 @@ If you continue to see authentication errors, please contact your Agor administr
               event.raw_sdk_message = aggregateClaudeResults(sdkResults);
               try {
                 const contextUsage = await result.getContextUsage();
-                console.log(
-                  `📊 SDK context usage: ${contextUsage.totalTokens}/${contextUsage.maxTokens} tokens (${contextUsage.percentage}%)`
-                );
                 yield { type: 'context_usage', contextUsage } as ProcessedEvent;
               } catch (error) {
                 console.warn(

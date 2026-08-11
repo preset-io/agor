@@ -14,17 +14,16 @@
  * See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
  */
 
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import {
   AgenticConfigurationResolutionError,
-  assertInlineAgenticConfigurationAllowed,
   InvalidScheduleAgenticToolConfigError,
   normalizeScheduleAgenticToolConfig,
   PAGINATION,
-  resolveAgenticConfigurationReference,
-  resolveAgenticToolPreset,
 } from '@agor/core/config';
 import { ScheduleRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
+import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
   AuthenticatedParams,
   BranchID,
@@ -39,6 +38,10 @@ import type {
 } from '@agor/core/types';
 import { SCHEDULE_CREATE_WRITE_FIELDS, SCHEDULE_PATCH_WRITE_FIELDS } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import {
+  materializedAgenticToolConfigurationToScheduleConfig,
+  scheduleAgenticToolConfigToSource,
+} from '../utils/agentic-configuration-sources.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 export type ScheduleParams = QueryParams<{
@@ -48,7 +51,24 @@ export type ScheduleParams = QueryParams<{
 }> &
   AuthenticatedParams & { schedule?: Schedule };
 
-export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData, ScheduleParams> {
+type PersistedScheduleCreateData = Omit<ScheduleCreateData, 'agentic_tool_config'> & {
+  agentic_tool_config?: PersistedScheduleAgenticToolConfig;
+  created_by?: Schedule['created_by'];
+  next_run_at?: Schedule['next_run_at'];
+};
+
+type PersistedSchedulePatchData = Omit<SchedulePatchData, 'agentic_tool_config'> & {
+  agentic_tool_config?: PersistedScheduleAgenticToolConfig;
+  next_run_at?: Schedule['next_run_at'];
+};
+
+type PersistedScheduleWriteData = PersistedScheduleCreateData | PersistedSchedulePatchData;
+
+export class SchedulesService extends DrizzleService<
+  Schedule,
+  PersistedScheduleWriteData,
+  ScheduleParams
+> {
   private db: TenantScopeAwareDatabase;
 
   constructor(db: TenantScopeAwareDatabase) {
@@ -67,31 +87,19 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
   private async validateConfig(
     config: ScheduleAgenticToolConfig,
     userId?: UserID
-  ): Promise<ScheduleAgenticToolConfig> {
+  ): Promise<PersistedScheduleAgenticToolConfig> {
     try {
-      if (config.configuration_reference !== undefined) {
-        await resolveAgenticConfigurationReference(
-          this.db,
-          config.agentic_tool,
-          config.configuration_reference,
-          userId
-        );
-        return config;
-      } else if (config.preset_id !== undefined) {
-        const preset = await resolveAgenticToolPreset(
-          this.db,
-          config.agentic_tool,
-          config.preset_id
-        );
-        return { ...config, preset_id: preset.preset_id };
-      } else {
-        await assertInlineAgenticConfigurationAllowed(this.db, config.agentic_tool);
-        return config;
-      }
+      const materialized = await materializeAgenticToolConfiguration(this.db, {
+        tool: config.agentic_tool,
+        source: scheduleAgenticToolConfigToSource(config),
+        executionOwnerId: userId,
+      });
+      return materializedAgenticToolConfigurationToScheduleConfig(config, materialized);
     } catch (error) {
       if (error instanceof AgenticConfigurationResolutionError) {
         throw new BadRequest('Selected agentic configuration is not available');
       }
+      if (isInvalidModelConfigError(error)) throw new BadRequest(error.message);
       throw error;
     }
   }
@@ -119,18 +127,14 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
     data = pickWriteFields<ScheduleCreateData>(rawData, SCHEDULE_CREATE_WRITE_FIELDS);
 
     const creatorId = params?.user?.user_id as UserID | undefined;
-    if (data.agentic_tool_config) {
-      let agenticToolConfig = this.normalizeConfig(data.agentic_tool_config);
-      agenticToolConfig = await this.validateConfig(agenticToolConfig, creatorId);
-      data = {
-        ...data,
-        agentic_tool_config: agenticToolConfig,
-      };
-    }
+    const agenticToolConfig = data.agentic_tool_config
+      ? await this.validateConfig(this.normalizeConfig(data.agentic_tool_config), creatorId)
+      : undefined;
     const trustedCreatedBy =
       creatorId ?? (prepared ? (rawData.created_by as UserID | undefined) : undefined);
-    const trustedData = {
+    const trustedData: PersistedScheduleCreateData = {
       ...data,
+      ...(agenticToolConfig ? { agentic_tool_config: agenticToolConfig } : {}),
       ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
       ...(prepared && typeof rawData.next_run_at === 'number'
         ? { next_run_at: rawData.next_run_at }
@@ -150,21 +154,18 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
     );
     data = pickWriteFields<SchedulePatchData>(rawData, SCHEDULE_PATCH_WRITE_FIELDS);
 
+    let agenticToolConfig: PersistedScheduleAgenticToolConfig | undefined;
     if (data.agentic_tool_config) {
       if (id === null) throw new BadRequest('Schedule configuration cannot be multi-patched');
       const current = params?.schedule ?? (await this.get(id, params));
-      let agenticToolConfig = this.normalizeConfig(data.agentic_tool_config);
       agenticToolConfig = await this.validateConfig(
-        agenticToolConfig,
+        this.normalizeConfig(data.agentic_tool_config),
         current.created_by as UserID
       );
-      data = {
-        ...data,
-        agentic_tool_config: agenticToolConfig,
-      };
     }
-    const trustedData = {
+    const trustedData: PersistedSchedulePatchData = {
       ...data,
+      ...(agenticToolConfig ? { agentic_tool_config: agenticToolConfig } : {}),
       ...(prepared && typeof rawData.next_run_at === 'number'
         ? { next_run_at: rawData.next_run_at }
         : {}),

@@ -13,6 +13,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { loadConfigSync } from '../config/config-manager';
+import { sanitizeDbError } from './sanitize-error';
 import * as postgresSchema from './schema.postgres';
 
 // Import both schemas explicitly
@@ -145,7 +146,7 @@ async function configureSQLitePragmas(client: Client): Promise<void> {
     await client.execute('PRAGMA foreign_keys = ON');
     if (!silent) console.log('✅ Foreign key constraints enabled');
   } catch (error) {
-    console.warn('⚠️  Failed to configure SQLite pragmas:', error);
+    console.warn('⚠️  Failed to configure SQLite pragmas:', sanitizeDbError(error));
   }
 }
 

@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   getRemoteUrl: vi.fn(),
   scanGitConfigRemoteCredentials: vi.fn(),
   scrubGitConfigRemoteCredentials: vi.fn(),
+  handleUnixSyncRepo: vi.fn(),
+  handleUnixSyncBranch: vi.fn(),
   userHome: '/passwd/home',
 }));
 
@@ -31,10 +33,14 @@ vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/config');
   return {
     ...actual,
-    parseAgorYml: mocks.parseAgorYml,
-    writeAgorYml: mocks.writeAgorYml,
+    getReposDir: mocks.getReposDir,
   };
 });
+
+vi.mock('@agor/core/config/node', () => ({
+  parseAgorYml: mocks.parseAgorYml,
+  writeAgorYml: mocks.writeAgorYml,
+}));
 
 vi.mock('../git/index.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('../git/index.js');
@@ -45,7 +51,6 @@ vi.mock('../git/index.js', async () => {
     createBranchAsClone: mocks.createBranchAsClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
-    getReposDir: mocks.getReposDir,
     isValidGitRepo: mocks.isValidGitRepo,
     getDefaultBranch: mocks.getDefaultBranch,
     getRemoteUrl: mocks.getRemoteUrl,
@@ -58,10 +63,18 @@ vi.mock('../services/feathers-client.js', () => ({
   createExecutorClient: mocks.createExecutorClient,
 }));
 
+vi.mock('./unix.js', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('./unix.js');
+  return {
+    ...actual,
+    handleUnixSyncRepo: mocks.handleUnixSyncRepo,
+    handleUnixSyncBranch: mocks.handleUnixSyncBranch,
+  };
+});
+
 import {
   handleBranchAgorYmlExport,
   handleBranchAgorYmlImport,
-  handleBranchInspect,
   handleGitBranchAdd,
   handleGitBranchRemove,
   handleGitClone,
@@ -80,7 +93,9 @@ function createClient(records: {
   branches?: Array<Record<string, unknown>>;
   branchPages?: Array<Array<Record<string, unknown>>>;
   branch?: Record<string, unknown>;
+  branchFindQueries?: Array<Record<string, unknown>>;
   patchedRepos?: Array<Record<string, unknown>>;
+  patchedBranches?: Array<Record<string, unknown>>;
 }) {
   const client = {
     io: { disconnect: vi.fn() },
@@ -106,7 +121,6 @@ function createClient(records: {
             return { ...(records.repo ?? {}), ...data };
           }),
           create: vi.fn(async (data: Record<string, unknown>) => data),
-          initializeUnixGroup: vi.fn(async () => ({ unix_group: 'agor_repo_test' })),
           find,
         };
       }
@@ -116,6 +130,7 @@ function createClient(records: {
       if (name === 'branches') {
         const find = vi.fn(
           async ({ query }: { query?: { $skip?: number; $limit?: number } } = {}) => {
+            records.branchFindQueries?.push(query ?? {});
             if (records.branchPages) {
               const skip = query?.$skip ?? 0;
               const limit = query?.$limit ?? 1000;
@@ -139,10 +154,10 @@ function createClient(records: {
         return {
           get: vi.fn(async () => records.branch),
           find,
-          patch: vi.fn(async (_id: string, data: Record<string, unknown>) => ({
-            ...(records.branch ?? {}),
-            ...data,
-          })),
+          patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
+            records.patchedBranches?.push(data);
+            return { ...(records.branch ?? {}), ...data };
+          }),
         };
       }
       throw new Error(`unexpected service ${name}`);
@@ -174,6 +189,14 @@ beforeEach(() => {
     findings: [{ configPath: '/repo/.git/config' }],
   });
   mocks.scrubGitConfigRemoteCredentials.mockResolvedValue({ findings: [] });
+  mocks.handleUnixSyncRepo.mockResolvedValue({
+    success: true,
+    data: { groupName: 'agor_repo_test' },
+  });
+  mocks.handleUnixSyncBranch.mockResolvedValue({
+    success: true,
+    data: { groupName: 'agor_wt_test' },
+  });
 });
 
 describe('managed executor git/fs commands', () => {
@@ -220,6 +243,58 @@ describe('managed executor git/fs commands', () => {
         depth: 42,
         referencePath: '/trusted/repo',
       })
+    );
+  });
+
+  it('runs branch isolation in the current lifecycle executor and fails closed', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://example.com/repo.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'feature',
+        ref: 'feature',
+        base_ref: 'main',
+        new_branch: true,
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+      patchedBranches,
+    });
+    mocks.handleUnixSyncBranch.mockResolvedValueOnce({
+      success: false,
+      error: { code: 'UNIX_SYNC_BRANCH_FAILED', message: 'setfacl failed' },
+    });
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchId, repoId, initUnixGroup: true, daemonUser: 'agor' },
+      },
+      {}
+    );
+
+    expect(mocks.handleUnixSyncBranch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'unix.sync-branch',
+        sessionToken: 'tenant-token',
+        params: { branchId, daemonUser: 'agor' },
+      }),
+      {}
+    );
+    expect(result).toMatchObject({ success: false, error: { message: 'setfacl failed' } });
+    expect(patchedBranches).toContainEqual(
+      expect.objectContaining({ filesystem_status: 'failed' })
+    );
+    expect(patchedBranches).not.toContainEqual(
+      expect.objectContaining({ filesystem_status: 'ready' })
     );
   });
 
@@ -332,6 +407,34 @@ describe('managed executor git/fs commands', () => {
     expect(result).toMatchObject({ success: true, data: { dryRun: true } });
     expect(mocks.scrubGitConfigRemoteCredentials).not.toHaveBeenCalled();
   });
+
+  it('reconciles active and archived branches without an unsupported archived query operator', async () => {
+    const activePath = '/managed/active';
+    const archivedPath = '/managed/archived';
+    const branchFindQueries: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: { repo_id: repoId, repo_type: 'remote', local_path: '/managed/repo' },
+      branchFindQueries,
+      branches: [
+        { branch_id: branchId, repo_id: repoId, path: activePath, archived: false },
+        { branch_id: 'archived-branch', repo_id: repoId, path: archivedPath, archived: true },
+      ],
+    });
+
+    const result = await handleGitManagedCredentialsReconcile(
+      {
+        command: 'git.managed-credentials.reconcile',
+        sessionToken: 'tenant-token',
+        params: {},
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(mocks.scrubGitConfigRemoteCredentials).toHaveBeenCalledWith(activePath);
+    expect(mocks.scrubGitConfigRemoteCredentials).toHaveBeenCalledWith(archivedPath);
+    expect(branchFindQueries).toEqual([{ repo_id: repoId, $limit: 1000, $skip: 0 }]);
+  });
   it('uses the daemon-provided tenant root when removing a branch directory', async () => {
     const branchesRoot = await mkdtemp(join(tmpdir(), 'agor-tenant-worktrees-'));
     const branchPath = join(branchesRoot, 'repo', 'feature');
@@ -381,76 +484,80 @@ describe('managed executor git/fs commands', () => {
   });
 
   it('uses slug-derived output paths for git.clone to avoid same-basename collisions', async () => {
+    const previousGitConfigParameters = process.env.GIT_CONFIG_PARAMETERS;
     const patchedRepos: Array<Record<string, unknown>> = [];
     createClient({ repo: { repo_id: repoId }, patchedRepos });
+
+    try {
+      const result = await handleGitClone(
+        {
+          command: 'git.clone',
+          sessionToken: 'jwt',
+          params: {
+            url: 'https://github.com/preset-io/agor-assistant.git',
+            slug: 'smoke/agor-assistant-pr1258',
+            repoId,
+            createDbRecord: true,
+          },
+        },
+        {}
+      );
+
+      expect(result.success).toBe(true);
+      expect(mocks.cloneRepo).toHaveBeenCalledWith(
+        expect.objectContaining({ targetDir: '/safe/repos/smoke/agor-assistant-pr1258' })
+      );
+      expect(process.env.GIT_CONFIG_PARAMETERS).toContain(
+        "'safe.directory=/safe/repos/smoke/agor-assistant-pr1258'"
+      );
+      expect(patchedRepos).toContainEqual(
+        expect.objectContaining({
+          local_path: '/safe/repos/smoke/agor-assistant-pr1258',
+        })
+      );
+      expect(patchedRepos.at(-1)).toMatchObject({ clone_status: 'ready' });
+    } finally {
+      if (previousGitConfigParameters === undefined) {
+        delete process.env.GIT_CONFIG_PARAMETERS;
+      } else {
+        process.env.GIT_CONFIG_PARAMETERS = previousGitConfigParameters;
+      }
+    }
+  });
+
+  it('keeps a cloned repo non-ready when lifecycle permission sync fails', async () => {
+    const patchedRepos: Array<Record<string, unknown>> = [];
+    createClient({ repo: { repo_id: repoId }, patchedRepos });
+    mocks.handleUnixSyncRepo.mockResolvedValueOnce({
+      success: false,
+      error: { code: 'UNIX_SYNC_REPO_FAILED', message: 'chgrp failed' },
+    });
 
     const result = await handleGitClone(
       {
         command: 'git.clone',
-        sessionToken: 'jwt',
+        sessionToken: 'tenant-token',
         params: {
-          url: 'https://github.com/preset-io/agor-assistant.git',
-          slug: 'smoke/agor-assistant-pr1258',
+          url: 'https://example.com/repo.git',
+          slug: 'repo',
           repoId,
-          createDbRecord: true,
+          initUnixGroup: true,
+          daemonUser: 'agor',
         },
       },
       {}
     );
 
-    expect(result.success).toBe(true);
-    expect(mocks.cloneRepo).toHaveBeenCalledWith(
-      expect.objectContaining({ targetDir: '/safe/repos/smoke/agor-assistant-pr1258' })
-    );
-    expect(patchedRepos.at(-1)).toMatchObject({
-      local_path: '/safe/repos/smoke/agor-assistant-pr1258',
-    });
-  });
-
-  it('adds branch/repo safe.directory and falls back to DB branch name when current branch lookup fails', async () => {
-    mocks.gitRaw.mockImplementation(async (args: string[]) => {
-      if (args.includes('status')) return '';
-      if (args.includes('--abbrev-ref')) throw new Error('dubious ownership');
-      if (args.includes('HEAD')) return 'sha-abc\n';
-      return '';
-    });
-    createClient({
-      repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
-      branch: {
-        branch_id: branchId,
-        repo_id: repoId,
-        name: 'feature-x',
-        path: '/safe/worktrees/repo/feature-x',
-      },
-    });
-
-    const result = await handleBranchInspect(
-      { command: 'branch.inspect', sessionToken: 'jwt', params: { branchId } },
+    expect(mocks.handleUnixSyncRepo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'unix.sync-repo',
+        sessionToken: 'tenant-token',
+        params: expect.objectContaining({ repoId, daemonUser: 'agor', initialize: true }),
+      }),
       {}
     );
-
-    expect(result.success).toBe(true);
-    expect(mocks.addConfig).toHaveBeenCalledWith(
-      'safe.directory',
-      '/safe/worktrees/repo/feature-x',
-      true,
-      'global'
-    );
-    expect(mocks.addConfig).toHaveBeenCalledWith(
-      'safe.directory',
-      '/safe/repos/repo',
-      true,
-      'global'
-    );
-    expect(mocks.gitRaw).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        '-c',
-        'safe.directory=/safe/worktrees/repo/feature-x',
-        '-c',
-        'safe.directory=/safe/repos/repo',
-      ])
-    );
-    expect(result.data).toMatchObject({ currentSha: 'sha-abc', currentRef: 'feature-x' });
+    expect(result).toMatchObject({ success: false, error: { message: 'chgrp failed' } });
+    expect(patchedRepos).not.toContainEqual(expect.objectContaining({ clone_status: 'ready' }));
   });
 
   it('pages through every branch before deleting repo directories', async () => {

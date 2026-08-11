@@ -1,0 +1,337 @@
+---
+title: Tenant Data Portability
+description: Inspect, export, import, verify, and delete a single tenant's database and filesystem data in a standalone multi-tenant PostgreSQL runtime.
+---
+
+# Tenant Data Portability
+
+Operators of a standalone multi-tenant PostgreSQL runtime sometimes need to move
+one tenant's data between runtimes, prove what a tenant owns, or remove a tenant
+entirely — for migration, backup and restore, or offboarding. Agor exposes a
+small, generic capability set for exactly this, built on the runtime's own
+tenant-table manifest, migration ledger, and configured tenant filesystem root.
+
+Agor is agnostic about how you transport or mount an archive. It knows only
+tenant ids, the database connection, operation ids, the archive directory you
+point it at, and the existing tenant-directory mapping
+(`multi_tenancy.tenants_base_folder`, see
+[Multi-Tenant Filesystem](/guide/multi-tenant-filesystem)). Copying, syncing,
+snapshotting, or mounting the archive directory is your deployment's concern.
+
+## Requirements
+
+- **PostgreSQL.** Multi-tenancy is a PostgreSQL-only feature; the SQLite schema
+  is single-tenant. Every database operation fails closed against SQLite.
+- **A matching binary.** The database's applied migration ledger must match the
+  running binary. Commands refuse to run when the database has pending or
+  unknown migrations, so an archive is never produced or restored against a
+  schema this binary does not fully understand.
+- **Filesystem isolation** (optional). Tenant files are moved only when
+  `multi_tenancy.filesystem_isolation_enabled` is `true`, so a tenant has a
+  dedicated `<tenants_base_folder>/<tenant-id>` root. When isolation is disabled,
+  the commands operate on the database only and leave the shared data home
+  untouched.
+
+Every command runs non-interactively, prints a single stable JSON object to
+stdout for automation, and writes human-readable audit lines to stderr. Failure
+causes are reduced to a bounded JSON marker rather than printed as free-form
+error text, and row or file contents are **never printed**.
+
+### Machine-readable failures
+
+Every caught command failure writes one JSON line to stderr with this versioned
+shape (the PostgreSQL fields are optional):
+
+```json
+{
+  "marker": "agor.tenant-portability.error",
+  "version": 1,
+  "category": "database_constraint",
+  "sqlstate": "23503",
+  "constraint": "branches_board_id_boards_board_id_fk",
+  "table": "branches",
+  "column": "board_id"
+}
+```
+
+Strict consumers should parse stderr one line at a time and accept only an
+object whose `marker` and `version` match exactly. `category` is one of
+`archive_invalid`, `catalog_invariant`, `database_constraint`, `database_error`,
+`filesystem_deletion_pending`, `filesystem_error`, `invalid_input`, `unknown`,
+`unsafe_archive_path`, `unsupported_runtime`, `verification_failed`, or
+`write_gate`. `sqlstate` is present only for a validated five-character
+SQLSTATE; `constraint`, `table`, and `column` are present only for bounded,
+validated PostgreSQL identifiers. The marker never includes an exception
+message, query text, parameters, row data, PostgreSQL detail/hint text,
+filesystem paths, arbitrary cause strings, or credentials. Existing stdout
+success and deletion-recovery objects, flags, exit codes, and audit lines remain
+separate from this marker.
+
+## Commands
+
+### `agor tenant inspect`
+
+A bounded, machine-readable inventory and proof of a tenant's footprint: per-table
+row counts, a runtime-derived identity fingerprint (dialect, migration ledger,
+tenant-table set), and — when filesystem isolation is enabled — a contents-free
+filesystem summary (file, directory, symlink counts and total bytes).
+
+```bash
+agor tenant inspect --tenant-id acme-corp
+agor tenant inspect --tenant-id acme-corp --database-only
+```
+
+### `agor tenant export`
+
+Write a deterministic, versioned archive to a directory you supply. The archive
+contains every tenant-owned database row, the tenant filesystem tree (when
+isolation is enabled), and a manifest with per-payload SHA-256 hashes, the schema
+and migration identity, the manifest version, a tenant/operation binding, and
+safe relative paths only.
+
+```bash
+agor tenant export --tenant-id acme-corp --archive /path/to/archive
+```
+
+The destination must be empty or not yet exist. Two exports of identical tenant
+data produce the same content fingerprint. Quiesce tenant writes for the duration
+so the archive is internally consistent.
+
+Row movement is lossless: PostgreSQL renders each row to canonical JSON text on
+the server, and that text is what the archive stores, what hashing and
+verification re-derive, and what restore feeds back — including the tenant-id
+rewrite a re-home applies, done server-side. Persisted JSON and numeric values
+never pass through a JavaScript number, so content beyond 2^53 round-trips
+exactly.
+
+Archive layout:
+
+```text
+<archive>/
+  manifest.json            # identity, hashes, entries, content fingerprint
+  database/<table>.jsonl   # one canonical JSON row per line, per table
+  files/<relative tree>    # the tenant filesystem tree (safe paths only)
+```
+
+### `agor tenant import`
+
+Restore a tenant from an archive. The archive is validated in full **before any
+mutation**: its hashes are re-checked, and the live database's migration ledger
+and tenant-table identity must match the archive exactly. The database is
+restored inside a single transaction (atomic commit or rollback); the filesystem
+tree is materialised in a staging directory and published to the tenant root with
+a single atomic rename. PostgreSQL foreign keys between movable tenant tables are
+initially immediate for normal application transactions, but the import
+transaction defers them until commit so valid mutually-referencing rows can be
+restored atomically. An invalid reference fails the commit and rolls back every
+insert from the import.
+
+```bash
+agor tenant import --archive /path/to/archive
+agor tenant import --archive /path/to/archive --tenant-id new-tenant
+```
+
+Import requires an **empty destination or the identical prior operation**, and is
+idempotent by operation: re-running a fully-applied import is a no-op success, and
+an import interrupted between the database and filesystem steps can be re-run to
+completion. A non-empty destination that does not match the archive is refused.
+Traversal paths, escaping symlinks, and malformed archives are rejected.
+
+The already-applied check compares the live destination against the hashes the
+archive *would* produce once its rows are rewritten to the destination tenant id,
+not the archive's source-bound hashes. This holds for re-homes too: a re-home
+whose database committed before a filesystem-tail failure is recognised as
+already-applied on retry and finishes the filesystem portion, rather than being
+stranded as an unretryable conflict. The filesystem portion is matched on tree
+content alone (paths and bytes are not tenant-bound), so it recognises a fully
+published tree regardless of the tenant id.
+
+Passing a different `--tenant-id` re-homes the tenant. Re-homing requires a
+**fresh destination runtime**: row identifiers (UUID primary keys) are globally
+unique across a runtime, not merely within a tenant, so importing under a new
+tenant id into the *same* runtime the archive came from collides on those ids and
+is refused. Point a re-home at a separate runtime whose global key space is empty
+for the archived ids.
+
+### `agor tenant verify`
+
+Prove that a tenant's live data matches a saved archive proof. It re-derives the
+tenant's database and filesystem hashes from the running system and compares them
+to the manifest, emitting strict, bounded evidence. Exit code is `0` on a full
+match and `3` on a mismatch.
+
+```bash
+agor tenant verify --archive /path/to/archive
+agor tenant verify --archive /path/to/archive --database-only
+```
+
+The verification scope is explicit. By default (`full`) the database and — when
+the archive carries one — the filesystem tree are both checked; a full
+verification is **fail-closed** if the archive includes filesystem content that
+cannot be checked (for example the tenant root is unavailable). `--database-only`
+verifies just the database and reports the filesystem as skipped
+(`filesystem.requested: false`), so it matches a full archive on the database
+alone rather than always mismatching.
+
+### `agor tenant delete`
+
+Permanently and idempotently delete all data belonging to a single tenant. The
+generic deletion contract covers both tenant-owned database rows (audited,
+verified, and PostgreSQL-only) and — when filesystem isolation is enabled — the
+configured tenant filesystem tree. With isolation disabled, the shared data home
+is left untouched, preserving the historical database-only behavior.
+
+```bash
+agor tenant delete --tenant-id acme-corp
+agor tenant delete --tenant-id acme-corp --dry-run
+agor tenant delete --tenant-id acme-corp --database-only
+```
+
+On success, stdout contains a combined, bounded proof for both phases. Existing
+database result fields remain at the top level; the additional fields make the
+commit state and filesystem postcondition explicit:
+
+```json
+{
+  "tenantDataDeleted": true,
+  "schemaVersion": "0042_example",
+  "rowCounts": { "sessions": 3 },
+  "tenantId": "acme-corp",
+  "tenantDeletionComplete": true,
+  "databaseCommitted": true,
+  "filesPending": false,
+  "filesystem": {
+    "requested": true,
+    "isolationEnabled": true,
+    "present": true,
+    "deleted": true,
+    "verifiedAbsent": true,
+    "status": "deleted"
+  }
+}
+```
+
+Automation that requires full database-and-filesystem erasure should require
+`tenantDeletionComplete`, `databaseCommitted`, and
+`filesystem.verifiedAbsent` to all be `true`, and `filesPending` to be `false`.
+`filesystem.deleted` says that this particular invocation removed a tree;
+`verifiedAbsent` is the postcondition proof and remains `true` on an idempotent
+retry when the tree was already absent (`status: "already-absent"`). When
+filesystem isolation is disabled, the status is `"not-configured"`; with
+`--database-only`, it is `"not-requested"`. Those outcomes deliberately do not
+claim filesystem absence, so a caller that expects an isolated runtime root can
+fail closed on missing configuration or a missing mount.
+
+## Freezing a tenant: the write gate
+
+Export, verify, and delete all want the tenant's data to hold still. The write
+gate is a generic, generation-bound signal an external orchestrator uses to stop
+tenant writers **at the application's wired entry points** and to prove that
+signal stayed continuous.
+
+- **`agor tenant gate acquire`** records the gate and returns an opaque
+  `generation` token. While held, tenant writers that pass through the wired
+  enforcement points fail closed — request traffic (the daemon answers writes
+  with `503`) and deferred operators alike (scheduler, gateway, executor, queue
+  drains). Reads are never blocked.
+- **`agor tenant gate inspect --expect-generation <gen>`** proves the *same*
+  gate is still in force. A later acquire mints a new generation (replacement)
+  and a release removes it (loss); either makes the check fail closed (exit `3`).
+- **`agor tenant gate release --generation <gen>`** lifts the gate, but only for
+  the generation the caller holds (compare-and-delete).
+
+The gate is stored per tenant with row-level-security isolation and is removed
+automatically if the tenant is deleted. It is PostgreSQL-only; on the
+single-tenant SQLite schema there is nothing to gate and enforcement is a no-op.
+
+### What the gate does and does not guarantee
+
+The gate is **app-layer, fail-closed enforcement** at request hooks and deferred
+operator helpers. It is **not** a database lock or fence:
+
+- A write that already passed its pre-acquire check before the gate row appeared
+  can still commit.
+- A raw writer that bypasses those entry points (a direct SQL session, an
+  unwired code path) can still commit while the gate is "held".
+
+So the gate does **not** affirmatively freeze every possible writer. Export
+consistency therefore **relies on the mandatory `verify` step**, which re-hashes
+live tenant data against the archive and detects any straggler write — treat
+`verify` as part of the move, not an optional check. DB-level trigger fencing
+(rejecting writes while the gate row exists) is a possible future hardening, not
+current behavior.
+
+The filesystem export **fails closed** if a read would resolve outside the
+tenant root. The walk never descends symlinks (it records them as their own
+entries), and every regular-file read opens with `O_NOFOLLOW` **and** then proves
+the opened inode's canonical path is inside the tenant root. This covers both a
+terminal component swapped to a symlink and an intermediate directory swapped to
+a symlink mid-export: either way the read is refused and the export aborts rather
+than archiving foreign bytes. (This is prevention at the read, not detection
+after the fact; the mandatory `verify` step remains a defence-in-depth check for
+straggler *writes*, which the gate does not fence — see above.)
+
+`agor tenant delete --assert-gate-generation <gen>` binds the **database
+deletion phase only**: it re-checks the gate **inside the deletion transaction**,
+so a gate that was lost or replaced (writes may have resumed) aborts the database
+deletion before anything is removed. It does **not** cover the subsequent
+filesystem deletion, which is a separate step.
+
+Recommended orchestration, e.g. for a verified move:
+
+```bash
+GEN=$(agor tenant gate acquire --tenant-id acme-corp --reason move | jq -r .generation)
+agor tenant export --tenant-id acme-corp --archive /path/to/archive
+agor tenant gate inspect --tenant-id acme-corp --expect-generation "$GEN"   # exit 3 if the gate broke
+# ... transport the archive and import it into the destination ...
+agor tenant verify --archive /path/to/archive                                # mandatory: catches straggler writes
+agor tenant delete --tenant-id acme-corp --assert-gate-generation "$GEN"     # aborts the DB phase if the gate broke
+agor tenant gate release --tenant-id acme-corp --generation "$GEN"
+```
+
+### Retrying a partially-completed delete
+
+`agor tenant delete --assert-gate-generation <gen>` is **not idempotent after the
+database phase succeeds**: the gate row lives in a tenant table, so it is deleted
+along with the tenant. Because deletion is database-then-filesystem, a crash in
+the window after the database commit but before the filesystem tree is removed
+leaves the tenant in a DB-done / FS-pending state. A retry to finish the
+filesystem removal must be run **without** `--assert-gate-generation` — the gate
+generation no longer exists, so re-asserting it would abort. (The database phase
+on retry deletes zero rows and still reports success.)
+
+A filesystem-tail failure exits non-zero but still emits a bounded recovery
+object on stdout with `databaseCommitted: true`, `filesPending: true`,
+`tenantDeletionComplete: false`, and `filesystem.status: "pending"`. Treat that
+as proof that the database phase already committed, not as deletion success.
+After fixing the filesystem access or mount, retry without the gate assertion
+and require the full-success proof above. The retry's database row counts will
+be zero, while `filesystem.verifiedAbsent` proves that the configured tenant
+root is gone.
+
+## Preconditions and guarantees
+
+- **Quiesce writes.** Table locks and re-validation narrow races, but you must
+  stop concurrent tenant writes for the duration of an export, import, or delete.
+  The write gate (above) makes this enforceable rather than advisory.
+- **Fail closed on schema drift.** The tenant-table set is derived from the
+  runtime manifest and fails closed if any schema table is unclassified; import
+  additionally requires an exact ordered migration-ledger match.
+- **Cross-tenant isolation.** Every database statement is tenant-scoped by both an
+  explicit predicate and row-level security. An archive contains one tenant's data
+  only.
+- **Determinism.** Identical tenant data exports to identical database payloads
+  and produces the same content fingerprint (wall-clock metadata is excluded).
+- **Safety.** The filesystem walk never follows symlinks, records only safe
+  relative paths, preserves file modes, and rejects links or paths that escape the
+  tenant root. Regular-file reads open with `O_NOFOLLOW` and additionally prove
+  the opened inode's canonical path is inside the tenant root, so a read that
+  would resolve outside the root (via a terminal or intermediate-directory symlink
+  swap) fails closed instead of archiving foreign bytes.
+
+## Derived data
+
+The Knowledge embedding cache (`kb_unit_embeddings`) is tenant-owned but derived
+from Knowledge content that the archive already moves, and its column type is not
+portable. It is reported in `inspect` for completeness but is not exported or
+imported; the runtime regenerates it after a restore.

@@ -5,6 +5,7 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
+  assertTenantWritable,
   enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
@@ -74,7 +75,12 @@ export function deferWithTenantDatabaseScope(
   const schedule = () => {
     runWithoutTenantDatabaseScope(() => {
       setImmediate(() => {
-        void runWithTenantDatabaseScope(db, tenantId, work).catch((error) => {
+        // Deferred tenant writer: fail closed at the write gate (see
+        // assertTenantWritable) inside the fresh transaction before the work.
+        void runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+          await assertTenantWritable(scoped, tenantId);
+          await work();
+        }).catch((error) => {
           if (onError) {
             onError(error);
             return;

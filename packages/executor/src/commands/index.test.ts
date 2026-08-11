@@ -2,7 +2,24 @@
  * Tests for command router
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
+  isOpenCodeCleanupUnverifiedError: () => false,
+  OpenCodeTool: class {},
+  OPENCODE_AUXILIARY_ADAPTER: {
+    async execute() {
+      return { success: true, data: { dryRun: true } };
+    },
+    async executeInteractive(input: { request?: { operation?: string }; dryRun?: boolean }) {
+      return {
+        success: true,
+        data: { dryRun: Boolean(input.dryRun), operation: input.request?.operation },
+      };
+    },
+  },
+}));
+
 import type {
   EnvironmentLifecyclePayload,
   GitBranchAddPayload,
@@ -11,7 +28,12 @@ import type {
   PromptPayload,
   ZellijAttachPayload,
 } from '../payload-types.js';
-import { executeCommand, getRegisteredCommands, hasCommand } from './index.js';
+import {
+  executeCommand,
+  executeInteractiveCommand,
+  getRegisteredCommands,
+  hasCommand,
+} from './index.js';
 
 describe('Command Registry', () => {
   it('should have all expected commands registered', () => {
@@ -30,7 +52,7 @@ describe('Command Registry', () => {
     expect(commands).toContain('branch.knowledge.write');
     expect(commands).toContain('branch.knowledge.read');
     expect(commands).toContain('branch.gateway.slack-file-upload');
-    expect(commands).toContain('branch.inspect');
+    expect(commands).toContain('branch.upload.materialize');
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
     expect(commands).toContain('environment.lifecycle');
@@ -55,7 +77,7 @@ describe('Command Registry', () => {
     expect(hasCommand('branch.knowledge.write')).toBe(true);
     expect(hasCommand('branch.knowledge.read')).toBe(true);
     expect(hasCommand('branch.gateway.slack-file-upload')).toBe(true);
-    expect(hasCommand('branch.inspect')).toBe(true);
+    expect(hasCommand('branch.upload.materialize')).toBe(true);
     expect(hasCommand('branch.agor-yml.import')).toBe(true);
     expect(hasCommand('branch.agor-yml.export')).toBe(true);
     expect(hasCommand('environment.lifecycle')).toBe(true);
@@ -405,6 +427,56 @@ describe('executeCommand - unknown command', () => {
     expect(result.error?.code).toBe('UNKNOWN_COMMAND');
     expect(result.error?.message).toContain('unknown.command');
     expect(result.error?.details).toHaveProperty('supportedCommands');
+  });
+});
+
+describe('interactive command registry', () => {
+  it('routes bounded OpenCode OAuth through the generic transport contract', async () => {
+    const result = await executeInteractiveCommand(
+      {
+        command: 'agentic-tool.invoke',
+        agenticToolContext: { dataHome: '/opaque/data-home' },
+        params: {
+          tool: 'opencode',
+          request: {
+            operation: 'connect-oauth',
+            providerId: 'openai',
+            method: 0,
+          },
+        },
+      },
+      { dryRun: true },
+      {
+        emit() {},
+        async read() {
+          throw new Error('dry-run must not read a control frame');
+        },
+      }
+    );
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        dryRun: true,
+        operation: 'connect-oauth',
+      },
+    });
+  });
+
+  it('rejects interactive operations for tools without an auxiliary adapter', async () => {
+    const result = await executeInteractiveCommand(
+      {
+        command: 'agentic-tool.invoke',
+        params: { tool: 'codex', request: { operation: 'discover' } },
+      },
+      {},
+      { emit() {}, async read() {} }
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: 'AGENTIC_TOOL_AUXILIARY_UNSUPPORTED' },
+    });
   });
 });
 

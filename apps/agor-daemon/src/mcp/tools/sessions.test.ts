@@ -14,7 +14,7 @@
  */
 
 import { AGENTIC_TOOL_NAMES } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../resolve-ids.js', () => ({
@@ -189,6 +189,47 @@ describe('sessionless MCP context', () => {
   });
 });
 
+describe('agor_sessions_get_current_context', () => {
+  it('returns coherent latest-task Git boundary snapshots', async () => {
+    const app = makeFakeApp({
+      sessions: {
+        get: async () => ({
+          session_id: 'sess-current',
+          status: 'idle',
+          agentic_tool: 'codex',
+          tasks: ['task-1'],
+          genealogy: { children: [] },
+        }),
+      },
+      users: {
+        get: async () => ({ name: 'Alice', email: 'alice@example.com', role: 'member' }),
+      },
+      tasks: {
+        get: async () => ({
+          git_state: {
+            ref_at_start: 'main',
+            sha_at_start: 'start-sha',
+            ref_at_end: 'feature',
+            sha_at_end: 'end-sha',
+          },
+        }),
+      },
+    });
+    const tools = await registerAndCaptureTools(
+      { app, userId: 'user-1', sessionId: 'sess-current' },
+      ['agor_sessions_get_current_context']
+    );
+
+    const response = await tools.agor_sessions_get_current_context.cb({
+      includeSiblings: false,
+    });
+    const result = JSON.parse(response.content[0].text);
+
+    expect(result.latest_task_git_start).toEqual({ ref: 'main', sha: 'start-sha' });
+    expect(result.latest_task_git_end).toEqual({ ref: 'feature', sha: 'end-sha' });
+  });
+});
+
 describe('agor_sessions_list', () => {
   afterEach(() => {
     vi.resetModules();
@@ -334,9 +375,6 @@ describe('agor_sessions_create', () => {
   };
 
   beforeEach(() => {
-    vi.doMock('../../utils/branch-inspect.js', () => ({
-      inspectBranchViaExecutor: async () => ({ currentSha: 'sha-abc', currentRef: 'main' }),
-    }));
     vi.doMock('@agor/core/types', async () => {
       const actual = await vi.importActual<Record<string, unknown>>('@agor/core/types');
       return {
@@ -391,12 +429,11 @@ describe('agor_sessions_create', () => {
 
     expect(sessionCreates).toHaveLength(1);
     const created = sessionCreates[0] as Record<string, any>;
-    expect(created.model_config).toBeDefined();
-    // Explicit override wins over user default ('claude-sonnet-5').
-    expect(created.model_config.model).toBe('claude-opus-4-6');
-    expect(created.model_config.mode).toBe('alias');
-    expect(created.model_config.effort).toBe('max');
-    expect(typeof created.model_config.updated_at).toBe('string');
+    expect(created.model_config).toEqual({
+      model: 'claude-opus-4-6',
+      mode: 'alias',
+      effort: 'max',
+    });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.session).not.toHaveProperty('mcp_token');
@@ -442,7 +479,7 @@ describe('agor_sessions_create', () => {
     expect(created.model_config.effort).toBe('xhigh');
   });
 
-  it("attributes sessions created from another user's session context to the acting MCP user and uses their defaults", async () => {
+  it('attributes sessions to the acting MCP user and leaves their defaults for the sessions service', async () => {
     const sessionCreates: unknown[] = [];
     const baseServiceParams = {
       authenticated: true,
@@ -506,13 +543,11 @@ describe('agor_sessions_create', () => {
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.created_by).toBe('user-b');
     expect(created.unix_username).toBe('bob');
-    expect(created.permission_config.mode).toBe('acceptEdits');
-    expect(created.model_config.model).toBe('claude-sonnet-5');
-    expect(created.model_config.effort).toBe('high');
-    expect(created.model_config.model).not.toBe('claude-parent');
+    expect(created).not.toHaveProperty('permission_config');
+    expect(created).not.toHaveProperty('model_config');
   });
 
-  it('falls back to user default modelConfig when none is explicitly provided', async () => {
+  it('does not snapshot user defaults before the sessions service materializes them', async () => {
     const sessionCreates: unknown[] = [];
     const app = makeFakeApp({
       users: { get: async () => baseUser },
@@ -544,8 +579,8 @@ describe('agor_sessions_create', () => {
     });
 
     const created = sessionCreates[0] as Record<string, any>;
-    expect(created.model_config.model).toBe('claude-sonnet-5'); // user default
-    expect(created.model_config.effort).toBe('medium');
+    expect(created).not.toHaveProperty('permission_config');
+    expect(created).not.toHaveProperty('model_config');
   });
 
   it('attaches explicit mcpServerIds via the /sessions/:id/mcp-servers route (Bug 1)', async () => {
@@ -707,11 +742,17 @@ describe('agor_sessions_create', () => {
     const result = await agor_sessions_create({
       branchId: 'wt-1',
       agenticTool: 'claude-code',
+      enableCallback: true,
     });
 
     // New session genealogy should reference the calling session as parent
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.genealogy.parent_session_id).toBe('sess-caller');
+    expect(created.callback_config).toMatchObject({
+      enabled: true,
+      callback_session_id: 'sess-caller',
+      callback_mode: 'persistent',
+    });
 
     // Parent's children list should be updated to include the new session
     expect(patchCalls).toHaveLength(1);
@@ -723,6 +764,38 @@ describe('agor_sessions_create', () => {
     // Note in response should mention the parent link
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.note).toContain('sess-caller');
+  });
+
+  it('rejects a default callback target the caller cannot prompt', async () => {
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    vi.mocked(ensureCanPromptTargetSession).mockRejectedValueOnce(
+      new Error('Prompt permission required')
+    );
+    const sessionCreate = vi.fn();
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: { create: sessionCreate },
+    });
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-view-only' },
+      ['agor_sessions_create']
+    );
+
+    await expect(
+      agor_sessions_create({
+        branchId: 'wt-1',
+        agenticTool: 'claude-code',
+        enableCallback: true,
+      })
+    ).rejects.toThrow('Prompt permission required');
+    expect(ensureCanPromptTargetSession).toHaveBeenCalledWith(
+      'sess-view-only',
+      'user-1',
+      app,
+      expect.anything()
+    );
+    expect(sessionCreate).not.toHaveBeenCalled();
   });
 
   it('does not set parent_session_id when called without session context', async () => {
@@ -974,12 +1047,6 @@ describe('agor_sessions_create', () => {
 });
 
 describe('agor_sessions_spawn', () => {
-  beforeEach(() => {
-    vi.doMock('../../utils/branch-inspect.js', () => ({
-      inspectBranchViaExecutor: async () => ({ currentSha: 'sha-abc', currentRef: 'main' }),
-    }));
-  });
-
   afterEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
@@ -1060,12 +1127,6 @@ describe('agor_sessions_spawn', () => {
 });
 
 describe('agor_sessions_prompt (subsession mode)', () => {
-  beforeEach(() => {
-    vi.doMock('../../utils/branch-inspect.js', () => ({
-      inspectBranchViaExecutor: async () => ({ currentSha: 'sha-abc', currentRef: 'main' }),
-    }));
-  });
-
   afterEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
@@ -1108,6 +1169,93 @@ describe('agor_sessions_prompt (subsession mode)', () => {
       effort: 'max',
       provider: 'anthropic',
     });
+  });
+});
+
+describe('agor_sessions_prompt task callback', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('binds callback:true to trusted calling session context', async () => {
+    const promptCalls: any[] = [];
+    const app = makeFakeApp({
+      '/sessions/:id/prompt': {
+        create: async (...args: unknown[]) => {
+          promptCalls.push(args);
+          return { task_id: 'task-1', status: 'queued', queue_position: 1 };
+        },
+      },
+    });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_prompt']
+    );
+
+    await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'continue exactly this task',
+      mode: 'continue',
+      callback: true,
+    });
+
+    expect(promptCalls[0][1]).toMatchObject({
+      route: { id: 'sess-target' },
+      _taskCompletionCallback: {
+        target_session_id: 'sess-caller',
+        requested_from_session_id: 'sess-caller',
+        requested_by_user_id: 'user-1',
+      },
+    });
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    expect(ensureCanPromptTargetSession).toHaveBeenCalledWith(
+      'sess-caller',
+      'user-1',
+      app,
+      expect.anything()
+    );
+  });
+
+  it('rejects callback:true when the caller cannot prompt its callback session', async () => {
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    vi.mocked(ensureCanPromptTargetSession).mockRejectedValueOnce(
+      new Error('Prompt permission required')
+    );
+    const promptCreate = vi.fn();
+    const app = makeFakeApp({ '/sessions/:id/prompt': { create: promptCreate } });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-view-only' },
+      ['agor_sessions_prompt']
+    );
+
+    await expect(
+      agor_sessions_prompt({
+        sessionId: 'sess-target',
+        prompt: 'continue',
+        mode: 'continue',
+        callback: true,
+      })
+    ).rejects.toThrow('Prompt permission required');
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects callback:true without current session context', async () => {
+    const promptCreate = vi.fn();
+    const app = makeFakeApp({ '/sessions/:id/prompt': { create: promptCreate } });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_prompt',
+    ]);
+
+    const result = await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'continue',
+      mode: 'continue',
+      callback: true,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(promptCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -1284,7 +1432,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
     expect(sessionCreates).toHaveLength(1);
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.model_config.model).toBe('claude-opus-4-6');
-    expect(created.model_config.mode).toBe('alias'); // default applied by resolveModelConfig
+    expect(created.model_config).toEqual({ model: 'claude-opus-4-6' });
   });
 });
 

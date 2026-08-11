@@ -1,20 +1,23 @@
+import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
-import type { ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
+import type { AgenticToolName, ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
 import { hasAgorAbortCause, markAgorAbortCause } from './termination-state.js';
 
-export type SdkActivityAdapter = 'claude-code' | 'codex' | 'gemini' | 'copilot' | 'opencode';
+export type SdkActivityAdapter = 'claude-code' | 'codex' | 'gemini' | 'copilot';
 export type SdkActivityCallback = (kind: ExecutorPulseKind, detail?: string) => void;
 
 export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkActivityAdapter, string> = {
   'claude-code': '@anthropic-ai/claude-agent-sdk@0.3.197',
   codex: '@openai/codex-sdk@0.144.0',
-  gemini: '@google/gemini-cli-core@0.31.0',
+  gemini: '@google/gemini-cli-core@0.40.1',
   copilot: '@github/copilot-sdk@0.2.2',
-  opencode: '@opencode-ai/sdk@1.14.33',
 };
 
-export function getSdkActivityVersion(adapter: string): string | undefined {
-  return SDK_ACTIVITY_VERSION_MANIFEST[adapter as SdkActivityAdapter];
+export function getSdkActivityVersion(tool: AgenticToolName): string | undefined {
+  return (
+    getAgenticToolIntegration(tool).sdkVersion ??
+    SDK_ACTIVITY_VERSION_MANIFEST[tool as SdkActivityAdapter]
+  );
 }
 
 const STARTED = new Set([
@@ -24,7 +27,6 @@ const STARTED = new Set([
   'codex:event_msg.turn_context',
   'gemini:model_info',
   'copilot:assistant.turn_start',
-  'opencode:permission.updated',
 ]);
 const WAITING = new Set([
   'claude-code:permission.request',
@@ -32,7 +34,6 @@ const WAITING = new Set([
   'copilot:permission.request',
   'copilot:user_input.request',
   'gemini:tool_call_confirmation',
-  'opencode:permission.asked',
 ]);
 const PROGRESS = new Set([
   'claude-code:assistant',
@@ -58,9 +59,6 @@ const PROGRESS = new Set([
   'copilot:subagent.started',
   'copilot:subagent.completed',
   'copilot:assistant.turn_end',
-  'opencode:message.updated',
-  'opencode:message.part.updated',
-  'opencode:session.status',
 ]);
 
 function boundedDetail(value: string): string {
@@ -71,8 +69,6 @@ export function mapSdkActivity(
   adapter: SdkActivityAdapter,
   discriminator: string
 ): { kind: ExecutorPulseKind; detail: string } | undefined {
-  if (adapter === 'opencode' && discriminator === 'server.heartbeat') return undefined;
-
   const detail = boundedDetail(discriminator);
   const key = `${adapter}:${detail}`;
   if (WAITING.has(key)) return { kind: 'waiting', detail };

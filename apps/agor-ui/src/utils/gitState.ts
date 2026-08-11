@@ -5,8 +5,7 @@
  * split that back out for display.
  *
  * Returns `{ cleanSha: '', isDirty: false }` for empty / `'unknown'` input
- * so callers can pass `session.git_state.current_sha` directly without
- * pre-filtering.
+ * so callers can pass optional task SHA snapshots without pre-filtering.
  */
 const DIRTY_SUFFIX = '-dirty';
 

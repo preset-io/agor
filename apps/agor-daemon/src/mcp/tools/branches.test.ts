@@ -1,6 +1,6 @@
 import * as configModule from '@agor/core/config';
 import { BranchRepository } from '@agor/core/db';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerBranchTools } from './branches.js';
 
@@ -137,6 +137,30 @@ afterEach(() => {
 });
 
 describe('agor_branches_update', () => {
+  it('can persist an explicit None override instead of an inherited board default', async () => {
+    const branchesPatch = vi.fn(async (_id, data) => ({ branch_id: 'branch-1', ...data }));
+    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const update = registerAndCaptureUpdate({ app, userId: 'user-1' });
+
+    await update({
+      branchId: 'branch-1',
+      permissionSource: 'override',
+      othersCan: 'none',
+    });
+
+    expect(branchesPatch).toHaveBeenCalledWith(
+      'branch-1',
+      { permission_source: 'override', others_can: 'none' },
+      {}
+    );
+  });
+
   it('uses authenticated service params when falling back to the current session branch', async () => {
     const baseServiceParams = {
       authenticated: true,
@@ -1538,10 +1562,10 @@ describe('agor_teammates_list', () => {
       baseServiceParams,
     });
 
-    const result = await listTeammates({ limit: 200 });
+    const result = await listTeammates({ limit: 100 });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
+    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 101, offset: 0 });
     expect(parsed.total).toBe(1);
     expect(parsed.teammates).toEqual([
       expect.objectContaining({
@@ -1626,7 +1650,7 @@ describe('agor_teammates_list', () => {
 
     await listTeammates({});
 
-    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
+    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 26, offset: 0 });
   });
 
   it('scopes teammate discovery for superadmins when superadmin bypass is disabled', async () => {
@@ -1659,7 +1683,8 @@ describe('agor_teammates_list', () => {
     expect(findTeammateBranches).toHaveBeenCalledWith({
       archived: false,
       userId: 'superadmin-1',
-      limit: 200,
+      limit: 26,
+      offset: 0,
     });
   });
 });

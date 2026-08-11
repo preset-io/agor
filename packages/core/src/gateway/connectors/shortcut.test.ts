@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { GatewayListenerError } from '../listener-error';
 import {
   buildThreadId,
   commentMentionsAgent,
@@ -113,6 +114,23 @@ describe('ShortcutConnector', () => {
   it('formatMessage passes markdown through unchanged', () => {
     const connector = new ShortcutConnector({ api_token: 'tok', agent_member_id: 'm1' });
     expect(connector.formatMessage('**bold** and `code`')).toBe('**bold** and `code`');
+  });
+
+  it.each([
+    [401, 'permanent', 'shortcut_token_invalid'],
+    [403, 'permanent', 'shortcut_token_invalid'],
+    [429, 'transient', 'shortcut_api_unavailable'],
+    [500, 'transient', 'shortcut_api_unavailable'],
+  ] as const)('classifies startup HTTP %s as %s', async (status, kind, code) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status }))
+    );
+    const connector = new ShortcutConnector({ api_token: 'tok' });
+    const error = await connector.startListening(vi.fn()).catch((caught) => caught);
+    expect(error).toBeInstanceOf(GatewayListenerError);
+    expect(error).toMatchObject({ kind, code });
+    vi.unstubAllGlobals();
   });
 });
 

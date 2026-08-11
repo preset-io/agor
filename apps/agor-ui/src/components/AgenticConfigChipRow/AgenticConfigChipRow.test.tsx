@@ -6,6 +6,7 @@ import {
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm/agenticConfigHelpers';
 import { AgenticConfigChipRow } from './AgenticConfigChipRow';
 
 const storeSettings = vi.hoisted(() => ({ inlineAllowed: true }));
@@ -33,10 +34,19 @@ vi.mock('../ModelSelector', async () => {
         change model
       </button>
     ),
-    AdvisorModelSelect: ({ onChange }: { onChange: (value: string) => void }) => (
-      <button type="button" data-testid="advisor-select" onClick={() => onChange('advisor-model')}>
-        choose advisor
-      </button>
+    AdvisorModelSelect: ({ onChange }: { onChange: (value: string | undefined) => void }) => (
+      <>
+        <button
+          type="button"
+          data-testid="advisor-select"
+          onClick={() => onChange('advisor-model')}
+        >
+          choose advisor
+        </button>
+        <button type="button" data-testid="advisor-clear" onClick={() => onChange(undefined)}>
+          clear advisor
+        </button>
+      </>
     ),
   };
 });
@@ -110,16 +120,24 @@ function Harness({
         enableSaveAsDefault
       />
       <Form.Item shouldUpdate noStyle>
-        {() => (
-          <span data-testid="state">
-            {JSON.stringify({
-              src: form.getFieldValue('agenticToolPresetId'),
-              model: (form.getFieldValue('modelConfig') as { model?: string } | undefined)?.model,
-              perm: form.getFieldValue('permissionMode'),
-              effort: form.getFieldValue('effort'),
-            })}
-          </span>
-        )}
+        {() => {
+          const modelConfig = form.getFieldValue('modelConfig') as
+            | { model?: string; advisorModel?: string }
+            | undefined;
+          return (
+            <span data-testid="state">
+              {JSON.stringify({
+                src: form.getFieldValue('agenticToolPresetId'),
+                model: modelConfig?.model,
+                perm: form.getFieldValue('permissionMode'),
+                effort: form.getFieldValue('effort'),
+                // Round-trip through the submit path so the assertion proves what
+                // the created session receives, not just the form field.
+                submittedModelConfig: buildModelConfigFromFormValues({ modelConfig }),
+              })}
+            </span>
+          );
+        }}
       </Form.Item>
     </Form>
   );
@@ -134,7 +152,9 @@ describe('AgenticConfigChipRow', () => {
     render(<Harness user={userWithDefault} />);
     // Source Select shows the resolved "My default" summary.
     await waitFor(() =>
-      expect(screen.getByText(/My default · Claude Opus 4.8 · Accept edits/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/My default · Claude Opus 4.8 — 200k · Accept edits/)
+      ).toBeInTheDocument()
     );
     // Chips render real values — never "default".
     expect(screen.getByTestId('model-chip')).toHaveTextContent('Opus 4.8');
@@ -145,7 +165,7 @@ describe('AgenticConfigChipRow', () => {
 
   it('uses semantic, focusable buttons for popover chips', async () => {
     render(<Harness user={userWithDefault} initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION} />);
-    const modelChip = await screen.findByRole('button', { name: 'Model: Opus 4.8' });
+    const modelChip = await screen.findByRole('button', { name: 'Model: Opus 4.8 — 200k' });
 
     modelChip.focus();
     expect(modelChip).toHaveFocus();
@@ -206,7 +226,7 @@ describe('AgenticConfigChipRow', () => {
   it('flips the Select to Custom (seeded from resolved values) when a chip is edited', async () => {
     render(<Harness user={userWithDefault} />);
     await waitFor(() =>
-      expect(screen.getByText(/My default · Claude Opus 4.8/)).toBeInTheDocument()
+      expect(screen.getByText(/My default · Claude Opus 4.8 — 200k/)).toBeInTheDocument()
     );
 
     // Open the model chip popover and change the model.
@@ -234,6 +254,39 @@ describe('AgenticConfigChipRow', () => {
     await waitFor(() => expect(chip).toHaveTextContent('Advisor: advisor-model'));
   });
 
+  it('surfaces an advisor inherited from "My default" and clears it as a custom override', async () => {
+    const userWithAdvisor = {
+      user_id: 'u4',
+      default_agentic_config: {
+        'claude-code': {
+          modelConfig: { model: 'claude-opus-4-8', advisorModel: 'claude-haiku-4-5' },
+          permissionMode: 'acceptEdits',
+        },
+      },
+    } as unknown as User;
+
+    render(<Harness user={userWithAdvisor} initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION} />);
+
+    // The inherited advisor is visible without first switching to Custom.
+    const chip = await screen.findByTestId('advisor-chip');
+    expect(chip).toHaveTextContent('Advisor: Haiku 4.5');
+
+    fireEvent.click(chip);
+    fireEvent.click(await screen.findByTestId('advisor-clear'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('advisor-chip')).toHaveTextContent('Advisor: Off')
+    );
+
+    const state = JSON.parse(screen.getByTestId('state').textContent || '{}');
+    // Clearing overrides only this session: the source flips to Custom…
+    expect(state.src).toBe('__inline__');
+    // …seeded from the resolved default, minus the advisor.
+    expect(state.model).toBe('claude-opus-4-8');
+    expect(state.perm).toBe('acceptEdits');
+    expect(state.submittedModelConfig).not.toHaveProperty('advisorModel');
+  });
+
   it('shows inherited Codex effort and turns an explicit selection into a custom override', async () => {
     const codexUser = {
       user_id: 'codex-user',
@@ -253,7 +306,7 @@ describe('AgenticConfigChipRow', () => {
 
     fireEvent.click(effortChip);
     const selector = await screen.findByTestId('effort-select');
-    expect(selector).toHaveTextContent('Inherited|clearable|low,medium,high,xhigh');
+    expect(selector.textContent).toBe('Inherited|clearable|low,medium,high,xhigh,max');
     fireEvent.click(selector);
 
     await waitFor(() => expect(screen.getByText('Custom')).toBeInTheDocument());

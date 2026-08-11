@@ -14,6 +14,7 @@ export type {
   BranchesService,
   ClientInput,
   GatewayChannelsService,
+  MessagesBulkService,
   MessagesService,
   ReposCloneService,
   ReposLocalService,

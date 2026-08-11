@@ -123,8 +123,8 @@ export const BasePayloadSchema = z.object({
   /** Environment variables to inject */
   env: z.record(z.string(), z.string()).optional(),
 
-  /** Data home directory override */
-  dataHome: z.string().optional(),
+  /** Opaque, daemon-authorized context interpreted by the selected adapter. */
+  agenticToolContext: z.record(z.string(), z.unknown()).optional(),
 
   /**
    * Daemon-resolved config slice. See {@link ResolvedConfigSliceSchema}.
@@ -159,6 +159,21 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
 });
 
 export type PromptPayload = z.infer<typeof PromptPayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
+// Agentic-tool Auxiliary Invocation Payload
+// ═══════════════════════════════════════════════════════════
+
+export const AgenticToolInvokePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('agentic-tool.invoke'),
+  params: z.object({
+    tool: ToolTypeSchema,
+    /** Adapter-owned request validated by the selected integration. */
+    request: z.record(z.string(), z.unknown()),
+  }),
+});
+
+export type AgenticToolInvokePayload = z.infer<typeof AgenticToolInvokePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Git Clone Payload
@@ -220,6 +235,9 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
 
     /** Initialize Unix group for repo isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
+
+    /** Daemon Unix identity that must retain explicit ACL access. */
+    daemonUser: z.string().optional(),
   }),
 });
 
@@ -269,6 +287,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
 
     /** Initialize Unix group for branch isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
+
+    /** Daemon Unix identity that must retain explicit ACL access. */
+    daemonUser: z.string().optional(),
 
     /** Legacy open-access self-hosted chmod; false for RBAC/simple Cloud mounts. */
     fixBasicPermissions: z.boolean().optional().default(false),
@@ -504,26 +525,17 @@ export const BranchSlackFileUploadPayloadSchema = BasePayloadSchema.extend({
 });
 export type BranchSlackFileUploadPayload = z.infer<typeof BranchSlackFileUploadPayloadSchema>;
 
-// ═══════════════════════════════════════════════════════════
-// Branch Inspect Payload
-// ═══════════════════════════════════════════════════════════
-
-/**
- * Branch inspect payload - read current git ref/SHA from a branch checkout.
- */
-export const BranchInspectPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('branch.inspect'),
-
-  /** JWT for Feathers authentication */
+export const BranchUploadMaterializePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.upload.materialize'),
   sessionToken: z.string(),
-
   params: z.object({
-    /** Branch ID whose checkout should be inspected */
     branchId: z.string().uuid(),
+    sessionId: z.string().uuid(),
+    uploadRef: z.string().regex(/^upl_[0-9a-f-]{36}$/),
+    filename: z.string().min(1),
   }),
 });
-
-export type BranchInspectPayload = z.infer<typeof BranchInspectPayloadSchema>;
+export type BranchUploadMaterializePayload = z.infer<typeof BranchUploadMaterializePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Branch .agor.yml Payloads
@@ -808,6 +820,12 @@ export const UnixSyncRepoPayloadSchema = BasePayloadSchema.extend({
     /** Daemon Unix user (added to repo group for daemon access) */
     daemonUser: z.string().optional(),
 
+    /** Post-clone initialization applies permissions to the whole repo root. */
+    initialize: z.boolean().optional(),
+
+    /** Trusted clone creator ID whose Unix identity receives initial access. */
+    creatorUserId: z.string().uuid().optional(),
+
     /** If true, delete the group instead of syncing (for repo removal) */
     delete: z.boolean().optional(),
   }),
@@ -938,6 +956,7 @@ export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
  */
 export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   PromptPayloadSchema,
+  AgenticToolInvokePayloadSchema,
   GitClonePayloadSchema,
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
@@ -952,7 +971,7 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   BranchKnowledgeWritePayloadSchema,
   BranchKnowledgeReadPayloadSchema,
   BranchSlackFileUploadPayloadSchema,
-  BranchInspectPayloadSchema,
+  BranchUploadMaterializePayloadSchema,
   BranchAgorYmlImportPayloadSchema,
   BranchAgorYmlExportPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
@@ -1015,6 +1034,7 @@ export function parseExecutorPayload(json: string): ExecutorPayload {
 export function getSupportedCommands(): string[] {
   return [
     'prompt',
+    'agentic-tool.invoke',
     'git.clone',
     'git.branch.add',
     'git.branch.remove',
@@ -1031,7 +1051,7 @@ export function getSupportedCommands(): string[] {
     'branch.knowledge.write',
     'branch.knowledge.read',
     'branch.gateway.slack-file-upload',
-    'branch.inspect',
+    'branch.upload.materialize',
     'branch.agor-yml.import',
     'branch.agor-yml.export',
     'environment.lifecycle',

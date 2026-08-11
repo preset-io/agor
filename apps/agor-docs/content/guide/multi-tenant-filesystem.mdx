@@ -17,6 +17,11 @@ multi_tenancy:
   auth_claim: tenant_id
   filesystem_isolation_enabled: true
   tenants_base_folder: ~/.agor/tenants
+
+uploads:
+  location: ~/.agor
+  max_age_days: 30
+  max_file_size_mb: 50
 ```
 
 `filesystem_isolation_enabled` defaults to `false`, preserving the existing
@@ -41,9 +46,57 @@ With filesystem isolation enabled, Agor creates directories lazily:
   config.yaml
 ```
 
-Repository clones, branch directories, direct uploads, and gateway attachment
-uploads are tenant-scoped. `agor.db` and `config.yaml` remain shared daemon
-state under `~/.agor`.
+`uploads.location` is a **base storage location**, not the final upload folder.
+Agor owns and appends the tenant and `uploads/` namespaces beneath it. Local
+multi-tenant uploads therefore use
+`<location>/tenants/<tenant-id>/uploads/`. In single-tenant mode they use
+`<location>/uploads/`. `max_age_days: 0` disables automatic expiry.
+
+The base may also be an `s3://bucket/prefix` URI. The daemon uses the
+AWS SDK credential and region provider chains, so configure credentials through
+the workload identity (recommended), environment, or shared AWS configuration;
+never embed credentials in the URI. Set the region through workload/shared
+configuration or `AWS_REGION`.
+
+S3 objects always use the same tenant-first partition. Operators provide only
+the bucket and optional base prefix; Agor manages everything below it:
+
+```text
+<prefix>/tenants/<tenant-id>/uploads/objects/<handle-shard>/<upload-ref>
+```
+
+Agor enforces tenant, branch, and session ownership before every read or delete.
+The bucket policy should grant the daemon only the configured prefix. Agor does
+not list or reconcile the bucket during upload requests. Configure S3 lifecycle
+rules to expire objects after the configured retention and abort incomplete
+multipart uploads. Failed transfers are also aborted directly by the uploader.
+When `max_age_days` is zero, omit object expiration if permanent retention is
+intended.
+
+The daemon needs `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on the
+configured object prefix, plus `s3:AbortMultipartUpload` for failed multipart
+transfers. It does not require bucket-list permissions for normal upload
+operation.
+
+## Expired upload maintenance
+
+Upload expiry is enforced on access. S3 lifecycle rules are the normal Cloud
+mechanism for physical byte retention. Deployment operators may also remove a
+bounded batch of expired database metadata and its exact storage objects:
+
+```bash
+# Static/single-tenant deployment
+agor local uploads cleanup --limit 500
+
+# One tenant, or an explicit cross-tenant Cloud maintenance job
+agor local uploads cleanup --tenant-id acme --limit 500
+agor local uploads cleanup --all-tenants --limit 500
+```
+
+Use `--dry-run` to count without deleting. This is a deployment-local command:
+it reads the runtime database/configuration and uses local filesystem or AWS
+credentials directly. It is not an authenticated, tenant-bound user API. The
+S3 path performs exact-key operations and never lists or reconciles the bucket.
 
 In the default single-tenant mode, paths remain unchanged:
 
@@ -64,8 +117,10 @@ an executor provisioning responsibility. A deployment may mount a stable home
 for the Agor user together with only the authorized branch paths, using
 read-only or read-write mounts according to its RBAC policy.
 
-Tenant filesystem isolation determines where daemon-managed data lives; it
-does not require mounting the entire tenant root into every executor.
+The daemon upload root is not mounted into executors. When an agent needs an
+upload, Agor streams an authorized copy into the executor-owned
+`.agor/session-staging/<session-id>/` directory inside the existing branch
+workspace mount.
 
 ## Migration
 
@@ -75,3 +130,8 @@ existing tenant data into the target topology while the daemon is stopped.
 Database rows containing filesystem paths must agree with the resulting
 locations.
 
+## Moving and removing tenant data
+
+To inspect, export, import, verify, or delete a single tenant's database and
+filesystem data — for migration, backup and restore, or offboarding — see
+[Tenant Data Portability](/guide/tenant-data-portability).

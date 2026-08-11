@@ -10,6 +10,7 @@ import {
   runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
+  UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Session, UserID } from '@agor/core/types';
@@ -28,6 +29,11 @@ async function seedPresetSession(
     model: 'gpt-5.4',
   }
 ) {
+  await new UsersRepository(db).create({
+    user_id: ACTOR_ID,
+    email: `materialize-owner-${generateId()}@example.com`,
+    name: 'Materialization owner',
+  });
   const repo = await new RepoRepository(db).create({
     repo_id: generateId(),
     slug: `repo-${generateId()}`,
@@ -63,7 +69,6 @@ async function seedPresetSession(
     agentic_tool_preset_id: preset.preset_id,
     status: SessionStatus.IDLE,
     created_by: ACTOR_ID,
-    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
     tasks: [],
     contextFiles: [],
     genealogy: { children: [] },

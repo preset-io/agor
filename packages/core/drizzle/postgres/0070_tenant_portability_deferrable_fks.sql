@@ -1,0 +1,109 @@
+-- Exact schema-derived set of 91 foreign keys whose child and parent are both movable tenant-manifest tables.
+-- ALTER CONSTRAINT preserves every column and ON UPDATE/ON DELETE action; normal transactions remain initially immediate.
+--
+-- Each ALTER CONSTRAINT briefly needs ACCESS EXCLUSIVE on its table. Bound the
+-- wait to acquire that lock so a single busy table cannot make this migration
+-- queue behind a long-running transaction and, while queued, stall every new
+-- query on that table for up to statement_timeout (60s; see client.ts). The
+-- migrator runs all pending migrations in ONE transaction, so this SET LOCAL
+-- applies to the 91 ALTERs below (and auto-clears at commit — it never leaks
+-- onto the pooled connection). lock_timeout (3s) is deliberately far below the
+-- 60s statement_timeout so a contended lock fails fast and specifically rather
+-- than after a long statement-timeout stall.
+--
+-- Rollout: if any ALTER cannot acquire its lock within 3s the whole migration
+-- transaction rolls back with no partial application; retry during a quieter
+-- window. On an idle/low-traffic database every lock is uncontended and the
+-- migration completes in one pass.
+SET LOCAL lock_timeout = '3s';--> statement-breakpoint
+ALTER TABLE "app_variables" ALTER CONSTRAINT "app_variables_updated_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "artifact_trust_grants" ALTER CONSTRAINT "artifact_trust_grants_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "artifacts" ALTER CONSTRAINT "artifacts_board_id_boards_board_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "artifacts" ALTER CONSTRAINT "artifacts_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "artifacts" ALTER CONSTRAINT "artifacts_source_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_comments" ALTER CONSTRAINT "board_comments_board_id_boards_board_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_comments" ALTER CONSTRAINT "board_comments_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_comments" ALTER CONSTRAINT "board_comments_message_id_messages_message_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_comments" ALTER CONSTRAINT "board_comments_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_comments" ALTER CONSTRAINT "board_comments_task_id_tasks_task_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_group_grants" ALTER CONSTRAINT "board_group_grants_board_id_boards_board_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_group_grants" ALTER CONSTRAINT "board_group_grants_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_group_grants" ALTER CONSTRAINT "board_group_grants_group_id_groups_group_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_objects" ALTER CONSTRAINT "board_objects_board_id_boards_board_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_objects" ALTER CONSTRAINT "board_objects_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_objects" ALTER CONSTRAINT "board_objects_card_id_cards_card_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_owners" ALTER CONSTRAINT "board_owners_board_id_boards_board_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "board_owners" ALTER CONSTRAINT "board_owners_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "boards" ALTER CONSTRAINT "boards_primary_teammate_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "branch_group_grants" ALTER CONSTRAINT "branch_group_grants_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "branch_group_grants" ALTER CONSTRAINT "branch_group_grants_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "branch_group_grants" ALTER CONSTRAINT "branch_group_grants_group_id_groups_group_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "branch_owners" ALTER CONSTRAINT "branch_owners_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "branch_owners" ALTER CONSTRAINT "branch_owners_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "branches" ALTER CONSTRAINT "branches_board_id_boards_board_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "branches" ALTER CONSTRAINT "branches_repo_id_repos_repo_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "cards" ALTER CONSTRAINT "cards_board_id_boards_board_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "cards" ALTER CONSTRAINT "cards_card_type_id_card_types_card_type_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "gateway_channels" ALTER CONSTRAINT "gateway_channels_agentic_tool_preset_id_fkey" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "gateway_channels" ALTER CONSTRAINT "gateway_channels_target_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "gateway_outbound_messages" ALTER CONSTRAINT "gateway_outbound_messages_consumed_by_session_id_sessions_sessi" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "gateway_outbound_messages" ALTER CONSTRAINT "gateway_outbound_messages_emitted_by_schedule_id_schedules_sche" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "gateway_outbound_messages" ALTER CONSTRAINT "gateway_outbound_messages_emitted_by_session_id_sessions_sessio" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "gateway_outbound_messages" ALTER CONSTRAINT "gateway_outbound_messages_emitted_by_task_id_tasks_task_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "gateway_outbound_messages" ALTER CONSTRAINT "gateway_outbound_messages_emitted_by_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "gateway_outbound_messages" ALTER CONSTRAINT "gateway_outbound_messages_gateway_channel_id_gateway_channels_i" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "gateway_outbound_messages" ALTER CONSTRAINT "gateway_outbound_messages_target_branch_id_branches_branch_id_f" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "group_memberships" ALTER CONSTRAINT "group_memberships_added_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "group_memberships" ALTER CONSTRAINT "group_memberships_group_id_groups_group_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "group_memberships" ALTER CONSTRAINT "group_memberships_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "groups" ALTER CONSTRAINT "groups_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_document_units" ALTER CONSTRAINT "kb_document_units_document_id_kb_documents_document_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_document_units" ALTER CONSTRAINT "kb_document_units_version_id_kb_document_versions_version_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_document_versions" ALTER CONSTRAINT "kb_document_versions_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_document_versions" ALTER CONSTRAINT "kb_document_versions_document_id_kb_documents_document_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_documents" ALTER CONSTRAINT "kb_documents_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_documents" ALTER CONSTRAINT "kb_documents_namespace_id_kb_namespaces_namespace_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_documents" ALTER CONSTRAINT "kb_documents_updated_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_edges" ALTER CONSTRAINT "kb_graph_edges_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_edges" ALTER CONSTRAINT "kb_graph_edges_source_node_id_kb_graph_nodes_node_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_edges" ALTER CONSTRAINT "kb_graph_edges_target_node_id_kb_graph_nodes_node_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_artifact_id_artifacts_artifact_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_board_id_boards_board_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_document_id_kb_documents_document_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_message_id_messages_message_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_namespace_id_kb_namespaces_namespace_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_repo_id_repos_repo_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_task_id_tasks_task_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_unit_id_kb_document_units_unit_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_graph_nodes" ALTER CONSTRAINT "kb_graph_nodes_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_namespace_acl" ALTER CONSTRAINT "kb_namespace_acl_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_namespace_acl" ALTER CONSTRAINT "kb_namespace_acl_namespace_id_kb_namespaces_namespace_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_namespaces" ALTER CONSTRAINT "kb_namespaces_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_namespaces" ALTER CONSTRAINT "kb_namespaces_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_namespaces" ALTER CONSTRAINT "kb_namespaces_owner_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "kb_namespaces" ALTER CONSTRAINT "kb_namespaces_repo_id_repos_repo_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "messages" ALTER CONSTRAINT "messages_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "messages" ALTER CONSTRAINT "messages_task_id_tasks_task_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "schedules" ALTER CONSTRAINT "schedules_agentic_tool_preset_id_fkey" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "schedules" ALTER CONSTRAINT "schedules_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "schedules" ALTER CONSTRAINT "schedules_created_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "schedules" ALTER CONSTRAINT "schedules_last_run_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "session_env_selections" ALTER CONSTRAINT "session_env_selections_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "session_mcp_servers" ALTER CONSTRAINT "session_mcp_servers_mcp_server_id_mcp_servers_mcp_server_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "session_mcp_servers" ALTER CONSTRAINT "session_mcp_servers_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "session_relationships" ALTER CONSTRAINT "session_relationships_callback_session_id_sessions_session_id_f" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "session_relationships" ALTER CONSTRAINT "session_relationships_source_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "session_relationships" ALTER CONSTRAINT "session_relationships_target_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "sessions" ALTER CONSTRAINT "sessions_agentic_tool_preset_id_fkey" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "sessions" ALTER CONSTRAINT "sessions_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "sessions" ALTER CONSTRAINT "sessions_schedule_id_schedules_schedule_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "tasks" ALTER CONSTRAINT "tasks_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "thread_session_map" ALTER CONSTRAINT "thread_session_map_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "thread_session_map" ALTER CONSTRAINT "thread_session_map_channel_id_gateway_channels_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "thread_session_map" ALTER CONSTRAINT "thread_session_map_session_id_sessions_session_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "user_api_keys" ALTER CONSTRAINT "user_api_keys_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "user_mcp_oauth_tokens" ALTER CONSTRAINT "user_mcp_oauth_tokens_mcp_server_id_mcp_servers_mcp_server_id_f" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
+ALTER TABLE "user_mcp_oauth_tokens" ALTER CONSTRAINT "user_mcp_oauth_tokens_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint

@@ -58,7 +58,8 @@ pnpm agor db migrate
 
 # 5. (Optional) Test against a live agor-managed env.
 #    The container's docker-entrypoint.sh runs `pnpm agor db migrate --yes`
-#    on boot, so a branch restart applies pending migrations automatically.
+#    on boot, so a branch restart applies ordinary pending migrations automatically.
+#    Purpose-marked offline cutovers still require an explicit maintenance run.
 
 # 6. Commit schema files + new SQL + the meta/_journal.json updates.
 git add packages/core/src/db/schema.{sqlite,postgres}.ts
@@ -98,6 +99,63 @@ When inserting manual or backfill migrations into `meta/_journal.json`, ensure t
 Don't use `CHECK(col IN ('a', 'b', 'c'))` on a SQLite column. When a new value is added (e.g. extending `others_can` with `'session'`), the CHECK constraint forces a full table-recreation migration — SQLite can't alter constraints in place. This is error-prone and easy to forget when updating TypeScript enums.
 
 Validate enum values at the application layer instead — Drizzle schema `enum` option, Zod, or service hooks. The TypeScript types are the source of truth; the DB just stores text.
+
+### New tenant-table FKs must be made `DEFERRABLE INITIALLY IMMEDIATE` (Postgres)
+
+`agor tenant import` restores a whole tenant inside one transaction with
+`SET CONSTRAINTS ALL DEFERRED`, which only works on constraints _declared_
+deferrable. Migration `0070_tenant_portability_deferrable_fks` marked every
+existing FK between tenant-manifest tables `DEFERRABLE INITIALLY IMMEDIATE`
+(behaviorally identical for normal transactions — checks still run per
+statement unless a transaction explicitly defers them).
+
+Drizzle generates FKs **non-deferrable** by default, so when you add a
+tenant-owned table (or a new FK between existing tenant tables), ship a small
+companion Postgres migration:
+
+```sql
+SET LOCAL lock_timeout = '3s';--> statement-breakpoint
+ALTER TABLE "my_table" ALTER CONSTRAINT "my_table_branch_id_branches_branch_id_fk" DEFERRABLE INITIALLY IMMEDIATE;
+```
+
+If you forget, the integration test
+`packages/core/src/db/tenant-portability.postgres.test.ts`
+("keeps exactly every manifest-to-manifest FK deferrable and initially
+immediate") fails — it pins the exact deferrable set against `pg_constraint`
+in both directions, so stray deferrable FKs outside the manifest also fail.
+
+### Bound lock waits when ALTERing existing tables (Postgres)
+
+`ALTER TABLE … ALTER CONSTRAINT` (and most other ALTERs) need an
+ACCESS EXCLUSIVE lock. Two things make an unbounded wait dangerous on a live
+database:
+
+1. While the ALTER waits for its lock, **every new query on that table queues
+   behind it** — even SELECTs — so a wait is a traffic stall, not a quiet delay.
+2. The migrator runs all pending migrations in **one transaction**, and
+   Postgres holds every acquired lock until commit. A multi-table migration
+   that stalls on table N is still holding exclusive locks on tables 1…N-1.
+
+For any migration touching multiple existing tables, start it with
+`SET LOCAL lock_timeout = '3s';` (see `0070_tenant_portability_deferrable_fks.sql`
+for the pattern and full rationale). On an idle DB the timeout never triggers;
+on a busy one the migration fails fast with `55P03` and rolls back atomically —
+always safe to retry — instead of freezing the app. `SET LOCAL` scopes the
+setting to the migration transaction, so it never leaks onto pooled connections.
+
+The corollary for operators: migrations that ALTER existing tables should run
+with the daemon **stopped** (`systemctl stop` → `agor db migrate` → `start`);
+live daemon connections hold shared locks that will trip the timeout.
+
+### Protocol-breaking migrations require an enforced offline cutover
+
+If old and new workers cannot safely share the additive schema, register the
+migration in `OFFLINE_CUTOVER_MIGRATIONS` in `src/db/migrate.ts`. Existing
+PostgreSQL databases then refuse automatic migration until an operator stops
+every daemon and runs `agor db migrate --offline-cutover`. Fresh databases may
+still migrate automatically because no old worker can exist. Document the
+exact stop → migrate → start order in the user guide; the acknowledgement flag
+cannot itself prove that another host has stopped.
 
 ### Schemas drifting
 

@@ -71,6 +71,13 @@ function unwrapTenantScopedDatabaseProxy(db: Database): RawDatabase | Database {
   return tenantScopedProxyTargets.get(db as unknown as object) ?? db;
 }
 
+/** Inspect a raw or tenant-guarded handle without requiring an active DB scope. */
+export function isPostgresDatabaseHandle(
+  db: TenantScopeAwareDatabase | RawDatabase | Database
+): boolean {
+  return isPostgresDatabase(unwrapTenantScopedDatabaseProxy(db));
+}
+
 /**
  * Return a Database proxy that transparently routes repository calls to the
  * current tenant-scoped transaction when one is active. Repositories can keep

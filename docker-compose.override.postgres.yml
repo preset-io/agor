@@ -8,6 +8,12 @@
 
 services:
   agor-dev:
+    # This overlay is selected explicitly and therefore bypasses Compose's
+    # automatic docker-compose.override.yml loading. Keep Codex shell
+    # sandboxing functional in PostgreSQL variants too.
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined
     environment:
       - AGOR_DB_DIALECT=postgresql
       - DATABASE_URL=postgresql://agor_app:agor_dev_secret@postgres:5432/agor

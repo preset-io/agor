@@ -147,19 +147,20 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
-      # Executor Unix user isolation (set AGOR_USE_EXECUTOR=true to enable)
-      # When enabled, executors run as separate Unix user via sudo
+      # Executor Unix user isolation (set AGOR_USE_EXECUTOR=true to enable).
+      # An explicit username remains an override; otherwise executor mode falls
+      # back to agor_executor in the effective-config resolver.
       - AGOR_USE_EXECUTOR=${AGOR_USE_EXECUTOR:-false}
-      - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-agor_executor}
+      - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-}
 
-      # Branch RBAC + Unix isolation tier (written into ~/.agor/config.yaml
-      # by the entrypoint before the daemon boots). Both are optional — when
-      # unset the existing config.yaml values are left alone.
+      # Branch RBAC + Unix isolation tier (resolved in memory; config.yaml is
+      # never rewritten). Both are optional.
       #   AGOR_RBAC_ENABLED=true         → execution.branch_rbac: true
       #   AGOR_UNIX_USER_MODE=insulated  → execution.unix_user_mode: insulated
       #                                    (simple | insulated | strict)
       - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-}
       - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-}
+      - AGOR_DAEMON_UNIX_USER=${AGOR_DAEMON_UNIX_USER:-agor}
 
       # Instance identification (optional - displayed in UI navbar)
       - INSTANCE_LABEL=${INSTANCE_LABEL:-}
@@ -186,6 +187,8 @@ services:
       - /app/node_modules
       # Shadow package-level node_modules too (they contain symlinks into root)
       - /app/packages/core/node_modules
+      - /app/packages/agentic-tool-opencode/node_modules
+      - /app/packages/agentic-tools/node_modules
       - /app/packages/executor/node_modules
       - /app/packages/client/node_modules
       - /app/packages/git/node_modules
@@ -230,7 +233,11 @@ services:
       # through Drizzle migrations during daemon startup; checking for the
       # drizzle schema here can deadlock fresh environments before the daemon has
       # a chance to create it.
-      test: ['CMD-SHELL', 'pg_isready -h localhost -d ${POSTGRES_DB:-agor}']
+      # Escape `$` so Compose leaves these for the container shell. Without an
+      # explicit user, pg_isready inherits the healthcheck process user
+      # (`root`) and PostgreSQL logs a failed `role "root" does not exist`
+      # connection on every probe.
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 2s
       timeout: 3s
       retries: 10

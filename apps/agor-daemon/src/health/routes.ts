@@ -23,7 +23,16 @@ import { probeDatabase } from './db-probe.js';
  */
 export type ProbeRouteApp = Pick<Application, 'get'>;
 
-export function registerHealthProbeRoutes(app: ProbeRouteApp, db: Database): void {
+export interface ReadinessDependency {
+  name: string;
+  isReady: () => boolean;
+}
+
+export function registerHealthProbeRoutes(
+  app: ProbeRouteApp,
+  db: Database,
+  dependencies: readonly ReadinessDependency[] = []
+): void {
   // Liveness: trivial in-process 200, no DB. If this can't answer, the event
   // loop is wedged and a restart is the right remedy.
   app.get('/livez', (_req, res) => {
@@ -34,11 +43,29 @@ export function registerHealthProbeRoutes(app: ProbeRouteApp, db: Database): voi
   // returned, so nothing leaks to unauthenticated callers.
   app.get('/readyz', async (_req, res) => {
     const dbProbe = await probeDatabase(db);
-    if (!dbProbe.ok) {
-      console.warn(`[health] /readyz DB probe failed after ${dbProbe.latencyMs}ms:`, dbProbe.error);
+    const unavailable = dependencies.filter((dependency) => !dependency.isReady());
+    if (!dbProbe.ok || unavailable.length > 0) {
+      if (!dbProbe.ok) {
+        console.warn(
+          `[health] /readyz DB probe failed after ${dbProbe.latencyMs}ms:`,
+          dbProbe.error
+        );
+      }
+      if (unavailable.length > 0) {
+        console.warn(
+          `[health] /readyz required dependency unavailable: ${unavailable.map(({ name }) => name).join(',')}`
+        );
+      }
       res.status(503).json({
         status: 'error',
-        db: { ok: false, latencyMs: dbProbe.latencyMs },
+        db: { ok: dbProbe.ok, latencyMs: dbProbe.latencyMs },
+        ...(unavailable.length > 0
+          ? {
+              dependencies: Object.fromEntries(
+                unavailable.map(({ name }) => [name, { ok: false }])
+              ),
+            }
+          : {}),
       });
       return;
     }

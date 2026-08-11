@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import {
   BranchRepository,
   GatewayChannelRepository,
@@ -14,10 +15,31 @@ import {
   requiredBotScopes,
 } from '@agor/core/gateway';
 import { AGENTIC_TOOL_NAMES, getRequiredSecretFields } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
 import { getUploadDirectory, MAX_UPLOAD_FILE_SIZE } from '../../utils/upload.js';
+
+const uploadStoreMock = vi.hoisted(() => ({
+  stage: vi.fn(
+    async (input: { body: AsyncIterable<Uint8Array>; name: string; mimeType: string }) => {
+      let size = 0;
+      for await (const chunk of input.body) size += chunk.byteLength;
+      return {
+        ref: 'upl_00000000-0000-4000-8000-000000000099',
+        name: input.name,
+        mimeType: input.mimeType,
+        size,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        expiresAt: '2026-01-02T00:00:00.000Z',
+        provenance: 'mcp-slack',
+      };
+    }
+  ),
+  inspect: vi.fn(),
+  read: vi.fn(),
+  consume: vi.fn(async () => undefined),
+}));
 
 vi.mock('@agor/core/gateway', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/gateway')>();
@@ -41,6 +63,9 @@ vi.mock('../../utils/spawn-executor.js', () => ({
   generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   runExecutorCommand: vi.fn(),
+}));
+vi.mock('../../utils/upload-staging.js', () => ({
+  getUploadStagingStore: () => uploadStoreMock,
 }));
 
 type ServiceStub = Record<string, (...args: unknown[]) => unknown>;
@@ -115,11 +140,18 @@ async function captureTools(
   } as unknown as McpServer;
   registerGatewayChannelTools(fakeServer, {
     app: app as any,
-    db: {} as any,
+    db: {
+      transaction: async (callback: (tx: unknown) => unknown) =>
+        callback({ execute: async () => undefined }),
+    } as any,
     userId: 'user-1' as any,
     ...(sessionId ? { sessionId: sessionId as any } : {}),
     authenticatedUser: { user_id: 'user-1', role } as any,
-    baseServiceParams: { authenticated: true, user: { user_id: 'user-1', role } } as any,
+    baseServiceParams: {
+      authenticated: true,
+      user: { user_id: 'user-1', role },
+      tenant: { tenant_id: 'tenant-test' },
+    } as any,
   });
   return tools;
 }
@@ -178,6 +210,10 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(getConnector).mockReset();
   vi.mocked(getUploadDirectory).mockReset();
+  vi.mocked(runExecutorCommand).mockReset();
+  uploadStoreMock.inspect.mockReset();
+  uploadStoreMock.read.mockReset();
+  uploadStoreMock.consume.mockClear();
 });
 
 describe('agor_gateway_channels MCP tools', () => {
@@ -620,6 +656,7 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(sessionsGet).toHaveBeenCalledWith('sess-42', {
       authenticated: true,
       user: { user_id: 'user-1', role: 'member' },
+      tenant: { tenant_id: 'tenant-test' },
     });
     expect(fetchThreadHistory).toHaveBeenCalledWith({
       threadId: 'C123-171234.000100',
@@ -1634,7 +1671,10 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
         const tools = await captureTools('member');
         await expect(
-          tools.agor_gateway_slack_file_upload.handler({ slackChannelId: 'C999', path: filePath })
+          tools.agor_gateway_slack_file_upload.handler({
+            slackChannelId: 'C999',
+            source: { kind: 'branch', branchPath: 'screenshot.png' },
+          })
         ).rejects.toThrow("not in this gateway channel's allowed_channel_ids whitelist");
         expect(getConnector).not.toHaveBeenCalled();
       } finally {
@@ -1661,13 +1701,22 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
 
         const tools = await captureTools('member');
+        vi.mocked(runExecutorCommand).mockResolvedValue({
+          success: true,
+          data: { uploaded: { id: 'F999', name: 'screenshot.png' } },
+        });
         const result = await tools.agor_gateway_slack_file_upload.handler({
           slackChannelId: 'D123',
-          path: filePath,
+          source: { kind: 'branch', branchPath: 'screenshot.png' },
         });
         const payload = JSON.parse(result.content[0].text);
 
-        expect(uploadFile).toHaveBeenCalledWith(expect.objectContaining({ channel: 'D123' }));
+        expect(runExecutorCommand).toHaveBeenCalledWith(
+          expect.objectContaining({
+            params: expect.objectContaining({ channel: 'D123', filePath: 'screenshot.png' }),
+          }),
+          expect.any(Object)
+        );
         expect(payload).toMatchObject({ uploaded: true, slack_channel_id: 'D123' });
       } finally {
         fs.rmSync(uploadDir, { recursive: true, force: true });
@@ -1688,11 +1737,18 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       if (uploadDir) fs.rmSync(uploadDir, { recursive: true, force: true });
     });
 
-    it('uploads a file from inside the daemon upload directory', async () => {
-      const dir = withUploadDir();
-      const filePath = path.join(dir, 'screenshot.png');
-      fs.writeFileSync(filePath, Buffer.from('fake-image-bytes'));
-
+    it('streams a session-owned staged handle without exposing its daemon path', async () => {
+      uploadStoreMock.inspect.mockResolvedValue({
+        ref: 'upl_00000000-0000-4000-8000-000000000001',
+        name: 'screenshot.png',
+        mimeType: 'image/png',
+        size: 16,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        expiresAt: '2026-01-02T00:00:00.000Z',
+        provenance: 'browser',
+      });
+      const stream = Readable.from('fake-image-bytes');
+      uploadStoreMock.read.mockResolvedValue(stream);
       const uploadFile = vi.fn(async () => ({
         id: 'F123',
         permalink: 'https://slack.example/files/F123',
@@ -1706,14 +1762,21 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
 
       const tools = await captureTools('member');
-      const result = await tools.agor_gateway_slack_file_upload.handler({ path: filePath });
+      const result = await tools.agor_gateway_slack_file_upload.handler({
+        source: {
+          kind: 'upload',
+          uploadRef: 'upl_00000000-0000-4000-8000-000000000001',
+        },
+      });
       const payload = JSON.parse(result.content[0].text);
 
       expect(uploadFile).toHaveBeenCalledWith({
         channel: 'C123',
-        file: Buffer.from('fake-image-bytes'),
+        file: stream,
         filename: 'screenshot.png',
       });
+      expect(uploadStoreMock.consume).toHaveBeenCalled();
+      expect(JSON.stringify(payload)).not.toContain('agor-gateway-upload');
       expect(payload).toMatchObject({
         uploaded: true,
         slack_channel_id: 'C123',
@@ -1734,7 +1797,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
       const tools = await captureTools('member');
       const result = await tools.agor_gateway_slack_file_upload.handler({
-        path: 'chart.png',
+        source: { kind: 'branch', branchPath: 'chart.png' },
         threadTs: '171234.000100',
       });
       const payload = JSON.parse(result.content[0].text);
@@ -1763,6 +1826,10 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       const outsideFile = path.join(outsideDir, 'secret.txt');
       fs.writeFileSync(outsideFile, 'nope');
       try {
+        vi.mocked(runExecutorCommand).mockResolvedValue({
+          success: false,
+          error: { code: 'BRANCH_SLACK_FILE_UPLOAD_FAILED', message: 'Path must be relative' },
+        });
         spyCallerGatewaySession('branch-1', gatewaySource);
         vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
           fileUploadEnabled as any
@@ -1771,8 +1838,10 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
         const tools = await captureTools('member');
         await expect(
-          tools.agor_gateway_slack_file_upload.handler({ path: outsideFile })
-        ).rejects.toThrow('escapes the daemon upload directory');
+          tools.agor_gateway_slack_file_upload.handler({
+            source: { kind: 'branch', branchPath: outsideFile },
+          })
+        ).rejects.toThrow('Path must be relative');
         expect(getConnector).not.toHaveBeenCalled();
       } finally {
         fs.rmSync(outsideDir, { recursive: true, force: true });
@@ -1792,7 +1861,9 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
       const tools = await captureTools('member');
       await expect(
-        tools.agor_gateway_slack_file_upload.handler({ path: '../secret.txt' })
+        tools.agor_gateway_slack_file_upload.handler({
+          source: { kind: 'branch', branchPath: '../secret.txt' },
+        })
       ).rejects.toThrow('Path escapes branch root');
       expect(getConnector).not.toHaveBeenCalled();
     });
@@ -1805,6 +1876,10 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       const symlinkPath = path.join(dir, 'innocuous.png');
       fs.symlinkSync(outsideFile, symlinkPath);
       try {
+        vi.mocked(runExecutorCommand).mockResolvedValue({
+          success: false,
+          error: { code: 'BRANCH_SLACK_FILE_UPLOAD_FAILED', message: 'Path must be relative' },
+        });
         spyCallerGatewaySession('branch-1', gatewaySource);
         vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
           fileUploadEnabled as any
@@ -1813,8 +1888,10 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
         const tools = await captureTools('member');
         await expect(
-          tools.agor_gateway_slack_file_upload.handler({ path: symlinkPath })
-        ).rejects.toThrow('escapes the daemon upload directory');
+          tools.agor_gateway_slack_file_upload.handler({
+            source: { kind: 'branch', branchPath: symlinkPath },
+          })
+        ).rejects.toThrow('Path must be relative');
         expect(getConnector).not.toHaveBeenCalled();
       } finally {
         fs.rmSync(outsideDir, { recursive: true, force: true });
@@ -1831,7 +1908,9 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
       const tools = await captureTools('member');
       await expect(
-        tools.agor_gateway_slack_file_upload.handler({ path: path.join(dir, 'evil\0.png') })
+        tools.agor_gateway_slack_file_upload.handler({
+          source: { kind: 'branch', branchPath: path.join(dir, 'evil\0.png') },
+        })
       ).rejects.toThrow();
       expect(getConnector).not.toHaveBeenCalled();
     });
@@ -1847,10 +1926,16 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         fileUploadEnabled as any
       );
       vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+      vi.mocked(runExecutorCommand).mockResolvedValue({
+        success: false,
+        error: { code: 'BRANCH_SLACK_FILE_UPLOAD_FAILED', message: 'File exceeds the limit' },
+      });
 
       const tools = await captureTools('member');
       await expect(
-        tools.agor_gateway_slack_file_upload.handler({ path: filePath })
+        tools.agor_gateway_slack_file_upload.handler({
+          source: { kind: 'branch', branchPath: filePath },
+        })
       ).rejects.toThrow('exceeds the');
       expect(getConnector).not.toHaveBeenCalled();
     });
@@ -1868,7 +1953,9 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
       const tools = await captureTools('member');
       await expect(
-        tools.agor_gateway_slack_file_upload.handler({ path: filePath })
+        tools.agor_gateway_slack_file_upload.handler({
+          source: { kind: 'branch', branchPath: 'screenshot.png' },
+        })
       ).rejects.toThrow("capability 'file_upload' is disabled");
       expect(getConnector).not.toHaveBeenCalled();
     });
@@ -1884,7 +1971,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         tools.agor_gateway_slack_file_upload.handler({
           gatewayChannelId: 'chan-1',
           slackChannelId: 'C123',
-          path: '/tmp/whatever.png',
+          source: { kind: 'branch', branchPath: 'whatever.png' },
         })
       ).rejects.toThrow('targets a different branch');
       expect(getConnector).not.toHaveBeenCalled();
@@ -1895,20 +1982,23 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       const schema = tools.agor_gateway_slack_file_upload.cfg.inputSchema;
 
       expect(
-        schema.safeParse({ slackChannelId: 'not-a-channel', path: '/tmp/x.png' }).success
+        schema.safeParse({
+          slackChannelId: 'not-a-channel',
+          source: { kind: 'branch', branchPath: 'x.png' },
+        }).success
       ).toBe(false);
       expect(
         schema.safeParse({
           slackChannelId: 'C123',
           threadTs: 'not-a-timestamp',
-          path: '/tmp/x.png',
+          source: { kind: 'branch', branchPath: 'x.png' },
         }).success
       ).toBe(false);
       expect(
         schema.safeParse({
           slackChannelId: 'C123',
           threadTs: '171234.000100',
-          path: '/tmp/x.png',
+          source: { kind: 'branch', branchPath: 'x.png' },
         }).success
       ).toBe(true);
       expect(getConnector).not.toHaveBeenCalled();
@@ -1945,7 +2035,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
     });
 
     it('downloads a file via files.info through the hardened ingestion path into the upload dir', async () => {
-      const dir = withUploadDir();
+      void withUploadDir();
       const fetchMock = vi.fn(
         async () =>
           new Response('log line one', {
@@ -1980,9 +2070,8 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         gateway_channel: { id: 'chan-1', target_branch_id: 'branch-1' },
         file: { id: 'F123', name: 'error.log', mimetype: 'text/plain', size: 512 },
       });
-      expect(payload.file.path.startsWith(dir)).toBe(true);
-      expect(payload.file.path).toContain('F123_error');
-      expect(fs.readFileSync(payload.file.path, 'utf8')).toBe('log line one');
+      expect(payload.file.upload_ref).toMatch(/^upl_/);
+      expect(payload.file).not.toHaveProperty('path');
       expect(JSON.stringify(payload)).not.toContain('url_private_download');
       expect(JSON.stringify(payload)).not.toContain('files.slack.com');
       expect(JSON.stringify(payload)).not.toContain('xoxb-secret');
@@ -2073,7 +2162,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
     });
 
     it("keeps the no-session path gated on admin or branch 'all' permission", async () => {
-      const dir = withUploadDir();
+      withUploadDir();
       vi.stubGlobal(
         'fetch',
         vi.fn(
@@ -2105,13 +2194,12 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       ).rejects.toThrow("'all' branch permission");
 
       permission.mockResolvedValue('all' as any);
-      const result = await tools.agor_gateway_slack_file_download.handler({
-        gatewayChannelId: 'chan-1',
-        fileId: 'F123',
-      });
-      const payload = JSON.parse(result.content[0].text);
-      expect(payload.downloaded).toBe(true);
-      expect(payload.file.path.startsWith(dir)).toBe(true);
+      await expect(
+        tools.agor_gateway_slack_file_download.handler({
+          gatewayChannelId: 'chan-1',
+          fileId: 'F123',
+        })
+      ).rejects.toThrow('session-bound staging');
     });
 
     it('rejects a malformed fileId at the schema layer', async () => {

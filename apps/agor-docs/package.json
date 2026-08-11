@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.13.0",
+  "packageManager": "pnpm@11.17.0",
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build && next-sitemap --config next-sitemap.config.cjs && pnpm run build:search",
@@ -11,26 +11,28 @@
     "typecheck": "tsc --noEmit --incremental false",
     "validate:brand-assets": "tsx scripts/validate-brand-assets.ts",
     "validate:social-metadata": "tsx scripts/validate-social-metadata.ts",
+    "validate:analytics": "tsx scripts/validate-analytics.ts",
     "build:search": "pagefind --site out --output-path out/_pagefind && rm -rf public/_pagefind && cp -R out/_pagefind public/_pagefind"
   },
   "dependencies": {
+    "@scalar/api-reference-react": "0.9.60",
     "@theguild/remark-mermaid": "^0.3.0",
-    "katex": "^0.17.0",
-    "lucide-react": "^1.24.0",
-    "next": "^15.5.20",
+    "katex": "^0.18.1",
+    "lucide-react": "^1.28.0",
+    "next": "^15.5.21",
     "nextra": "^4.6.1",
     "nextra-theme-docs": "^4.6.1",
     "ogl": "^1.0.11",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
-    "@types/react": "^19.2.17",
+    "@types/react": "^19.2.18",
     "next-sitemap": "^4.2.3",
     "pagefind": "^1.5.2",
-    "tsx": "^4.23.0",
+    "tsx": "4.23.1",
     "typescript": "^6.0.3"
   }
 }

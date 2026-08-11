@@ -21,10 +21,20 @@ vi.mock('../AgenticToolConfigurationPicker', async () => {
   const { Form: AntForm } = await import('antd');
   return {
     INLINE_AGENTIC_CONFIGURATION: '__inline__',
-    AgenticToolConfigurationPicker: ({ defaultResolution }: { defaultResolution?: string }) => {
+    AgenticToolConfigurationPicker: ({
+      defaultResolution,
+      modelCatalogClient,
+    }: {
+      defaultResolution?: string;
+      modelCatalogClient?: AgorClient | null;
+    }) => {
       const form = AntForm.useFormInstance();
       return (
-        <div data-testid="configuration-picker" data-default-resolution={defaultResolution}>
+        <div
+          data-testid="configuration-picker"
+          data-default-resolution={defaultResolution}
+          data-model-catalog={modelCatalogClient === null ? 'closed' : 'open'}
+        >
           <AntForm.Item noStyle shouldUpdate>
             {({ getFieldValue }) => (
               <span data-testid="configuration-selection">
@@ -112,6 +122,14 @@ describe('ScheduleModal agentic configuration payload', () => {
     expect(await screen.findByTestId('configuration-picker')).toHaveAttribute(
       'data-default-resolution',
       'schedule-run'
+    );
+  });
+
+  it('fails the model catalog closed when the schedule owner is not the caller', async () => {
+    renderModal(vi.fn());
+    expect(await screen.findByTestId('configuration-picker')).toHaveAttribute(
+      'data-model-catalog',
+      'closed'
     );
   });
 

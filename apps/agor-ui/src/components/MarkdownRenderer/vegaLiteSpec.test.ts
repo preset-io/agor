@@ -115,20 +115,19 @@ describe('parseVegaLiteSpec', () => {
     );
   });
 
-  it.each([
-    null,
-    '',
-    { unexpected: 'object' },
-  ])('rejects an invalid authored count field: %j', (field) => {
-    const spec = {
-      ...validSpec,
-      encoding: {
-        y: { aggregate: 'count', field, type: 'quantitative' },
-      },
-    };
+  it.each([null, '', { unexpected: 'object' }])(
+    'rejects an invalid authored count field: %j',
+    (field) => {
+      const spec = {
+        ...validSpec,
+        encoding: {
+          y: { aggregate: 'count', field, type: 'quantitative' },
+        },
+      };
 
-    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(/field must name/);
-  });
+      expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(/field must name/);
+    }
+  );
 
   it('allows count to omit its field', () => {
     const spec = {

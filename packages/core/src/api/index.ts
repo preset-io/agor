@@ -35,6 +35,11 @@ import type {
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
+  OpenCodeModelCatalog,
+  OpenCodeOAuthAttempt,
+  OpenCodeOAuthAttemptPatch,
+  OpenCodeOAuthConnectRequest,
+  OpenCodeProviderSettings,
   PatchAgenticToolPreset,
   PermissionMode,
   Repo,
@@ -109,7 +114,6 @@ export interface SessionPromptRequest {
   prompt: string;
   permissionMode?: PermissionMode;
   stream?: boolean;
-  messageSource?: 'gateway' | 'agor';
 }
 
 export interface QueuedSessionPromptResult {
@@ -142,14 +146,12 @@ export interface SessionsClientHelpers {
 }
 
 /**
- * Body shape for `POST /tasks/:id/run`. Matches the prompt route's options
- * so the same defaults (`stream: true`, agor messageSource for socket
- * callers) apply when explicitly triggering an already-created task.
+ * Body shape for `POST /tasks/:id/run`. Message provenance is derived by the
+ * daemon from the authenticated transport rather than accepted from callers.
  */
 export interface TaskRunRequest {
   permissionMode?: PermissionMode;
   stream?: boolean;
-  messageSource?: 'gateway' | 'agor';
 }
 
 export interface TaskRunOptions extends TaskRunRequest {
@@ -218,6 +220,8 @@ export interface ServiceTypes {
   templates: TemplateRenderResponse;
   'agentic-tool-settings': TenantAgenticToolSettings;
   'agentic-tool-presets': AgenticToolPreset;
+  'opencode-auth': OpenCodeProviderSettings;
+  'opencode-models': OpenCodeModelCatalog;
 }
 
 /**
@@ -317,6 +321,27 @@ export interface KnowledgeReindexService {
   ): Promise<{ queued: number; status: KnowledgeEmbeddingStatus }>;
 }
 
+export interface OpenCodeAuthService {
+  find(params?: Params): Promise<OpenCodeProviderSettings>;
+  get(attemptId: string, params?: Params): Promise<OpenCodeOAuthAttempt>;
+  create(
+    data:
+      | { providerId: string; apiKey: string; metadata?: Record<string, string> }
+      | OpenCodeOAuthConnectRequest,
+    params?: Params
+  ): Promise<OpenCodeProviderSettings | OpenCodeOAuthAttempt>;
+  patch(
+    attemptId: string,
+    data: OpenCodeOAuthAttemptPatch,
+    params?: Params
+  ): Promise<OpenCodeOAuthAttempt>;
+  remove(providerId: string, params?: Params): Promise<OpenCodeProviderSettings>;
+}
+
+export interface OpenCodeModelsService {
+  find(params?: Params): Promise<OpenCodeModelCatalog>;
+}
+
 /**
  * Sessions service with custom methods for forking, spawning, and genealogy
  */
@@ -382,30 +407,18 @@ export interface TasksService extends AgorService<Task> {
   fail(id: string, data: { error: string }, params?: Params): Promise<Task>;
 }
 
-/**
- * Messages service with bulk creation support
- */
-export interface MessagesService extends AgorService<Message> {
-  /**
-   * Create multiple messages in a single request
-   * Returns array of created messages with IDs
-   */
-  createMany(data: Partial<Message>[]): Promise<Message[]>;
+/** Public Message CRUD surface. Full replacement is daemon-internal. */
+export type MessagesService = Omit<AgorService<Message>, 'update'>;
+
+/** Narrow transport contract for `POST /messages/bulk`. */
+export interface MessagesBulkService {
+  create(data: CreatePayload<Message>[], params?: Params): Promise<Message[]>;
 }
 
 /**
  * Repos service with branch management
  */
 export interface ReposService extends AgorService<Repo> {
-  /**
-   * Initialize Unix group for a repo (daemon-side privileged operation).
-   * Called by executor after cloning.
-   */
-  initializeUnixGroup(
-    data: { repoId: string; userId?: string },
-    params?: Params
-  ): Promise<{ unixGroup: string }>;
-
   /**
    * Create a git branch for a repository.
    *
@@ -546,15 +559,6 @@ export interface UsersService extends AgorService<User> {
  */
 export interface BranchesService extends AgorService<Branch> {
   /**
-   * Initialize Unix group for a branch (daemon-side privileged operation).
-   * Called by executor after creating the git branch.
-   */
-  initializeUnixGroup(
-    data: { branchId: string; othersAccess?: 'none' | 'read' | 'write' },
-    params?: Params
-  ): Promise<{ unixGroup: string }>;
-
-  /**
    * Create or repair the primary Knowledge namespace for a teammate branch.
    * API/UI-only; not exposed through teammate MCP config mutation tools.
    */
@@ -665,9 +669,11 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
+  service(path: 'opencode-auth'): OpenCodeAuthService;
+  service(path: 'opencode-models'): OpenCodeModelsService;
 
   // Bulk operation endpoints
-  service(path: 'messages/bulk'): MessagesService;
+  service(path: 'messages/bulk'): MessagesBulkService;
   service(path: 'tasks/bulk'): TasksService;
 
   // Standard services (CRUD only)
@@ -923,9 +929,6 @@ function extendReposService(client: AgorClient): void {
     methods?: (...names: string[]) => unknown;
   };
   if (reposService[REPOS_SERVICE_EXTENDED]) return;
-  if (typeof reposService.methods === 'function') {
-    reposService.methods('initializeUnixGroup');
-  }
   reposService[REPOS_SERVICE_EXTENDED] = true;
 }
 
@@ -936,11 +939,7 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods(
-      'updateEnvironment',
-      'initializeUnixGroup',
-      'ensureTeammateKnowledgeNamespace'
-    );
+    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace');
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }

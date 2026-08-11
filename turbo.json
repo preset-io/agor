@@ -1,7 +1,27 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": ["**/.env.*local", "pnpm-lock.yaml"],
-  "globalPassThroughEnv": ["AGOR_DB_DIALECT", "BIOME_BIN", "DATABASE_URL"],
+  "globalPassThroughEnv": [
+    "AGOR_ADMIN_PASSWORD",
+    "AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN",
+    "AGOR_DB_DIALECT",
+    "AGOR_HA_INTEGRATION",
+    "AGOR_HA_INTEGRATION_FAILURES",
+    "AGOR_HA_INTEGRATION_START",
+    "AGOR_HA_NODE_ENV",
+    "AGOR_HA_PUBLIC_ORIGIN",
+    "AGOR_POSTGRES_TEST_CONCURRENCY",
+    "AGOR_POSTGRES_TEST_RUN_ID",
+    "AGOR_TEST_POSTGRES_ADMIN_URL",
+    "AGOR_TEST_POSTGRES_URL",
+    "BIOME_BIN",
+    "COMPOSE_PROJECT_NAME",
+    "DATABASE_URL",
+    "HA_DAEMON_A_PORT",
+    "HA_DAEMON_B_PORT",
+    "HA_PORT",
+    "HA_URL"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

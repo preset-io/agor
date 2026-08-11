@@ -1,11 +1,15 @@
-import type { AgorClient, Branch, Schedule } from '@agor-live/client';
+import type { AgorClient, Branch, Schedule, User } from '@agor-live/client';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeBranch, renderWithApp } from '../testUtils';
 import { ScheduleTab } from './ScheduleTab';
 
+const scheduleModalProps = vi.hoisted(() => vi.fn());
 vi.mock('../../ScheduleModal', () => ({
-  ScheduleModal: () => null,
+  ScheduleModal: (props: unknown) => {
+    scheduleModalProps(props);
+    return null;
+  },
 }));
 
 vi.mock('../../ScheduleRunsPanel', () => ({
@@ -62,22 +66,32 @@ function renderScheduleTab({
   branch = makeBranch(),
   schedules = [makeSchedule()],
   onOpenSession = vi.fn(),
+  currentUser,
+  userById,
 }: {
   branch?: Branch;
   schedules?: Schedule[];
   onOpenSession?: (sessionId: string) => void;
+  currentUser?: User;
+  userById?: Map<string, User>;
 } = {}) {
   renderWithApp(
     <ScheduleTab
       branch={branch}
       client={makeScheduleClient(schedules)}
       onOpenSession={onOpenSession}
+      currentUser={currentUser}
+      userById={userById}
     />
   );
   return { onOpenSession };
 }
 
 describe('ScheduleTab compact list', () => {
+  beforeEach(() => {
+    scheduleModalProps.mockClear();
+  });
+
   it('keeps secondary schedule details out of full-width columns', async () => {
     renderScheduleTab();
 
@@ -101,5 +115,42 @@ describe('ScheduleTab compact list', () => {
     await waitFor(() => {
       expect(onOpenSession).toHaveBeenCalledWith('018f0000-0000-7000-8000-0000000000aa');
     });
+  });
+
+  it.each([
+    ['self-owned before user-map hydration', 'owner', undefined, 'owner'],
+    ['different owner before user-map hydration', 'caller', undefined, null],
+    ['different owner after user-map hydration', 'caller', 'owner', 'owner'],
+  ])('passes %s to the editor', async (_label, callerId, hydratedOwnerId, expectedOwnerId) => {
+    const caller = { user_id: callerId, email: `${callerId}@example.com` } as User;
+    const owner = { user_id: 'owner', email: 'owner@example.com' } as User;
+    renderScheduleTab({
+      schedules: [makeSchedule({ created_by: owner.user_id })],
+      currentUser: caller,
+      userById: hydratedOwnerId ? new Map([[hydratedOwnerId, owner]]) : undefined,
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
+
+    expect(scheduleModalProps.mock.lastCall?.[0]).toMatchObject({
+      executionOwner: expectedOwnerId ? owner : null,
+    });
+  });
+
+  it('keeps a different-owner editor fail-closed for stale or caller-only user state', async () => {
+    const caller = { user_id: 'caller', email: 'caller@example.com' } as User;
+    const staleOwner = { user_id: 'stale-owner', email: 'stale@example.com' } as User;
+    renderScheduleTab({
+      schedules: [makeSchedule({ created_by: 'owner' })],
+      currentUser: caller,
+      userById: new Map([
+        ['caller', caller],
+        ['owner', staleOwner],
+      ]),
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
+
+    expect(scheduleModalProps.mock.lastCall?.[0]).toMatchObject({ executionOwner: null });
   });
 });

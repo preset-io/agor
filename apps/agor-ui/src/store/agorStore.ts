@@ -52,6 +52,8 @@ interface AgorMeta {
   /** Set once the background gateway-channels hydration first applies (empty result included). */
   gatewayChannelsHydrated: boolean;
   agenticToolSettingsByName: Map<TenantAgenticToolName, TenantAgenticToolSettings>;
+  /** Set once the background agentic-tool-settings hydration first applies (empty result included). */
+  agenticToolSettingsHydrated: boolean;
 }
 
 /** Store actions: foundational primitives + the one immer cascade. */
@@ -71,7 +73,20 @@ interface AgorActions {
   setItemCounts: (value: ItemCounts | ((prev: ItemCounts) => ItemCounts)) => void;
   /** Mark a gated background collection as first-hydrated (idempotent). */
   markHydrated: (flag: GatedHydrationFlag) => void;
+  /**
+   * Replace the WHOLE tenant tool-settings map from a complete snapshot (the
+   * background full fetch) and mark the collection hydrated. Only a full
+   * snapshot may flip `agenticToolSettingsHydrated` — a partial map must never
+   * be treated as authoritative (that would let disabled providers fail open).
+   */
   setAgenticToolSettings: (settings: TenantAgenticToolSettings[]) => void;
+  /**
+   * Merge ONE row into the tenant tool-settings map (realtime `patched` /
+   * `created`, or an admin edit). Does NOT touch `agenticToolSettingsHydrated`:
+   * a single incremental row is not a complete snapshot, so it can't establish
+   * "we now know the full set".
+   */
+  upsertAgenticToolSetting: (setting: TenantAgenticToolSettings) => void;
   /**
    * Replace a single data map: accepts a value or a functional updater, and
    * short-circuits on `Object.is` equality so
@@ -113,6 +128,7 @@ const INITIAL_META: AgorMeta = {
   mcpServersHydrated: false,
   gatewayChannelsHydrated: false,
   agenticToolSettingsByName: new Map(),
+  agenticToolSettingsHydrated: false,
 };
 
 export const agorStore = createStore<AgorState>()(
@@ -122,7 +138,16 @@ export const agorStore = createStore<AgorState>()(
 
     reset: () => set({ ...EMPTY_MAPS, ...INITIAL_META }),
 
-    resetMaps: () => set({ ...EMPTY_MAPS }),
+    // Also clear the tenant-specific tool-settings map AND its hydration flag:
+    // both are meta (not in EMPTY_MAPS), so without this they'd persist across a
+    // logout / tenant switch and the next tenant would fail open + read stale
+    // rows until its own fetch lands.
+    resetMaps: () =>
+      set({
+        ...EMPTY_MAPS,
+        agenticToolSettingsByName: new Map(),
+        agenticToolSettingsHydrated: false,
+      }),
 
     // Meta setters mirror `useState`'s bail-out: a write equal to the current
     // value is a no-op (no fresh state object, no subscriber notify).
@@ -147,7 +172,17 @@ export const agorStore = createStore<AgorState>()(
       if (!get()[flag]) set({ [flag]: true } as Partial<AgorState>);
     },
     setAgenticToolSettings: (settings) => {
-      set({ agenticToolSettingsByName: new Map(settings.map((item) => [item.tool, item])) });
+      set({
+        agenticToolSettingsByName: new Map(settings.map((item) => [item.tool, item])),
+        agenticToolSettingsHydrated: true,
+      });
+    },
+    upsertAgenticToolSetting: (setting) => {
+      const next = new Map(get().agenticToolSettingsByName);
+      next.set(setting.tool, setting);
+      // Intentionally leaves `agenticToolSettingsHydrated` untouched: a partial
+      // update never establishes the complete set, so it can't flip the gate.
+      set({ agenticToolSettingsByName: next });
     },
 
     setMap: (key, value) => {

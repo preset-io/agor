@@ -1,19 +1,22 @@
 /**
  * Startup & Shutdown
  *
- * Orchestrates post-boot steps: orphan cleanup, health monitor, master secret,
- * server listen, scheduler, gateway init, and graceful shutdown.
+ * Orchestrates post-boot steps: orphan cleanup, health monitor, server listen,
+ * scheduler, gateway init, and graceful shutdown.
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { AgorConfig } from '@agor/core/config';
 import {
+  type AgorConfig,
   getAgorHome,
+  type ResolvedEnvironmentHealthMonitorSettings,
+  resolveDeploymentAgenticToolPolicy,
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
+import type { DistributedWorkIdentity } from '@agor/core/coordination';
 import {
   MessagesRepository,
   runWithTenantContext,
@@ -23,14 +26,20 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
-import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { containAllTrackedExecutors } from './executor-tracking.js';
-import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
+import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
+import {
+  MCPCatalogIngestionWorker,
+  resolveMCPCatalogOptions,
+} from './services/mcp-catalog-ingestion.js';
 import { SchedulerService } from './services/scheduler.js';
+import { SessionQueueWorker } from './services/session-queue-worker.js';
+import { TaskRuntimeReconciler } from './services/task-runtime-reconciler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
@@ -68,6 +77,84 @@ export interface StartupContext {
   /** Services returned from registerServices() */
   sessionsService: SessionsServiceImpl;
   terminalsService: TerminalsService | null;
+  /** One diagnostic identity owned by this daemon application/process. */
+  distributedWorkIdentity: DistributedWorkIdentity;
+  /**
+   * Explicit activation boundary while daemon HA configuration is still
+   * landing. `standalone` preserves historical active-runtime boot repair
+   * while retaining durable queues; `shared_postgres` treats all durable Task
+   * state as replica-independent.
+   */
+  taskRuntimePolicy: TaskRuntimePolicy;
+  /** Required Redis/Socket.IO lifecycle in explicit HA mode. */
+  realtimeRuntime?: Pick<
+    import('./realtime/redis-realtime.js').RedisRealtimeRuntime,
+    'beginDrain' | 'close'
+  >;
+  /** Environment observation ownership policy; aligned with Task runtime naming. */
+  environmentHealthMonitorPolicy: EnvironmentHealthMonitorPolicy;
+  /** Required worker tuning resolved and validated by the HA deployment config. */
+  environmentHealthMonitorSettings?: ResolvedEnvironmentHealthMonitorSettings;
+}
+
+export type TaskRuntimePolicy = 'standalone' | 'shared_postgres';
+export type EnvironmentHealthMonitorPolicy = 'standalone' | 'shared_postgres';
+
+type EnvironmentHealthMonitor = {
+  initialize: () => Promise<void> | void;
+  cleanup: () => Promise<void> | void;
+  isReady?: () => boolean;
+};
+type EnvironmentHealthMonitorFactory = (
+  policy: EnvironmentHealthMonitorPolicy,
+  app: Application,
+  ctx: StartupContext
+) => EnvironmentHealthMonitor;
+
+/**
+ * Standalone shutdown preserves the historical containment contract. Shared
+ * replicas must not intentionally contain detached executors: killing them and
+ * then losing the process-local evidence would force another replica to claim
+ * uncertainty. Actual survival still depends on the execution substrate.
+ */
+export function shouldContainLocalExecutorsOnShutdown(policy: TaskRuntimePolicy): boolean {
+  return policy === 'standalone';
+}
+
+/** Preserve standalone's terminal Socket.IO disconnect while HA invites failover reconnect. */
+export function shouldReconnectSocketClientsOnShutdown(policy: TaskRuntimePolicy): boolean {
+  return policy === 'shared_postgres';
+}
+
+/**
+ * Construction boundary for standalone timers versus PostgreSQL-coordinated
+ * all-daemon observation. A mismatched Task/environment policy fails closed.
+ */
+export function createEnvironmentHealthMonitor(
+  ctx: StartupContext,
+  factory: EnvironmentHealthMonitorFactory = (policy, app, startupCtx) => {
+    if (policy === 'standalone') {
+      const multiTenancy = resolveMultiTenancyConfig(startupCtx.config);
+      return new HealthMonitor(app, {
+        defaultParams: startupTenantParams(startupCtx.config),
+        db: startupCtx.db,
+        tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
+        requireTenantParams: multiTenancy.mode !== 'static',
+      });
+    }
+    if (!startupCtx.environmentHealthMonitorSettings) {
+      throw new Error('Distributed environment health monitor settings are required');
+    }
+    return new DistributedHealthMonitor(app, startupCtx.db, {
+      workIdentity: startupCtx.distributedWorkIdentity,
+      ...startupCtx.environmentHealthMonitorSettings,
+    });
+  }
+): EnvironmentHealthMonitor | null {
+  if (ctx.taskRuntimePolicy !== ctx.environmentHealthMonitorPolicy) {
+    return null;
+  }
+  return factory(ctx.environmentHealthMonitorPolicy, ctx.app, ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +234,6 @@ interface OrphanCleanupResult {
   orphanedTasks: Task[];
   orphanedSessions: Session[];
   sessionIdsWithOrphanedTasks: Set<string>;
-  queuedTasks: Task[];
   sessionsResetFromOrphanedTasks: number;
 }
 
@@ -214,29 +300,10 @@ async function cleanupOrphanStatusesInTenantScope(
     }
   }
 
-  // Wipe the queue BEFORE making any session promptable. Running tasks are marked STOPPED above,
-  // which invalidates the ordering premise of anything waiting behind them — a queued prompt
-  // typically depends on whatever was running first. Wiping here prevents the session after-patch
-  // hook (triggered below) from draining queued tasks that should be discarded.
-  const queuedTasks = await collectAllPages<Task>(
-    (skip) =>
-      tasksService.find({
-        query: { status: TaskStatus.QUEUED, $limit: 1000, $skip: skip },
-        ...startupParams,
-      }) as Promise<Task[] | Paginated<Task>>
-  );
-
-  if (queuedTasks.length > 0) {
-    for (const task of queuedTasks) {
-      await tasksService.patch(
-        task.task_id,
-        {
-          status: TaskStatus.STOPPED,
-        },
-        startupParams as never
-      );
-    }
-  }
+  // QUEUED Tasks are durable user intent. Leave them intact across daemon
+  // restarts; the fleet-wide queue worker will discover and attempt them after
+  // startup cleanup has made their Session promptable again. Active runtime
+  // cleanup above is intentionally separate from durable queue recovery.
 
   // Find all orphaned sessions (RUNNING, STOPPING, AWAITING_PERMISSION, AWAITING_INPUT, TIMED_OUT)
   const orphanedSessions: Session[] = [];
@@ -316,13 +383,12 @@ async function cleanupOrphanStatusesInTenantScope(
   // see SessionPromptState in @agor/core/types), so it is the normal resting
   // state of every read session. Discriminate by the session's most recent
   // task: only sessions whose latest task was non-terminal at boot (just
-  // orphan-stopped / queue-wiped above, or still in an executing state) were
+  // orphan-stopped above, or still in an executing state) were
   // actually interrupted; read sessions have a terminal latest task from a
   // previous run and must be left untouched.
-  const bootInterruptedTaskIds = new Set<string>([
-    ...orphanedTasks.map((t: Task) => t.task_id as string),
-    ...queuedTasks.map((t: Task) => t.task_id as string),
-  ]);
+  const bootInterruptedTaskIds = new Set<string>(
+    orphanedTasks.map((t: Task) => t.task_id as string)
+  );
 
   const idleNotReadySessions = await collectAllPages<Session>(
     (skip) =>
@@ -366,7 +432,7 @@ async function cleanupOrphanStatusesInTenantScope(
   const cleanupParts: string[] = [
     `${orphanedTasks.length} orphaned task(s) stopped`,
     `${orphanedSessions.length} active session(s) reset`,
-    `${queuedTasks.length} queued task(s) stopped`,
+    'durable queued task(s) preserved',
   ];
   if (sessionsResetFromOrphanedTasks > 0) {
     cleanupParts.push(`${sessionsResetFromOrphanedTasks} task-owned session(s) reset`);
@@ -381,7 +447,6 @@ async function cleanupOrphanStatusesInTenantScope(
     orphanedTasks,
     orphanedSessions,
     sessionIdsWithOrphanedTasks,
-    queuedTasks,
     sessionsResetFromOrphanedTasks,
   };
 }
@@ -526,45 +591,30 @@ export function runPostStartJob(name: string, job: () => Promise<void> | void): 
     });
 }
 
-// ---------------------------------------------------------------------------
-// Master secret
-// ---------------------------------------------------------------------------
-
-async function ensureMasterSecret(config: AgorConfig): Promise<void> {
-  // AGOR_MASTER_SECRET: env > existing config value > generate-and-persist >
-  // fail-fast. See setup/persisted-secret.ts and the doc §1.5 (H3).
-  //
-  // Same fail-fast reasoning as the JWT path: a fresh master secret on every
-  // restart corrupts every stored encrypted API key.
-  const { randomBytes } = await import('node:crypto');
-  const { resolvePersistedSecret } = await import('./setup/persisted-secret.js');
-  const resolution = await resolvePersistedSecret({
-    name: 'AGOR_MASTER_SECRET (API key encryption)',
-    envVar: 'AGOR_MASTER_SECRET',
-    existing: config.daemon?.masterSecret,
-    configKey: 'daemon.masterSecret',
-    generate: () => randomBytes(32).toString('hex'),
-  });
-  // Side effect: downstream code (encrypted-creds resolver, etc.) reads this
-  // off process.env, not off a parameter. Keep that contract.
-  process.env.AGOR_MASTER_SECRET = resolution.value;
-  switch (resolution.source) {
-    case 'env':
-      console.log('🔐 API key encryption enabled (AGOR_MASTER_SECRET set)');
-      break;
-    case 'config':
-      console.log('🔐 Using saved AGOR_MASTER_SECRET from config');
-      break;
-    case 'generated':
-      console.log('🔐 Generated and saved AGOR_MASTER_SECRET for API key encryption');
-      console.log('   Secret stored in ~/.agor/config.yaml');
-      break;
-  }
+/** Schedule the initial scan only when the monitor exists for this topology. */
+export function initializeEnvironmentHealthMonitor(
+  monitor: EnvironmentHealthMonitor | null
+): boolean {
+  if (!monitor) return false;
+  runPostStartJob('health-monitor-initialize', () => monitor.initialize());
+  return true;
 }
 
 // ---------------------------------------------------------------------------
 // Main startup
 // ---------------------------------------------------------------------------
+
+/**
+ * Apply only the boot-time Task policy. Exported so the destructive
+ * standalone compatibility path and non-destructive shared path can be
+ * regression-tested without opening a listening socket.
+ */
+export async function prepareTaskRuntimeStartup(
+  ctx: StartupContext
+): Promise<OrphanCleanupResult | null> {
+  if (ctx.taskRuntimePolicy !== 'standalone') return null;
+  return cleanupOrphanStatuses(ctx);
+}
 
 export async function startup(ctx: StartupContext): Promise<void> {
   const {
@@ -578,26 +628,27 @@ export async function startup(ctx: StartupContext): Promise<void> {
     terminalsService,
   } = ctx;
 
-  // 1. Correct orphaned task/session state from previous daemon instance.
-  // Keep this blocking so clients never see stale RUNNING/AWAITING states from
-  // a previous process. More expensive UX/audit follow-ups are post-start jobs.
-  const orphanCleanupResult = await cleanupOrphanStatuses(ctx);
+  // 1. Preserve the historical single-daemon active-runtime repair only
+  // behind its explicit policy. A shared PostgreSQL replica starting is not
+  // evidence that any Task, Session, queue item, or executor is orphaned.
+  const orphanCleanupResult = await prepareTaskRuntimeStartup(ctx);
+  if (ctx.taskRuntimePolicy !== 'standalone') {
+    console.log(
+      '[startup] shared PostgreSQL task runtime: startup cleanup and restart notices disabled'
+    );
+  }
 
-  // 2. Register Health Monitor listeners before serving requests. The initial
-  // full scan of already-running environments is deferred until after listen.
+  // 2. Construct the topology-specific environment observer before serving.
+  // HA still gates lifecycle control to webhooks; this worker observes only.
   const startupMultiTenancy = resolveMultiTenancyConfig(config);
-  const healthMonitor = new HealthMonitor(app, {
-    defaultParams: startupTenantParams(config),
-    db,
-    tenantId:
-      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
-    requireTenantParams: startupMultiTenancy.mode !== 'static',
-  });
+  const healthMonitor = createEnvironmentHealthMonitor(ctx);
+  if (!healthMonitor) {
+    throw new Error('Environment health monitor policy does not match the Task runtime policy');
+  }
+  app.set('environmentHealthMonitor', healthMonitor);
 
-  // 3. Validate/generate master secret for API key encryption
-  await ensureMasterSecret(config);
-
-  // 4. Start server
+  // 3. Start server. Deployment secrets were resolved before service
+  // registration in startDaemon(); consumers may already have captured them.
   const server = await app.listen(DAEMON_PORT, DAEMON_HOST);
 
   const displayHost = DAEMON_HOST === '0.0.0.0' ? 'localhost' : DAEMON_HOST;
@@ -608,8 +659,10 @@ export async function startup(ctx: StartupContext): Promise<void> {
     `   health=/health auth=required services=/sessions,/tasks,/messages,/boards,/repos,/mcp-servers,/users`
   );
 
-  runPostStartJob('health-monitor-initialize', () => healthMonitor.initialize());
-  runPostStartJob('daemon-restart-notices', () => injectRestartNotices(ctx, orphanCleanupResult));
+  initializeEnvironmentHealthMonitor(healthMonitor);
+  if (orphanCleanupResult) {
+    runPostStartJob('daemon-restart-notices', () => injectRestartNotices(ctx, orphanCleanupResult));
+  }
 
   // Non-blocking credential spill repair. If an agent/user wrote a PAT into a
   // git remote URL while the daemon was down, scrub persisted repo metadata
@@ -675,51 +728,78 @@ export async function startup(ctx: StartupContext): Promise<void> {
     }
   }
 
-  // 5. Start executor heartbeat stale supervisor
+  // 5. Start the Task-owned runtime reconciler. In shared mode every daemon
+  // may discover the same routing refs; repository fences choose the winner.
   const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);
-  const heartbeatSupervisor = new ExecutorHeartbeatSupervisor({
+  const taskRuntimeReconciler = new TaskRuntimeReconciler({
     app,
+    db,
     config: heartbeatConfig,
+    workIdentity: ctx.distributedWorkIdentity,
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
     dispatchConnectTimeoutMs: resolveDispatchConnectTimeoutMs(config.execution),
   });
-  heartbeatSupervisor.start();
-  if (heartbeatConfig.enabled) {
-    console.log(
-      `💓 Executor heartbeat supervisor started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms)`
-    );
-  } else {
-    console.log('💓 Executor heartbeat disabled');
-  }
+  taskRuntimeReconciler.start();
+  console.log(
+    heartbeatConfig.enabled
+      ? `💓 Task runtime reconciler started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms, policy: ${ctx.taskRuntimePolicy})`
+      : `💓 Task runtime reconciler started with heartbeat expiry disabled (policy: ${ctx.taskRuntimePolicy})`
+  );
 
-  // 6. Start scheduler service (background worker)
-  let schedulerService: SchedulerService | null = null;
-  {
-    const multiTenancy = resolveMultiTenancyConfig(config);
-    schedulerService = new SchedulerService(db, app, {
-      tickInterval: 30000, // 30 seconds
-      gracePeriod: 120000, // 2 minutes
-      debug: process.env.NODE_ENV !== 'production',
-      unixUserMode: config.execution?.unix_user_mode ?? 'simple',
-      // Static mode keeps the historical single-tenant scope. Auth-resolved
-      // multi-tenant mode leaves this undefined so the scheduler discovers due
-      // schedule tenant metadata at the DB boundary on each tick.
-      tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
-    });
-    app.set('scheduler', schedulerService);
-    schedulerService.start();
-    console.log('🔄 Scheduler started (tick interval: 30s)');
-  }
+  // 6. Start the all-daemon durable Session queue scanner. Discovery is
+  // bounded and may overlap freely; the database dispatch claim, not this
+  // timer, elects the launcher.
+  const queueMultiTenancy = resolveMultiTenancyConfig(config);
+  const sessionQueueWorker = new SessionQueueWorker(db, {
+    tenantId: queueMultiTenancy.mode === 'static' ? queueMultiTenancy.static_tenant_id : undefined,
+    workIdentity: ctx.distributedWorkIdentity,
+    processSession: (sessionId, params) =>
+      ctx.sessionsService.triggerQueueProcessing(sessionId, params as never),
+  });
+  sessionQueueWorker.start();
 
-  // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)
-  let knowledgeEmbeddingIndexer: KnowledgeEmbeddingIndexer | null = null;
-  knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
-    tenantId: startupTenantParams(config).tenant.tenant_id,
+  // 7. Start scheduler service (background worker)
+  const schedulerMultiTenancy = resolveMultiTenancyConfig(config);
+  const schedulerService = new SchedulerService(db, app, {
+    deploymentPolicy: resolveDeploymentAgenticToolPolicy(config),
+    tickInterval: 30000, // 30 seconds
+    gracePeriod: 120000, // 2 minutes
+    unixUserMode: config.execution?.unix_user_mode ?? 'simple',
+    // Static mode keeps the historical single-tenant scope. Auth-resolved
+    // multi-tenant mode leaves this undefined so the scheduler discovers due
+    // schedule tenant metadata at the DB boundary on each tick.
+    tenantId:
+      schedulerMultiTenancy.mode === 'static' ? schedulerMultiTenancy.static_tenant_id : undefined,
+    workIdentity: ctx.distributedWorkIdentity,
+  });
+  app.set('scheduler', schedulerService);
+  schedulerService.start();
+
+  // 8. Start Knowledge embedding indexer (no-op unless semantic search is configured)
+  const knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    distributedMode:
+      ctx.taskRuntimePolicy === 'shared_postgres' || startupMultiTenancy.mode !== 'static',
+    workIdentity: ctx.distributedWorkIdentity,
   });
   knowledgeEmbeddingIndexer.start();
   app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
   console.log('🧠 Knowledge embedding indexer started');
 
-  // 8. Initialize gateway listeners. Static mode preserves the historical
+  // 8b. Start MCP catalog ingestion. The catalog is global, so this runs once
+  // per daemon regardless of tenancy mode; it enters an explicit system
+  // database scope rather than any tenant's.
+  const mcpCatalogIngestion = new MCPCatalogIngestionWorker(
+    db,
+    resolveMCPCatalogOptions(config.mcp_catalog)
+  );
+  mcpCatalogIngestion.start();
+  app.set('mcpCatalogIngestion', mcpCatalogIngestion);
+  console.log('📚 MCP catalog ingestion scheduled');
+
+  // 9. Initialize gateway listeners. Static mode preserves the historical
   // tenant. Auth-resolved mode performs narrow global ID discovery, then
   // reloads and starts each channel under its immutable tenant identity.
   const gatewayService = safeService('gateway') as unknown as GatewayService | undefined;
@@ -734,23 +814,49 @@ export async function startup(ctx: StartupContext): Promise<void> {
     });
   }
 
-  // 8. Graceful shutdown handler
+  // 10. Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
 
-    // Write sentinel before anything else — if later steps hang or fail and the
-    // process gets SIGKILL'd, the sentinel is already on disk and startup will
-    // correctly classify this as a graceful restart rather than a crash.
-    await writeCleanShutdownSentinel(signal);
+    // Fail readiness before waiting on any worker drain so ingress stops
+    // assigning new HTTP/Engine.IO sessions immediately.
+    ctx.realtimeRuntime?.beginDrain();
+
+    // Refuse new cost-bearing claims before any other shutdown work can wait.
+    // stop() also aborts the local provider wait and drains its active DB step.
+    if (knowledgeEmbeddingIndexer) {
+      console.log('🧠 Stopping Knowledge embedding indexer...');
+      await knowledgeEmbeddingIndexer.stop();
+    }
+
+    // The process-global sentinel is meaningful only for a standalone daemon.
+    // In shared mode it cannot identify which replica owned any Task.
+    if (ctx.taskRuntimePolicy === 'standalone') {
+      await writeCleanShutdownSentinel(signal);
+    }
 
     try {
       // Clean up health monitor
-      healthMonitor.cleanup();
+      await healthMonitor?.cleanup();
 
-      // Stop heartbeat supervisor
-      heartbeatSupervisor.stop();
+      // Stop Task runtime discovery before closing services.
+      taskRuntimeReconciler?.stop();
 
-      await containAllTrackedExecutors();
+      // Stop durable Session queue discovery. Any in-flight database claim is
+      // still safe; stop only prevents the next local scan.
+      sessionQueueWorker?.stop();
+
+      if (shouldContainLocalExecutorsOnShutdown(ctx.taskRuntimePolicy)) {
+        // Preserve the historical standalone shutdown contract.
+        await containAllTrackedExecutors(app);
+      } else if (ctx.taskRuntimePolicy === 'shared_postgres') {
+        // A shared replica cannot discard verified process-local evidence
+        // by intentionally killing an executor. A runtime may reconnect only
+        // when the configured execution substrate independently survives.
+        console.log(
+          '🔁 Skipping local executor containment for shared-daemon handoff (substrate survival required)'
+        );
+      }
 
       // Clean up terminal sessions
       if (terminalsService) {
@@ -764,15 +870,11 @@ export async function startup(ctx: StartupContext): Promise<void> {
         await gatewayService.stopListeners();
       }
 
-      // Stop Knowledge embedding indexer
-      if (knowledgeEmbeddingIndexer) {
-        console.log('🧠 Stopping Knowledge embedding indexer...');
-        knowledgeEmbeddingIndexer.stop();
-      }
+      console.log('📚 Stopping MCP catalog ingestion...');
+      mcpCatalogIngestion.stop();
 
       // Stop scheduler
       if (schedulerService) {
-        console.log('🔄 Stopping scheduler...');
         schedulerService.stop();
       }
 
@@ -780,9 +882,19 @@ export async function startup(ctx: StartupContext): Promise<void> {
       const socketServer = getSocketServer();
       if (socketServer) {
         console.log('🔌 Closing Socket.io and HTTP server...');
-        // Disconnect all active clients first
-        socketServer.disconnectSockets();
-        // Give sockets a moment to disconnect
+        if (shouldReconnectSocketClientsOnShutdown(ctx.taskRuntimePolicy)) {
+          // In HA, close Engine.IO transports instead of issuing a Socket.IO
+          // namespace disconnect. A namespace disconnect tells clients not to
+          // reconnect; a transport close lets them retry another healthy
+          // replica through ingress.
+          for (const socket of socketServer.sockets.sockets.values()) {
+            socket.conn.close();
+          }
+        } else {
+          // Preserve the historical standalone shutdown contract.
+          socketServer.disconnectSockets();
+        }
+        // Give transports a moment to close.
         await new Promise<void>((resolve) => setTimeout(resolve, 100));
         // Now close the server with a timeout
         await new Promise<void>((resolve) => {
@@ -810,6 +922,11 @@ export async function startup(ctx: StartupContext): Promise<void> {
             }
           });
         });
+      }
+
+      if (ctx.realtimeRuntime) {
+        console.log('🔌 Closing Redis realtime clients...');
+        await ctx.realtimeRuntime.close();
       }
 
       process.exit(0);

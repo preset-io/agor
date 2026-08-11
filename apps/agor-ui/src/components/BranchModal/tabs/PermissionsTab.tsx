@@ -14,7 +14,6 @@ import { useEffect, useState } from 'react';
 import {
   RbacPermissionFields,
   type RbacPermissionValue,
-  rbacVisibilityFromOthersCan,
 } from '../../permissions/RbacPermissionFields';
 import type { GroupGrantsStatus, PermissionsFormState } from '../useBranchModalForm';
 
@@ -54,7 +53,9 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   const permissionSource = state.permissionSource ?? 'override';
   const canEditBranchFallbacks = canEdit && permissionSource === 'override';
   const fieldValue: RbacPermissionValue = {
-    visibility: rbacVisibilityFromOthersCan(state.othersCan),
+    // Branches have no persisted visibility mode: `none` is the public
+    // fallback and does not disable explicit owners/groups/filesystem grants.
+    visibility: 'shared',
     ownerIds: state.selectedOwnerIds,
     groupGrants: state.groupGrants ?? [],
     othersCan: state.othersCan,
@@ -218,6 +219,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
             groupGrantsError={groupGrantsError}
             ownersLoadError={ownersLoadError}
             groupsHelp="Grant explicit branch access to user groups"
+            showVisibility={false}
           />
         )}
       </Form>

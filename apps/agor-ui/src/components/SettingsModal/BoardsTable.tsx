@@ -1,16 +1,4 @@
-import { GOLD_SHIMMER_BOARD_BACKGROUND } from '@agor/core/design/board-backgrounds';
-import type {
-  AgorClient,
-  Board,
-  BoardGroupGrantWithGroup,
-  Branch,
-  BranchFsAccessLevel,
-  BranchPermissionLevel,
-  Group,
-  Session,
-  User,
-  UUID,
-} from '@agor-live/client';
+import type { AgorClient, Board, Branch, Session } from '@agor-live/client';
 import {
   CopyOutlined,
   DeleteOutlined,
@@ -37,7 +25,8 @@ import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ArchiveToggleButton } from '../ArchiveButton';
-import { BoardFormFields, extractBoardFormValues, isCustomCSS } from '../forms/BoardFormFields';
+import { BoardEditModal } from '../BoardEditModal';
+import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -68,11 +57,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const { modal } = App.useApp();
   const { showSuccess, showError } = useThemedMessage();
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
-  const [rbacEnabled, setRbacEnabled] = useState(false);
-  const [allUsers, setAllUsers] = useState<User[]>([]);
-  const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
@@ -98,51 +83,6 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     return counts;
   }, [boardById, sessionsByBranch, branchById]);
 
-  const syncBoardPermissions = async (boardId: string) => {
-    if (!client || !rbacEnabled) return;
-    const boardUuid = boardId as UUID;
-    const values = form.getFieldsValue(true);
-    const isPrivate = values.access_mode === 'private';
-    const desiredOwnerIds = (values.owner_ids || []) as UUID[];
-    const desiredGrants = (isPrivate ? [] : values.board_group_grants || []) as Array<{
-      group_id: string;
-      can: BranchPermissionLevel;
-      fs_access?: BranchFsAccessLevel;
-    }>;
-
-    const currentOwners = (await client
-      .service('boards/:id/owners')
-      .find({ route: { id: boardUuid } })) as User[];
-    const currentOwnerIds = currentOwners.map((u) => u.user_id as UUID);
-    await Promise.all([
-      ...desiredOwnerIds
-        .filter((id) => !currentOwnerIds.includes(id))
-        .map((user_id) =>
-          client.service('boards/:id/owners').create({ user_id }, { route: { id: boardUuid } })
-        ),
-      ...currentOwnerIds
-        .filter((id) => !desiredOwnerIds.includes(id))
-        .map((id) => client.service('boards/:id/owners').remove(id, { route: { id: boardUuid } })),
-    ]);
-
-    const currentGrants = (await client
-      .service('boards/:id/group-grants')
-      .find({ route: { id: boardUuid } })) as BoardGroupGrantWithGroup[];
-    const desiredByGroup = new Map(desiredGrants.map((grant) => [grant.group_id, grant]));
-    await Promise.all([
-      ...desiredGrants.map((grant) =>
-        client.service('boards/:id/group-grants').create(grant, { route: { id: boardUuid } })
-      ),
-      ...currentGrants
-        .filter((grant) => !desiredByGroup.has(grant.group_id))
-        .map((grant) =>
-          client.service('boards/:id/group-grants').remove(grant.group_id, {
-            route: { id: boardUuid },
-          })
-        ),
-    ]);
-  };
-
   const handleCreate = () => {
     // Validate all fields (not just 'name') so custom_context JSON rules run.
     // Otherwise the extractor's JSON.parse can throw and get swallowed.
@@ -158,81 +98,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       });
   };
 
-  const handleEdit = async (board: Board) => {
-    setEditingBoard(board);
-    let ownerIds: string[] = [];
-    let boardGroupGrants: Array<{ group_id: string; can: string; fs_access?: string }> = [];
-    if (client) {
-      try {
-        const [users, groups, owners, grants] = await Promise.all([
-          client.service('users').findAll({}),
-          client.service('groups').findAll({ query: { archived: false } }),
-          client.service('boards/:id/owners').find({ route: { id: board.board_id } }),
-          client.service('boards/:id/group-grants').find({ route: { id: board.board_id } }),
-        ]);
-        setRbacEnabled(true);
-        setAllUsers(users as User[]);
-        setAllGroups(groups as Group[]);
-        ownerIds = (owners as User[]).map((user) => user.user_id);
-        if (ownerIds.length === 0 && board.created_by) {
-          ownerIds = [board.created_by];
-        }
-        boardGroupGrants = (
-          grants as Array<{ group_id: string; can: string; fs_access?: string }>
-        ).map((grant) => ({
-          group_id: grant.group_id,
-          can: grant.can,
-          fs_access: grant.fs_access,
-        }));
-      } catch (error) {
-        setRbacEnabled(false);
-        setAllUsers([]);
-        setAllGroups([]);
-        console.warn('Board RBAC metadata unavailable:', error);
-      }
-    }
-    form.setFieldsValue({
-      name: board.name,
-      icon: board.icon,
-      description: board.description,
-      background_color: board.background_color,
-      custom_css: board.custom_css,
-      access_mode: board.access_mode || 'shared',
-      default_others_can: board.default_others_can || 'session',
-      default_others_fs_access: board.default_others_fs_access || 'read',
-      default_dangerously_allow_session_sharing: Boolean(
-        board.default_dangerously_allow_session_sharing
-      ),
-      owner_ids: ownerIds,
-      board_group_grants: boardGroupGrants,
-      custom_context: board.custom_context ? JSON.stringify(board.custom_context, null, 2) : '',
-    });
-    setEditModalOpen(true);
-  };
-
-  const handleUpdate = () => {
-    if (!editingBoard) return;
-
-    form
-      .validateFields()
-      .then(() => {
-        const values = form.getFieldsValue(true);
-        if (values.access_mode === 'private' && (values.owner_ids || []).length !== 1) {
-          showError('Private boards must have exactly one private user');
-          return;
-        }
-        onUpdate?.(editingBoard.board_id, extractBoardFormValues(form));
-        syncBoardPermissions(editingBoard.board_id).catch((error) => {
-          showError(`Failed to update board permissions: ${error.message}`);
-        });
-        form.resetFields();
-        setEditModalOpen(false);
-        setEditingBoard(null);
-      })
-      .catch(() => {
-        // Antd displays inline field errors; nothing to do here.
-      });
-  };
+  const handleEdit = (board: Board) => setEditingBoard(board);
 
   const handleDelete = (boardId: string) => {
     onDelete?.(boardId);
@@ -489,8 +355,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
+              // New boards start on the theme-aware default (no persisted
+              // background); the editor's Default mode reflects this.
               form.resetFields();
-              form.setFieldsValue({ background_color: GOLD_SHIMMER_BOARD_BACKGROUND });
               setCreateModalOpen(true);
             }}
           >
@@ -523,39 +390,17 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         okText="Create"
       >
         <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
-          <BoardFormFields form={form} extra={customContextField} initialCustomCSS />
+          <BoardFormFields form={form} extra={customContextField} />
         </Form>
       </Modal>
 
-      {/* Edit Board Modal */}
-      <Modal
-        title="Edit Board"
-        open={editModalOpen}
-        width={760}
-        onOk={handleUpdate}
-        onCancel={() => {
-          form.resetFields();
-          setEditModalOpen(false);
-          setEditingBoard(null);
-        }}
-        okText="Save"
-      >
-        <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
-          {/* Keyed on board_id so useCustomCSS state and Collapse defaultActiveKey
-              re-initialize when switching between boards (Modal stays mounted). */}
-          <BoardFormFields
-            key={editingBoard?.board_id}
-            form={form}
-            extra={customContextField}
-            initialCustomCSS={
-              isCustomCSS(editingBoard?.background_color) || Boolean(editingBoard?.custom_css)
-            }
-            rbacEnabled={rbacEnabled}
-            allUsers={allUsers}
-            allGroups={allGroups}
-          />
-        </Form>
-      </Modal>
+      <BoardEditModal
+        board={editingBoard}
+        client={client}
+        open={Boolean(editingBoard)}
+        onClose={() => setEditingBoard(null)}
+        onUpdate={onUpdate}
+      />
     </div>
   );
 };

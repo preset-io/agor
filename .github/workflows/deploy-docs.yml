@@ -29,7 +29,7 @@ jobs:
         uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -45,6 +45,13 @@ jobs:
 
       - name: Build docs
         run: pnpm --filter @agor/docs build
+        env:
+          # GA measurement IDs are public identifiers, not secrets. Keep this
+          # explicit so static exports cannot silently lose production analytics.
+          NEXT_PUBLIC_GA_ID: G-DME77D3LDH
+
+      - name: Verify production analytics export
+        run: pnpm --filter @agor/docs validate:analytics
         env:
           NEXT_PUBLIC_GA_ID: G-DME77D3LDH
 

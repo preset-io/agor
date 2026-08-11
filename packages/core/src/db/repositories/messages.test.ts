@@ -9,9 +9,10 @@ import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/typ
 import { MessageRole } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
+import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
-import { MessagesRepository } from './messages';
+import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
@@ -118,6 +119,27 @@ async function createTestTask(db: any, sessionId: SessionID): Promise<TaskID> {
 // ============================================================================
 
 describe('MessagesRepository.create', () => {
+  dbTest('sanitizes PostgreSQL-invalid Unicode in JSON and preview fields', async ({ db }) => {
+    const actualNul = String.fromCharCode(0);
+    const loneHighSurrogate = String.fromCharCode(0xd800);
+    const loneLowSurrogate = String.fromCharCode(0xdc00);
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const original = createMessageData({
+      session_id: sessionId,
+      content_preview: `preview${actualNul}${loneHighSurrogate}`,
+      content: [
+        { type: 'tool_result', content: `binary${actualNul}${loneLowSurrogate} 😀` },
+      ] as Message['content'],
+      metadata: { nested: [actualNul] } as Message['metadata'],
+    });
+
+    const created = await repository.create(original);
+    expect(created.content_preview).toBe('preview��');
+    expect(created.content).toEqual([{ type: 'tool_result', content: 'binary�� 😀' }]);
+    expect(created.metadata).toEqual({ nested: ['�'] });
+    expect(original.content_preview).toBe(`preview${actualNul}${loneHighSurrogate}`);
+  });
   dbTest('should create message with all fields including task_id', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);
@@ -197,6 +219,15 @@ describe('MessagesRepository.create', () => {
 // ============================================================================
 
 describe('MessagesRepository.createMany', () => {
+  dbTest('sanitizes every row in bulk inserts', async ({ db }) => {
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await repository.createMany([
+      createMessageData({ session_id: sessionId, index: 0, content: 'a\0' }),
+      createMessageData({ session_id: sessionId, index: 1, content: 'b\ud800' }),
+    ]);
+    expect(created.map((message) => message.content)).toEqual(['a�', 'b�']);
+  });
   dbTest('should bulk insert multiple messages and preserve order', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);
@@ -479,6 +510,47 @@ describe('MessagesRepository.update', () => {
     expect(updated.metadata).toEqual({ model: 'claude-3' }); // Preserved
   });
 
+  dbTest('sanitizes all JSON and preview fields on finalization update', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await messages.create(
+      createMessageData({ session_id: sessionId, content: 'Original', metadata: { keep: true } })
+    );
+
+    const updated = await messages.update(created.message_id, {
+      content: [{ type: 'tool_result', content: 'binary\0result' }] as Message['content'],
+      content_preview: 'binary\0preview',
+      tool_uses: [{ id: 'tool-1', name: 'read', input: { 'bad\0key': '\ud800' } }],
+    });
+
+    expect(updated.content).toEqual([{ type: 'tool_result', content: 'binary�result' }]);
+    expect(updated.content_preview).toBe('binary�preview');
+    expect(updated.tool_uses).toEqual([{ id: 'tool-1', name: 'read', input: { 'bad�key': '�' } }]);
+    expect(updated.metadata).toEqual({ keep: true });
+  });
+
+  dbTest(
+    'persists a bounded placeholder when final content exceeds the safety budget',
+    async ({ db }) => {
+      const messages = new MessagesRepository(db);
+      const sessionId = await createTestSession(db);
+      const created = await messages.create(createMessageData({ session_id: sessionId }));
+      const oversized = new Array(JSON_SANITIZER_LIMITS.maxNodes).fill(null);
+
+      const updated = await messages.update(created.message_id, {
+        content: oversized as Message['content'],
+        content_preview: 'untrusted preview',
+        metadata: { secret: 'must be dropped' },
+      });
+
+      expect(updated.content).toBe(MESSAGE_CONTENT_OMITTED);
+      expect(updated.content_preview).toBe(MESSAGE_CONTENT_OMITTED);
+      expect(updated.tool_uses).toBeUndefined();
+      expect(updated.metadata).toEqual({ persistence_omission: { reason: 'size' } });
+      expect(updated.metadata).not.toHaveProperty('secret');
+    }
+  );
+
   dbTest('should throw error for non-existent message', async ({ db }) => {
     const messages = new MessagesRepository(db);
 
@@ -614,5 +686,54 @@ describe('MessagesRepository JSON and edge cases', () => {
     const created = await messages.create(data);
 
     expect(created.content).toBe(specialContent);
+  });
+});
+
+describe('MessagesRepository.mutateMetadataLocked', () => {
+  dbTest('elects one widget resolver across concurrent SQLite writers', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const message = createMessageData({
+      session_id: sessionId,
+      type: 'widget_request',
+      role: MessageRole.SYSTEM,
+      metadata: {
+        widget: {
+          widget_id: generateId() as MessageID,
+          widget_type: 'test',
+          schema_version: 1,
+          params: {},
+          status: 'pending',
+          requested_at: new Date().toISOString(),
+        },
+      },
+    });
+    message.metadata!.widget!.widget_id = message.message_id;
+    await new MessagesRepository(db).create(message);
+
+    const attempts = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        new MessagesRepository(db).mutateMetadataLocked(message.message_id, (metadata) => {
+          const widget = metadata?.widget;
+          if (widget?.status !== 'pending') return null;
+          return {
+            ...metadata,
+            widget: {
+              ...widget,
+              status: 'resolving',
+              resolution_claim: {
+                token: `claim-${index}`,
+                action: index % 2 === 0 ? 'submit' : 'dismiss',
+                claimed_at: new Date().toISOString(),
+                claimed_by: 'test-user' as UUID,
+              },
+            },
+          };
+        })
+      )
+    );
+
+    expect(attempts.filter((attempt) => attempt.changed)).toHaveLength(1);
+    const stored = await new MessagesRepository(db).findById(message.message_id);
+    expect(stored?.metadata?.widget?.status).toBe('resolving');
   });
 });

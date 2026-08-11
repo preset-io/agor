@@ -12,7 +12,6 @@ describe('SDK activity mapping', () => {
     ['codex', 'item.started'],
     ['gemini', 'content'],
     ['copilot', 'assistant.message_delta'],
-    ['opencode', 'message.part.updated'],
   ] as const)('%s maps healthy activity to progress', (adapter, event) => {
     expect(mapSdkActivity(adapter, event)).toEqual({ kind: 'progress', detail: event });
   });
@@ -29,7 +28,6 @@ describe('SDK activity mapping', () => {
     ['codex', 'future.event'],
     ['gemini', 'future.event'],
     ['copilot', 'future.event'],
-    ['opencode', 'future.event'],
   ] as const)('%s keeps unknown activity visible but non-progressing', (adapter, event) => {
     expect(mapSdkActivity(adapter, event)).toEqual({
       kind: 'unknown_activity',
@@ -37,8 +35,7 @@ describe('SDK activity mapping', () => {
     });
   });
 
-  it('ignores OpenCode transport heartbeats and bounds diagnostic detail', () => {
-    expect(mapSdkActivity('opencode', 'server.heartbeat')).toBeUndefined();
+  it('bounds diagnostic detail', () => {
     const pulse = mapSdkActivity('codex', `bad secret ${'x'.repeat(200)}`);
     expect(pulse?.detail).toMatch(/^[a-zA-Z0-9._-]+$/);
     expect(pulse?.detail.length).toBe(128);
@@ -55,7 +52,7 @@ describe('SDK activity version manifest', () => {
   it('matches every reviewed resolved dependency version', () => {
     const lockfile = readFileSync(new URL('../../../../pnpm-lock.yaml', import.meta.url), 'utf8');
     expect(Object.keys(SDK_ACTIVITY_VERSION_MANIFEST).sort()).toEqual(
-      ['claude-code', 'codex', 'gemini', 'copilot', 'opencode'].sort()
+      ['claude-code', 'codex', 'gemini', 'copilot'].sort()
     );
     for (const dependency of Object.values(SDK_ACTIVITY_VERSION_MANIFEST)) {
       expect(lockfile).toContain(`'${dependency}':`);

@@ -23,11 +23,35 @@ declare global {
 }
 
 // Source form (edit submit button copy, fields, etc. in HubSpot):
-// https://app.hubspot.com/forms/5901754/editor/f76e3259-8c31-4e39-8147-8e23fa53be74/edit
-const HUBSPOT_PORTAL_ID = '5901754';
-const HUBSPOT_FORM_ID = 'f76e3259-8c31-4e39-8147-8e23fa53be74';
-const HUBSPOT_REGION = 'na1';
+// https://app-na2.hubspot.com/forms/246818610/editor/56f5b614-72f0-4412-9247-33b53715fda4/edit
+const HUBSPOT_PORTAL_ID = '246818610';
+const HUBSPOT_FORM_ID = '56f5b614-72f0-4412-9247-33b53715fda4';
+const HUBSPOT_REGION = 'na2';
 const HUBSPOT_SCRIPT_SRC = 'https://js.hsforms.net/forms/embed/v2.js';
+
+// Name of the form's hidden field used to attribute which on-page CTA opened
+// it (nav bar, hero, footer, a specific blog post, etc.) — see `sourceCta`.
+const SOURCE_FIELD_NAME = 'source_page';
+
+// The form's field-group layout (which fields share a row) is set in the
+// HubSpot form editor's UI, not here — currently First name sits alone on
+// its own row, with Email and Last name paired below it. Reparent the DOM
+// nodes into First+Last paired / Email alone instead, reusing HubSpot's own
+// form-columns-1/form-columns-2 classes (and their responsive behavior) so
+// we don't have to reimplement column layout. display:contents doesn't
+// reliably promote a <fieldset>'s children to grid/flex items across
+// browsers, which rules out a pure-CSS reorder here.
+function reorderNameFields(target: HTMLElement) {
+  const firstnameField = target.querySelector('.hs_firstname');
+  const lastnameField = target.querySelector('.hs_lastname');
+  const firstFieldset = firstnameField?.closest('fieldset');
+  const pairFieldset = lastnameField?.closest('fieldset');
+  if (!firstnameField || !lastnameField || !firstFieldset || !pairFieldset) return;
+  if (firstFieldset === pairFieldset) return; // already paired — nothing to do
+  firstFieldset.appendChild(lastnameField); // moves it out of pairFieldset
+  firstFieldset.className = firstFieldset.className.replace('form-columns-1', 'form-columns-2');
+  pairFieldset.className = pairFieldset.className.replace('form-columns-2', 'form-columns-1');
+}
 
 // HubSpot v2 renders the form inline into our target div and injects
 // whatever we pass via `css` as a <style> tag in the document head. We
@@ -121,6 +145,10 @@ interface HubSpotFormProps {
   portalId?: string;
   formId?: string;
   region?: string;
+  /** Attribution tag for the hidden `source_page` field — identifies which
+   * specific CTA (nav bar, landing hero, footer, a given blog post, etc.)
+   * opened this form, not just which page it's on. */
+  sourceCta?: string;
   /** When set, "Book a Demo" invokes this (e.g. swap to the in-modal
    * scheduler) instead of linking out to meetings.hubspot.com. */
   onBookDemo?: () => void;
@@ -132,6 +160,7 @@ export function HubSpotForm({
   portalId = HUBSPOT_PORTAL_ID,
   formId = HUBSPOT_FORM_ID,
   region = HUBSPOT_REGION,
+  sourceCta,
   onBookDemo,
 }: HubSpotFormProps) {
   // useId returns ":r0:"-style strings; strip ":" so we can use it
@@ -162,9 +191,26 @@ export function HubSpotForm({
       region,
       target: `#${targetId}`,
       css: HUBSPOT_FORM_CSS,
-      onFormReady: () => setFormReady(true),
+      onFormReady: () => {
+        reorderNameFields(target);
+        // Stamp the hidden attribution field directly in the DOM — set
+        // .value and dispatch input/change so HubSpot's own listeners (and
+        // any field-dependent validation) see the update, same as a user
+        // typing it in.
+        if (sourceCta) {
+          const sourceField = target.querySelector<HTMLInputElement>(
+            `input[name="${SOURCE_FIELD_NAME}"]`
+          );
+          if (sourceField) {
+            sourceField.value = sourceCta;
+            sourceField.dispatchEvent(new Event('input', { bubbles: true }));
+            sourceField.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        setFormReady(true);
+      },
     });
-  }, [scriptReady, portalId, formId, region, targetId]);
+  }, [scriptReady, portalId, formId, region, targetId, sourceCta]);
 
   return (
     <div id={anchorId} className={styles.wrapper}>

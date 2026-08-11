@@ -10,7 +10,7 @@ import {
   type ApiKeyName,
   stripProviderCredentialEnvironment,
 } from '@agor/core/config';
-import { generateId, shortId } from '@agor/core/db';
+import { generateId, sanitizeDbError, shortId } from '@agor/core/db';
 import type {
   AgenticToolName,
   ContextUsageSnapshot,
@@ -25,6 +25,7 @@ import type {
 import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
+import { formatExecutorFailure } from '../../safe-executor-error.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -42,6 +43,62 @@ function sdkDebug(...args: unknown[]): void {
 
 class MissingCredentialError extends Error {
   override readonly name = 'MissingCredentialError';
+}
+
+async function appendTaskFailureMessage(
+  client: AgorClient,
+  sessionId: SessionID,
+  taskId: TaskID,
+  failure: Error
+): Promise<void> {
+  const safeFailure = formatExecutorFailure(failure);
+  try {
+    const existingMessages = await client.service('messages').find({
+      query: { session_id: sessionId, $limit: 0 },
+    });
+    const messageCount =
+      typeof existingMessages === 'object' && 'total' in existingMessages
+        ? existingMessages.total
+        : Array.isArray(existingMessages)
+          ? existingMessages.length
+          : 0;
+
+    await client.service('messages').create({
+      message_id: generateId() as MessageID,
+      session_id: sessionId,
+      task_id: taskId,
+      type: 'system',
+      role: MessageRole.SYSTEM,
+      index: messageCount,
+      timestamp: new Date().toISOString(),
+      content: safeFailure,
+      content_preview: safeFailure.substring(0, 200),
+      metadata: {
+        is_task_failure: true,
+        ...(failure instanceof MissingCredentialError
+          ? { is_missing_credential_failure: true }
+          : {}),
+      },
+    });
+  } catch (error) {
+    console.error('[executor.message.persist] failed', sanitizeDbError(error));
+  }
+}
+
+export async function settleTaskFailure(
+  client: AgorClient,
+  sessionId: SessionID,
+  taskId: TaskID,
+  failure: Error,
+  patch: Partial<Task>
+): Promise<void> {
+  // Terminal task hooks may drain the next queued turn, so reserve the current
+  // transcript index before publishing terminality. Message failure stays best-effort.
+  await appendTaskFailureMessage(client, sessionId, taskId, failure);
+  await client.service('tasks').patch(taskId, {
+    ...patch,
+    ...(patch.error_message ? { error_message: formatExecutorFailure(failure) } : {}),
+  });
 }
 
 /**
@@ -282,17 +339,6 @@ async function captureGitStateForSession(
       `[Git SHA Capture] Captured git state at task ${phase}: ${sha.substring(0, 8)}${sha.endsWith('-dirty') ? ' (dirty)' : ''} ref=${ref}`
     );
 
-    // Update session's current_sha to keep it in sync as tasks complete.
-    if (phase === 'end' && sha && sha !== 'unknown') {
-      try {
-        await client.service('sessions').patch(sessionId, {
-          git_state: { ...session.git_state, current_sha: sha, ref },
-        });
-      } catch (sessionPatchError) {
-        console.warn('[Git SHA Capture] Failed to update session current_sha:', sessionPatchError);
-      }
-    }
-
     return { sha, ref };
   } catch (error) {
     console.warn(`[Git SHA Capture] Failed to capture git state at task ${phase}:`, error);
@@ -303,9 +349,8 @@ async function captureGitStateForSession(
 export async function captureGitStateAtTaskEnd(
   client: AgorClient,
   sessionId: SessionID
-): Promise<string | undefined> {
-  const gitState = await captureGitStateForSession(client, sessionId, 'end');
-  return gitState?.sha;
+): Promise<CapturedGitState | undefined> {
+  return captureGitStateForSession(client, sessionId, 'end');
 }
 
 export async function stampGitStateAtTaskStart(
@@ -553,6 +598,7 @@ export async function executeToolTask(params: {
     if (gitStateAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
+        ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,
       };
     }
@@ -568,9 +614,6 @@ export async function executeToolTask(params: {
       });
       if (normalized) {
         patchData.normalized_sdk_response = normalized;
-        console.log(
-          `[${toolName}] Normalized SDK response: ${normalized.tokenUsage.totalTokens} tokens, $${normalized.costUsd?.toFixed(4) ?? 'N/A'}`
-        );
       }
     }
 
@@ -578,7 +621,6 @@ export async function executeToolTask(params: {
     const resolvedTaskModel = result.model || patchData.normalized_sdk_response?.primaryModel;
     if (resolvedTaskModel) {
       patchData.model = resolvedTaskModel;
-      console.log(`[${toolName}] Task model set to: ${resolvedTaskModel}`);
     }
 
     // Prefer the authoritative context-window snapshot when the tool surfaced
@@ -591,9 +633,6 @@ export async function executeToolTask(params: {
     // be near zero.
     if (result.rawContextUsage && result.rawContextUsage.maxTokens > 0) {
       patchData.computed_context_window = result.rawContextUsage.totalTokens;
-      console.log(
-        `[${toolName}] Authoritative context snapshot: ${result.rawContextUsage.totalTokens}/${result.rawContextUsage.maxTokens} tokens (${result.rawContextUsage.percentage}%)`
-      );
 
       // Override contextWindowLimit in the normalized response with the
       // authoritative maxTokens so the UI computes percentage against the
@@ -619,7 +658,6 @@ export async function executeToolTask(params: {
           );
           if (contextWindow > 0) {
             patchData.computed_context_window = contextWindow;
-            console.log(`[${toolName}] Computed context window: ${contextWindow} tokens`);
           }
         } catch (error) {
           console.error(`[${toolName}] Failed to compute context window:`, error);
@@ -635,7 +673,7 @@ export async function executeToolTask(params: {
   } catch (error) {
     if (daemonOwnsTerminality()) return;
     const err = error instanceof Error ? error : new Error(String(error));
-    console.error(`[${toolName}] Execution failed:`, err);
+    console.error(`[${toolName}] execution failed category=task_execution`);
 
     // Capture git SHA at task end (even for failed tasks)
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
@@ -646,7 +684,7 @@ export async function executeToolTask(params: {
       completed_at: new Date().toISOString(),
       // Surface the actual failure reason so the UI / DB show what went wrong,
       // instead of the task silently flipping to FAILED with no context.
-      error_message: err.message || String(err),
+      error_message: formatExecutorFailure(err),
     };
 
     // Add git_state if we captured a SHA
@@ -654,43 +692,12 @@ export async function executeToolTask(params: {
     if (gitStateAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
+        ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,
       };
     }
 
-    // Update task status to failed with git SHA
-    await client.service('tasks').patch(taskId, patchData);
-
-    // Emit a system error message so the user sees what went wrong in the conversation
-    try {
-      const existingMessages = await client.service('messages').find({
-        query: { session_id: sessionId, $limit: 0 },
-      });
-      const messageCount =
-        typeof existingMessages === 'object' && 'total' in existingMessages
-          ? existingMessages.total
-          : Array.isArray(existingMessages)
-            ? existingMessages.length
-            : 0;
-
-      await client.service('messages').create({
-        message_id: generateId() as MessageID,
-        session_id: sessionId,
-        task_id: taskId,
-        type: 'system',
-        role: MessageRole.SYSTEM,
-        index: messageCount,
-        timestamp: new Date().toISOString(),
-        content: err.message,
-        content_preview: err.message.substring(0, 200),
-        metadata: {
-          is_task_failure: true,
-          ...(err instanceof MissingCredentialError ? { is_missing_credential_failure: true } : {}),
-        },
-      });
-    } catch (msgErr) {
-      console.error(`[${toolName}] Failed to create error message:`, msgErr);
-    }
+    await settleTaskFailure(client, sessionId, taskId, err, patchData);
 
     throw err;
   } finally {

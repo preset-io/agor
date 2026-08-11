@@ -1,19 +1,21 @@
 /**
  * MCP Server — Official SDK integration
  *
- * Creates an McpServer using @modelcontextprotocol/sdk and mounts it
- * at POST /mcp with JWT session-token auth.
+ * Creates a lightweight McpServer adapter per request using the v2 MCP SDK
+ * and mounts one authenticated endpoint that serves both the modern
+ * 2026-07-28 protocol and the stateless initialization-era protocol family.
  *
  * When tool search is enabled (mcpToolSearch config flag), only essential
  * tools appear in tools/list. Agents discover others via agor_search_tools.
- * All tools remain registered and callable regardless.
+ * Hidden domain tools remain callable both directly by name for compatibility
+ * and through the explicit execute facade.
  *
  * DETERMINISM: The tools/list response and registry are built once on first
  * request and cached as module-level singletons. This ensures byte-identical
  * JSON across requests, which is critical for client-side KV prefix caching.
  */
 
-import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AgorConfig } from '@agor/core/config';
 import {
   resolveMultiTenancyConfig,
@@ -30,12 +32,12 @@ import {
 import type { Application } from '@agor/core/feathers';
 import type { SessionID, TenantContext, UserID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
+import { ToolDispatcher, toolDispatcherProxy } from './register-tool-proxy.js';
 import { tenantScopedToolProxy } from './tenant-scope.js';
 import { validateVerifiedSessionToken, verifySessionToken } from './tokens.js';
 import { formatDomainDescriptionsForInstructions, ToolRegistry } from './tool-registry.js';
@@ -191,7 +193,7 @@ function logQueryParamDeprecation(req: Request): void {
  * responses critical for client-side KV prefix caching.
  */
 let cachedRegistry: ToolRegistry | null = null;
-let cachedToolsList: { tools: Array<Record<string, unknown>> } | null = null;
+let cachedToolsList: ListToolsResult | null = null;
 
 type DomainToolRegistrar = {
   domain: string;
@@ -263,12 +265,14 @@ export function buildRegistry(): ToolRegistry {
     }
   ).registerTool = (name: string, config: Record<string, unknown>, cb: unknown) => {
     // Convert Zod schema to JSON Schema using Zod v4's built-in converter
-    let jsonSchema: Record<string, unknown> = { type: 'object' };
+    let jsonSchema: import('@modelcontextprotocol/server').Tool['inputSchema'] = {
+      type: 'object',
+    };
     if (config.inputSchema) {
       try {
         jsonSchema = toJSONSchema(
           config.inputSchema as Parameters<typeof toJSONSchema>[0]
-        ) as Record<string, unknown>;
+        ) as unknown as import('@modelcontextprotocol/server').Tool['inputSchema'];
       } catch {
         // Fallback: empty object schema if conversion fails
         jsonSchema = { type: 'object' };
@@ -279,8 +283,7 @@ export function buildRegistry(): ToolRegistry {
       name,
       description: (config.description as string) ?? '',
       inputSchema: jsonSchema,
-      annotations:
-        config.annotations as import('@modelcontextprotocol/sdk/types.js').ToolAnnotations,
+      annotations: config.annotations as import('@modelcontextprotocol/server').ToolAnnotations,
     });
 
     // Still register with the temp server so Zod schemas are valid
@@ -304,7 +307,7 @@ export function buildRegistry(): ToolRegistry {
  */
 function getRegistry(): {
   registry: ToolRegistry;
-  toolsList: { tools: Array<Record<string, unknown>> };
+  toolsList: ListToolsResult;
 } {
   if (!cachedRegistry) {
     cachedRegistry = buildRegistry();
@@ -327,17 +330,25 @@ function getRegistry(): {
  * Tool handlers close over `ctx` for per-request user/session scope.
  * The registry and tools/list response are shared across all requests.
  */
-function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer {
+function createMcpServer(
+  ctx: McpContext,
+  toolSearchEnabled: boolean,
+  serverVersion: string
+): McpServer {
   const server = new McpServer(
     {
       name: 'agor',
-      version: '0.14.3',
+      version: serverVersion,
       ...(toolSearchEnabled && {
         description: 'Multiplayer canvas for orchestrating AI coding agents',
       }),
     },
     {
-      capabilities: { tools: { listChanged: true }, logging: {} },
+      capabilities: { tools: { listChanged: false } },
+      cacheHints: {
+        'server/discover': { ttlMs: 60_000, cacheScope: 'private' },
+        'tools/list': { ttlMs: 60_000, cacheScope: 'private' },
+      },
       ...(toolSearchEnabled && { instructions: SERVER_INSTRUCTIONS }),
     }
   );
@@ -345,18 +356,40 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
   // MCP custom methods bypass Feathers around hooks. Scope every tool at this
   // execution boundary so tenant-aware repositories and manual events share one
   // consistent ambient context.
-  registerDomainTools(tenantScopedToolProxy(server, ctx), ctx);
-
   if (toolSearchEnabled) {
     const { registry, toolsList } = getRegistry();
+    const dispatcher = new ToolDispatcher();
 
-    // Register search/execute tools with the shared cached registry
-    registerSearchTools(server, registry);
+    // Capture domain operations for agor_execute_tool while also registering
+    // them normally. Existing clients may call a known tool directly even
+    // though progressive discovery intentionally omits it from tools/list.
+    // Both paths retain the same authenticated tenant wrapper and SDK input /
+    // output validation.
+    registerDomainTools(tenantScopedToolProxy(toolDispatcherProxy(server, dispatcher), ctx), ctx);
 
-    // Override tools/list with the pre-computed, deterministic response.
-    // All tools remain registered and callable via tools/call.
-    server.server.setRequestHandler(ListToolsRequestSchema, async () => toolsList);
+    // Register search/detail/execute as the complete visible MCP catalog.
+    registerSearchTools(server, registry, dispatcher);
+
+    // Keep the advertised catalog to the three progressive-discovery facade
+    // tools without removing direct tools/call compatibility. This uses the
+    // SDK's public low-level handler seam; domain tools remain registered with
+    // McpServer for native annotations, validation, and direct dispatch.
+    server.server.setRequestHandler('tools/list', async () => toolsList);
+
+    // Guard the invariant that the SDK-generated catalog is the same stable
+    // three-tool surface captured in the shared registry.
+    if (toolsList.tools.length !== 3) {
+      throw new Error(`Expected 3 progressive-discovery MCP tools, got ${toolsList.tools.length}`);
+    }
+  } else {
+    registerDomainTools(tenantScopedToolProxy(server, ctx), ctx);
   }
+
+  // McpServer.registerTool() conservatively advertises listChanged=true.
+  // Agor's registry is immutable after startup, so correct the generated
+  // capability after every tool has been registered. Agor intentionally
+  // advertises no logging capability because it sends no MCP logging events.
+  server.server.registerCapabilities({ tools: { listChanged: false } });
 
   return server;
 }
@@ -366,13 +399,17 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
  *
  * @param toolSearchEnabled - When true, tools/list returns only essential tools
  *   and agents discover others via agor_search_tools. Default: true.
+ * @param options.serverVersion - User-facing Agor release version advertised
+ *   during MCP initialization.
  */
 export function setupMCPRoutes(
   app: Application,
   db: TenantScopeAwareDatabase,
   toolSearchEnabled = true,
-  config: Pick<AgorConfig, 'multi_tenancy'> = { multi_tenancy: undefined }
+  config: Pick<AgorConfig, 'multi_tenancy'> = { multi_tenancy: undefined },
+  options: { serverVersion?: string } = {}
 ): void {
+  const serverVersion = options.serverVersion ?? '0.0.0';
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
     getRegistry();
@@ -381,69 +418,32 @@ export function setupMCPRoutes(
 
   const personalApiKeys = new UserApiKeysRepository(db);
   const multiTenancy = resolveMultiTenancyConfig(config);
+  const requestContext = new AsyncLocalStorage<McpContext>();
 
-  type StatefulTransportEntry = {
-    transport: StreamableHTTPServerTransport;
-    server: McpServer;
-    /** Mutable context object captured by registered tool handlers. */
-    context: McpContext;
-    userId: UserID;
-    /** Immutable tenant binding established at MCP initialize time. */
-    tenantId: TenantContext['tenant_id'];
-    /** Immutable Agor session binding established at MCP initialize time, if any. */
-    sessionId?: SessionID;
-    lastUsedAt: number;
-    ttlTimer: NodeJS.Timeout;
-  };
-
-  // Streamable HTTP sessions are intentionally in-memory and modestly bounded:
-  // external orchestrators can hold an SSE session, but abandoned clients must
-  // not grow this map forever if they never send DELETE /mcp.
-  const STATEFUL_TRANSPORT_TTL_MS = 30 * 60 * 1000;
-  const STATEFUL_TRANSPORT_MAX = 100;
-  const statefulTransports = new Map<string, StatefulTransportEntry>();
-
-  const closeStatefulTransport = (mcpSessionId: string): void => {
-    const entry = statefulTransports.get(mcpSessionId);
-    if (!entry) return;
-    statefulTransports.delete(mcpSessionId);
-    clearTimeout(entry.ttlTimer);
-    // McpServer owns the connected transport; closing the server closes the
-    // transport. Calling both can recurse through transport.onclose.
-    entry.server.close().catch(() => {});
-  };
-
-  const armStatefulTransportTtl = (mcpSessionId: string, entry: StatefulTransportEntry): void => {
-    clearTimeout(entry.ttlTimer);
-    entry.lastUsedAt = Date.now();
-    entry.ttlTimer = setTimeout(() => {
-      console.warn(`⚠️  MCP streamable HTTP session expired: ${mcpSessionId}`);
-      closeStatefulTransport(mcpSessionId);
-    }, STATEFUL_TRANSPORT_TTL_MS);
-    entry.ttlTimer.unref?.();
-  };
-
-  const evictOldestStatefulTransportIfNeeded = (): void => {
-    if (statefulTransports.size < STATEFUL_TRANSPORT_MAX) return;
-    let oldestId: string | undefined;
-    let oldestLastUsed = Number.POSITIVE_INFINITY;
-    for (const [id, entry] of statefulTransports) {
-      if (entry.lastUsedAt < oldestLastUsed) {
-        oldestLastUsed = entry.lastUsedAt;
-        oldestId = id;
+  const protocolHandler = createMcpHandler(
+    ({ era }) => {
+      const ctx = requestContext.getStore();
+      if (!ctx) {
+        throw new Error('Authenticated MCP request context is unavailable');
       }
+      mcpRequestDebug(`🔌 Serving MCP ${era} protocol request`);
+      return createMcpServer(ctx, toolSearchEnabled, serverVersion);
+    },
+    {
+      // One endpoint serves the 2026-07-28 per-request protocol and every
+      // initialization-era client through the SDK's stateless compatibility
+      // path. Agor intentionally exposes no transport subscriptions or
+      // mid-call messages. Modern calls therefore resolve to bounded JSON;
+      // the SDK may use one request-scoped SSE response for legacy clients.
+      legacy: 'stateless',
+      responseMode: 'auto',
+      maxSubscriptions: 0,
+      onerror: (error) => mcpRequestDebug('❌ MCP protocol request failed:', error.message),
     }
-    if (oldestId) {
-      console.warn(`⚠️  MCP streamable HTTP session limit reached; evicting ${oldestId}`);
-      closeStatefulTransport(oldestId);
-    }
-  };
-
-  const isInitializeRequest = (body: unknown): boolean => {
-    if (!body || typeof body !== 'object') return false;
-    const maybeRequest = body as { method?: unknown };
-    return maybeRequest.method === 'initialize';
-  };
+  );
+  const nodeProtocolHandler = toNodeHandler(protocolHandler, {
+    onerror: (error) => console.error('❌ MCP Node adapter failed:', error.message),
+  });
 
   const getBodyId = (req: Request): unknown => (req.body as { id?: unknown } | undefined)?.id;
 
@@ -453,16 +453,57 @@ export function setupMCPRoutes(
     error: { code, message },
   });
 
-  const getCredential = (req: Request): string | undefined => {
-    const authHeader = req.headers.authorization;
-    if (authHeader) {
-      const [scheme, ...rest] = authHeader.split(' ');
-      const token = rest.join(' ').trim();
-      if (scheme?.toLowerCase() === 'bearer' && token) return token;
+  class MalformedHeaderError extends Error {}
+
+  /**
+   * Read a security-sensitive header without accepting Node's duplicate-header
+   * coalescing. Credentials and context bindings must have exactly one on-wire
+   * value so intermediaries cannot interpret the request differently.
+   */
+  const getSingleHeader = (req: Request, name: string): string | undefined => {
+    const lowerName = name.toLowerCase();
+    const distinct = (req as Request & { headersDistinct?: Record<string, string[] | undefined> })
+      .headersDistinct;
+    const values = distinct?.[lowerName];
+    if (values && values.length !== 1) {
+      throw new MalformedHeaderError(`${name} must be sent at most once`);
     }
 
-    const xApiKey = req.headers['x-api-key'];
-    return coerceString(Array.isArray(xApiKey) ? xApiKey[0] : xApiKey);
+    const normalized = values?.[0] ?? req.headers[lowerName];
+    if (Array.isArray(normalized)) {
+      if (normalized.length !== 1) {
+        throw new MalformedHeaderError(`${name} must be sent at most once`);
+      }
+      const value = coerceString(normalized[0]);
+      if (!value) throw new MalformedHeaderError(`${name} must be a non-empty string`);
+      return value;
+    }
+    if (normalized !== undefined && typeof normalized !== 'string') {
+      throw new MalformedHeaderError(`${name} must be a string`);
+    }
+    if (normalized === undefined) return undefined;
+    const value = coerceString(normalized);
+    if (!value) throw new MalformedHeaderError(`${name} must be a non-empty string`);
+    return value;
+  };
+
+  const getCredential = (
+    authorization: string | undefined,
+    xApiKey: string | undefined
+  ): string | undefined => {
+    if (authorization && xApiKey) {
+      throw new MalformedHeaderError(
+        'Send exactly one credential: Authorization or X-API-Key, not both'
+      );
+    }
+
+    if (authorization) {
+      const [scheme, ...rest] = authorization.split(' ');
+      const token = rest.join(' ').trim();
+      if (scheme?.toLowerCase() === 'bearer' && token) return token;
+      throw new MalformedHeaderError('Authorization must use Bearer <token>');
+    }
+    return xApiKey;
   };
 
   /**
@@ -478,12 +519,21 @@ export function setupMCPRoutes(
     return distinct ?? (req.headers as Record<string, unknown>);
   };
 
-  const getRequestedSessionId = (req: Request): string | undefined => {
-    const fromQuery = coerceString(req.query.sessionId);
-    if (fromQuery) return fromQuery;
-
-    const fromHeader = req.headers['x-agor-session-id'];
-    return coerceString(Array.isArray(fromHeader) ? fromHeader[0] : fromHeader);
+  const getRequestedSessionId = (
+    req: Request,
+    fromHeader: string | undefined
+  ): string | undefined => {
+    const rawQuery = req.query.sessionId;
+    const fromQuery = coerceString(rawQuery);
+    if (rawQuery !== undefined && !fromQuery) {
+      throw new MalformedHeaderError('sessionId query parameter must be a single non-empty string');
+    }
+    if (fromHeader && fromQuery && fromHeader !== fromQuery) {
+      throw new MalformedHeaderError(
+        'X-Agor-Session-Id and sessionId query parameter must match when both are sent'
+      );
+    }
+    return fromHeader ?? fromQuery;
   };
 
   const handler = async (req: Request, res: Response) => {
@@ -508,7 +558,26 @@ export function setupMCPRoutes(
         });
       }
 
-      const credential = getCredential(req);
+      let requestedSessionId: string | undefined;
+      let credential: string | undefined;
+      try {
+        const authorization = getSingleHeader(req, 'Authorization');
+        const xApiKey = getSingleHeader(req, 'X-API-Key');
+        requestedSessionId = getRequestedSessionId(req, getSingleHeader(req, 'X-Agor-Session-Id'));
+        const mcpSessionId = getSingleHeader(req, 'Mcp-Session-Id');
+        if (mcpSessionId && !/^[\x21-\x7e]+$/.test(mcpSessionId)) {
+          throw new MalformedHeaderError('Mcp-Session-Id must contain only visible ASCII');
+        }
+        credential = getCredential(authorization, xApiKey);
+      } catch (error) {
+        if (error instanceof MalformedHeaderError) {
+          return res.status(400).json({
+            ...jsonRpcError(req, -32600, `Bad Request: ${error.message}`),
+          });
+        }
+        throw error;
+      }
+
       if (!credential) {
         console.warn('⚠️  MCP request missing credentials');
         return res.status(401).json({
@@ -577,7 +646,7 @@ export function setupMCPRoutes(
           }
           throw error;
         }
-        sessionId = getRequestedSessionId(req) as SessionID | undefined;
+        sessionId = requestedSessionId as SessionID | undefined;
       } else {
         const verifiedToken = verifySessionToken(app, credential);
         if (!verifiedToken) {
@@ -654,10 +723,11 @@ export function setupMCPRoutes(
           tenant,
         };
 
-        // Personal API key callers may optionally bind a current-session context
-        // using a header/query param. Validate through the normal sessions
-        // service so branch RBAC and short-ID resolution stay identical to REST.
-        if (isPersonalApiKey && sessionId) {
+        // Re-authorize every optional current-Session context through the
+        // normal service on every request. Personal keys may supply a short ID;
+        // internal tokens carry a signed full ID, but still need fresh branch
+        // RBAC after a permission change. This also canonicalizes short IDs.
+        if (sessionId) {
           try {
             const session = await app.service('sessions').get(sessionId, baseServiceParams);
             sessionId = session.session_id;
@@ -666,7 +736,9 @@ export function setupMCPRoutes(
               ...jsonRpcError(
                 req,
                 -32003,
-                'Forbidden: X-Agor-Session-Id / ?sessionId is invalid or not accessible to this API key user.'
+                isPersonalApiKey
+                  ? 'Forbidden: X-Agor-Session-Id / ?sessionId is invalid or not accessible to this API key user.'
+                  : 'Forbidden: the Agor Session context authenticated by this MCP token is no longer accessible.'
               ),
             });
           }
@@ -685,153 +757,22 @@ export function setupMCPRoutes(
           baseServiceParams,
         };
 
-        const mcpSessionHeader = req.headers['mcp-session-id'];
-        const mcpSessionId = coerceString(
-          Array.isArray(mcpSessionHeader) ? mcpSessionHeader[0] : mcpSessionHeader
-        );
+        // A valid legacy Mcp-Session-Id is deliberately discarded before the
+        // protocol adapter sees the request. It selects no server/context,
+        // conveys no trust, and changes neither routing nor logging during a
+        // rolling upgrade from the former stateful implementation.
+        delete req.headers['mcp-session-id'];
 
-        if (req.method === 'GET' || req.method === 'DELETE' || mcpSessionId) {
-          if (!mcpSessionId) {
-            return res.status(400).json({
-              ...jsonRpcError(req, -32000, 'Bad Request: Mcp-Session-Id header is required'),
-            });
-          }
-          const entry = statefulTransports.get(mcpSessionId);
-          if (!entry) {
-            return res.status(404).json({
-              ...jsonRpcError(req, -32001, 'Session not found for Mcp-Session-Id'),
-            });
-          }
-          if (entry.tenantId !== tenant.tenant_id) {
-            return res.status(403).json({
-              ...jsonRpcError(req, -32003, 'Forbidden: MCP session belongs to a different tenant'),
-            });
-          }
-          if (entry.userId !== userId) {
-            return res.status(403).json({
-              ...jsonRpcError(req, -32003, 'Forbidden: MCP session belongs to a different user'),
-            });
-          }
-
-          // A stateful MCP transport's Agor session binding is immutable. Tool
-          // handlers close over `entry.context`, so allowing callers to add or
-          // change X-Agor-Session-Id on later requests would be confusing at
-          // best and a stale-context authorization footgun at worst.
-          if (!entry.sessionId && sessionId) {
-            return res.status(403).json({
-              ...jsonRpcError(
-                req,
-                -32003,
-                'Forbidden: MCP session was initialized without X-Agor-Session-Id / ?sessionId context; start a new MCP session with session context instead.'
-              ),
-            });
-          }
-          if (entry.sessionId && sessionId && entry.sessionId !== sessionId) {
-            return res.status(403).json({
-              ...jsonRpcError(
-                req,
-                -32003,
-                'Forbidden: MCP session is already bound to a different X-Agor-Session-Id / ?sessionId context'
-              ),
-            });
-          }
-
-          armStatefulTransportTtl(mcpSessionId, entry);
-
-          // Rebuild the mutable context captured by registered handlers on each
-          // stateful request. Credentials have just been re-authenticated and
-          // the user was reloaded, so this keeps role/user data fresh for
-          // long-lived streamable HTTP sessions. If the immutable Agor session
-          // binding is no longer accessible to this user, evict the MCP session.
-          if (entry.sessionId) {
-            try {
-              const session = await app.service('sessions').get(entry.sessionId, baseServiceParams);
-              entry.sessionId = session.session_id;
-            } catch {
-              closeStatefulTransport(mcpSessionId);
-              return res.status(403).json({
-                ...jsonRpcError(
-                  req,
-                  -32003,
-                  'Forbidden: the X-Agor-Session-Id / ?sessionId context bound to this MCP session is no longer accessible.'
-                ),
-              });
-            }
-          }
-          entry.context.userId = userId;
-          entry.context.sessionId = entry.sessionId;
-          entry.context.authenticatedUser = authenticatedUser;
-          entry.context.baseServiceParams = baseServiceParams;
-
-          await entry.transport.handleRequest(req, res, req.body);
-          return;
+        // createMcpHandler performs era classification, modern discovery,
+        // legacy initialization compatibility, per-request server/transport
+        // construction, response projection, and cleanup. Authentication and
+        // tenant identity remain authoritative in this outer request scope.
+        if (req.method === 'GET' || req.method === 'DELETE') {
+          // HTTP 405 responses should enumerate the supported method. Let the
+          // SDK own the status/body while completing the HTTP contract here.
+          res.setHeader('Allow', 'POST');
         }
-
-        if (req.method === 'POST' && isInitializeRequest(req.body)) {
-          evictOldestStatefulTransportIfNeeded();
-
-          const mcpServer = createMcpServer(mcpContext, toolSearchEnabled);
-          let transport: StreamableHTTPServerTransport;
-          transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: () => randomUUID(),
-            onsessioninitialized: (newSessionId) => {
-              const ttlTimer = setTimeout(
-                () => closeStatefulTransport(newSessionId),
-                STATEFUL_TRANSPORT_TTL_MS
-              );
-              ttlTimer.unref?.();
-              const entry: StatefulTransportEntry = {
-                transport,
-                server: mcpServer,
-                context: mcpContext,
-                userId,
-                tenantId: tenant.tenant_id,
-                sessionId,
-                lastUsedAt: Date.now(),
-                ttlTimer,
-              };
-              statefulTransports.set(newSessionId, entry);
-            },
-            onsessionclosed: (closedSessionId) => {
-              if (closedSessionId) closeStatefulTransport(closedSessionId);
-            },
-          });
-
-          transport.onclose = () => {
-            const sid = transport.sessionId;
-            if (sid) {
-              const entry = statefulTransports.get(sid);
-              statefulTransports.delete(sid);
-              if (entry) clearTimeout(entry.ttlTimer);
-            }
-          };
-
-          await mcpServer.connect(transport);
-          await transport.handleRequest(req, res, req.body);
-          return;
-        }
-
-        if (req.method !== 'POST') {
-          return res.status(405).json({
-            ...jsonRpcError(req, -32005, `Method ${req.method} not allowed on /mcp`),
-          });
-        }
-
-        const mcpServer = createMcpServer(mcpContext, toolSearchEnabled);
-
-        // Create stateless transport (one per request, no session tracking)
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,
-        });
-
-        // Connect and handle the request
-        await mcpServer.connect(transport);
-        await transport.handleRequest(req, res, req.body);
-
-        // Clean up after response is done
-        res.on('close', () => {
-          mcpServer.close().catch(() => {});
-        });
+        return requestContext.run(mcpContext, () => nodeProtocolHandler(req, res, req.body));
       });
     } catch (error) {
       console.error('❌ MCP request failed:', error);
@@ -844,7 +785,8 @@ export function setupMCPRoutes(
     }
   };
 
-  // Register as Express POST route
+  // GET and DELETE remain registered only to return an explicit, authenticated
+  // 405 response to Streamable HTTP clients that optimistically probe them.
   // @ts-expect-error - FeathersJS app extends Express
   app.post('/mcp', handler);
   // @ts-expect-error - FeathersJS app extends Express
@@ -852,5 +794,7 @@ export function setupMCPRoutes(
   // @ts-expect-error - FeathersJS app extends Express
   app.delete('/mcp', handler);
 
-  console.log('✅ MCP routes registered at /mcp (POST + GET + DELETE)');
+  console.log(
+    '✅ MCP route registered at /mcp (2026-07-28 + stateless legacy; POST request/response, GET + DELETE 405)'
+  );
 }

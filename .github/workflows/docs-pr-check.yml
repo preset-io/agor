@@ -19,10 +19,10 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 11.13.0
+          version: 11.17.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -38,6 +38,13 @@ jobs:
 
       - name: Build docs
         run: pnpm --filter @agor/docs build
+        env:
+          NEXT_PUBLIC_GA_ID: G-DME77D3LDH
+
+      - name: Verify production analytics export
+        run: pnpm --filter @agor/docs validate:analytics
+        env:
+          NEXT_PUBLIC_GA_ID: G-DME77D3LDH
 
       - name: Verify build output
         run: |

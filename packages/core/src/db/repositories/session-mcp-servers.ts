@@ -42,32 +42,9 @@ export class SessionMCPServerRepository {
         throw new EntityNotFoundError('MCPServer', serverId);
       }
 
-      // Check if relationship already exists
-      const existing = await select(this.db)
-        .from(sessionMcpServers)
-        .where(
-          and(
-            eq(sessionMcpServers.session_id, sessionId),
-            eq(sessionMcpServers.mcp_server_id, serverId)
-          )
-        )
-        .one();
-
-      if (existing) {
-        // Already exists, just ensure it's enabled
-        await update(this.db, sessionMcpServers)
-          .set({ enabled: true })
-          .where(
-            and(
-              eq(sessionMcpServers.session_id, sessionId),
-              eq(sessionMcpServers.mcp_server_id, serverId)
-            )
-          )
-          .run();
-        return;
-      }
-
-      // Create new relationship
+      // Insert-first instead of check-then-insert: the unique index is the
+      // durable idempotency guard when two recovering daemons attach the same
+      // server concurrently.
       const newRelationship: SessionMCPServerInsert = {
         session_id: sessionId,
         mcp_server_id: serverId,
@@ -75,7 +52,16 @@ export class SessionMCPServerRepository {
         added_at: new Date(),
       };
 
-      await insert(this.db, sessionMcpServers).values(newRelationship).run();
+      await insert(this.db, sessionMcpServers).values(newRelationship).onConflictDoNothing().run();
+      await update(this.db, sessionMcpServers)
+        .set({ enabled: true })
+        .where(
+          and(
+            eq(sessionMcpServers.session_id, sessionId),
+            eq(sessionMcpServers.mcp_server_id, serverId)
+          )
+        )
+        .run();
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(

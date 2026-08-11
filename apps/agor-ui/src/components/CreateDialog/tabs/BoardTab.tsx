@@ -1,4 +1,3 @@
-import { GOLD_SHIMMER_BOARD_BACKGROUND } from '@agor/core/design/board-backgrounds';
 import type { Board } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback } from 'react';
@@ -32,14 +31,8 @@ export const BoardTab: React.FC<BoardTabProps> = ({ onValidityChange, formRef })
   };
 
   return (
-    <Form
-      form={form}
-      layout="vertical"
-      preserve
-      initialValues={{ background_color: GOLD_SHIMMER_BOARD_BACKGROUND }}
-      onValuesChange={handleValuesChange}
-    >
-      <BoardFormFields form={form} autoFocus initialCustomCSS />
+    <Form form={form} layout="vertical" preserve onValuesChange={handleValuesChange}>
+      <BoardFormFields form={form} autoFocus />
     </Form>
   );
 };

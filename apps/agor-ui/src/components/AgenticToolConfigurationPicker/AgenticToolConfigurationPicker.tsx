@@ -7,6 +7,7 @@ import { AgenticToolConfigForm, buildConfigFromFormValues } from '../AgenticTool
 import { SessionMcpServersField } from '../MCPServerSelect';
 import {
   INLINE_AGENTIC_CONFIGURATION,
+  summarizeAgenticConfiguration,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   useAgenticConfigurationSources,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -17,9 +18,13 @@ export { INLINE_AGENTIC_CONFIGURATION } from './useAgenticConfigurationSources';
 /** Form field the save-as-default checkbox binds to. Parents read it on submit. */
 export const SAVE_AS_DEFAULT_FIELD = 'saveAsDefault';
 
+const PreservedFormValue: React.FC<{ value?: unknown }> = () => null;
+
 interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client'> {
   tool: AgenticToolName;
   client: AgorClient | null;
+  /** Subject-authorized model catalog. Explicit null disables inline model selection. */
+  modelCatalogClient?: AgorClient | null;
   mcpServerById: Map<string, MCPServer>;
   fieldName?: string;
   /**
@@ -30,6 +35,8 @@ interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client
   defaultResolution?: 'save' | 'schedule-run';
   /** Current user — resolves "My default" and gates the save-as-default checkbox. */
   currentUser?: User | null;
+  /** False while a persisted configuration's execution owner is still hydrating. */
+  configurationOwnerResolved?: boolean;
   /** Render the MCP servers field inside the picker (default true). */
   renderMcpField?: boolean;
   /** Offer the "Save as my default" checkbox while inline config is active. */
@@ -67,18 +74,25 @@ export async function persistUserDefaultFromForm(
 export const AgenticToolConfigurationPicker: React.FC<Props> = ({
   tool,
   client,
+  modelCatalogClient,
   mcpServerById,
   fieldName = 'agenticToolPresetId',
   defaultResolution = 'save',
   currentUser,
+  configurationOwnerResolved = true,
   renderMcpField = true,
   enableSaveAsDefault = false,
   ...formProps
 }) => {
+  const resolvedModelCatalogClient = modelCatalogClient === undefined ? client : modelCatalogClient;
+  const catalogUnavailable = tool === 'opencode' && resolvedModelCatalogClient === null;
   const form = Form.useFormInstance();
   const selected = Form.useWatch(fieldName, form);
+  const modelConfig = Form.useWatch('modelConfig', form);
+  const permissionMode = Form.useWatch('permissionMode', form);
   const {
     inlineAllowed,
+    inlineSelectionAllowed,
     presets,
     loading,
     loaded,
@@ -88,12 +102,30 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
     preferredSource,
     sourceOptions,
     getSourceError,
-  } = useAgenticConfigurationSources({ tool, client, currentUser });
+  } = useAgenticConfigurationSources({
+    tool,
+    client,
+    currentUser,
+    allowInlineSelection: !catalogUnavailable,
+    preserveInlineSelection: catalogUnavailable && selected === INLINE_AGENTIC_CONFIGURATION,
+  });
+  const storedInlineSummary = summarizeAgenticConfiguration(tool, {
+    modelConfig,
+    permissionMode,
+  });
 
   useEffect(() => {
-    if (!loaded || isValidSource(selected)) return;
+    if (!configurationOwnerResolved || !loaded || isValidSource(selected)) return;
     form.setFieldValue(fieldName, preferredSource);
-  }, [fieldName, form, isValidSource, loaded, preferredSource, selected]);
+  }, [
+    configurationOwnerResolved,
+    fieldName,
+    form,
+    isValidSource,
+    loaded,
+    preferredSource,
+    selected,
+  ]);
 
   const configurationLabel = (
     <Space size={4}>
@@ -156,7 +188,31 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
         />
       )}
 
-      {!inlineAllowed && presets.length === 0 && loaded && (
+      {catalogUnavailable && (
+        <Alert
+          type="warning"
+          showIcon
+          title="OpenCode model selection is unavailable for this execution owner"
+          description={
+            selected === INLINE_AGENTIC_CONFIGURATION && inlineSelectionAllowed
+              ? `Stored configuration: ${storedInlineSummary || 'exact provider/model pair'}. It is read-only and will be preserved.`
+              : undefined
+          }
+        />
+      )}
+
+      {selected === INLINE_AGENTIC_CONFIGURATION && !inlineAllowed && inlineSelectionAllowed && (
+        <>
+          <Form.Item name="modelConfig" noStyle>
+            <PreservedFormValue />
+          </Form.Item>
+          <Form.Item name="permissionMode" noStyle>
+            <PreservedFormValue />
+          </Form.Item>
+        </>
+      )}
+
+      {!inlineAllowed && !inlineSelectionAllowed && presets.length === 0 && loaded && (
         <Alert type="error" showIcon title="No administrator-managed preset is available" />
       )}
 
@@ -186,9 +242,13 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
           />
         )}
 
-      {selected === INLINE_AGENTIC_CONFIGURATION && (
+      {selected === INLINE_AGENTIC_CONFIGURATION && inlineAllowed && (
         <>
-          <AgenticToolConfigForm agenticTool={tool} client={client} {...formProps} />
+          <AgenticToolConfigForm
+            agenticTool={tool}
+            client={resolvedModelCatalogClient}
+            {...formProps}
+          />
           {enableSaveAsDefault && currentUser && client && (
             <Form.Item
               name={SAVE_AS_DEFAULT_FIELD}

@@ -43,6 +43,21 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to. Real-time updates appear instantly for everyone watching the board.
 
+### Progressive tool discovery
+
+When `mcp_tool_search` is enabled (the default), `tools/list` intentionally
+returns only three stable facade tools:
+
+- `agor_search_tools` browses domains or searches concise tool summaries.
+- `agor_get_tool_details` returns the exact schema for one selected tool.
+- `agor_execute_tool` invokes the selected domain tool with validated arguments.
+
+The MCP `2026-07-28` revision adds `server/discover` for protocol capabilities
+and standard cache hints for tool lists. It does **not** replace Agor's semantic
+catalog search, domain filters, annotation filters, or detail-on-demand flow.
+Agor keeps those features while using the standard discovery response and
+private 60-second cache hints for its deterministic visible catalog.
+
 ## Self-Aware Agents Inside Agor
 
 When you launch a session in Agor, the SDK config includes the internal MCP server automatically:
@@ -89,13 +104,127 @@ HTTP(S) webhook URLs. See [Environments: webhook-only mode](/guide/environment-c
 
 ## External Agent Access
 
-External agents can use the same MCP endpoint:
+External clients connect to the same HTTP MCP endpoint. Use the hosted URL
+`https://<your-agor-host>/mcp`, or `http://<daemon-host>:3030/mcp` for a
+default self-hosted daemon. In Agor, open **User Settings → Personal API Keys**,
+create a key, copy it once, and store it in a password manager or your shell's
+secret-loading mechanism:
 
-1. Obtain an authenticated token (session token for scoped access today; broader API tokens are planned).
-2. Connect over HTTP/SSE to `http(s)://<daemon-host>:<port>/mcp`.
-3. Call the same tools internal agents use. No separate API surface required.
+```bash
+export AGOR_API_KEY='…'
+```
 
-This makes Agor a control plane for other AI systems, enabling remote triage bots, automation pipelines, or custom dashboards to work against live boards.
+Agor authenticates personal keys with the `X-API-Key` header. Never paste a
+real key into a command, committed config, issue, or chat transcript.
+
+### Claude Code
+
+This user-scoped registration works for the hosted sandbox:
+
+```bash
+claude mcp add -s user -t http agor-sandbox https://agor.sandbox.preset.zone/mcp \
+  -H 'X-API-Key: ${AGOR_API_KEY}'
+```
+
+The single quotes are important: your shell passes the placeholder rather than
+the secret. Claude Code stores `${AGOR_API_KEY}` in its user configuration and
+expands it when it loads the MCP server, so the variable must also exist in the
+environment that launches Claude Code. This exact behavior was verified with
+Claude Code's generated configuration; it also matches Anthropic's documented
+environment expansion for HTTP headers.
+
+Use `-s local` (the default) for private configuration in only the current
+project, or `-s project` only when the shareable `.mcp.json` contains the
+placeholder—not a secret. Check the registration with:
+
+```bash
+claude mcp get agor-sandbox
+```
+
+### Codex
+
+Codex supports environment-backed HTTP headers in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.agor]
+url = "https://agor.sandbox.preset.zone/mcp"
+env_http_headers = { "X-API-Key" = "AGOR_API_KEY" }
+```
+
+`env_http_headers` maps the header to an environment-variable **name**; do not
+use `http_headers` with the literal key. The global file is shared by Codex CLI,
+the IDE extension, and the Codex app. For one trusted repository, put the same
+table in `.codex/config.toml` instead. Restart the client after changing its
+environment or configuration, then use `/mcp` or `codex mcp list` to inspect
+the connection.
+
+### Optional session context
+
+An external personal API key identifies you but does not imply an Agor session.
+Most tools accept explicit IDs. To make current-session tools work, add
+`X-Agor-Session-Id: <session-id>` as another header. The session must be visible
+to your user. Do not copy Agor's short-lived internal session JWT into an
+external client; those tokens are injected automatically into sessions that
+Agor launches.
+
+That is the key distinction: **inside an Agor session**, the endpoint, scoped
+JWT, tenant, user, and session context are attached automatically. **From an
+external client**, you configure the endpoint and personal API key yourself,
+and session context is absent unless you add it.
+
+### Built-in transport contract
+
+Agor's built-in endpoint uses the stable TypeScript MCP SDK v2 in a dual-era,
+stateless request/response configuration:
+
+- Modern `2026-07-28` clients use the handshake-free per-request metadata
+  contract. They may call `server/discover`; ordinary RPC results are bounded
+  JSON and include standard cache hints where required.
+- Initialization-era clients through `2025-11-25` continue to use
+  `initialize` and `notifications/initialized`. The compatibility path may
+  return one bounded, request-scoped SSE response for a legacy request. It does
+  not create or retain a transport session.
+- Neither era receives `Mcp-Session-Id`. Agor does not retain a transport Map
+  or timer, open a standalone server event stream, or send transport-level
+  progress, logging, subscription, or tool-list-change notifications.
+- Authenticated `GET /mcp` and `DELETE /mcp` return `405 Method Not Allowed`
+  (requests still pass the normal authentication boundary first). Streamable
+  HTTP clients may optimistically try `GET`; compatible clients treat `405` as
+  the server declining that optional stream.
+- Authentication, trusted tenant identity, current user data, and optional
+  `X-Agor-Session-Id` access are reconstructed and authorized on every request.
+
+This contract applies only to Agor's built-in endpoint. MCP servers that users
+configure under **Settings → MCP Servers** remain separate external services;
+Agor still passes their configured stdio, Streamable HTTP, or legacy SSE
+transports directly to the selected executor.
+
+Version selection is protocol-driven rather than an Agor-specific client
+switch. V2 clients can probe with `server/discover` and select the modern era;
+older clients send `initialize` and are served by the stateless compatibility
+arm. Both paths use the same authenticated server factory and tool definitions.
+
+### Smoke test and troubleshooting
+
+Ask the client to call `agor_search_tools` with no arguments, then
+`agor_boards_list` with `{ "limit": 1 }`. A successful response should show
+tool domains and one accessible board page.
+
+- **401:** confirm `AGOR_API_KEY` exists in the environment that launched the
+  client, the header is exactly `X-API-Key`, and the key has not been revoked.
+  Re-register if the client stored a literal secret or an unexpanded shell
+  expression.
+- **Proxy or TLS errors:** verify the `/mcp` URL is reachable from the client,
+  configure its supported `HTTP_PROXY`/`HTTPS_PROXY` settings, and install your
+  organization's CA rather than disabling certificate verification.
+- **Unsupported transport or interpolation:** use Streamable HTTP (not stdio or
+  legacy SSE). If a client cannot resolve environment-backed custom headers,
+  use a supported secret store or a local proxy that injects the header; do not
+  commit the key as a static header.
+
+Client syntax is based on the current official
+[Claude Code MCP documentation](https://docs.anthropic.com/en/docs/claude-code/mcp)
+and [Codex MCP documentation](https://developers.openai.com/codex/mcp/).
 
 ### Multi-tenant authentication boundary
 
@@ -116,11 +245,10 @@ In hosted `required_from_auth` deployments:
 - If more than one tenant signal is present, all signals must agree. Missing or
   conflicting identity fails closed before tenant-owned authentication data is
   queried.
-- Streamable HTTP sessions retain their initialize-time tenant, user, and
-  optional Agor-session bindings. Every later GET, POST, or DELETE request is
-  re-authenticated. Tenant and user identity must still match; an optional
-  Agor-session binding may be omitted and reused, but cannot be added or
-  replaced, and is re-authorized before each request.
+- The built-in endpoint retains no transport context. Every POST resolves the
+  tenant, authenticates and reloads the user, and authorizes any optional Agor
+  Session independently. An `Mcp-Session-Id` is never a source of identity or
+  authority.
 
 Tenant identity is ambient for the MCP operation, but it does not hold a
 database transaction open. Individual service and repository calls use short

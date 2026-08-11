@@ -41,8 +41,10 @@ import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import Aurora from './Aurora/Aurora';
 import { HubSpotFormModal } from './HubSpotFormModal';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
+import { HERO_VARIANTS, type HeroVariantKey, HighlightedText } from './heroVariants';
 import styles from './LandingPage.module.css';
 import Orb from './Orb/Orb';
+import { useFitText } from './useFitText';
 
 const basePath = getBasePath();
 
@@ -310,8 +312,8 @@ const busItems: Array<{
   rippleDelays: number[];
 }> = [
   {
-    title: 'Open source & self-hosted',
-    desc: 'Your repos, your database, your infrastructure. Nobody’s moat but your own. BSL 1.1.',
+    title: 'Open & self-hosted',
+    desc: 'Your repos, your database, your infrastructure. Production use is permitted under BSL 1.1.',
     rippleSize: 10,
     rippleDelays: [0, 1500],
   },
@@ -545,9 +547,26 @@ const liveCards = [
   },
 ];
 
-export function LandingPage() {
+interface LandingPageProps {
+  /** Homepage hero A/B test arm — overrides headline/subhead/primary CTA
+   * only; every section below the hero (and "/" itself) stays identical so
+   * the test isolates the hero thesis. See heroVariants.tsx. */
+  heroVariant?: HeroVariantKey;
+}
+
+export function LandingPage({ heroVariant }: LandingPageProps = {}) {
+  const variant = heroVariant ? HERO_VARIANTS[heroVariant] : undefined;
+  const heroH1Ref = useFitText<HTMLHeadingElement>([variant?.headline]);
+  const heroH2Ref = useFitText<HTMLHeadingElement>([variant?.subheadline]);
   const landingRef = useRef<HTMLElement>(null);
   const [isBetaFormOpen, setIsBetaFormOpen] = useState(false);
+  // Which on-page CTA opened the (single, shared) beta form modal — stamped
+  // into the form's hidden source_page field for attribution.
+  const [betaCtaSource, setBetaCtaSource] = useState('landing-hero');
+  const openBetaForm = (source: string) => {
+    setBetaCtaSource(source);
+    setIsBetaFormOpen(true);
+  };
   const [isDemoFormOpen, setIsDemoFormOpen] = useState(false);
   const [activeShot, setActiveShot] = useState(0);
   const [activeSurface, setActiveSurface] = useState(0);
@@ -556,9 +575,8 @@ export function LandingPage() {
   const [radarInView, setRadarInView] = useState(false);
   const radarScopeRef = useRef<HTMLDivElement>(null);
   const [scrollySurface, setScrollySurface] = useState(0);
-  const scrollyWrapRef = useRef<HTMLDivElement>(null);
   const scrollyTrackRef = useRef<HTMLDivElement>(null);
-  const showcasePinRef = useRef<HTMLElement>(null);
+  const showcaseViewportRef = useRef<HTMLDivElement>(null);
   const slideVideoRefs = useRef<Array<HTMLVideoElement | null>>([]);
 
   // Showcase carousel playback gating: only the active slide's video plays;
@@ -604,9 +622,9 @@ export function LandingPage() {
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          // Very tall sections (e.g. the scroll-locked surface carousel) can
-          // never reach the 14% ratio in a phone viewport, so also reveal
-          // once the visible slice fills a third of the screen.
+          // Very tall sections can never reach the 14% ratio in a phone
+          // viewport, so also reveal once the visible slice fills a third
+          // of the screen.
           if (
             entry.isIntersecting &&
             (entry.intersectionRatio >= 0.14 ||
@@ -627,113 +645,87 @@ export function LandingPage() {
     return () => observer.disconnect();
   }, []);
 
-  // Scroll-locked surface carousel (phones): while .surfaceScrolly's tall
-  // wrapper crosses the viewport, its sticky stage pins and vertical scroll
-  // progress maps onto the track's horizontal position. Sticky + transform
-  // only — native scrolling is never intercepted, so flicking straight
-  // through remains possible. Desktop and reduced-motion phones never match
-  // the media query (CSS shows the pill explorer instead).
+  // Native swipe carousel (phones): .scrollyTrack is itself the horizontally
+  // scrollable element (CSS scroll-snap), so a flick moves it and vertical
+  // page scroll is never touched — no pinning, no artificial section height.
+  // This listener just keeps `scrollySurface` (status line, dots) in sync
+  // with wherever the user's swipe lands, debounced to the settle rather
+  // than firing on every scroll frame.
   useEffect(() => {
-    const wrap = scrollyWrapRef.current;
     const track = scrollyTrackRef.current;
-    if (!wrap || !track) {
+    if (!track) {
       return;
     }
 
-    const media = window.matchMedia(
-      '(max-width: 720px) and (prefers-reduced-motion: no-preference)'
-    );
-    const count = productPreviews.length;
-    let raf = 0;
+    const media = window.matchMedia('(max-width: 720px)');
+    let settleTimeout: ReturnType<typeof setTimeout> | undefined;
 
-    const update = () => {
-      raf = 0;
+    const onScroll = () => {
       if (!media.matches) {
-        track.style.transform = '';
         return;
       }
-      const rect = wrap.getBoundingClientRect();
-      const range = rect.height - window.innerHeight;
-      const progress = range > 0 ? Math.min(1, Math.max(0, -rect.top / range)) : 0;
-      // Dwell easing: each card parks flush for ~a third of its scroll
-      // segment before handing off, so pausing mid-scroll doesn't strand a
-      // card half off-screen.
-      const pos = progress * (count - 1);
-      const seg = Math.min(count - 2, Math.floor(pos));
-      const frac = pos - seg;
-      const dwell = 0.32;
-      const eased = seg + Math.min(1, Math.max(0, (frac - dwell / 2) / (1 - dwell)));
-      track.style.transform = `translateX(${(-eased * 100) / count}%)`;
-      setScrollySurface(Math.round(eased));
-    };
-    const schedule = () => {
-      if (!raf) {
-        raf = requestAnimationFrame(update);
-      }
+      clearTimeout(settleTimeout);
+      settleTimeout = setTimeout(() => {
+        const width = track.clientWidth;
+        if (!width) {
+          return;
+        }
+        const index = Math.round(track.scrollLeft / width);
+        setScrollySurface(Math.min(productPreviews.length - 1, Math.max(0, index)));
+      }, 100);
     };
 
-    update();
-    window.addEventListener('scroll', schedule, { passive: true });
-    window.addEventListener('resize', schedule);
-    media.addEventListener('change', schedule);
-
+    track.addEventListener('scroll', onScroll, { passive: true });
     return () => {
-      window.removeEventListener('scroll', schedule);
-      window.removeEventListener('resize', schedule);
-      media.removeEventListener('change', schedule);
-      if (raf) {
-        cancelAnimationFrame(raf);
-      }
+      track.removeEventListener('scroll', onScroll);
+      clearTimeout(settleTimeout);
     };
   }, []);
 
-  // Scroll-locked showcase carousel (phones): the pinned section's scroll
-  // progress simply drives setActiveShot, so the track's existing 550ms
-  // transition, tab highlighting, caption, and active-video play/pause
-  // gating stay on the exact same code path as tap navigation. Rounding to
-  // the nearest slide gives natural dwell plateaus between transitions.
+  // Same native-swipe treatment for the showcase reel, plus the reverse
+  // direction: the phone-only arrow buttons still call setActiveShot, so
+  // scroll the viewport to match whenever that state changes elsewhere.
   useEffect(() => {
-    const pin = showcasePinRef.current;
-    if (!pin) {
+    const viewport = showcaseViewportRef.current;
+    if (!viewport) {
       return;
     }
 
-    const media = window.matchMedia(
-      '(max-width: 720px) and (prefers-reduced-motion: no-preference)'
-    );
-    const count = showcaseSlides.length;
-    let raf = 0;
+    const media = window.matchMedia('(max-width: 720px)');
+    let settleTimeout: ReturnType<typeof setTimeout> | undefined;
 
-    const update = () => {
-      raf = 0;
+    const onScroll = () => {
       if (!media.matches) {
         return;
       }
-      const rect = pin.getBoundingClientRect();
-      const range = rect.height - window.innerHeight;
-      if (range <= 0) {
-        return;
-      }
-      const progress = Math.min(1, Math.max(0, -rect.top / range));
-      setActiveShot(Math.round(progress * (count - 1)));
-    };
-    const schedule = () => {
-      if (!raf) {
-        raf = requestAnimationFrame(update);
-      }
+      clearTimeout(settleTimeout);
+      settleTimeout = setTimeout(() => {
+        const width = viewport.clientWidth;
+        if (!width) {
+          return;
+        }
+        const index = Math.round(viewport.scrollLeft / width);
+        setActiveShot(Math.min(showcaseSlides.length - 1, Math.max(0, index)));
+      }, 100);
     };
 
-    window.addEventListener('scroll', schedule, { passive: true });
-    window.addEventListener('resize', schedule);
-
+    viewport.addEventListener('scroll', onScroll, { passive: true });
     return () => {
-      window.removeEventListener('scroll', schedule);
-      window.removeEventListener('resize', schedule);
-      if (raf) {
-        cancelAnimationFrame(raf);
-      }
+      viewport.removeEventListener('scroll', onScroll);
+      clearTimeout(settleTimeout);
     };
   }, []);
+
+  useEffect(() => {
+    const viewport = showcaseViewportRef.current;
+    if (!viewport || !window.matchMedia('(max-width: 720px)').matches) {
+      return;
+    }
+    const target = activeShot * viewport.clientWidth;
+    if (Math.abs(viewport.scrollLeft - target) > 2) {
+      viewport.scrollTo({ left: target, behavior: 'smooth' });
+    }
+  }, [activeShot]);
 
   // Phones show the radar detail card as a fixed bottom overlay; fade it in
   // only while the radar itself is on screen so it never floats over
@@ -782,17 +774,30 @@ export function LandingPage() {
         <section className={styles.heroSection}>
           <div className={styles.heroCopy} data-reveal>
             <p className={styles.heroBadge}>The command center for AI enablement</p>
-            <h1>
-              Empower your <span className={styles.headingStrong}>team</span> with{' '}
-              <span className={styles.headingAccent}>AI teammates</span>
+            <h1 ref={heroH1Ref} className={variant ? styles.heroForcedBreak : undefined}>
+              {variant ? (
+                <HighlightedText text={variant.headline} />
+              ) : (
+                <>
+                  Empower your <span className={styles.headingStrong}>team</span> with{' '}
+                  <span className={styles.headingAccent}>AI teammates</span>
+                </>
+              )}
             </h1>
+            {variant && (
+              <h2 ref={heroH2Ref} className={styles.heroForcedBreak}>
+                <HighlightedText text={variant.subheadline} />
+              </h2>
+            )}
             <div className={styles.heroActions}>
               <button
                 type="button"
                 className={styles.primaryButton}
-                onClick={() => setIsBetaFormOpen(true)}
+                onClick={() =>
+                  openBetaForm(variant ? `landing-hero-${heroVariant}` : 'landing-hero')
+                }
               >
-                Sign up for Agor Cloud
+                {variant ? variant.ctaLabel : 'Sign up for Agor Cloud'}
               </button>
               <Link href="/guide/getting-started" className={styles.secondaryButton}>
                 Install locally
@@ -849,7 +854,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.showcaseSection} data-reveal ref={showcasePinRef}>
+      <section className={styles.showcaseSection} data-reveal>
         {/* Section divider: the docs pages' mint aurora as a thin curtain
             hanging from the seam with the problem section. */}
         <div className={styles.showcaseDivider} aria-hidden="true">
@@ -905,11 +910,17 @@ export function LandingPage() {
             <span className={styles.scrollyStatusTitle}>{showcaseSlides[activeShot].label}</span>
           </div>
           <div className={styles.showcaseFrame}>
-            <div className={styles.showcaseViewport}>
-              {/* Track is 400% wide with 25% slides — keep in sync with showcaseSlides.length */}
+            <div className={styles.showcaseViewport} ref={showcaseViewportRef}>
+              {/* Track is 400% wide with 25% slides on desktop; phones scroll it
+                  natively instead (see .showcaseTrack's phone override). Keep
+                  the 25%/400% math in sync with showcaseSlides.length. */}
               <div
                 className={styles.showcaseTrack}
-                style={{ transform: `translateX(-${activeShot * 25}%)` }}
+                style={
+                  {
+                    '--showcase-transform': `translateX(-${activeShot * 25}%)`,
+                  } as CSSProperties
+                }
               >
                 {showcaseSlides.map((slide, index) => (
                   <div className={styles.showcaseSlide} key={slide.label}>
@@ -1118,10 +1129,12 @@ export function LandingPage() {
             <div className={styles.showcaseViewport}>
               <div
                 className={styles.showcaseTrack}
-                style={{
-                  width: `${productPreviews.length * 100}%`,
-                  transform: `translateX(-${activeSurface * (100 / productPreviews.length)}%)`,
-                }}
+                style={
+                  {
+                    width: `${productPreviews.length * 100}%`,
+                    '--showcase-transform': `translateX(-${activeSurface * (100 / productPreviews.length)}%)`,
+                  } as CSSProperties
+                }
               >
                 {productPreviews.map((preview, index) => (
                   <div
@@ -1178,15 +1191,10 @@ export function LandingPage() {
             </button>
           </div>
         </div>
-        {/* Phone treatment (Claude Design scroll-lock-carousel mock): the
-            stage pins while vertical scroll drives the cards sideways, then
-            hands scrolling back to the page. Heights are inline because they
-            depend on the surface count. */}
-        <div
-          className={styles.surfaceScrolly}
-          ref={scrollyWrapRef}
-          style={{ height: `calc(${productPreviews.length * 55}dvh + 100dvh)` }}
-        >
+        {/* Phone treatment: cards swipe natively via CSS scroll-snap on
+            .scrollyTrack — a normal-height section, so vertical page scroll
+            is never intercepted. */}
+        <div className={styles.surfaceScrolly}>
           <div className={styles.scrollySticky}>
             <div className={styles.scrollyStatus}>
               {/* Same treatment as the showcase status: numeric ornament is
@@ -1202,11 +1210,7 @@ export function LandingPage() {
                 {productPreviews[scrollySurface].title}
               </span>
             </div>
-            <div
-              className={styles.scrollyTrack}
-              ref={scrollyTrackRef}
-              style={{ width: `${productPreviews.length * 100}%` }}
-            >
+            <div className={styles.scrollyTrack} ref={scrollyTrackRef}>
               {productPreviews.map((preview) => (
                 <article
                   key={preview.title}
@@ -1297,7 +1301,7 @@ export function LandingPage() {
                     <button
                       type="button"
                       className={styles.busBetaLink}
-                      onClick={() => setIsBetaFormOpen(true)}
+                      onClick={() => openBetaForm('landing-bus-item')}
                     >
                       Register for the Agor Cloud beta
                     </button>
@@ -1489,14 +1493,14 @@ export function LandingPage() {
             <span className={styles.headingStrong}>work</span>
           </h2>
           <p>
-            Onboard your first AI teammate via open-source build, or reach out to build at
+            Onboard your first AI teammate via the self-hosted build, or reach out to build at
             enterprise-ready scale. Agor Cloud is opening to teams now.
           </p>
           <div className={styles.heroActions}>
             <button
               type="button"
               className={styles.primaryButton}
-              onClick={() => setIsBetaFormOpen(true)}
+              onClick={() => openBetaForm('landing-final-cta')}
             >
               Sign up for Agor Cloud
             </button>
@@ -1522,9 +1526,9 @@ export function LandingPage() {
           <div>
             <strong>agor</strong>
             <p>The command center for AI enablement.</p>
-            <p className={styles.footerEtymology}>
+            <Link href="/blog/making-of-agor" className={styles.footerEtymology}>
               <span>AG</span>ent <span>OR</span>chestration
-            </p>
+            </Link>
           </div>
         </div>
         <div className={styles.footerLinks}>
@@ -1552,7 +1556,7 @@ export function LandingPage() {
             <button
               type="button"
               className={styles.footerLinkButton}
-              onClick={() => setIsBetaFormOpen(true)}
+              onClick={() => openBetaForm('landing-footer')}
             >
               Sign up for Agor Cloud
             </button>
@@ -1584,6 +1588,7 @@ export function LandingPage() {
         isOpen={isBetaFormOpen}
         onClose={() => setIsBetaFormOpen(false)}
         title="Join the Agor Cloud private beta"
+        sourceCta={betaCtaSource}
       />
       <HubSpotMeetingModal isOpen={isDemoFormOpen} onClose={() => setIsDemoFormOpen(false)} />
     </main>

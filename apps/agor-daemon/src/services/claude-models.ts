@@ -13,11 +13,7 @@ import {
   shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import {
-  AVAILABLE_CLAUDE_MODEL_ALIASES,
-  DEFAULT_CLAUDE_MODEL,
-  hasNativeMillionContext,
-} from '@agor/core/models';
+import { AVAILABLE_CLAUDE_MODEL_ALIASES, DEFAULT_CLAUDE_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -59,34 +55,35 @@ function isAlias(id: string): boolean {
   return /^claude-[a-z]+-\d+(?:-\d+)?$/.test(id);
 }
 
-const CONTEXT_1M_BETA = 'context-1m-2025-08-07';
-const ONE_MILLION_TOKENS = 900_000; // threshold to detect 1M-eligible models
-
 /**
- * Build the option list from the API response. Models whose
- * `max_input_tokens` >= 900k (when fetched with the 1M beta flag) get a
- * `[1m]` variant — no static allowlist required.
+ * Build the option list from the API response. The Models API describes API
+ * model capacity, not Claude Code's selectable standard/extended variants.
+ * For known aliases, use the audited Claude Code registry so the distinct
+ * persisted `[1m]` choices are retained. Unknown API aliases remain selectable
+ * without inventing a context size or unsupported suffix.
  */
-function toModelOptions(models: Anthropic.ModelInfo[]): ClaudeModelOption[] {
+export function toModelOptions(models: Anthropic.ModelInfo[]): ClaudeModelOption[] {
   const aliases = models.filter((m) => isAlias(m.id));
 
   const options: ClaudeModelOption[] = [];
   for (const m of aliases) {
-    options.push({
-      id: m.id,
-      displayName: m.display_name,
-      description: undefined,
-      source: 'dynamic',
-    });
-    if (
-      m.max_input_tokens &&
-      m.max_input_tokens >= ONE_MILLION_TOKENS &&
-      !hasNativeMillionContext(m.id)
-    ) {
+    const registered = AVAILABLE_CLAUDE_MODEL_ALIASES.filter(
+      (candidate) => candidate.id.replace(/\[1m\]$/, '') === m.id
+    );
+    if (registered.length > 0) {
+      options.push(
+        ...registered.map((candidate) => ({
+          id: candidate.id,
+          displayName: candidate.displayName,
+          description: candidate.description,
+          source: 'dynamic' as const,
+        }))
+      );
+    } else {
       options.push({
-        id: `${m.id}[1m]`,
-        displayName: `${m.display_name} (1M context)`,
-        description: `${m.display_name} with extended 1M token context window`,
+        id: m.id,
+        displayName: m.display_name,
+        description: undefined,
         source: 'dynamic',
       });
     }
@@ -139,10 +136,8 @@ export class ClaudeModelsService {
         baseURL: (resolution.connection as { ANTHROPIC_BASE_URL?: string } | undefined)
           ?.ANTHROPIC_BASE_URL,
       });
-      // Pass the 1M beta so eligible models report their extended
-      // max_input_tokens — used to derive [1m] variants dynamically.
       const page = await withTimeout(
-        client.models.list({ limit: 100, betas: [CONTEXT_1M_BETA] }),
+        client.models.list({ limit: 100 }),
         CLAUDE_MODELS_TIMEOUT_MS,
         'Anthropic models.list() timed out'
       );

@@ -23,7 +23,6 @@ import type {
   Branch,
   CardType,
   CardWithType,
-  MCPServer,
   Repo,
   Session,
   User,
@@ -43,7 +42,6 @@ import {
   buildById,
   buildSessionMaps,
   buildSessionMcpMap,
-  replaceIfChanged,
 } from '../store/agorMaps';
 import * as realtime from '../store/agorRealtimeActions';
 import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
@@ -55,6 +53,7 @@ import {
   untombstoneSession,
 } from '../store/realtimeBatch';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
+import { refetchMCPOAuthDurableState } from '../utils/mcpOAuthAttempt';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import {
   resolveBoardFromUrlPure,
@@ -352,13 +351,17 @@ export function useAgorData(
         // gate ignores them. We apply through the store's `applyMaps` (not the
         // per-entity setters), keeping fetchData's deps stable so the subscribe
         // effect doesn't re-fire.
-        void client
-          .service('agentic-tool-settings')
-          .findAll()
-          .then((settings) => agorStore.getState().setAgenticToolSettings(settings))
-          .catch((settingsError) =>
-            console.error('Failed to load workspace agentic-tool settings:', settingsError)
-          );
+        // Route the full snapshot through the shared skip-apply-on-race / generation
+        // lifecycle (like mcp-servers / gateway-channels) so an older snapshot can't
+        // clobber a newer realtime upsert, and a fetch resolving after logout is
+        // dropped instead of repopulating the previous tenant. The apply sets the
+        // hydration gate, so it only flips once a quiet, current snapshot lands.
+        void runHydration(
+          'agentic-tool-settings',
+          ['agenticToolSettings'],
+          () => client.service('agentic-tool-settings').findAll(),
+          (settings) => agorStore.getState().setAgenticToolSettings(settings)
+        );
 
         void runHydration(
           'mcp-servers',
@@ -1185,17 +1188,19 @@ export function useAgorData(
     usersService.on('removed', realtime.userRemoved);
 
     const agenticToolSettingsService = client.service('agentic-tool-settings');
+    // A single-row realtime event is an INCREMENTAL upsert, not a complete
+    // snapshot — merge the row without flipping the hydration gate, so a patch
+    // that lands before the full fetch can't mark a partial map authoritative.
     const agenticToolSettingsPatched = (
       updated: import('@agor-live/client').TenantAgenticToolSettings
     ) => {
-      const current = agorStore.getState().agenticToolSettingsByName;
-      agorStore
-        .getState()
-        .setAgenticToolSettings(
-          [...current.values()].filter((item) => item.tool !== updated.tool).concat(updated)
-        );
+      // Bump the live-write revision so a background full-fetch that raced this
+      // upsert discards its (now-stale) snapshot instead of overwriting it.
+      bumpRevision('agenticToolSettings');
+      agorStore.getState().upsertAgenticToolSetting(updated);
     };
     agenticToolSettingsService.on('patched', agenticToolSettingsPatched);
+    agenticToolSettingsService.on('created', agenticToolSettingsPatched);
 
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
@@ -1259,94 +1264,36 @@ export function useAgorData(
     commentsService.on('updated', realtime.commentPatched);
     commentsService.on('removed', realtime.commentRemoved);
 
-    // Listen for OAuth completion events to update per-user token state in real-time.
-    // Only update the per-user set when oauth_mode is 'per_user' (or unset, which defaults
-    // to per_user). Shared-mode completions update the server record itself and don't need
-    // per-user tracking — and shared events ARE broadcast to all sockets on purpose, since
-    // every tab needs to refetch. Per-user events are scoped to the originating socket or
-    // the user's per-user room on the daemon side (see register-services.ts oauth callback),
-    // so we never receive another user's per_user completion here.
+    // Realtime OAuth events are latency hints only. Correctness comes from
+    // refetching the durable, authenticated token status and server record;
+    // events can be missed during reconnects or handled by another daemon.
     const handleOAuthCompleted = async (event: {
-      state: string;
+      attempt_id?: string;
       success: boolean;
       mcp_server_id?: string;
       oauth_mode?: string;
     }) => {
       if (!event.success || !event.mcp_server_id) return;
-      bumpRevision('oauth');
-      const mode = event.oauth_mode || 'per_user';
-      if (mode === 'per_user') {
-        agorStore.getState().setMap('userAuthenticatedMcpServerIds', (prev) => {
-          if (prev.has(event.mcp_server_id!)) return prev;
-          const next = new Set(prev);
-          next.add(event.mcp_server_id!);
-          return next;
-        });
-      }
-
-      // Refetch the server so the daemon's `injectPerUserOAuthTokens` find-hook
-      // re-hydrates `auth.oauth_access_token` / `oauth_token_expires_at` from the
-      // freshly-persisted token row. Without this, `mcpServerById` keeps the stale
-      // (often-expired) auth fields and `mcpServerNeedsAuth` keeps returning true —
-      // chip stays orange and the above-prompt auth banner stays up until the user
-      // reloads. The hook is registered for both `find` and `get` (see
-      // `apps/agor-daemon/src/register-hooks.ts`), so a single `get` is enough.
       try {
-        const fresh = (await client.service('mcp-servers').get(event.mcp_server_id)) as MCPServer;
+        await refetchMCPOAuthDurableState(client, event.mcp_server_id);
+        bumpRevision('oauth');
         bumpRevision('mcpServers');
-        agorStore
-          .getState()
-          .setMap('mcpServerById', (prev) => replaceIfChanged(prev, fresh.mcp_server_id, fresh));
       } catch (err) {
-        console.warn('[OAuth] Failed to refetch MCP server after re-auth:', err);
+        console.warn('[OAuth] Failed to refetch durable state after re-auth:', err);
       }
     };
     client.io.on('oauth:completed', handleOAuthCompleted);
 
-    // Mirror of `oauth:completed`: when a user disconnects OAuth from Settings,
-    // the daemon emits `oauth:disconnected` so every tab flips the pill to
-    // "needs auth" immediately instead of staying purple until the next page
-    // reload.
+    // Disconnect follows the same durable-refetch rule; do not optimistically
+    // mutate token state based only on a best-effort realtime event.
     const handleOAuthDisconnected = async (event: { mcp_server_id: string }) => {
       if (!event.mcp_server_id) return;
-      bumpRevision('oauth');
-      bumpRevision('mcpServers');
-      agorStore.getState().setMap('userAuthenticatedMcpServerIds', (prev) => {
-        if (!prev.has(event.mcp_server_id)) return prev;
-        const next = new Set(prev);
-        next.delete(event.mcp_server_id);
-        return next;
-      });
-
-      // Optimistically strip the token from the local server object so
-      // `mcpServerNeedsAuth` flips to true immediately. Without this, the
-      // stale `oauth_access_token` in mcpServerById short-circuits the
-      // `userAuthenticatedMcpServerIds` check — and for tokens with no
-      // expiry (e.g. Notion), `isExpired` is always false, so the pill
-      // stays purple forever even though the Set was updated above.
-      agorStore.getState().setMap('mcpServerById', (prev) => {
-        const existing = prev.get(event.mcp_server_id);
-        if (!existing?.auth?.oauth_access_token) return prev;
-        const next = new Map(prev);
-        next.set(event.mcp_server_id, {
-          ...existing,
-          auth: {
-            ...existing.auth,
-            oauth_access_token: undefined,
-            oauth_token_expires_at: undefined,
-          },
-        });
-        return next;
-      });
-
-      // Still refetch to get the canonical server state from the daemon.
       try {
-        const fresh = (await client.service('mcp-servers').get(event.mcp_server_id)) as MCPServer;
-        agorStore
-          .getState()
-          .setMap('mcpServerById', (prev) => replaceIfChanged(prev, fresh.mcp_server_id, fresh));
+        await refetchMCPOAuthDurableState(client, event.mcp_server_id);
+        bumpRevision('oauth');
+        bumpRevision('mcpServers');
       } catch (err) {
-        console.warn('[OAuth] Failed to refetch MCP server after disconnect:', err);
+        console.warn('[OAuth] Failed to refetch durable state after disconnect:', err);
       }
     };
     client.io.on('oauth:disconnected', handleOAuthDisconnected);
@@ -1441,6 +1388,7 @@ export function useAgorData(
       usersService.removeListener('removed', realtime.userRemoved);
 
       agenticToolSettingsService.removeListener('patched', agenticToolSettingsPatched);
+      agenticToolSettingsService.removeListener('created', agenticToolSettingsPatched);
 
       mcpServersService.removeListener('created', realtime.mcpServerCreated);
       mcpServersService.removeListener('patched', realtime.mcpServerPatched);

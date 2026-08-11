@@ -119,9 +119,13 @@ describe('SchedulesService default configuration references', () => {
         params(creator)
       );
 
-      expect(created.agentic_tool_config).toEqual({
+      expect(created.agentic_tool_config).toMatchObject({
         agentic_tool: 'codex',
         configuration_reference: expected,
+        model_config: expect.objectContaining({
+          mode: expect.any(String),
+          model: expect.any(String),
+        }),
       });
     });
   }
@@ -187,6 +191,55 @@ describe('SchedulesService default configuration references', () => {
         params(creator)
       )
     ).rejects.toBeInstanceOf(BadRequest);
+  });
+
+  dbTest('rejects an incomplete inline OpenCode pair before persistence', async ({ db }) => {
+    const { creator, branch } = await setupContext(db);
+    const service = new SchedulesService(db);
+
+    await expect(
+      service.create(
+        scheduleData(branch.branch_id, {
+          agentic_tool: 'opencode',
+          model_config: { mode: 'exact', provider: 'openai', model: '' },
+        }),
+        params(creator)
+      )
+    ).rejects.toThrow(/provider and model/i);
+    expect(await new ScheduleRepository(db).findAll()).toHaveLength(0);
+  });
+
+  dbTest('resolves the exact OpenCode pair from the schedule creator', async ({ db }) => {
+    const { branch } = await setupContext(db);
+    const creator = await new UsersRepository(db).create({
+      email: `opencode-schedule-${generateId()}@example.com`,
+      name: 'OpenCode schedule creator',
+      default_agentic_config: {
+        opencode: {
+          modelConfig: {
+            mode: 'exact',
+            provider: 'openai',
+            model: 'gpt-test',
+          },
+        },
+      },
+    });
+    const service = new SchedulesService(db);
+
+    const created = await service.create(
+      scheduleData(branch.branch_id, { agentic_tool: 'opencode' }),
+      params(creator)
+    );
+
+    expect(created.agentic_tool_config).toMatchObject({
+      agentic_tool: 'opencode',
+      model_config: {
+        mode: 'exact',
+        provider: 'openai',
+        model: 'gpt-test',
+        updated_at: expect.any(String),
+      },
+    });
   });
 
   dbTest('rejects multi-patch of a configuration source', async ({ db }) => {

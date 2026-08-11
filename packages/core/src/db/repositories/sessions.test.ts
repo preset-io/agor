@@ -28,11 +28,6 @@ function createSessionData(overrides?: Partial<Session>): Partial<Session> {
     agentic_tool: overrides?.agentic_tool ?? 'claude-code',
     status: overrides?.status ?? SessionStatus.IDLE,
     created_by: overrides?.created_by ?? 'test-user',
-    git_state: overrides?.git_state ?? {
-      ref: 'main',
-      base_sha: 'abc123',
-      current_sha: 'def456',
-    },
     tasks: overrides?.tasks ?? [],
     contextFiles: overrides?.contextFiles ?? [],
     genealogy: overrides?.genealogy ?? {
@@ -99,15 +94,11 @@ function createPostgresStyleSessionRow(overrides?: Partial<SessionRow> & { tenan
     scheduled_run_at: null,
     scheduled_from_branch: false,
     schedule_id: null,
+    scheduler_init_completed_at: null,
     ready_for_prompt: false,
     archived: false,
     archived_reason: null,
     data: {
-      git_state: {
-        ref: 'main',
-        base_sha: 'abc123',
-        current_sha: 'def456',
-      },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -136,6 +127,20 @@ describe('SessionRepository row mapping', () => {
     expect(Object.keys(session)).not.toContain('tenant_id');
     expect(JSON.stringify(session)).not.toContain('tenant_id');
   });
+
+  it('does not expose legacy session-level git_state JSON', () => {
+    const repo = new SessionRepository({} as never);
+    const row = createPostgresStyleSessionRow({
+      data: {
+        genealogy: { children: [] },
+        contextFiles: [],
+        tasks: [],
+        git_state: { ref: 'main', base_sha: 'old', current_sha: 'old' },
+      } as SessionRow['data'],
+    });
+
+    expect(rowToSessionForTest(repo, row)).not.toHaveProperty('git_state');
+  });
 });
 
 // ============================================================================
@@ -162,11 +167,6 @@ describe('SessionRepository.create', () => {
     expect(created.description).toBe('Test description');
     expect(created.created_at).toBeDefined();
     expect(created.last_updated).toBeDefined();
-    expect(created.git_state).toEqual({
-      ref: 'main',
-      base_sha: 'abc123',
-      current_sha: 'def456',
-    });
   });
 
   dbTest('should generate session_id if not provided', async ({ db }) => {
@@ -975,21 +975,11 @@ describe('SessionRepository.update', () => {
         mode: 'bypassPermissions',
       },
       tasks: [task1, task2],
-      git_state: {
-        ref: 'feature-branch',
-        base_sha: 'xyz789',
-        current_sha: 'uvw456',
-      },
       custom_context: { foo: 'baz', newField: 123 },
     });
 
     expect(updated.permission_config?.mode).toBe('bypassPermissions');
     expect(updated.tasks).toEqual([task1, task2]);
-    expect(updated.git_state).toEqual({
-      ref: 'feature-branch',
-      base_sha: 'xyz789',
-      current_sha: 'uvw456',
-    });
     expect(updated.custom_context).toEqual({ foo: 'baz', newField: 123 });
   });
 
@@ -1361,6 +1351,87 @@ describe('SessionRepository schedule-link queries', () => {
     const found = await repo.findScheduleRun(scheduleId, 1_700_000_000_000);
     expect(found).toBeNull();
   });
+
+  dbTest(
+    'discovers and idempotently completes pending scheduled initialization',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const scheduleId = await createTestSchedule(db, branch.branch_id);
+      const created = await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_000,
+          scheduled_from_branch: true,
+        })
+      );
+      await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_001,
+          scheduled_from_branch: true,
+        })
+      );
+
+      const firstPage = await repo.findIncompleteScheduledRefs(1);
+      const secondPage = await repo.findIncompleteScheduledRefs(1, firstPage[0]);
+      expect(firstPage).toHaveLength(1);
+      expect(secondPage).toHaveLength(1);
+      expect(secondPage[0].session_id).not.toBe(firstPage[0].session_id);
+
+      expect((await repo.findIncompleteScheduledRefs(10)).map((ref) => ref.session_id)).toContain(
+        created.session_id
+      );
+      expect(await repo.isScheduledInitializationComplete(created.session_id)).toBe(false);
+      expect(await repo.markScheduledInitializationComplete(created.session_id)).toBe(true);
+      expect(await repo.markScheduledInitializationComplete(created.session_id)).toBe(false);
+      expect(await repo.isScheduledInitializationComplete(created.session_id)).toBe(true);
+      expect(
+        (await repo.findIncompleteScheduledRefs(10)).map((ref) => ref.session_id)
+      ).not.toContain(created.session_id);
+    }
+  );
+
+  dbTest(
+    'keeps incomplete scheduled Sessions discoverable after schedule deletion',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const scheduleId = await createTestSchedule(db, branch.branch_id);
+      const created = await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_000,
+          scheduled_from_branch: true,
+          custom_context: {
+            scheduled_run: {
+              rendered_prompt: 'durable prompt',
+              run_index: 1,
+              schedule_config_snapshot: {
+                schedule_id: scheduleId,
+                cron: '0 * * * *',
+                timezone: 'UTC',
+                retention: 1,
+                mcp_server_ids: [],
+              },
+            },
+          },
+        })
+      );
+
+      await new ScheduleRepository(db).delete(scheduleId);
+
+      expect((await repo.findById(created.session_id))?.schedule_id).toBeUndefined();
+      const pending = await repo.findIncompleteScheduledRefs(10);
+      expect(pending.find((ref) => ref.session_id === created.session_id)).toMatchObject({
+        session_id: created.session_id,
+        scheduled_run_at: 1_700_000_000_000,
+      });
+    }
+  );
 
   dbTest('findScheduleRun does not match a different scheduled_run_at', async ({ db }) => {
     const repo = new SessionRepository(db);

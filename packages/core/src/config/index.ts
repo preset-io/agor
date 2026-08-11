@@ -5,14 +5,15 @@
  */
 
 export * from './agentic-tool-preset-resolver';
-export * from './agor-yml';
 export * from './config-manager';
 export * from './constants';
+export * from './deployment';
 export * from './env-blocklist';
 export * from './env-locking';
 export * from './env-resolver';
 export * from './env-validation';
 export * from './env-vars';
+export * from './executor-credential-storage';
 export * from './executor-heartbeat';
 export * from './key-resolver';
 export * from './multitenancy';
@@ -37,6 +38,7 @@ export {
   SANDPACK_CSP_FRAME_SRC,
   SANDPACK_CSP_WORKER_SRC,
 } from './security-resolver';
+export * from './storage-layout';
 export * from './tenant-agentic-tool-resolver';
 export * from './types';
 export * from './variant-resolver';

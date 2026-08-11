@@ -41,7 +41,7 @@ on:
   workflow_call:
 
 env:
-  PNPM_VERSION: '11.13.0'
+  PNPM_VERSION: '11.17.0'
   NODE_VERSION: '22'
 
 jobs:
@@ -56,7 +56,7 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -121,6 +121,33 @@ jobs:
           fi
           echo "✓ No workspace:* refs in packed manifest"
 
+      # Recreate the published install shape before @agor-live/client@0.24.0
+      # exists on npm. Installing both tarballs as top-level packages produces
+      # a different, much larger tree, so rewrite only the smoke tarball's
+      # client edge to the local artifact and exercise a cold global prefix.
+      - name: Cold-cache global install with macOS-style file limit
+        run: |
+          set -euo pipefail
+          CLIENT="${{ steps.pack.outputs.client }}"
+          LIVE="${{ steps.pack.outputs.live }}"
+          ROOT="$RUNNER_TEMP/global-smoke"
+          mkdir -p "$ROOT/repack" "$ROOT/prefix" "$ROOT/cache"
+          tar -xzf "$LIVE" -C "$ROOT/repack"
+          node - "$ROOT/repack/package/package.json" "$CLIENT" <<'NODE'
+          const fs = require('node:fs');
+          const [manifestPath, clientTarball] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          manifest.dependencies['@agor-live/client'] = `file:${clientTarball}`;
+          fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+          LOCAL_LIVE=$(cd "$ROOT/repack/package" && npm pack --pack-destination "$ROOT" --silent)
+          (
+            ulimit -n 256
+            npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+              --no-fund --no-audit "$ROOT/$LOCAL_LIVE"
+          )
+          "$ROOT/prefix/bin/agor" doctor --json >/dev/null
+
       # Install BOTH tarballs together. List the client first so npm registers
       # it before resolving agor-live's "@agor-live/client" dep — guarantees
       # the local file: source wins over the (non-existent) registry version.
@@ -154,7 +181,11 @@ jobs:
           cat > "$HOME/.agor/config.yaml" <<'EOF'
           daemon:
             port: 3030
+          agentic_tools:
+            installed: []
           EOF
+          export AGOR_JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          export AGOR_MASTER_SECRET=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
           BIN="$RUNNER_TEMP/smoke-install/node_modules/agor-live/bin"
           cd "$RUNNER_TEMP/smoke-install"
 
@@ -205,6 +236,8 @@ jobs:
             echo "::error::/ui/ JS asset response is invalid (${SIZE} bytes, ${CTYPE}) — static serving broken"
             exit 1
           fi
+          curl -fsS http://localhost:3030/docs.json -o /tmp/agor-openapi.json
+          node "$GITHUB_WORKSPACE/scripts/check-openapi-snapshot.mjs" /tmp/agor-openapi.json
           echo "✓ Smoke test passed"
 
       - name: Stop daemon

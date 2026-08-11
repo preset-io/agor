@@ -18,15 +18,19 @@
  * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
-import { TaskStatus } from '@agor/core/types';
+import { type HookContext, TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
+
 import {
+  CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
   protectExternalTaskCreate,
   protectServerManagedTaskWrites,
+  type RegisterHooksContext,
+  registerHooks,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
@@ -46,7 +50,6 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     tasks: [],
     genealogy: { children: [] },
     contextFiles: [],
-    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
     scheduled_from_branch: false,
     ready_for_prompt: false,
     archived: false,
@@ -140,26 +143,23 @@ describe('protectServerManagedTaskWrites', () => {
     ).rejects.toThrow('executor token scoped to this task');
   });
 
-  it.each([
-    'task_id',
-    'session_id',
-    'created_by',
-    'queue_position',
-    'sdk_failure',
-  ])('rejects executor patch field %s outside the result allowlist', async (field) => {
-    await expect(
-      protectServerManagedTaskWrites(
-        externalContext(
-          'patch',
-          { [field]: 'forged' },
-          {
-            taskId: 'task-1',
-            executorTaskId: 'task-1',
-          }
+  it.each(['task_id', 'session_id', 'created_by', 'queue_position', 'sdk_failure'])(
+    'rejects executor patch field %s outside the result allowlist',
+    async (field) => {
+      await expect(
+        protectServerManagedTaskWrites(
+          externalContext(
+            'patch',
+            { [field]: 'forged' },
+            {
+              taskId: 'task-1',
+              executorTaskId: 'task-1',
+            }
+          )
         )
-      )
-    ).rejects.toThrow('not executor-managed');
-  });
+      ).rejects.toThrow('not executor-managed');
+    }
+  );
 
   it('allows a task-scoped executor to publish bounded result fields', async () => {
     await expect(
@@ -181,21 +181,21 @@ describe('protectServerManagedTaskWrites', () => {
     ).resolves.toBeDefined();
   });
 
-  it.each([
-    TaskStatus.AWAITING_PERMISSION,
-    TaskStatus.AWAITING_INPUT,
-  ])('allows a scoped executor to request resume from %s', async () => {
-    const context = externalContext(
-      'patch',
-      { status: TaskStatus.RUNNING },
-      {
-        taskId: 'task-1',
-        executorTaskId: 'task-1',
-      }
-    );
+  it.each([TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT])(
+    'allows a scoped executor to request resume from %s',
+    async () => {
+      const context = externalContext(
+        'patch',
+        { status: TaskStatus.RUNNING },
+        {
+          taskId: 'task-1',
+          executorTaskId: 'task-1',
+        }
+      );
 
-    await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
-  });
+      await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+    }
+  );
 
   it('preserves trusted internal direct-to-running task writes', async () => {
     const context = externalContext('patch', {
@@ -217,6 +217,94 @@ describe('protectServerManagedTaskWrites', () => {
 });
 
 describe('tenant-owned service registration', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = {
+    before?: Partial<Record<'all' | 'create', RegisteredHook[]>>;
+  };
+
+  const captureScheduleRegistrations = (): RegisteredHooks[] => {
+    const registrations: RegisteredHooks[] = [];
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: RegisteredHooks) {
+            if (path.replace(/^\//, '') === 'schedules') registrations.push(hooks);
+          },
+        };
+      },
+      use() {},
+      publish() {},
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      branchRbacEnabled: false,
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+
+    return registrations;
+  };
+
+  const runRegisteredScheduleCreateBeforeHooks = async (
+    registrations: RegisteredHooks[]
+  ): Promise<HookContext> => {
+    const context = {
+      path: 'schedules',
+      method: 'create',
+      data: {
+        branch_id: '00000000-0000-7000-8000-000000000001',
+        name: 'Nightly',
+        cron_expression: '0 0 * * *',
+        timezone_mode: 'utc',
+        prompt: 'Run',
+        agentic_tool_config: { agentic_tool: 'codex' },
+      },
+      params: {
+        provider: 'rest',
+        user: { user_id: 'registration-test-user', role: 'member' },
+      },
+    } as HookContext;
+
+    for (const registration of registrations) {
+      for (const hook of registration.before?.all ?? []) {
+        await hook(context);
+      }
+    }
+
+    for (const registration of registrations) {
+      for (const hook of registration.before?.create ?? []) {
+        await hook(context);
+      }
+    }
+
+    return context;
+  };
+
+  it('keeps schedule create DTOs valid through the registered tenant hook', async () => {
+    const context = await runRegisteredScheduleCreateBeforeHooks(captureScheduleRegistrations());
+
+    expect(context.params.tenant?.tenant_id).toBe('registration-test');
+    expect(context.data).toMatchObject({
+      created_by: 'registration-test-user',
+      next_run_at: expect.any(Number),
+    });
+    expect(context.data).not.toHaveProperty('tenant_id');
+  });
+
   it('wraps gateway inbound routing in tenant database scope', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
   });
@@ -227,20 +315,25 @@ describe('tenant-owned service registration', () => {
     );
   });
 
-  it('wraps MCP OAuth/session helper services in tenant database scope', () => {
+  it('wraps MCP OAuth/session database helpers in tenant scope without holding network I/O open', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining([
         'sessions/:id/mcp-servers',
-        'mcp-servers/discover',
-        'mcp-servers/oauth-auth-headers',
-        'mcp-servers/oauth-complete',
+        'mcp-servers/oauth-attempt-status',
         'mcp-servers/oauth-disconnect',
-        'mcp-servers/oauth-refresh',
-        'mcp-servers/oauth-start',
         'mcp-servers/oauth-status',
-        'mcp-servers/test-oauth',
       ])
     );
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toEqual(
+      expect.arrayContaining(['mcp-servers/oauth-auth-headers', 'mcp-servers/oauth-refresh'])
+    );
+  });
+
+  it('fails closed for discovery that can enter the process-local MCP OAuth flow in HA', () => {
+    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
+      'mcp-servers/discover',
+      'mcpOAuth',
+    ]);
   });
 
   it('wraps Knowledge policy and indexing admin services in tenant database scope', () => {
@@ -386,11 +479,12 @@ describe('enrichSessionFindResultWithRemoteRelationships', () => {
 
 describe('isPromptFlowPatchOnly', () => {
   describe('accepts whitelisted-only patches', () => {
-    it.each(
-      PROMPT_FLOW_PATCH_FIELDS.map((f) => [f])
-    )('accepts single whitelisted field: %s', (field) => {
-      expect(isPromptFlowPatchOnly({ [field]: 'any-value' })).toBe(true);
-    });
+    it.each(PROMPT_FLOW_PATCH_FIELDS.map((f) => [f]))(
+      'accepts single whitelisted field: %s',
+      (field) => {
+        expect(isPromptFlowPatchOnly({ [field]: 'any-value' })).toBe(true);
+      }
+    );
 
     it('accepts the prompt-route task-append shape', () => {
       // register-routes.ts: /sessions/:id/prompt appends task_id to session.tasks
@@ -406,13 +500,6 @@ describe('isPromptFlowPatchOnly', () => {
       // register-routes.ts: /sessions/:id/stop sets status + ready_for_prompt
       // (ready_for_prompt: true so the post-patch hook drains any QUEUED tasks)
       expect(isPromptFlowPatchOnly({ status: 'idle', ready_for_prompt: true })).toBe(true);
-    });
-
-    it('accepts the executor git-SHA capture shape', () => {
-      // packages/executor/src/handlers/sdk/base-executor.ts patches current SHA
-      expect(isPromptFlowPatchOnly({ git_state: { current_sha: 'deadbeef', ref: 'main' } })).toBe(
-        true
-      );
     });
 
     it('accepts the executor opencode init shape', () => {
@@ -544,18 +631,27 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
   // around hook. codex-auth/logout was missing here, so `Remove login` ran with
   // no active tenant scope and threw "Missing active tenant context for Codex
   // auth logout" — the delete-only logout never worked end-to-end.
-  it.each([
-    'codex-auth/device',
-    'codex-auth/import',
-    'codex-auth/logout',
-  ])('grants ambient tenant identity to %s', (path) => {
-    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
-  });
+  it.each(['codex-auth/device', 'codex-auth/import', 'codex-auth/logout'])(
+    'grants ambient tenant identity to %s',
+    (path) => {
+      expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+    }
+  );
 
   it('keeps the codex-auth endpoints grouped together', () => {
     const codexPaths = TENANT_IDENTITY_ONLY_SERVICE_PATHS.filter((path) =>
       path.startsWith('codex-auth/')
     );
     expect(codexPaths).toEqual(['codex-auth/device', 'codex-auth/import', 'codex-auth/logout']);
+  });
+
+  it.each([
+    'mcp-servers/discover',
+    'mcp-servers/oauth-complete',
+    'mcp-servers/oauth-start',
+    'mcp-servers/test-oauth',
+  ])('keeps provider/waiting endpoint %s out of an HTTP-long transaction', (path) => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
   });
 });

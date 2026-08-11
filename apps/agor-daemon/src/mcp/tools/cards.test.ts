@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/db', () => ({
@@ -113,6 +113,58 @@ describe('card MCP tool input schemas', () => {
     expect(parsed?.error?.issues?.[0]).toMatchObject({
       path: ['updates', 0, 'cardId'],
       message: 'updates[].cardId cannot be empty. Example: { "updates[].cardId": "01abcdef" }',
+    });
+  });
+});
+
+describe('agor_cards_list', () => {
+  it('uses the authenticated service find path with stable server-side paging', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const find = vi.fn(async () => ({
+      total: 3,
+      limit: 2,
+      skip: 0,
+      data: [
+        { card_id: 'card-2', board_id: 'board-1', title: 'Second' },
+        { card_id: 'card-1', board_id: 'board-1', title: 'First' },
+      ],
+    }));
+    const ctx = {
+      app: {
+        service: (name: string) =>
+          name === 'boards' ? { get: vi.fn(async () => ({ board_id: 'board-1' })) } : { find },
+      },
+      baseServiceParams,
+    } as unknown as Parameters<typeof registerCardTools>[1];
+
+    const result = (await captureHandler(
+      'agor_cards_list',
+      ctx
+    )({
+      boardId: 'board-1',
+      search: 'term',
+      limit: 2,
+    })) as { content: Array<{ text: string }> };
+
+    expect(find).toHaveBeenCalledWith({
+      query: {
+        archived: false,
+        board_id: 'board-1',
+        search: 'term',
+        $limit: 2,
+        $skip: 0,
+        $sort: { created_at: -1, card_id: 1 },
+      },
+      ...baseServiceParams,
+    });
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      total: 3,
+      hasMore: true,
+      nextOffset: 2,
     });
   });
 });

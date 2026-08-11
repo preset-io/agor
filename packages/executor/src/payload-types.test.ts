@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  AgenticToolInvokePayloadSchema,
   EnvironmentLifecyclePayloadSchema,
   EnvironmentLogsPayloadSchema,
   ExecutorPayloadSchema,
@@ -48,7 +49,7 @@ describe('PromptPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       daemonUrl: 'http://localhost:4000',
       env: { ANTHROPIC_API_KEY: 'key' },
-      dataHome: '/data/agor',
+      agenticToolContext: { nativeHome: '/data/agor' },
       params: {
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
         taskId: '550e8400-e29b-41d4-a716-446655440001',
@@ -62,7 +63,7 @@ describe('PromptPayloadSchema', () => {
     const result = PromptPayloadSchema.parse(payload);
     expect(result.daemonUrl).toBe('http://localhost:4000');
     expect(result.env?.ANTHROPIC_API_KEY).toBe('key');
-    expect(result.dataHome).toBe('/data/agor');
+    expect(result.agenticToolContext).toEqual({ nativeHome: '/data/agor' });
     expect(result.params.permissionMode).toBe('auto');
   });
 
@@ -93,6 +94,41 @@ describe('PromptPayloadSchema', () => {
     };
 
     expect(() => PromptPayloadSchema.parse(payload)).toThrow();
+  });
+});
+
+describe('AgenticToolInvokePayloadSchema', () => {
+  it('accepts an opaque adapter-owned request and context', () => {
+    expect(
+      AgenticToolInvokePayloadSchema.parse({
+        command: 'agentic-tool.invoke',
+        agenticToolContext: { dataHome: '/opaque/data-home' },
+        params: {
+          tool: 'opencode',
+          request: { operation: 'discover', directory: '/authorized/branch' },
+        },
+      })
+    ).toMatchObject({
+      params: {
+        tool: 'opencode',
+        request: { operation: 'discover', directory: '/authorized/branch' },
+      },
+    });
+  });
+
+  it('rejects an unknown agentic tool but leaves request policy to the adapter', () => {
+    expect(() =>
+      AgenticToolInvokePayloadSchema.parse({
+        command: 'agentic-tool.invoke',
+        params: { tool: 'unknown', request: { operation: 'anything' } },
+      })
+    ).toThrow();
+    expect(() =>
+      AgenticToolInvokePayloadSchema.parse({
+        command: 'agentic-tool.invoke',
+        params: { tool: 'opencode', request: { operation: 'future-operation' } },
+      })
+    ).not.toThrow();
   });
 });
 
@@ -559,7 +595,7 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('branch.knowledge.write');
     expect(commands).toContain('branch.knowledge.read');
     expect(commands).toContain('branch.gateway.slack-file-upload');
-    expect(commands).toContain('branch.inspect');
+    expect(commands).toContain('branch.upload.materialize');
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
     expect(commands).toContain('environment.lifecycle');
@@ -572,6 +608,8 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands.length).toBe(31);
+    expect(commands).toContain('agentic-tool.invoke');
+    expect(commands).toContain('codex.auth-file');
+    expect(commands.length).toBe(32);
   });
 });

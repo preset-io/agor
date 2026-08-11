@@ -6,9 +6,10 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { Transform } from 'node:stream';
 import {
   type AgorConfig,
-  isTenantAgenticToolEnabled,
+  type ResolvedDeploymentConfig,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
@@ -16,6 +17,7 @@ import {
   resolveTenantContext,
 } from '@agor/core/config';
 import {
+  assertTenantWritable,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   generateId,
@@ -30,6 +32,7 @@ import {
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  UploadRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { MANAGED_ENV_EXECUTION_MODE_DEFAULT } from '@agor/core/environment/webhook';
@@ -44,27 +47,33 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
-import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
   AuthenticatedParams,
   HookContext,
   Message,
+  MessageID,
   MessageSource,
-  Paginated,
   Params,
-  PermissionRequestContent,
   ScheduleID,
   Session,
   SessionID,
   SessionMCPServer,
   StreamingEventType,
   Task,
+  TaskMetadata,
   User,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, MessageRole, ROLES, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  hasMinimumRole,
+  isTaskPendingDispatch,
+  MessageRole,
+  ROLES,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-import type { Request } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
@@ -92,6 +101,11 @@ import {
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
+import {
+  deliverPermissionDecision,
+  type PermissionDecisionSubmission,
+} from './permissions/deliver-permission-decision.js';
+import { assertExternalPermissionMessageCreateAllowed } from './permissions/permission-message-boundary.js';
 import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
@@ -129,7 +143,7 @@ import {
 } from './utils/mcp-header-secrets.js';
 import {
   buildPromptTaskMetadata,
-  type PromptTaskMetadataInput,
+  type InternalPromptTaskMetadataInput,
 } from './utils/prompt-task-metadata.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
 import {
@@ -144,17 +158,27 @@ import {
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
+import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
+import {
+  shouldReconcileStableInitialMessage,
+  stableInitialMessageIdForTask,
+} from './utils/task-initial-message.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
+import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
 import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
 import {
   createUploadMiddleware,
-  enforceParsedTotalUploadSize,
   enforceTotalUploadSize,
+  getUploadLimits,
+  type StagedMulterFile,
 } from './utils/upload.js';
+import { getUploadStagingStore } from './utils/upload-staging.js';
+import { assertExternalWidgetMessageCreateAllowed } from './widgets/message-boundary.js';
+import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
 const DEBUG_AUTH_EVENTS =
@@ -201,6 +225,8 @@ export interface RouteParams extends Params {
     name?: string;
   };
   user?: User;
+  /** Trusted internal callback request, populated by MCP tooling only. */
+  _taskCompletionCallback?: NonNullable<TaskMetadata['completion_callback']>;
 }
 
 /** Compatibility tombstone retained for stale Claude CLI restart clients. */
@@ -210,13 +236,6 @@ export function rejectRemovedClaudeCliRestart(): never {
 
 function isServiceAccountRoute(params: RouteParams): boolean {
   return (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
-}
-
-/**
- * Type guard to check if result is paginated
- */
-function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
-  return !Array.isArray(result) && 'data' in result && 'total' in result;
 }
 
 /**
@@ -234,6 +253,8 @@ export interface RegisterRoutesContext {
   DB_PATH: string;
   DAEMON_PORT: number;
   DAEMON_VERSION: string;
+  /** User-facing agor-live release version advertised by protocol surfaces. */
+  AGOR_VERSION: string;
   /**
    * Resolved build info (sha + builtAt). Surfaced on /health so the UI can
    * detect FE/BE drift after a deploy. The SHA is the canonical version
@@ -245,6 +266,12 @@ export interface RegisterRoutesContext {
    * Used by /health to surface the effective policy to admin users.
    */
   resolvedSecurity: import('@agor/core/config').ResolvedSecurity;
+  realtimeRuntime?: Pick<
+    import('./realtime/redis-realtime.js').RedisRealtimeRuntime,
+    'health' | 'isReady'
+  >;
+  distributedWorkIdentity: import('@agor/core/coordination').DistributedWorkIdentity;
+  deployment: ResolvedDeploymentConfig;
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
@@ -300,8 +327,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     DB_PATH,
     DAEMON_PORT: _DAEMON_PORT,
     DAEMON_VERSION,
+    AGOR_VERSION,
     DAEMON_BUILD_INFO,
     resolvedSecurity,
+    realtimeRuntime,
+    distributedWorkIdentity,
+    deployment,
     sessionsService,
     messagesService,
     boardsService,
@@ -471,7 +502,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // no email, so we bucket purely by IP. Trust only Express's resolved
     // `req.ip` (which respects `app.set('trust proxy', n)`) — never
     // X-Forwarded-For directly.
-    keyGenerator: (req: Request): string => buildAuthRateLimitKey(req),
+    // express-rate-limit can resolve Feathers' Express 4 declaration copy
+    // alongside the daemon's Express 5 declarations. The runtime request is
+    // the same object; infer the middleware signature and narrow at our edge.
+    keyGenerator: (req): string => buildAuthRateLimitKey(req as unknown as Request),
     message: 'Too many authentication attempts. Please try again in 15 minutes.',
   });
 
@@ -682,10 +716,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const _reposRepo = new RepoRepository(db);
   const _tasksRepo = new TaskRepository(db);
 
-  const permissionService = new PermissionService((event, data) => {
-    app.service('sessions').emit(event, data);
-  });
-
   // ============================================================================
   // Messages bulk + streaming routes
   // ============================================================================
@@ -695,6 +725,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/messages/bulk',
     {
       async create(data: unknown, params: RouteParams) {
+        assertExternalWidgetMessageCreateAllowed(data);
+        assertExternalPermissionMessageCreateAllowed(data);
         return messagesService.createMany(data as Message[]);
       },
     },
@@ -801,11 +833,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const forkedSession = await sessionsService.fork(id, data, params);
         console.log(`✅ Fork created: ${shortId(forkedSession.session_id)}`);
 
-        console.log('📡 [FORK] Manually broadcasting created event to all clients');
-
-        if (app.io) {
-          app.io.emit('sessions created', forkedSession);
-        }
+        // fork() persists through an internal service call, so emit the
+        // standard event explicitly with its tenant/auth context. A raw
+        // app.io.emit would bypass Feathers publication authorization and, in
+        // HA, the Redis adapter would fan it out cluster-wide.
+        emitServiceEvent(app, {
+          path: 'sessions',
+          event: 'created',
+          data: forkedSession,
+          params,
+          id: forkedSession.session_id,
+        });
 
         return forkedSession;
       },
@@ -827,11 +865,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const spawnedSession = await sessionsService.spawn(id, data, params);
         console.log(`✅ Spawn created: ${shortId(spawnedSession.session_id)}`);
 
-        console.log('📡 [SPAWN] Manually broadcasting created event to all clients');
-
-        if (app.io) {
-          app.io.emit('sessions created', spawnedSession);
-        }
+        emitServiceEvent(app, {
+          path: 'sessions',
+          event: 'created',
+          data: spawnedSession,
+          params,
+          id: spawnedSession.session_id,
+        });
 
         return spawnedSession;
       },
@@ -906,15 +946,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   /**
-   * Per-session "turn" lock — single source of truth for "who's allowed to
-   * spawn an executor for this session right now" mutual exclusion. Shared
-   * by `/sessions/:id/prompt`'s idle branch, `/tasks/:id/run`, and the
-   * queue processor's drain loop. See `utils/session-turn-lock.ts`.
-   *
-   * Without this, two concurrent prompts on the same idle session could
-   * both observe `status === 'idle'` and both spawn executors — a race
-   * that pre-dates the `/tasks/:id/run` route but is now fixed across all
-   * three entry points.
+   * Per-session local turn coalescing. This reduces redundant preparatory
+   * reads and duplicate drain triggers inside one daemon; it is not a
+   * correctness authority. Queue-position admission and the Session+Task
+   * dispatch fence in PostgreSQL are authoritative across daemons.
    */
   const sessionTurnLocks: SessionTurnLocks = new Map();
 
@@ -971,11 +1006,124 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   }
 
   /**
+   * Persist the first transcript row for a Task. Scheduled/idempotent prompts
+   * pass a stable message ID, so a replacement daemon can repair a kill after
+   * the dispatch claim without duplicating the prompt. Ordinary prompts retain
+   * the historical best-effort/random-ID behavior and executor fallback.
+   */
+  async function ensureInitialUserMessage(
+    task: Task,
+    params: RouteParams,
+    input: {
+      messageStartIndex: number;
+      startTimestamp: string;
+      messageSource?: MessageSource;
+      stableMessageId?: MessageID;
+    }
+  ): Promise<void> {
+    if (config.execution?.daemon_writes_user_message === false) return;
+
+    const messageRepo = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
+    if (input.stableMessageId) {
+      const existing = await messageRepo.findById(input.stableMessageId);
+      if (existing) {
+        if (existing.session_id !== task.session_id || existing.task_id !== task.task_id) {
+          throw new Conflict(
+            `Stable initial message identity ${input.stableMessageId} is already in use`
+          );
+        }
+        return;
+      }
+    }
+
+    const isCallback = task.metadata?.is_agor_callback === true;
+    const messageMetadata: Message['metadata'] = {};
+    if (isCallback) messageMetadata.is_agor_callback = true;
+    if (input.messageSource === 'gateway' || input.messageSource === 'agor') {
+      messageMetadata.source = input.messageSource;
+    }
+    const userMessage = buildInitialUserMessage({
+      messageId: input.stableMessageId,
+      sessionId: task.session_id,
+      taskId: task.task_id,
+      index: input.messageStartIndex,
+      timestamp: input.startTimestamp,
+      content: task.full_prompt,
+      type: isCallback ? 'system' : 'user',
+      metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
+    });
+
+    try {
+      await app.service('messages').create(userMessage, params);
+    } catch (error) {
+      if (input.stableMessageId) {
+        const winner = await messageRepo.findById(input.stableMessageId);
+        if (winner?.session_id === task.session_id && winner.task_id === task.task_id) return;
+        throw error;
+      }
+      // Don't fail the spawn — the executor's createUserMessage fallback
+      // (with skip-if-exists) will write the row when it connects.
+      console.warn(
+        formatStructuredLog('[messages.initial]', {
+          event: 'write_failed',
+          task_id: task.task_id,
+          outcome: 'executor_retry',
+          error_code: structuredLogErrorCode(error),
+        })
+      );
+    }
+  }
+
+  /** Repair one stable initial transcript row from durable Task state. */
+  async function reconcileStableInitialUserMessage(
+    task: Task,
+    params: RouteParams,
+    stableMessageId: MessageID,
+    fallback: {
+      messageStartIndex?: number;
+      startTimestamp?: string;
+      messageSource?: MessageSource;
+    } = {}
+  ): Promise<void> {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for message reconciliation');
+    const persistedStartIndex = task.message_range?.start_index;
+    const hasPersistedStartIndex =
+      typeof persistedStartIndex === 'number' && persistedStartIndex >= 0;
+    const fallbackStartIndex =
+      typeof fallback.messageStartIndex === 'number' && fallback.messageStartIndex >= 0
+        ? fallback.messageStartIndex
+        : undefined;
+    const messageStartIndex = hasPersistedStartIndex
+      ? persistedStartIndex
+      : (fallbackStartIndex ??
+        (await runWithTenantDatabaseScope(db, tenantId, () =>
+          sessionsRepository.countMessages(task.session_id)
+        )));
+    const startTimestamp =
+      (hasPersistedStartIndex ? task.message_range?.start_timestamp : undefined) ??
+      task.started_at ??
+      fallback.startTimestamp ??
+      new Date().toISOString();
+    const persistedSource = task.metadata?.source ?? fallback.messageSource;
+    const messageSource =
+      persistedSource === 'gateway' || persistedSource === 'agor' ? persistedSource : undefined;
+
+    await ensureInitialUserMessage(task, params, {
+      messageStartIndex,
+      startTimestamp,
+      messageSource,
+      stableMessageId,
+    });
+  }
+
+  /**
    * spawnTaskExecutor — sole transition point for `tasks.status` going from
    * `created` / `queued` → `dispatching`.
    *
-   * Both the IDLE branch of POST /sessions/:id/prompt and the queued-task
-   * drainer call this helper. Centralising the transition guarantees that:
+   * Both POST /sessions/:id/prompt's immediate queue-head attempt and the
+   * queued-task drainer call this helper. Centralising the transition
+   * guarantees that:
    *
    *   - `message_range.start_index`, `git_state.{ref,sha}_at_start`, and
    *     `started_at` are recomputed against fresh state right before the
@@ -1003,21 +1151,43 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
       messageSource?: MessageSource;
+      stableInitialMessageId?: MessageID;
     },
     params: RouteParams
   ): Promise<Task> {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Missing active tenant context for task executor startup');
+    const stableInitialMessageId = stableInitialMessageIdForTask(
+      task,
+      options.stableInitialMessageId
+    );
+    const persistedMessageSource = task.metadata?.source ?? options.messageSource;
+    const runtimeMessageSource =
+      persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
+        ? persistedMessageSource
+        : undefined;
+
+    // A stable scheduled Task that has crossed the dispatch fence needs only
+    // deterministic projection repair. Do not make that reconciliation depend
+    // on mutable launch-time state (tool enablement, preset validity, or user
+    // defaults): no new executor launch will occur on this path.
+    if (shouldReconcileStableInitialMessage(task, stableInitialMessageId)) {
+      await reconcileStableInitialUserMessage(task, params, stableInitialMessageId, {
+        messageSource: runtimeMessageSource,
+      });
+      return task;
+    }
+
     const {
       agenticToolEnabled,
       messageStartIndex,
       session: loadedSession,
-    } = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+    } = await runWithTenantDatabaseScope(db, tenantId, async () => {
       const session = await sessionsService.get(task.session_id, params);
       const agenticTool = requireActiveAgenticTool(session.agentic_tool);
       return {
         session,
-        agenticToolEnabled: await isTenantAgenticToolEnabled(agenticTool, tenantDb),
+        agenticToolEnabled: await isAgenticToolEnabledForTenant(db, tenantId, agenticTool),
         // Recompute message_range.start_index against the live message count.
         messageStartIndex: await sessionsRepository.countMessages(task.session_id),
       };
@@ -1026,11 +1196,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
     const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
-    const persistedMessageSource = task.metadata?.source ?? options.messageSource;
-    const runtimeMessageSource =
-      persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
-        ? persistedMessageSource
-        : undefined;
     const startTimestamp = new Date().toISOString();
 
     // The daemon persists launch intent and writes required sentinel git fields
@@ -1044,71 +1209,89 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       config.execution?.executor_command_template ? 'templated' : 'local'
     );
 
-    // Patch task: queued/created → launch status, with real ranges. queue_position
-    // is cleared here so a draining task is no longer considered queued.
-    const updatedTask = (await app.service('tasks').patch(
-      task.task_id,
-      {
-        ...launchState,
-        ...(launchState.executor_mode
-          ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
-          : {}),
-        queue_position: undefined,
-        message_range: {
-          start_index: messageStartIndex,
-          end_index: messageStartIndex + 1,
-          start_timestamp: startTimestamp,
-          end_timestamp: startTimestamp,
+    if (!isTaskPendingDispatch(task)) return task;
+
+    // Atomically claim queued/created → launch status. Process-local session
+    // locks reduce contention, but this expected-state transition is the
+    // cross-daemon fence that prevents duplicate executor launches.
+    const dispatchClaim = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      await assertTenantWritable(tenantDb, tenantId);
+      return tasksService.claimDispatchAndProjectSession(
+        task.task_id,
+        task.status,
+        {
+          ...launchState,
+          ...(launchState.executor_mode
+            ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
+            : {}),
+          queue_position: undefined,
+          message_range: {
+            start_index: messageStartIndex,
+            end_index: messageStartIndex + 1,
+            start_timestamp: startTimestamp,
+            end_timestamp: startTimestamp,
+          },
+          git_state: {
+            ref_at_start: refAtStart,
+            sha_at_start: gitStateAtStart,
+          },
         },
-        git_state: {
-          ref_at_start: refAtStart,
-          sha_at_start: gitStateAtStart,
-        },
-      },
-      { ...params, provider: undefined }
-    )) as Task;
+        { ...params, provider: undefined }
+      );
+    });
+    if (dispatchClaim.outcome !== 'claimed') {
+      const workIdentity = app.get('distributedWorkIdentity');
+      console.info(
+        formatStructuredLog('[distributed-work.task-dispatch]', {
+          event: 'claim_lost',
+          instance_id: workIdentity?.instanceId,
+          boot_id: workIdentity?.bootId,
+          tenant_id: tenantId,
+          task_id: task.task_id,
+          session_id: task.session_id,
+          observed_status: dispatchClaim.task.status,
+        })
+      );
+      if (shouldReconcileStableInitialMessage(dispatchClaim.task, stableInitialMessageId)) {
+        await reconcileStableInitialUserMessage(
+          dispatchClaim.task,
+          params,
+          stableInitialMessageId,
+          {
+            messageStartIndex,
+            startTimestamp,
+            messageSource: runtimeMessageSource,
+          }
+        );
+      }
+      return dispatchClaim.task;
+    }
+    const updatedTask = dispatchClaim.task;
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
     // write is harmless if the daemon path is enabled.
-    if (config.execution?.daemon_writes_user_message !== false) {
-      try {
-        const isCallback = task.metadata?.is_agor_callback === true;
-        const messageMetadata: Message['metadata'] = {};
-        if (isCallback) {
-          messageMetadata.is_agor_callback = true;
-        }
-        // Prefer task.metadata.source (set when the task was queued) over
-        // the request's messageSource — the latter applies only to the
-        // current draining tick, the former to where the prompt originated.
-        if (runtimeMessageSource) {
-          messageMetadata.source = runtimeMessageSource;
-        }
-
-        const userMessage = buildInitialUserMessage({
-          sessionId: task.session_id,
-          taskId: task.task_id,
-          index: messageStartIndex,
-          timestamp: startTimestamp,
-          content: task.full_prompt,
-          // Callback messages are typed `system` so the UI shows the special
-          // Agor-callback styling. Normal prompts stay `user`.
-          type: isCallback ? 'system' : 'user',
-          metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
-        });
-        await app.service('messages').create(userMessage, params);
-      } catch (msgErr) {
-        // Don't fail the spawn — the executor's createUserMessage fallback
-        // (with skip-if-exists) will write the row when it connects.
-        console.warn(
-          `⚠️  [Daemon] Failed to write initial user-message row for task ${shortId(task.task_id)} (executor will retry):`,
-          msgErr
-        );
-      }
+    // Prefer task.metadata.source (set when the task was queued) over the
+    // request's messageSource — the latter applies only to this drain tick.
+    if (stableInitialMessageId) {
+      await reconcileStableInitialUserMessage(updatedTask, params, stableInitialMessageId, {
+        messageStartIndex,
+        startTimestamp,
+        messageSource: runtimeMessageSource,
+      });
+    } else {
+      await ensureInitialUserMessage(task, params, {
+        messageStartIndex,
+        startTimestamp,
+        messageSource: runtimeMessageSource,
+      });
     }
 
-    // Flip session to RUNNING and append to session.tasks. Done here so both
-    // callers (idle prompt and queue drain) get this for free.
+    // Re-apply the Session projection through Feathers so hooks/realtime see
+    // the transition. TaskRepository.claimDispatchAndProjectSession already
+    // committed the same projection atomically with the Task fence; this
+    // service patch is no longer correctness-critical on SQLite and is
+    // intentionally idempotent.
     //
     // The session-status flip used to fall out of `TasksService.create` when
     // the IDLE path created a task with `status: RUNNING` directly. Now the
@@ -1237,7 +1420,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Prompt endpoint
   // ============================================================================
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/sessions/:id/prompt',
     {
@@ -1248,13 +1431,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           stream?: boolean;
           messageSource?: MessageSource;
           /**
-           * Optional extra task metadata merged onto the queued/created task.
-           * Used by internal callers (e.g. widget submissions) to stamp
+           * Internal-only task metadata merged onto the queued/created task.
+           * Used by daemon callers (e.g. widget submissions) to stamp
            * traceability fields like `system_authored` / `widget_id`.
-           * Transport provenance (`source`) is daemon-owned and deliberately
-           * excluded/sanitized even for stale or untyped clients.
+           * External transports are rejected, and the metadata builder also
+           * strips every internal field defensively for untrusted callers.
            */
-          metadata?: PromptTaskMetadataInput;
+          metadata?: InternalPromptTaskMetadataInput;
+          /**
+           * Internal-only stable task identity for idempotent producers such
+           * as the scheduler. External callers may not set this field.
+           */
+          idempotencyTaskId?: UUID;
         },
         params: RouteParams
       ) {
@@ -1268,29 +1456,78 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         let id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         if (!data.prompt) throw new Error('Prompt required');
+        if (data.idempotencyTaskId && params.provider) {
+          throw new Forbidden('idempotencyTaskId is internal-only');
+        }
+        if (data.metadata !== undefined && params.provider) {
+          throw new Forbidden('Task metadata is internal-only');
+        }
+        const promptTenantId = getCurrentTenantId();
+        if (!promptTenantId) throw new Error('Missing active tenant context for prompt admission');
+        await runWithTenantDatabaseScope(db, promptTenantId, (tenantDb) =>
+          assertTenantWritable(tenantDb, promptTenantId)
+        );
 
-        // Validate and normalize messageSource
+        // Derive external provenance server-side. Only provider-less,
+        // daemon-internal producers may preserve an explicit gateway source.
         const messageSource = normalizeMessageSource(data.messageSource, params);
         if (messageSource !== data.messageSource && data.messageSource !== undefined) {
           console.warn(
-            `[Daemon] Invalid messageSource value: ${data.messageSource}, defaulted based on provider`
+            `[Daemon] Ignored caller-supplied messageSource: ${data.messageSource}; using ${messageSource ?? 'no source'}`
           );
         }
 
         let session = await sessionsService.get(id, params);
         id = session.session_id;
-        const activeAgenticTool = requireActiveAgenticTool(session.agentic_tool);
+        const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
 
-        if (!(await isTenantAgenticToolEnabled(activeAgenticTool, db))) {
-          throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
-        }
-        session = await sessionsService.materializeAgenticToolPreset(session, params);
-        if (
-          session.agentic_tool_preset_id &&
-          data.permissionMode !== undefined &&
-          data.permissionMode !== session.permission_config?.mode
-        ) {
-          throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
+        const reconcileDurablyDispatchedTask = async (): Promise<Task | null> => {
+          if (!data.idempotencyTaskId) return null;
+          const prior = await taskRepo.findById(data.idempotencyTaskId);
+          if (!prior) return null;
+          if (prior.session_id !== id) {
+            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+          }
+          const expectedCreator = params.user?.user_id ?? session.created_by;
+          if (prior.created_by !== expectedCreator || prior.full_prompt !== data.prompt) {
+            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+          }
+          if (isTaskPendingDispatch(prior)) return null;
+
+          await reconcileStableInitialUserMessage(
+            prior,
+            params,
+            prior.metadata?.initial_message_id ?? (data.idempotencyTaskId as MessageID)
+          );
+          return prior;
+        };
+
+        // Scheduled recovery is reconciliation, not a fresh launch admission,
+        // once its stable Task has crossed the durable dispatch fence. Return
+        // that Task before consulting mutable tool/preset/user configuration.
+        const durableTask = await reconcileDurablyDispatchedTask();
+        if (durableTask) return durableTask;
+
+        try {
+          const activeAgenticTool = requireActiveAgenticTool(session.agentic_tool);
+          if (!(await isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool))) {
+            throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
+          }
+          session = await sessionsService.materializeAgenticToolPreset(session, params);
+          if (
+            session.agentic_tool_preset_id &&
+            data.permissionMode !== undefined &&
+            data.permissionMode !== session.permission_config?.mode
+          ) {
+            throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
+          }
+        } catch (error) {
+          // Another daemon can cross the dispatch fence between the first
+          // stable-Task read and launch admission. Re-check before surfacing a
+          // mutable configuration failure; the winner no longer needs launch.
+          const concurrentlyDurableTask = await reconcileDurablyDispatchedTask();
+          if (concurrentlyDurableTask) return concurrentlyDurableTask;
+          throw error;
         }
 
         // Auto-unarchive on prompt
@@ -1309,18 +1546,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new Error('Cannot send prompt: session is currently stopping');
         }
 
-        // The route is one path: always materialize a Task. Whether it runs
-        // immediately or gets queued is the *response*, not a different code
-        // path. Sentinels and queue-position assignment live in
-        // `taskRepo.createPending` so callers don't reassemble them by hand.
-        //
-        // Wrapped in `withSessionTurnLock` so the queue-vs-idle decision and
-        // the subsequent spawn are atomic with respect to other entry points
-        // (`/tasks/:id/run`, the queue drainer). Without this, two concurrent
-        // prompts on an idle session could both observe `status === 'idle'`
-        // and both spawn executors. Inside the lock the session is re-read,
-        // so the decision is made against the freshest possible state.
-        const taskRepo = new TaskRepository(db);
+        // Every prompt first takes one durable queue position. The subsequent
+        // Session+Task database claim decides whether this Task leaves the
+        // queue immediately or remains queued. This avoids a split
+        // read-session/create-CREATED race: two daemons can admit concurrently,
+        // but only the durable head can claim the idle Session.
         if (!params.user?.user_id) {
           throw new NotAuthenticated('Authentication required to prompt a session');
         }
@@ -1342,85 +1572,81 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               taskRepo,
               params
             );
-            const queuedTasks = await taskRepo.findQueued(id as SessionID);
-            const shouldQueue =
-              !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
-              queuedTasks.length > 0;
 
-            if (shouldQueue) {
-              const queuedTask = await taskRepo.createPending({
-                session_id: id as SessionID,
-                full_prompt: data.prompt,
-                created_by: createdBy,
-                status: TaskStatus.QUEUED,
-                metadata: buildPromptTaskMetadata(data.metadata, messageSource, createdBy),
-              });
-              await tasksService.autoTitleSession(queuedTask, params);
-
-              console.log(
-                `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
-                  `(session status: ${lockedSession.status}, existing queue items: ${queuedTasks.length})`
-              );
-
-              app.service('tasks').emit('queued', queuedTask);
-
-              if (sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)) {
-                deferInFreshTenantScope(params, async () => {
-                  try {
-                    await sessionsService.triggerQueueProcessing(id as SessionID, params);
-                  } catch (error) {
-                    console.error(
-                      `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
-                      error
-                    );
-                  }
-                });
-              }
-
-              // Uniform response: the entity is always a Task. Caller inspects
-              // `task.status` (`'queued'` here) and `task.queue_position` to know
-              // what happened.
-              return queuedTask;
+            const prior = data.idempotencyTaskId
+              ? await taskRepo.findById(data.idempotencyTaskId)
+              : null;
+            if (prior && prior.session_id !== id) {
+              throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
             }
 
-            console.log(`   Session agent: ${lockedSession.agentic_tool}`);
-            console.log(
-              `   Session permission_config.mode: ${lockedSession.permission_config?.mode || 'not set'}`
-            );
-
-            // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
-            // which is the sole place that populates message_range / git_state,
-            // writes the user-message row, and spawns the executor. Both this
-            // path and processNextQueuedTask go through that helper so behavior
-            // stays in lockstep.
-            const idleTaskMetadata = buildPromptTaskMetadata(data.metadata, messageSource);
+            const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy, {
+              trustedInternalMetadata: !params.provider,
+            });
+            if (data.idempotencyTaskId) {
+              taskMetadata.initial_message_id = data.idempotencyTaskId as MessageID;
+            }
+            if (params._taskCompletionCallback) {
+              taskMetadata.completion_callback = params._taskCompletionCallback;
+            }
             const task = await taskRepo.createPending({
+              task_id: data.idempotencyTaskId,
               session_id: id as SessionID,
               full_prompt: data.prompt,
               created_by: createdBy,
-              status: TaskStatus.CREATED,
-              metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
+              status: TaskStatus.QUEUED,
+              metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
             });
             await tasksService.autoTitleSession(task, params);
-            // Bypassing the service means no native 'created' emit; do it here
-            // so reactive clients see the new task before the executor spawns.
-            emitServiceEvent(app, {
-              path: 'tasks',
-              event: 'created',
-              data: task,
-              params,
-              id: task.task_id,
-            });
 
-            return await spawnTaskExecutor(
+            if (!prior) {
+              // Repository admission bypasses TasksService.create. Publish the
+              // entity before its possible patched/dispatch event so reactive
+              // clients observe a coherent lifecycle.
+              emitServiceEvent(app, {
+                path: 'tasks',
+                event: 'created',
+                data: task,
+                params,
+                id: task.task_id,
+              });
+            }
+
+            const admitted = await spawnTaskExecutor(
               task,
               {
                 permissionMode: data.permissionMode,
                 stream: data.stream !== false,
                 messageSource,
+                ...(data.idempotencyTaskId
+                  ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
+                  : {}),
               },
               params
             );
+
+            if (admitted.status === TaskStatus.QUEUED) {
+              console.log(
+                `📬 [Prompt] Queued task for session ${shortId(id)} at position ${admitted.queue_position} ` +
+                  `(observed session status: ${lockedSession.status})`
+              );
+              app.service('tasks').emit('queued', admitted);
+
+              // Immediate triggers are a latency hint. Durable all-daemon
+              // discovery remains the recovery path if this process dies or
+              // another claim changes the Session after our observation.
+              deferInFreshTenantScope(params, async () => {
+                try {
+                  await sessionsService.triggerQueueProcessing(id as SessionID, params);
+                } catch (error) {
+                  console.error(`❌ [Prompt] Failed to trigger queued Task processing:`, error);
+                }
+              });
+            }
+
+            // Uniform response: QUEUED means durable wait; DISPATCHING/RUNNING
+            // means this or another daemon already won the launch claim.
+            return admitted;
           },
           { waiterTimeoutMs: 30_000 }
         );
@@ -1535,11 +1761,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           }
         }
 
-        // Acquire the session-turn lock before validating session state and
-        // spawning. This is what closes the race against concurrent
-        // /tasks/:id/run on different tasks of the same session, against
-        // /sessions/:id/prompt's idle branch, and against the queue
-        // drainer — they all serialize through `sessionTurnLocks`.
+        // The local lock coalesces same-process contenders. The repository's
+        // Session-first dispatch claim is authoritative against other daemons
+        // and also refuses to jump a durable prompt queue.
         return await withSessionTurnLock(
           sessionTurnLocks,
           task.session_id,
@@ -1564,7 +1788,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               );
             }
 
-            return await runExistingTask(
+            const result = await runExistingTask(
               task,
               {
                 permissionMode: data.permissionMode,
@@ -1577,6 +1801,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 spawnFn: spawnTaskExecutor,
               }
             );
+            if (result.status === TaskStatus.CREATED) {
+              throw new Conflict(
+                `Cannot run task ${shortId(taskId)}: another Task or queued prompt owns the Session turn.`
+              );
+            }
+            return result;
           },
           { waiterTimeoutMs: 30_000 }
         );
@@ -1734,7 +1964,147 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const branchRepo = new BranchRepository(db);
-  const uploadMiddleware = createUploadMiddleware();
+  const uploadRepo = new UploadRepository(db);
+  const uploadMiddleware = createUploadMiddleware(getUploadStagingStore());
+
+  // Executor-only data plane for staged upload materialization. The scoped
+  // service token stays in the Authorization header (never URL/query/logs) and
+  // binds exactly one tenant + session + upload handle.
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
+  (app as any).get('/executor/uploads/:uploadRef/content', async (req: any, res: any) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const result = await app.service('authentication').create({
+        strategy: 'jwt',
+        accessToken: authHeader.slice(7),
+      });
+      const claims = result.authentication?.payload as Record<string, unknown> | undefined;
+      const uploadRef = req.params.uploadRef;
+      if (
+        claims?.type !== 'service' ||
+        claims.executor_action !== 'upload.materialize' ||
+        claims.executor_upload_ref !== uploadRef ||
+        typeof claims.executor_session_id !== 'string' ||
+        typeof claims.executor_branch_id !== 'string' ||
+        typeof claims.tenant_id !== 'string'
+      ) {
+        return res.status(403).json({ error: 'Upload transfer capability denied' });
+      }
+      const store = getUploadStagingStore();
+      const owner = {
+        tenantId: claims.tenant_id as import('@agor/core/types').TenantID,
+        sessionId: claims.executor_session_id as SessionID,
+        branchId: claims.executor_branch_id as import('@agor/core/types').BranchID,
+        ref: uploadRef as import('@agor/core/types').UploadRef,
+      };
+      const metadata = await store.inspect(owner);
+      const stream = await store.read(owner);
+      res.status(200);
+      res.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Length', String(metadata.size));
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      stream.once('error', (error) => {
+        if (!res.headersSent) res.status(500);
+        res.destroy(error as Error);
+      });
+      res.once('close', () =>
+        (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
+      );
+      stream.pipe(res);
+    } catch (error) {
+      const status = (error as { status?: number }).status ?? 404;
+      if (!res.headersSent) res.status(status).json({ error: 'Upload transfer unavailable' });
+      else res.destroy();
+    }
+  });
+
+  // Raw streaming executor -> daemon Slack upload data plane. Metadata is
+  // bounded in headers; file bytes never enter Feathers/JSON/base64.
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
+  (app as any).post('/executor/gateway/slack-file-upload', async (req: any, res: any) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const result = await app.service('authentication').create({
+        strategy: 'jwt',
+        accessToken: authHeader.slice(7),
+      });
+      const claims = result.authentication?.payload as Record<string, unknown> | undefined;
+      const gatewayChannelId = String(req.headers['x-agor-gateway-channel-id'] ?? '');
+      const channel = String(req.headers['x-agor-slack-channel-id'] ?? '');
+      const size = Number.parseInt(String(req.headers['content-length'] ?? ''), 10);
+      if (
+        claims?.type !== 'service' ||
+        claims.executor_action !== 'gateway.slack-file-upload' ||
+        claims.executor_gateway_channel_id !== gatewayChannelId ||
+        claims.executor_slack_channel_id !== channel ||
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        size > getUploadLimits().maxFileBytes
+      ) {
+        return res.status(403).json({ error: 'Slack upload capability denied' });
+      }
+      const authParams = {
+        user: result.user,
+        provider: 'rest',
+        authentication: result.authentication,
+        headers: req.headers,
+      };
+      const params = {
+        ...authParams,
+        tenant: resolveTenantContext(multiTenancy, {
+          params: authParams,
+          authPayload: result.authentication?.payload,
+          headers: req.headers,
+        }),
+      } as AuthenticatedParams;
+      let received = 0;
+      const limiter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          received += chunk.byteLength;
+          if (received > size || received > getUploadLimits().maxFileBytes) {
+            callback(new Error('Slack upload stream exceeds its authorized size'));
+            return;
+          }
+          callback(null, chunk);
+        },
+        flush(callback) {
+          callback(received === size ? undefined : new Error('Slack upload stream size mismatch'));
+        },
+      });
+      req.pipe(limiter);
+      const uploaded = await (
+        app.service(
+          'gateway-channels'
+        ) as unknown as import('./services/gateway-channels.js').GatewayChannelsService
+      ).uploadFileStreamFromExecutor(
+        {
+          gatewayChannelId,
+          channel,
+          size,
+          filename: decodeURIComponent(String(req.headers['x-agor-filename'] ?? 'upload')),
+          ...(req.headers['x-agor-thread-ts']
+            ? { threadTs: String(req.headers['x-agor-thread-ts']) }
+            : {}),
+          ...(req.headers['x-agor-comment']
+            ? { comment: decodeURIComponent(String(req.headers['x-agor-comment'])) }
+            : {}),
+        },
+        limiter,
+        params
+      );
+      res.json({ uploaded });
+    } catch (error) {
+      const status = (error as { code?: number }).code ?? 400;
+      res.status(status).json({ error: error instanceof Error ? error.message : 'Upload failed' });
+    }
+  });
   const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
@@ -1793,6 +2163,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
       }
 
+      if (!params.tenant?.tenant_id || !params.user?.user_id || !session.branch_id) {
+        return res.status(403).json({ error: 'Upload ownership context unavailable' });
+      }
+      req._uploadOwner = {
+        tenantId: params.tenant.tenant_id,
+        sessionId: session.session_id,
+        branchId: session.branch_id,
+        createdBy: params.user.user_id,
+      };
       next();
     } catch (error) {
       next(error);
@@ -1813,7 +2192,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       const { sessionId } = req.params;
       const { notifyAgent, message } = req.body;
-      const files = req.files as Express.Multer.File[];
+      const files = req.files as StagedMulterFile[];
 
       if (DEBUG_UPLOAD) {
         console.log(
@@ -1837,11 +2216,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
-      const uploadedFiles = files.map((f) => ({
-        filename: f.filename,
-        path: f.path,
-        size: f.size,
-        mimeType: f.mimetype,
+      const uploadedFiles = files.map((staged) => ({
+        ref: staged.ref,
+        filename: staged.name,
+        size: staged.size,
+        mimeType: staged.mimeType,
+        createdAt: staged.createdAt,
+        expiresAt: staged.expiresAt,
       }));
 
       if (DEBUG_UPLOAD) {
@@ -1854,8 +2235,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       let notificationError: string | null = null;
       if ((notifyAgent === 'true' || notifyAgent === true) && message) {
         try {
-          const filePaths = uploadedFiles.map((f) => f.path).join(', ');
-          const promptText = message.replace(/\{filepath\}/g, filePaths);
+          const handles = uploadedFiles.map((f) => f.ref).join(', ');
+          const promptText = message.replace(/\{filepath\}/g, handles);
 
           if (DEBUG_UPLOAD) {
             console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
@@ -1984,10 +2365,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     authorizeUpload,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
     uploadMiddleware.array('files', 10) as any,
-    // Defence-in-depth aggregate-size check using the actual file sizes that
-    // multer wrote — catches Content-Length-spoofing clients.
-    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-    enforceParsedTotalUploadSize() as any,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((req: any, res: any, next: any) => {
       if (DEBUG_UPLOAD) {
@@ -2008,6 +2385,192 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       });
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any
+  );
+
+  type UploadHttpRequest = Request & {
+    feathers?: AuthenticatedParams;
+    params: { uploadRef: string };
+  };
+  const loadAuthorizedUpload = async (req: UploadHttpRequest) => {
+    const params = req.feathers as AuthenticatedParams;
+    const tenantId = params.tenant?.tenant_id;
+    const userId = params.user?.user_id as UUID | undefined;
+    if (!tenantId || !userId) throw new NotAuthenticated('Authentication required');
+    const ref = req.params.uploadRef as import('@agor/core/types').UploadRef;
+    const upload = await runWithTenantDatabaseScope(db, tenantId, () =>
+      uploadRepo.findOwned(tenantId, ref)
+    );
+    if (upload?.status !== 'active') throw new NotFound('Upload unavailable');
+    if (upload.expiresAt && Date.parse(upload.expiresAt) <= Date.now()) {
+      throw new NotFound('Upload unavailable');
+    }
+    if (upload.createdBy === userId) return upload;
+    if (!branchRbacEnabled) return upload;
+    const allowed = await runWithTenantDatabaseScope(db, tenantId, async () => {
+      const branch = await branchRepo.findById(upload.branchId);
+      if (!branch) return false;
+      if (await branchRepo.isOwner(branch.branch_id, userId)) return true;
+      return (await branchRepo.resolveUserPermission(branch, userId)) !== 'none';
+    });
+    if (
+      !allowed &&
+      !(superadminOpts.allowSuperadmin && hasMinimumRole(params.user?.role, ROLES.SUPERADMIN))
+    ) {
+      throw new NotFound('Upload unavailable');
+    }
+    return upload;
+  };
+
+  // User Settings: owner-scoped logical upload inventory.
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on Feathers Application
+  (app as any).get(
+    '/uploads',
+    uploadAuthMiddleware,
+    async (req: UploadHttpRequest, res: Response, next: NextFunction) => {
+      try {
+        const params = req.feathers as AuthenticatedParams;
+        if (!params.tenant?.tenant_id || !params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required');
+        }
+        const tenantId = params.tenant.tenant_id;
+        const userId = params.user.user_id as UUID;
+        const uploads = await runWithTenantDatabaseScope(db, tenantId, () =>
+          uploadRepo.listByUploader(tenantId, userId)
+        );
+        res.json({ uploads });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on Feathers Application
+  (app as any).get(
+    '/uploads/:uploadRef/content',
+    uploadAuthMiddleware,
+    async (req: UploadHttpRequest, res: Response, next: NextFunction) => {
+      try {
+        const upload = await loadAuthorizedUpload(req);
+        const store = getUploadStagingStore();
+        const readOwner = {
+          tenantId: upload.tenantId,
+          sessionId: upload.sessionId,
+          branchId: upload.branchId,
+          ref: upload.ref,
+        };
+        let offset = 0;
+        let length: number | undefined;
+        const range = req.headers.range;
+        if (typeof range === 'string') {
+          const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+          if (!match) return res.status(416).end();
+          offset = Number(match[1]);
+          const end = match[2] ? Number(match[2]) : upload.size - 1;
+          if (
+            !Number.isSafeInteger(offset) ||
+            !Number.isSafeInteger(end) ||
+            end < offset ||
+            offset >= upload.size
+          ) {
+            return res.status(416).end();
+          }
+          length = Math.min(end, upload.size - 1) - offset + 1;
+          res.status(206);
+          res.setHeader('Content-Range', `bytes ${offset}-${offset + length - 1}/${upload.size}`);
+        }
+        const stream = await store.read({ ...readOwner, offset, ...(length ? { length } : {}) });
+        res.setHeader('Content-Type', upload.mimeType || 'application/octet-stream');
+        res.setHeader('Content-Length', String(length ?? upload.size));
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        const safeInline = new Set([
+          'image/png',
+          'image/jpeg',
+          'image/gif',
+          'image/webp',
+          'application/pdf',
+        ]);
+        res.setHeader(
+          'Content-Disposition',
+          `${safeInline.has(upload.mimeType) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(upload.displayName)}`
+        );
+        stream.once('error', (error) => res.destroy(error as Error));
+        res.once('close', () =>
+          (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
+        );
+        stream.pipe(res);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on Feathers Application
+  (app as any).delete(
+    '/uploads/:uploadRef',
+    uploadAuthMiddleware,
+    async (req: UploadHttpRequest, res: Response, next: NextFunction) => {
+      try {
+        const upload = await loadAuthorizedUpload(req);
+        const params = req.feathers as AuthenticatedParams;
+        if (
+          upload.createdBy !== params.user?.user_id &&
+          !hasMinimumRole(params.user?.role, ROLES.ADMIN)
+        ) {
+          throw new NotFound('Upload unavailable');
+        }
+        await getUploadStagingStore().delete({
+          tenantId: upload.tenantId,
+          sessionId: upload.sessionId,
+          branchId: upload.branchId,
+          ref: upload.ref,
+        });
+        await runWithTenantDatabaseScope(db, upload.tenantId, () =>
+          uploadRepo.remove(upload.tenantId, upload.ref)
+        );
+        res.status(204).end();
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on Feathers Application
+  (app as any).patch(
+    '/uploads/:uploadRef',
+    uploadAuthMiddleware,
+    async (req: UploadHttpRequest, res: Response, next: NextFunction) => {
+      try {
+        const upload = await loadAuthorizedUpload(req);
+        const params = req.feathers as AuthenticatedParams;
+        if (
+          upload.createdBy !== params.user?.user_id &&
+          !hasMinimumRole(params.user?.role, ROLES.ADMIN)
+        ) {
+          throw new NotFound('Upload unavailable');
+        }
+        const displayName =
+          typeof req.body?.displayName === 'string'
+            ? req.body.displayName
+                .split('')
+                .filter((character: string) => {
+                  const code = character.charCodeAt(0);
+                  return code >= 32 && code !== 127;
+                })
+                .join('')
+                .trim()
+                .slice(0, 200)
+            : '';
+        if (!displayName) throw new BadRequest('displayName is required');
+        const updated = await runWithTenantDatabaseScope(db, upload.tenantId, () =>
+          uploadRepo.rename(upload.tenantId, upload.ref, displayName)
+        );
+        res.json({ upload: updated });
+      } catch (error) {
+        next(error);
+      }
+    }
   );
 
   // ============================================================================
@@ -2108,10 +2671,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Queue listing — task-centric (was message-centric pre-never-lose-prompt).
   // The queue is the set of tasks with status='queued', ranked by
   // queue_position. Each queued task carries the full prompt + metadata; on
-  // drain it transitions queued → running via spawnTaskExecutor.
+  // drain it transitions queued → dispatching via spawnTaskExecutor.
   //
-  // Enqueueing goes through `POST /sessions/:id/prompt` — the daemon decides
-  // run-vs-queue based on session state and reports it back via `task.status`.
+  // Enqueueing goes through `POST /sessions/:id/prompt`: every admission first
+  // takes a durable position, then the database claim decides whether it may
+  // leave the queue immediately and reports the actual status to the caller.
   // ============================================================================
 
   registerAuthenticatedRoute(
@@ -2138,14 +2702,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // Queue processing implementation — task-centric. Acquires the shared
-  // `sessionTurnLocks` (declared near the top of registerRoutes) so the
-  // drainer can't race `/sessions/:id/prompt` or `/tasks/:id/run` for the
-  // same session. The retry-on-existing-lock indirection (vs. a plain
-  // `withSessionTurnLock` wrapper) preserves the original "if drain is in
-  // flight, schedule a retry instead of stacking concurrent drainers"
-  // semantics — important because callbacks can fire processNextQueuedTask
-  // from arbitrary points in the lifecycle.
+  // Queue processing implementation — task-centric. `sessionTurnLocks` and
+  // `queueRetryScheduled` only coalesce duplicate work inside this daemon.
+  // They may disappear on process death without losing correctness: the
+  // durable queue head plus Session-first dispatch claim are authoritative,
+  // and the all-daemon queue worker rediscovers missed work.
   const queueRetryScheduled = new Set<SessionID>();
 
   async function processNextQueuedTask(sessionId: SessionID, params: RouteParams): Promise<void> {
@@ -2272,22 +2833,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    const userId = nextTask.metadata?.queued_by_user_id;
+    // Recovery triggers carry trusted tenant routing but no request user. Restore
+    // the durable enqueuer identity before entering hooked Session reads/repairs
+    // so branch RBAC applies exactly as it did at admission time.
+    const userId = nextTask.metadata?.queued_by_user_id ?? nextTask.created_by;
     const userRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
     const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
-
     const taskParams: RouteParams = queuedByUser
-      ? ({
-          ...params,
-          user: queuedByUser,
-        } as RouteParams)
+      ? ({ ...params, user: queuedByUser } as RouteParams)
       : params;
-
-    console.log(
-      `📬 Processing queued task ${shortId(nextTask.task_id)} ` +
-        `(position ${nextTask.queue_position}) ` +
-        `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
-    );
 
     const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
       sessionsService.get(sessionId, taskParams)
@@ -2295,10 +2849,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
 
     if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
-      console.log(
-        `⏸️  [Queue] Session ${shortId(sessionId)} is ${session.status}, task ${shortId(nextTask.task_id)} waiting in queue ` +
-          `(will be processed when session becomes IDLE via patch hook)`
-      );
       return;
     }
 
@@ -2310,23 +2860,38 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    // spawnTaskExecutor handles the QUEUED → RUNNING transition (recomputes
+    // spawnTaskExecutor handles the QUEUED → DISPATCHING claim (recomputes
     // message_range/git_state, writes the user-message row, appends to
     // session.tasks, spawns the executor). We pass the messageSource from
     // task.metadata so callback styling survives the queue → run hop.
     const persistedSource = nextTask.metadata?.source;
     const source =
       persistedSource === 'gateway' || persistedSource === 'agor' ? persistedSource : undefined;
-    await spawnTaskExecutor(
+    const scheduledInitialTaskId = queuedSession.custom_context?.scheduled_run?.initial_task_id;
+    const stableInitialMessageId = stableInitialMessageIdForTask(
+      stillQueued,
+      scheduledInitialTaskId === stillQueued.task_id
+        ? (scheduledInitialTaskId as MessageID)
+        : undefined
+    );
+    const admitted = await spawnTaskExecutor(
       stillQueued,
       {
         stream: true,
         messageSource: source,
+        ...(stableInitialMessageId ? { stableInitialMessageId } : {}),
       },
       taskParams
     );
-
-    console.log(`✅ Queued task drained for session ${shortId(sessionId)}`);
+    if (admitted.status === TaskStatus.QUEUED) {
+      taskQueueDebug(
+        `⏸️  Queue head ${shortId(admitted.task_id)} remains queued after a lost/changed claim`
+      );
+      return;
+    }
+    console.log(
+      `[task-queue] event=dispatched session_id=${JSON.stringify(sessionId)} task_id=${JSON.stringify(admitted.task_id)} status=${JSON.stringify(admitted.status)}`
+    );
   }
 
   // Inject queue processor into sessions service.
@@ -2346,76 +2911,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/sessions/:id/permission-decision',
     {
-      async create(data: PermissionDecision, params: RouteParams) {
+      async create(data: PermissionDecisionSubmission, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        if (!data.requestId) throw new Error('requestId required');
-        if (typeof data.allow !== 'boolean') throw new Error('allow field required');
-
-        const messagesServiceInst = app.service('messages');
-        const messages = await messagesServiceInst.find({
-          query: {
-            session_id: id,
-            type: 'permission_request',
+        return deliverPermissionDecision({
+          app,
+          sessionId: id as SessionID,
+          data,
+          params,
+          authorization: {
+            branchRbacEnabled,
+            branchRepository,
+            allowSuperadmin: superadminOpts.allowSuperadmin,
           },
         });
-
-        const messageList = isPaginated(messages) ? messages.data : messages;
-        const permissionMessage = messageList.find((msg: Message) => {
-          const content = msg.content as PermissionRequestContent;
-          return content?.request_id === data.requestId;
-        });
-
-        if (!permissionMessage) {
-          throw new Error(`Permission request ${data.requestId} not found`);
-        }
-
-        const permissionContent = permissionMessage.content as PermissionRequestContent;
-
-        if (permissionContent?.status && permissionContent.status !== 'pending') {
-          return {
-            success: false,
-            alreadyResolved: true,
-            status: permissionContent.status,
-            message: `Permission request already ${permissionContent.status}`,
-          };
-        }
-
-        const resolvedTaskId = permissionContent.task_id || permissionMessage.task_id;
-
-        if (!resolvedTaskId) {
-          console.error(
-            `❌ [Permission] Cannot resolve permission: task_id missing from both content and message. requestId=${data.requestId}`
-          );
-          throw new Error(
-            'Cannot process permission decision: task_id is missing. This permission request may be corrupted.'
-          );
-        }
-
-        await messagesServiceInst.patch(permissionMessage.message_id, {
-          content: {
-            ...permissionContent,
-            status: data.allow ? 'approved' : 'denied',
-            scope: data.scope,
-            approved_by: data.decidedBy,
-            approved_at: new Date().toISOString(),
-          },
-        });
-
-        permissionService.resolvePermission(data);
-
-        app.service('messages').emit('permission_resolved', {
-          requestId: data.requestId,
-          taskId: resolvedTaskId,
-          sessionId: id,
-          allow: data.allow,
-          reason: data.reason,
-          remember: data.remember,
-          scope: data.scope,
-          decidedBy: data.decidedBy,
-        });
-
-        return { success: true };
       },
     },
     {
@@ -2432,16 +2941,34 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // auto-resume task queueing, and the `widget:resolved` broadcast.
   // ============================================================================
 
+  const widgetResolutionMessages = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
+  const widgetResolutionBranches = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
+    resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
+      emitServiceEvent(app, {
+        path: 'messages',
+        event: 'patched',
+        data: message,
+        id: message.message_id,
+      })
+    ),
+    publishResolved: (payload: Record<string, unknown>) =>
+      emitServiceEvent(app, {
+        path: 'messages',
+        event: 'widget:resolved',
+        data: payload,
+        method: 'patch',
+        id: payload.widget_id as string,
+      }),
     isBranchOwner: async (branchId: string, userId: UUID) =>
-      branchRepository.isOwner(branchId as import('@agor/core/types').BranchID, userId),
+      widgetResolutionBranches.isOwner(branchId as import('@agor/core/types').BranchID, userId),
     resolveBranchPermission: async (branch: import('@agor/core/types').Branch, userId: UUID) =>
-      branchRepository.resolveUserPermission(branch, userId),
+      widgetResolutionBranches.resolveUserPermission(branch, userId),
   };
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/submit',
     {
@@ -2465,7 +2992,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/dismiss',
     {
@@ -3609,7 +4136,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
       const dbProbe = await probeDatabase(db);
       const publicResponse = {
-        status: healthStatus(dbProbe),
+        status:
+          healthStatus(dbProbe) === 'ok' && (!realtimeRuntime || realtimeRuntime.isReady())
+            ? 'ok'
+            : 'degraded',
         db: publicHealthDb(dbProbe),
         timestamp: Date.now(),
         version: DAEMON_VERSION,
@@ -3627,6 +4157,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           label: config.daemon?.instanceLabel,
           description: config.daemon?.instanceDescription,
         },
+        realtime: realtimeRuntime
+          ? { required: true, ready: realtimeRuntime.isReady() }
+          : { required: false, ready: true },
         features: {
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),
           // Web terminal availability: UI should hide terminal buttons when false.
@@ -3650,6 +4183,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // create time; the UI uses it to pick the right default and disable
           // unavailable storage modes before submit.
           branchStorage: resolveBranchStorageConfig(),
+          uploadPolicy: getUploadLimits(),
         },
       };
 
@@ -3701,6 +4235,26 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             managedEnvsExecutionMode:
               config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,
           },
+          deployment: {
+            mode: deployment.mode,
+            ...(deployment.mode === 'ha'
+              ? {
+                  // @agor/core's source owns these fields. The daemon package's
+                  // no-build typecheck can temporarily see the previous core
+                  // dist declaration while watch mode catches up.
+                  supportProfile: (deployment as typeof deployment & { supportProfile: string })
+                    .supportProfile,
+                  capabilities: (
+                    deployment as typeof deployment & {
+                      capabilities: Record<string, boolean>;
+                    }
+                  ).capabilities,
+                }
+              : {}),
+            instanceId: distributedWorkIdentity.instanceId,
+            bootId: distributedWorkIdentity.bootId,
+            realtime: realtimeRuntime?.health() ?? { required: false, ready: true },
+          },
           // Resolved security posture — admins can confirm in Settings → About
           // which CSP/CORS policy the daemon booted with, without tailing logs
           // or reading response headers by hand. Keep the shape tight: the
@@ -3735,7 +4289,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // Liveness (/livez) and readiness (/readyz) probes — see health/routes.ts.
-  registerHealthProbeRoutes(app, db);
+  registerHealthProbeRoutes(app, db, [
+    ...(realtimeRuntime ? [{ name: 'redis', isReady: () => realtimeRuntime.isReady() }] : []),
+    ...(deployment.mode === 'ha'
+      ? [
+          {
+            name: 'environment-health-monitor',
+            isReady: () => {
+              const monitor = app.get('environmentHealthMonitor') as
+                | { isReady?: () => boolean }
+                | undefined;
+              return monitor?.isReady?.() === true;
+            },
+          },
+        ]
+      : []),
+  ]);
 
   // ============================================================================
   // MCP routes
@@ -3744,7 +4313,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   if (config.daemon?.mcpEnabled !== false) {
     const { setupMCPRoutes } = await import('./mcp/server.js');
     const toolSearchEnabled = config.daemon?.mcpToolSearch !== false;
-    setupMCPRoutes(app, db, toolSearchEnabled, config);
+    setupMCPRoutes(app, db, toolSearchEnabled, config, { serverVersion: AGOR_VERSION });
     console.log(
       `✅ MCP server enabled at POST /mcp${toolSearchEnabled ? ' (tool search mode)' : ''}`
     );

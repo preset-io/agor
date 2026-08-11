@@ -11,6 +11,7 @@ import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
+  ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   getBranchesDir,
   loadConfig,
@@ -683,6 +684,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       if (!Number.isInteger(withDefaults.clone_depth) || withDefaults.clone_depth <= 0) {
         throw new BadRequest('clone_depth must be a positive integer when set.');
       }
+      try {
+        ensureBranchCloneDepthAllowed(withDefaults.clone_depth);
+      } catch (error) {
+        throw new BadRequest(error instanceof Error ? error.message : String(error));
+      }
     }
     // Persist the effective mode so the executor never reconstructs a
     // configuration default at the filesystem boundary.
@@ -704,41 +710,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     return withDefaults;
-  }
-
-  /**
-   * Custom method: Initialize Unix group for a branch (daemon-side privileged operation).
-   *
-   * Called by the executor via Feathers RPC after creating the git branch on
-   * disk, so that groupadd/chgrp/setfacl run with daemon sudo privileges
-   * regardless of executor impersonation mode.
-   *
-   * Auth: only service accounts (executor JWTs) may invoke this externally.
-   * Internal calls (no `provider`) pass through.
-   */
-  async initializeUnixGroup(
-    data: { branchId: string; othersAccess?: 'none' | 'read' | 'write' },
-    params?: BranchParams
-  ): Promise<{ unixGroup: string }> {
-    if (params?.provider) {
-      const caller = (params as AuthenticatedParams | undefined)?.user;
-      if (!caller) {
-        throw new NotAuthenticated('Authentication required');
-      }
-      const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
-      if (!isService) {
-        throw new Forbidden('Only the executor service account may initialize Unix groups');
-      }
-    }
-
-    const { initializeBranchUnixGroup } = await import('../utils/unix-group-init.js');
-    const unixGroup = await initializeBranchUnixGroup(
-      this.db,
-      this.app,
-      data.branchId,
-      data.othersAccess || 'read'
-    );
-    return { unixGroup };
   }
 
   /**
@@ -1694,7 +1665,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // templates without tripping requireAdminForEnvConfig when unarchive
         // is performed by a non-admin user.
         const sessionToken = generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } }
+          this.app as unknown as { settings: { authentication?: { secret?: string } } },
+          { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
         );
         spawnExecutor(
           {
@@ -1711,6 +1683,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               restoreMode: true,
               // Unix group isolation
               initUnixGroup,
+              ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
               fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
               useReference:
                 storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
@@ -1876,7 +1849,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           environmentUpdate?: BranchEnvironmentUpdate;
         },
     environmentUpdateOrParams?: BranchEnvironmentUpdate | BranchParams,
-    params?: BranchParams
+    params?: BranchParams,
+    internalOptions?: { beginLifecycle?: boolean }
   ): Promise<BranchWithZoneAndSessions> {
     const isRpcEnvelope = typeof idOrData === 'object';
     const id = isRpcEnvelope ? (idOrData.branch_id ?? idOrData.branchId) : idOrData;
@@ -1920,7 +1894,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       existing.environment_instance,
       updatedEnvironment
     );
-    if (!hasPersistedChange) {
+    if (!hasPersistedChange && !internalOptions?.beginLifecycle) {
       return existing;
     }
 
@@ -1949,7 +1923,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Observation-only persistence deliberately bypasses Feathers publication.
     // It also preserves branch.updated_at so health bookkeeping does not affect
     // branch ordering or modification semantics every five seconds.
-    if (!hasChanged) {
+    if (!hasChanged && !internalOptions?.beginLifecycle) {
       return this.withTenantDatabase(resolvedParams, () =>
         this.branchRepo.update(
           id,
@@ -1959,16 +1933,28 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
     }
 
-    const branch = await this.withTenantDatabase(resolvedParams, () =>
-      this.patch(
-        id,
-        {
-          environment_instance: updatedEnvironment,
-          updated_at: new Date().toISOString(),
-        },
-        resolvedParams
-      )
-    );
+    const branch = internalOptions?.beginLifecycle
+      ? await this.withTenantDatabase(resolvedParams, async () => {
+          await this.branchRepo.update(
+            id,
+            {
+              environment_instance: updatedEnvironment,
+              updated_at: new Date().toISOString(),
+            },
+            { invalidateEnvironmentObservation: true }
+          );
+          return this.get(id, resolvedParams);
+        })
+      : await this.withTenantDatabase(resolvedParams, () =>
+          this.patch(
+            id,
+            {
+              environment_instance: updatedEnvironment,
+              updated_at: new Date().toISOString(),
+            },
+            resolvedParams
+          )
+        );
 
     // this.patch() calls the raw implementation and bypasses Feathers event
     // dispatch, so the patched event is not automatically emitted. Emit it
@@ -2020,7 +2006,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         last_health_check: undefined,
         last_error: undefined,
       },
-      params
+      params,
+      { beginLifecycle: true }
     );
 
     try {

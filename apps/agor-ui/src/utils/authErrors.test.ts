@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { isDefiniteAuthFailure, isTransientConnectionError } from './authErrors';
 
 describe('isDefiniteAuthFailure', () => {
-  it('returns true for 401 / 403 via `code`, `status`, `statusCode`', () => {
+  it('returns true for 401 via `code`, `status`, `statusCode`', () => {
     expect(isDefiniteAuthFailure({ code: 401 })).toBe(true);
-    expect(isDefiniteAuthFailure({ status: 403 })).toBe(true);
+    expect(isDefiniteAuthFailure({ status: 401 })).toBe(true);
     expect(isDefiniteAuthFailure({ statusCode: 401 })).toBe(true);
+  });
+
+  it('returns false for 403 authorization failures', () => {
+    expect(isDefiniteAuthFailure({ code: 403 })).toBe(false);
+    expect(isDefiniteAuthFailure({ status: 403 })).toBe(false);
+    expect(isDefiniteAuthFailure({ statusCode: 403 })).toBe(false);
   });
 
   it('returns true for Feathers NotAuthenticated by name or className', () => {

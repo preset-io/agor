@@ -186,11 +186,6 @@ describe('Session Repository Integration', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: {
-        ref: 'main',
-        base_sha: 'abc123',
-        current_sha: 'abc123',
-      },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -213,7 +208,6 @@ describe('Session Repository Integration', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -232,21 +226,17 @@ describe('Session Repository Integration', () => {
     const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
-    const gitState = { ref: 'main', base_sha: 'abc123', current_sha: 'abc123' };
     const session = await repo.create({
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: gitState,
       genealogy: { children: [] },
       contextFiles: ['file1.ts', 'file2.ts'],
       tasks: [],
     });
 
     const found = await repo.findById(session.session_id);
-
-    expect(found!.git_state).toEqual(gitState);
     expect(found!.contextFiles).toEqual(['file1.ts', 'file2.ts']);
   });
 
@@ -263,7 +253,6 @@ describe('Session Repository Integration', () => {
         status,
         created_by: 'test-user' as UserID,
         branch_id: branch.branch_id,
-        git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
         genealogy: { children: [] },
         contextFiles: [],
         tasks: [],
@@ -296,7 +285,6 @@ describe('Session Repository Integration', () => {
         status: SessionStatus.IDLE,
         created_by: 'test-user' as UserID,
         branch_id: branch.branch_id,
-        git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
         genealogy: { children: [] },
         contextFiles: [],
         tasks: [],
@@ -324,7 +312,6 @@ describe('Task Repository Integration', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -368,7 +355,6 @@ describe('Task Repository Integration', () => {
         status: SessionStatus.IDLE,
         created_by: 'test-user' as UserID,
         branch_id: branch.branch_id,
-        git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
         genealogy: { children: [] },
         contextFiles: [],
         tasks: [],
@@ -416,7 +402,6 @@ describe('Task Repository Integration', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -596,7 +581,6 @@ describe('Session Genealogy', () => {
       status: TaskStatus.COMPLETED,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -607,7 +591,6 @@ describe('Session Genealogy', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
       genealogy: {
         forked_from_session_id: parent.session_id,
         fork_point_task_id: 'task-123' as TaskID,
@@ -633,7 +616,6 @@ describe('Session Genealogy', () => {
       status: TaskStatus.COMPLETED,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -644,7 +626,6 @@ describe('Session Genealogy', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: {
         forked_from_session_id: parent.session_id,
         fork_point_task_id: 'task-1' as TaskID,
@@ -659,7 +640,6 @@ describe('Session Genealogy', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: {
         parent_session_id: parent.session_id,
         spawn_point_task_id: 'task-2' as TaskID,
@@ -691,7 +671,6 @@ describe('Session Genealogy', () => {
       status: TaskStatus.COMPLETED,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -702,7 +681,6 @@ describe('Session Genealogy', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
       genealogy: {
         forked_from_session_id: parent.session_id,
         fork_point_task_id: 'task-123' as TaskID,
@@ -761,7 +739,6 @@ describe('Error Handling', () => {
       status: 'invalid-status' as any,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -818,7 +795,6 @@ describe('Edge Cases and Data Integrity', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -841,7 +817,6 @@ describe('Edge Cases and Data Integrity', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -878,7 +853,6 @@ describe('Edge Cases and Data Integrity', () => {
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
       branch_id: branch.branch_id,
-      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
@@ -900,32 +874,5 @@ describe('Edge Cases and Data Integrity', () => {
     });
 
     expect(task.full_prompt).toBe(fullPrompt);
-  });
-
-  it('should preserve exact SHA hashes', async () => {
-    const db = createTestDb();
-    await initializeDatabase(db);
-    const { branch } = await setupRepoAndBranch(db);
-
-    const repo = new SessionRepository(db);
-
-    const sha = 'a1b2c3d4e5f6789012345678901234567890abcd';
-    const session = await repo.create({
-      agentic_tool: 'claude-code',
-      status: SessionStatus.IDLE,
-      created_by: 'test-user' as UserID,
-      branch_id: branch.branch_id,
-      git_state: {
-        ref: 'main',
-        base_sha: sha,
-        current_sha: sha,
-      },
-      genealogy: { children: [] },
-      contextFiles: [],
-      tasks: [],
-    });
-
-    expect(session.git_state.base_sha).toBe(sha);
-    expect(session.git_state.current_sha).toBe(sha);
   });
 });

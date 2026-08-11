@@ -39,13 +39,13 @@ function statusOf(err: unknown): number | undefined {
 
 /**
  * True when the error represents a definite auth failure: the credentials
- * were rejected (401 / 403), or Feathers explicitly raised NotAuthenticated.
+ * were rejected with 401, or Feathers explicitly raised NotAuthenticated.
  * The executor's 401-retry hook treats this as "the socket lost its auth —
  * try re-authenticating once with the still-valid session JWT."
  */
 export function isDefiniteAuthFailure(err: unknown): boolean {
   const status = statusOf(err);
-  if (status === 401 || status === 403) return true;
+  if (status === 401) return true;
   if (!err || typeof err !== 'object') return false;
   const e = err as FeathersLikeError;
   if (e.name === 'NotAuthenticated') return true;

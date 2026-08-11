@@ -6,11 +6,13 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type AgorConfig,
   isUnixImpersonationEnabled,
   loadConfig,
+  type ResolvedDeploymentConfig,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
   resolveMultiTenancyDatabaseDialect,
@@ -22,13 +24,19 @@ import {
 } from '@agor/core/config';
 import {
   ArtifactRepository,
+  assertTenantWritable,
   BoardRepository,
   type BranchRepository,
+  getCurrentTenantDatabaseScope,
+  getCurrentTenantId,
+  isPostgresDatabaseHandle,
+  runWithTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  TenantWriteGateActiveError,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
@@ -39,12 +47,13 @@ import {
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
 import type { Application, FeathersService } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
   boardObjectQueryValidator,
   boardQueryValidator,
   branchQueryValidator,
+  mcpCatalogQueryValidator,
   mcpServerQueryValidator,
   repoQueryValidator,
   sessionQueryValidator,
@@ -61,6 +70,7 @@ import type {
   GroupID,
   HookContext,
   MCPServer,
+  MessageID,
   Paginated,
   Params,
   Session,
@@ -69,7 +79,6 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
-  AGENTIC_TOOL_DISPLAY_NAMES,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
@@ -90,19 +99,22 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
+import { rejectInConstrainedHa } from './ha-support.js';
 import { classifyMissingCredentialFailure } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
+import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
+import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
+import { isMCPOAuthGrantBoundToServer } from './services/mcp-oauth-grant-binding.js';
 import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
 } from './services/sessions.js';
 import { isLocalAuthenticationLookup } from './services/users.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
-import { applySessionConfigDefaults } from './utils/apply-session-config-defaults.js';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute,
@@ -124,6 +136,7 @@ import {
   loadSession,
   loadSessionBranch,
   resolveSessionContext,
+  scopeFindToAccessibleBoards,
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
   scopeFindToAccessibleSessionsSql,
@@ -131,9 +144,7 @@ import {
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
-import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
   redactMCPServerSecrets,
@@ -164,11 +175,14 @@ import {
   serviceTokenScopeForCurrentTenant,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
+import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
 import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
+  resolveTenantIdForDeferredScope,
 } from './utils/tenant-db-scope.js';
 import { enforcePublicWriteFields, markWriteDataPrepared } from './utils/write-data-boundary.js';
+import { protectExternalWidgetMessageWrites } from './widgets/message-boundary.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
@@ -292,7 +306,6 @@ function validateBranchEnvPolicyHook() {
  *   - `/sessions/:id/stop`    → `status`, `ready_for_prompt`
  *   - executor status updates → `status`, `ready_for_prompt`
  *     (claude/copilot permission-hooks, see packages/executor)
- *   - executor git-SHA capture → `git_state` (per-message current_sha)
  *   - executor opencode init   → `sdk_session_id` (SDK session handle)
  *
  * When a `patch` touches ONLY these fields, the sessions hook chain downgrades
@@ -306,7 +319,7 @@ function validateBranchEnvPolicyHook() {
  * `isPromptFlowPatchOnly` check and falls through to the strict `'all'` path,
  * so widening the whitelist here cannot accidentally leak metadata writes.
  *
- * NOTE: `git_state` and `sdk_session_id` are on this list because the executor
+ * NOTE: `sdk_session_id` is on this list because the executor
  * authenticates as the session creator (see auth/session-token-strategy.ts),
  * not as a service account. Proper long-term fix is to give the executor a
  * service-account token so these patches bypass RBAC entirely.
@@ -317,7 +330,6 @@ export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
   'archived_reason',
   'status',
   'ready_for_prompt',
-  'git_state',
   'sdk_session_id',
 ];
 
@@ -392,6 +404,8 @@ export interface RegisterHooksContext {
   branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
+  realtimeRelay?: Pick<RedisRealtimeRuntime, 'relay' | 'setRelayHandler'>;
+  deployment: ResolvedDeploymentConfig;
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
@@ -428,14 +442,9 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'agentic-tool-settings',
   'agentic-tool-presets',
   'mcp-servers',
-  'mcp-servers/discover',
-  'mcp-servers/oauth-auth-headers',
-  'mcp-servers/oauth-complete',
+  'mcp-servers/oauth-attempt-status',
   'mcp-servers/oauth-disconnect',
-  'mcp-servers/oauth-refresh',
-  'mcp-servers/oauth-start',
   'mcp-servers/oauth-status',
-  'mcp-servers/test-oauth',
   'card-types',
   'cards',
   'artifacts',
@@ -465,14 +474,51 @@ export const TENANT_OWNED_SERVICE_PATHS = [
 // units of work at the call site instead of holding an HTTP-long transaction.
 export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'check-auth',
+  // Global catalog: no tenant column to scope, no writes to stamp.
+  'mcp-catalog',
   'codex-auth/device',
   'codex-auth/import',
   'codex-auth/logout',
+  'opencode-auth',
+  'opencode-models',
   'claude-models',
   'copilot-models',
   'cursor-models',
   'terminals',
+  // These OAuth/discovery endpoints perform provider network I/O or wait for
+  // a browser callback. Their durable one-shot claim must commit before any
+  // authorization-code exchange, so they must never inherit an HTTP-long
+  // tenant transaction. Each DB access opens a short tenant unit of work.
+  'mcp-servers/discover',
+  'mcp-servers/oauth-complete',
+  'mcp-servers/oauth-start',
+  'mcp-servers/oauth-auth-headers',
+  'mcp-servers/oauth-refresh',
+  'mcp-servers/test-oauth',
 ] as const;
+
+/**
+ * Service endpoints whose implementation retains process-local credentials,
+ * provider handshakes, or native runtime state. Keep this inventory exported
+ * so the constrained HA fail-closed boundary has direct regression coverage.
+ * `mcp-servers/discover` is included because an OAuth-protected probe can start
+ * the same pending PKCE/callback flow as the explicit OAuth endpoints.
+ */
+export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
+  ['mcp-servers/discover', 'mcpOAuth'],
+  ['mcp-servers/oauth-auth-headers', 'mcpOAuth'],
+  ['mcp-servers/oauth-complete', 'mcpOAuth'],
+  ['mcp-servers/oauth-disconnect', 'mcpOAuth'],
+  ['mcp-servers/oauth-refresh', 'mcpOAuth'],
+  ['mcp-servers/oauth-start', 'mcpOAuth'],
+  ['mcp-servers/oauth-status', 'mcpOAuth'],
+  ['mcp-servers/test-oauth', 'mcpOAuth'],
+  ['codex-auth/device', 'codexDeviceAuth'],
+  ['codex-auth/import', 'codexAuth'],
+  ['codex-auth/logout', 'codexAuth'],
+  ['opencode-auth', 'openCodeAuth'],
+  ['opencode-models', 'openCodeAuth'],
+] as const satisfies ReadonlyArray<readonly [string, Parameters<typeof rejectInConstrainedHa>[1]]>;
 
 const taskFieldSet = (...fields: (keyof Task)[]) => new Set<string>(fields);
 
@@ -550,10 +596,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     requireAuth,
     superadminOpts,
     sessionsService,
+    messagesService,
     boardsService,
     branchRepository,
     usersRepository,
     sessionsRepository,
+    realtimeRelay,
+    deployment,
   } = ctx;
 
   // Used by classifyMissingCredentialFailure to look up the acting user for
@@ -569,6 +618,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     }
   };
 
+  if (deployment.mode === 'ha') {
+    for (const [path, feature] of CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES) {
+      safeService(path)?.hooks({ before: { all: [rejectInConstrainedHa(deployment, feature)] } });
+    }
+  }
+
   const multiTenancy = resolveMultiTenancyConfig(config);
   const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
   const executionMode = resolveExecutionSecurityMode(config);
@@ -582,12 +637,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   });
 
   const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
-
-  const stampTenantData = (data: unknown, tenantId: string): unknown => {
-    if (Array.isArray(data)) return data.map((item) => stampTenantData(item, tenantId));
-    if (!data || typeof data !== 'object') return data;
-    return { ...(data as Record<string, unknown>), tenant_id: tenantId };
-  };
 
   const stripTenantData = (data: unknown): unknown => {
     if (Array.isArray(data)) return data.map(stripTenantData);
@@ -636,9 +685,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const tenantId = context.params.tenant?.tenant_id;
     if (!tenantId) return context;
 
-    if (context.method === 'create') {
-      context.data = stampTenantData(context.data, tenantId) as typeof context.data;
-    } else if (context.method === 'update' || context.method === 'patch') {
+    if (context.method === 'update' || context.method === 'patch') {
       context.data = stripTenantData(context.data) as typeof context.data;
     }
 
@@ -658,13 +705,42 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  // Enforce the per-tenant write gate on request-driven writes. Runs after
+  // scopeTenantBefore has resolved the trusted tenant. Reads are never gated;
+  // only create/update/patch/remove are blocked while a freeze is held. This is
+  // the request-traffic enforcement point for the generic write gate; deferred
+  // operators (scheduler/gateway/executor/queue) enforce at their own entry
+  // points. Fails closed with 503 so an orchestrator sees a transient block.
+  const WRITE_METHODS = new Set(['create', 'update', 'patch', 'remove']);
+  const writeGateBefore = async (context: HookContext): Promise<HookContext> => {
+    if (!WRITE_METHODS.has(context.method)) return context;
+    const tenantId = context.params.tenant?.tenant_id;
+    if (!tenantId) return context;
+    // Only enforce inside an active tenant database scope — the one the around
+    // hook (`tenantDatabaseScopeAround`) opens before these before-hooks run.
+    // The gate read joins that transaction; without an active scope there is no
+    // tenant transaction to read against (e.g. identity-only services, or a unit
+    // test that invokes the before-hooks directly), so there is nothing to
+    // enforce here and we must not open a stray transaction.
+    if (!getCurrentTenantDatabaseScope()) return context;
+    try {
+      await assertTenantWritable(db, tenantId);
+    } catch (error) {
+      if (error instanceof TenantWriteGateActiveError) {
+        throw new Unavailable(error.message);
+      }
+      throw error;
+    }
+    return context;
+  };
+
   const registerTenantHooks = (): void => {
     for (const path of tenantOwnedServicePaths) {
       const service = safeService(path);
       if (!service) continue;
       service.hooks({
         around: { all: [path === 'gateway' ? tenantIdentityAround : tenantDatabaseScopeAround] },
-        before: { all: [scopeTenantBefore] },
+        before: { all: [scopeTenantBefore, writeGateBefore] },
         after: { all: [assertTenantAfter] },
       });
     }
@@ -765,6 +841,51 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     );
   };
 
+  // Session creation can be an internal scheduler admission that deliberately
+  // bypasses the public Feathers create hook pipeline while a schedule row is
+  // locked. Own the Unix side effect as a service event consumer so both paths
+  // share it, and always defer database/process work until after commit.
+  if (executionMode.unixFsIsolationEnabled) {
+    app.service('sessions').on('created', (session: Session, hook?: Partial<HookContext>) => {
+      if (!session.branch_id || !session.unix_username) return;
+      if ((hook?.params as { isBranchOwner?: boolean } | undefined)?.isBranchOwner) return;
+      const tenantId = resolveTenantIdForDeferredScope(hook?.params);
+      deferWithTenantContext(
+        hook?.params,
+        async () => {
+          const activeTenantId = getCurrentTenantId();
+          const branch = await runWithTenantDatabaseScope(db, activeTenantId, () =>
+            branchRepository.findById(session.branch_id)
+          );
+          if (!branch?.others_fs_access || branch.others_fs_access === 'none') return;
+          console.info(
+            formatStructuredLog('[unix-access.sync]', {
+              event: 'scheduled',
+              source: 'session_created',
+              tenant_id: tenantId,
+              branch_id: session.branch_id,
+              session_id: session.session_id,
+            })
+          );
+          syncBranchUnixAccess(branch.branch_id, '[Executor/session.created.unix-group]', {
+            scope: { session_id: session.session_id },
+          });
+        },
+        (error) =>
+          console.error(
+            formatStructuredLog('[unix-access.sync]', {
+              event: 'schedule_failed',
+              source: 'session_created',
+              tenant_id: tenantId,
+              branch_id: session.branch_id,
+              session_id: session.session_id,
+              error_code: structuredLogErrorCode(error),
+            })
+          )
+      );
+    });
+  }
+
   const syncUnixAccessForBoardAlignedBranches = async (
     boardId: unknown,
     logPrefix: string
@@ -858,6 +979,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Messages hooks
   // ============================================================================
 
+  const protectWidgetMessageWrites = protectExternalWidgetMessageWrites((messageId) =>
+    messagesService.findByIdForScopeCheck(messageId as MessageID)
+  );
+  const protectPermissionMessageWrites = protectExternalPermissionMessageWrites((messageId) =>
+    messagesService.findByIdForScopeCheck(messageId as MessageID)
+  );
+
   app.service('messages').hooks({
     before: {
       all: [requireAuth, executorRuntimeScopeGuard()],
@@ -879,6 +1007,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create messages'),
+        protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
         ...(branchRbacEnabled
           ? [
               resolveSessionContext(),
@@ -898,6 +1028,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           AGENTIC_TOOL_DISPLAY_NAMES
         ),
       ],
+      update: [protectWidgetMessageWrites, protectPermissionMessageWrites],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),
         ...(branchRbacEnabled
@@ -908,6 +1039,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
+        protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete messages'),
@@ -919,6 +1052,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
+        protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
       ],
     },
     after: {
@@ -992,6 +1127,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('cards')?.hooks({
     before: {
       all: [requireAuth],
+      find: [
+        ...(branchRbacEnabled
+          ? [scopeFindToAccessibleBoards(new BoardRepository(db), superadminOpts)]
+          : []),
+      ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create cards'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update cards')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete cards')],
@@ -1595,39 +1735,25 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         if (!row) {
           return server;
         }
-
-        // JIT refresh — see `refreshAndPersistToken` for mutexing + invalid_grant cleanup.
-        let accessToken = row.oauth_access_token;
-        let expiresAt = row.oauth_token_expires_at;
-        const { needsRefresh, refreshAndPersistToken, InvalidGrantError } = await import(
-          '@agor/core/tools/mcp/oauth-refresh'
-        );
-        if (needsRefresh(row.oauth_token_expires_at) && row.oauth_refresh_token) {
-          console.log(`[MCP OAuth] Token near/past expiry for ${server.name} — refreshing`);
-          try {
-            accessToken = await refreshAndPersistToken({
-              db,
-              userId: tokenUserId,
-              mcpServerId: server.mcp_server_id,
-            });
-            // Re-read to pick up the rotated expiry for the UI.
-            const fresh = await userTokenRepo.getToken(tokenUserId, server.mcp_server_id);
-            if (fresh) expiresAt = fresh.oauth_token_expires_at;
-          } catch (refreshErr) {
-            if (refreshErr instanceof InvalidGrantError) {
-              console.warn(
-                `[MCP OAuth] invalid_grant refreshing ${server.name} — user must re-auth`
-              );
-              return server;
-            }
-            // Transient error: fall through with the stale access_token. The
-            // MCP call may still succeed or fail cleanly at the transport.
-            console.warn(
-              `[MCP OAuth] Refresh failed for ${server.name} (using stale token):`,
-              refreshErr instanceof Error ? refreshErr.message : refreshErr
-            );
-          }
+        if (
+          isPostgresDatabaseHandle(db) &&
+          !isMCPOAuthGrantBoundToServer(process.env.AGOR_MASTER_SECRET!, server, row)
+        ) {
+          console.warn('[MCP OAuth] grant_rejected category=binding_mismatch');
+          return server;
         }
+
+        // Response enrichment is a durable read only. Refresh is coordinated
+        // by oauth-auth-headers/manual refresh, never from an after hook that
+        // may hold an unrelated tenant transaction.
+        if (
+          row.refresh_status !== 'idle' ||
+          (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
+        ) {
+          return server;
+        }
+        const accessToken = row.oauth_access_token;
+        const expiresAt = row.oauth_token_expires_at;
 
         return {
           ...server,
@@ -1640,11 +1766,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               expiresAt instanceof Date ? expiresAt.getTime() : (expiresAt ?? undefined),
           },
         };
-      } catch (error) {
-        console.warn(
-          `[MCP OAuth] Failed to resolve OAuth token for ${server.name}:`,
-          error instanceof Error ? error.message : error
-        );
+      } catch {
+        console.warn('[MCP OAuth] grant_resolution_failed category=local_error');
       }
 
       return server;
@@ -1684,6 +1807,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
       create: [requireMinimumRole(ROLES.ADMIN, 'create MCP servers')],
       patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
+      update: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
     },
     after: {
@@ -1692,6 +1816,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [redactMCPServerSecretFields],
       patch: [redactMCPServerSecretFields],
       update: [redactMCPServerSecretFields],
+    },
+  });
+
+  // The MCP catalog mirrors a public registry plus a repo-checked-in curation
+  // file — no tenant data, and no writes through this service. Authentication
+  // still gates it so an unauthenticated visitor cannot enumerate the browse
+  // surface, and query validation is also the SQL-injection boundary because
+  // every catalog filter reaches the database.
+  safeService('mcp-catalog')?.hooks({
+    before: {
+      all: [typedValidateQuery(mcpCatalogQueryValidator), requireAuth],
     },
   });
 
@@ -1757,7 +1892,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     if (channelId) {
       deferWithTenantContext(
         context.params,
-        () => gw.stopChannelListener(channelId),
+        async () => {
+          await gw.stopChannelListener(channelId);
+        },
         (err) => console.warn(`[gateway] Failed to stop listener for channel ${channelId}:`, err)
       );
     }
@@ -2419,6 +2556,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     accessCache: realtimeAccessCache,
     allowSuperadmin: superadminOpts.allowSuperadmin,
     multiTenancy,
+    realtimeRelay,
   });
 
   // ============================================================================
@@ -2476,13 +2614,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
         injectCreatedBy(),
-        // Auto-fill permission_config / model_config from the creator's
-        // default_agentic_config[tool] when the caller omits them. Must run
-        // after injectCreatedBy() so `data.created_by` is the trusted user
-        // ID. See utils/apply-session-config-defaults.ts.
-        applySessionConfigDefaults(),
         async (context) => {
-          // Populate repo field and auto-populate git_state from branch_id
+          // Populate repo field from branch_id.
           if (!Array.isArray(context.data) && context.data?.branch_id) {
             try {
               const branch = await context.app.service('branches').get(context.data.branch_id);
@@ -2497,41 +2630,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                     managed_branch: true,
                   };
                   console.log(`✅ Populated repo.cwd from branch: ${branch.path}`);
-                }
-
-                // Auto-populate git_state if not provided (UI and gateway don't set it).
-                // Branch git reads go through the executor so the daemon never
-                // runs git inside the managed checkout.
-                const existingGitState = (context.data as Record<string, unknown>).git_state as
-                  | { base_sha?: string }
-                  | undefined;
-                if (!existingGitState?.base_sha && branch.path) {
-                  try {
-                    const { currentSha, currentRef } = await inspectBranchViaExecutor(
-                      context.app as Application,
-                      branch.branch_id,
-                      {
-                        asUser: await resolveExecutorReadAsUser(
-                          db,
-                          (context.params as AuthenticatedParams).user?.user_id as
-                            | UserID
-                            | undefined
-                        ),
-                        logPrefix: `[sessions.create ${branch.name}]`,
-                      }
-                    );
-                    (context.data as Record<string, unknown>).git_state = {
-                      ref: currentRef || branch.name || 'unknown',
-                      base_sha: currentSha,
-                      current_sha: currentSha,
-                    };
-                    console.log(
-                      `✅ Auto-populated git_state from branch: ref=${currentRef}, sha=${currentSha.substring(0, 8)}`
-                    );
-                  } catch (gitError) {
-                    const message = gitError instanceof Error ? gitError.message : String(gitError);
-                    console.warn(`Failed to auto-populate git_state from branch: ${message}`);
-                  }
                 }
               }
             } catch (error) {
@@ -2643,55 +2741,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
         sessionMcpTokenAfterHooks.create,
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
-
-        // Unix Integration: When a non-owner creates a session in a branch with
-        // others_fs_access != 'none', ensure they're added to the branch and repo
-        // unix groups. Without this, non-owners can't access the .git/ directory
-        // (which uses 2770 = no others access) even if the branch directory itself
-        // allows "others" access via ACLs.
-        ...(executionMode.unixFsIsolationEnabled
-          ? [
-              async (context: HookContext) => {
-                const session = context.result as Session;
-
-                // Only for sessions with a branch and unix_username
-                if (!session.branch_id || !session.unix_username) {
-                  return context;
-                }
-
-                // Check if user is NOT an owner (owners are already handled by sync)
-                const isOwner = context.params?.isBranchOwner;
-                if (isOwner) {
-                  return context;
-                }
-
-                // Load branch to check others_fs_access
-                try {
-                  const branch = await branchRepository.findById(session.branch_id);
-                  if (!branch?.others_fs_access || branch.others_fs_access === 'none') {
-                    return context;
-                  }
-
-                  // Fire-and-forget: trigger unix.sync-branch to add session user to groups
-                  console.log(
-                    `[Unix Integration] Non-owner session created in branch ${shortId(session.branch_id)} ` +
-                      `by ${session.unix_username} (others_fs_access: ${branch.others_fs_access}), syncing group membership`
-                  );
-                  syncBranchUnixAccess(branch.branch_id, '[Executor/session.create.unix-group]', {
-                    scope: { session_id: session.session_id },
-                  });
-                } catch (error) {
-                  // Don't fail session creation if unix sync fails
-                  console.error(
-                    `[Unix Integration] Failed to trigger group sync for session ${shortId(session.session_id)}:`,
-                    error
-                  );
-                }
-
-                return context;
-              },
-            ]
-          : []),
       ],
       patch: [
         async (context) => {
@@ -3016,7 +3065,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               board_id: shortId(result.board_id),
               objectId,
               objectsCount: Object.keys(result.objects || {}).length,
-              objects: result.objects,
             });
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
             emitServiceEvent(app, {

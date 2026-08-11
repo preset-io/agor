@@ -8,12 +8,10 @@ import type { MCPServer } from '@agor-live/client';
  *      by the daemon's `injectPerUserOAuthTokens` find-hook on every
  *      `mcp-servers` find/get. Authoritative, but only as fresh as the last
  *      fetch. Covers both shared-mode and per-user tokens.
- *   2. `userAuthenticatedMcpServerIds` — a Set populated at boot from
- *      `/mcp-servers/oauth-status` and then *additively* updated when an
- *      `oauth:completed` socket event arrives. Acts as an optimistic flip
- *      that lights the chip green the instant OAuth completes (before the
- *      `mcp-servers.get(id)` refetch resolves) and as a fallback if that
- *      refetch ever fails.
+ *   2. `userAuthenticatedMcpServerIds` — a Set populated from the durable
+ *      `/mcp-servers/oauth-status` resource. Realtime OAuth events merely
+ *      trigger a full status/server refetch; they never mutate this Set
+ *      optimistically.
  *
  * Both branches are gated on `!isExpired` so the optimistic Set can never
  * outlive the actual token: stale "authenticated" state degrades back to
@@ -44,9 +42,8 @@ export function mcpServerNeedsAuth(
   // A token only counts as "authenticated" while it's still valid.
   if (server.auth.oauth_access_token && !isExpired) return false;
 
-  // Optimistic flip / refetch fallback. See the docstring above for why this
-  // Set exists alongside `server.auth`. Re-check expiry here too because the
-  // Set is never pruned when tokens expire on a long-lived tab.
+  // Durable status refetch fallback. Re-check expiry here too because a
+  // long-lived tab may not have polled again since token expiry.
   if (userAuthenticatedMcpServerIds.has(server.mcp_server_id) && !isExpired) return false;
 
   return true;

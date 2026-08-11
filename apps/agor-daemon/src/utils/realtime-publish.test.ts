@@ -15,6 +15,7 @@ import {
   executorTaskChannelName,
   leaveAllSessionStreamChannels,
   markConnectionSessionStreamsAware,
+  REDIS_FEATHERS_DENIED_PATHS,
 } from './realtime-publish';
 
 class FakeChannel {
@@ -49,6 +50,7 @@ function makeApp(
     publish: vi.fn((fn) => {
       publishFn = fn;
     }),
+    emit: vi.fn(),
     service: vi.fn((path: string) => {
       const service = services[path];
       if (!service) throw new Error(`Unexpected service: ${path}`);
@@ -104,6 +106,34 @@ describe('configureRealtimePublish executor control scope', () => {
     expect(result[0]?.connections).toEqual([executor]);
   });
 
+  it('routes a standalone permission decision only to the private room for that Task', async () => {
+    const browser = { user: user('browser') };
+    const executor = { user: user('executor') };
+    const room = executorTaskChannelName('tenant-a', 'task-1');
+    const app = makeApp([browser, executor], {}, { [room]: [executor] });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+
+    const result = (await app.runPublish(
+      { requestId: 'request-1', taskId: 'task-1', allow: true },
+      {
+        path: 'messages',
+        method: 'patch',
+        event: 'permission_resolved',
+        params: {},
+      }
+    )) as unknown as FakeChannel[];
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.connections).toEqual([executor]);
+    expect(result[0]?.connections).not.toContain(browser);
+  });
+
   it('does not materialize a room when Stop wins before executor connect', async () => {
     const app = makeApp([]);
     configureRealtimePublish({
@@ -151,6 +181,218 @@ describe('configureRealtimePublish executor control scope', () => {
         }
       )
     ).resolves.toEqual([]);
+  });
+});
+
+describe('HA Feathers publication relay', () => {
+  it('bridges executor control to the receiving replica local Feathers room only', async () => {
+    const executorA = { user: user('executor-a') };
+    const executorB = { user: user('executor-b') };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: vi.fn((handler) => {
+        remoteHandler = handler;
+      }),
+    };
+    const app = makeApp(
+      [],
+      {},
+      {
+        [executorTaskChannelName('tenant-a', 'task-1')]: [executorA],
+        [executorTaskChannelName('tenant-b', 'task-1')]: [executorB],
+      }
+    );
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: relay,
+    });
+
+    await remoteHandler?.({
+      version: 1,
+      tenantId: 'tenant-a',
+      path: 'tasks',
+      event: 'termination_requested',
+      method: 'patch',
+      id: 'task-1',
+      data: { task_id: 'task-1', status: 'stopping' },
+    });
+
+    expect(app.emit).toHaveBeenCalledOnce();
+    const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
+    expect(channel.connections).toEqual([executorA]);
+    expect(channel.connections).not.toContain(executorB);
+  });
+
+  it('bridges permission delivery across replicas without crossing tenant Task rooms', async () => {
+    const executorA = { user: user('executor-a') };
+    const executorB = { user: user('executor-b') };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: vi.fn((handler) => {
+        remoteHandler = handler;
+      }),
+    };
+    const app = makeApp(
+      [],
+      {},
+      {
+        [executorTaskChannelName('tenant-a', 'task-1')]: [executorA],
+        [executorTaskChannelName('tenant-b', 'task-1')]: [executorB],
+      }
+    );
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: relay,
+    });
+
+    await remoteHandler?.({
+      version: 1,
+      tenantId: 'tenant-a',
+      path: 'messages',
+      event: 'permission_resolved',
+      method: 'patch',
+      id: 'message-1',
+      data: { requestId: 'request-1', taskId: 'task-1', allow: true },
+    });
+
+    expect(app.emit).toHaveBeenCalledOnce();
+    const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
+    expect(channel.connections).toEqual([executorA]);
+    expect(channel.connections).not.toContain(executorB);
+  });
+
+  it('re-runs tenant containment on the receiving replica', async () => {
+    const tenantAUser = { user: user('tenant-a-user') };
+    const tenantBUser = { user: user('tenant-b-user') };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: vi.fn((handler) => {
+        remoteHandler = handler;
+      }),
+    };
+    const app = makeApp(
+      [tenantAUser, tenantBUser],
+      {},
+      {
+        'tenant:tenant-a': [tenantAUser],
+        'tenant:tenant-b': [tenantBUser],
+      }
+    );
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: relay,
+    });
+
+    await remoteHandler?.({
+      version: 1,
+      tenantId: 'tenant-a',
+      path: 'boards',
+      event: 'patched',
+      method: 'patch',
+      id: 'board-a',
+      data: { board_id: 'board-a', tenant_id: 'tenant-a' },
+    });
+
+    expect(app.emit).toHaveBeenCalledOnce();
+    const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
+    expect(channel.connections).toEqual([tenantAUser]);
+    expect(channel.connections).not.toContain(tenantBUser);
+  });
+
+  it('never places authentication results on the shared relay', async () => {
+    const app = makeApp(
+      [{ user: user('u1') }],
+      {},
+      {
+        'tenant:tenant-a': [{ user: user('u1') }],
+      }
+    );
+    const relay = { relay: vi.fn(), setRelayHandler: vi.fn() };
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+      realtimeRelay: relay,
+    });
+
+    await app.runPublish(
+      { accessToken: 'must-not-leave-process' },
+      { path: 'authentication', event: 'created', method: 'create', params: {} }
+    );
+    expect(relay.relay).not.toHaveBeenCalled();
+  });
+
+  it('relays the Feathers dispatch projection rather than an unredacted result', async () => {
+    const tenantUser = { user: user('u1') };
+    const app = makeApp([tenantUser], {}, { 'tenant:tenant-a': [tenantUser] });
+    const relay = { relay: vi.fn(), setRelayHandler: vi.fn() };
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+      realtimeRelay: relay,
+    });
+
+    await app.runPublish(
+      { id: 'channel-1', bot_token: 'must-not-enter-redis' },
+      {
+        path: 'gateway-channels',
+        event: 'patched',
+        method: 'patch',
+        params: {},
+        dispatch: { id: 'channel-1', bot_token: '[REDACTED]' },
+      }
+    );
+
+    expect(relay.relay).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { id: 'channel-1', bot_token: '[REDACTED]' } })
+    );
+    expect(JSON.stringify(relay.relay.mock.calls)).not.toContain('must-not-enter-redis');
+  });
+
+  it('keeps the credential/process-affine Feathers deny list explicit', () => {
+    expect([...REDIS_FEATHERS_DENIED_PATHS]).toEqual(
+      expect.arrayContaining([
+        'authentication',
+        'session-tokens',
+        'external-launch',
+        'mcp-servers/oauth-auth-headers',
+        'codex-auth/device',
+        'opencode-auth',
+        'terminals',
+      ])
+    );
   });
 });
 

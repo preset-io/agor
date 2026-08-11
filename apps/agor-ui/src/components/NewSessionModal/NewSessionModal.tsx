@@ -80,6 +80,7 @@ export interface NewSessionModalProps {
   branch?: Branch; // Optional - branch details for display
   currentUser?: User | null; // Optional - current user for default settings
   client: AgorClient | null;
+  uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
 export const NewSessionModal: React.FC<NewSessionModalProps> = ({
@@ -91,6 +92,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   branch,
   currentUser,
   client,
+  uploadPolicy,
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -106,7 +108,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     valid: true,
   });
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
-    useComposerAttachments({ sessionId: null, showError });
+    useComposerAttachments({ sessionId: null, showError, uploadPolicy });
 
   // Stable callback so the chip row's reporting effect doesn't loop.
   const handleConfigValidity = useCallback((valid: boolean, reason?: string) => {
@@ -357,6 +359,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           mcpServerById={mcpServerById}
           currentUser={currentUser}
           client={client}
+          branchId={branchId}
+          validateModelSelection
           enableSaveAsDefault
           onConfigValidityChange={handleConfigValidity}
         />

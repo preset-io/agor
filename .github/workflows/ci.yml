@@ -30,7 +30,7 @@ on:
       - 'context/**'
 
 env:
-  PNPM_VERSION: '11.13.0'
+  PNPM_VERSION: '11.17.0'
   NODE_VERSION: '22'
 
 jobs:
@@ -44,7 +44,7 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -54,6 +54,7 @@ jobs:
       # Cheap structural check — runs before lint so its output is the
       # first thing you see in failure output.
       - run: pnpm check:agor-live-deps
+      - run: pnpm check:agentic-tool-packages
 
       # Biome at the repo root — not a turbo task. Runs independently of
       # the build graph.

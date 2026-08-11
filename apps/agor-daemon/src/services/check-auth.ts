@@ -16,6 +16,8 @@
  * variables are not credential fallbacks.
  */
 
+import { getAgenticToolIntegration, TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
@@ -24,15 +26,14 @@ import {
   type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
-import { Claude } from '@agor/core/sdk';
 import type {
-  AgenticToolName,
   AuthCheckResult,
   AuthCheckStatus,
   AuthenticatedParams,
   UserID,
 } from '@agor/core/types';
-import { TOOL_API_KEY_NAMES } from '@agor/core/types';
+import { isAgenticToolName } from '@agor/core/types';
+import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
 import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
@@ -73,7 +74,7 @@ const unknown = (hint?: string): AuthCheckResult => ({
  */
 async function probeClaudeCodeAuth(
   env?: Record<string, string | undefined>
-): Promise<{ ok: boolean; account: Claude.AccountInfo | null }> {
+): Promise<{ ok: boolean; account: ClaudeSdk.AccountInfo | null }> {
   let releaseHeldInput!: () => void;
   const heldInputPromise = new Promise<void>((resolve) => {
     releaseHeldInput = resolve;
@@ -84,6 +85,7 @@ async function probeClaudeCodeAuth(
     await heldInputPromise;
   }
 
+  const Claude = await loadManagedAgenticToolSdk<typeof ClaudeSdk>('claude-code');
   const q = Claude.query({
     prompt: neverYields(),
     options: env ? { env } : {},
@@ -200,7 +202,7 @@ async function validateApiKey(
         // The Cursor SDK throws on any failure and does not expose a status code,
         // so a rejection cannot be told apart from a transport error — treat a
         // successful call as authenticated and any throw as unknown (fail safe).
-        const { Cursor } = await import('@cursor/sdk');
+        const { Cursor } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
         await Promise.race([
           Cursor.me({ apiKey: key }),
           new Promise<never>((_, reject) =>
@@ -263,7 +265,10 @@ async function probeCodexAuthFile(
     return unknown('Could not resolve the Unix account that holds the Codex login.');
   }
 
-  const inspection = await inspectCodexAuthViaExecutor(identity.unixUser);
+  const inspection = await inspectCodexAuthViaExecutor(identity.unixUser, {
+    reportedUnixUser: identity.reportedUnixUser,
+    userId: identity.userId,
+  });
   if (!inspection.ok) {
     // Only a genuinely absent file proves "no login". Permission/sudo/
     // transport failures mean we could not LOOK, which must never surface as
@@ -311,26 +316,24 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       params?: AuthenticatedParams
     ): Promise<AuthCheckResult> {
       const { tool, apiKey: rawKey } = data;
+      if (!isAgenticToolName(tool)) return unknown('Unsupported tool');
+
       const userId = params?.user?.user_id as UserID | undefined;
       const tenantId = getCurrentTenantId();
       if (!tenantId) throw new Error('Missing active tenant context for agent authentication');
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
 
-      if (
-        !(await withTenantDatabase((tenantDb) =>
-          isTenantAgenticToolEnabled(tool as AgenticToolName, tenantDb)
-        ))
-      ) {
+      if (!(await withTenantDatabase((tenantDb) => isTenantAgenticToolEnabled(tool, tenantDb)))) {
         return unauthenticated('none', `${tool} is disabled for this workspace.`);
       }
 
-      // opencode is server-based — no credentials concept, always ready.
-      if (tool === 'opencode') {
+      // Runtime-managed integrations authenticate inside their isolated native runtime.
+      if (getAgenticToolIntegration(tool).authentication === 'runtime-managed') {
         return authed('native');
       }
 
-      const keyName = TOOL_API_KEY_NAMES[tool as keyof typeof TOOL_API_KEY_NAMES];
+      const keyName = TOOL_API_KEY_NAMES[tool];
       if (!keyName) {
         return unknown('Unsupported tool');
       }
@@ -360,13 +363,12 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       }
 
       // Otherwise resolve from the tenant's explicit user/workspace policy.
-      const toolName = tool as AgenticToolName;
       const { apiKey, decryptionFailed, connection, useNativeAuth } = await withTenantDatabase(
         (tenantDb) =>
           resolveApiKey(keyName, {
             userId,
             db: tenantDb,
-            tool: toolName,
+            tool,
           })
       );
 

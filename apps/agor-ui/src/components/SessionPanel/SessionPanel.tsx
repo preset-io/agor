@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -13,7 +14,6 @@ import type {
   User,
 } from '@agor-live/client';
 import {
-  AGENTIC_TOOL_CAPABILITIES,
   getDefaultPermissionMode,
   isAgenticToolName,
   mapToCodexPermissionConfig,
@@ -296,6 +296,7 @@ export interface SessionPanelProps {
   sessionMcpServerIds?: string[];
   open: boolean;
   onClose: () => void;
+  uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
 const SessionPanel: React.FC<SessionPanelProps> = ({
@@ -306,6 +307,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   sessionMcpServerIds = [],
   open,
   onClose,
+  uploadPolicy,
 }) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
@@ -526,6 +528,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } = useComposerAttachments({
     sessionId: session?.session_id ?? null,
     showError,
+    uploadPolicy,
   });
   const composerSendInFlightRef = React.useRef(false);
 
@@ -617,12 +620,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     for (let i = tasks.length - 1; i >= 0; i--) {
       const task = tasks[i];
       if (task.computed_context_window !== undefined && task.normalized_sdk_response) {
-        const { contextWindowLimit } = task.normalized_sdk_response;
+        const { contextWindowLimit, contextUsageSnapshot } = task.normalized_sdk_response;
 
         if (task.computed_context_window > 0) {
           return {
             used: task.computed_context_window,
-            limit: contextWindowLimit || 0,
+            limit: contextUsageSnapshot?.maxTokens ?? contextWindowLimit ?? 0,
             // Forward the full normalized response so ContextWindowPill can
             // honor `contextUsageSnapshot.percentage` instead of recomputing
             // from raw used/limit (which is wrong for Codex's baseline-adjusted
@@ -1037,7 +1040,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         attachmentsAtSendStart,
         sendStartSessionId
       );
-      const attachmentPaths = uploadedFiles.map((file) => file.path);
+      const promptAttachments = uploadedFiles;
       const composerStillOwnsSend =
         composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
         composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;
@@ -1054,7 +1057,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             sendStartValue: value,
           })
         : value;
-      const promptToSend = buildPromptWithAttachments(latestValue, attachmentPaths);
+      const promptToSend = buildPromptWithAttachments(latestValue, promptAttachments);
       if (!promptToSend.trim()) return;
 
       // Single entry point: /prompt. The daemon decides run-vs-queue based on
@@ -1340,6 +1343,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const sessionFooter = activeSession ? (
     <SessionFooter
       session={activeSession}
+      currentUserId={currentUserId}
       footerTimerTask={footerTimerTask}
       tokenBreakdown={tokenBreakdown}
       latestContextWindow={latestContextWindow}

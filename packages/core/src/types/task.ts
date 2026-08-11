@@ -1,6 +1,7 @@
 // src/types/task.ts
 import type { PersistedAgenticToolName } from './agentic-tool';
-import type { MessageID, SessionID, TaskID } from './id';
+import type { GatewayInboundEventID } from './gateway';
+import type { MessageID, SessionID, TaskID, UserID } from './id';
 import type { PersistedMessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
@@ -19,6 +20,9 @@ export const TaskStatus = {
 } as const;
 
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
+
+/** Task states that have not yet crossed the daemon's durable dispatch fence. */
+export type TaskPendingDispatchStatus = typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
 
 export type ExecutorMode = 'local' | 'templated';
 
@@ -81,6 +85,21 @@ export type TerminationCause =
   | 'heartbeat_lost'
   | 'sdk_health_failure';
 
+/**
+ * Expiring, database-fenced ownership of one containment attempt.
+ *
+ * The daemon identity is diagnostic. `claim_token` is the correctness fence:
+ * a coordinator may settle containment only while this exact token remains on
+ * the Task. A replacement daemon can claim a new token after expiry.
+ */
+export interface TerminationCoordinationClaim {
+  claim_token: string;
+  claimed_at: string;
+  lease_expires_at: string;
+  instance_id: string;
+  boot_id: string;
+}
+
 export interface TerminationRequest {
   cause: TerminationCause;
   requested_at: string;
@@ -93,6 +112,8 @@ export interface TerminationRequest {
    * process-group absence verification before the session becomes promptable.
    */
   executor_quiesced_at?: string;
+  /** Current expiring containment coordinator, if one has been elected. */
+  coordination?: TerminationCoordinationClaim;
 }
 
 export interface ExecutorTerminationCompleteInput {
@@ -132,7 +153,8 @@ export interface TaskMetadata {
    * paths race.
    */
   callback_dispatches?: Array<{
-    event: 'session_completion';
+    /** `session_completion` is retained for callbacks recorded before task-level callbacks existed. */
+    event: 'task_completion' | 'session_completion';
     target_session_id: SessionID;
     queued_task_id?: TaskID;
     dispatched_at: string;
@@ -148,6 +170,30 @@ export interface TaskMetadata {
    * this prompt. Links the task back to the originating widget for audit.
    */
   widget_id?: MessageID;
+  /** User who resolved the widget; Task execution remains session-owner attributed. */
+  widget_resolved_by_user_id?: UserID;
+  /** Provider-event occurrence that durably admitted this gateway prompt. */
+  gateway_inbound_event_id?: GatewayInboundEventID;
+  /** Provider reply target captured for this gateway Task (for example an editable ack ID). */
+  gateway_reply_metadata?: Record<string, unknown>;
+  /**
+   * Durable identity of the Task's first transcript row. Internal
+   * idempotent producers persist this alongside the Task so any daemon that
+   * later drains the queue can reconcile the same row instead of inventing a
+   * process-local message identity.
+   */
+  initial_message_id?: MessageID;
+
+  /**
+   * Immutable one-shot completion callback requested for this exact task.
+   * The MCP prompt tool derives both identities from trusted request context;
+   * callers cannot nominate an arbitrary destination.
+   */
+  completion_callback?: {
+    target_session_id: SessionID;
+    requested_from_session_id: SessionID;
+    requested_by_user_id: string;
+  };
 }
 
 /**
@@ -166,8 +212,26 @@ export const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatu
   TaskStatus.TIMED_OUT,
 ]);
 
+/** Every persisted Task status that still represents unfinished work. */
+export const NONTERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>(
+  Object.values(TaskStatus).filter((status) => !TERMINAL_TASK_STATUSES.has(status))
+);
+
 export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
   return status !== undefined && TERMINAL_TASK_STATUSES.has(status);
+}
+
+/**
+ * A Task whose daemon-side launch claim has not yet become durable.
+ *
+ * Every other status is downstream of the CREATED/QUEUED -> DISPATCHING
+ * fence (or terminal) and must never be sent through launch admission again
+ * merely to reconcile projections around that durable Task.
+ */
+export function isTaskPendingDispatch(task: Pick<Task, 'status'>): task is Pick<Task, 'status'> & {
+  status: TaskPendingDispatchStatus;
+} {
+  return task.status === TaskStatus.CREATED || task.status === TaskStatus.QUEUED;
 }
 
 /**
@@ -255,6 +319,7 @@ export interface Task {
   git_state: {
     ref_at_start: string; // Branch name at task start (required)
     sha_at_start: string; // SHA at task start (required)
+    ref_at_end?: string; // Branch name at task end (optional)
     sha_at_end?: string; // SHA at task end (optional)
     commit_message?: string; // Commit message if task resulted in a commit (optional)
   };

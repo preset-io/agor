@@ -88,6 +88,10 @@ export interface ReactiveSessionState {
 
 type Listener = () => void;
 
+type MessageMutation =
+  | { sequence: number; kind: 'upsert'; message: Message }
+  | { sequence: number; kind: 'remove'; message: Message };
+
 interface QueueFindResult {
   data?: Task[];
 }
@@ -155,6 +159,14 @@ export class ReactiveSessionHandle {
   private readonly disposeCallbacks: Array<() => void> = [];
   private readyPromise: Promise<void>;
   private disposed = false;
+  private messageMutationSequence = 0;
+  private messageFetchTokenSequence = 0;
+  // A DB snapshot and the realtime stream are two independently scheduled
+  // deliveries. Journal mutations only while a snapshot is in flight, then
+  // replay them over that snapshot so a late stale response cannot erase a
+  // message that was already observed live (or resurrect a removed one).
+  private readonly messageFetches = new Map<number, number>();
+  private readonly messageMutations: MessageMutation[] = [];
 
   /**
    * The canonical (full-UUID) session id. When this handle was constructed with
@@ -300,12 +312,7 @@ export class ReactiveSessionHandle {
 
   async loadTaskMessages(taskId: string): Promise<Message[]> {
     this.assertNotDisposed();
-    const messages = await this.client.service('messages').findAll({
-      query: {
-        task_id: taskId,
-        $sort: { index: 1 },
-      },
-    });
+    const messages = await this.fetchTaskMessagesWithoutRealtimeGap(taskId);
     this.updateState((prev) => {
       const nextByTask = new Map(prev.messagesByTask);
       nextByTask.set(taskId, sortMessagesByIndex(messages));
@@ -319,6 +326,78 @@ export class ReactiveSessionHandle {
       };
     });
     return messages;
+  }
+
+  private beginMessageFetch(): number {
+    this.messageFetchTokenSequence += 1;
+    this.messageFetches.set(this.messageFetchTokenSequence, this.messageMutationSequence);
+    return this.messageFetchTokenSequence;
+  }
+
+  private recordMessageMutation(kind: 'upsert' | 'remove', message: Message): void {
+    this.messageMutationSequence += 1;
+    if (this.messageFetches.size > 0) {
+      this.messageMutations.push({ sequence: this.messageMutationSequence, kind, message });
+    }
+  }
+
+  private finishMessageFetch(
+    fetchToken: number,
+    snapshot: Message[],
+    belongsToFetch: (message: Message) => boolean
+  ): Message[] {
+    const fetchSequence = this.messageFetches.get(fetchToken);
+    if (fetchSequence === undefined) return sortMessagesByIndex(snapshot);
+    const byId = new Map(snapshot.map((message) => [message.message_id, message]));
+    for (const mutation of this.messageMutations) {
+      if (mutation.sequence <= fetchSequence || !belongsToFetch(mutation.message)) continue;
+      if (mutation.kind === 'remove') byId.delete(mutation.message.message_id);
+      else byId.set(mutation.message.message_id, mutation.message);
+    }
+    this.cancelMessageFetch(fetchToken);
+    return sortMessagesByIndex([...byId.values()]);
+  }
+
+  private cancelMessageFetch(fetchToken: number): void {
+    this.messageFetches.delete(fetchToken);
+    if (this.messageFetches.size === 0) {
+      this.messageMutations.length = 0;
+      return;
+    }
+    const oldestActiveFetch = Math.min(...this.messageFetches.values());
+    const firstNeeded = this.messageMutations.findIndex(
+      (mutation) => mutation.sequence > oldestActiveFetch
+    );
+    if (firstNeeded === -1) this.messageMutations.length = 0;
+    else if (firstNeeded > 0) this.messageMutations.splice(0, firstNeeded);
+  }
+
+  private async fetchMessagesWithoutRealtimeGap(
+    query: Record<string, unknown>,
+    belongsToFetch: (message: Message) => boolean
+  ): Promise<Message[]> {
+    const fetchSequence = this.beginMessageFetch();
+    try {
+      const snapshot = await this.client.service('messages').findAll({ query });
+      return this.finishMessageFetch(fetchSequence, snapshot, belongsToFetch);
+    } catch (error) {
+      this.cancelMessageFetch(fetchSequence);
+      throw error;
+    }
+  }
+
+  private async fetchTaskMessagesWithoutRealtimeGap(taskId: string): Promise<Message[]> {
+    return this.fetchMessagesWithoutRealtimeGap(
+      { task_id: taskId, $sort: { index: 1 } },
+      (message) => message.task_id === taskId && this.matchesSession(message.session_id)
+    );
+  }
+
+  private async fetchSessionMessagesWithoutRealtimeGap(): Promise<Message[]> {
+    return this.fetchMessagesWithoutRealtimeGap(
+      { session_id: this.sessionId, $sort: { index: 1 } },
+      (message) => this.matchesSession(message.session_id)
+    );
   }
 
   unloadTaskMessages(taskId: string): void {
@@ -399,12 +478,7 @@ export class ReactiveSessionHandle {
       let loadedTaskIds = new Set<string>();
 
       if (this.options.taskHydration === 'eager') {
-        const allMessages = await this.client.service('messages').findAll({
-          query: {
-            session_id: this.sessionId,
-            $sort: { index: 1 },
-          },
-        });
+        const allMessages = await this.fetchSessionMessagesWithoutRealtimeGap();
         messagesByTask = groupMessagesByTask(allMessages);
         loadedTaskIds = new Set(messagesByTask.keys());
       } else if (this.options.taskHydration === 'lazy') {
@@ -417,12 +491,9 @@ export class ReactiveSessionHandle {
         const latestTask = findLatestHydratableTask(tasks);
         if (latestTask) {
           try {
-            const latestMessages = await this.client.service('messages').findAll({
-              query: {
-                task_id: latestTask.task_id,
-                $sort: { index: 1 },
-              },
-            });
+            const latestMessages = await this.fetchTaskMessagesWithoutRealtimeGap(
+              latestTask.task_id
+            );
             messagesByTask.set(latestTask.task_id, sortMessagesByIndex(latestMessages));
             loadedTaskIds.add(latestTask.task_id);
           } catch {
@@ -653,6 +724,7 @@ export class ReactiveSessionHandle {
 
     const onMessageCreated = (message: Message) => {
       if (!this.matchesSession(message.session_id)) return;
+      this.recordMessageMutation('upsert', message);
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.delete(message.message_id);
@@ -693,6 +765,7 @@ export class ReactiveSessionHandle {
     const onMessagePatched = (message: Message) => {
       const taskId = message.task_id;
       if (!this.matchesSession(message.session_id) || !taskId) return;
+      this.recordMessageMutation('upsert', message);
       this.updateState((prev) => {
         const current = prev.messagesByTask.get(taskId);
         if (!current) return prev;
@@ -712,6 +785,7 @@ export class ReactiveSessionHandle {
 
     const onMessageRemoved = (message: Message) => {
       if (!this.matchesSession(message.session_id)) return;
+      this.recordMessageMutation('remove', message);
       const taskId = message.task_id;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
@@ -1022,12 +1096,7 @@ export class ReactiveSessionHandle {
       let loadedTaskIds = this.stateSnapshot.loadedTaskIds;
 
       if (this.options.taskHydration === 'eager') {
-        const allMessages = await this.client.service('messages').findAll({
-          query: {
-            session_id: this.sessionId,
-            $sort: { index: 1 },
-          },
-        });
+        const allMessages = await this.fetchSessionMessagesWithoutRealtimeGap();
         messagesByTask = groupMessagesByTask(allMessages);
         loadedTaskIds = new Set(messagesByTask.keys());
       } else if (this.options.taskHydration === 'lazy') {
@@ -1041,12 +1110,7 @@ export class ReactiveSessionHandle {
         if (toRefresh.size > 0) {
           const refreshedByTask = new Map<string, Message[]>();
           for (const taskId of toRefresh) {
-            const taskMessages = await this.client.service('messages').findAll({
-              query: {
-                task_id: taskId,
-                $sort: { index: 1 },
-              },
-            });
+            const taskMessages = await this.fetchTaskMessagesWithoutRealtimeGap(taskId);
             refreshedByTask.set(taskId, sortMessagesByIndex(taskMessages));
           }
           messagesByTask = refreshedByTask;
