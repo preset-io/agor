@@ -1,17 +1,15 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { EXECUTOR_RESULT_PREFIX } from '@agor/core/executor-protocol';
 import { describe, expect, it } from 'vitest';
-
-import { EXECUTOR_RESULT_PREFIX } from './executor-output.js';
 
 describe('executor result output', () => {
   it('delivers a result larger than the pipe buffer before exiting', async () => {
     const modulePath = fileURLToPath(new URL('./executor-output.ts', import.meta.url));
     const payload = 'x'.repeat(512 * 1024);
     const script = [
-      `import { emitExecutorResult } from ${JSON.stringify(modulePath)};`,
-      `emitExecutorResult({ success: true, data: 'x'.repeat(${payload.length}) });`,
-      'process.exitCode = 0;',
+      `import { completeExecutorResult } from ${JSON.stringify(modulePath)};`,
+      `completeExecutorResult({ success: true, data: 'x'.repeat(${payload.length}) });`,
     ].join('\n');
 
     const child = spawn(

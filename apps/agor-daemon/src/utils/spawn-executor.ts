@@ -28,6 +28,10 @@ import { fileURLToPath } from 'node:url';
 import type { AgorExecutionSettings } from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
 import {
+  EXECUTOR_RESULT_PREFIX,
+  INTERACTIVE_EXECUTOR_EVENT_PREFIX,
+} from '@agor/core/executor-protocol';
+import {
   attachEnvFileCleanup,
   buildSpawnArgs,
   escapeShellArg,
@@ -557,8 +561,6 @@ function spawnExecutorWithTemplate(
   sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
 }
 
-const EXECUTOR_RESULT_PREFIX = 'AGOR_EXECUTOR_RESULT ';
-
 function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | null {
   const lines = stdout
     .split(/\r?\n/)
@@ -600,8 +602,6 @@ function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Bu
     }
   }
 }
-
-const INTERACTIVE_EXECUTOR_EVENT_PREFIX = 'AGOR_EXECUTOR_INTERACTIVE_EVENT ';
 
 function resolveLocalExecutorLocation(options: Pick<SpawnExecutorOptions, 'cwd'> = {}) {
   const executorPath = findExecutorPath();
