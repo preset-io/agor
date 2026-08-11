@@ -53,7 +53,11 @@ import type {
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
+  MCPOAuthCompatibilityMode,
+  MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
+  MCPOAuthStartRequest,
+  MCPOAuthStartResult,
   MCPServerID,
   MessageSource,
   Params,
@@ -1454,8 +1458,8 @@ async function registerMCPServices(
     authorizationUrlOverride?: string;
     tokenUrlOverride?: string;
     scope?: string;
-    compatibilityMode?: 'strict' | 'legacy';
-    dcrMode?: 'disabled' | 'advertised' | 'fallback';
+    compatibilityMode?: MCPOAuthCompatibilityMode;
+    dcrMode?: MCPOAuthDCRMode;
     socketId?: string;
   };
 
@@ -1557,8 +1561,10 @@ async function registerMCPServices(
       // flow context. Daemon callers never read or populate its origin-only
       // bearer cache.
       cacheKey: opts.prefetchedAuthServerMetadata ? opts.mcpUrl : undefined,
-      // Process-global DCR credentials are not a tenant/user namespace.
-      reuseDynamicClientRegistration: !durableOAuthFlows,
+      // Process-global DCR credentials are not a tenant/user/server namespace.
+      // Even SQLite daemon flows can serve multiple users and scopes, so only
+      // standalone core/CLI callers may opt into this legacy cache.
+      reuseDynamicClientRegistration: false,
       resourceUri: opts.mcpUrl,
       compatibilityMode: opts.compatibilityMode,
       dcrMode: opts.dcrMode,
@@ -1955,19 +1961,79 @@ async function registerMCPServices(
       const issuer = req.query.iss as string | undefined;
       const error = req.query.error as string | undefined;
 
+      if (!state) {
+        res.status(400).send(oauthResultPage(false, 'Missing state parameter'));
+        return;
+      }
+
+      // Inspect the exact state-bound context without consuming it so RFC 9207
+      // validation applies equally to success and provider-error callbacks.
+      // A spoofed/mismatched callback must not terminate the legitimate flow.
+      let callbackContext: OAuthFlowContext | undefined;
+      if (durableOAuthFlows) {
+        const inspected = await durableOAuthFlows.inspectForCallback(state);
+        if (!inspected) {
+          res
+            .status(400)
+            .send(
+              oauthResultPage(
+                false,
+                'OAuth flow expired or not found. Please start the flow again.'
+              )
+            );
+          return;
+        }
+        if (inspected.status !== 'pending') {
+          const status = inspected.status;
+          res
+            .status(status === 'succeeded' ? 200 : 409)
+            .send(oauthResultPage(status === 'succeeded', terminalMessageForStatus(status)));
+          return;
+        }
+        try {
+          callbackContext = durableOAuthFlows.openPendingCallback(inspected, state).context;
+        } catch {
+          res
+            .status(409)
+            .send(oauthResultPage(false, 'OAuth flow cannot be resumed. Please start again.'));
+          return;
+        }
+      } else {
+        callbackContext = pendingOAuthFlows.get(state)?.context;
+      }
+      if (!callbackContext) {
+        res
+          .status(400)
+          .send(
+            oauthResultPage(false, 'OAuth flow expired or not found. Please start the flow again.')
+          );
+        return;
+      }
+
+      try {
+        const { validateMCPOAuthCallbackIssuer } = await import(
+          '@agor/core/tools/mcp/oauth-mcp-transport'
+        );
+        validateMCPOAuthCallbackIssuer(callbackContext, issuer);
+      } catch {
+        console.warn('[OAuth Callback] Callback issuer validation failed');
+        res
+          .status(400)
+          .send(oauthResultPage(false, 'OAuth callback validation failed. Please restart OAuth.'));
+        return;
+      }
+
       if (error) {
         console.warn('[OAuth Callback] Provider authorization was not completed');
         // Reject any awaitToken() promise from the originating flow so the
         // caller (discover / test-oauth) can surface the failure.
-        if (state) {
-          if (durableOAuthFlows) {
-            await durableOAuthFlows.failPendingCallback(state, 'authorization_denied');
-          } else {
-            const pending = pendingOAuthFlows.get(state);
-            pending?.tokenReject?.(new Error('Authorization was not completed'));
-            if (pending) markLocalOAuthAttempt(pending, 'failed', 'authorization_denied');
-            pendingOAuthFlows.delete(state);
-          }
+        if (durableOAuthFlows) {
+          await durableOAuthFlows.failPendingCallback(state, 'authorization_denied');
+        } else {
+          const pending = pendingOAuthFlows.get(state);
+          pending?.tokenReject?.(new Error('Authorization was not completed'));
+          if (pending) markLocalOAuthAttempt(pending, 'failed', 'authorization_denied');
+          pendingOAuthFlows.delete(state);
         }
         res
           .status(400)
@@ -1975,8 +2041,8 @@ async function registerMCPServices(
         return;
       }
 
-      if (!code || !state) {
-        res.status(400).send(oauthResultPage(false, 'Missing code or state parameter'));
+      if (!code) {
+        res.status(400).send(oauthResultPage(false, 'Missing code parameter'));
         return;
       }
 
@@ -2229,8 +2295,8 @@ async function registerMCPServices(
         scope?: string;
         grant_type?: string;
         start_browser_flow?: boolean;
-        compatibility_mode?: 'strict' | 'legacy';
-        dcr_mode?: 'disabled' | 'advertised' | 'fallback';
+        compatibility_mode?: MCPOAuthCompatibilityMode;
+        dcr_mode?: MCPOAuthDCRMode;
       },
       params?: { connection?: { id?: string } }
     ) {
@@ -2587,9 +2653,9 @@ async function registerMCPServices(
   // OAuth start endpoint
   app.use('/mcp-servers/oauth-start', {
     async create(
-      data: { mcp_url: string; mcp_server_id?: string; client_id?: string },
+      data: MCPOAuthStartRequest,
       params?: AuthenticatedParams
-    ) {
+    ): Promise<MCPOAuthStartResult> {
       try {
         console.log('[OAuth Start] Starting two-phase OAuth flow');
         const userId = params?.user?.user_id;
@@ -2601,8 +2667,8 @@ async function registerMCPServices(
         let clientSecretOverride: string | undefined;
         let clientIdFromConfig: string | undefined;
         let scopeOverride: string | undefined;
-        let compatibilityMode: 'strict' | 'legacy' = 'strict';
-        let dcrMode: 'disabled' | 'advertised' | 'fallback' | undefined;
+        let compatibilityMode: MCPOAuthCompatibilityMode = 'strict';
+        let dcrMode: MCPOAuthDCRMode | undefined;
         const savedServer = data.mcp_server_id
           ? await runInOAuthTenantScope(db, tenantId, () => {
               const mcpServerRepo = new MCPServerRepository(db);
@@ -2610,15 +2676,29 @@ async function registerMCPServices(
             })
           : null;
 
+        if (
+          data.mcp_server_id &&
+          (!savedServer?.enabled || !savedServer.url || savedServer.auth?.type !== 'oauth')
+        ) {
+          return {
+            success: false,
+            error:
+              'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
+          };
+        }
+
+        // A saved-server ID is the authority for provider URL and client
+        // configuration. Caller-supplied duplicates are accepted only for
+        // backward wire compatibility and never drive outbound requests.
+        const effectiveMcpUrl = savedServer?.url ?? data.mcp_url;
+
         // PostgreSQL is the shared authority, so reject transient or stale
         // server input before the first outbound probe. Doing this only in the
         // later flow helper would still let any authenticated caller use
         // mcp_url as an arbitrary pre-validation network destination.
         if (
           durableOAuthFlows &&
-          (!savedServer?.enabled ||
-            savedServer.url !== data.mcp_url ||
-            savedServer.auth?.type !== 'oauth')
+          (!savedServer?.enabled || !savedServer.url || savedServer.auth?.type !== 'oauth')
         ) {
           return {
             success: false,
@@ -2649,7 +2729,7 @@ async function registerMCPServices(
           }
         }
 
-        let probeResponse = await oauthFetch(data.mcp_url, {
+        let probeResponse = await oauthFetch(effectiveMcpUrl, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
           body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
@@ -2657,7 +2737,7 @@ async function registerMCPServices(
         });
 
         if (probeResponse.status !== 401) {
-          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(data.mcp_url);
+          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl);
           if (fallbackProbe) {
             console.log(
               '[OAuth Start] Handshake-level probe returned no auth requirement; ' +
@@ -2678,7 +2758,7 @@ async function registerMCPServices(
         const { resolveMCPOAuthDiscovery } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
         );
-        const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, data.mcp_url, {
+        const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, effectiveMcpUrl, {
           compatibilityMode,
           allowLocalhostHttp: !durableOAuthFlows,
         });
@@ -2695,7 +2775,7 @@ async function registerMCPServices(
         let result: StartTwoPhaseOAuthResult;
         try {
           result = await startTwoPhaseMCPOAuthFlow({
-            mcpUrl: data.mcp_url,
+            mcpUrl: effectiveMcpUrl,
             wwwAuthenticate,
             resourceMetadataUrl:
               discovery.kind === 'resource-metadata' ? discovery.metadataUrl : undefined,
@@ -2704,7 +2784,7 @@ async function registerMCPServices(
             mcpServerId: data.mcp_server_id,
             userId,
             oauthMode,
-            clientId: data.client_id || clientIdFromConfig,
+            clientId: savedServer ? clientIdFromConfig : data.client_id,
             clientSecret: clientSecretOverride,
             authorizationUrlOverride,
             tokenUrlOverride,

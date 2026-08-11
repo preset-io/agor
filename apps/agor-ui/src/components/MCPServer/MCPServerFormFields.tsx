@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, MCPOAuthStartResult } from '@agor-live/client';
 import { ApiOutlined, DownOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import {
@@ -152,7 +152,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     ].some((v) => typeof v === 'string' && v.trim().length > 0) ||
     (typeof watchedOauthMode === 'string' && watchedOauthMode !== 'per_user') ||
     watchedCompatibilityMode === 'legacy' ||
-    watchedDcrMode === 'fallback';
+    (typeof watchedDcrMode === 'string' && watchedDcrMode !== 'advertised');
 
   const handleStartOAuthFlow = async () => {
     if (!client) {
@@ -188,14 +188,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         .service('mcp-servers/oauth-start')
         .create(
           buildMCPOAuthStartRequest(requestData.mcp_url, targetServerId, requestData.client_id)
-        )) as {
-        success: boolean;
-        error?: string;
-        message?: string;
-        authorizationUrl?: string;
-        attempt_id?: string;
-        state?: string;
-      };
+        )) as MCPOAuthStartResult;
 
       if (data.success && data.authorizationUrl && data.attempt_id) {
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');

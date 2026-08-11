@@ -137,7 +137,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
     it('starts on daemon A, claims on daemon B, and never stores raw capability material', async () => {
       const bound = await seed('peer-callback');
-      const context = flowContext(crypto.randomUUID());
+      const context = { ...flowContext(crypto.randomUUID()), requiresCallbackIssuer: false };
       const attemptId = await authorityA.create({
         context,
         tenantId: bound.tenantId,
@@ -161,6 +161,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(JSON.stringify(stored)).not.toContain(context.state);
       expect(JSON.stringify(stored)).not.toContain(context.pkceVerifier);
       expect(JSON.stringify(stored)).not.toContain(context.clientSecret);
+
+      const inspected = await authorityB.inspectForCallback(context.state);
+      if (!inspected) throw new Error('Expected peer callback inspection');
+      expect(authorityB.openPendingCallback(inspected, context.state).context).toMatchObject({
+        issuer: context.issuer,
+        requiresCallbackIssuer: false,
+      });
 
       const claimed = await authorityB.claimForCallback(context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected peer callback claim');
@@ -202,7 +209,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         pkceVerifier: context.pkceVerifier,
         clientId: context.clientId,
         clientSecret: context.clientSecret,
-        requiresCallbackIssuer: true,
+        requiresCallbackIssuer: false,
       });
       await expect(
         authorityA.getForUser(bound.tenantId, bound.userId, attemptId as never)
@@ -222,6 +229,33 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauth_refresh_token: 'peer-callback-refresh-token',
         grant_generation: claimed.flow.grantGeneration,
       });
+    });
+
+    it('preserves the legacy absent callback-issuer capability across replicas', async () => {
+      const bound = await seed('legacy-callback-capability');
+      const context = flowContext(crypto.randomUUID());
+      delete context.requiresCallbackIssuer;
+      await authorityA.create({
+        context,
+        tenantId: bound.tenantId,
+        userId: bound.userId,
+        mcpServerId: bound.serverId,
+        oauthMode: 'per_user',
+        configFingerprint: 'b'.repeat(64),
+      });
+
+      const inspected = await authorityB.inspectForCallback(context.state);
+      if (!inspected) throw new Error('Expected legacy callback inspection');
+      expect(
+        authorityB.openPendingCallback(inspected, context.state).context.requiresCallbackIssuer
+      ).toBeUndefined();
+
+      const claimed = await authorityB.claimForCallback(context.state);
+      if (claimed.outcome !== 'claimed') throw new Error('Expected legacy callback claim');
+      expect(authorityB.openClaim(claimed.flow, context.state).context.requiresCallbackIssuer).toBe(
+        undefined
+      );
+      await expect(authorityB.finish(claimed.flow, 'failed', 'test_cleanup')).resolves.toBe(true);
     });
 
     it('rejects cross-tenant/user reads and database-level cross-tenant bindings', async () => {

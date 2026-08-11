@@ -46,6 +46,7 @@ import {
   resolveMCPOAuthDiscovery,
   resolveResourceMetadataUrl,
   startMCPOAuthFlow,
+  validateMCPOAuthCallbackIssuer,
 } from './oauth-mcp-transport';
 
 // ---------------------------------------------------------------------------
@@ -233,6 +234,20 @@ describe('completeMCPOAuthFlow token exchange', () => {
         { cacheToken: false }
       )
     ).resolves.toMatchObject({ access_token: 'provider-token' });
+  });
+
+  it('validates issuer identification independently of provider success or error payloads', () => {
+    const strictContext = { ...context, compatibilityMode: 'strict' as const };
+    expect(() => validateMCPOAuthCallbackIssuer(strictContext, context.issuer)).not.toThrow();
+    expect(() => validateMCPOAuthCallbackIssuer(strictContext, undefined)).toThrowError(
+      expect.objectContaining({ failureCode: 'callback_issuer_missing' })
+    );
+    expect(() =>
+      validateMCPOAuthCallbackIssuer(
+        { ...context, requiresCallbackIssuer: false },
+        'https://attacker.example.test'
+      )
+    ).toThrowError(expect.objectContaining({ failureCode: 'callback_issuer_mismatch' }));
   });
 
   it.each([
@@ -902,6 +917,41 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(authUrl.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9999/oauth/callback');
   });
 
+  it('does not reuse a standalone DCR client across different registered scopes', async () => {
+    let registrations = 0;
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      registrations += 1;
+      return new Response(
+        JSON.stringify({
+          client_id: `scope-client-${registrations}`,
+          redirect_uris: ['http://127.0.0.1:9999/oauth/callback'],
+          token_endpoint_auth_method: 'none',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    const metadata = {
+      issuer: 'https://auth.reo.dev',
+      authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+      token_endpoint: 'https://auth.reo.dev/oauth/token',
+      registration_endpoint: 'https://auth.reo.dev/oauth/register',
+    };
+    const start = (scope: string) =>
+      startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
+        prefetchedAuthServerMetadata: metadata,
+        cacheKey: 'https://mcp.reo.dev/mcp',
+        resourceUri: 'https://mcp.reo.dev/mcp',
+        compatibilityMode: 'legacy',
+        allowLocalhostHttp: true,
+        scope,
+      });
+
+    await expect(start('read')).resolves.toMatchObject({ clientId: 'scope-client-1' });
+    await expect(start('write')).resolves.toMatchObject({ clientId: 'scope-client-2' });
+    expect(registrations).toBe(2);
+  });
+
   it('does not guess a DCR endpoint in the default advertised-only mode', async () => {
     globalThis.fetch = vi.fn() as unknown as typeof fetch;
 
@@ -1104,6 +1154,8 @@ describe('strict current MCP OAuth profile', () => {
       metadataIssuer?: string;
       s256?: boolean;
       responseIssuer?: boolean;
+      authorizationEndpoint?: string;
+      tokenEndpoint?: string;
     } = {}
   ) {
     return vi.fn().mockImplementation(async (input: string | URL) => {
@@ -1122,8 +1174,8 @@ describe('strict current MCP OAuth profile', () => {
         return new Response(
           JSON.stringify({
             issuer: overrides.metadataIssuer ?? issuer,
-            authorization_endpoint: `${issuer}/authorize`,
-            token_endpoint: `${issuer}/token`,
+            authorization_endpoint: overrides.authorizationEndpoint ?? `${issuer}/authorize`,
+            token_endpoint: overrides.tokenEndpoint ?? `${issuer}/token`,
             code_challenge_methods_supported: overrides.s256 === false ? ['plain'] : ['S256'],
             authorization_response_iss_parameter_supported: overrides.responseIssuer !== false,
           }),
@@ -1193,6 +1245,29 @@ describe('strict current MCP OAuth profile', () => {
     await expect(startStrict()).resolves.toMatchObject({ requiresCallbackIssuer: false });
 
     globalThis.fetch = strictFetch({ responseIssuer: true });
+    await expect(startStrict()).resolves.toMatchObject({ requiresCallbackIssuer: true });
+  });
+
+  it('uses same-origin AS endpoints as the strict mix-up defense when RFC 9207 is absent', async () => {
+    globalThis.fetch = strictFetch({
+      responseIssuer: false,
+      authorizationEndpoint: 'https://honest.example.com/authorize',
+    });
+    await expect(startStrict()).rejects.toThrow(
+      'authorization endpoint to share the issuer origin'
+    );
+
+    globalThis.fetch = strictFetch({
+      responseIssuer: false,
+      tokenEndpoint: 'https://attacker.example.com/token',
+    });
+    await expect(startStrict()).rejects.toThrow('token endpoint to share the issuer origin');
+
+    globalThis.fetch = strictFetch({
+      responseIssuer: true,
+      authorizationEndpoint: 'https://honest.example.com/authorize',
+      tokenEndpoint: 'https://tokens.example.com/token',
+    });
     await expect(startStrict()).resolves.toMatchObject({ requiresCallbackIssuer: true });
   });
 

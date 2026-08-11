@@ -190,6 +190,16 @@ export class MCPOAuthPendingFlowAuthority {
     );
   }
 
+  async inspectForCallback(rawState: string): Promise<MCPOAuthPendingFlowRecord | null> {
+    const stateHash = fingerprintMCPOAuthState(rawState);
+    return runWithSystemDatabaseScope(
+      this.db,
+      'MCP OAuth provider callback issuer validation',
+      (systemDb) => new MCPOAuthPendingFlowRepository(systemDb).inspectForCallback(stateHash),
+      { capability: 'mcp_oauth_callback' }
+    );
+  }
+
   async failPendingCallback(rawState: string, failureCode: string): Promise<boolean> {
     const stateHash = fingerprintMCPOAuthState(rawState);
     return runWithSystemDatabaseScope(
@@ -217,13 +227,28 @@ export class MCPOAuthPendingFlowAuthority {
   }
 
   openClaim(record: MCPOAuthPendingFlowRecord, rawState: string): ClaimedDurableMCPOAuthFlow {
+    return this.openRecord(record, rawState, 'exchanging');
+  }
+
+  openPendingCallback(
+    record: MCPOAuthPendingFlowRecord,
+    rawState: string
+  ): ClaimedDurableMCPOAuthFlow {
+    return this.openRecord(record, rawState, 'pending');
+  }
+
+  private openRecord(
+    record: MCPOAuthPendingFlowRecord,
+    rawState: string,
+    expectedStatus: 'pending' | 'exchanging'
+  ): ClaimedDurableMCPOAuthFlow {
     if (
-      record.status !== 'exchanging' ||
-      !record.exchangeClaimId ||
+      record.status !== expectedStatus ||
+      (expectedStatus === 'exchanging' && !record.exchangeClaimId) ||
       !record.sealedMaterial ||
       record.stateHash !== fingerprintMCPOAuthState(rawState)
     ) {
-      throw new Error('MCP OAuth pending-flow claim is incomplete');
+      throw new Error('MCP OAuth pending-flow callback material is unavailable');
     }
 
     let parsed: unknown;

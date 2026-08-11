@@ -53,6 +53,24 @@ export interface MCPOAuthRefreshResult {
 
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
+export type MCPOAuthCompatibilityMode = 'strict' | 'legacy';
+export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
+
+/** Authenticated Feathers payload shared by Settings and conversation-footer OAuth starts. */
+export interface MCPOAuthStartRequest {
+  mcp_url: string;
+  mcp_server_id?: string;
+  client_id?: string;
+}
+
+export interface MCPOAuthStartResult {
+  success: boolean;
+  error?: string;
+  message?: string;
+  authorizationUrl?: string;
+  attempt_id?: string;
+  state?: string;
+}
 
 /**
  * Secret-bearing material required to exchange an authorization code.
@@ -80,8 +98,12 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
-  compatibilityMode: 'strict' | 'legacy';
-  /** RFC 9207 was advertised when this flow was created. */
+  compatibilityMode: MCPOAuthCompatibilityMode;
+  /**
+   * Whether this flow relies on RFC 9207 callback issuer identification.
+   * `false` is valid only when strict same-origin AS endpoint binding supplies
+   * the mix-up defense. Missing values preserve the older require-issuer rule.
+   */
   requiresCallbackIssuer?: boolean;
   allowLocalhostHttp: boolean;
 }
@@ -122,13 +144,13 @@ export interface MCPAuth {
   oauth_scope?: string;
   oauth_grant_type?: string;
   /** Strict current MCP Authorization behavior is the default. */
-  oauth_compatibility_mode?: 'strict' | 'legacy';
+  oauth_compatibility_mode?: MCPOAuthCompatibilityMode;
   /**
    * Dynamic Client Registration policy. Missing values use `advertised` for
    * compatibility with servers that publish an RFC 7591 endpoint. The
    * `fallback` mode additionally permits the legacy guessed `/register` URL.
    */
-  oauth_dcr_mode?: 'disabled' | 'advertised' | 'fallback';
+  oauth_dcr_mode?: MCPOAuthDCRMode;
   // OAuth 2.1 runtime tokens (obtained via browser flow)
   oauth_access_token?: string;
   oauth_token_expires_at?: number; // Unix timestamp in milliseconds

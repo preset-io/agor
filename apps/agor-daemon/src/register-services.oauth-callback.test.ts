@@ -96,6 +96,24 @@ describe('register-services OAuth callback URL regression', () => {
     expect(loggedExpressions).not.toMatch(/\b(?:code|state|tokenResponse|pendingFlow\.context)\b/);
   });
 
+  it('validates callback issuer before consuming success or provider-error state', () => {
+    const callbackBody = rawSource.slice(
+      rawSource.indexOf('const oauthCallbackHandler'),
+      rawSource.indexOf("app.use('/mcp-servers',")
+    );
+    const inspectIndex = callbackBody.indexOf('inspectForCallback(state)');
+    const validateIndex = callbackBody.indexOf('validateMCPOAuthCallbackIssuer');
+    const providerErrorIndex = callbackBody.indexOf('if (error)');
+    const failIndex = callbackBody.indexOf('failPendingCallback');
+    const claimIndex = callbackBody.indexOf('claimForCallback(state)');
+
+    expect(inspectIndex).toBeGreaterThanOrEqual(0);
+    expect(validateIndex).toBeGreaterThan(inspectIndex);
+    expect(providerErrorIndex).toBeGreaterThan(validateIndex);
+    expect(failIndex).toBeGreaterThan(providerErrorIndex);
+    expect(claimIndex).toBeGreaterThan(validateIndex);
+  });
+
   it('uses one phase-aware failure classifier for callback and manual completion', () => {
     const classifications = codeOnly.match(/classifyMCPOAuthCompletionFailure\s*\(/g) ?? [];
     expect(classifications).toHaveLength(2);

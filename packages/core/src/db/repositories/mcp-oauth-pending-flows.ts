@@ -314,6 +314,25 @@ export class MCPOAuthPendingFlowRepository {
     return this.claim(stateHash, claimId);
   }
 
+  /**
+   * Inspect an unauthenticated callback capability without consuming it.
+   * Used only to validate callback issuer identification before the one-shot
+   * claim/failure transition. RLS remains bound to the exact state hash.
+   */
+  async inspectForCallback(stateHash: string): Promise<MCPOAuthPendingFlowRecord | null> {
+    assertStateHash(stateHash);
+    await this.bindCallbackStateFingerprint(stateHash);
+    try {
+      const row = await select(this.db)
+        .from(mcpOauthPendingFlows)
+        .where(eq(mcpOauthPendingFlows.state_hash, stateHash))
+        .one();
+      return row ? mapRow(row as unknown as Record<string, unknown>) : null;
+    } catch (error) {
+      throw databaseFailure('callback inspection', error);
+    }
+  }
+
   /** Claim from an authenticated manual-complete request in its tenant scope. */
   async claimForUser(
     tenantId: string,

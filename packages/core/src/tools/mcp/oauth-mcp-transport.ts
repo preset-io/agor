@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import type { MCPOAuthCompatibilityMode, MCPOAuthDCRMode } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
@@ -360,7 +361,7 @@ export type MCPOAuthDiscoveryResult =
 export async function resolveMCPOAuthDiscovery(
   wwwAuthenticateHeader: string | null,
   mcpUrl: string,
-  options: { compatibilityMode?: 'strict' | 'legacy'; allowLocalhostHttp?: boolean } = {}
+  options: { compatibilityMode?: MCPOAuthCompatibilityMode; allowLocalhostHttp?: boolean } = {}
 ): Promise<MCPOAuthDiscoveryResult | null> {
   // Strategies 1 + 2: RFC 9728 (header hint, then well-known fallback)
   const rfc9728 = await resolveResourceMetadataUrl(wwwAuthenticateHeader, mcpUrl, options);
@@ -434,7 +435,8 @@ export function __seedDynamicClientCacheForTests(
  * Perform Dynamic Client Registration (RFC 7591)
  *
  * Registers a new OAuth client with the authorization server.
- * Results are cached per authorization server to avoid repeated registrations.
+ * Standalone callers may cache an exact registration contract to avoid
+ * repeated registrations. Daemon callers always disable this cache.
  */
 async function registerDynamicClient(
   registrationEndpoint: string,
@@ -445,7 +447,7 @@ async function registerDynamicClient(
   allowLocalhostHttp = false
 ): Promise<DynamicClientRegistrationResponse> {
   // Check cache first
-  const cacheKey = registrationEndpoint;
+  const cacheKey = JSON.stringify([registrationEndpoint, redirectUri, clientName, scope ?? '']);
   const cached = reuseLocalCache ? dynamicClientCache.get(cacheKey) : undefined;
   if (cached && cached.redirect_uri === redirectUri) {
     console.log('[MCP OAuth] Using cached dynamic client registration');
@@ -553,7 +555,7 @@ function buildWellKnownUrl(issuerUrl: string, wellKnownSuffix: string): string {
  */
 export async function fetchAuthorizationServerMetadata(
   authServerUrl: string,
-  options: { compatibilityMode?: 'strict' | 'legacy'; allowLocalhostHttp?: boolean } = {}
+  options: { compatibilityMode?: MCPOAuthCompatibilityMode; allowLocalhostHttp?: boolean } = {}
 ): Promise<AuthorizationServerMetadata> {
   const cleanUrl = authServerUrl.replace(/\/$/, '');
   const urlsToTry: { url: string; label: string }[] = [];
@@ -1211,11 +1213,49 @@ export interface OAuthFlowContext {
   clientSecret?: string;
   state: string;
   authorizationUrl: string;
-  compatibilityMode: 'strict' | 'legacy';
-  /** Require and verify RFC 9207 `iss` when the provider advertised support. */
+  compatibilityMode: MCPOAuthCompatibilityMode;
+  /**
+   * Require RFC 9207 `iss` unless strict same-origin endpoint binding provides
+   * the authorization-server mix-up defense.
+   */
   requiresCallbackIssuer?: boolean;
   /** Narrow standalone-development exception; durable daemon flows leave this false. */
   allowLocalhostHttp: boolean;
+}
+
+function assertStrictSameOriginMixupDefense(
+  issuer: string,
+  authorizationEndpoint: string,
+  tokenEndpoint: string
+): void {
+  const issuerOrigin = new URL(issuer).origin;
+  if (new URL(authorizationEndpoint).origin !== issuerOrigin) {
+    throw new Error(
+      'Strict MCP OAuth requires the authorization endpoint to share the issuer origin when RFC 9207 is unavailable'
+    );
+  }
+  if (new URL(tokenEndpoint).origin !== issuerOrigin) {
+    throw new Error(
+      'Strict MCP OAuth requires the token endpoint to share the issuer origin when RFC 9207 is unavailable'
+    );
+  }
+}
+
+/** Validate RFC 9207 issuer identification before any callback is consumed. */
+export function validateMCPOAuthCallbackIssuer(
+  context: Pick<OAuthFlowContext, 'issuer' | 'compatibilityMode' | 'requiresCallbackIssuer'>,
+  issuer: string | undefined
+): void {
+  // Durable strict flows created before the capability bit existed keep their
+  // original require-issuer contract during rolling upgrades.
+  const requiresCallbackIssuer =
+    context.requiresCallbackIssuer ?? context.compatibilityMode === 'strict';
+  if (requiresCallbackIssuer && issuer == null) {
+    throw new OAuthCallbackValidationError('callback_issuer_missing');
+  }
+  if (issuer != null && issuer !== context.issuer) {
+    throw new OAuthCallbackValidationError('callback_issuer_mismatch');
+  }
 }
 
 /**
@@ -1261,8 +1301,8 @@ async function startMCPOAuthFlowWithAS(opts: {
   reuseDynamicClientRegistration?: boolean;
   resourceUri: string;
   issuer: string;
-  compatibilityMode: 'strict' | 'legacy';
-  dcrMode: 'disabled' | 'advertised' | 'fallback';
+  compatibilityMode: MCPOAuthCompatibilityMode;
+  dcrMode: MCPOAuthDCRMode;
   allowLocalhostHttp: boolean;
 }): Promise<OAuthFlowContext> {
   const {
@@ -1301,6 +1341,59 @@ async function startMCPOAuthFlowWithAS(opts: {
     : !clientId && resourceScopesSupported && resourceScopesSupported.length > 0
       ? resourceScopesSupported.join(' ')
       : undefined;
+
+  // Resolve and validate the authorization-server contract before DCR sends
+  // any client metadata to a provider-controlled registration endpoint.
+  const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
+  if (!tokenEndpoint) {
+    throw new Error(
+      'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
+        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+    );
+  }
+  const authorizationEndpoint =
+    authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
+  if (!authorizationEndpoint) {
+    throw new Error(
+      'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
+        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+    );
+  }
+  console.log('[MCP OAuth] OAuth endpoints resolved');
+
+  assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
+  assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
+  const requiresCallbackIssuer =
+    compatibilityMode === 'strict'
+      ? authServerMetadata?.authorization_response_iss_parameter_supported === true
+      : undefined;
+  if (compatibilityMode === 'strict') {
+    if (!authServerMetadata) {
+      throw new Error('Strict MCP OAuth requires authorization-server metadata');
+    }
+    if (authServerMetadata.issuer !== issuer) {
+      throw new Error('Authorization server issuer mismatch');
+    }
+    if (!authServerMetadata.code_challenge_methods_supported?.includes('S256')) {
+      throw new Error('Authorization server does not advertise required PKCE S256 support');
+    }
+    if (
+      authorizationUrlOverride &&
+      authorizationUrlOverride !== authServerMetadata.authorization_endpoint
+    ) {
+      throw new Error('Strict MCP OAuth authorization endpoint override does not match metadata');
+    }
+    if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
+      throw new Error('Strict MCP OAuth token endpoint override does not match metadata');
+    }
+    // RFC 9207 issuer identification is the preferred mix-up defense. Servers
+    // such as Notion do not advertise it, so strict mode instead pins both
+    // code-producing and code-consuming endpoints to the validated issuer
+    // origin. Legacy mode remains the explicit escape hatch.
+    if (!requiresCallbackIssuer) {
+      assertStrictSameOriginMixupDefense(issuer, authorizationEndpoint, tokenEndpoint);
+    }
+  }
 
   // Client ID resolution (DCR if available)
   let actualClientId = clientId;
@@ -1355,47 +1448,6 @@ async function startMCPOAuthFlowWithAS(opts: {
   // CSRF state
   const state = crypto.randomUUID();
 
-  // Resolve token + auth endpoints
-  const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
-  if (!tokenEndpoint) {
-    throw new Error(
-      'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
-    );
-  }
-  const authorizationEndpoint =
-    authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
-  if (!authorizationEndpoint) {
-    throw new Error(
-      'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
-    );
-  }
-  console.log('[MCP OAuth] OAuth endpoints resolved');
-
-  assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
-  assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
-  if (compatibilityMode === 'strict') {
-    if (!authServerMetadata) {
-      throw new Error('Strict MCP OAuth requires authorization-server metadata');
-    }
-    if (authServerMetadata.issuer !== issuer) {
-      throw new Error('Authorization server issuer mismatch');
-    }
-    if (!authServerMetadata.code_challenge_methods_supported?.includes('S256')) {
-      throw new Error('Authorization server does not advertise required PKCE S256 support');
-    }
-    if (
-      authorizationUrlOverride &&
-      authorizationUrlOverride !== authServerMetadata.authorization_endpoint
-    ) {
-      throw new Error('Strict MCP OAuth authorization endpoint override does not match metadata');
-    }
-    if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
-      throw new Error('Strict MCP OAuth token endpoint override does not match metadata');
-    }
-  }
-
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('client_id', actualClientId!);
@@ -1421,9 +1473,7 @@ async function startMCPOAuthFlowWithAS(opts: {
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,
-    requiresCallbackIssuer:
-      compatibilityMode === 'strict' &&
-      authServerMetadata?.authorization_response_iss_parameter_supported === true,
+    requiresCallbackIssuer,
     allowLocalhostHttp,
   };
 }
@@ -1461,8 +1511,8 @@ export async function startMCPOAuthFlow(
     reuseDynamicClientRegistration?: boolean;
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
-    compatibilityMode?: 'strict' | 'legacy';
-    dcrMode?: 'disabled' | 'advertised' | 'fallback';
+    compatibilityMode?: MCPOAuthCompatibilityMode;
+    dcrMode?: MCPOAuthDCRMode;
     /** Exact loopback HTTP exception for standalone development only. */
     allowLocalhostHttp?: boolean;
   }
@@ -1618,17 +1668,7 @@ export async function completeMCPOAuthFlow(
   if (state !== context.state) {
     throw new OAuthCallbackValidationError('callback_state_mismatch');
   }
-  // Old durable strict contexts did not persist this capability bit and keep
-  // their original require-issuer contract. New flows require RFC 9207 only
-  // when the provider advertised it; MCP OAuth does not mandate RFC 9207.
-  const requiresCallbackIssuer =
-    context.requiresCallbackIssuer ?? context.compatibilityMode === 'strict';
-  if (requiresCallbackIssuer && options.issuer == null) {
-    throw new OAuthCallbackValidationError('callback_issuer_missing');
-  }
-  if (options.issuer != null && options.issuer !== context.issuer) {
-    throw new OAuthCallbackValidationError('callback_issuer_mismatch');
-  }
+  validateMCPOAuthCallbackIssuer(context, options.issuer);
 
   // Exchange code for token
   const tokenResponse = await exchangeCodeForToken(

@@ -1,4 +1,4 @@
-import type { AgorClient, MCPServer } from '@agor-live/client';
+import type { AgorClient, MCPOAuthStartResult, MCPServer } from '@agor-live/client';
 import { ApiOutlined, EditOutlined, LoginOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 import { useState } from 'react';
@@ -89,17 +89,16 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
 
   const handleOAuthClick = async () => {
     if (!client) return;
+    if (!server.url) {
+      showError('MCP URL is required');
+      return;
+    }
     try {
       const data = (await client
         .service('mcp-servers/oauth-start')
         .create(
           buildMCPOAuthStartRequest(server.url, server.mcp_server_id, server.auth?.oauth_client_id)
-        )) as {
-        success: boolean;
-        error?: string;
-        authorizationUrl?: string;
-        attempt_id?: string;
-      };
+        )) as MCPOAuthStartResult;
 
       if (data.success && data.authorizationUrl && data.attempt_id) {
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');

@@ -2,6 +2,11 @@ import {
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
 } from '@agor/core/tools/mcp/http-headers';
+import type {
+  MCPOAuthCompatibilityMode,
+  MCPOAuthDCRMode,
+  MCPOAuthStartRequest,
+} from '@agor-live/client';
 
 /**
  * OAuth utility functions extracted from MCPServersTable for testability.
@@ -26,8 +31,8 @@ export interface OAuthConfig {
   oauth_scope?: string;
   oauth_grant_type?: string;
   oauth_mode?: 'per_user' | 'shared';
-  oauth_compatibility_mode?: 'strict' | 'legacy';
-  oauth_dcr_mode?: 'disabled' | 'advertised' | 'fallback';
+  oauth_compatibility_mode?: MCPOAuthCompatibilityMode;
+  oauth_dcr_mode?: MCPOAuthDCRMode;
 }
 
 /**
@@ -88,19 +93,13 @@ export interface TestConfig {
   client_secret?: string;
   scope?: string;
   grant_type?: string;
-  compatibility_mode?: 'strict' | 'legacy';
-  dcr_mode?: 'disabled' | 'advertised' | 'fallback';
-}
-
-export interface MCPOAuthStartRequest {
-  mcp_url: string | undefined;
-  mcp_server_id: string | undefined;
-  client_id: string | undefined;
+  compatibility_mode?: MCPOAuthCompatibilityMode;
+  dcr_mode?: MCPOAuthDCRMode;
 }
 
 /** Shared Socket.IO/Feathers payload used by Settings and the session footer. */
 export function buildMCPOAuthStartRequest(
-  mcpUrl: string | undefined,
+  mcpUrl: string,
   mcpServerId: string | undefined,
   clientId: string | undefined
 ): MCPOAuthStartRequest {
@@ -182,8 +181,8 @@ export interface BuiltAuth {
   oauth_scope?: string;
   oauth_grant_type?: string;
   oauth_mode?: 'per_user' | 'shared';
-  oauth_compatibility_mode?: 'strict' | 'legacy';
-  oauth_dcr_mode?: 'disabled' | 'advertised' | 'fallback';
+  oauth_compatibility_mode?: MCPOAuthCompatibilityMode;
+  oauth_dcr_mode?: MCPOAuthDCRMode;
 }
 
 /**
