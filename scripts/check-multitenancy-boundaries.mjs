@@ -40,15 +40,14 @@ const checks = [
       'apps/agor-daemon/src/register-hooks.ts': 1,
       // OAuth HA hints use the audited native-event inventory; authorization
       // URLs and standalone socket hints are explicitly local-only.
-      'apps/agor-daemon/src/register-services.ts': 5,
+      'apps/agor-daemon/src/register-services.ts': 1,
       // HA fork/spawn now use the tenant-aware Feathers event helper instead
       // of raw global Socket.IO broadcasts.
-      'apps/agor-daemon/src/register-routes.ts': 6,
+      'apps/agor-daemon/src/register-routes.ts': 4,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,
-      'apps/agor-daemon/src/services/repos.ts': 1,
       // The tenant-aware realtime facade: tenant/session channel join, the
       // publish handler, session-stream and tenant+task executor-control joins,
       // the existence-gated room lookup (existingChannel — used by publish +
