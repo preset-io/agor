@@ -2,13 +2,14 @@ import { type Message, MessageRole, type UUID } from '@agor/core/types';
 import { sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
+import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
 import { createDatabase, type Database } from '../client';
 import { executeRaw } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import { sanitizeDbError } from '../sanitize-error';
 import { runWithTenantDatabaseScope } from '../tenant-scope';
 import { BranchRepository } from './branches';
-import { MessagesRepository } from './messages';
+import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 
@@ -116,6 +117,15 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         (await repository.mutateMetadataLocked(first.message_id, () => ({ value: actualNul })))
           .message.metadata
       ).toEqual({ value: '�' });
+
+      const oversized = new Array(JSON_SANITIZER_LIMITS.maxNodes).fill(null);
+      const omitted = await repository.update(first.message_id, {
+        content: oversized as Message['content'],
+        content_preview: 'should not survive',
+      });
+      expect(omitted.content).toBe(MESSAGE_CONTENT_OMITTED);
+      expect(omitted.content_preview).toBe(MESSAGE_CONTENT_OMITTED);
+      expect(omitted.metadata).toEqual({ persistence_omission: { reason: 'size' } });
     });
   });
 });

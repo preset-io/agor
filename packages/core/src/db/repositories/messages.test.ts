@@ -9,9 +9,10 @@ import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/typ
 import { MessageRole } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
+import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
-import { MessagesRepository } from './messages';
+import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
@@ -527,6 +528,28 @@ describe('MessagesRepository.update', () => {
     expect(updated.tool_uses).toEqual([{ id: 'tool-1', name: 'read', input: { 'bad�key': '�' } }]);
     expect(updated.metadata).toEqual({ keep: true });
   });
+
+  dbTest(
+    'persists a bounded placeholder when final content exceeds the safety budget',
+    async ({ db }) => {
+      const messages = new MessagesRepository(db);
+      const sessionId = await createTestSession(db);
+      const created = await messages.create(createMessageData({ session_id: sessionId }));
+      const oversized = new Array(JSON_SANITIZER_LIMITS.maxNodes).fill(null);
+
+      const updated = await messages.update(created.message_id, {
+        content: oversized as Message['content'],
+        content_preview: 'untrusted preview',
+        metadata: { secret: 'must be dropped' },
+      });
+
+      expect(updated.content).toBe(MESSAGE_CONTENT_OMITTED);
+      expect(updated.content_preview).toBe(MESSAGE_CONTENT_OMITTED);
+      expect(updated.tool_uses).toBeUndefined();
+      expect(updated.metadata).toEqual({ persistence_omission: { reason: 'size' } });
+      expect(updated.metadata).not.toHaveProperty('secret');
+    }
+  );
 
   dbTest('should throw error for non-existent message', async ({ db }) => {
     const messages = new MessagesRepository(db);

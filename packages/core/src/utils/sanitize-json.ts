@@ -1,3 +1,5 @@
+import { toUSVString } from 'node:util';
+
 const REPLACEMENT_CHARACTER = '\uFFFD';
 
 export const JSON_SANITIZER_LIMITS = {
@@ -18,27 +20,7 @@ export class JsonSanitizationError extends Error {
 }
 
 export function sanitizeUnicodeString(value: string): string {
-  let output: string | undefined;
-  for (let index = 0; index < value.length; index++) {
-    const unit = value.charCodeAt(index);
-    if (unit === 0) {
-      output ??= value.slice(0, index);
-      output += REPLACEMENT_CHARACTER;
-    } else if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        if (output !== undefined) output += value[index] + value[index + 1];
-        index++;
-      } else {
-        output ??= value.slice(0, index);
-        output += REPLACEMENT_CHARACTER;
-      }
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      output ??= value.slice(0, index);
-      output += REPLACEMENT_CHARACTER;
-    } else if (output !== undefined) output += value[index];
-  }
-  return output ?? value;
+  return toUSVString(value).replaceAll('\0', REPLACEMENT_CHARACTER);
 }
 
 type JsonContainer = Record<string, unknown> | unknown[];
