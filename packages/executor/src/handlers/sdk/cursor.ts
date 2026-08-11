@@ -234,6 +234,7 @@ async function buildCursorMcpServers(args: {
     sessionId: args.sessionId,
     taskId: args.taskId,
     withheld: reporter.withheld,
+  });
 
   for (const { server } of serversWithSource) {
     const name = claimMcpName(server.name, claimed);

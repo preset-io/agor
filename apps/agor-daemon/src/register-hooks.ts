@@ -1844,8 +1844,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
       find: [scopeMcpServerFindToUsable],
       create: [requireMinimumRole(ROLES.ADMIN, 'create MCP servers')],
-      patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
       update: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
+      patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
     },
     after: {

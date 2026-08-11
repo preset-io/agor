@@ -102,12 +102,16 @@ describe('getMcpServersForSession', () => {
     } as MCPServer;
     const listEffectiveServers = vi.fn().mockResolvedValue([shared, foreignPrivate]);
 
-    const servers = await getMcpServersForSession('session-a' as SessionID, {
-      mcpServerRepo: { findAll: vi.fn() } as never,
-      sessionMCPRepo: { listEffectiveServers } as never,
-      forUserId: 'prompt-user',
-      sessionOwnerId: 'owner-a',
-    });
+    const servers = await getMcpServersForSession(
+      'session-a' as SessionID,
+      {
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: { listEffectiveServers } as never,
+        forUserId: 'prompt-user',
+        sessionOwnerId: 'owner-a',
+      },
+      ENFORCING
+    );
 
     expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['shared']);
   });
@@ -116,12 +120,16 @@ describe('getMcpServersForSession', () => {
     const findAll = vi.fn().mockResolvedValue([makeServer('shared', 'global')]);
     const listServers = vi.fn().mockResolvedValue([]);
 
-    await getMcpServersForSession('session-a' as SessionID, {
-      mcpServerRepo: { findAll } as never,
-      sessionMCPRepo: { listServers } as never,
-      forUserId: 'prompt-user',
-      sessionOwnerId: 'owner-a',
-    });
+    await getMcpServersForSession(
+      'session-a' as SessionID,
+      {
+        mcpServerRepo: { findAll } as never,
+        sessionMCPRepo: { listServers } as never,
+        forUserId: 'prompt-user',
+        sessionOwnerId: 'owner-a',
+      },
+      ENFORCING
+    );
 
     expect(findAll).toHaveBeenCalledWith(
       { scope: 'global', enabled: true, usableByUserId: 'owner-a' },

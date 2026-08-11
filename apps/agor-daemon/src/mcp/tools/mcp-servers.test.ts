@@ -621,19 +621,14 @@ describe('agor_mcp_servers_create/update/attach', () => {
     });
   });
 
-  it('sets session-specific MCP server links by diffing add/remove operations', async () => {
-    const createCalls: Array<string> = [];
-    const removeCalls: Array<string> = [];
+  it('sets session-specific MCP server links with one atomic replacement', async () => {
+    const updateCalls: Array<unknown> = [];
     const app = makeFakeApp({
       '/sessions/:id/mcp-servers': {
         find: async () => [{ mcp_server_id: 'full-keep' }, { mcp_server_id: 'full-remove' }],
-        create: async (data: { mcpServerId: string }) => {
-          createCalls.push(data.mcpServerId);
+        update: async (id: unknown, data: unknown, params: unknown) => {
+          updateCalls.push({ id, data, params });
           return data;
-        },
-        remove: async (id: string) => {
-          removeCalls.push(id);
-          return { mcp_server_id: id };
         },
       },
     });
@@ -645,8 +640,12 @@ describe('agor_mcp_servers_create/update/attach', () => {
     const result = await set({ mcpServerIds: ['keep', 'add'] });
     const payload = JSON.parse(result.content[0].text);
 
-    expect(removeCalls).toEqual(['full-remove']);
-    expect(createCalls).toEqual(['full-add']);
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0]).toMatchObject({
+      id: null,
+      data: { mcpServerIds: ['full-keep', 'full-add'] },
+      params: { route: { id: 'sess-current' } },
+    });
     expect(payload).toMatchObject({
       session_id: 'sess-current',
       desired_mcp_server_ids: ['full-keep', 'full-add'],
@@ -656,12 +655,11 @@ describe('agor_mcp_servers_create/update/attach', () => {
     });
   });
 
-  it('marks set session-specific MCP links as an MCP error when diff operations fail', async () => {
+  it('marks set session-specific MCP links as an MCP error when replacement fails', async () => {
     const app = makeFakeApp({
       '/sessions/:id/mcp-servers': {
         find: async () => [{ mcp_server_id: 'full-remove' }],
-        create: async () => ({}),
-        remove: async () => {
+        update: async () => {
           throw new Error('RBAC denied');
         },
       },
@@ -676,7 +674,7 @@ describe('agor_mcp_servers_create/update/attach', () => {
 
     expect(result.isError).toBe(true);
     expect(payload.failures).toEqual([
-      { mcp_server_id: 'full-remove', action: 'remove', reason: 'RBAC denied' },
+      { mcp_server_id: 'sess-current', action: 'replace', reason: 'RBAC denied' },
     ]);
   });
 

@@ -42,6 +42,10 @@ describe('register-services /mcp-servers/discover wiring', () => {
     expect(discoverBlock.length).toBeGreaterThan(0);
   });
 
+  it('uses the same caller visibility gate for saved server IDs', () => {
+    expect(discoverBlock).toContain('loadMcpServerForCaller');
+  });
+
   it('calls resolveProbeServerTemplates before resolveMCPAuthHeaders', () => {
     const probeIdx = discoverBlock.search(/\bresolveProbeServerTemplates\s*\(/);
     const headersIdx = discoverBlock.search(/\bresolveMCPAuthHeaders\s*\(/);

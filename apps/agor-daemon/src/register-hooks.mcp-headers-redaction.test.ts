@@ -19,6 +19,12 @@ describe('register-hooks MCP server secret redaction', () => {
     );
   });
 
+  it('keeps full MCP server replacements behind the admin write gate', () => {
+    expect(source).toMatch(
+      /update:\s*\[requireMinimumRole\(ROLES\.ADMIN, ['"]update MCP servers['"]\)\]/
+    );
+  });
+
   it('redacts session MCP server route responses that bypass service hooks', () => {
     expect(routesSource).toContain("'/sessions/:id/mcp-servers'");
     expect(routesSource).toContain('redactMCPServerSecrets');
@@ -28,6 +34,8 @@ describe('register-hooks MCP server secret redaction', () => {
     expect(routesSource).toContain('includeGlobal');
     expect(routesSource).toContain("scope: 'global'");
     expect(routesSource).toContain('forUserId');
+    expect(routesSource).toContain('sessionMCPServersService.setServers');
+    expect(routesSource).toContain('update: { role: ROLES.MEMBER');
   });
 
   it('does not expose raw secrets to global session-token service reads', () => {

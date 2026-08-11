@@ -964,7 +964,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_sessions_set_mcp_servers',
     {
       description:
-        'Replace the session-specific MCP links for a session by diffing through the same add/remove route the UI uses. Defaults to current session when `sessionId` is omitted. Permissions are service-enforced per add/remove. This manages session links only; enabled global MCP servers are still effective for every session even if omitted here.',
+        'Atomically replace the session-specific MCP links for a session. Defaults to current session when `sessionId` is omitted. The complete replacement is validated before any link changes are committed, so a rejected private server leaves the existing set unchanged. This manages session links only; enabled global MCP servers are still effective for every session even if omitted here.',
       annotations: { destructiveHint: true, idempotentHint: true },
       inputSchema: z.strictObject({
         mcpServerIds: z
@@ -1001,48 +1001,45 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       const toAdd = desired.filter((id) => !currentSet.has(id));
       const toRemove = current.filter((id) => !desiredSet.has(id));
 
-      const failures: Array<{ mcp_server_id: string; action: 'add' | 'remove'; reason: string }> =
-        [];
-      for (const mcpServerId of toRemove) {
-        try {
-          await removeMcpServerFromSession(ctx, target.sessionId, mcpServerId);
-        } catch (error) {
-          failures.push({
-            mcp_server_id: mcpServerId,
-            action: 'remove',
-            reason: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      for (const mcpServerId of toAdd) {
-        try {
-          await attachMcpServerToSession(ctx, target.sessionId, mcpServerId);
-        } catch (error) {
-          failures.push({
-            mcp_server_id: mcpServerId,
-            action: 'add',
-            reason: error instanceof Error ? error.message : String(error),
-          });
-        }
+      try {
+        await ctx.app.service('/sessions/:id/mcp-servers').update(
+          null,
+          { mcpServerIds: desired },
+          {
+            ...ctx.baseServiceParams,
+            route: { id: target.sessionId },
+          }
+        );
+      } catch (error) {
+        const payload = {
+          session_id: target.sessionId,
+          desired_mcp_server_ids: desired,
+          failures: [
+            {
+              mcp_server_id: desired[0] ?? target.sessionId,
+              action: 'replace' as const,
+              reason: error instanceof Error ? error.message : String(error),
+            },
+          ],
+          unchanged_mcp_server_ids: current,
+          next_steps: [
+            'The atomic replacement was rejected; the existing session-specific MCP links were left unchanged.',
+          ],
+        };
+        return { ...textResult(payload), isError: true };
       }
 
-      const payload = {
+      return textResult({
         session_id: target.sessionId,
         desired_mcp_server_ids: desired,
-        added_mcp_server_ids: toAdd.filter(
-          (id) => !failures.some((f) => f.action === 'add' && f.mcp_server_id === id)
-        ),
-        removed_mcp_server_ids: toRemove.filter(
-          (id) => !failures.some((f) => f.action === 'remove' && f.mcp_server_id === id)
-        ),
+        added_mcp_server_ids: toAdd,
+        removed_mcp_server_ids: toRemove,
         unchanged_mcp_server_ids: desired.filter((id) => currentSet.has(id)),
-        failures: failures.length > 0 ? failures : undefined,
         next_steps: [
           'Verify with agor_sessions_get_current/agor_sessions_get. Enabled global MCP servers remain effective even if not listed here.',
           'Restart or re-prompt an existing agent if its MCP client does not hot-reload MCP link changes.',
         ],
-      };
-      return failures.length > 0 ? { ...textResult(payload), isError: true } : textResult(payload);
+      });
     }
   );
 }

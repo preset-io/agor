@@ -453,6 +453,7 @@ export async function setupQuery(
           `   ⚠️  Skipping MCP server "${server.name}": reserved for the built-in Agor MCP server`
         );
         return false;
+      });
 
       mcpToolPermissions = buildMcpToolPermissionIndex(
         attachableServers.map(({ server }) => server)

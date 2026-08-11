@@ -52,7 +52,6 @@ import {
   isMCPServerUsableInSession,
   MCPServerNotUsableError,
 } from '@agor/core/mcp';
-import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
   AuthenticatedParams,
   HookContext,
@@ -3979,6 +3978,47 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         return relationship;
       },
+      async update(_id: string | null, data: { mcpServerIds?: unknown }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (!Array.isArray(data?.mcpServerIds)) {
+          throw new BadRequest('mcpServerIds (array) required');
+        }
+        if (
+          !data.mcpServerIds.every((serverId): serverId is string => typeof serverId === 'string')
+        ) {
+          throw new BadRequest('mcpServerIds must contain strings');
+        }
+
+        await authorizeAndLoadSessionForMcpConfig(id, params);
+        const serverIds = [...new Set(data.mcpServerIds)] as Array<
+          import('@agor/core/types').MCPServerID
+        >;
+        try {
+          await sessionMCPServersService.setServers(
+            id as import('@agor/core/types').SessionID,
+            serverIds,
+            params
+          );
+        } catch (error) {
+          if (error instanceof MCPServerNotUsableError) {
+            throw new Forbidden('That MCP server is private to another user');
+          }
+          throw error;
+        }
+
+        const replacement = {
+          session_id: id,
+          mcp_server_ids: serverIds,
+        };
+        emitServiceEvent(app, {
+          path: 'session-mcp-servers',
+          event: 'patched',
+          data: replacement,
+          params,
+        });
+        return replacement;
+      },
       async remove(mcpId: string, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
@@ -4022,6 +4062,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       find: { role: ROLES.MEMBER, action: 'view session MCP servers' },
       create: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
+      update: { role: ROLES.MEMBER, action: 'replace session MCP servers' },
       remove: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
       patch: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
     },

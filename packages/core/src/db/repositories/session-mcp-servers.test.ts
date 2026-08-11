@@ -225,6 +225,21 @@ describe('SessionMCPServerRepository.addServer', () => {
       ).toEqual([server1.mcp_server_id]);
     }
   );
+
+  dbTest('deduplicates the desired set before atomically replacing links', async ({ db }) => {
+    const { session, server1, server2 } = await setupTestData(db);
+    const repo = new SessionMCPServerRepository(db);
+
+    await repo.setServers(session.session_id, [
+      server1.mcp_server_id,
+      server1.mcp_server_id,
+      server2.mcp_server_id,
+    ]);
+
+    expect(
+      (await repo.listServers(session.session_id)).map((server) => server.mcp_server_id)
+    ).toEqual([server1.mcp_server_id, server2.mcp_server_id]);
+  });
 });
 
 // ============================================================================

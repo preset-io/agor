@@ -95,6 +95,7 @@ export interface MCPResolutionDeps {
    * indistinguishable from it being broken.
    */
   onServerWithheld?: (server: MCPServer, reason: string) => void;
+  /**
    * Creator of the session being resolved. This is separate from forUserId:
    * a collaborator may prompt a session, but cannot bring their private MCP
    * definitions into the session owner's executor.
