@@ -206,7 +206,10 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
             widget: { ...baseWidgetMeta, widget_id: widgetId },
           },
         },
-        ctx.baseServiceParams
+        // This lifecycle projection is daemon-owned. Keep the authenticated
+        // user and tenant context, but remove MCP transport provenance so the
+        // external Message mutation guard does not reject its own finalization.
+        { ...ctx.baseServiceParams, provider: undefined }
       );
 
       if (presentEverywhere) {
@@ -359,7 +362,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
             widget: { ...baseWidgetMeta, widget_id: widgetId },
           },
         },
-        ctx.baseServiceParams
+        { ...ctx.baseServiceParams, provider: undefined }
       );
 
       return textResult({ widget_id: widgetId, status: 'requested' });

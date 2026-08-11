@@ -37,8 +37,10 @@ type CapturedTool = {
 
 function registerAndCapture(ctx: {
   app: unknown;
+  db?: unknown;
   userId: string;
   sessionId: string;
+  baseServiceParams?: Parameters<typeof registerWidgetTools>[1]['baseServiceParams'];
 }): Record<string, CapturedTool> {
   const captured: Record<string, CapturedTool> = {};
   const fakeServer = {
@@ -49,13 +51,13 @@ function registerAndCapture(ctx: {
 
   registerWidgetTools(fakeServer, {
     app: ctx.app as unknown as Parameters<typeof registerWidgetTools>[1]['app'],
-    db: {} as unknown as Parameters<typeof registerWidgetTools>[1]['db'],
+    db: (ctx.db ?? {}) as Parameters<typeof registerWidgetTools>[1]['db'],
     userId: ctx.userId as unknown as Parameters<typeof registerWidgetTools>[1]['userId'],
     sessionId: ctx.sessionId as unknown as Parameters<typeof registerWidgetTools>[1]['sessionId'],
     authenticatedUser: { user_id: ctx.userId, role: 'member' } as unknown as Parameters<
       typeof registerWidgetTools
     >[1]['authenticatedUser'],
-    baseServiceParams: {},
+    baseServiceParams: ctx.baseServiceParams ?? {},
   });
   return captured;
 }
@@ -144,6 +146,9 @@ function makeApp(opts: {
     messages: {
       patch: async (...args: unknown[]) => {
         calls.push({ service: 'messages', method: 'patch', args });
+        if ((args[2] as { provider?: string } | undefined)?.provider) {
+          throw new Error('external widget message writes are not allowed');
+        }
         lastMessagePatch = args[1] as Record<string, unknown>;
         return { message_id: args[0] };
       },
@@ -232,6 +237,49 @@ describe('agor_widgets_request_env_vars', () => {
       message_range: { end_index: number };
     };
     expect(patchBody.message_range.end_index).toBe(0); // index of the appended widget
+  });
+
+  it('finalizes the widget with its persisted id for MCP callers', async () => {
+    const { app, calls, patchedMessage } = makeApp({ sessionCreator: 'user-creator' });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+      baseServiceParams: {
+        user: { user_id: 'user-creator', role: 'member' },
+        authenticated: true,
+        provider: 'mcp',
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      },
+      db: { run: vi.fn() },
+    });
+
+    const res = await captured.agor_widgets_request_env_vars.cb({
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      auto_resume: true,
+    });
+
+    const patchCall = calls.find((call) => call.service === 'messages' && call.method === 'patch');
+    expect(patchCall).toBeDefined();
+    if (!patchCall) throw new Error('Widget finalization patch was not emitted');
+    expect(patchCall?.args[0]).toBe('widget-msg-1');
+    expect(patchCall?.args[2]).toMatchObject({
+      provider: undefined,
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    });
+
+    const patchWidgetId = (patchCall.args[1] as { metadata: { widget: { widget_id: string } } })
+      .metadata.widget.widget_id;
+    expect(patchWidgetId).toBe('widget-msg-1');
+    expect(patchWidgetId).not.toBe('pending');
+    expect(patchedMessage()?.metadata).toMatchObject({
+      widget: { widget_id: 'widget-msg-1' },
+    });
+    expect(JSON.parse(res.content[0].text)).toMatchObject({
+      widget_id: 'widget-msg-1',
+      status: 'requested',
+    });
   });
 
   it('normalizes requested names before storing widget metadata and preview text', async () => {
