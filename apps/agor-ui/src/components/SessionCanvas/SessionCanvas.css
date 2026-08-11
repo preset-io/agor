@@ -113,3 +113,29 @@
 .react-flow__node-appNode .react-flow__resize-control.line.bottom {
   height: 12px;
 }
+
+/* ---- Slim mode: horizontal floating toolbar at the bottom of the board ---- */
+.canvas-slim .react-flow__controls {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  margin-bottom: 20px;
+  border-radius: 12px;
+}
+
+.canvas-slim .react-flow__controls-button {
+  border: none;
+  border-radius: 8px;
+  width: 33px;
+  height: 33px;
+  min-width: 33px;
+  min-height: 33px;
+}
+
+.canvas-slim .react-flow__controls-button svg {
+  max-width: none;
+  max-height: none;
+  transform: scale(1.35);
+}

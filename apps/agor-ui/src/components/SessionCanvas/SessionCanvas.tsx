@@ -61,6 +61,7 @@ import {
   useRegisterRecenter,
 } from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { useAgorStore } from '../../store/agorStore';
@@ -527,6 +528,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Card modal state
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
     const [cardModalOpen, setCardModalOpen] = useState(false);
+
+    const { isSlim } = useUIMode();
+    const controlTooltipPlacement = isSlim ? ('top' as const) : ('right' as const);
 
     // Tool state for canvas annotations
     const [activeTool, setActiveTool] = useState<
@@ -2599,7 +2603,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         {scopedCustomCss && <style>{scopedCustomCss}</style>}
         <div
           ref={reactFlowWrapperRef}
-          className={boardCssClass || undefined}
+          className={
+            [boardCssClass, isSlim ? 'canvas-slim' : ''].filter(Boolean).join(' ') || undefined
+          }
           style={{
             width: '100%',
             height: '100%',
@@ -2652,13 +2658,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           >
             {!canvasBackground && <Background />}
             <Controls
-              position="top-left"
+              position={isSlim ? 'bottom-center' : 'top-left'}
               showZoom={false}
               showFitView={false}
               showInteractive={false}
             >
               {/* Zoom controls */}
-              <Tooltip title="Zoom In" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip title="Zoom In" placement={controlTooltipPlacement} mouseEnterDelay={0.3}>
                 <span>
                   <ControlButton
                     onClick={(e) => {
@@ -2670,7 +2676,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   </ControlButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Zoom Out" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip title="Zoom Out" placement={controlTooltipPlacement} mouseEnterDelay={0.3}>
                 <span>
                   <ControlButton
                     onClick={(e) => {
@@ -2682,7 +2688,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   </ControlButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Fit View" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip title="Fit View" placement={controlTooltipPlacement} mouseEnterDelay={0.3}>
                 <span>
                   <ControlButton
                     onClick={(e) => {
@@ -2695,7 +2701,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 </span>
               </Tooltip>
               {/* Custom toolbox buttons */}
-              <Tooltip title="Select" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip title="Select" placement={controlTooltipPlacement} mouseEnterDelay={0.3}>
                 <span>
                   <ControlButton
                     onClick={(e) => {
@@ -2715,7 +2721,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               </Tooltip>
               <Tooltip
                 title={mutationGate.canMutate ? 'Add Zone' : (mutationGate.message ?? 'Add Zone')}
-                placement="right"
+                placement={controlTooltipPlacement}
                 mouseEnterDelay={0.3}
               >
                 <span>
@@ -2742,7 +2748,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 title={
                   mutationGate.canMutate ? 'Add Comment' : (mutationGate.message ?? 'Add Comment')
                 }
-                placement="right"
+                placement={controlTooltipPlacement}
                 mouseEnterDelay={0.3}
               >
                 <span>
@@ -2771,7 +2777,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     ? 'Add Markdown Note — click canvas to place'
                     : (mutationGate.message ?? 'Add Markdown Note — click canvas to place')
                 }
-                placement="right"
+                placement={controlTooltipPlacement}
                 mouseEnterDelay={0.3}
               >
                 <span>
@@ -2801,7 +2807,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     ? 'Eraser - Click to toggle'
                     : (mutationGate.message ?? 'Eraser')
                 }
-                placement="right"
+                placement={controlTooltipPlacement}
                 mouseEnterDelay={0.3}
               >
                 <span>
