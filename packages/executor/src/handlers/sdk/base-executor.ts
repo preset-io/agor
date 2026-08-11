@@ -11,7 +11,7 @@ import {
   resolveSdkWatchdogConfig,
   stripProviderCredentialEnvironment,
 } from '@agor/core/config';
-import { generateId, shortId } from '@agor/core/db';
+import { generateId, sanitizeDbError, shortId } from '@agor/core/db';
 import type {
   AgenticToolName,
   ContextUsageSnapshot,
@@ -27,6 +27,7 @@ import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
+import { formatExecutorFailure } from '../../safe-executor-error.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -67,7 +68,7 @@ export async function appendTaskFailureMessage(
   sessionId: SessionID,
   taskId: TaskID,
   failure: Error,
-  message = failure.message
+  message = formatExecutorFailure(failure)
 ): Promise<void> {
   try {
     const existingMessages = await client.service('messages').find({
@@ -98,7 +99,7 @@ export async function appendTaskFailureMessage(
       },
     });
   } catch (error) {
-    console.error('[executor] Failed to create task failure message:', error);
+    console.error('[executor.message.persist] failed', sanitizeDbError(error));
   }
 }
 
@@ -701,8 +702,8 @@ export async function executeToolTask(params: {
     if (error instanceof RuntimeCleanupError) throw error;
     const err = error instanceof Error ? error : new Error(String(error));
     const interactionOutcome = getInteractionAbortOutcome(params.abortController);
-    const failureMessage = interactionOutcome?.errorMessage ?? (err.message || String(err));
-    console.error(`[${toolName}] Execution failed:`, interactionOutcome ? failureMessage : err);
+    const failureMessage = interactionOutcome?.errorMessage ?? formatExecutorFailure(err);
+    console.error(`[${toolName}] execution failed category=task_execution`);
 
     // Capture git SHA at task end (even for failed tasks)
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');

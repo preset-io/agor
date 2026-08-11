@@ -53,6 +53,7 @@ describe('resolveDeploymentConfig', () => {
         completionCallbackDurableAdmission: true,
         completionCallbackPreAdmissionRecovery: false,
         widgetResolutionDurableClaim: true,
+        githubInstall: true,
         codexCredentialFiles: true,
         codexDeviceAuth: false,
       },

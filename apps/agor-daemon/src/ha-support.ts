@@ -9,7 +9,6 @@ export const HA_UNSUPPORTED_FEATURES = {
   providerNativeInteractivePermissions:
     'provider-native interactive permission modes without Agor realtime decision routing',
   mcpOAuth: 'MCP OAuth flows',
-  githubInstall: 'GitHub App installation state',
   codexAuth: 'Codex credential-file import/logout without a consistent executor user home',
   codexDeviceAuth: 'Codex device authentication polling without durable attempt ownership',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',

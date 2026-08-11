@@ -463,7 +463,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const schema = `terminal_recovery_${generateId().replaceAll('-', '').slice(0, 20)}`;
       const migration = await readFile(
         new URL(
-          '../../../drizzle/postgres/0083_terminal_consequence_recovery.sql',
+          '../../../drizzle/postgres/0084_terminal_consequence_recovery.sql',
           import.meta.url
         ),
         'utf8'

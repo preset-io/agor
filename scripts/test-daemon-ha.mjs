@@ -297,6 +297,90 @@ try {
   assert.equal(typeof accessToken, 'string');
   cleanupAccessToken = accessToken;
 
+  const issueInstallState = async (base) => {
+    const response = await fetch(`${base}/api/github/setup/state`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    assert.equal(response.status, 200, `GitHub install state issue failed: ${response.status}`);
+    const body = await response.json();
+    assert.match(body.state, /^[a-f0-9]{64}$/);
+    return body.state;
+  };
+
+  // Issue through one daemon and consume through the peer's registered HTTP
+  // route. A replay routed back to the issuer must fail after the shared atomic
+  // delete commits.
+  const peerState = await issueInstallState(daemonA);
+  const peerCallback = await fetch(
+    `${daemonB}/api/github/setup/callback?installation_id=4242&state=${encodeURIComponent(peerState)}`
+  );
+  assert.equal(peerCallback.status, 200);
+  assert.match(await peerCallback.text(), /unverified installation ID/i);
+  const peerReplay = await fetch(
+    `${daemonA}/api/github/setup/callback?installation_id=4242&state=${encodeURIComponent(peerState)}`
+  );
+  assert.equal(peerReplay.status, 400);
+  await peerReplay.text();
+  console.log('ok - GitHub install state issues on one daemon and consumes once on its peer');
+
+  // Exercise both state-bearing ingress paths, then prove nginx's logs omit
+  // the complete request target rather than retaining the raw bearer.
+  const ingressState = await issueInstallState(ingress);
+  const setupPage = await fetch(
+    `${ingress}/api/github/setup/new?name=Agor&state=${encodeURIComponent(ingressState)}`
+  );
+  assert.equal(setupPage.status, 200);
+  await setupPage.text();
+  const ingressCallback = await fetch(
+    `${ingress}/api/github/setup/callback?installation_id=4343&state=${encodeURIComponent(ingressState)}`
+  );
+  assert.equal(ingressCallback.status, 200);
+  await ingressCallback.text();
+  const ingressLogs = dockerOutput('logs', '--no-color', 'ingress');
+  assert(!ingressLogs.includes(ingressState), 'nginx logs retained raw GitHub setup state');
+  console.log('ok - HA ingress logs redact GitHub setup query state');
+
+  if (process.env.AGOR_HA_INTEGRATION_FAILURES === '1') {
+    // nginx's built-in error format includes the complete request and upstream
+    // URI. Prove the sensitive route suppresses that unformattable log path
+    // even when both peers are down and the bearer remains unconsumed.
+    const failedUpstreamState = await issueInstallState(ingress);
+    cleanupStoppedServices.add('daemon-a');
+    cleanupStoppedServices.add('daemon-b');
+    docker('stop', 'daemon-a', 'daemon-b');
+    // Express accepts case variants, so nginx must apply the same sensitive
+    // boundary to both the canonical path and a mixed-case spelling.
+    for (const callbackPath of ['/api/github/setup/callback', '/API/GITHUB/SETUP/CALLBACK']) {
+      const failedCallback = await fetch(
+        `${ingress}${callbackPath}?installation_id=4444&state=${encodeURIComponent(failedUpstreamState)}`
+      );
+      assert(
+        [502, 504].includes(failedCallback.status),
+        `expected an upstream failure for ${callbackPath}, received ${failedCallback.status}`
+      );
+      await failedCallback.text();
+    }
+    const failedIngressLogs = dockerOutput('logs', '--no-color', 'ingress');
+    assert(
+      !failedIngressLogs.includes(failedUpstreamState),
+      'nginx failure-path logs retained raw GitHub setup state'
+    );
+    startServiceOnly('daemon-a');
+    cleanupStoppedServices.delete('daemon-a');
+    startServiceOnly('daemon-b');
+    cleanupStoppedServices.delete('daemon-b');
+    await Promise.all([
+      waitFor(`${daemonA}/readyz`, (response) => response.status === 200),
+      waitFor(`${daemonB}/readyz`, (response) => response.status === 200),
+      waitFor(`${ingress}/readyz`, (response) => response.status === 200),
+    ]);
+    // Let nginx's configured fail_timeout elapse so later distribution probes
+    // can admit both recovered peers rather than observing the quarantine.
+    await delay(5_500);
+    console.log('ok - HA ingress failure-path logs omit unconsumed GitHub setup state');
+  }
+
   const socketA = await connectAuthenticated(daemonA, accessToken);
   const socketB = await connectAuthenticated(daemonB, accessToken);
   cleanupSockets.add(socketA);
@@ -318,6 +402,7 @@ try {
     assert.equal(health.deployment.capabilities.completionCallbackDurableAdmission, true);
     assert.equal(health.deployment.capabilities.completionCallbackPreAdmissionRecovery, false);
     assert.equal(health.deployment.capabilities.widgetResolutionDurableClaim, true);
+    assert.equal(health.deployment.capabilities.githubInstall, true);
     assert.equal(health.deployment.capabilities.gatewayListeners, true);
     assert.equal(health.deployment.capabilities.gatewayOutboundExactlyOnce, false);
     assert.equal(health.deployment.capabilities.environmentHealthMonitor, true);

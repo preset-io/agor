@@ -56,6 +56,7 @@ import {
   formatGatewayFollowUpRoutingMessage,
   formatGatewaySessionCreatedMessage,
   formatGatewaySystemPayload,
+  gatewayListenerFailure,
   getConnector,
   hasConnector,
   isSlackWriteTargetAllowed,
@@ -163,6 +164,16 @@ interface ActiveGatewayListenerLease extends GatewayListenerLease {
   tenant_id: TenantID | string;
 }
 
+interface GatewayListenerRetryState {
+  tenantId: TenantID | string;
+  channel: GatewayChannel;
+  lease?: GatewayListenerLease;
+  attempt: number;
+  timer?: NodeJS.Timeout;
+  generation: number;
+  lifecycleGeneration: number;
+}
+
 const GATEWAY_LISTENER_LEASE_MS = 30_000;
 const GATEWAY_LISTENER_SCAN_BATCH = 25;
 const GATEWAY_LISTENER_RENEW_SCAN_MAX_MS = 5_000;
@@ -178,6 +189,8 @@ if (
 ) {
   throw new Error('Gateway terminal delivery lease must outlive its provider timeout');
 }
+const GATEWAY_LISTENER_RETRY_BASE_MS = 5_000;
+const GATEWAY_LISTENER_RETRY_MAX_MS = 5 * 60_000;
 
 async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -737,6 +750,11 @@ export class GatewayService {
   private activeListeners = new Map<string, GatewayConnector>();
   /** PostgreSQL-only durable ownership diagnostics/fences for local listeners. */
   private activeListenerLeases = new Map<string, ActiveGatewayListenerLease>();
+  /** Failed starts, scoped by tenant + channel. A durable owner retains its lease while waiting. */
+  private listenerRetries = new Map<string, GatewayListenerRetryState>();
+  private listenerRetryGeneration = 0;
+  /** Cancellation fence covering timers and provider startups already in flight. */
+  private listenerLifecycleGenerations = new Map<string, number>();
   private listenerTimer: NodeJS.Timeout | null = null;
   private listenerScanRunning = false;
   private listenerStopped = false;
@@ -3286,10 +3304,10 @@ export class GatewayService {
     try {
       found = await this.reconcileListenersOnce();
       this.listenerIdleRounds = found === 0 ? this.listenerIdleRounds + 1 : 0;
-    } catch (error) {
+    } catch {
       this.listenerIdleRounds += 1;
       console.warn(
-        `[distributed-work.gateway-listener] event=scan_failed instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+        `[distributed-work.gateway-listener] event=scan_failed instance_id=${JSON.stringify(this.workIdentity.instanceId)} boot_id=${JSON.stringify(this.workIdentity.bootId)} code=database_unavailable`
       );
     } finally {
       this.listenerScanRunning = false;
@@ -3366,7 +3384,7 @@ export class GatewayService {
     for (const ref of refs) {
       await this.runWithListenerTenantIdentity(ref.tenant_id, async () => {
         const key = this.listenerKey(ref.tenant_id, ref.channel_id);
-        if (this.activeListeners.has(key)) return;
+        if (this.activeListeners.has(key) || this.listenerRetries.has(key)) return;
         const channel = await this.channelRepo.findById(ref.channel_id);
         if (!channel?.enabled) return;
         if (tenantIdFromGatewayChannel(channel) !== ref.tenant_id) {
@@ -3381,14 +3399,14 @@ export class GatewayService {
         // Provider authentication/connect is external network work and must not
         // hold up the bounded/fair discovery cursor. The channel-row claim
         // prevents a second start while this promise is in flight.
-        void this.startChannelListener(channel, ref.tenant_id).catch((error) => {
+        void this.startChannelListener(channel, ref.tenant_id).catch(() => {
           console.warn(
-            `[distributed-work.gateway-listener] event=start_failed tenant_id=${JSON.stringify(ref.tenant_id)} channel_id=${JSON.stringify(ref.channel_id)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+            `[gateway.listener] event=start_failed channel_id=${JSON.stringify(channel.id)} provider=${channel.channel_type} code=supervisor_unavailable`
           );
         });
-      }).catch((error) => {
+      }).catch(() => {
         console.warn(
-          `[distributed-work.gateway-listener] event=candidate_failed tenant_id=${JSON.stringify(ref.tenant_id)} channel_id=${JSON.stringify(ref.channel_id)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+          `[distributed-work.gateway-listener] event=candidate_failed tenant_id=${JSON.stringify(ref.tenant_id)} channel_id=${JSON.stringify(ref.channel_id)} code=candidate_unavailable`
         );
       });
     }
@@ -3516,6 +3534,8 @@ export class GatewayService {
       async (scopedDb) => isPostgresDatabase(scopedDb)
     );
     const channel = await this.channelRepo.findById(channelId);
+    this.invalidateListenerLifecycle(tenantId, channelId);
+    await this.cancelListenerRetry(tenantId, channelId, true);
     if (!channel) {
       console.warn(`[gateway] Cannot manage listener: channel ${channelId} not found`);
       return;
@@ -3568,9 +3588,17 @@ export class GatewayService {
       'Missing tenant context while stopping a gateway listener'
     );
     const key = this.listenerKey(tenantId, channelId);
+    this.invalidateListenerLifecycle(tenantId, channelId);
     const connector = this.activeListeners.get(key);
     const lease = this.activeListenerLeases.get(key);
+    const retry = this.listenerRetries.get(key);
+    if (retry?.timer) clearTimeout(retry.timer);
+    this.listenerRetries.delete(key);
     if (!connector) {
+      this.activeListenerLeases.delete(key);
+      if (lease && options.releaseClaim !== false) {
+        await this.channelRepo.releaseListener(lease.channel_id, lease.claim_token);
+      }
       return true; // Not listening
     }
 
@@ -3586,13 +3614,12 @@ export class GatewayService {
       }
       stopped = true;
       console.log(`[gateway] Listener stopped for channel ${shortId(channelId)}`);
-    } catch (error) {
+    } catch {
       // A transport that ignores stop may still deliver, but every callback and
       // checkpoint remains fenced by its opaque database token. Do not release
       // the lease early; expiry is the safe takeover path.
-      console.error(
-        `[gateway] Error stopping listener for ${channelId} (old socket may still be alive):`,
-        error
+      console.warn(
+        `[gateway.listener] event=stop_failed channel_id=${JSON.stringify(channelId)} code=transport_stop_failed`
       );
     }
 
@@ -3611,7 +3638,8 @@ export class GatewayService {
   private async startChannelListener(
     channel: GatewayChannel,
     listenerTenantId: TenantID | string,
-    claimedLease?: GatewayListenerLease
+    claimedLease?: GatewayListenerLease,
+    expectedGeneration?: number
   ): Promise<void> {
     if (this.listenerStopped || this.listenerDraining) return;
     const rowTenantId = tenantIdFromGatewayChannel(channel);
@@ -3620,6 +3648,11 @@ export class GatewayService {
     }
 
     const key = this.listenerKey(listenerTenantId, channel.id);
+    if (!this.listenerLifecycleGenerations.has(key)) {
+      this.listenerLifecycleGenerations.set(key, 0);
+    }
+    const generation = expectedGeneration ?? this.listenerLifecycleGenerations.get(key) ?? 0;
+    if (this.listenerLifecycleGenerations.get(key) !== generation) return;
     if (this.activeListeners.has(key)) {
       return; // Already listening
     }
@@ -3632,6 +3665,21 @@ export class GatewayService {
     }
 
     let lease = claimedLease;
+    if (lease) {
+      const renewedLease = await this.runWithListenerTenantIdentity(listenerTenantId, () =>
+        this.channelRepo.renewListener(channel.id, lease!.claim_token, GATEWAY_LISTENER_LEASE_MS)
+      );
+      if (!renewedLease) {
+        if (this.listenerLifecycleGenerations.get(key) === generation) {
+          const retry = this.listenerRetries.get(key);
+          if (retry?.timer) clearTimeout(retry.timer);
+          this.listenerRetries.delete(key);
+          this.activeListenerLeases.delete(key);
+        }
+        return;
+      }
+      lease = renewedLease;
+    }
     if (this.durableListenerOwnership && !lease) {
       const claim = await this.channelRepo.claimListener({
         channelId: channel.id,
@@ -3643,6 +3691,10 @@ export class GatewayService {
       if (claim.outcome !== 'claimed') return;
       lease = claim.lease;
     }
+
+    const priorRetry = this.listenerRetries.get(key);
+    const priorAttempt = priorRetry?.attempt ?? 0;
+    if (priorRetry?.timer) clearTimeout(priorRetry.timer);
 
     return runWithoutTenantDatabaseScope(async () => {
       let connector: GatewayConnector | undefined;
@@ -3682,16 +3734,20 @@ export class GatewayService {
               this.channelRepo.listenerClaimIsCurrent(channel.id, lease!.claim_token)
             )
           : true;
-        if (this.listenerStopped || this.listenerDraining || !leaseIsCurrent) {
+        if (
+          this.listenerStopped ||
+          this.listenerDraining ||
+          this.listenerLifecycleGenerations.get(key) !== generation ||
+          !leaseIsCurrent
+        ) {
           let stopped = !connector.stopListening;
           if (connector.stopListening) {
             try {
               await withGatewayTimeout(connector.stopListening(), GATEWAY_LISTENER_STOP_TIMEOUT_MS);
               stopped = true;
-            } catch (stopError) {
-              console.error(
-                `[gateway] Failed to stop listener that completed startup after drain/fence loss for channel "${channel.name}":`,
-                stopError
+            } catch (_stopError) {
+              console.warn(
+                `[gateway.listener] event=stop_failed channel_id=${JSON.stringify(channel.id)} code=transport_stop_failed`
               );
             }
           }
@@ -3702,32 +3758,146 @@ export class GatewayService {
           }
           return;
         }
+        this.listenerRetries.delete(key);
         this.activeListeners.set(key, connector);
         if (lease) {
           this.activeListenerLeases.set(key, { ...lease, tenant_id: listenerTenantId });
         }
-        console.log(`[gateway] Listener started for channel "${channel.name}"`);
+        console.log(
+          `[gateway.listener] event=${priorAttempt > 0 ? 'recovered' : 'started'} channel_id=${JSON.stringify(channel.id)} provider=${channel.channel_type}`
+        );
       } catch (error) {
-        console.error(`[gateway] Failed to start listener for channel "${channel.name}":`, error);
+        const failure = gatewayListenerFailure(error);
         let stopped = !connector;
         if (connector?.stopListening) {
           try {
             await withGatewayTimeout(connector.stopListening(), GATEWAY_LISTENER_STOP_TIMEOUT_MS);
             stopped = true;
-          } catch (stopError) {
-            console.error(
-              `[gateway] Failed to stop partially-started listener for channel "${channel.name}":`,
-              stopError
+          } catch (_stopError) {
+            console.warn(
+              `[gateway.listener] event=stop_failed channel_id=${JSON.stringify(channel.id)} code=transport_stop_failed`
             );
           }
         }
-        if (lease && stopped) {
-          await this.runWithListenerTenantIdentity(listenerTenantId, () =>
-            this.channelRepo.releaseListener(channel.id, lease!.claim_token)
-          ).catch(() => undefined);
+        if (!stopped) {
+          // An uncertain transport is fenced by lease expiry; never overlap it.
+          this.listenerRetries.delete(key);
+          this.activeListenerLeases.delete(key);
+          return;
         }
+        if (this.listenerLifecycleGenerations.get(key) !== generation) return;
+        this.recordListenerFailure(channel, listenerTenantId, lease, failure, priorAttempt);
       }
     });
+  }
+
+  private recordListenerFailure(
+    channel: GatewayChannel,
+    tenantId: TenantID | string,
+    lease: GatewayListenerLease | undefined,
+    failure: ReturnType<typeof gatewayListenerFailure>,
+    priorAttempt = 0
+  ): void {
+    const key = this.listenerKey(tenantId, channel.id);
+    const attempt = priorAttempt + 1;
+    const generation = ++this.listenerRetryGeneration;
+    const state: GatewayListenerRetryState = {
+      tenantId,
+      channel,
+      lease,
+      attempt,
+      generation,
+      lifecycleGeneration: this.listenerLifecycleGenerations.get(key) ?? 0,
+    };
+    this.listenerRetries.set(key, state);
+    if (lease) this.activeListenerLeases.set(key, { ...lease, tenant_id: tenantId });
+
+    if (failure.kind === 'permanent') {
+      console.warn(
+        `[gateway.listener] event=start_blocked channel_id=${JSON.stringify(channel.id)} provider=${channel.channel_type} code=${failure.code} retry=operator_action`
+      );
+      return;
+    }
+
+    const delayMs = boundedBackoffDelay(
+      attempt,
+      {
+        baseDelayMs: GATEWAY_LISTENER_RETRY_BASE_MS,
+        maxDelayMs: GATEWAY_LISTENER_RETRY_MAX_MS,
+        jitterRatio: 0.2,
+      },
+      Math.random()
+    );
+    console.warn(
+      `[gateway.listener] event=start_retry_scheduled channel_id=${JSON.stringify(channel.id)} provider=${channel.channel_type} code=${failure.code} attempt=${attempt} delay_ms=${delayMs}`
+    );
+    state.timer = setTimeout(() => {
+      state.timer = undefined;
+      void this.retryChannelListener(key, generation);
+    }, delayMs);
+    state.timer.unref?.();
+  }
+
+  private async retryChannelListener(key: string, generation: number): Promise<void> {
+    const state = this.listenerRetries.get(key);
+    if (
+      !state ||
+      state.generation !== generation ||
+      this.listenerLifecycleGenerations.get(key) !== state.lifecycleGeneration ||
+      this.listenerStopped ||
+      this.listenerDraining
+    )
+      return;
+    try {
+      await this.runWithListenerTenantIdentity(state.tenantId, async () => {
+        const current = await this.channelRepo.findById(state.channel.id);
+        if (!current?.enabled || !hasListeningConfig(current)) {
+          await this.cancelListenerRetry(state.tenantId, state.channel.id, true);
+          return;
+        }
+        // A CRUD refresh changes the lifecycle generation and starts immediately.
+        await this.startChannelListener(
+          state.channel,
+          state.tenantId,
+          state.lease,
+          state.lifecycleGeneration
+        );
+      });
+    } catch {
+      if (this.listenerRetries.get(key) !== state) return;
+      this.recordListenerFailure(
+        state.channel,
+        state.tenantId,
+        state.lease,
+        gatewayListenerFailure(undefined),
+        state.attempt
+      );
+    }
+  }
+
+  private invalidateListenerLifecycle(tenantId: TenantID | string, channelId: string): void {
+    const key = this.listenerKey(tenantId, channelId);
+    this.listenerLifecycleGenerations.set(
+      key,
+      (this.listenerLifecycleGenerations.get(key) ?? 0) + 1
+    );
+  }
+
+  private async cancelListenerRetry(
+    tenantId: TenantID | string,
+    channelId: string,
+    releaseClaim: boolean
+  ): Promise<void> {
+    const key = this.listenerKey(tenantId, channelId);
+    const state = this.listenerRetries.get(key);
+    if (!state) return;
+    if (state.timer) clearTimeout(state.timer);
+    this.listenerRetries.delete(key);
+    const lease = this.activeListenerLeases.get(key);
+    this.activeListenerLeases.delete(key);
+    if (releaseClaim && lease) {
+      await this.channelRepo.releaseListener(lease.channel_id, lease.claim_token);
+    }
   }
 
   private async handleListenerInboundMessage(
@@ -3864,7 +4034,14 @@ export class GatewayService {
     if (this.listenerTimer) clearTimeout(this.listenerTimer);
     this.listenerTimer = null;
     const leases = new Map(this.activeListenerLeases);
+    const retryKeys = new Set(this.listenerRetries.keys());
+    for (const retry of this.listenerRetries.values()) {
+      if (retry.timer) clearTimeout(retry.timer);
+    }
+    this.listenerRetries.clear();
+    this.listenerLifecycleGenerations.clear();
     const stoppedTransports = new Set<string>();
+    for (const key of retryKeys) stoppedTransports.add(key);
     for (const listenerKey of [...this.activeListeners.keys()]) {
       const separator = listenerKey.indexOf('\0');
       const tenantId = listenerKey.slice(0, separator);

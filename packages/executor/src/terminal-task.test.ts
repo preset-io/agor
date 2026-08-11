@@ -52,6 +52,23 @@ describe('executor settlement reporting', () => {
     });
   });
 
+  it('sanitizes database details before requesting containment', async () => {
+    const { client, reportExecutorSettlement } = makeClient(TaskStatus.STOPPING);
+    const secret = 'secret-runtime-result';
+    const failure = Object.assign(new Error(`Failed query: update tasks params: ${secret}`), {
+      query: 'update tasks',
+      params: [secret],
+      cause: { code: '22P05' },
+    });
+
+    await requestContainment(client, 't1', failure);
+
+    const persisted = JSON.stringify(reportExecutorSettlement.mock.calls);
+    expect(persisted).toContain('Database operation failed (22P05)');
+    expect(persisted).not.toContain(secret);
+    expect(persisted).not.toContain('update tasks');
+  });
+
   it('surfaces cooperative reporting errors and swallows only fail-safe containment reports', async () => {
     const reportExecutorSettlement = vi.fn().mockRejectedValue(new Error('socket closed'));
     const client = { service: () => ({ reportExecutorSettlement }) } as unknown as AgorClient;

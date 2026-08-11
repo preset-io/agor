@@ -15,6 +15,7 @@
  * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
+import { generateId } from '@agor/core/db';
 import type {
   ChannelType,
   EnvVarMetadata,
@@ -149,6 +150,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         ctx.baseServiceParams
       );
       const hostTaskId = hostTask?.task_id as TaskID | undefined;
+      const widgetId = generateId() as MessageID;
 
       const created = await runWithMcpTenantDatabaseScope(ctx, (db) =>
         appendSystemMessage({
@@ -160,17 +162,17 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           contentPreview: `Widget: env_vars (${params.names.join(', ')})`,
           type: 'widget_request',
           role: MessageRole.SYSTEM,
-          // widget_id is filled in once we know the new message_id (id == widget_id).
+          // Generate the shared ID before create so no realtime consumer can
+          // observe a temporary "pending" submit URL.
+          messageId: widgetId,
           metadata: {
             widget: {
               ...baseWidgetMeta,
-              widget_id: 'pending' as MessageID,
+              widget_id: widgetId,
             },
           },
         })
       );
-
-      const widgetId = created.message_id as MessageID;
 
       // Extend the host task's message_range.end_index so the widget is
       // counted within the task's window (mirrors the daemon-restart
@@ -195,19 +197,6 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           );
         }
       }
-
-      // Stamp the actual widget_id onto the row (single source of truth =
-      // `metadata.widget.widget_id === message.message_id`).
-      await ctx.app.service('messages').patch(
-        widgetId,
-        {
-          metadata: {
-            ...(created.metadata ?? {}),
-            widget: { ...baseWidgetMeta, widget_id: widgetId },
-          },
-        },
-        ctx.baseServiceParams
-      );
 
       if (presentEverywhere) {
         // Short-circuit: no form render. Auto-queue a "values already
@@ -309,6 +298,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         ctx.baseServiceParams
       );
       const hostTaskId = hostTask?.task_id as TaskID | undefined;
+      const widgetId = generateId() as MessageID;
 
       const created = await runWithMcpTenantDatabaseScope(ctx, (db) =>
         appendSystemMessage({
@@ -320,16 +310,17 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           contentPreview: `Widget: gateway_token (${channel.name})`,
           type: 'widget_request',
           role: MessageRole.SYSTEM,
+          // Generate the shared ID before create so no realtime consumer can
+          // observe a temporary "pending" submit URL.
+          messageId: widgetId,
           metadata: {
             widget: {
               ...baseWidgetMeta,
-              widget_id: 'pending' as MessageID,
+              widget_id: widgetId,
             },
           },
         })
       );
-
-      const widgetId = created.message_id as MessageID;
 
       if (hostTask?.message_range) {
         try {
@@ -350,17 +341,6 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           );
         }
       }
-
-      await ctx.app.service('messages').patch(
-        widgetId,
-        {
-          metadata: {
-            ...(created.metadata ?? {}),
-            widget: { ...baseWidgetMeta, widget_id: widgetId },
-          },
-        },
-        ctx.baseServiceParams
-      );
 
       return textResult({ widget_id: widgetId, status: 'requested' });
     }

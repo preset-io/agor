@@ -46,6 +46,7 @@ export class MigrationError extends Error {
 const OFFLINE_CUTOVER_MIGRATIONS = new Set([
   '0074_knowledge_embedding_claims',
   '0078_mcp_oauth_pending_flows',
+  '0082_github_install_state',
 ]);
 
 export interface RunMigrationsOptions {

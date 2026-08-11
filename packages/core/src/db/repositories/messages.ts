@@ -7,6 +7,7 @@
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
 import { and, eq, inArray } from 'drizzle-orm';
+import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -19,6 +20,16 @@ import {
 } from '../database-wrapper';
 import { type MessageInsert, type MessageRow, messages } from '../schema';
 import { visibleSessionReferenceAccessExists } from './branch-access';
+
+export const MESSAGE_CONTENT_OMITTED =
+  '[Message content omitted: payload could not be safely persisted]';
+
+function omittedMessageData(reason: JsonSanitizationError['category']): MessageInsert['data'] {
+  return {
+    content: MESSAGE_CONTENT_OMITTED,
+    metadata: { persistence_omission: { reason } },
+  };
+}
 
 export class MessagesRepository {
   constructor(private db: Database) {}
@@ -65,6 +76,23 @@ export class MessagesRepository {
    * Convert Message to database row
    */
   private messageToRow(message: Message): MessageInsert {
+    let contentPreview: string;
+    let data: MessageInsert['data'];
+    try {
+      contentPreview = sanitizeJsonValue(message.content_preview);
+      data = sanitizeJsonValue({
+        content: message.content,
+        tool_uses: message.tool_uses,
+        metadata: message.metadata,
+      });
+    } catch (error) {
+      if (!(error instanceof JsonSanitizationError)) throw error;
+      console.warn(
+        `[messages.persistence] content omitted category=${error.category} message_id=${message.message_id}`
+      );
+      contentPreview = MESSAGE_CONTENT_OMITTED;
+      data = omittedMessageData(error.category);
+    }
     return {
       message_id: message.message_id,
       created_at: new Date(),
@@ -74,13 +102,9 @@ export class MessagesRepository {
       role: message.role,
       index: message.index,
       timestamp: new Date(message.timestamp),
-      content_preview: message.content_preview,
+      content_preview: contentPreview,
       parent_tool_use_id: message.parent_tool_use_id || null,
-      data: {
-        content: message.content,
-        tool_uses: message.tool_uses,
-        metadata: message.metadata,
-      },
+      data,
     };
   }
 
@@ -146,8 +170,18 @@ export class MessagesRepository {
             tool_uses?: Message['tool_uses'];
             metadata?: Message['metadata'];
           };
+          let sanitizedData: MessageInsert['data'];
+          try {
+            sanitizedData = sanitizeJsonValue({ ...data, metadata });
+          } catch (error) {
+            if (!(error instanceof JsonSanitizationError)) throw error;
+            console.warn(
+              `[messages.persistence] content omitted category=${error.category} message_id=${messageId}`
+            );
+            sanitizedData = omittedMessageData(error.category);
+          }
           const updatedRow = await update(txDb, messages)
-            .set({ data: { ...data, metadata } })
+            .set({ data: sanitizedData })
             .where(eq(messages.message_id, messageId))
             .returning()
             .one();

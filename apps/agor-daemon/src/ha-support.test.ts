@@ -25,6 +25,7 @@ describe('constrained HA support profile', () => {
       completionCallbackDurableAdmission: true as const,
       completionCallbackPreAdmissionRecovery: false as const,
       widgetResolutionDurableClaim: true as const,
+      githubInstall: true as const,
       codexCredentialFiles: true,
       codexDeviceAuth: false as const,
       processAffineAuth: false as const,
@@ -116,7 +117,6 @@ describe('constrained HA support profile', () => {
     expect(Object.keys(HA_UNSUPPORTED_FEATURES)).toEqual([
       'providerNativeInteractivePermissions',
       'mcpOAuth',
-      'githubInstall',
       'codexAuth',
       'codexDeviceAuth',
       'openCodeAuth',

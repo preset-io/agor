@@ -17,12 +17,14 @@
 
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
+import { INTERACTIVE_EXECUTOR_EVENT_PREFIX } from '@agor/core/executor-protocol';
 
 import {
   executeCommand,
   executeInteractiveCommand,
   getRegisteredCommands,
 } from './commands/index.js';
+import { completeExecutorResult, emitExecutorResult } from './executor-output.js';
 import { initializeToolRegistry, ToolRegistry } from './handlers/sdk/tool-registry.js';
 import { AgorExecutor } from './index.js';
 import {
@@ -52,12 +54,8 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
-function emitExecutorResult(result: unknown): void {
-  console.log(`AGOR_EXECUTOR_RESULT ${JSON.stringify(result)}`);
-}
-
 function emitInteractiveEvent(event: unknown): void {
-  console.log(`AGOR_EXECUTOR_INTERACTIVE_EVENT ${JSON.stringify(event)}`);
+  console.log(`${INTERACTIVE_EXECUTOR_EVENT_PREFIX}${JSON.stringify(event)}`);
 }
 
 /**
@@ -105,12 +103,13 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   if (payload.command === 'zellij.attach') {
     const result = await executeCommand(payload, { dryRun: options.dryRun });
 
+    if (!result.success) {
+      completeExecutorResult(result);
+      return;
+    }
+
     // Output result on a sentinel line so daemon parsers can suppress it from logs.
     emitExecutorResult(result);
-
-    if (!result.success) {
-      process.exit(1);
-    }
 
     // DON'T exit - stay alive to stream PTY I/O
     // The PTY onExit handler will call process.exit() when done
@@ -122,9 +121,7 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   const result = await executeCommand(payload, { dryRun: options.dryRun });
 
   // Output result on a sentinel line so daemon parsers can suppress it from logs.
-  emitExecutorResult(result);
-
-  process.exit(result.success ? 0 : 1);
+  completeExecutorResult(result);
 }
 
 /**
@@ -150,17 +147,15 @@ async function handleInteractiveCommandMode(options: { dryRun: boolean }): Promi
         },
       }
     );
-    emitExecutorResult(result);
-    process.exitCode = result.success ? 0 : 1;
+    completeExecutorResult(result);
   } catch {
-    emitExecutorResult({
+    completeExecutorResult({
       success: false,
       error: {
         code: 'INTERACTIVE_COMMAND_PROTOCOL_INVALID',
         message: 'Interactive executor input was invalid.',
       },
     });
-    process.exitCode = 1;
   } finally {
     lines.close();
   }
@@ -188,7 +183,8 @@ async function handlePromptPayload(
         },
       })
     );
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   // =========================================================================

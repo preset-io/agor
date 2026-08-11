@@ -2647,22 +2647,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
+    // Recovery triggers carry trusted tenant routing but no request user. Restore
+    // the durable enqueuer identity before entering hooked Session reads/repairs
+    // so branch RBAC applies exactly as it did at admission time.
     const userId = nextTask.metadata?.queued_by_user_id ?? nextTask.created_by;
     const userRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
     const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
-
     const taskParams: RouteParams = queuedByUser
-      ? ({
-          ...params,
-          user: queuedByUser,
-        } as RouteParams)
+      ? ({ ...params, user: queuedByUser } as RouteParams)
       : params;
-
-    console.log(
-      `📬 Processing queued task ${shortId(nextTask.task_id)} ` +
-        `(position ${nextTask.queue_position}) ` +
-        `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
-    );
 
     const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
       sessionsService.get(sessionId, taskParams)
@@ -2725,7 +2718,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
     console.log(
-      `✅ Queue head ${shortId(admitted.task_id)} observed as ${admitted.status} for session ${shortId(sessionId)}`
+      `[task-queue] event=dispatched session_id=${JSON.stringify(sessionId)} task_id=${JSON.stringify(admitted.task_id)} status=${JSON.stringify(admitted.status)}`
     );
   }
 

@@ -262,4 +262,21 @@ describe('prompt and widget transaction scopes', () => {
       }
     }
   });
+
+  it('restores the queued user before hooked Session recovery under branch RBAC', () => {
+    const start = source.indexOf('async function processNextQueuedTaskInternal(');
+    const end = source.indexOf('// Inject queue processor into sessions service.', start);
+    const drain = source.slice(start, end);
+
+    expect(start).toBeGreaterThan(0);
+    const userLookup = drain.indexOf('userRepo.findById(userId)');
+    const sessionRead = drain.indexOf('sessionsService.get(sessionId, taskParams)');
+    expect(userLookup).toBeGreaterThan(0);
+    expect(sessionRead).toBeGreaterThan(userLookup);
+    expect(drain).toMatch(
+      /reconcileSessionPromptStateIfStuck\(\s*queuedSession,\s*taskRepo,\s*taskParams\s*\)/
+    );
+    expect(drain).not.toContain('event=drain_started');
+    expect(drain).toContain('event=dispatched');
+  });
 });

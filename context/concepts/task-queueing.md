@@ -56,6 +56,13 @@ queued Session refs and then reloads/processes each Session inside its trusted
 tenant scope. There is no permanent leader and no worker lease: overlapping
 scans are expected, while the Session+Task claim elects the only launcher.
 
+Ordinary draining is event-driven by the committed terminal/Session projection.
+The worker is a missed-event and restart recovery sweep, not a low-latency poller:
+it pages quickly through at most 250 Session refs per sweep, preserves its
+keyset cursor when saturated, then waits about one minute before continuing. A
+known-busy queue head is therefore not fully hydrated every few seconds, while
+a missed wakeup remains durably recoverable.
+
 The scan cursor, startup offset, bounded backoff, and jitter are contention
 etiquette and fairness only; process death or duplicate triggers cannot affect
 correctness.

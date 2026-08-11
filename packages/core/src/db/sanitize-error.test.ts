@@ -10,6 +10,7 @@ describe('sanitizeDbError', () => {
       new Error('duplicate key value violates unique constraint "sessions_schedule_run_unique"'),
       {
         code: '23505',
+        routine: 'json_errsave_error',
         constraint_name: 'sessions_schedule_run_unique',
         detail: 'Key (rendered_prompt)=(SECRET_SENTINEL) already exists',
       }
@@ -34,6 +35,8 @@ describe('sanitizeDbError', () => {
     expect(output).toContain('Database constraint violation');
     expect(output).toContain('sessions_schedule_run_unique');
     expect(output).toContain('23505');
+    expect(output).toContain('json_errsave_error');
+    expect(output.length).toBeLessThan(1024);
   });
 
   it('sanitizes RepositoryError output without changing its cause semantics', () => {
@@ -57,6 +60,23 @@ describe('sanitizeDbError', () => {
     expect(output).not.toContain('SECRET_SENTINEL');
     expect(output).toContain('Database operation failed');
     expect(output).toContain('22P02');
+  });
+
+  it('does not format large query parameters or secret-like tool output', () => {
+    const secret = 'sk-secret-sentinel';
+    const failure = Object.assign(new Error(`Failed query\nparams: ${secret}`), {
+      params: [{ tool_result: `${secret}${'PK\\x00'.repeat(300_000)}` }],
+      cause: Object.assign(new Error('invalid JSON parameter'), {
+        code: '22P05',
+        routine: 'json_errsave_error',
+      }),
+    });
+    const output = inspect(sanitizeDbError(failure));
+    expect(output).not.toContain(secret);
+    expect(output).not.toContain('PK');
+    expect(output).toContain('22P05');
+    expect(output).toContain('json_errsave_error');
+    expect(output.length).toBeLessThan(1024);
   });
 
   it('only includes strictly validated database metadata', () => {

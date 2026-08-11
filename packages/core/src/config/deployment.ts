@@ -70,6 +70,7 @@ export type ResolvedDeploymentConfig =
         completionCallbackDurableAdmission: true;
         completionCallbackPreAdmissionRecovery: false;
         widgetResolutionDurableClaim: true;
+        githubInstall: true;
         codexCredentialFiles: boolean;
         codexDeviceAuth: false;
         processAffineAuth: false;
@@ -462,6 +463,7 @@ export function resolveDeploymentConfig(
       completionCallbackDurableAdmission: true,
       completionCallbackPreAdmissionRecovery: false,
       widgetResolutionDurableClaim: true,
+      githubInstall: true,
       codexCredentialFiles:
         executorStorage.user_home !== 'replica-local' && tenantSafeCredentialHome,
       codexDeviceAuth: false,

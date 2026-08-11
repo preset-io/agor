@@ -31,6 +31,7 @@ import type {
   GatewayListenerOptions,
   InboundMessage,
 } from '../connector';
+import { GatewayListenerError } from '../listener-error';
 import { addToRingBuffer, escapeRegex } from './shared';
 
 // ============================================================================
@@ -74,6 +75,47 @@ const DEFAULT_STARTUP_LOOKBACK_MS = 5 * 60_000;
 
 /** Default mention keyword */
 const DEFAULT_MENTION_NAME = 'agor';
+
+/** Classify GitHub installation validation without exposing its response payload. */
+export function classifyGitHubInstallationError(error: unknown): GatewayListenerError {
+  const candidate =
+    typeof error === 'object' && error !== null
+      ? (error as {
+          status?: unknown;
+          message?: unknown;
+          response?: { headers?: Record<string, unknown>; data?: { message?: unknown } };
+        })
+      : {};
+  const status = Number(candidate.status);
+  const headers = candidate.response?.headers ?? {};
+  const header = (name: string): string => {
+    const value = headers[name] ?? headers[name.toLowerCase()] ?? headers[name.toUpperCase()];
+    return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  };
+  const providerMessage = `${String(candidate.message ?? '')} ${String(
+    candidate.response?.data?.message ?? ''
+  )}`.toLowerCase();
+  const rateLimited =
+    status === 429 ||
+    (status === 403 &&
+      (header('retry-after') !== '' ||
+        header('x-ratelimit-remaining') === '0' ||
+        providerMessage.includes('secondary rate limit') ||
+        providerMessage.includes('rate limit exceeded')));
+
+  if (!rateLimited && (status === 401 || status === 403 || status === 404)) {
+    return new GatewayListenerError(
+      'github_credentials_invalid',
+      'permanent',
+      'Verify the GitHub App id, private key, installation id, and installation access.'
+    );
+  }
+  return new GatewayListenerError(
+    'github_api_unavailable',
+    'transient',
+    'GitHub is unavailable; Agor will retry automatically.'
+  );
+}
 
 // ============================================================================
 // Helpers
@@ -432,10 +474,7 @@ export class GitHubConnector implements GatewayConnector {
         `[github] Authenticated as installation ${this.config.installation_id} on ${(installation.account && 'login' in installation.account ? installation.account.login : undefined) ?? 'unknown'}`
       );
     } catch (error) {
-      console.error('[github] Failed to validate installation:', error);
-      throw new Error(
-        'GitHub App authentication failed — check app_id, private_key, and installation_id'
-      );
+      throw classifyGitHubInstallationError(error);
     }
 
     // Resolve repos to watch

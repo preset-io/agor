@@ -1,5 +1,6 @@
 /** Executor-side settlement reporting. The daemon owns durable terminality. */
 import type { ExecutorFailureCause, ExecutorOutcomePatch, Task } from '@agor/core/types';
+import { formatExecutorFailure } from './safe-executor-error.js';
 import type { AgorClient } from './services/feathers-client.js';
 
 export type AgenticToolTaskPatch = ExecutorOutcomePatch;
@@ -77,7 +78,7 @@ export async function requestContainment(
   taskId: string,
   error: unknown
 ): Promise<void> {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatExecutorFailure(error);
   await client.service('tasks').reportExecutorSettlement({
     task_id: taskId,
     kind: 'containment_required',

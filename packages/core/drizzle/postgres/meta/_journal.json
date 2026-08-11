@@ -573,14 +573,21 @@
       "idx": 82,
       "version": "7",
       "when": 1786700000000,
-      "tag": "0082_task_runtime_recovery",
+      "tag": "0082_github_install_state",
       "breakpoints": true
     },
     {
       "idx": 83,
       "version": "7",
       "when": 1786800000000,
-      "tag": "0083_terminal_consequence_recovery",
+      "tag": "0083_task_runtime_recovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1786900000000,
+      "tag": "0084_terminal_consequence_recovery",
       "breakpoints": true
     }
   ]

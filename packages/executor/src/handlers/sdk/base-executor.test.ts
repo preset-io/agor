@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatExecutorFailure } from '../../safe-executor-error.js';
 import { RuntimeCleanupError } from '../../terminal-task.js';
 import {
+  appendTaskFailureMessage,
   createStreamingCallbacks,
   executeToolTask,
   installProviderConnection,
@@ -146,6 +148,40 @@ describe('resolveApiKeyForTask', () => {
         'codex' as never
       )
     ).rejects.toThrow('fetch failed');
+  });
+});
+
+describe('executor failure diagnostics', () => {
+  it('does not persist Drizzle query parameters in task or transcript diagnostics', async () => {
+    const secret = 'secret-binary-tool-result';
+    const messageCreate = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service(name: string) {
+        if (name === 'messages') {
+          return {
+            find: vi.fn().mockResolvedValue({ total: 0, data: [] }),
+            create: messageCreate,
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const failure = Object.assign(new Error(`Failed query: update messages params: ${secret}`), {
+      query: 'update messages',
+      params: [secret],
+      cause: { code: '22P05' },
+    });
+
+    await appendTaskFailureMessage(client, 'session-1' as never, 'task-1' as never, failure);
+    const taskPatch = { error_message: formatExecutorFailure(failure) };
+
+    const persisted = JSON.stringify({
+      message: messageCreate.mock.calls,
+      task: taskPatch,
+    });
+    expect(persisted).not.toContain(secret);
+    expect(persisted).not.toContain('update messages');
+    expect(persisted).toContain('Database operation failed');
   });
 });
 

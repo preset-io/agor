@@ -204,7 +204,7 @@ export async function executeOpenCodeTask(params: {
     };
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
-    console.error('[opencode] Execution failed:', failure);
+    console.error('[opencode] execution failed category=task_execution');
 
     if (isOpenCodeCleanupUnverifiedError(failure)) {
       // Keep the task active. Executor exit hands containment to the daemon;

@@ -586,8 +586,15 @@
     {
       "idx": 85,
       "version": "6",
+      "when": 1786700000000,
+      "tag": "0085_github_install_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "6",
       "when": 1786800000000,
-      "tag": "0085_terminal_consequence_recovery",
+      "tag": "0086_terminal_consequence_recovery",
       "breakpoints": true
     }
   ]

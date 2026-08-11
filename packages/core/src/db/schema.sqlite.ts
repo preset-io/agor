@@ -429,6 +429,27 @@ export const executorSessionTokenAuthorities = sqliteTable(
 );
 
 /**
+ * Schema mirror for PostgreSQL GitHub installation setup state.
+ *
+ * Standalone SQLite intentionally keeps the short-lived hash authority in the
+ * daemon process. This unused table preserves dual-dialect migration history
+ * without changing standalone behavior.
+ */
+export const githubInstallStates = sqliteTable(
+  'github_install_states',
+  {
+    state_hash: text('state_hash', { length: 64 }).primaryKey(),
+    user_id: text('user_id', { length: 36 }).notNull(),
+    intent: text('intent').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+  },
+  (table) => ({
+    expiresIdx: index('github_install_states_expires_idx').on(table.expires_at),
+  })
+);
+
+/**
  * Messages table - Conversation messages within sessions
  *
  * Stores individual messages (user, assistant, system) for full conversation replay.
@@ -2629,6 +2650,8 @@ export type TaskInsert = typeof tasks.$inferInsert;
 export type ExecutorSessionTokenAuthorityRow = typeof executorSessionTokenAuthorities.$inferSelect;
 export type ExecutorSessionTokenAuthorityInsert =
   typeof executorSessionTokenAuthorities.$inferInsert;
+export type GitHubInstallStateRow = typeof githubInstallStates.$inferSelect;
+export type GitHubInstallStateInsert = typeof githubInstallStates.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
 export type BoardRow = typeof boards.$inferSelect;

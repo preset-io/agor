@@ -164,7 +164,7 @@ export class AgorExecutor {
         process.exit(0);
         return;
       }
-      console.error('[executor] Fatal error:', error);
+      console.error('[executor] fatal error category=task_startup');
       await this.requestContainment(error, true);
       process.exit(1);
     }

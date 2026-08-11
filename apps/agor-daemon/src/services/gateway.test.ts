@@ -12,7 +12,7 @@ import {
   runWithTenantDatabaseScope,
   shortId,
 } from '@agor/core/db';
-import { getConnector, type InboundMessage } from '@agor/core/gateway';
+import { GatewayListenerError, getConnector, type InboundMessage } from '@agor/core/gateway';
 import type {
   GatewayChannel,
   GatewayTerminalDeliveryReceipt,
@@ -1620,6 +1620,191 @@ describe('GatewayService durable listener delivery fences', () => {
     finishCallback();
     await stopping;
     expect(releaseListener).toHaveBeenCalledWith(channelId, 'owner-token');
+  });
+});
+
+describe('GatewayService listener retry supervision', () => {
+  const makeSupervisor = () => {
+    const service = new GatewayService(
+      { run: vi.fn() } as never,
+      { service: vi.fn(), get: vi.fn() } as never
+    );
+    (service as unknown as { durableListenerOwnership: boolean }).durableListenerOwnership = false;
+    const channel = attachHiddenTenant(
+      {
+        ...slackChannel,
+        id: 'retry-channel' as never,
+        config: { bot_token: 'redacted', app_token: 'redacted' },
+      },
+      { tenant_id: 'tenant-a' }
+    );
+    const channelRepo = {
+      findById: vi.fn(async () => channel),
+      releaseListener: vi.fn(async () => true),
+      renewListener: vi.fn(async () => null),
+      listenerClaimIsCurrent: vi.fn(async () => true),
+    };
+    (service as unknown as { channelRepo: unknown }).channelRepo = channelRepo;
+    const start = () =>
+      runWithTenantContext('tenant-a', () =>
+        (
+          service as unknown as {
+            startChannelListener(c: GatewayChannel, tenant: string): Promise<void>;
+          }
+        ).startChannelListener(channel, 'tenant-a')
+      );
+    return { service, channel, channelRepo, start };
+  };
+
+  it('parks permanent failures until an explicit channel refresh', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { service, channel, start } = makeSupervisor();
+    vi.mocked(getConnector).mockReturnValue({
+      sendMessage: vi.fn(),
+      startListening: vi.fn(async () => {
+        throw new GatewayListenerError('slack_bot_token_invalid', 'permanent', 'replace token');
+      }),
+      stopListening: vi.fn(),
+    });
+    await start();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(vi.mocked(getConnector)).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('retry=operator_action'));
+    await runWithTenantContext('tenant-a', () => service.startListenerForChannel(channel.id));
+    expect(vi.mocked(getConnector)).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('backs off transient failures, recovers, and cancels retries on disable', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { service, channel, channelRepo, start } = makeSupervisor();
+    const startListening = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Authorization: Bearer secret'))
+      .mockResolvedValue(undefined);
+    vi.mocked(getConnector).mockReturnValue({
+      sendMessage: vi.fn(),
+      startListening,
+      stopListening: vi.fn(),
+    });
+    await start();
+    expect(startListening).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(startListening).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(startListening).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('event=recovered'));
+
+    await runWithTenantContext('tenant-a', () => service.stopChannelListener(channel.id));
+    channelRepo.findById.mockResolvedValue({ ...channel, enabled: false });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(startListening).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('lets refreshed config supersede a retry startup already in flight', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { service, channel, channelRepo, start } = makeSupervisor();
+    let finishOldStart!: () => void;
+    const oldStart = new Promise<void>((resolve) => {
+      finishOldStart = resolve;
+    });
+    const oldStop = vi.fn(async () => undefined);
+    const oldStartListening = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockImplementationOnce(() => oldStart);
+    const freshStartListening = vi.fn(async () => undefined);
+    vi.mocked(getConnector).mockImplementation((_type, config) =>
+      (config as { version?: string }).version === 'fresh'
+        ? {
+            sendMessage: vi.fn(),
+            startListening: freshStartListening,
+            stopListening: vi.fn(),
+          }
+        : {
+            sendMessage: vi.fn(),
+            startListening: oldStartListening,
+            stopListening: oldStop,
+          }
+    );
+
+    await start();
+    const retryStarted = vi.advanceTimersByTimeAsync(10_000);
+    await vi.waitFor(() => expect(oldStartListening).toHaveBeenCalledTimes(2));
+    channelRepo.findById.mockResolvedValue({
+      ...channel,
+      config: { ...channel.config, version: 'fresh' },
+    });
+    await runWithTenantContext('tenant-a', () => service.startListenerForChannel(channel.id));
+    expect(freshStartListening).toHaveBeenCalledOnce();
+    finishOldStart();
+    await retryStarted;
+    expect(oldStop).toHaveBeenCalled();
+    const active = (
+      service as unknown as { activeListeners: Map<string, { startListening?: unknown }> }
+    ).activeListeners.get(`tenant-a\0${channel.id}`);
+    expect(active?.startListening).toBe(freshStartListening);
+    vi.useRealTimers();
+  });
+
+  it('does not start a retry transport after its durable lease is lost', async () => {
+    const { service, channel, channelRepo } = makeSupervisor();
+    (service as unknown as { durableListenerOwnership: boolean }).durableListenerOwnership = true;
+    const startListening = vi.fn(async () => undefined);
+    vi.mocked(getConnector).mockReturnValue({ sendMessage: vi.fn(), startListening });
+    channelRepo.renewListener.mockResolvedValue(null);
+    const lease = {
+      channel_id: channel.id,
+      claim_token: 'lost-owner',
+      generation: 1,
+      claimed_at: '2026-08-10T00:00:00.000Z',
+      lease_expires_at: '2026-08-10T00:00:30.000Z',
+      instance_id: 'daemon-a',
+      boot_id: 'boot-a',
+      checkpoint: null,
+    };
+
+    await runWithTenantContext('tenant-a', () =>
+      (
+        service as unknown as {
+          startChannelListener(
+            c: GatewayChannel,
+            tenant: string,
+            lease: typeof lease
+          ): Promise<void>;
+        }
+      ).startChannelListener(channel, 'tenant-a', lease)
+    );
+    expect(startListening).not.toHaveBeenCalled();
+    expect(channelRepo.releaseListener).not.toHaveBeenCalled();
+  });
+
+  it('reschedules safely when retry preparation fails', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { channelRepo, start } = makeSupervisor();
+    const startListening = vi.fn().mockRejectedValue(new Error('provider secret payload'));
+    vi.mocked(getConnector).mockReturnValue({
+      sendMessage: vi.fn(),
+      startListening,
+      stopListening: vi.fn(),
+    });
+    await start();
+    channelRepo.findById.mockRejectedValueOnce(new Error('database details'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('event=start_retry_scheduled'));
+    expect(warn.mock.calls.flat().join(' ')).not.toMatch(/secret payload|database details/);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(startListening).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });
 

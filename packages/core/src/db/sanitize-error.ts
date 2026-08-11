@@ -9,6 +9,7 @@ export interface SanitizedDbError {
   message: string;
   code?: string;
   constraint?: string;
+  routine?: string;
 }
 
 type ErrorRecord = Record<string, unknown>;
@@ -61,6 +62,7 @@ export function isDatabaseUniqueConstraintError(error: unknown): boolean {
 export function sanitizeDbError(error: unknown): SanitizedDbError {
   let code: string | undefined;
   let constraint: string | undefined;
+  let routine: string | undefined;
   let current: unknown = error;
   const seen = new Set<unknown>();
 
@@ -82,6 +84,13 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
     ) {
       constraint = candidateConstraint;
     }
+    if (
+      !routine &&
+      typeof record?.routine === 'string' &&
+      DATABASE_IDENTIFIER.test(record.routine)
+    ) {
+      routine = record.routine;
+    }
 
     current = record?.cause;
   }
@@ -98,5 +107,6 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
     message,
     ...(code ? { code } : {}),
     ...(constraint ? { constraint } : {}),
+    ...(routine ? { routine } : {}),
   };
 }

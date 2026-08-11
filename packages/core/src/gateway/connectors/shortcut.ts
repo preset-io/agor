@@ -48,6 +48,7 @@ import type {
   GatewayListenerOptions,
   InboundMessage,
 } from '../connector';
+import { GatewayListenerError } from '../listener-error';
 import { addToRingBuffer, escapeRegex } from './shared';
 
 // ============================================================================
@@ -125,6 +126,12 @@ const SHORTCUT_API_BASE = 'https://api.app.shortcut.com/api/v3';
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_SEARCH_PAGE_SIZE = 25;
 const DEFAULT_STARTUP_LOOKBACK_MS = 5 * 60_000;
+
+class ShortcutHttpError extends Error {
+  constructor(readonly status: number) {
+    super('Shortcut API request failed');
+  }
+}
 
 // ============================================================================
 // Helpers
@@ -275,12 +282,7 @@ export class ShortcutConnector implements GatewayConnector {
     });
 
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(
-        `Shortcut API ${init?.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText}${
-          body ? ` — ${body.slice(0, 300)}` : ''
-        }`
-      );
+      throw new ShortcutHttpError(res.status);
     }
 
     if (res.status === 204) return undefined as T;
@@ -375,8 +377,18 @@ export class ShortcutConnector implements GatewayConnector {
       me = await this.request<ShortcutMember>('/member');
       console.log(`[shortcut] Authenticated (token member ${me.id})`);
     } catch (error) {
-      console.error('[shortcut] Failed to validate api_token:', error);
-      throw new Error('Shortcut authentication failed — check api_token');
+      if (error instanceof ShortcutHttpError && (error.status === 401 || error.status === 403)) {
+        throw new GatewayListenerError(
+          'shortcut_token_invalid',
+          'permanent',
+          'Replace the Shortcut API token and verify workspace access.'
+        );
+      }
+      throw new GatewayListenerError(
+        'shortcut_api_unavailable',
+        'transient',
+        'Shortcut is unavailable; Agor will retry automatically.'
+      );
     }
 
     // Mention target: explicit override, else the token owner.

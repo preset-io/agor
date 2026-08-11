@@ -22,6 +22,12 @@
       "import": "./dist/types/index.js",
       "require": "./dist/types/index.cjs"
     },
+    "./executor-protocol": {
+      "source": "./src/executor-protocol.ts",
+      "types": "./dist/executor-protocol.d.ts",
+      "import": "./dist/executor-protocol.js",
+      "require": "./dist/executor-protocol.cjs"
+    },
     "./design/board-backgrounds": {
       "source": "./src/design/board-backgrounds.ts",
       "types": "./dist/design/board-backgrounds.d.ts",

@@ -37,6 +37,8 @@ export interface AppendSystemMessageOptions {
   /** Defaults to MessageRole.SYSTEM */
   role?: Message['role'];
   metadata?: Message['metadata'];
+  /** Optional daemon-generated ID to use for the row and any derived metadata. */
+  messageId?: MessageID;
   /** FeathersJS request params forwarded to the service create call */
   params?: Params;
 }
@@ -52,6 +54,7 @@ export async function appendSystemMessage(opts: AppendSystemMessageOptions): Pro
     type = 'system',
     role = MessageRole.SYSTEM,
     metadata,
+    messageId,
     params,
   } = opts;
 
@@ -59,7 +62,7 @@ export async function appendSystemMessage(opts: AppendSystemMessageOptions): Pro
   const preview = contentPreview ?? (typeof content === 'string' ? content.substring(0, 200) : '');
 
   const message: Message = {
-    message_id: generateId() as MessageID,
+    message_id: messageId ?? (generateId() as MessageID),
     session_id: sessionId as SessionID,
     task_id: taskId as TaskID | undefined,
     type,

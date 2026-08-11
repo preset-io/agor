@@ -37,8 +37,10 @@ type CapturedTool = {
 
 function registerAndCapture(ctx: {
   app: unknown;
+  db?: unknown;
   userId: string;
   sessionId: string;
+  baseServiceParams?: Parameters<typeof registerWidgetTools>[1]['baseServiceParams'];
 }): Record<string, CapturedTool> {
   const captured: Record<string, CapturedTool> = {};
   const fakeServer = {
@@ -49,13 +51,13 @@ function registerAndCapture(ctx: {
 
   registerWidgetTools(fakeServer, {
     app: ctx.app as unknown as Parameters<typeof registerWidgetTools>[1]['app'],
-    db: {} as unknown as Parameters<typeof registerWidgetTools>[1]['db'],
+    db: (ctx.db ?? {}) as Parameters<typeof registerWidgetTools>[1]['db'],
     userId: ctx.userId as unknown as Parameters<typeof registerWidgetTools>[1]['userId'],
     sessionId: ctx.sessionId as unknown as Parameters<typeof registerWidgetTools>[1]['sessionId'],
     authenticatedUser: { user_id: ctx.userId, role: 'member' } as unknown as Parameters<
       typeof registerWidgetTools
     >[1]['authenticatedUser'],
-    baseServiceParams: {},
+    baseServiceParams: ctx.baseServiceParams ?? {},
   });
   return captured;
 }
@@ -87,10 +89,8 @@ function makeApp(opts: {
 }): {
   app: unknown;
   calls: ServiceCall[];
-  patchedMessage(): Record<string, unknown> | undefined;
 } {
   const calls: ServiceCall[] = [];
-  let lastMessagePatch: Record<string, unknown> | undefined;
   const defaultTasks: FakeTask[] = [
     {
       task_id: 'task-host-1',
@@ -141,13 +141,6 @@ function makeApp(opts: {
         return { ...t, ...(args[1] as Record<string, unknown>) };
       },
     },
-    messages: {
-      patch: async (...args: unknown[]) => {
-        calls.push({ service: 'messages', method: 'patch', args });
-        lastMessagePatch = args[1] as Record<string, unknown>;
-        return { message_id: args[0] };
-      },
-    },
     '/sessions/:id/prompt': {
       create: async (...args: unknown[]) => {
         calls.push({ service: '/sessions/:id/prompt', method: 'create', args });
@@ -164,9 +157,6 @@ function makeApp(opts: {
       },
     },
     calls,
-    patchedMessage() {
-      return lastMessagePatch;
-    },
   };
 }
 
@@ -176,17 +166,23 @@ describe('agor_widgets_request_env_vars', () => {
   beforeEach(() => {
     appendStub.mockReset();
     // Default: return a freshly-created widget message row.
-    appendStub.mockImplementation(async (opts: { content: string }) => ({
-      message_id: 'widget-msg-1',
-      session_id: 'sess-1',
-      type: 'widget_request',
-      role: 'system',
-      index: 0,
-      timestamp: '2026-05-19T00:00:00.000Z',
-      content: opts.content,
-      content_preview: opts.content,
-      metadata: {},
-    }));
+    appendStub.mockImplementation(
+      async (opts: {
+        content: string;
+        messageId?: MessageID;
+        metadata?: Record<string, unknown>;
+      }) => ({
+        message_id: opts.messageId ?? ('widget-msg-1' as MessageID),
+        session_id: 'sess-1',
+        type: 'widget_request',
+        role: 'system',
+        index: 0,
+        timestamp: '2026-05-19T00:00:00.000Z',
+        content: opts.content,
+        content_preview: opts.content,
+        metadata: opts.metadata,
+      })
+    );
   });
 
   it('normal path: creates a pending widget_request and returns status "requested"', async () => {
@@ -213,7 +209,8 @@ describe('agor_widgets_request_env_vars', () => {
     // Returns the new widget_id + "requested"
     const text = JSON.parse(res.content[0].text);
     expect(text.status).toBe('requested');
-    expect(text.widget_id).toBe('widget-msg-1');
+    expect(text.widget_id).toBe(appendArgs.metadata.widget.widget_id);
+    expect(text.widget_id).not.toBe('pending');
 
     // No auto-resume task on the normal path — it fires only after the user
     // submits/dismisses, via the resolve handler.
@@ -232,6 +229,40 @@ describe('agor_widgets_request_env_vars', () => {
       message_range: { end_index: number };
     };
     expect(patchBody.message_range.end_index).toBe(0); // index of the appended widget
+  });
+
+  it('generates the persisted widget id before the MCP message create', async () => {
+    const { app, calls } = makeApp({ sessionCreator: 'user-creator' });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+      baseServiceParams: {
+        user: { user_id: 'user-creator', role: 'member' },
+        authenticated: true,
+        provider: 'mcp',
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      },
+      db: { run: vi.fn() },
+    });
+
+    const res = await captured.agor_widgets_request_env_vars.cb({
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      auto_resume: true,
+    });
+
+    const appendArgs = appendStub.mock.calls[0][0];
+    const widgetId = appendArgs.metadata.widget.widget_id;
+    expect(appendArgs.messageId).toBe(widgetId);
+    expect(widgetId).not.toBe('pending');
+    expect(
+      calls.find((call) => call.service === 'messages' && call.method === 'patch')
+    ).toBeUndefined();
+    expect(JSON.parse(res.content[0].text)).toMatchObject({
+      widget_id: widgetId,
+      status: 'requested',
+    });
   });
 
   it('normalizes requested names before storing widget metadata and preview text', async () => {
@@ -464,9 +495,10 @@ describe('agor_widgets_request_env_vars', () => {
     expect(promptData.prompt).toContain('HUBSPOT_API_KEY');
     expect(promptData.prompt.toLowerCase()).toContain('already configured');
     expect(promptData.metadata.system_authored).toBe(true);
-    expect(promptData.metadata.widget_id).toBe('widget-msg-1');
-    expect(promptData.idempotencyTaskId).toBe(widgetAutoResumeTaskId('widget-msg-1' as MessageID));
-    expect(promptData.idempotencyTaskId).not.toBe('widget-msg-1');
+    const widgetId = appendStub.mock.calls[0][0].metadata.widget.widget_id;
+    expect(promptData.metadata.widget_id).toBe(widgetId);
+    expect(promptData.idempotencyTaskId).toBe(widgetAutoResumeTaskId(widgetId as MessageID));
+    expect(promptData.idempotencyTaskId).not.toBe(widgetId);
   });
 
   it('does NOT short-circuit when even one requested name is missing', async () => {

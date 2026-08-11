@@ -420,7 +420,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         dataSource={servers}
         columns={columns}
         rowKey="mcp_server_id"
-        pagination={{ pageSize: 10, showSizeChanger: true }}
+        pagination={{ defaultPageSize: 10, showSizeChanger: true }}
         size="small"
       />
 
