@@ -833,13 +833,18 @@ export const App: React.FC<AppProps> = ({
     applyLeftPanelState(getShowCommentsPanelState({ collapsed: true, activeTab: 'teammate' }));
   }, [applyLeftPanelState]);
 
-  // Shared by every TeammatePanelRail button: expand the panel onto
-  // whichever tab was clicked.
+  // Shared by every TeammatePanelRail button: expand the panel onto the
+  // clicked section. In slim the rail is the only tab UI, so clicking the
+  // active section again collapses the panel.
   const handleSelectTeammatePanelTab = useCallback(
     (tab: BoardTeammatePanelTab) => {
+      if (isSlim && !commentsPanelCollapsed && leftPanelTab === tab) {
+        setCommentsPanelCollapsed(true);
+        return;
+      }
       applyLeftPanelState(getSelectTeammatePanelTabState(tab));
     },
-    [applyLeftPanelState]
+    [applyLeftPanelState, isSlim, commentsPanelCollapsed, leftPanelTab, setCommentsPanelCollapsed]
   );
 
   const handleCommentSelect = useCallback((commentId: string | null) => {
@@ -1432,6 +1437,45 @@ export const App: React.FC<AppProps> = ({
   const stableOnLogout = useStableCallback(onLogout);
   const stableOnRetryConnection = useStableCallback(onRetryConnection);
 
+  const teammatePanelNode = (
+    <BoardTeammatePanel
+      client={client}
+      board={currentBoard || null}
+      activeTab={leftPanelTab}
+      onTabChange={setLeftPanelTab}
+      unreadCommentsCount={unreadCommentsCount}
+      hasUserMentions={hasUserMentions}
+      primaryTeammateBranch={primaryTeammateBranch}
+      primaryTeammateRepo={primaryTeammateRepo}
+      primaryTeammateInaccessible={primaryTeammateInaccessible}
+      currentUserId={user?.user_id}
+      selectedSessionId={effectiveSelectedSessionId}
+      onSessionClick={handleSessionClick}
+      onCreateSession={handleQuickStartSession}
+      onForkSession={stableOnForkSession}
+      onSpawnSession={stableOnSpawnSession}
+      onArchiveOrDelete={stableOnArchiveOrDeleteBranch}
+      onOpenSettings={handleOpenBranchModal}
+      onOpenSessionSettings={setSessionSettingsId}
+      onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
+      onStartEnvironment={stableOnStartEnvironment}
+      onStopEnvironment={stableOnStopEnvironment}
+      onViewLogs={setLogsModalBranchId}
+      onNukeEnvironment={stableOnNukeEnvironment}
+      onExecuteScheduleNow={stableOnExecuteScheduleNow}
+      onSendComment={handleTeammateSendComment}
+      onReplyComment={stableOnReplyComment}
+      onResolveComment={stableOnResolveComment}
+      onToggleReaction={stableOnToggleReaction}
+      onDeleteComment={stableOnDeleteComment}
+      hoveredCommentId={hoveredCommentId}
+      selectedCommentId={selectedCommentId}
+      onCollapse={handleTeammateCollapse}
+      deferSessionDetails={homeExitPanelDetailsDeferred}
+      onDeferredDetailsHydrated={handleDeferredDetailsHydrated}
+    />
+  );
+
   return (
     <AppActionsProvider value={appActionsValue}>
       <BoardSwitcherBridge setCurrentBoardId={setCurrentBoardId} />
@@ -1503,13 +1547,33 @@ export const App: React.FC<AppProps> = ({
                 ? leftPanelRailVisible
                   ? LEFT_PANEL_RAIL_WIDTH_PX
                   : 0
-                : LEFT_PANEL_MIN_WIDTH_PX
+                : isSlim
+                  ? LEFT_PANEL_MIN_WIDTH_PX + LEFT_PANEL_RAIL_WIDTH_PX
+                  : LEFT_PANEL_MIN_WIDTH_PX
             }
             onSideHandleDragging={(isDragging) => {
               leftPanelResizeDraggingRef.current = isDragging;
             }}
             sideContent={
-              leftPanelCollapsed ? (
+              isSlim ? (
+                /* Slim: the rail is the permanent navigation surface; the
+                   expanded panel renders beside it with no tab bar. */
+                <div style={{ height: '100%', display: 'flex' }}>
+                  {!leftPanelCollapsed && (
+                    <div style={{ flex: 1, minWidth: 0 }}>{teammatePanelNode}</div>
+                  )}
+                  {(leftPanelRailVisible || !leftPanelCollapsed) && (
+                    <div style={{ width: LEFT_PANEL_RAIL_WIDTH_PX, flexShrink: 0 }}>
+                      <TeammatePanelRail
+                        onSelectTab={handleSelectTeammatePanelTab}
+                        activeTab={leftPanelCollapsed ? null : leftPanelTab}
+                        unreadCommentsCount={unreadCommentsCount}
+                        hasUserMentions={hasUserMentions}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : leftPanelCollapsed ? (
                 leftPanelRailVisible && (
                   <TeammatePanelRail
                     onSelectTab={handleSelectTeammatePanelTab}
@@ -1518,42 +1582,7 @@ export const App: React.FC<AppProps> = ({
                   />
                 )
               ) : (
-                <BoardTeammatePanel
-                  client={client}
-                  board={currentBoard || null}
-                  activeTab={leftPanelTab}
-                  onTabChange={setLeftPanelTab}
-                  unreadCommentsCount={unreadCommentsCount}
-                  hasUserMentions={hasUserMentions}
-                  primaryTeammateBranch={primaryTeammateBranch}
-                  primaryTeammateRepo={primaryTeammateRepo}
-                  primaryTeammateInaccessible={primaryTeammateInaccessible}
-                  currentUserId={user?.user_id}
-                  selectedSessionId={effectiveSelectedSessionId}
-                  onSessionClick={handleSessionClick}
-                  onCreateSession={handleQuickStartSession}
-                  onForkSession={stableOnForkSession}
-                  onSpawnSession={stableOnSpawnSession}
-                  onArchiveOrDelete={stableOnArchiveOrDeleteBranch}
-                  onOpenSettings={handleOpenBranchModal}
-                  onOpenSessionSettings={setSessionSettingsId}
-                  onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
-                  onStartEnvironment={stableOnStartEnvironment}
-                  onStopEnvironment={stableOnStopEnvironment}
-                  onViewLogs={setLogsModalBranchId}
-                  onNukeEnvironment={stableOnNukeEnvironment}
-                  onExecuteScheduleNow={stableOnExecuteScheduleNow}
-                  onSendComment={handleTeammateSendComment}
-                  onReplyComment={stableOnReplyComment}
-                  onResolveComment={stableOnResolveComment}
-                  onToggleReaction={stableOnToggleReaction}
-                  onDeleteComment={stableOnDeleteComment}
-                  hoveredCommentId={hoveredCommentId}
-                  selectedCommentId={selectedCommentId}
-                  onCollapse={handleTeammateCollapse}
-                  deferSessionDetails={homeExitPanelDetailsDeferred}
-                  onDeferredDetailsHydrated={handleDeferredDetailsHydrated}
-                />
+                teammatePanelNode
               )
             }
             contentPanelWidthPercent={contentPanelWidthPercent}

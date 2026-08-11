@@ -125,7 +125,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
   const { themeMode, setThemeMode } = useTheme();
-  const { uiMode, setUIMode } = useUIMode();
+  const { uiMode, setUIMode, isSlim } = useUIMode();
 
   // Entity state via narrow store subscriptions rather than props. Each
   // whole-map selector is a stable module-level reference, so the header
@@ -271,7 +271,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             onUpdateBoard={onUpdateBoard}
           />
         </div>
-        {boards.length > 0 && (
+        {boards.length > 0 && !isSlim && (
           <RecentBoardPills
             recentBoards={recentBoards}
             onBoardChange={onBoardChange || (() => {})}

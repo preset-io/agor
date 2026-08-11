@@ -193,7 +193,11 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       }}
     >
       <Space size={8}>
-        <span style={{ fontSize: 18 }}>🏠</span>
+        {isSlim ? (
+          <HomeOutlined style={{ fontSize: 14, opacity: 0.65 }} />
+        ) : (
+          <span style={{ fontSize: 18 }}>🏠</span>
+        )}
         <Text strong={!currentBoardId}>Home</Text>
       </Space>
       <HomeOutlined style={{ color: token.colorTextTertiary }} />
