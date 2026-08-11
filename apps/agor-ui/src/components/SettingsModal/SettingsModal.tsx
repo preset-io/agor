@@ -699,7 +699,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                 color: token.colorText,
               }}
             >
-              Settings
+              Workspace Settings
             </div>
             <Menu
               mode="inline"
