@@ -8,6 +8,7 @@ import type {
   MCPServer,
   UpdateMCPServerInput,
 } from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
@@ -124,6 +125,102 @@ export async function listAttachedMcpServers(
     }
   }
   return summaries;
+}
+
+type McpCatalogFindResult =
+  | MCPServer[]
+  | {
+      data: MCPServer[];
+      total?: number;
+    };
+
+function getMcpCatalogFindData(result: McpCatalogFindResult): MCPServer[] {
+  return Array.isArray(result) ? result : result.data;
+}
+
+function getMcpCatalogFindTotal(result: McpCatalogFindResult): number {
+  const data = getMcpCatalogFindData(result);
+  return Array.isArray(result) ? data.length : (result.total ?? data.length);
+}
+
+/**
+ * The catalog is deliberately different from the effective MCP set:
+ *
+ * - global rows are eligible for every session, subject to service-level
+ *   authorization;
+ * - Agor-provided session rows are discoverable to a caller with trusted
+ *   current-session context, even before a junction row attaches them; and
+ * - user/imported session rows are not catalog-visible because their
+ *   session-specific authorization is owned by `session-mcp-servers`.
+ *
+ * Keeping the last rule here is important: querying all session rows would
+ * disclose another user's configured MCPs. The caller's tenant and session
+ * authorization remain in `baseServiceParams` and the verified `sessionId`.
+ */
+function isMcpCatalogServerVisible(ctx: McpContext, mcpServer: MCPServer): boolean {
+  const isAdmin = hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN);
+  if (mcpServer.owner_user_id && mcpServer.owner_user_id !== ctx.userId && !isAdmin) {
+    return false;
+  }
+  if (mcpServer.scope === 'global') return true;
+  return mcpServer.scope === 'session' && mcpServer.source === 'agor' && !!ctx.sessionId;
+}
+
+async function listCatalogMcpServers(
+  ctx: McpContext,
+  includeDisabled: boolean,
+  limit: number,
+  offset: number
+): Promise<{ servers: MCPServer[]; total: number }> {
+  // Fetch enough from each scoped query to produce the requested page after
+  // merging. The MCP input limit is bounded; the service also applies its
+  // own pagination to each query.
+  const fetchLimit = limit + offset;
+  const queryBase = {
+    ...(includeDisabled ? {} : { enabled: true }),
+    $limit: fetchLimit,
+    $skip: 0,
+    $sort: { created_at: -1, mcp_server_id: 1 },
+  };
+  const queries = [
+    { ...queryBase, scope: 'global' as const },
+    ...(ctx.sessionId
+      ? [{ ...queryBase, scope: 'session' as const, source: 'agor' as const }]
+      : []),
+  ];
+
+  const results = (await Promise.all(
+    queries.map((query) =>
+      ctx.app.service('mcp-servers').find({
+        ...ctx.baseServiceParams,
+        query,
+      })
+    )
+  )) as McpCatalogFindResult[];
+
+  const visibleById = new Map<string, MCPServer>();
+  let total = 0;
+  for (const result of results) {
+    const data = getMcpCatalogFindData(result);
+    const visible = data.filter((mcpServer) => isMcpCatalogServerVisible(ctx, mcpServer));
+    for (const mcpServer of visible) {
+      visibleById.set(mcpServer.mcp_server_id, mcpServer);
+    }
+
+    // The service total includes only rows from this scoped query. Account
+    // for rows filtered defensively above, while retaining a correct
+    // has-more signal when the service truncated the query.
+    total += Math.max(
+      visible.length,
+      getMcpCatalogFindTotal(result) - data.length + visible.length
+    );
+  }
+
+  const catalog = [...visibleById.values()];
+  return {
+    servers: catalog.slice(offset, offset + limit),
+    total: Math.max(total, catalog.length),
+  };
 }
 
 const mcpNameSchema = z
@@ -536,7 +633,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_list',
     {
       description:
-        'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, custom-header presence, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`.',
+        'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, custom-header presence, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`. If the catalog is empty, do not invent an unvetted third-party server or request a broad Slack token; configure an official server in Agor User Settings > MCP Servers instead. The official Slack MCP endpoint is https://mcp.slack.com/mcp, and this is separate from Slack gateway-channel setup or Claude connector settings.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         includeDisabled: z
@@ -552,17 +649,8 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       const limit = args.limit ?? 25;
       const offset = args.offset ?? 0;
 
-      const result = await ctx.app.service('mcp-servers').find({
-        ...ctx.baseServiceParams,
-        query: {
-          scope: 'global',
-          ...(includeDisabled ? {} : { enabled: true }),
-          $limit: limit,
-          $skip: offset,
-          $sort: { created_at: -1, mcp_server_id: 1 },
-        },
-      });
-      const data = (Array.isArray(result) ? result : result.data) as MCPServer[];
+      const catalog = await listCatalogMcpServers(ctx, includeDisabled, limit, offset);
+      const data = catalog.servers;
 
       const servers: McpServerSummary[] = [];
       for (const mcpServer of data) {
@@ -572,15 +660,11 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       return textResult({
         mcp_servers: servers,
         pagination: {
-          total: Array.isArray(result) ? servers.length : result.total,
+          total: catalog.total,
           limit,
           offset,
-          hasMore:
-            !Array.isArray(result) && offset + servers.length < (result.total ?? servers.length),
-          nextOffset:
-            !Array.isArray(result) && offset + servers.length < (result.total ?? servers.length)
-              ? offset + servers.length
-              : null,
+          hasMore: offset + servers.length < catalog.total,
+          nextOffset: offset + servers.length < catalog.total ? offset + servers.length : null,
         },
         summary: {
           total: servers.length,

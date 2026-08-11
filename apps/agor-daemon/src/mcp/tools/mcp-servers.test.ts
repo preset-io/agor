@@ -1,10 +1,10 @@
 /**
  * Tests for `agor_mcp_servers_list`.
  *
- * Catalog-only contract: this tool MUST NOT include rows from the
+ * Catalog contract: this tool MUST NOT include rows from the
  * `session-mcp-servers` junction. Per-session attachment lives on
- * `agor_sessions_get_current.attached_mcp_servers`. Locking the boundary so
- * the previous "globals + current session merge" behavior doesn't sneak back.
+ * `agor_sessions_get_current.attached_mcp_servers`, while Agor-provided
+ * session-scoped entries remain discoverable before they are attached.
  */
 
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -64,30 +64,60 @@ async function captureTool(
   return handler;
 }
 
-describe('agor_mcp_servers_list (catalog-only)', () => {
-  it('returns global-scope servers and does NOT consult session-mcp-servers', async () => {
+describe('agor_mcp_servers_list', () => {
+  it('returns eligible global and official session-scope servers without consulting attachments', async () => {
     let sessionMcpServersWasCalled = false;
     const app = makeFakeApp({
       'mcp-servers': {
-        find: async (params: { query?: { scope?: string } }) => {
-          // Catalog query is scope:'global' — the previous implementation
-          // also did a session-mcp-servers.find first; if that lookup ever
-          // comes back the test below would fail.
-          expect(params.query?.scope).toBe('global');
+        find: async (params: { query?: { scope?: string; source?: string } }) => {
+          if (params.query?.scope === 'global') {
+            return {
+              data: [
+                {
+                  mcp_server_id: 'srv-a',
+                  name: 'a',
+                  display_name: 'A',
+                  transport: 'http',
+                  scope: 'global',
+                  source: 'user',
+                  enabled: true,
+                  auth: { type: 'none' },
+                },
+                {
+                  mcp_server_id: 'srv-foreign',
+                  name: 'foreign-private-global',
+                  transport: 'http',
+                  scope: 'global',
+                  source: 'user',
+                  owner_user_id: 'user-2',
+                  enabled: true,
+                  auth: { type: 'bearer', token: 'foreign-secret' },
+                },
+              ],
+            };
+          }
+
+          expect(params.query).toMatchObject({ scope: 'session', source: 'agor' });
           return {
             data: [
               {
-                mcp_server_id: 'srv-a',
-                name: 'a',
-                display_name: 'A',
+                mcp_server_id: 'srv-official',
+                name: 'official-slack',
+                display_name: 'Slack',
                 transport: 'http',
+                scope: 'session',
+                source: 'agor',
                 enabled: true,
-                auth: { type: 'none' },
+                url: 'https://mcp.slack.com/mcp',
+                headers: { Authorization: 'Bearer official-secret' },
+                auth: { type: 'oauth', oauth_access_token: 'official-secret' },
               },
               {
-                mcp_server_id: 'srv-b',
-                name: 'b',
-                transport: 'stdio',
+                mcp_server_id: 'srv-private',
+                name: 'private-session-server',
+                transport: 'http',
+                scope: 'session',
+                source: 'user',
                 enabled: true,
                 auth: { type: 'none' },
               },
@@ -117,7 +147,18 @@ describe('agor_mcp_servers_list (catalog-only)', () => {
       auth_type: 'none',
       oauth_authenticated: true,
     });
-    expect(payload.summary).toMatchObject({ total: 2, oauth_servers: 0, needs_auth: 0 });
+    expect(payload.mcp_servers).toContainEqual(
+      expect.objectContaining({ mcp_server_id: 'srv-official', auth_type: 'oauth' })
+    );
+    expect(payload.mcp_servers).not.toContainEqual(
+      expect.objectContaining({ mcp_server_id: 'srv-private' })
+    );
+    expect(payload.mcp_servers).not.toContainEqual(
+      expect.objectContaining({ mcp_server_id: 'srv-foreign' })
+    );
+    expect(JSON.stringify(payload)).not.toContain('official-secret');
+    expect(JSON.stringify(payload)).not.toContain('foreign-secret');
+    expect(payload.summary).toMatchObject({ total: 2, oauth_servers: 1, needs_auth: 1 });
   });
 
   it('omits disabled servers by default and includes them when asked', async () => {
@@ -139,8 +180,32 @@ describe('agor_mcp_servers_list (catalog-only)', () => {
     await list({ includeDisabled: true });
 
     expect(calls[0]).toMatchObject({ scope: 'global', enabled: true });
-    expect(calls[1]).toMatchObject({ scope: 'global' });
-    expect(calls[1]).not.toHaveProperty('enabled');
+    expect(calls[1]).toMatchObject({ scope: 'session', source: 'agor', enabled: true });
+    expect(calls[2]).toMatchObject({ scope: 'global' });
+    expect(calls[2]).not.toHaveProperty('enabled');
+    expect(calls[3]).toMatchObject({ scope: 'session', source: 'agor' });
+    expect(calls[3]).not.toHaveProperty('enabled');
+  });
+
+  it('returns an empty catalog when no eligible servers are configured', async () => {
+    const app = makeFakeApp({
+      'mcp-servers': {
+        find: async () => ({ data: [] }),
+      },
+    });
+
+    const list = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      'agor_mcp_servers_list'
+    );
+    const result = await list({});
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload).toMatchObject({
+      mcp_servers: [],
+      pagination: { total: 0, hasMore: false, nextOffset: null },
+      summary: { total: 0, oauth_servers: 0, authenticated: 0, needs_auth: 0 },
+    });
   });
 });
 
