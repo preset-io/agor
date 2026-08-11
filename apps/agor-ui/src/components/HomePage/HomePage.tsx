@@ -4,6 +4,7 @@ import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme }
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
+import { useUIMode } from '../../contexts/UIModeContext';
 import {
   type AgorState,
   agorStore,
@@ -152,6 +153,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     props.currentUserId ? s.userById.get(props.currentUserId)?.name : undefined
   );
   const username = currentUserName || 'there';
+  const { isSlim } = useUIMode();
 
   // Resizable sidebar
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -283,24 +285,26 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                 minHeight: 0,
               }}
             >
-              {/* Greeting */}
+              {/* Greeting (hidden in slim mode — boards and sessions are the page) */}
               <header
                 style={{
                   display: 'flex',
-                  alignItems: 'flex-start',
-                  justifyContent: 'space-between',
+                  alignItems: isSlim ? 'center' : 'flex-start',
+                  justifyContent: isSlim ? 'flex-end' : 'space-between',
                   gap: 16,
-                  marginBottom: 24,
+                  marginBottom: isSlim ? 16 : 24,
                 }}
               >
-                <div>
-                  <Title level={5} style={{ margin: 0, fontWeight: 700 }}>
-                    Hi, {username}! 👋
-                  </Title>
-                  <Text type="secondary" style={{ fontSize: 14 }}>
-                    Here's an overview of your workspace.
-                  </Text>
-                </div>
+                {!isSlim && (
+                  <div>
+                    <Title level={5} style={{ margin: 0, fontWeight: 700 }}>
+                      Hi, {username}! 👋
+                    </Title>
+                    <Text type="secondary" style={{ fontSize: 14 }}>
+                      Here's an overview of your workspace.
+                    </Text>
+                  </div>
+                )}
                 <Dropdown
                   menu={{
                     items: NEW_MENU_ITEMS,
@@ -341,7 +345,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
               />
 
               {/* Workspace stats */}
-              <HomeStatsBar currentUserId={props.currentUserId} />
+              {!isSlim && <HomeStatsBar currentUserId={props.currentUserId} />}
 
               {/* My Sessions — flex: 1 fills remaining viewport height */}
               <HomeSessionsSection
@@ -360,8 +364,8 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
             </div>
           </Content>
 
-          {/* Resizable right sidebar — hidden below 992px */}
-          {sidebarVisible && (
+          {/* Resizable right sidebar — hidden below 992px and in slim mode */}
+          {sidebarVisible && !isSlim && (
             <aside
               style={{
                 width: sidebarWidth,
