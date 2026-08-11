@@ -253,6 +253,9 @@ async function requestOnce(
         // The TLS SNI/Host remain the validated URL hostname, while connection
         // address selection cannot perform a second DNS lookup.
         lookup: pinnedLookup,
+        // Never reuse a socket opened before this request's DNS validation. A
+        // pooled global agent can bypass the lookup callback entirely.
+        agent: false,
         servername: isIP(normalizedHostname(url)) ? undefined : normalizedHostname(url),
       },
       (response) => {

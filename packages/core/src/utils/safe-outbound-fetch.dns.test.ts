@@ -57,10 +57,10 @@ describe('safe outbound connection-time DNS policy', () => {
     async (_label, address, family) => {
       const lookup = createPinnedLookup({ address, family });
 
-      await expect(invokeLookup(lookup, { all: true })).resolves.toEqual({
+      await expect(invokeLookup(lookup, { all: true, family })).resolves.toEqual({
         address: [{ address, family }],
       });
-      await expect(invokeLookup(lookup, { all: false })).resolves.toEqual({
+      await expect(invokeLookup(lookup, { all: false, family })).resolves.toEqual({
         address,
         family,
       });
@@ -88,6 +88,37 @@ describe('safe outbound connection-time DNS policy', () => {
         cache: false,
       })
     ).resolves.toMatchObject({ token: 'oauth-access' });
+  });
+
+  it('does not reuse a pooled socket after the pinned address changes', async () => {
+    let requests = 0;
+    server = http.createServer((_request, response) => {
+      requests += 1;
+      response.writeHead(200, {
+        connection: 'keep-alive',
+        'content-length': '2',
+      });
+      response.end('ok');
+    });
+    await new Promise<void>((resolve, reject) => {
+      server?.once('error', reject);
+      server?.listen(0, '127.0.0.1', resolve);
+    });
+    const port = (server.address() as AddressInfo).port;
+    let lookups = 0;
+    lookupMock.mockImplementation(async () => [
+      { address: lookups++ === 0 ? '127.0.0.1' : '127.0.0.2', family: 4 },
+    ]);
+    const options = { allowLocalhostHttp: true, timeoutMs: 500 };
+
+    await expect(
+      safeOutboundFetch(`http://localhost:${port}/first`, options)
+    ).resolves.toMatchObject({
+      status: 200,
+    });
+    await expect(safeOutboundFetch(`http://localhost:${port}/second`, options)).rejects.toThrow();
+    expect(requests).toBe(1);
+    expect(lookupMock).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a mixed public/private DNS answer before opening a connection', async () => {
@@ -119,5 +150,12 @@ describe('safe outbound connection-time DNS policy', () => {
     await expect(
       safeOutboundFetch('https://unresolved.example/token', { timeoutMs: 30 })
     ).rejects.toThrow('Outbound OAuth timeout');
+  });
+
+  it('propagates DNS resolver failures without attempting a socket', async () => {
+    const error = new Error('getaddrinfo ENOTFOUND');
+    lookupMock.mockRejectedValue(error);
+
+    await expect(safeOutboundFetch('https://resolver-error.example/token')).rejects.toBe(error);
   });
 });
