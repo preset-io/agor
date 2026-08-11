@@ -96,21 +96,14 @@ export function resolveMCPCatalogOptions(
 }
 
 /**
- * Assumes one daemon per database.
+ * Safe to run independently on every daemon sharing one PostgreSQL database.
  *
- * `running` below is an in-process boolean, so it stops this worker overlapping
- * itself and nothing more. Two daemons against one Postgres both wake on their
- * own six-hour interval and both read-modify-write the same rows: the `data`
- * blob merges are read-then-write with no row lock, so a concurrent pair is
- * last-writer-wins, and two INSERTs of the same new `name` race the unique index
- * into a violation that surfaces as `entryFailures`. The previous run-long
- * transaction serialized this by accident; per-row units do not.
- *
- * The damage is bounded — the mirror is reconstructable from the registry and
- * `curated.yaml`, and the next run corrects it — so this is a correctness
- * limitation, not a data-loss risk. Serializing properly wants a
- * `pg_advisory_lock` around the run, which is tracked separately rather than
- * bolted on here.
+ * `running` is deliberately process-local: it prevents one worker overlapping
+ * itself, while repository writes converge across daemons through conflict-safe
+ * inserts and locked row reloads inside per-entry transactions. Cross-daemon
+ * runs are not leader-elected, so they may duplicate registry requests and auth
+ * probes; the opt-in registry sync and bounded probe budget limit that redundant
+ * third-party work without making correctness depend on one elected worker.
  */
 export class MCPCatalogIngestionWorker {
   private intervalHandle?: ReturnType<typeof setInterval>;
