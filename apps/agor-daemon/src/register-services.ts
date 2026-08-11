@@ -155,6 +155,10 @@ import {
   MCP_OAUTH_GRANT_BINDING_VERSION,
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
+import {
+  createStartedMCPOAuthFlowResult,
+  type StartedMCPOAuthFlowResult,
+} from './services/mcp-oauth-start-result.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
@@ -1463,20 +1467,13 @@ async function registerMCPServices(
     socketId?: string;
   };
 
-  type StartTwoPhaseOAuthResult = {
-    attemptId: MCPOAuthAttemptID;
-    state: string;
-    authorizationUrl: string;
-    redirectUri: string;
-  };
-
-  type StartTwoPhaseOAuthAndAwaitResult = StartTwoPhaseOAuthResult & {
+  type StartTwoPhaseOAuthAndAwaitResult = StartedMCPOAuthFlowResult & {
     awaitToken: () => Promise<OAuthTokenResponse>;
   };
 
   async function startTwoPhaseMCPOAuthFlow(
     opts: StartTwoPhaseOAuthOptions
-  ): Promise<StartTwoPhaseOAuthResult> {
+  ): Promise<StartedMCPOAuthFlowResult> {
     return startTwoPhaseMCPOAuthFlowInternal(opts, false);
   }
 
@@ -1492,7 +1489,7 @@ async function registerMCPServices(
   async function startTwoPhaseMCPOAuthFlowInternal(
     opts: StartTwoPhaseOAuthOptions,
     awaitToken: boolean
-  ): Promise<StartTwoPhaseOAuthResult | StartTwoPhaseOAuthAndAwaitResult> {
+  ): Promise<StartedMCPOAuthFlowResult | StartTwoPhaseOAuthAndAwaitResult> {
     const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
@@ -1707,12 +1704,7 @@ async function registerMCPServices(
       });
     }
 
-    const base: StartTwoPhaseOAuthResult = {
-      attemptId,
-      state: context.state,
-      authorizationUrl: context.authorizationUrl,
-      redirectUri,
-    };
+    const base = createStartedMCPOAuthFlowResult(context, attemptId);
     if (awaitToken) {
       if (durableBinding) {
         const awaitDurableToken = async (): Promise<OAuthTokenResponse> => {
@@ -2793,7 +2785,7 @@ async function registerMCPServices(
         const connection = params?.connection as { id?: string } | undefined;
         const socketId = connection?.id;
 
-        let result: StartTwoPhaseOAuthResult;
+        let result: StartedMCPOAuthFlowResult;
         try {
           result = await startTwoPhaseMCPOAuthFlow({
             mcpUrl: effectiveMcpUrl,
