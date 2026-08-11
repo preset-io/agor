@@ -152,6 +152,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
+  /**
+   * Branches with a health observation in flight. Recording an observation is a
+   * read-modify-write on persisted state, and checkHealth has three callers, so
+   * the guard belongs with the state rather than in one of them.
+   */
+  private healthChecksInFlight = new Set<BranchID>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
@@ -2439,6 +2445,40 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return branch;
     }
 
+    // Serialize observations per branch. checkHealth is reachable from the
+    // health monitor's interval, `GET /branches/:id/health` and the MCP
+    // environment tool; only the monitor held a guard, so the others could
+    // overlap it. That matters because recording an observation is a
+    // read-modify-write on persisted state — read the branch, probe for
+    // seconds, write the new streak — so two overlapping callers both read the
+    // same count and both write the same value, losing an observation and
+    // letting the older probe's verdict land last.
+    //
+    // The guard sits AFTER the tenant-scoped get above, so every caller is
+    // still authorized and scoped independently; only the probe-and-write is
+    // shared. A caller arriving mid-observation gets the current state rather
+    // than a second probe of the same window.
+    if (this.healthChecksInFlight.has(id)) {
+      return branch;
+    }
+    this.healthChecksInFlight.add(id);
+    try {
+      return await this.probeAndRecordHealth(branch, id, currentStatus, params);
+    } finally {
+      this.healthChecksInFlight.delete(id);
+    }
+  }
+
+  /**
+   * Probe the environment and record what came back. Callers must hold the
+   * per-branch in-flight guard — see checkHealth.
+   */
+  private async probeAndRecordHealth(
+    branch: BranchWithZoneAndSessions,
+    id: BranchID,
+    currentStatus: EnvironmentInstance['status'] | undefined,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
     // Effective health probe target. Local envs freeze a `health_check_url` at
     // branch creation. Remote/managed envs (e.g. a Codespace) have no static URL
     // — their reachable address only exists after `start` — so we fall back to a
@@ -2727,24 +2767,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
   }
 
-  /**
-   * Track consecutive failed health probes and decide whether a `running`
-   * environment should be demoted to `error`.
-   *
-   * A remote environment can vanish out from under Agor — a Codespace hits its
-   * idle timeout and shuts down, or retention deletes it. Without this, the
-   * environment stays `running` forever while only `last_health_check` goes
-   * unhealthy, so the UI keeps showing a green pill linking to a dead URL AND
-   * disables the Start button (`isRunning` gates it), leaving the user unable
-   * to recover from the board. Demoting to `error` re-enables Start.
-   *
-   * Demotion requires consecutive failures so that one blip — a redeploy, a
-   * slow request, a dropped packet — cannot flap a healthy environment.
-   *
-   * Note the health monitor stops polling once status leaves running/starting.
-   * That is intended here: a shut-down Codespace will not come back on its own,
-   * it needs an explicit start, which is exactly what we have re-enabled.
-   */
   /**
    * Apply the shared transition rules to one observation.
    *

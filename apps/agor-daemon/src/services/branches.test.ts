@@ -2892,3 +2892,79 @@ describe('environment health transition thresholds (characterization)', () => {
     expect(env.status).toBe('starting');
   });
 });
+
+describe('checkHealth concurrency', () => {
+  /**
+   * checkHealth is reachable from three places — the health monitor's interval,
+   * `GET /branches/:id/health`, and the MCP environment tool — and only the
+   * monitor held an in-flight guard. Since the readiness/demotion streak is now
+   * a read-modify-write on persisted state (read the branch, probe for seconds,
+   * write the new count), two overlapping callers both read the same count and
+   * both write the same value: one observation is silently lost, and the later
+   * write can carry the older probe's verdict.
+   */
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const slowProbeService = () => {
+    const env: Record<string, unknown> = { status: 'running' };
+    const branch = {
+      branch_id: 'wt-race' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-race',
+      path: '/tmp/wt-race',
+      branch_unique_id: 1,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: env,
+    };
+    const app = {
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockImplementation(
+      async () => ({ ...branch, environment_instance: { ...env } }) as never
+    );
+    const updateEnvironment = vi
+      .spyOn(service, 'updateEnvironment')
+      .mockImplementation(async (_id, update) => {
+        Object.assign(env, update as Record<string, unknown>);
+        return { ...branch, environment_instance: { ...env } } as never;
+      });
+    const fetchSpy = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          setTimeout(() => resolve({ ok: false, status: 503, statusText: 'Down' } as Response), 20);
+        })
+    );
+    globalThis.fetch = fetchSpy as never;
+    return { service, env, updateEnvironment, fetchSpy };
+  };
+
+  it('collapses overlapping checks into a single observation', async () => {
+    const { service, updateEnvironment, fetchSpy } = slowProbeService();
+
+    await Promise.all([
+      service.checkHealth('wt-race' as BranchID),
+      service.checkHealth('wt-race' as BranchID),
+    ]);
+
+    // Two racing probes would each read consecutive=undefined and each write 1,
+    // losing an observation and letting the second write land after the first.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(updateEnvironment).toHaveBeenCalledTimes(1);
+  });
+
+  it('records consecutive observations correctly once they no longer overlap', async () => {
+    const { service, env } = slowProbeService();
+
+    await service.checkHealth('wt-race' as BranchID);
+    await service.checkHealth('wt-race' as BranchID);
+
+    expect((env.last_health_check as { consecutive?: number }).consecutive).toBe(2);
+  });
+});
