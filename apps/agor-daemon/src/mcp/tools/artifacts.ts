@@ -44,6 +44,7 @@ import { coerceString, textResult } from '../server.js';
 import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 const SANDPACK_TEMPLATES = [
+  'static',
   'react',
   'react-ts',
   'vanilla',
@@ -115,7 +116,7 @@ The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor
 Recommended: create the folder inside your branch so files can be version-controlled.
 
 DECLARATIVE CONFIG:
-- \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template at render time. Currently only the \`react\` / \`react-ts\` mapping is verified end-to-end: those are CRA-backed (sandpack-react v2), so use \`process.env.REACT_APP_X\`. Other templates are best-effort and may need to be audited the first time an artifact publishes against them — the table in apps/agor-docs/pages/guide/artifacts.mdx tracks status. \`vanilla\` / \`vanilla-ts\` have no dotenv path (daemon warns and injects nothing).
+- \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template at render time. Currently only the \`react\` / \`react-ts\` mapping is verified end-to-end: those are CRA-backed (sandpack-react v2), so use \`process.env.REACT_APP_X\`. Other templates are best-effort and may need to be audited the first time an artifact publishes against them — the table in apps/agor-docs/pages/guide/artifacts.mdx tracks status. \`static\`, \`vanilla\` / \`vanilla-ts\` have no dotenv path (daemon warns and injects nothing). HTML-first vanilla artifacts with an empty entry are served through the \`static\` template automatically.
 - \`agorGrants\`: declarative daemon capabilities. Each grant maps to a fixed env var:
     \`agor_api_url: true\`   → injects the daemon URL as \`AGOR_API_URL\`.
     \`agor_user_email: true\` → injects viewer's email as \`AGOR_USER_EMAIL\`.

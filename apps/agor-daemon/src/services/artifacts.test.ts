@@ -597,6 +597,44 @@ describe('ArtifactsService.getPayload trust + .env synthesis', () => {
     const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
     expect(payload.files['/.env']).toBeUndefined();
   });
+
+  dbTest(
+    'HTML-first vanilla artifacts render through Sandpack static semantics',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifactRepo = new ArtifactRepository(db);
+      const html = `<!doctype html>
+<html>
+  <head><style>body { font-family: Inter, sans-serif; }</style></head>
+  <body><main class="hero">Styled artifact</main></body>
+</html>`;
+      const created = await artifactRepo.create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: 'html-first-vanilla',
+        template: 'vanilla',
+        files: {
+          '/index.js': '// generated entry intentionally left empty\n',
+          '/index.html': html,
+        },
+        required_env_vars: ['SOMETHING'],
+        public: true,
+        created_by: 'user-owner',
+      });
+
+      const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+
+      expect(payload.template).toBe('static');
+      expect(payload.sandpack_config).toMatchObject({
+        template: 'static',
+        customSetup: { entry: '/index.html' },
+      });
+      expect(payload.files['/index.html']).toBe(html);
+      expect(payload.files['/index.js']).toContain('intentionally left empty');
+      expect(payload.files['/.env']).toBeUndefined();
+    }
+  );
 });
 
 describe('ArtifactsService.grantTrust', () => {

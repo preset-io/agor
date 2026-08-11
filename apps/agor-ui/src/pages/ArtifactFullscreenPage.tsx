@@ -1,4 +1,11 @@
-import type { AgorClient, Artifact, ArtifactPayload, SessionID, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Artifact,
+  ArtifactPayload,
+  SandpackTemplate,
+  SessionID,
+  User,
+} from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
 import {
   ArrowLeftOutlined,
@@ -24,7 +31,7 @@ import { uiRouteHref } from '@/utils/uiRoutes';
 import { ArtifactConsentModal } from '../components/ArtifactConsentModal/ArtifactConsentModal';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
-import { withBodyReset } from '../components/SessionCanvas/canvas/utils/sandpackDefaults';
+import { useStableSandpackProviderInputs } from '../components/SessionCanvas/canvas/utils/sandpackDefaults';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 
 ensureSandpackCryptoSubtle();
@@ -255,15 +262,17 @@ export function ArtifactFullscreenPage({
 
   const sandpackConfig = payload?.sandpack_config ?? {};
   const sandpackOptions = sandpackConfig.options ?? {};
-  const customSetup = payload
-    ? {
-        ...(sandpackConfig.customSetup ?? {}),
-        ...(payload.dependencies && !sandpackConfig.customSetup?.dependencies
-          ? { dependencies: payload.dependencies }
-          : {}),
-      }
-    : {};
-  const sandpackTemplate = (sandpackConfig.template ?? payload?.template ?? 'react') as 'react';
+  const sandpackTemplate = (sandpackConfig.template ??
+    payload?.template ??
+    'react') as SandpackTemplate;
+  const sandpackInputs = useStableSandpackProviderInputs({
+    template: sandpackTemplate,
+    files: payload?.files ?? {},
+    customSetup: sandpackConfig.customSetup,
+    dependencies: payload?.dependencies,
+    entryFile: payload?.entry,
+    options: sandpackOptions,
+  });
   const title = payload?.name ?? artifact?.name ?? `Artifact ${artifactIdParam}`;
 
   const hideNavbar = useCallback(() => {
@@ -322,19 +331,11 @@ export function ArtifactFullscreenPage({
         <div className="artifact-fullscreen-sandpack" style={{ flex: 1, minHeight: 0 }}>
           <SandpackProvider
             key={payload.content_hash}
-            template={sandpackTemplate}
-            files={withBodyReset(payload.files)}
-            customSetup={
-              Object.keys(customSetup).length > 0 ? (customSetup as SandpackSetup) : undefined
-            }
+            template={sandpackInputs.template as SandpackTemplate}
+            files={sandpackInputs.files}
+            customSetup={sandpackInputs.customSetup as SandpackSetup | undefined}
             theme={sandpackConfig.theme as never}
-            options={{
-              initMode: 'user-visible',
-              ...sandpackOptions,
-              ...(payload.entry && !sandpackOptions.activeFile
-                ? { activeFile: payload.entry }
-                : {}),
-            }}
+            options={sandpackInputs.options}
           >
             <SandpackPreview
               style={{ height: '100%', border: 'none' }}

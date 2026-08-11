@@ -46,7 +46,7 @@ import type {
  *   plain `process.env.X` without name mangling (note: Vue CLI actually
  *   expects `VUE_APP_*` for browser-side env vars; tracked as the same
  *   follow-up).
- * - `vanilla`, `vanilla-ts` have no working dotenv path — the daemon
+ * - `static`, `vanilla`, `vanilla-ts` have no working dotenv path — the daemon
  *   skips env injection entirely and emits a warning if the artifact
  *   declared `required_env_vars`.
  *
@@ -58,6 +58,7 @@ import type {
 const ENV_PREFIX_BY_TEMPLATE = {
   react: 'REACT_APP_',
   'react-ts': 'REACT_APP_',
+  static: null,
   vue3: 'VITE_',
   svelte: 'VITE_',
   solid: 'VITE_',
@@ -95,7 +96,7 @@ export function isKnownSandpackTemplate(value: unknown): value is SandpackTempla
  * derive the effective template first — see `effectiveTemplateForArtifact`.
  */
 export function envVarPrefixForTemplate(template: SandpackTemplate): string | null {
-  const prefix = ENV_PREFIX_BY_TEMPLATE[template];
+  const prefix = ENV_PREFIX_BY_TEMPLATE[template as keyof typeof ENV_PREFIX_BY_TEMPLATE];
   return prefix === undefined ? null : prefix;
 }
 
@@ -124,6 +125,90 @@ export function effectiveTemplateForArtifact(artifact: {
   // own template if the override is unknown.
   if (isKnownSandpackTemplate(override)) return override;
   return artifact.template;
+}
+
+/**
+ * Sandpack's `vanilla` runtime is Parcel-backed with `/index.js` as its main
+ * file. CodeSandbox's full Parcel sandbox also accepts an HTML-first project,
+ * but the embedded Sandpack template does not infer that intent from a
+ * non-empty `/index.html`. HTML-first artifacts therefore need Sandpack's
+ * built-in `static` template instead.
+ *
+ * Treat an empty/comment-only vanilla entry plus a non-empty `/index.html` as
+ * an HTML-first artifact. This is deliberately narrow: a vanilla project
+ * with executable JavaScript remains vanilla, and React/Vue/etc. are never
+ * reclassified. The file map is not rewritten, so inline styles and scripts
+ * retain their existing iframe security boundary and browser semantics.
+ */
+export function shouldUseStaticTemplate(artifact: {
+  template: SandpackTemplate;
+  sandpack_config?: SandpackConfig;
+  files?: Record<string, string>;
+}): boolean {
+  const template = effectiveTemplateForArtifact(artifact);
+  if (template === 'static') return false;
+  if (template !== 'vanilla' && template !== 'vanilla-ts') return false;
+
+  const files = artifact.files ?? {};
+  const configuredEntry = artifact.sandpack_config?.customSetup?.entry;
+  if (configuredEntry?.toLowerCase().endsWith('.html')) return true;
+
+  const defaultEntry = template === 'vanilla-ts' ? '/index.ts' : '/index.js';
+  const entryPath = configuredEntry ?? defaultEntry;
+  const entry = files[entryPath] ?? files[entryPath.replace(/^\//, '')];
+  if (entry !== undefined && !isCommentOnlySource(entry)) return false;
+
+  const html = files['/index.html'] ?? files['index.html'];
+  return typeof html === 'string' && html.trim().length > 0;
+}
+
+/**
+ * Resolve the template used by Sandpack at render time. Persisted artifacts
+ * may predate the explicit `static` template support, so this also repairs
+ * the affected vanilla HTML-first shape without mutating its source files.
+ */
+export function renderTemplateForArtifact(artifact: {
+  template: SandpackTemplate;
+  sandpack_config?: SandpackConfig;
+  files?: Record<string, string>;
+}): SandpackTemplate {
+  return shouldUseStaticTemplate(artifact) ? 'static' : effectiveTemplateForArtifact(artifact);
+}
+
+/**
+ * Build the render-only config for an HTML-first artifact. Sandpack's static
+ * template uses `/index.html` as its main entry; removing a stale vanilla
+ * `customSetup.environment` avoids overriding that environment. The returned
+ * object is a copy, so persisted author config is never mutated at payload
+ * fetch time.
+ */
+export function normalizeSandpackConfigForRender(artifact: {
+  template: SandpackTemplate;
+  sandpack_config?: SandpackConfig;
+  files?: Record<string, string>;
+}): { template: SandpackTemplate; sandpack_config?: SandpackConfig } {
+  const useStaticTemplate = shouldUseStaticTemplate(artifact);
+  const template = useStaticTemplate ? 'static' : effectiveTemplateForArtifact(artifact);
+  if (!useStaticTemplate) {
+    return { template, sandpack_config: artifact.sandpack_config };
+  }
+
+  const customSetup = { ...(artifact.sandpack_config?.customSetup ?? {}) };
+  delete customSetup.environment;
+  customSetup.entry = '/index.html';
+
+  return {
+    template,
+    sandpack_config: {
+      ...(artifact.sandpack_config ?? {}),
+      template,
+      customSetup,
+    },
+  };
+}
+
+function isCommentOnlySource(source: string): boolean {
+  return /^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r\n|\r|\n|$))*$/.test(source);
 }
 
 /**

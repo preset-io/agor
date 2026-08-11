@@ -13,7 +13,10 @@ import {
   detectLegacyFormat,
   effectiveTemplateForArtifact,
   envVarPrefixForTemplate,
+  normalizeSandpackConfigForRender,
+  renderTemplateForArtifact,
   sanitizeSandpackConfig,
+  shouldUseStaticTemplate,
 } from './sandpack-config';
 
 describe('sanitizeSandpackConfig', () => {
@@ -153,6 +156,75 @@ describe('sanitizeSandpackConfig.template', () => {
       sanitizeSandpackConfig({ template: 'react-vite-experimental' }).template
     ).toBeUndefined();
     expect(sanitizeSandpackConfig({ template: 42 as unknown as string }).template).toBeUndefined();
+  });
+});
+
+describe('HTML-first vanilla artifact rendering', () => {
+  const affectedShape = {
+    template: 'vanilla' as const,
+    files: {
+      '/index.js': '// generated entry intentionally left empty\n',
+      '/index.html': `<!doctype html>
+<html>
+  <head><style>body { font-family: Inter, sans-serif; }</style></head>
+  <body><main class="hero">Styled artifact</main></body>
+</html>`,
+    },
+  };
+
+  it('recognizes the HTML-first shape instead of accepting an inert JS entry', () => {
+    expect(shouldUseStaticTemplate(affectedShape)).toBe(true);
+    expect(renderTemplateForArtifact(affectedShape)).toBe('static');
+  });
+
+  it('selects Sandpack static entry semantics without rewriting HTML/CSS/scripts', () => {
+    const normalized = normalizeSandpackConfigForRender(affectedShape);
+
+    expect(normalized.template).toBe('static');
+    expect(normalized.sandpack_config).toMatchObject({
+      template: 'static',
+      customSetup: { entry: '/index.html' },
+    });
+    expect(affectedShape.files['/index.html']).toContain('font-family: Inter');
+    expect(affectedShape.files['/index.js']).toContain('intentionally left empty');
+  });
+
+  it('does not carry a stale vanilla environment into the static runtime', () => {
+    const artifact = {
+      ...affectedShape,
+      sandpack_config: {
+        customSetup: {
+          entry: '/index.js',
+          environment: 'parcel',
+          dependencies: { 'safe-dependency': '^1.0.0' },
+        },
+      },
+    };
+    const normalized = normalizeSandpackConfigForRender(artifact);
+
+    expect(normalized.sandpack_config?.customSetup).toEqual({
+      entry: '/index.html',
+      dependencies: { 'safe-dependency': '^1.0.0' },
+    });
+    expect(artifact.sandpack_config.customSetup.environment).toBe('parcel');
+  });
+
+  it('keeps executable vanilla JavaScript on the vanilla template', () => {
+    expect(
+      renderTemplateForArtifact({
+        ...affectedShape,
+        files: { ...affectedShape.files, '/index.js': 'document.body.dataset.ready = "yes";' },
+      })
+    ).toBe('vanilla');
+  });
+
+  it('does not reclassify framework artifacts that happen to contain index.html', () => {
+    expect(
+      renderTemplateForArtifact({
+        template: 'react',
+        files: affectedShape.files,
+      })
+    ).toBe('react');
   });
 });
 

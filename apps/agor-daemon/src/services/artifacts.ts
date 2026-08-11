@@ -65,8 +65,8 @@ import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import {
   detectLegacyFormat,
-  effectiveTemplateForArtifact,
   envVarPrefixForTemplate,
+  normalizeSandpackConfigForRender,
   sanitizeSandpackConfig,
 } from '../utils/sandpack-config.js';
 import {
@@ -543,12 +543,22 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const resolvedSandpackConfig = sanitizeSandpackConfig(
       data.sandpack_config ?? sidecar?.sandpack_config ?? existing?.sandpack_config
     );
-    const template = (data.template ??
+    const requestedTemplate = (data.template ??
       resolvedSandpackConfig.template ??
       sidecar?.template ??
       existing?.template ??
       'react') as SandpackTemplate;
-    if (!resolvedSandpackConfig.template) resolvedSandpackConfig.template = template;
+    const renderConfig = normalizeSandpackConfigForRender({
+      template: requestedTemplate,
+      sandpack_config: resolvedSandpackConfig,
+      files,
+    });
+    const template = renderConfig.template;
+    if (renderConfig.sandpack_config) {
+      Object.assign(resolvedSandpackConfig, renderConfig.sandpack_config);
+    } else if (!resolvedSandpackConfig.template) {
+      resolvedSandpackConfig.template = template;
+    }
     const requiredEnvVars = sanitizeEnvVarNames(
       data.required_env_vars ?? sidecar?.required_env_vars ?? existing?.required_env_vars
     );
@@ -779,7 +789,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       dbUpdates.agor_runtime = updates.agor_runtime;
     }
     if (updates.sandpack_config !== undefined) {
-      dbUpdates.sandpack_config = sanitizeSandpackConfig(updates.sandpack_config);
+      const sanitizedConfig = sanitizeSandpackConfig(updates.sandpack_config);
+      const normalizedConfig = normalizeSandpackConfigForRender({
+        template: existing.template,
+        sandpack_config: sanitizedConfig,
+        files: existing.files,
+      });
+      dbUpdates.sandpack_config = normalizedConfig.sandpack_config;
+      if (normalizedConfig.template !== existing.template) {
+        dbUpdates.template = normalizedConfig.template;
+        dbUpdates.entry = normalizedConfig.sandpack_config?.customSetup?.entry ?? existing.entry;
+      }
     }
 
     let updated = existing;
@@ -957,6 +977,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       throw new Error(`Artifact ${artifactId} has no files in DB — cannot serve payload`);
     }
 
+    const renderConfig = normalizeSandpackConfigForRender({
+      template: artifact.template,
+      sandpack_config: artifact.sandpack_config,
+      files: artifact.files,
+    });
     const filesOut: Record<string, string> = { ...artifact.files };
     const requiredEnvVars = artifact.required_env_vars ?? [];
     const grants = canonicalizeAgorGrants(artifact.agor_grants);
@@ -992,11 +1017,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // so .env synthesis must follow the same effective template — otherwise
       // the daemon prefixes for one bundler while the bundler that actually
       // runs is something else.
-      const effectiveTemplate = effectiveTemplateForArtifact(artifact);
+      const effectiveTemplate = renderConfig.template;
       // If the artifact explicitly overrides the sandpack environment we
       // can't reliably guess the prefix — operator's responsibility to make
       // the override match the template's prefix convention.
-      const envOverride = artifact.sandpack_config?.customSetup?.environment;
+      const envOverride = renderConfig.sandpack_config?.customSetup?.environment;
       if (envOverride) {
         console.warn(
           `[artifacts] Artifact ${artifact.artifact_id} sets customSetup.environment=${envOverride}; .env prefix still derived from template=${effectiveTemplate}. If the override changes the bundler family the injected vars may not be picked up.`
@@ -1027,8 +1052,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // never touches user files.
     const runtimeEnabled = artifact.agor_runtime?.enabled !== false;
     const servedSandpackConfig = runtimeEnabled
-      ? withInjectedAgorRuntime(artifact.sandpack_config)
-      : artifact.sandpack_config;
+      ? withInjectedAgorRuntime(renderConfig.sandpack_config)
+      : renderConfig.sandpack_config;
 
     const contentHash = this.computeHashFromFiles({
       ...filesOut,
@@ -1041,11 +1066,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       source_session_id: artifact.source_session_id ?? null,
       name: artifact.name,
       description: artifact.description,
-      template: artifact.template,
+      template: renderConfig.template,
       files: filesOut,
       sandpack_config: servedSandpackConfig,
       dependencies: artifact.dependencies,
-      entry: artifact.entry,
+      entry: renderConfig.sandpack_config?.customSetup?.entry ?? artifact.entry,
       content_hash: contentHash,
       runtime_report_hash: this.computeRuntimeReportHash(artifact),
       required_env_vars: requiredEnvVars.length > 0 ? requiredEnvVars : undefined,
@@ -1362,6 +1387,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (!artifact.files || Object.keys(artifact.files).length === 0) {
       throw new Error(`Artifact ${artifactId} has no files to export`);
     }
+    const exportRenderConfig = normalizeSandpackConfigForRender({
+      template: artifact.template,
+      sandpack_config: artifact.sandpack_config,
+      files: artifact.files,
+    });
 
     // Strip Agor-only sidecars + the synthesized .env. CodeSandbox expects
     // `src/index.js` keys, not `/src/index.js` (no leading slash). Hold the
@@ -1399,7 +1429,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         // dependency cache rather than failing the whole export.
       }
     }
-    const customSetupDeps = artifact.sandpack_config?.customSetup?.dependencies ?? {};
+    const customSetupDeps = exportRenderConfig.sandpack_config?.customSetup?.dependencies ?? {};
     const cachedDeps = artifact.dependencies ?? {};
     const mergedDeps: Record<string, string> = {
       ...customSetupDeps,
@@ -1409,7 +1439,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const finalPkg: Record<string, unknown> = {
       name: 'artifact-export',
       version: '0.0.0',
-      main: artifact.entry ?? userPkg.main ?? 'src/index.js',
+      main:
+        exportRenderConfig.sandpack_config?.customSetup?.entry ??
+        artifact.entry ??
+        userPkg.main ??
+        'src/index.js',
       ...userPkg,
       dependencies: mergedDeps,
     };
@@ -1465,7 +1499,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     const url = `https://codesandbox.io/s/${sandboxId}`;
     const requiredVars = artifact.required_env_vars ?? [];
-    const exportTemplate = effectiveTemplateForArtifact(artifact);
+    const exportTemplate = exportRenderConfig.template;
     const exportPrefix = envVarPrefixForTemplate(exportTemplate);
     let note: string;
     if (requiredVars.length === 0) {
@@ -1766,14 +1800,19 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     >
   ): string {
     const files = artifact.files ?? {};
+    const renderConfig = normalizeSandpackConfigForRender({
+      template: artifact.template,
+      sandpack_config: artifact.sandpack_config,
+      files,
+    });
     return this.computeHashFromFiles({
       ...files,
       '/.agor/runtime-report-inputs.json': JSON.stringify({
         artifact_id: artifact.artifact_id,
         board_id: artifact.board_id,
-        template: artifact.template,
-        entry: artifact.entry ?? null,
-        sandpack_config: artifact.sandpack_config ?? null,
+        template: renderConfig.template,
+        entry: renderConfig.sandpack_config?.customSetup?.entry ?? artifact.entry ?? null,
+        sandpack_config: renderConfig.sandpack_config ?? null,
         required_env_vars: artifact.required_env_vars ?? [],
         agor_grants: canonicalizeAgorGrants(artifact.agor_grants),
         agor_runtime_enabled: artifact.agor_runtime?.enabled !== false,
