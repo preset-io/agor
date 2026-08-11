@@ -163,6 +163,7 @@ import {
   lockMCPOAuthGrantConfiguration,
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
+import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
@@ -2935,32 +2936,17 @@ async function registerMCPServices(
       if (!userId) return { authenticated_server_ids: [] };
       try {
         const userTokenRepo = new UserMCPOAuthTokenRepository(db);
-        const [perUserTokens, sharedTokens] = await Promise.all([
-          userTokenRepo.listForUser(userId as UserID),
-          userTokenRepo.listShared(),
-        ]);
-        const tokens = [...perUserTokens, ...sharedTokens];
-        const now = new Date();
-        const authenticatedServerIds = new Set<MCPServerID>();
         const serverRepo = new MCPServerRepository(db);
-        for (const token of tokens) {
-          if (token.oauth_token_expires_at && token.oauth_token_expires_at <= now) continue;
-          if (token.refresh_status === 'ambiguous') continue;
-          if (isPostgresDatabaseHandle(db)) {
-            const server = await serverRepo.findById(token.mcp_server_id);
-            if (
-              !server ||
-              !isMCPOAuthGrantBoundToServer(process.env.AGOR_MASTER_SECRET!, server, token)
-            ) {
-              // Durable status is authoritative. A realtime hint or stale row
-              // must never make the UI advertise a grant which the request
-              // path would refuse to use.
-              continue;
-            }
-          }
-          authenticatedServerIds.add(token.mcp_server_id);
-        }
-        return { authenticated_server_ids: [...authenticatedServerIds] };
+        const authenticatedServerIds = await resolveAuthenticatedServerIds({
+          viewer: { user_id: userId as UserID, role: params?.user?.role },
+          listForUser: (id) => userTokenRepo.listForUser(id),
+          listShared: () => userTokenRepo.listShared(),
+          findServer: (serverId) => serverRepo.findById(serverId),
+          requireGrantBinding: isPostgresDatabaseHandle(db),
+          isGrantBoundToServer: (server, grant) =>
+            isMCPOAuthGrantBoundToServer(process.env.AGOR_MASTER_SECRET!, server, grant),
+        });
+        return { authenticated_server_ids: authenticatedServerIds };
       } catch (error) {
         console.error(
           `[OAuth Status] Token lookup failed category=${

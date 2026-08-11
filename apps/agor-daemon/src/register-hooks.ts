@@ -1824,7 +1824,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
     for (const item of items) {
       const data = (item ?? undefined) as
-        | { transport?: MCPTransport; owner_user_id?: string | null }
+        | { transport?: MCPTransport; owner_user_id?: string | null; catalog_entry_name?: string }
         | undefined;
       const decision = await authorizeMcpServerWrite(db, context.params, {
         method,
@@ -1833,6 +1833,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       });
       if (decision.owner_user_id !== undefined && data) {
         data.owner_user_id = decision.owner_user_id;
+      }
+      if (decision.catalog_entry_name !== undefined && data) {
+        data.catalog_entry_name = decision.catalog_entry_name;
       }
     }
 

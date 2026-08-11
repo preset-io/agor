@@ -213,6 +213,59 @@ describe('authorizeMcpServerWrite', () => {
     ).rejects.toThrow(/ownership cannot be changed/);
   });
 
+  it.each(['member', 'admin'] as const)(
+    'refuses a caller-supplied catalog stamp from a %s',
+    async (role) => {
+      resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
+
+      // The registry name is printed on every card in the marketplace, so a
+      // stamp anybody may submit is a claim anybody may fake — and connect
+      // reuses a server by that claim. Provenance is recorded by the install
+      // path or not at all, which is why an admin is refused too: it is not a
+      // field an operator maintains, it is a fact about how the row got here.
+      await expect(
+        authorizeMcpServerWrite(db, paramsFor(ALICE, role), {
+          method: 'create',
+          data: { ...remoteCreate, catalog_entry_name: 'io.github.github/github-mcp-server' },
+        })
+      ).rejects.toThrow(/catalog provenance cannot be set/i);
+    }
+  );
+
+  it('refuses a caller-supplied catalog stamp on a patch', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
+
+    await expect(
+      authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+        method: 'patch',
+        existing: serverOwnedBy(ALICE),
+        data: { ...remoteCreate, catalog_entry_name: 'io.github.github/github-mcp-server' },
+      })
+    ).rejects.toThrow(/catalog provenance cannot be set/i);
+  });
+
+  it('stamps provenance when the marketplace install path names the entry', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
+
+    const installParams = {
+      ...paramsFor(ALICE, 'member'),
+      mcpCatalogInstall: { entry_name: 'com.linear/linear' },
+    } as AuthenticatedParams;
+
+    await expect(
+      authorizeMcpServerWrite(db, installParams, { method: 'create', data: remoteCreate })
+    ).resolves.toEqual({ owner_user_id: ALICE, catalog_entry_name: 'com.linear/linear' });
+  });
+
+  it('leaves an internal caller free to record provenance directly', async () => {
+    await expect(
+      authorizeMcpServerWrite(db, undefined, {
+        method: 'create',
+        data: { ...remoteCreate, catalog_entry_name: 'com.linear/linear' },
+      })
+    ).resolves.toEqual({});
+  });
+
   it('lets an owner change their own remote server', async () => {
     resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
 

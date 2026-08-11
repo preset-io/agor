@@ -68,6 +68,52 @@ function serverNameFor(entry: MCPCatalogEntry): string {
   return slug || 'mcp-server';
 }
 
+/**
+ * Whether two endpoint URLs name the same place.
+ *
+ * Normalised through `URL` so a trailing slash, a default port, or a
+ * differently-cased host does not read as a different server and cost somebody
+ * their install. Anything unparseable falls back to an exact comparison rather
+ * than guessing.
+ */
+function sameEndpoint(a: string | undefined, b: string): boolean {
+  if (!a) return false;
+  const normalize = (value: string): string => {
+    try {
+      const url = new URL(value.trim());
+      url.pathname = url.pathname.replace(/\/+$/, '');
+      return url.href;
+    } catch {
+      return value.trim();
+    }
+  };
+  return normalize(a) === normalize(b);
+}
+
+/**
+ * Whether `server` is still an install of `entry`.
+ *
+ * The stamp records where a row came from; this asks whether it is still that.
+ * The two come apart because a member may point their own private server
+ * wherever they like — which is theirs to do — so a stamp on its own would let
+ * a redirected row stand in for the catalog's, and reuse would hand the next
+ * caller an endpoint the catalog never named. A stamp nobody but the install
+ * path can write (see `authorizeMcpServerWrite`) closes the forged half; this
+ * closes the half where a legitimately stamped row is edited afterwards.
+ *
+ * Only the endpoint is compared, because only the endpoint is the catalog's to
+ * fix. Name, labels, `enabled`, scope, headers, and credentials are the
+ * owner's to tune, and a second row for a benign edit would be a worse outcome
+ * than the duplicate reuse exists to prevent.
+ */
+function isInstallOf(server: MCPServer, entry: MCPCatalogEntry & { remote_url: string }): boolean {
+  return (
+    server.catalog_entry_name === entry.name &&
+    server.transport === toServerTransport(entry) &&
+    sameEndpoint(server.url, entry.remote_url)
+  );
+}
+
 function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCatalogEntry & {
   remote_url: string;
 } {
@@ -129,9 +175,14 @@ export function createMCPCatalogConnectService(
    * install the user already has instead of adding a duplicate beside it. Both
    * sides carry the catalog's own `name` verbatim, which is what the entry is
    * unique on, so there is no second normalisation to keep in step.
+   *
+   * The name alone does not settle it, though: see {@link isInstallOf}. A row
+   * that has stopped pointing at the entry's endpoint is passed over rather
+   * than handed back, so a caller who has one of those and a real install gets
+   * the real one.
    */
   const findExistingInstall = async (
-    entry: MCPCatalogEntry,
+    entry: MCPCatalogEntry & { remote_url: string },
     userId: UserID | undefined,
     params: AuthenticatedParams
   ): Promise<MCPServer | undefined> => {
@@ -141,7 +192,7 @@ export function createMCPCatalogConnectService(
       query: { ...(userId ? { usableByUserId: userId } : {}), $limit: 1000 },
     });
     const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
-    return servers.find((server) => server.catalog_entry_name === entry.name);
+    return servers.find((server) => isInstallOf(server, entry));
   };
 
   return {
@@ -177,11 +228,17 @@ export function createMCPCatalogConnectService(
         // silently for every session its owner will ever start.
         scope: 'session',
         source: 'user',
-        catalog_entry_name: entry.name,
       };
 
+      // Provenance is named on params rather than in the payload: the write
+      // authorizer refuses a stamp that arrived from a request, so this is the
+      // one path that can produce one. See `McpCatalogInstallParams`.
       const mcpServer =
-        existing ?? ((await service('mcp-servers').create(createInput, params)) as MCPServer);
+        existing ??
+        ((await service('mcp-servers').create(createInput, {
+          ...params,
+          mcpCatalogInstall: { entry_name: entry.name },
+        })) as MCPServer);
 
       // Three writes across three services, so there is no transaction to lean
       // on. A server nobody can see is the worst thing to leave behind — it is

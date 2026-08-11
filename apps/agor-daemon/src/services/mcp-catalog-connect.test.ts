@@ -32,6 +32,17 @@ const CURATED: MCPCatalogEntry = {
   probed_auth_type: 'none',
 };
 
+/** A row as marketplace connect would have written it for {@link CURATED}. */
+function installOf(overrides: Record<string, unknown> = {}) {
+  return {
+    mcp_server_id: 'server-existing',
+    catalog_entry_name: LINEAR,
+    transport: 'http',
+    url: 'https://mcp.linear.app/mcp',
+    ...overrides,
+  };
+}
+
 function buildApp(entry: MCPCatalogEntry, existingServers: unknown[] = []) {
   const created: Record<string, unknown[]> = { mcpServers: [], sessions: [], attachments: [] };
   const removed: string[] = [];
@@ -99,10 +110,10 @@ describe('mcp-catalog/connect', () => {
       transport: 'http',
       url: 'https://mcp.linear.app/mcp',
       scope: 'session',
-      catalog_entry_name: LINEAR,
       auth: { type: 'none' },
     });
-    // Ownership is not decided here — the mcp-servers create hook stamps it.
+    // Neither ownership nor provenance is decided here — the mcp-servers
+    // create hook stamps both.
     expect(created.mcpServers[0]).not.toHaveProperty('owner_user_id');
     expect(result.starter_prompt).toBe('List the issues assigned to me this cycle.');
   });
@@ -121,7 +132,7 @@ describe('mcp-catalog/connect', () => {
   });
 
   it('reuses an install rather than creating a second row', async () => {
-    const existing = { mcp_server_id: 'server-existing', catalog_entry_name: LINEAR };
+    const existing = installOf();
     const { app, services, created } = buildApp(CURATED, [existing]);
 
     const result = await createMCPCatalogConnectService(app).create(request, params);
@@ -146,7 +157,7 @@ describe('mcp-catalog/connect', () => {
     };
     expect(republished.catalog_entry_id).not.toBe(CURATED.catalog_entry_id);
 
-    const existing = { mcp_server_id: 'server-existing', catalog_entry_name: LINEAR };
+    const existing = installOf();
     const { app, services, created } = buildApp(republished, [existing]);
 
     const result = await createMCPCatalogConnectService(app).create(
@@ -166,6 +177,76 @@ describe('mcp-catalog/connect', () => {
     expect(created.mcpServers).toHaveLength(0);
     expect(result.reused_existing_server).toBe(true);
     expect(result.mcp_server.mcp_server_id).toBe('server-existing');
+  });
+
+  it('does not reuse a server whose endpoint is not the catalog entry’s', async () => {
+    // Two routes reach this row and reuse cannot tell them apart, so it must
+    // not have to: a member forges the stamp on a server of their own, which
+    // is a string printed on every card in the marketplace; or they install
+    // the entry properly and then patch the `url`, which on their own private
+    // server they are allowed to do. Either way the next connect would hand
+    // the caller an endpoint the catalog never named.
+    const redirected = installOf({
+      mcp_server_id: 'server-redirected',
+      url: 'https://collector.evil.example/mcp',
+    });
+    const { app, created } = buildApp(CURATED, [redirected]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(result.mcp_server.mcp_server_id).not.toBe('server-redirected');
+    expect(created.mcpServers).toHaveLength(1);
+    expect(created.mcpServers[0]).toMatchObject({ url: 'https://mcp.linear.app/mcp' });
+  });
+
+  it('does not reuse an install whose transport no longer matches', async () => {
+    const switched = installOf({ mcp_server_id: 'server-switched', transport: 'sse' });
+    const { app, created } = buildApp(CURATED, [switched]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+  });
+
+  it('reuses an install the owner has renamed, relabelled, or disabled', async () => {
+    // The endpoint is what the catalog fixes. Everything a user can sensibly
+    // adjust about their own install must not cost them the install — a second
+    // row for a benign edit would be a worse bug than the one reuse guards.
+    const tuned = installOf({
+      name: 'my-linear',
+      display_name: 'Linear (work)',
+      description: 'my notes',
+      enabled: false,
+      scope: 'global',
+      headers: { 'X-Trace': '1' },
+      url: 'https://mcp.linear.app/mcp/',
+    });
+    const { app, created } = buildApp(CURATED, [tuned]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(created.mcpServers).toHaveLength(0);
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe('server-existing');
+  });
+
+  it('passes provenance to the mcp-servers service out of band, not in the payload', async () => {
+    // The stamp is not the caller's to submit — see `authorizeMcpServerWrite`.
+    // Connect names the entry it resolved on params the request cannot reach,
+    // so the trusted path is the only one that can produce a stamp.
+    const { app, services, created } = buildApp(CURATED);
+
+    await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(created.mcpServers[0]).not.toHaveProperty('catalog_entry_name');
+    expect(
+      (services['mcp-servers'] as { create: ReturnType<typeof vi.fn> }).create
+    ).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ mcpCatalogInstall: { entry_name: LINEAR } })
+    );
   });
 
   it('refuses an uncurated entry', async () => {
@@ -249,7 +330,7 @@ describe('mcp-catalog/connect', () => {
   });
 
   it('leaves a reused install alone when a later step fails', async () => {
-    const existing = { mcp_server_id: 'server-existing', catalog_entry_name: LINEAR };
+    const existing = installOf();
     const { app, services, removed } = buildApp(CURATED, [existing]);
     (services.sessions as { create: ReturnType<typeof vi.fn> }).create.mockRejectedValue(
       new Error('branch not found')

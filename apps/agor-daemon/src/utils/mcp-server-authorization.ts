@@ -35,12 +35,71 @@ export interface McpServerWriteRequest {
   /** The row being changed or deleted; absent on create. */
   existing?: Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport'>;
   /** The submitted payload; absent on remove. */
-  data?: { transport?: MCPTransport; owner_user_id?: UserID | string | null };
+  data?: {
+    transport?: MCPTransport;
+    owner_user_id?: UserID | string | null;
+    catalog_entry_name?: string;
+  };
 }
 
 export interface McpServerWriteDecision {
   /** The owner to persist, for a create the caller is not free to choose. */
   owner_user_id?: UserID;
+  /** The catalog provenance to persist, which only the install path may name. */
+  catalog_entry_name?: string;
+}
+
+/**
+ * The extra params the marketplace connect service sets on its own
+ * `mcp-servers` create, naming the entry it resolved from the catalog.
+ *
+ * Connect deliberately calls that service with the caller's own params so the
+ * member policy, the transport restriction, and ownership stamping each decide
+ * exactly once — which leaves it indistinguishable from a hand-rolled
+ * `POST /mcp-servers` unless it says so out of band. A request cannot: Feathers
+ * builds external params from the route, query, headers, and authentication,
+ * so a top-level key like this one is only ever set by daemon code.
+ */
+export interface McpCatalogInstallParams {
+  mcpCatalogInstall?: { entry_name: string };
+}
+
+/**
+ * The catalog provenance this write may persist, refusing any the client sent.
+ *
+ * Provenance is a fact about how a row got here, not a field its owner
+ * maintains. The registry name is printed on every card in the marketplace and
+ * marketplace connect reuses an install by matching it, so a stamp anyone may
+ * submit is a claim anyone may forge — a member could present a server aimed
+ * at their own endpoint as the catalog's GitHub entry and have the next
+ * connect hand it to somebody.
+ *
+ * It is refused rather than quietly dropped. No client here round-trips a
+ * fetched server into a write — the UI hydrates its form from one but rebuilds
+ * an explicit payload field by field, and neither it nor the CLI mentions this
+ * field at all — so a stamp arriving from a request is a confused client or a
+ * hostile one, and silence would serve neither. Admins are refused too: this
+ * is not an operator-maintained field.
+ */
+function resolveCatalogProvenance(
+  params: AuthenticatedParams | undefined,
+  request: McpServerWriteRequest
+): string | undefined {
+  // Internal daemon calls and service accounts are trusted by their route and
+  // write the column directly, the way any other server-side field is written.
+  if (!params?.provider) return undefined;
+  if ((params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true) {
+    return undefined;
+  }
+
+  if (request.data?.catalog_entry_name !== undefined) {
+    throw new Forbidden(
+      'MCP server catalog provenance cannot be set by a request; install from the marketplace to record it'
+    );
+  }
+
+  if (request.method !== 'create') return undefined;
+  return (params as McpCatalogInstallParams).mcpCatalogInstall?.entry_name;
 }
 
 /**
@@ -69,9 +128,24 @@ function assertPolicyAllowsWrite(policy: MCPMemberPolicy): void {
  * Decide a single MCP server write.
  *
  * Returns the fields the caller must persist rather than mutating the payload,
- * so a caller cannot accidentally keep a client-supplied owner.
+ * so a caller cannot accidentally keep a client-supplied owner or provenance.
+ *
+ * Policy and ownership are decided first, so a caller who may not write at all
+ * learns that rather than which fields are service-controlled.
  */
 export async function authorizeMcpServerWrite(
+  db: TenantScopeAwareDatabase,
+  params: AuthenticatedParams | undefined,
+  request: McpServerWriteRequest
+): Promise<McpServerWriteDecision> {
+  const decision = await decidePolicyAndOwnership(db, params, request);
+  const catalogEntryName = resolveCatalogProvenance(params, request);
+  return catalogEntryName === undefined
+    ? decision
+    : { ...decision, catalog_entry_name: catalogEntryName };
+}
+
+async function decidePolicyAndOwnership(
   db: TenantScopeAwareDatabase,
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
