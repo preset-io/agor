@@ -7,7 +7,7 @@
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
 import { and, eq, inArray } from 'drizzle-orm';
-import { sanitizeJsonValue, sanitizeUnicodeString } from '../../utils/sanitize-json';
+import { sanitizeJsonValue } from '../../utils/sanitize-json';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -75,7 +75,7 @@ export class MessagesRepository {
       role: message.role,
       index: message.index,
       timestamp: new Date(message.timestamp),
-      content_preview: sanitizeUnicodeString(message.content_preview),
+      content_preview: sanitizeJsonValue(message.content_preview),
       parent_tool_use_id: message.parent_tool_use_id || null,
       data: sanitizeJsonValue({
         content: message.content,

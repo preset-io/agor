@@ -509,6 +509,25 @@ describe('MessagesRepository.update', () => {
     expect(updated.metadata).toEqual({ model: 'claude-3' }); // Preserved
   });
 
+  dbTest('sanitizes all JSON and preview fields on finalization update', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await messages.create(
+      createMessageData({ session_id: sessionId, content: 'Original', metadata: { keep: true } })
+    );
+
+    const updated = await messages.update(created.message_id, {
+      content: [{ type: 'tool_result', content: 'binary\0result' }] as Message['content'],
+      content_preview: 'binary\0preview',
+      tool_uses: [{ id: 'tool-1', name: 'read', input: { 'bad\0key': '\ud800' } }],
+    });
+
+    expect(updated.content).toEqual([{ type: 'tool_result', content: 'binary�result' }]);
+    expect(updated.content_preview).toBe('binary�preview');
+    expect(updated.tool_uses).toEqual([{ id: 'tool-1', name: 'read', input: { 'bad�key': '�' } }]);
+    expect(updated.metadata).toEqual({ keep: true });
+  });
+
   dbTest('should throw error for non-existent message', async ({ db }) => {
     const messages = new MessagesRepository(db);
 

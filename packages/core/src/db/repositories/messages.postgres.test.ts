@@ -88,14 +88,30 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
             type: 'tool_result',
             tool_use_id: 'read-binary',
             content: `updated${actualNul}${loneHighSurrogate}`,
+            provider_payload: { [`bad${actualNul}key`]: `value${loneLowSurrogate}` },
           },
         ] as Message['content'],
         content_preview: `updated${actualNul}`,
+        tool_uses: [
+          {
+            id: 'read-binary',
+            name: 'read',
+            input: { [`path${actualNul}`]: `file${loneHighSurrogate}` },
+          },
+        ],
       });
       expect(finalized.content).toEqual([
-        { type: 'tool_result', tool_use_id: 'read-binary', content: 'updated��' },
+        {
+          type: 'tool_result',
+          tool_use_id: 'read-binary',
+          content: 'updated��',
+          provider_payload: { 'bad�key': 'value�' },
+        },
       ]);
       expect(finalized.content_preview).toBe('updated�');
+      expect(finalized.tool_uses).toEqual([
+        { id: 'read-binary', name: 'read', input: { 'path�': 'file�' } },
+      ]);
       expect(
         (await repository.mutateMetadataLocked(first.message_id, () => ({ value: actualNul })))
           .message.metadata

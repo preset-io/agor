@@ -25,6 +25,7 @@ import type {
 import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
+import { formatExecutorFailure } from '../../safe-executor-error.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -50,6 +51,7 @@ async function appendTaskFailureMessage(
   taskId: TaskID,
   failure: Error
 ): Promise<void> {
+  const safeFailure = formatExecutorFailure(failure);
   try {
     const existingMessages = await client.service('messages').find({
       query: { session_id: sessionId, $limit: 0 },
@@ -69,8 +71,8 @@ async function appendTaskFailureMessage(
       role: MessageRole.SYSTEM,
       index: messageCount,
       timestamp: new Date().toISOString(),
-      content: failure.message,
-      content_preview: failure.message.substring(0, 200),
+      content: safeFailure,
+      content_preview: safeFailure.substring(0, 200),
       metadata: {
         is_task_failure: true,
         ...(failure instanceof MissingCredentialError
@@ -93,7 +95,10 @@ export async function settleTaskFailure(
   // Terminal task hooks may drain the next queued turn, so reserve the current
   // transcript index before publishing terminality. Message failure stays best-effort.
   await appendTaskFailureMessage(client, sessionId, taskId, failure);
-  await client.service('tasks').patch(taskId, patch);
+  await client.service('tasks').patch(taskId, {
+    ...patch,
+    ...(patch.error_message ? { error_message: formatExecutorFailure(failure) } : {}),
+  });
 }
 
 /**
@@ -679,7 +684,7 @@ export async function executeToolTask(params: {
       completed_at: new Date().toISOString(),
       // Surface the actual failure reason so the UI / DB show what went wrong,
       // instead of the task silently flipping to FAILED with no context.
-      error_message: err.message || String(err),
+      error_message: formatExecutorFailure(err),
     };
 
     // Add git_state if we captured a SHA
