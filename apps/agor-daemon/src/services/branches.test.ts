@@ -380,16 +380,35 @@ describe('BranchesService environment start async behavior', () => {
     expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
   });
 
-  it('marks a repeated starting request as a fresh lifecycle boundary', async () => {
+  it('marks a repeated start request as a fresh lifecycle boundary', async () => {
     const { service, branch, lifecycleOptions } = createStartHarness();
+    // Retry after a failed start. Originally this fixture was `starting`, but
+    // startEnvironment now refuses a start while one is already in flight (two
+    // concurrent starts previously spawned two executors, and for a remote
+    // backend that means two billable Codespaces for one branch). `error` is
+    // the realistic repeat-request state and exercises the same thing: the
+    // environment_instance content is unchanged, so only beginLifecycle forces
+    // the write + publish.
     vi.spyOn(service, 'get').mockResolvedValue({
       ...branch,
-      environment_instance: { status: 'starting' },
+      environment_instance: { status: 'error' },
     } as never);
 
     await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
 
     expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
+  });
+
+  it('still refuses a start while one is already in flight', async () => {
+    const { service, branch } = createStartHarness();
+    vi.spyOn(service, 'get').mockResolvedValue({
+      ...branch,
+      environment_instance: { status: 'starting' },
+    } as never);
+
+    await expect(
+      runInTestTenantScope(() => service.startEnvironment(branch.branch_id))
+    ).rejects.toThrow(/already starting/);
   });
 
   it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {
