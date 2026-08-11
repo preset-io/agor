@@ -109,14 +109,19 @@ interface GatewayChannelsTableProps {
   onDelete?: (channelId: string) => void;
 }
 
-const CHANNEL_TYPE_OPTIONS: { value: ChannelType; label: string; icon: React.ReactNode }[] = [
+const CHANNEL_TYPE_OPTIONS: {
+  value: ChannelType;
+  label: string;
+  icon: React.ReactNode;
+  comingSoon?: boolean;
+}[] = [
   { value: 'slack', label: 'Slack', icon: <SlackOutlined /> },
   { value: 'github', label: 'GitHub', icon: <GithubOutlined /> },
   { value: 'teams', label: 'Microsoft Teams', icon: <TeamOutlined /> },
   { value: 'shortcut', label: 'Shortcut', icon: <ThunderboltOutlined /> },
-  { value: 'discord', label: 'Discord', icon: <MessageOutlined /> },
-  { value: 'whatsapp', label: 'WhatsApp', icon: <MessageOutlined /> },
-  { value: 'telegram', label: 'Telegram', icon: <MessageOutlined /> },
+  { value: 'discord', label: 'Discord', icon: <MessageOutlined />, comingSoon: true },
+  { value: 'whatsapp', label: 'WhatsApp', icon: <MessageOutlined />, comingSoon: true },
+  { value: 'telegram', label: 'Telegram', icon: <MessageOutlined />, comingSoon: true },
 ];
 
 function getChannelTypeIcon(type: ChannelType): React.ReactNode {
@@ -1608,10 +1613,11 @@ const ChannelFormFields: React.FC<{
           >
             <Select onChange={(value: ChannelType) => onChannelTypeChange(value)}>
               {CHANNEL_TYPE_OPTIONS.map((opt) => (
-                <Select.Option key={opt.value} value={opt.value}>
+                <Select.Option key={opt.value} value={opt.value} disabled={opt.comingSoon}>
                   <Space>
                     {opt.icon}
                     {opt.label}
+                    {opt.comingSoon && <Tag style={{ marginInlineStart: 4 }}>Coming soon</Tag>}
                   </Space>
                 </Select.Option>
               ))}
