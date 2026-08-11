@@ -738,6 +738,14 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     deployment,
   });
 
+  let releaseTaskAdmission: () => void = () => undefined;
+  const taskAdmissionReady =
+    deployment.mode === 'ha'
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          releaseTaskAdmission = resolve;
+        });
+
   // --------------------------------------------------------------------------
   // Phase 3: Register routes (auth, REST, tier hooks, error handler)
   // --------------------------------------------------------------------------
@@ -768,6 +776,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     sessionMCPServersService: services.sessionMCPServersService,
     sessionEnvSelectionsService: services.sessionEnvSelectionsService,
     terminalsService: services.terminalsService,
+    taskAdmissionReady,
   });
 
   // --------------------------------------------------------------------------
@@ -784,6 +793,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
     distributedWorkIdentity,
+    releaseTaskAdmission,
     // PostgreSQL leases/claims and executor-token authority make the merged
     // runtime workers replica-independent. Agor-managed permission callbacks
     // use the transient task-private realtime control path; unsupported

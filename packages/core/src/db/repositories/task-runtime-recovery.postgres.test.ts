@@ -11,8 +11,8 @@ import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
-import type { GatewayChannelID, TenantID, ThreadSessionMapID, UUID } from '../../types';
-import { TaskStatus } from '../../types';
+import type { GatewayChannelID, MessageID, TenantID, ThreadSessionMapID, UUID } from '../../types';
+import { MessageRole, TaskStatus } from '../../types';
 import { createDatabase, type Database } from '../client';
 import { executeRaw } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
@@ -256,10 +256,49 @@ describe.skipIf(!postgresUrl || !postgresAdminUrl || !usesPostgresSchema)(
       );
       expect(discovered).not.toContain(tenantComplete);
 
+      const routingRefs = await runWithSystemDatabaseScope(
+        db,
+        'test terminal consequence routing discovery',
+        async (systemDb) => {
+          const tasks = new TaskRepository(systemDb);
+          return {
+            consequences: await tasks.findIncompleteTerminalRefs({ limit: 100 }),
+            deliveries: await tasks.findPendingGatewayDeliveryRefs({ limit: 100 }),
+          };
+        },
+        { capability: 'task_runtime_recovery' }
+      );
+      expect(routingRefs.consequences).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ task_id: a.taskId, tenant_id: tenantA }),
+          expect.objectContaining({ task_id: b.taskId, tenant_id: tenantB }),
+        ])
+      );
+      expect(routingRefs.consequences).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ tenant_id: tenantComplete })])
+      );
+      expect(routingRefs.deliveries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ task_id: pending.taskId, tenant_id: tenantPending }),
+        ])
+      );
+      for (const ref of [...routingRefs.consequences, ...routingRefs.deliveries]) {
+        expect(Object.keys(ref).sort()).toEqual(['cursor', 'task_id', 'tenant_id']);
+      }
+
       await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
         const tasks = new TaskRepository(scoped);
         expect(await tasks.findById(a.taskId)).not.toBeNull();
         expect(await tasks.findById(b.taskId)).toBeNull();
+        const tenantRefs = await tasks.findIncompleteTerminalRefs({ limit: 100 });
+        expect(tenantRefs).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ task_id: a.taskId, tenant_id: tenantA }),
+          ])
+        );
+        expect(tenantRefs).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ task_id: b.taskId })])
+        );
 
         await expect(
           tasks.createCompletionCallbackOnce(a.taskId, b.sessionId, {
@@ -268,6 +307,25 @@ describe.skipIf(!postgresUrl || !postgresAdminUrl || !usesPostgresSchema)(
             metadata: { is_agor_callback: true },
           })
         ).rejects.toThrow();
+        await expect(
+          tasks.createBtwResultMessageOnce(a.taskId, b.sessionId, {
+            message_id: generateId() as MessageID,
+            task_id: undefined,
+            type: 'system',
+            role: MessageRole.SYSTEM,
+            timestamp: new Date().toISOString(),
+            content_preview: 'must not cross tenants',
+            content: 'must not cross tenants',
+            metadata: { is_btw_result: true, source: 'agor' },
+          })
+        ).rejects.toThrow();
+        await expect(
+          tasks.claimGatewayTerminalDelivery(b.taskId, {
+            claimToken: 'must-not-cross-tenants',
+            leaseDurationMs: 30_000,
+          })
+        ).rejects.toThrow();
+        expect((await tasks.findById(a.taskId))?.metadata?.btw_result_delivery).toBeUndefined();
 
         expect(await new GatewayChannelRepository(scoped).findById(b.channelId)).toBeNull();
         expect(await new ThreadSessionMapRepository(scoped).findBySession(b.sessionId)).toBeNull();
@@ -290,6 +348,7 @@ describe.skipIf(!postgresUrl || !postgresAdminUrl || !usesPostgresSchema)(
       await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
         const task = await new TaskRepository(scoped).findById(b.taskId);
         expect(task?.metadata?.gateway_terminal_delivery).toBeUndefined();
+        expect(await new SessionRepository(scoped).countMessages(b.sessionId)).toBe(0);
         expect(await new GatewayChannelRepository(scoped).findById(b.channelId)).not.toBeNull();
         expect(
           await new ThreadSessionMapRepository(scoped).findBySession(b.sessionId)

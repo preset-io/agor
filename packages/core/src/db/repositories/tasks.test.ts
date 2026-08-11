@@ -3405,133 +3405,7 @@ describe('TaskRepository.findQueued', () => {
 // Atomic queue claim
 // ============================================================================
 
-describe('TaskRepository.claimNextQueued', () => {
-  dbTest('should return null when no queued tasks for session', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-    const sessionId = await createSessionWithDeps(db);
-    await new SessionRepository(db).update(sessionId, {
-      status: SessionStatus.IDLE,
-      ready_for_prompt: true,
-    });
-
-    const next = await taskRepo.claimNextQueued(sessionId);
-
-    expect(next).toBeNull();
-  });
-
-  dbTest('should return lowest queue_position first', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-    const sessionId = await createSessionWithDeps(db);
-    await new SessionRepository(db).update(sessionId, {
-      status: SessionStatus.IDLE,
-      ready_for_prompt: true,
-    });
-
-    // Insert out of order with manually-set queue_position so we know findRunning
-    // isn't accidentally returning insert-order.
-    await taskRepo.create(
-      createTaskData({
-        session_id: sessionId,
-        status: TaskStatus.QUEUED,
-        queue_position: 3,
-        full_prompt: 'pos 3',
-      })
-    );
-    await taskRepo.create(
-      createTaskData({
-        session_id: sessionId,
-        status: TaskStatus.QUEUED,
-        queue_position: 1,
-        full_prompt: 'pos 1',
-      })
-    );
-    await taskRepo.create(
-      createTaskData({
-        session_id: sessionId,
-        status: TaskStatus.QUEUED,
-        queue_position: 2,
-        full_prompt: 'pos 2',
-      })
-    );
-
-    const next = await taskRepo.claimNextQueued(sessionId);
-
-    expect(next).not.toBeNull();
-    expect(next?.status).toBe(TaskStatus.DISPATCHING);
-    expect(next?.queue_position).toBeUndefined();
-    expect(next?.full_prompt).toBe('pos 1');
-    await expect(new SessionRepository(db).findById(sessionId)).resolves.toMatchObject({
-      status: SessionStatus.RUNNING,
-      ready_for_prompt: false,
-      tasks: [next?.task_id],
-    });
-  });
-
-  dbTest('should not return tasks from other sessions', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-    const sessionA = await createSessionWithDeps(db);
-    const sessionB = await createSessionWithDeps(db);
-    await new SessionRepository(db).update(sessionB, {
-      status: SessionStatus.IDLE,
-      ready_for_prompt: true,
-    });
-
-    await taskRepo.createPending(
-      createPendingInput({ session_id: sessionA, status: TaskStatus.QUEUED })
-    );
-
-    const next = await taskRepo.claimNextQueued(sessionB);
-
-    expect(next).toBeNull();
-  });
-
-  dbTest('should not return non-QUEUED tasks even if queue_position set', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-    const sessionId = await createSessionWithDeps(db);
-    await new SessionRepository(db).update(sessionId, {
-      status: SessionStatus.IDLE,
-      ready_for_prompt: true,
-    });
-
-    // A task that has a queue_position but a non-QUEUED status — e.g. one that
-    // already drained to RUNNING — must not be picked up by claimNextQueued.
-    await taskRepo.create(
-      createTaskData({
-        session_id: sessionId,
-        status: TaskStatus.RUNNING,
-        queue_position: 1,
-      })
-    );
-
-    const next = await taskRepo.claimNextQueued(sessionId);
-
-    expect(next).toBeNull();
-  });
-
-  dbTest('atomically lets only one concurrent drainer claim the lowest task', async ({ db }) => {
-    const sessionId = await createSessionWithDeps(db);
-    const sessions = new SessionRepository(db);
-    const tasks = new TaskRepository(db);
-    await sessions.update(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true });
-    const first = await tasks.createPending(
-      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
-    );
-    await tasks.createPending(
-      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
-    );
-
-    const claims = await Promise.all([
-      tasks.claimNextQueued(sessionId),
-      tasks.claimNextQueued(sessionId),
-    ]);
-
-    expect(claims.filter(Boolean)).toHaveLength(1);
-    expect(claims.find(Boolean)?.task_id).toBe(first.task_id);
-    expect(await tasks.findQueued(sessionId)).toHaveLength(1);
-  });
-});
-
-describe('TaskRepository.findIncompleteTerminalPage', () => {
+describe('TaskRepository terminal consequence discovery', () => {
   dbTest('uses a stable Task-ID cursor without an age cutoff', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -3552,8 +3426,11 @@ describe('TaskRepository.findIncompleteTerminalPage', () => {
       );
     }
 
-    const first = await taskRepo.findIncompleteTerminalPage(undefined, 2);
-    const second = await taskRepo.findIncompleteTerminalPage(first.at(-1)?.task_id, 2);
+    const first = await taskRepo.findIncompleteTerminalRefs({ limit: 2 });
+    const second = await taskRepo.findIncompleteTerminalRefs({
+      limit: 2,
+      after: first.at(-1)?.cursor,
+    });
 
     expect(first.map((task) => task.task_id)).toEqual(taskIds.slice(0, 2));
     expect(second.map((task) => task.task_id)).toEqual(taskIds.slice(2));
@@ -3564,7 +3441,7 @@ describe('TaskRepository.findIncompleteTerminalPage', () => {
     );
     expect(completed.metadata?.terminal_consequences_completed_at).toBe('2026-01-01T00:00:04.000Z');
     expect(
-      (await taskRepo.findIncompleteTerminalPage(undefined, 10)).map((task) => task.task_id)
+      (await taskRepo.findIncompleteTerminalRefs({ limit: 10 })).map((task) => task.task_id)
     ).toEqual(taskIds.slice(1));
   });
 
@@ -3595,17 +3472,25 @@ describe('TaskRepository.findIncompleteTerminalPage', () => {
     });
     await taskRepo.markTerminalConsequencesComplete(task.task_id);
 
-    expect(await taskRepo.findPendingGatewayDeliveryPage()).toHaveLength(1);
+    expect(await taskRepo.findPendingGatewayDeliveryRefs()).toHaveLength(1);
     expect((await taskRepo.findById(task.task_id))?.metadata?.gateway_terminal_delivery).toEqual(
       pending
     );
 
+    const claim = await taskRepo.claimGatewayTerminalDelivery(task.task_id, {
+      claimToken: 'delivery-a',
+      leaseDurationMs: 2_000,
+      now: new Date('2026-01-01T00:00:02.000Z'),
+    });
+    expect(claim.outcome).toBe('claimed');
     await taskRepo.settleGatewayTerminalDelivery(
       task.task_id,
       {
         mapping_id: pending.mapping_id,
         channel_id: pending.channel_id,
         thread_id: pending.thread_id,
+        claim_token: 'delivery-a',
+        now: new Date('2026-01-01T00:00:03.000Z'),
       },
       {
         ...pending,
@@ -3614,7 +3499,157 @@ describe('TaskRepository.findIncompleteTerminalPage', () => {
         reason: 'origin_channel_disabled',
       }
     );
-    expect(await taskRepo.findPendingGatewayDeliveryPage()).toHaveLength(0);
+    expect(await taskRepo.findPendingGatewayDeliveryRefs()).toHaveLength(0);
+  });
+
+  dbTest('rejects expired and stale-token gateway delivery settlement', async ({ db }) => {
+    const tasks = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await tasks.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.COMPLETED,
+        completed_at: '2026-01-01T00:00:00.000Z',
+      })
+    );
+    const pending = {
+      mapping_id: generateId(),
+      channel_id: generateId(),
+      thread_id: 'thread-lease',
+      status: 'pending' as const,
+      intended_at: '2026-01-01T00:00:01.000Z',
+    };
+    await tasks.materializeGatewayTerminalDelivery(task.task_id, pending);
+
+    await expect(
+      tasks.claimGatewayTerminalDelivery(task.task_id, {
+        claimToken: 'delivery-a',
+        leaseDurationMs: 1_000,
+        now: new Date('2026-01-01T00:00:02.000Z'),
+      })
+    ).resolves.toMatchObject({ outcome: 'claimed' });
+    await expect(
+      tasks.claimGatewayTerminalDelivery(task.task_id, {
+        claimToken: 'delivery-b',
+        leaseDurationMs: 1_000,
+        now: new Date('2026-01-01T00:00:02.500Z'),
+      })
+    ).resolves.toMatchObject({ outcome: 'held' });
+    await expect(
+      tasks.renewGatewayTerminalDeliveryClaim(task.task_id, {
+        claimToken: 'delivery-a',
+        leaseDurationMs: 1_000,
+        now: new Date('2026-01-01T00:00:03.000Z'),
+      })
+    ).resolves.toBeNull();
+    await expect(
+      tasks.settleGatewayTerminalDelivery(
+        task.task_id,
+        {
+          ...pending,
+          claim_token: 'delivery-a',
+          now: new Date('2026-01-01T00:00:03.000Z'),
+        },
+        { ...pending, status: 'delivered', delivered_at: '2026-01-01T00:00:03.000Z' }
+      )
+    ).resolves.toMatchObject({ outcome: 'stale' });
+    await expect(tasks.findById(task.task_id)).resolves.toMatchObject({
+      metadata: {
+        gateway_terminal_delivery: {
+          status: 'pending',
+          claim: { claim_token: 'delivery-a' },
+        },
+      },
+    });
+    await expect(
+      tasks.claimGatewayTerminalDelivery(task.task_id, {
+        claimToken: 'delivery-b',
+        leaseDurationMs: 1_000,
+        now: new Date('2026-01-01T00:00:03.000Z'),
+      })
+    ).resolves.toMatchObject({ outcome: 'claimed' });
+
+    const staleSettlement = await tasks.settleGatewayTerminalDelivery(
+      task.task_id,
+      {
+        ...pending,
+        claim_token: 'delivery-a',
+        now: new Date('2026-01-01T00:00:03.100Z'),
+      },
+      { ...pending, status: 'delivered', delivered_at: '2026-01-01T00:00:03.100Z' }
+    );
+    expect(staleSettlement.outcome).toBe('stale');
+    await expect(tasks.findById(task.task_id)).resolves.toMatchObject({
+      metadata: {
+        gateway_terminal_delivery: {
+          status: 'pending',
+          claim: { claim_token: 'delivery-b' },
+        },
+      },
+    });
+    await tasks.settleGatewayTerminalDelivery(
+      task.task_id,
+      {
+        ...pending,
+        claim_token: 'delivery-b',
+        now: new Date('2026-01-01T00:00:03.200Z'),
+      },
+      { ...pending, status: 'delivered', delivered_at: '2026-01-01T00:00:03.200Z' }
+    );
+    await expect(tasks.findById(task.task_id)).resolves.toMatchObject({
+      metadata: { gateway_terminal_delivery: { status: 'delivered' } },
+    });
+  });
+});
+
+describe('TaskRepository.createBtwResultMessageOnce', () => {
+  dbTest('atomically creates one parent Message and source-Task receipt', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const messageRepo = new MessagesRepository(db);
+    const parentSessionId = await createSessionWithDeps(db);
+    const btwSessionId = await createSessionWithDeps(db);
+    const source = await taskRepo.create(
+      createTaskData({
+        session_id: btwSessionId,
+        status: TaskStatus.COMPLETED,
+        completed_at: '2026-01-01T00:00:00.000Z',
+      })
+    );
+    const message = (messageId: MessageID) => ({
+      message_id: messageId,
+      task_id: undefined,
+      type: 'system' as const,
+      role: MessageRole.SYSTEM,
+      timestamp: '2026-01-01T00:00:01.000Z',
+      content_preview: 'BTW result',
+      content: 'Result',
+      metadata: { is_btw_result: true, source: 'agor' as const },
+    });
+
+    const results = await Promise.all([
+      taskRepo.createBtwResultMessageOnce(
+        source.task_id,
+        parentSessionId,
+        message(generateId() as MessageID)
+      ),
+      taskRepo.createBtwResultMessageOnce(
+        source.task_id,
+        parentSessionId,
+        message(generateId() as MessageID)
+      ),
+    ]);
+
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    expect(new Set(results.map((result) => result.message.message_id)).size).toBe(1);
+    await expect(messageRepo.findBySessionId(parentSessionId)).resolves.toHaveLength(1);
+    await expect(taskRepo.findById(source.task_id)).resolves.toMatchObject({
+      metadata: {
+        btw_result_delivery: {
+          parent_session_id: parentSessionId,
+          message_id: results[0]!.message.message_id,
+        },
+      },
+    });
   });
 });
 

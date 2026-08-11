@@ -18,11 +18,133 @@ import {
   type StartupContext,
   shouldContainLocalExecutorsOnShutdown,
   shouldReconnectSocketClientsOnShutdown,
+  startTaskWorkersAfterRecovery,
 } from './startup.js';
 import * as terminationCoordinator from './termination-coordinator.js';
 import * as systemMessages from './utils/append-system-message.js';
 
 afterEach(() => vi.restoreAllMocks());
+
+describe('Task worker startup ordering', () => {
+  it('keeps queue and direct admission fenced until recovery and the immediate scan succeed', async () => {
+    let finishRecovery!: () => void;
+    let finishScan!: () => void;
+    const recover = vi.fn(() => new Promise<void>((resolve) => (finishRecovery = resolve)));
+    const checkOnce = vi.fn(
+      () =>
+        new Promise<{ failures: number }>((resolve) => {
+          finishScan = () => resolve({ failures: 0 });
+        })
+    );
+    const start = vi.fn();
+    const startQueueWorker = vi.fn();
+    const releaseTaskAdmission = vi.fn();
+
+    const startup = startTaskWorkersAfterRecovery({
+      recover,
+      reconciler: { checkOnce, start } as never,
+      startQueueWorker,
+      releaseTaskAdmission,
+    });
+    expect(checkOnce).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(startQueueWorker).not.toHaveBeenCalled();
+    expect(releaseTaskAdmission).not.toHaveBeenCalled();
+
+    finishRecovery();
+    await vi.waitFor(() => expect(checkOnce).toHaveBeenCalledOnce());
+    expect(checkOnce).toHaveBeenCalledWith({ suppressTerminalQueueProcessing: true });
+    expect(start).not.toHaveBeenCalled();
+    expect(startQueueWorker).not.toHaveBeenCalled();
+    expect(releaseTaskAdmission).not.toHaveBeenCalled();
+
+    finishScan();
+    await startup;
+    expect(start).toHaveBeenCalledWith();
+    expect(startQueueWorker).toHaveBeenCalledOnce();
+    expect(releaseTaskAdmission).toHaveBeenCalledOnce();
+  });
+
+  it.each(['returned failure', 'thrown failure'] as const)(
+    'keeps admission fenced and gives %s retry to the recurring reconciler',
+    async (failure) => {
+      const checkOnce = vi.fn(async () => {
+        if (failure === 'thrown failure') throw new Error('scan failed');
+        return { failures: 1 };
+      });
+      const start = vi.fn();
+      const startQueueWorker = vi.fn();
+      const releaseTaskAdmission = vi.fn();
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await startTaskWorkersAfterRecovery({
+        recover: vi.fn(async () => undefined),
+        reconciler: { checkOnce, start } as never,
+        startQueueWorker,
+        releaseTaskAdmission,
+      });
+
+      expect(startQueueWorker).not.toHaveBeenCalled();
+      expect(releaseTaskAdmission).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          suppressTerminalQueueProcessingUntilSuccess: true,
+          onSuccessfulScan: expect.any(Function),
+        })
+      );
+      const retry = start.mock.calls[0]?.[0] as { onSuccessfulScan(): void };
+      retry.onSuccessfulScan();
+      expect(startQueueWorker).toHaveBeenCalledOnce();
+      expect(releaseTaskAdmission).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('keeps queue and direct admission fenced after a failure-free full page', async () => {
+    const start = vi.fn();
+    const startQueueWorker = vi.fn();
+    const releaseTaskAdmission = vi.fn();
+
+    await startTaskWorkersAfterRecovery({
+      recover: vi.fn(async () => undefined),
+      reconciler: {
+        checkOnce: vi.fn(async () => ({ failures: 0, saturated: true })),
+        start,
+      } as never,
+      startQueueWorker,
+      releaseTaskAdmission,
+    });
+
+    expect(startQueueWorker).not.toHaveBeenCalled();
+    expect(releaseTaskAdmission).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suppressTerminalQueueProcessingUntilSuccess: true,
+        onSuccessfulScan: expect.any(Function),
+        preserveDiscoveryCursors: true,
+      })
+    );
+  });
+
+  it('keeps every task worker fenced when ordered recovery fails', async () => {
+    const start = vi.fn();
+    const startQueueWorker = vi.fn();
+    const releaseTaskAdmission = vi.fn();
+
+    await expect(
+      startTaskWorkersAfterRecovery({
+        recover: vi.fn(async () => {
+          throw new Error('recovery failed');
+        }),
+        reconciler: { checkOnce: vi.fn(), start } as never,
+        startQueueWorker,
+        releaseTaskAdmission,
+      })
+    ).rejects.toThrow('recovery failed');
+    expect(start).not.toHaveBeenCalled();
+    expect(startQueueWorker).not.toHaveBeenCalled();
+    expect(releaseTaskAdmission).not.toHaveBeenCalled();
+  });
+});
 
 interface StartupFixtures {
   orphanedTasks?: Task[];
@@ -73,7 +195,6 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
       task: (fixtures.orphanedTasks ?? []).find((task) => task.task_id === input.taskId),
     })),
     reconcileSessionState: vi.fn(),
-    repairTerminalConsequences: vi.fn(),
   };
   const sessionsService = {
     find: vi.fn(
@@ -102,9 +223,6 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     }),
     patch: vi.fn(),
   };
-  const gatewayService = {
-    repairPendingTerminalDeliveries: vi.fn(),
-  };
   tasksService.reconcileSessionState.mockImplementation(async (id: string, params: unknown) => {
     await sessionsService.patch(id, { ready_for_prompt: true }, params);
     return fixtures.sessionsById?.[id] ?? makeSession({ session_id: id, ready_for_prompt: true });
@@ -112,7 +230,6 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
   const services = new Map<string, unknown>([
     ['tasks', tasksService],
     ['sessions', sessionsService],
-    ['gateway', gatewayService],
   ]);
   const app = {
     service: vi.fn((name: string) => services.get(name)),
@@ -139,7 +256,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     environmentHealthMonitorPolicy: 'standalone',
   } as unknown as StartupContext;
 
-  return { ctx, baseDb, tasksService, sessionsService, gatewayService };
+  return { ctx, baseDb, tasksService, sessionsService };
 }
 
 type TaskOverrides = Omit<Partial<Task>, 'task_id' | 'session_id'> & {
@@ -398,7 +515,7 @@ describe('startup tenant database scope', () => {
       status: SessionStatus.RUNNING,
       tasks: [task.task_id] as never,
     });
-    const { ctx, tasksService, gatewayService } = makeStartupContextWithGuardedDb({
+    const { ctx } = makeStartupContextWithGuardedDb({
       orphanedTasks: [task],
       sessionsById: { [session.session_id]: session },
     });
@@ -430,13 +547,6 @@ describe('startup tenant database scope', () => {
     const appendNotice = vi
       .spyOn(systemMessages, 'appendSystemMessage')
       .mockResolvedValue({ index: 0 } as never);
-    tasksService.repairTerminalConsequences.mockImplementation(async () => {
-      order.push('repair');
-    });
-    gatewayService.repairPendingTerminalDeliveries.mockImplementation(async () => {
-      expect(getCurrentTenantId()).toBe('startup-tenant');
-      order.push('gateway-repair');
-    });
 
     const recovery = resumeRuntimeRecovery(ctx, {
       wasGraceful: false,
@@ -452,13 +562,7 @@ describe('startup tenant database scope', () => {
     finishContainment();
     await recovery;
 
-    expect(order).toEqual([
-      'containment-start',
-      'containment-end',
-      'notice',
-      'repair',
-      'gateway-repair',
-    ]);
+    expect(order).toEqual(['containment-start', 'containment-end', 'notice']);
     expect(appendNotice).toHaveBeenCalledOnce();
     expect(containment).toHaveBeenCalledOnce();
     expect(countMessages).toHaveBeenCalledOnce();
@@ -466,7 +570,7 @@ describe('startup tenant database scope', () => {
 
   it('continues restart repair when one containment attempt fails', async () => {
     const task = makeTask({});
-    const { ctx, tasksService } = makeStartupContextWithGuardedDb({ orphanedTasks: [task] });
+    const { ctx } = makeStartupContextWithGuardedDb({ orphanedTasks: [task] });
     vi.spyOn(terminationCoordinator, 'requestExecutorTermination').mockRejectedValue(
       new Error('transient containment failure')
     );
@@ -484,8 +588,6 @@ describe('startup tenant database scope', () => {
         },
       ],
     } as unknown as Awaited<ReturnType<typeof cleanupOrphanStatuses>>);
-
-    expect(tasksService.repairTerminalConsequences).toHaveBeenCalledOnce();
   });
 });
 

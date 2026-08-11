@@ -16,15 +16,21 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { AuthenticatedParams, Task, TenantID } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import type { Application, TasksServiceImpl } from '../declarations.js';
 import { getTrackedExecutor } from '../executor-tracking.js';
 import { requestExecutorTermination } from '../termination-coordinator.js';
+import type { GatewayService } from './gateway.js';
 
 export const EXECUTOR_HEARTBEAT_LOST_MESSAGE =
   'Executor heartbeat lost; the executor may have crashed or disconnected.';
 
-type RuntimeCandidateKind = 'dispatch_timeout' | 'heartbeat_stale' | 'termination_stranded';
+type RuntimeCandidateKind =
+  | 'dispatch_timeout'
+  | 'heartbeat_stale'
+  | 'termination_stranded'
+  | 'terminal_consequence'
+  | 'gateway_delivery';
 
 interface RuntimeCandidate extends TaskRuntimeDiscoveryRef {
   kind: RuntimeCandidateKind;
@@ -53,9 +59,18 @@ export interface TaskRuntimeReconcileStats {
   dispatchCandidates: number;
   heartbeatCandidates: number;
   terminationCandidates: number;
+  consequenceCandidates: number;
+  gatewayCandidates: number;
   processed: number;
   failures: number;
   saturated: boolean;
+}
+
+export interface TaskRuntimeReconcilerStartOptions {
+  suppressTerminalQueueProcessingUntilSuccess?: boolean;
+  onSuccessfulScan?: () => void;
+  /** Continue a failure-free saturated startup scan from its advanced cursors. */
+  preserveDiscoveryCursors?: boolean;
 }
 
 const DEFAULT_SCAN_BATCH_SIZE = 25;
@@ -81,6 +96,7 @@ export class TaskRuntimeReconciler {
   private running = false;
   private stopped = true;
   private idleRounds = 0;
+  private startupScan?: TaskRuntimeReconcilerStartOptions;
   private readonly scanBatchSize: number;
   private readonly tickIntervalMs: number;
   private readonly random: () => number;
@@ -97,8 +113,10 @@ export class TaskRuntimeReconciler {
     this.random = options.random ?? Math.random;
   }
 
-  start(): void {
+  start(options: TaskRuntimeReconcilerStartOptions = {}): void {
     if (!this.stopped) return;
+    this.startupScan = options.onSuccessfulScan ? options : undefined;
+    if (this.startupScan && !options.preserveDiscoveryCursors) this.resetDiscoveryCursors();
     this.stopped = false;
     const delay = initialWorkOffset(
       this.options.startupOffsetMaxMs ?? DEFAULT_STARTUP_OFFSET_MAX_MS,
@@ -109,6 +127,7 @@ export class TaskRuntimeReconciler {
 
   stop(): void {
     this.stopped = true;
+    this.startupScan = undefined;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
@@ -122,9 +141,25 @@ export class TaskRuntimeReconciler {
     this.timer.unref?.();
   }
 
+  private resetDiscoveryCursors(): void {
+    for (const kind of Object.keys(this.discoveryCursors) as RuntimeCandidateKind[]) {
+      delete this.discoveryCursors[kind];
+    }
+  }
+
   private async runLoopIteration(): Promise<void> {
-    const stats = await this.checkOnce();
+    const startupScan = this.startupScan;
+    const stats = await this.checkOnce({
+      suppressTerminalQueueProcessing:
+        startupScan?.suppressTerminalQueueProcessingUntilSuccess === true,
+    });
     if (this.stopped) return;
+    if (startupScan) {
+      if (stats.failures === 0 && !stats.saturated) {
+        this.startupScan = undefined;
+        startupScan.onSuccessfulScan?.();
+      } else if (stats.failures > 0) this.resetDiscoveryCursors();
+    }
     let delay: number;
     if (stats.saturated) {
       this.idleRounds = 0;
@@ -147,67 +182,111 @@ export class TaskRuntimeReconciler {
     this.schedule(delay);
   }
 
-  private async discoverCandidates(): Promise<RuntimeCandidate[]> {
-    const discover = async (tenantId?: TenantID | string) => {
-      const repo = new TaskRepository(this.options.db);
-      const now = this.options.now?.();
-      const discoveryOptions = (kind: RuntimeCandidateKind) => ({
-        limit: this.scanBatchSize,
-        ...(this.discoveryCursors[kind] ? { after: this.discoveryCursors[kind] } : {}),
-        ...(now ? { now } : {}),
-      });
-      const advanceCursor = (kind: RuntimeCandidateKind, refs: TaskRuntimeDiscoveryRef[]): void => {
-        const last = refs.at(-1);
-        if (last) this.discoveryCursors[kind] = last.cursor;
-        else delete this.discoveryCursors[kind];
-      };
-      // Keep the routing transaction short and issue queries sequentially.
-      // postgres.js does not permit concurrent queries on one transaction
-      // connection, and these scans deliberately do not lock candidate rows.
-      const dispatch = await repo.findExpiredDispatchRefs(
-        this.options.dispatchConnectTimeoutMs ?? 5 * 60_000,
-        discoveryOptions('dispatch_timeout')
-      );
-      advanceCursor('dispatch_timeout', dispatch);
-      const heartbeat = this.options.config.enabled
-        ? await repo.findStaleHeartbeatRefs(
-            this.options.config.stale_after_ms,
-            discoveryOptions('heartbeat_stale')
-          )
-        : [];
-      advanceCursor('heartbeat_stale', heartbeat);
-      const termination = await repo.findStrandedTerminationRefs(
-        discoveryOptions('termination_stranded')
-      );
-      advanceCursor('termination_stranded', termination);
-      const withTenant = (ref: TaskRuntimeDiscoveryRef): TaskRuntimeDiscoveryRef => ({
-        ...ref,
-        ...(tenantId ? { tenant_id: tenantId } : {}),
-      });
-      return [
-        ...dispatch.map((ref) => ({ ...withTenant(ref), kind: 'dispatch_timeout' as const })),
-        ...heartbeat.map((ref) => ({ ...withTenant(ref), kind: 'heartbeat_stale' as const })),
-        ...termination.map((ref) => ({
-          ...withTenant(ref),
-          kind: 'termination_stranded' as const,
-        })),
-      ];
+  private async discoverRuntimeCandidates(
+    tenantId?: TenantID | string
+  ): Promise<RuntimeCandidate[]> {
+    const repo = new TaskRepository(this.options.db);
+    const now = this.options.now?.();
+    const discoveryOptions = (kind: RuntimeCandidateKind) => ({
+      limit: this.scanBatchSize,
+      ...(this.discoveryCursors[kind] ? { after: this.discoveryCursors[kind] } : {}),
+      ...(now ? { now } : {}),
+    });
+    const advanceCursor = (kind: RuntimeCandidateKind, refs: TaskRuntimeDiscoveryRef[]): void => {
+      const last = refs.at(-1);
+      if (last) this.discoveryCursors[kind] = last.cursor;
+      else delete this.discoveryCursors[kind];
     };
-
-    if (this.options.tenantId) {
-      return runWithTenantDatabaseScope(this.options.db, this.options.tenantId, () =>
-        discover(this.options.tenantId)
-      );
-    }
-    return runWithSystemDatabaseScope(
-      this.options.db,
-      'task runtime reconciliation discovery',
-      () => discover(),
-      { capability: 'task_runtime_discovery' }
+    // Keep the routing transaction short and issue queries sequentially.
+    // postgres.js does not permit concurrent queries on one transaction
+    // connection, and these scans deliberately do not lock candidate rows.
+    const dispatch = await repo.findExpiredDispatchRefs(
+      this.options.dispatchConnectTimeoutMs ?? 5 * 60_000,
+      discoveryOptions('dispatch_timeout')
     );
+    advanceCursor('dispatch_timeout', dispatch);
+    const heartbeat = this.options.config.enabled
+      ? await repo.findStaleHeartbeatRefs(
+          this.options.config.stale_after_ms,
+          discoveryOptions('heartbeat_stale')
+        )
+      : [];
+    advanceCursor('heartbeat_stale', heartbeat);
+    const termination = await repo.findStrandedTerminationRefs(
+      discoveryOptions('termination_stranded')
+    );
+    advanceCursor('termination_stranded', termination);
+    const withTenant = (ref: TaskRuntimeDiscoveryRef): TaskRuntimeDiscoveryRef => ({
+      ...ref,
+      ...(tenantId ? { tenant_id: tenantId } : {}),
+    });
+    return [
+      ...dispatch.map((ref) => ({ ...withTenant(ref), kind: 'dispatch_timeout' as const })),
+      ...heartbeat.map((ref) => ({ ...withTenant(ref), kind: 'heartbeat_stale' as const })),
+      ...termination.map((ref) => ({
+        ...withTenant(ref),
+        kind: 'termination_stranded' as const,
+      })),
+    ];
   }
 
-  private async processCandidate(candidate: RuntimeCandidate): Promise<boolean> {
+  private async discoverConsequenceCandidates(
+    tenantId?: TenantID | string
+  ): Promise<RuntimeCandidate[]> {
+    const repo = new TaskRepository(this.options.db);
+    const discover = async (
+      kind: Extract<RuntimeCandidateKind, 'terminal_consequence' | 'gateway_delivery'>
+    ) => {
+      const refs =
+        kind === 'terminal_consequence'
+          ? await repo.findIncompleteTerminalRefs({
+              limit: this.scanBatchSize,
+              ...(this.discoveryCursors[kind] ? { after: this.discoveryCursors[kind] } : {}),
+            })
+          : await repo.findPendingGatewayDeliveryRefs({
+              limit: this.scanBatchSize,
+              ...(this.discoveryCursors[kind] ? { after: this.discoveryCursors[kind] } : {}),
+            });
+      const last = refs.at(-1);
+      if (last) this.discoveryCursors[kind] = last.cursor;
+      else delete this.discoveryCursors[kind];
+      return refs.map((ref: TaskRuntimeDiscoveryRef) => ({
+        ...ref,
+        ...(tenantId ? { tenant_id: tenantId } : {}),
+        kind,
+      }));
+    };
+    // Keep each system transaction short and sequential.
+    return [...(await discover('terminal_consequence')), ...(await discover('gateway_delivery'))];
+  }
+
+  private async discoverCandidates(): Promise<RuntimeCandidate[]> {
+    if (this.options.tenantId) {
+      return runWithTenantDatabaseScope(this.options.db, this.options.tenantId, async () => {
+        const runtime = await this.discoverRuntimeCandidates(this.options.tenantId);
+        const consequences = await this.discoverConsequenceCandidates(this.options.tenantId);
+        return [...runtime, ...consequences];
+      });
+    }
+    const runtime = await runWithSystemDatabaseScope(
+      this.options.db,
+      'task runtime reconciliation discovery',
+      () => this.discoverRuntimeCandidates(),
+      { capability: 'task_runtime_discovery' }
+    );
+    const consequences = await runWithSystemDatabaseScope(
+      this.options.db,
+      'task terminal consequence discovery',
+      () => this.discoverConsequenceCandidates(),
+      { capability: 'task_runtime_recovery' }
+    );
+    return [...runtime, ...consequences];
+  }
+
+  private async processCandidate(
+    candidate: RuntimeCandidate,
+    suppressTerminalQueueProcessing = false
+  ): Promise<boolean> {
     const tenantId = candidate.tenant_id ?? this.options.tenantId;
     if (!tenantId) throw new Error(`Task ${candidate.task_id} discovery omitted tenant routing`);
     return runWithTenantContext(tenantId, async () => {
@@ -223,6 +302,27 @@ export class TaskRuntimeReconciler {
           return this.reconcileStaleHeartbeat(task, candidate, params);
         case 'termination_stranded':
           return this.reconcileStrandedTermination(task, params);
+        case 'terminal_consequence':
+          if (!isTerminalTaskStatus(task.status)) return false;
+          await tasks.reconcileTerminalTask(task, task.status, {
+            ...params,
+            repairTerminalConsequences: true,
+            ...(suppressTerminalQueueProcessing ? { suppressTerminalQueueProcessing: true } : {}),
+          });
+          return true;
+        case 'gateway_delivery':
+          await (
+            this.options.app.service('gateway') as unknown as GatewayService
+          ).deliverTerminalTask({
+            session_id: task.session_id,
+            task_id: task.task_id,
+            state:
+              task.status === TaskStatus.FAILED || task.status === TaskStatus.TIMED_OUT
+                ? 'failed'
+                : 'done',
+            ...(task.error_message ? { error_message: task.error_message } : {}),
+          });
+          return true;
       }
     });
   }
@@ -343,13 +443,17 @@ export class TaskRuntimeReconciler {
     return result.status !== 'condition_changed';
   }
 
-  async checkOnce(): Promise<TaskRuntimeReconcileStats> {
+  async checkOnce(
+    options: { suppressTerminalQueueProcessing?: boolean } = {}
+  ): Promise<TaskRuntimeReconcileStats> {
     if (this.running) {
       return {
         candidates: 0,
         dispatchCandidates: 0,
         heartbeatCandidates: 0,
         terminationCandidates: 0,
+        consequenceCandidates: 0,
+        gatewayCandidates: 0,
         processed: 0,
         failures: 0,
         saturated: false,
@@ -361,6 +465,8 @@ export class TaskRuntimeReconciler {
       dispatchCandidates: 0,
       heartbeatCandidates: 0,
       terminationCandidates: 0,
+      consequenceCandidates: 0,
+      gatewayCandidates: 0,
       processed: 0,
       failures: 0,
       saturated: false,
@@ -373,14 +479,24 @@ export class TaskRuntimeReconciler {
       stats.terminationCandidates = candidates.filter(
         (c) => c.kind === 'termination_stranded'
       ).length;
+      stats.consequenceCandidates = candidates.filter(
+        (c) => c.kind === 'terminal_consequence'
+      ).length;
+      stats.gatewayCandidates = candidates.filter((c) => c.kind === 'gateway_delivery').length;
       stats.saturated =
         stats.dispatchCandidates >= this.scanBatchSize ||
         stats.heartbeatCandidates >= this.scanBatchSize ||
-        stats.terminationCandidates >= this.scanBatchSize;
+        stats.terminationCandidates >= this.scanBatchSize ||
+        stats.consequenceCandidates >= this.scanBatchSize ||
+        stats.gatewayCandidates >= this.scanBatchSize;
 
       for (const candidate of candidates) {
         try {
-          if (await this.processCandidate(candidate)) stats.processed += 1;
+          if (
+            await this.processCandidate(candidate, options.suppressTerminalQueueProcessing === true)
+          ) {
+            stats.processed += 1;
+          }
         } catch (error) {
           stats.failures += 1;
           console.warn(

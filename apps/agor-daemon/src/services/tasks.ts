@@ -20,6 +20,7 @@ import {
   bindRepositoryToTenantUnitOfWork,
   type ExecutorOutcomeSettlementResult,
   enqueueTenantDatabasePostCommitCallback,
+  generateId,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   shortId,
@@ -40,6 +41,7 @@ import type {
   ContentBlock,
   ExecutorSettlementInput,
   ExecutorTerminationCompleteInput,
+  MessageID,
   Paginated,
   QueryParams,
   RuntimeTelemetryInput,
@@ -58,6 +60,7 @@ import {
   ExecutorSettlementInputSchema,
   isTaskExecuting,
   isTerminalTaskStatus,
+  MessageRole,
   SDK_WATCHDOG_FAILURE_REASONS,
   SessionStatus,
   TaskStatus,
@@ -68,7 +71,6 @@ import {
   requestExecutorTermination,
   type TerminationInput,
 } from '../termination-coordinator.js';
-import { appendSystemMessage } from '../utils/append-system-message.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
   type ExecutorHeartbeatCallbackPayload,
@@ -690,33 +692,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       ) as Promise<Session>;
   }
 
-  async repairTerminalConsequences(pageSize = 100, params?: TaskParams): Promise<void> {
-    let cursor: string | undefined;
-    let firstFailure: unknown;
-    while (true) {
-      const page = await this.taskRepo.findIncompleteTerminalPage(cursor, pageSize);
-      for (const task of page) {
-        try {
-          await this.reconcileTerminalTask(task, task.status, {
-            ...(params ?? {}),
-            repairTerminalConsequences: true,
-          });
-        } catch (error) {
-          firstFailure ??= error;
-          console.warn(
-            `[TasksService] Terminal consequence repair remains incomplete for ${shortId(task.task_id)}:`,
-            error
-          );
-        }
-      }
-      if (page.length < pageSize) {
-        if (firstFailure) throw firstFailure;
-        return;
-      }
-      cursor = page.at(-1)?.task_id;
-    }
-  }
-
   private async materializeTerminalConsequences(
     task: Task,
     status: Task['status'],
@@ -790,7 +765,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const latestTaskId = session.tasks?.[session.tasks.length - 1];
     const suppressBtwCleanup = params?.suppressBtwCleanup === true;
     const isStop = status === TaskStatus.STOPPED;
-    const isTermination = task.termination_request !== undefined;
+    const isForcedTermination =
+      !!task.termination_request && task.termination_request.cause !== 'runtime_settlement';
 
     if (latestTaskId && latestTaskId !== task.task_id) {
       console.log(
@@ -825,23 +801,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       await this.autoTitleSession(task, params);
     }
 
-    if (!repairOnly && session.fork_origin === 'btw') {
-      if (!suppressBtwCleanup) {
-        try {
-          await this.app.service('sessions').patch(session.session_id, {
-            archived: true,
-            archived_reason: 'btw_completed',
-          });
-          console.log(
-            `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
-          );
-        } catch (error) {
-          console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
-        }
-      }
-
-      if (!isStop && !isTermination) {
+    if (session.fork_origin === 'btw') {
+      if (!isStop && !isForcedTermination) {
         await this.injectBtwResultMessage(task, session, params);
+      }
+      if (!suppressBtwCleanup) {
+        await this.app
+          .service('sessions')
+          .patch(session.session_id, { archived: true, archived_reason: 'btw_completed' }, params);
+        console.log(
+          `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
+        );
       }
     }
 
@@ -905,109 +875,111 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   private async injectBtwResultMessage(
     task: Task,
     btwSession: Session,
-    _params?: TaskParams
+    params?: TaskParams
   ): Promise<void> {
     const parentSessionId = btwSession.genealogy?.forked_from_session_id;
     if (!parentSessionId) return;
+    const latestTask = (await this.taskRepo.findById(task.task_id)) ?? task;
+    if (latestTask.metadata?.btw_result_delivery?.parent_session_id === parentSessionId) {
+      console.log(
+        `⏭️  [TasksService] BTW result for task ${shortId(task.task_id)} already delivered`
+      );
+      return;
+    }
 
-    try {
-      const latestTask = (await this.taskRepo.findById(task.task_id)) ?? task;
-      if (latestTask.metadata?.btw_result_delivery?.parent_session_id === parentSessionId) {
-        console.log(
-          `⏭️  [TasksService] BTW result for task ${shortId(task.task_id)} already delivered`
-        );
-        return;
-      }
+    const messagesService = this.app.service('messages');
 
-      const messagesService = this.app.service('messages');
+    // Fetch all messages from the btw fork's task to extract prompt + response
+    const messagesResult = await messagesService.find({
+      query: {
+        session_id: btwSession.session_id,
+        task_id: task.task_id,
+      },
+    });
 
-      // Fetch all messages from the btw fork's task to extract prompt + response
-      const messagesResult = await messagesService.find({
-        query: {
-          session_id: btwSession.session_id,
-          task_id: task.task_id,
-        },
-      });
+    const allMessages = messagesResult.data || messagesResult;
+    const messageList = Array.isArray(allMessages) ? allMessages : [];
 
-      const allMessages = messagesResult.data || messagesResult;
-      const messageList = Array.isArray(allMessages) ? allMessages : [];
-
-      // Extract the original prompt (first user message or task description)
-      // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-      const userMessages = messageList.filter((msg: any) => msg.role === 'user');
-      let promptText = '';
-      if (userMessages.length > 0) {
-        const firstUser = userMessages[0];
-        promptText =
-          typeof firstUser.content === 'string'
+    // Extract the original prompt (first user message or task description)
+    // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
+    const userMessages = messageList.filter((msg: any) => msg.role === 'user');
+    let promptText = '';
+    if (userMessages.length > 0) {
+      const firstUser = userMessages[0];
+      promptText =
+        typeof firstUser.content === 'string'
+          ? firstUser.content
+          : Array.isArray(firstUser.content)
             ? firstUser.content
-            : Array.isArray(firstUser.content)
-              ? firstUser.content
-                  // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
-                  .filter((b: any) => b.type === 'text')
-                  // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
-                  .map((b: any) => b.text || '')
-                  .join('\n\n')
-              : '';
-      }
-      if (!promptText) {
-        promptText = task.full_prompt?.substring(0, 120) || btwSession.title || '(no prompt)';
-      }
+                // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
+                .filter((b: any) => b.type === 'text')
+                // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
+                .map((b: any) => b.text || '')
+                .join('\n\n')
+            : '';
+    }
+    if (!promptText) {
+      promptText = task.full_prompt?.substring(0, 120) || btwSession.title || '(no prompt)';
+    }
 
-      // Extract the last assistant response
-      const assistantMessages = messageList
-        // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-        .filter((msg: any) => msg.role === 'assistant')
-        // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-        .sort((a: any, b: any) => (b.index || 0) - (a.index || 0));
+    // Extract the last assistant response
+    const assistantMessages = messageList
+      // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
+      .filter((msg: any) => msg.role === 'assistant')
+      // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
+      .sort((a: any, b: any) => (b.index || 0) - (a.index || 0));
 
-      let responseText = '';
-      if (assistantMessages.length > 0) {
-        const lastMsg = assistantMessages[0];
-        responseText =
-          typeof lastMsg.content === 'string'
+    let responseText = '';
+    if (assistantMessages.length > 0) {
+      const lastMsg = assistantMessages[0];
+      responseText =
+        typeof lastMsg.content === 'string'
+          ? lastMsg.content
+          : Array.isArray(lastMsg.content)
             ? lastMsg.content
-            : Array.isArray(lastMsg.content)
-              ? lastMsg.content
-                  // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
-                  .filter((block: any) => block.type === 'text')
-                  // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
-                  .map((block: any) => block.text || '')
-                  .join('\n\n')
-              : '';
+                // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
+                .filter((block: any) => block.type === 'text')
+                // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
+                .map((block: any) => block.text || '')
+                .join('\n\n')
+            : '';
+    }
+
+    if (!responseText) {
+      responseText = `(btw fork completed with status: ${task.status}, but no text response was found)`;
+    }
+
+    // Find the parent's current running task to attach the message to
+    const parentSession = await this.app.service('sessions').get(parentSessionId, params);
+    const parentLatestTaskId = parentSession.tasks?.[parentSession.tasks.length - 1];
+
+    // For remote btw, fetch the caller session's title
+    const callerSessionId = btwSession.callback_config?.callback_session_id;
+    let callerTitle: string | undefined;
+    if (callerSessionId) {
+      try {
+        const callerSession = await this.app.service('sessions').get(callerSessionId, params);
+        callerTitle = callerSession.title;
+      } catch {
+        // Caller session may have been deleted — not critical
       }
+    }
 
-      if (!responseText) {
-        responseText = `(btw fork completed with status: ${task.status}, but no text response was found)`;
-      }
+    // Build preview from prompt + response
+    const previewText = `Q: ${promptText.substring(0, 80)} → A: ${responseText.substring(0, 100)}`;
 
-      // Find the parent's current running task to attach the message to
-      const parentSession = await this.app.service('sessions').get(parentSessionId);
-      const parentLatestTaskId = parentSession.tasks?.[parentSession.tasks.length - 1];
-
-      // For remote btw, fetch the caller session's title
-      const callerSessionId = btwSession.callback_config?.callback_session_id;
-      let callerTitle: string | undefined;
-      if (callerSessionId) {
-        try {
-          const callerSession = await this.app.service('sessions').get(callerSessionId);
-          callerTitle = callerSession.title;
-        } catch {
-          // Caller session may have been deleted — not critical
-        }
-      }
-
-      // Build preview from prompt + response
-      const previewText = `Q: ${promptText.substring(0, 80)} → A: ${responseText.substring(0, 100)}`;
-
-      // Create via service so FeathersJS broadcasts the `created` event to all clients
-      const delivered = await appendSystemMessage({
-        app: this.app,
-        db: this.db,
-        sessionId: parentSessionId,
-        taskId: parentLatestTaskId as string | undefined,
+    const timestamp = new Date().toISOString();
+    const delivered = await this.taskRepo.createBtwResultMessageOnce(
+      task.task_id,
+      parentSessionId,
+      {
+        message_id: generateId() as MessageID,
+        task_id: parentLatestTaskId as TaskID | undefined,
+        type: 'system',
+        role: MessageRole.SYSTEM,
+        timestamp,
         content: [{ type: 'text', text: responseText } as ContentBlock],
-        contentPreview: previewText.substring(0, 200),
+        content_preview: previewText.substring(0, 200),
         metadata: {
           is_btw_result: true,
           // The ephemeral btw fork session
@@ -1022,28 +994,25 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           btw_caller_title: callerTitle,
           source: 'agor',
         },
-      });
-      await super.patch(
-        task.task_id,
-        {
-          metadata: {
-            btw_result_delivery: {
-              parent_session_id: parentSessionId,
-              message_id: delivered.message_id,
-              delivered_at: new Date().toISOString(),
-            },
-          },
-        },
-        _params
-      );
-
+      }
+    );
+    if (!delivered.created) {
       console.log(
-        `💬 [TasksService] Injected btw result message into parent session ${shortId(parentSessionId)} from btw fork ${shortId(btwSession.session_id)}`
+        `⏭️  [TasksService] BTW result for task ${shortId(task.task_id)} already delivered`
       );
-    } catch (error) {
-      console.warn(`⚠️  [TasksService] Failed to inject btw result message:`, error);
-      // Non-critical — don't break task completion
+      return;
     }
+    emitServiceEvent(this.app, {
+      path: 'messages',
+      event: 'created',
+      data: delivered.message,
+      id: delivered.message.message_id,
+      params,
+    });
+
+    console.log(
+      `💬 [TasksService] Injected btw result message into parent session ${shortId(parentSessionId)} from btw fork ${shortId(btwSession.session_id)}`
+    );
   }
 
   /**

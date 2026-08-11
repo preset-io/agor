@@ -8,6 +8,7 @@ import type {
   ExecutorOutcomePatch,
   ExecutorTerminationCompleteInput,
   GatewayTerminalDeliveryReceipt,
+  Message,
   RuntimeTelemetryInput,
   SdkFailure,
   SessionID,
@@ -42,7 +43,15 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { type SessionRow, sessions, type TaskInsert, type TaskRow, tasks } from '../schema';
+import {
+  type MessageInsert,
+  messages,
+  type SessionRow,
+  sessions,
+  type TaskInsert,
+  type TaskRow,
+  tasks,
+} from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -366,6 +375,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   private async mutationNow(txDb: Database, fullId: string, override?: Date): Promise<Date> {
     if (override || isSQLiteDatabase(this.db)) return override ?? new Date();
     const row = await select(txDb, { value: sql<Date>`CURRENT_TIMESTAMP` })
+      .from(tasks)
+      .where(eq(tasks.task_id, fullId))
+      .one();
+    if (!row) throw new EntityNotFoundError('Task', fullId);
+    return row.value instanceof Date ? row.value : new Date(row.value);
+  }
+
+  /** Resolve fresh wall-clock time after the Task row lock for gateway lease fencing. */
+  private async gatewayLeaseNow(txDb: Database, fullId: string, override?: Date): Promise<Date> {
+    if (override || isSQLiteDatabase(this.db)) return override ?? new Date();
+    const row = await select(txDb, { value: sql<Date>`clock_timestamp()` })
       .from(tasks)
       .where(eq(tasks.task_id, fullId))
       .one();
@@ -2069,82 +2089,108 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     );
   }
 
-  /** Session-first atomic claim of the lowest queued Task. */
-  async claimNextQueued(sessionId: SessionID): Promise<Task | null> {
+  /** Create one BTW result Message and its source-Task receipt atomically. */
+  async createBtwResultMessageOnce(
+    sourceTaskId: string,
+    parentSessionId: SessionID,
+    input: Omit<Message, 'session_id' | 'index'>
+  ): Promise<{ created: boolean; message: Message }> {
+    const fullId = await this.resolveId(sourceTaskId);
     return this.runTaskMutation(() =>
       runDatabaseTransaction(
         this.db,
         async (txDb) => {
-          await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, sessionId));
-          const session = await select(txDb)
+          // Cross-resource order matches callback admission: target Session,
+          // then source Task. Provider and event work remains after commit.
+          await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, parentSessionId));
+          const parent = await select(txDb)
             .from(sessions)
-            .where(eq(sessions.session_id, sessionId))
+            .where(eq(sessions.session_id, parentSessionId))
             .one();
-          if (!session) throw new EntityNotFoundError('Session', sessionId);
-          if (!sessionCanStartTask(session.status, session.ready_for_prompt)) return null;
+          if (!parent) throw new EntityNotFoundError('Session', parentSessionId);
 
-          const active = await select(txDb, { task_id: tasks.task_id })
-            .from(tasks)
-            .where(
-              and(
-                eq(tasks.session_id, sessionId),
-                inArray(tasks.status, [
-                  TaskStatus.DISPATCHING,
-                  TaskStatus.RUNNING,
-                  TaskStatus.STOPPING,
-                  TaskStatus.AWAITING_PERMISSION,
-                  TaskStatus.AWAITING_INPUT,
-                ])
-              )
-            )
-            .orderBy(asc(tasks.task_id))
-            .limit(1)
-            .one();
-          if (active) return null;
-
-          const next = await select(txDb)
-            .from(tasks)
-            .where(and(eq(tasks.session_id, sessionId), eq(tasks.status, TaskStatus.QUEUED)))
-            .orderBy(asc(tasks.queue_position), asc(tasks.task_id))
-            .limit(1)
-            .one();
-          if (!next) return null;
-          await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, next.task_id));
-
-          const claimed = await update(txDb, tasks)
-            .set({ status: TaskStatus.DISPATCHING, queue_position: null })
-            .where(
-              and(
-                eq(tasks.task_id, next.task_id),
-                eq(tasks.status, TaskStatus.QUEUED),
-                next.queue_position === null
-                  ? isNull(tasks.queue_position)
-                  : eq(tasks.queue_position, next.queue_position)
-              )
-            )
-            .run();
-          if (claimed.rowsAffected === 0) return null;
-          const sessionTaskIds = session.data.tasks ?? [];
-          await update(txDb, sessions)
-            .set({
-              status: SessionStatus.RUNNING,
-              ready_for_prompt: false,
-              updated_at: new Date(),
-              data: {
-                ...session.data,
-                tasks: sessionTaskIds.includes(next.task_id)
-                  ? sessionTaskIds
-                  : [...sessionTaskIds, next.task_id],
+          await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, fullId));
+          const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+          if (!row) throw new EntityNotFoundError('Task', sourceTaskId);
+          const source = this.rowToTask(row);
+          if (!isTerminalTaskStatus(source.status)) {
+            throw new RepositoryError('BTW result delivery requires a terminal source Task');
+          }
+          const existing = source.metadata?.btw_result_delivery;
+          if (existing?.parent_session_id === parentSessionId) {
+            const existingRow = await select(txDb)
+              .from(messages)
+              .where(eq(messages.message_id, existing.message_id))
+              .one();
+            if (!existingRow) {
+              throw new RepositoryError('BTW result receipt references a missing Message');
+            }
+            const data = existingRow.data as {
+              content: Message['content'];
+              tool_uses?: Message['tool_uses'];
+              metadata?: Message['metadata'];
+            };
+            return {
+              created: false,
+              message: {
+                message_id: existingRow.message_id as Message['message_id'],
+                session_id: existingRow.session_id as Message['session_id'],
+                task_id: existingRow.task_id as Message['task_id'],
+                type: existingRow.type,
+                role: existingRow.role as Message['role'],
+                index: existingRow.index,
+                timestamp: new Date(existingRow.timestamp).toISOString(),
+                content_preview: existingRow.content_preview ?? '',
+                content: data.content,
+                tool_uses: data.tool_uses,
+                parent_tool_use_id: existingRow.parent_tool_use_id ?? undefined,
+                metadata: data.metadata,
               },
-            })
-            .where(eq(sessions.session_id, sessionId))
-            .run();
+            };
+          }
 
-          return this.rowToTask({
-            ...next,
-            status: TaskStatus.DISPATCHING,
-            queue_position: null,
-          });
+          const count = await select(txDb, { value: sql<number>`count(*)` })
+            .from(messages)
+            .where(eq(messages.session_id, parentSessionId))
+            .one();
+          const message: Message = {
+            ...input,
+            session_id: parentSessionId,
+            index: Number(count?.value ?? 0),
+          };
+          const messageRow: MessageInsert = {
+            message_id: message.message_id,
+            created_at: new Date(message.timestamp),
+            session_id: message.session_id,
+            task_id: message.task_id,
+            type: message.type,
+            role: message.role,
+            index: message.index,
+            timestamp: new Date(message.timestamp),
+            content_preview: message.content_preview,
+            parent_tool_use_id: message.parent_tool_use_id ?? null,
+            data: {
+              content: message.content,
+              tool_uses: message.tool_uses,
+              metadata: message.metadata,
+            },
+          };
+          await insert(txDb, messages).values(messageRow).run();
+
+          const metadata: TaskMetadata = {
+            ...(source.metadata ?? {}),
+            btw_result_delivery: {
+              parent_session_id: parentSessionId,
+              message_id: message.message_id,
+              delivered_at: message.timestamp,
+            },
+          };
+          const sourceData = this.taskToInsert({ ...source, metadata }).data;
+          await update(txDb, tasks)
+            .set({ data: sourceData })
+            .where(eq(tasks.task_id, fullId))
+            .run();
+          return { created: true, message };
         },
         { sqliteImmediate: true }
       )
@@ -2171,29 +2217,32 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
-  async findIncompleteTerminalPage(afterTaskId?: string, limit = 100): Promise<Task[]> {
-    const terminalCondition = inArray(tasks.status, [
-      TaskStatus.COMPLETED,
-      TaskStatus.FAILED,
-      TaskStatus.STOPPED,
-      TaskStatus.TIMED_OUT,
-    ]);
+  /** Bounded routing-only discovery for terminal Tasks with incomplete consequences. */
+  async findIncompleteTerminalRefs(
+    options: TaskRuntimeDiscoveryOptions = {}
+  ): Promise<TaskRuntimeDiscoveryRef[]> {
+    const limit = this.validateRuntimeDiscovery(options.limit);
     const incompleteCondition = isPostgresDatabase(this.db)
       ? sql`${tasks.data} -> 'metadata' ->> 'terminal_consequences_completed_at' IS NULL`
       : sql`json_extract(${tasks.data}, '$.metadata.terminal_consequences_completed_at') IS NULL`;
-    const rows = await select(this.db)
+    const rows = await select(this.db, this.runtimeDiscoveryColumns())
       .from(tasks)
       .where(
         and(
-          terminalCondition,
+          inArray(tasks.status, [
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.STOPPED,
+            TaskStatus.TIMED_OUT,
+          ]),
           incompleteCondition,
-          ...(afterTaskId ? [gt(tasks.task_id, afterTaskId)] : [])
+          options.after ? gt(tasks.task_id, options.after.task_id) : undefined
         )
       )
       .orderBy(asc(tasks.task_id))
       .limit(limit)
       .all();
-    return rows.map((row: TaskRow) => this.rowToTask(row));
+    return this.runtimeDiscoveryRefs(rows as Array<Record<string, unknown>>);
   }
 
   /**
@@ -2218,17 +2267,23 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
-  async findPendingGatewayDeliveryPage(afterTaskId?: string, limit = 100): Promise<Task[]> {
+  /** Bounded routing-only discovery for independently repairable gateway delivery. */
+  async findPendingGatewayDeliveryRefs(
+    options: TaskRuntimeDiscoveryOptions = {}
+  ): Promise<TaskRuntimeDiscoveryRef[]> {
+    const limit = this.validateRuntimeDiscovery(options.limit);
     const pendingCondition = isPostgresDatabase(this.db)
       ? sql`${tasks.data} -> 'metadata' -> 'gateway_terminal_delivery' ->> 'status' = 'pending'`
       : sql`json_extract(${tasks.data}, '$.metadata.gateway_terminal_delivery.status') = 'pending'`;
-    const rows = await select(this.db)
+    const rows = await select(this.db, this.runtimeDiscoveryColumns())
       .from(tasks)
-      .where(and(pendingCondition, ...(afterTaskId ? [gt(tasks.task_id, afterTaskId)] : [])))
+      .where(
+        and(pendingCondition, options.after ? gt(tasks.task_id, options.after.task_id) : undefined)
+      )
       .orderBy(asc(tasks.task_id))
       .limit(limit)
       .all();
-    return rows.map((row: TaskRow) => this.rowToTask(row));
+    return this.runtimeDiscoveryRefs(rows as Array<Record<string, unknown>>);
   }
 
   /** Atomically keep the first deterministic gateway intent for a terminal Task. */
@@ -2252,22 +2307,129 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
-  /** Settle a pending gateway receipt without rewriting an already terminal receipt. */
-  async settleGatewayTerminalDelivery(
+  /** Acquire or take over the short lease that fences one provider delivery attempt. */
+  async claimGatewayTerminalDelivery(
     id: string,
-    expected: { mapping_id: string; channel_id: string; thread_id: string },
-    receipt: Extract<GatewayTerminalDeliveryReceipt, { status: 'delivered' | 'skipped' }>
-  ): Promise<Task> {
+    input: { claimToken: string; leaseDurationMs: number; now?: Date }
+  ): Promise<{ outcome: 'claimed' | 'held' | 'not_pending'; task: Task }> {
+    if (!input.claimToken.trim())
+      throw new RepositoryError('Gateway delivery claim token is required');
+    if (!Number.isFinite(input.leaseDurationMs) || input.leaseDurationMs <= 0) {
+      throw new RepositoryError('Gateway delivery lease duration must be positive');
+    }
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
       const current = this.rowToTask(row);
       const pending = current.metadata?.gateway_terminal_delivery;
+      if (pending?.status !== 'pending') return { outcome: 'not_pending', task: current };
+      const claimedAt = await this.gatewayLeaseNow(txDb, fullId, input.now);
+      if (
+        pending.claim?.claim_token !== input.claimToken &&
+        pending.claim?.lease_expires_at &&
+        new Date(pending.claim.lease_expires_at).getTime() > claimedAt.getTime()
+      ) {
+        return { outcome: 'held', task: current };
+      }
+      const receipt: GatewayTerminalDeliveryReceipt = {
+        ...pending,
+        claim: {
+          claim_token: input.claimToken,
+          claimed_at: claimedAt.toISOString(),
+          lease_expires_at: new Date(claimedAt.getTime() + input.leaseDurationMs).toISOString(),
+        },
+      };
+      const metadata: TaskMetadata = {
+        ...(current.metadata ?? {}),
+        gateway_terminal_delivery: receipt,
+      };
+      const data = this.taskToInsert({ ...current, metadata }).data;
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return { outcome: 'claimed', task: this.rowToTask({ ...row, data }) };
+    });
+  }
+
+  /** Renew only the exact live claim immediately before provider admission. */
+  async renewGatewayTerminalDeliveryClaim(
+    id: string,
+    input: { claimToken: string; leaseDurationMs: number; now?: Date }
+  ): Promise<Task | null> {
+    if (
+      !input.claimToken.trim() ||
+      !Number.isFinite(input.leaseDurationMs) ||
+      input.leaseDurationMs <= 0
+    ) {
+      throw new RepositoryError('A valid gateway delivery claim and lease are required');
+    }
+    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const pending = current.metadata?.gateway_terminal_delivery;
+      const renewedAt = await this.gatewayLeaseNow(txDb, fullId, input.now);
+      if (
+        pending?.status !== 'pending' ||
+        pending.claim?.claim_token !== input.claimToken ||
+        !pending.claim.lease_expires_at ||
+        new Date(pending.claim.lease_expires_at).getTime() <= renewedAt.getTime()
+      ) {
+        return null;
+      }
+      const metadata: TaskMetadata = {
+        ...(current.metadata ?? {}),
+        gateway_terminal_delivery: {
+          ...pending,
+          claim: {
+            ...pending.claim,
+            lease_expires_at: new Date(renewedAt.getTime() + input.leaseDurationMs).toISOString(),
+          },
+        },
+      };
+      const data = this.taskToInsert({ ...current, metadata }).data;
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, data });
+    });
+  }
+
+  /** Release a known failed attempt without allowing a stale owner to clear a newer lease. */
+  async releaseGatewayTerminalDeliveryClaim(id: string, claimToken: string): Promise<boolean> {
+    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const pending = current.metadata?.gateway_terminal_delivery;
+      if (pending?.status !== 'pending' || pending.claim?.claim_token !== claimToken) return false;
+      const { claim: _claim, ...unclaimed } = pending;
+      const metadata: TaskMetadata = {
+        ...(current.metadata ?? {}),
+        gateway_terminal_delivery: unclaimed,
+      };
+      const data = this.taskToInsert({ ...current, metadata }).data;
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return true;
+    });
+  }
+
+  /** Settle a pending gateway receipt without rewriting an already terminal receipt. */
+  async settleGatewayTerminalDelivery(
+    id: string,
+    expected: {
+      mapping_id: string;
+      channel_id: string;
+      thread_id: string;
+      claim_token: string;
+      now?: Date;
+    },
+    receipt: Extract<GatewayTerminalDeliveryReceipt, { status: 'delivered' | 'skipped' }>
+  ): Promise<{ outcome: 'settled' | 'stale'; task: Task }> {
+    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const pending = current.metadata?.gateway_terminal_delivery;
+      const settledAt = await this.gatewayLeaseNow(txDb, fullId, expected.now);
       if (
         pending?.status !== 'pending' ||
         pending.mapping_id !== expected.mapping_id ||
         pending.channel_id !== expected.channel_id ||
-        pending.thread_id !== expected.thread_id
+        pending.thread_id !== expected.thread_id ||
+        pending.claim?.claim_token !== expected.claim_token ||
+        !pending.claim.lease_expires_at ||
+        new Date(pending.claim.lease_expires_at).getTime() <= settledAt.getTime()
       ) {
-        return current;
+        return { outcome: 'stale', task: current };
       }
       const metadata: TaskMetadata = {
         ...(current.metadata ?? {}),
@@ -2275,7 +2437,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       };
       const data = this.taskToInsert({ ...current, metadata }).data;
       await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
-      return this.rowToTask({ ...row, data });
+      return { outcome: 'settled', task: this.rowToTask({ ...row, data }) };
     });
   }
 

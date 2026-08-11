@@ -176,6 +176,39 @@ function makeService(
       };
     }
   );
+  const createBtwResultMessageOnce = vi.fn(
+    async (
+      sourceTaskId: string,
+      targetSessionId: Session['session_id'],
+      message: Record<string, unknown>
+    ) => {
+      const source = tasksById.get(sourceTaskId)!;
+      const existing = source.metadata?.btw_result_delivery;
+      if (existing) {
+        return {
+          created: false,
+          message: {
+            ...message,
+            message_id: existing.message_id,
+            session_id: targetSessionId,
+            index: 0,
+          },
+        };
+      }
+      source.metadata = {
+        ...(source.metadata ?? {}),
+        btw_result_delivery: {
+          parent_session_id: targetSessionId,
+          message_id: message.message_id as MessageID,
+          delivered_at: message.timestamp as string,
+        },
+      };
+      return {
+        created: true,
+        message: { ...message, session_id: targetSessionId, index: 0 },
+      };
+    }
+  );
 
   const sessionsPatch = vi.fn(async (id: string, updates: Partial<Session>) => {
     const target = id === parentSessionId ? parentSession : childSession;
@@ -198,6 +231,7 @@ function makeService(
   Reflect.set(service, 'taskRepo', {
     ...repository,
     createCompletionCallbackOnce: createPending,
+    createBtwResultMessageOnce,
   });
   Reflect.set(service, 'id', 'task_id');
   Reflect.set(service, 'emit', vi.fn());
@@ -227,6 +261,7 @@ function makeService(
     service,
     repository,
     createPending,
+    createBtwResultMessageOnce,
     sessionsPatch,
     triggerQueueProcessing,
     messagesFind,
@@ -262,58 +297,6 @@ describe('TasksService completion callbacks', () => {
     await expect(sessions.triggerQueueProcessing(childSessionId)).rejects.toThrow(
       'claimed queue preparation failed'
     );
-  });
-
-  it('deterministically pages through every terminal Task consequence', async () => {
-    const service = Object.create(TasksService.prototype) as TasksService;
-    const firstPage = [
-      makeTask({ status: TaskStatus.COMPLETED }),
-      makeTask({ task_id: callbackTaskId, status: TaskStatus.FAILED }),
-    ];
-    const lastTask = makeTask({
-      task_id: '018f0000-0000-7000-8000-000000000099' as TaskID,
-      status: TaskStatus.TIMED_OUT,
-    });
-    const findIncompleteTerminalPage = vi
-      .fn()
-      .mockResolvedValueOnce(firstPage)
-      .mockResolvedValueOnce([lastTask]);
-    Reflect.set(service, 'taskRepo', {
-      findIncompleteTerminalPage,
-    });
-    service.reconcileTerminalTask = vi.fn().mockResolvedValue(true);
-
-    await service.repairTerminalConsequences(2);
-
-    expect(findIncompleteTerminalPage).toHaveBeenNthCalledWith(1, undefined, 2);
-    expect(findIncompleteTerminalPage).toHaveBeenNthCalledWith(2, callbackTaskId, 2);
-    expect(service.reconcileTerminalTask).toHaveBeenCalledTimes(3);
-  });
-
-  it('continues deterministic paging when one consequence remains repairable', async () => {
-    const service = Object.create(TasksService.prototype) as TasksService;
-    const firstPage = [
-      makeTask({ status: TaskStatus.COMPLETED }),
-      makeTask({ task_id: callbackTaskId, status: TaskStatus.FAILED }),
-    ];
-    const lastTask = makeTask({
-      task_id: '018f0000-0000-7000-8000-000000000399' as TaskID,
-      status: TaskStatus.TIMED_OUT,
-    });
-    const findIncompleteTerminalPage = vi
-      .fn()
-      .mockResolvedValueOnce(firstPage)
-      .mockResolvedValueOnce([lastTask]);
-    Reflect.set(service, 'taskRepo', { findIncompleteTerminalPage });
-    service.reconcileTerminalTask = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('gateway unavailable'))
-      .mockResolvedValue(true);
-
-    await expect(service.repairTerminalConsequences(2)).rejects.toThrow('gateway unavailable');
-
-    expect(findIncompleteTerminalPage).toHaveBeenNthCalledWith(2, callbackTaskId, 2);
-    expect(service.reconcileTerminalTask).toHaveBeenCalledTimes(3);
   });
 
   it('re-observes an older termination without reverting the newer Session projection', async () => {
@@ -398,6 +381,123 @@ describe('TasksService completion callbacks', () => {
     ).injectBtwResultMessage(getStoredTask()!, childSession);
 
     expect(messagesFind).not.toHaveBeenCalled();
+  });
+
+  it('delivers a BTW result from the retained cooperative settlement before archiving', async () => {
+    const {
+      service,
+      childSession,
+      createBtwResultMessageOnce,
+      sessionsPatch,
+      markTerminalConsequencesComplete,
+    } = makeService({
+      childSession: {
+        fork_origin: 'btw',
+        genealogy: { forked_from_session_id: parentSessionId, children: [] },
+        callback_config: undefined,
+      },
+    });
+    const completedTask = makeTask({
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+      termination_request: {
+        cause: 'runtime_settlement',
+        requested_at: '2026-01-01T00:00:04.000Z',
+        executor_quiesced_at: '2026-01-01T00:00:05.000Z',
+        executor_settlement: { status: TaskStatus.COMPLETED },
+      },
+    });
+
+    await service.reconcileTerminalTask(completedTask, TaskStatus.COMPLETED, {
+      ...(tenantParams as object),
+      repairTerminalConsequences: true,
+    } as never);
+
+    expect(createBtwResultMessageOnce).toHaveBeenCalledOnce();
+    expect(sessionsPatch).toHaveBeenCalledWith(
+      childSession.session_id,
+      { archived: true, archived_reason: 'btw_completed' },
+      expect.anything()
+    );
+    expect(markTerminalConsequencesComplete).toHaveBeenCalledWith(completedTask.task_id);
+  });
+
+  it.each([
+    [TaskStatus.STOPPED, 'user_stop'],
+    [TaskStatus.FAILED, 'heartbeat_lost'],
+  ] as const)(
+    'does not deliver a BTW result after %s forced termination',
+    async (status, cause) => {
+      const { service, createBtwResultMessageOnce } = makeService({
+        childSession: {
+          fork_origin: 'btw',
+          genealogy: { forked_from_session_id: parentSessionId, children: [] },
+          callback_config: undefined,
+        },
+      });
+      const terminatedTask = makeTask({
+        status,
+        completed_at: '2026-01-01T00:00:05.000Z',
+        termination_request: {
+          cause,
+          requested_at: '2026-01-01T00:00:04.000Z',
+        },
+      });
+
+      await service.reconcileTerminalTask(terminatedTask, status, {
+        ...(tenantParams as object),
+        repairTerminalConsequences: true,
+      } as never);
+
+      expect(createBtwResultMessageOnce).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps BTW consequences incomplete across message and archive failures without duplicates', async () => {
+    const {
+      service,
+      childSession,
+      createBtwResultMessageOnce,
+      sessionsPatch,
+      markTerminalConsequencesComplete,
+    } = makeService({
+      childSession: {
+        fork_origin: 'btw',
+        genealogy: { forked_from_session_id: parentSessionId, children: [] },
+        callback_config: undefined,
+      },
+    });
+    const completedTask = makeTask({
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
+    createBtwResultMessageOnce.mockRejectedValueOnce(new Error('message insert failed'));
+
+    await expect(
+      service.reconcileTerminalTask(completedTask, TaskStatus.COMPLETED, {
+        ...(tenantParams as object),
+        repairTerminalConsequences: true,
+      } as never)
+    ).rejects.toThrow('message insert failed');
+    expect(markTerminalConsequencesComplete).not.toHaveBeenCalled();
+
+    sessionsPatch
+      .mockResolvedValueOnce(childSession)
+      .mockRejectedValueOnce(new Error('archive failed'));
+    await expect(
+      service.reconcileTerminalTask(completedTask, TaskStatus.COMPLETED, {
+        ...(tenantParams as object),
+        repairTerminalConsequences: true,
+      } as never)
+    ).rejects.toThrow('archive failed');
+    expect(markTerminalConsequencesComplete).not.toHaveBeenCalled();
+
+    await service.reconcileTerminalTask(completedTask, TaskStatus.COMPLETED, {
+      ...(tenantParams as object),
+      repairTerminalConsequences: true,
+    } as never);
+    expect(createBtwResultMessageOnce).toHaveBeenCalledTimes(2);
+    expect(markTerminalConsequencesComplete).toHaveBeenCalledOnce();
   });
 
   it('defers callback dispatch until after the tenant transaction commits', async () => {

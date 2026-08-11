@@ -15,6 +15,7 @@ import {
 import { getConnector, type InboundMessage } from '@agor/core/gateway';
 import type {
   GatewayChannel,
+  GatewayTerminalDeliveryReceipt,
   SessionID,
   Task,
   TenantID,
@@ -288,13 +289,73 @@ function makeGatewayHarness(args: {
       if (current?.metadata?.gateway_terminal_delivery) return current;
       return taskRepo.update(id, { metadata: { gateway_terminal_delivery: receipt } });
     }),
-    settleGatewayTerminalDelivery: vi.fn(async (id: string, _expected: unknown, receipt: never) =>
-      taskRepo.update(id, { metadata: { gateway_terminal_delivery: receipt } })
+    claimGatewayTerminalDelivery: vi.fn(
+      async (id: string, input: { claimToken: string; leaseDurationMs: number }) => {
+        const current = await taskRepo.findById(id);
+        const receipt = current?.metadata?.gateway_terminal_delivery;
+        if (receipt?.status !== 'pending') return { outcome: 'not_pending', task: current };
+        if (receipt.claim && Date.parse(receipt.claim.lease_expires_at) > Date.now()) {
+          return { outcome: 'held', task: current };
+        }
+        const task = await taskRepo.update(id, {
+          metadata: {
+            gateway_terminal_delivery: {
+              ...receipt,
+              claim: {
+                claim_token: input.claimToken,
+                claimed_at: new Date().toISOString(),
+                lease_expires_at: new Date(Date.now() + input.leaseDurationMs).toISOString(),
+              },
+            },
+          },
+        });
+        return { outcome: 'claimed', task };
+      }
     ),
-    findPendingGatewayDeliveryPage: vi.fn(async (_cursor?: string, limit = 100) =>
-      [...tasks.values()]
-        .filter((task) => task.metadata?.gateway_terminal_delivery?.status === 'pending')
-        .slice(0, limit)
+    renewGatewayTerminalDeliveryClaim: vi.fn(
+      async (id: string, input: { claimToken: string; leaseDurationMs: number }) => {
+        const current = await taskRepo.findById(id);
+        const receipt = current?.metadata?.gateway_terminal_delivery;
+        if (receipt?.status !== 'pending' || receipt.claim?.claim_token !== input.claimToken) {
+          return null;
+        }
+        return taskRepo.update(id, {
+          metadata: {
+            gateway_terminal_delivery: {
+              ...receipt,
+              claim: {
+                ...receipt.claim,
+                lease_expires_at: new Date(Date.now() + input.leaseDurationMs).toISOString(),
+              },
+            },
+          },
+        });
+      }
+    ),
+    releaseGatewayTerminalDeliveryClaim: vi.fn(async (id: string, claimToken: string) => {
+      const current = await taskRepo.findById(id);
+      const receipt = current?.metadata?.gateway_terminal_delivery;
+      if (receipt?.status !== 'pending' || receipt.claim?.claim_token !== claimToken) return false;
+      const { claim: _claim, ...pending } = receipt;
+      await taskRepo.update(id, { metadata: { gateway_terminal_delivery: pending } });
+      return true;
+    }),
+    settleGatewayTerminalDelivery: vi.fn(
+      async (
+        id: string,
+        expected: { claim_token: string },
+        receipt: Extract<GatewayTerminalDeliveryReceipt, { status: 'delivered' | 'skipped' }>
+      ) => {
+        const current = await taskRepo.findById(id);
+        const pending = current?.metadata?.gateway_terminal_delivery;
+        if (pending?.status !== 'pending' || pending.claim?.claim_token !== expected.claim_token) {
+          return { outcome: 'stale' as const, task: current };
+        }
+        return {
+          outcome: 'settled' as const,
+          task: await taskRepo.update(id, { metadata: { gateway_terminal_delivery: receipt } }),
+        };
+      }
     ),
   };
   (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
@@ -1814,11 +1875,63 @@ describe('GatewayService terminal reconciliation', () => {
     await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
     await expect(
       runWithTenantContext('tenant-channel', () => service.deliverTerminalTask(terminal))
-    ).rejects.toThrow('slack unavailable');
+    ).resolves.toEqual({ status: 'retry' });
 
     await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
       metadata: { gateway_terminal_delivery: { status: 'pending' } },
     });
+  });
+
+  it('returns retry when the delivery lease expires before settlement', async () => {
+    const setThreadStatus = vi.fn(async () => undefined);
+    const { service, taskRepo } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { setThreadStatus },
+    });
+    const terminal = { session_id: 'sess-1', task_id: 'task-1', state: 'done' as const };
+    await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+    taskRepo.settleGatewayTerminalDelivery.mockImplementationOnce(async (id) => ({
+      outcome: 'stale' as const,
+      task: await taskRepo.findById(id),
+    }));
+
+    await expect(
+      runWithTenantContext('tenant-channel', () => service.deliverTerminalTask(terminal))
+    ).resolves.toEqual({ status: 'retry' });
+  });
+
+  it('bounds a hanging provider admission below the delivery lease', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      const sendMessage = vi.fn(() => new Promise<string>(() => undefined));
+      const channel = {
+        ...slackChannel,
+        id: 'chan-github',
+        channel_type: 'github',
+        config: {},
+      } as GatewayChannel;
+      const mapping = makeMapping({ channel_id: channel.id });
+      const { service, taskRepo } = makeGatewayHarness({
+        channel,
+        existingMapping: mapping,
+        connector: { sendMessage },
+      });
+      const terminal = { session_id: 'sess-1', task_id: 'task-1', state: 'done' as const };
+      await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+
+      const delivery = runWithTenantContext('tenant-channel', () =>
+        service.deliverTerminalTask(terminal)
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sendMessage).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(25_000);
+
+      await expect(delivery).resolves.toEqual({ status: 'retry' });
+      expect(taskRepo.releaseGatewayTerminalDeliveryClaim).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('retries a pending Slack delivery against its original thread mapping', async () => {
@@ -1863,6 +1976,52 @@ describe('GatewayService terminal reconciliation', () => {
     );
     await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
       metadata: { gateway_terminal_delivery: { status: 'delivered' } },
+    });
+  });
+
+  it('revalidates immutable Slack topology after waiting in the Session queue', async () => {
+    const origin = makeMapping({ thread_id: 'C123-origin' });
+    let releaseBlocker!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    const setThreadStatus = vi
+      .fn()
+      .mockImplementationOnce(() => blocker)
+      .mockResolvedValue(undefined);
+    const { service, taskRepo, threadMapRepo } = makeGatewayHarness({
+      existingMapping: origin,
+      connector: { setThreadStatus },
+    });
+    const terminal = { session_id: 'sess-1', task_id: 'task-1', state: 'done' as const };
+    await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+
+    const queuedAhead = runWithTenantContext('tenant-channel', () =>
+      service.updateProgress({ session_id: 'sess-1', task_id: 'task-ahead', state: 'working' })
+    );
+    await vi.waitFor(() => expect(setThreadStatus).toHaveBeenCalledTimes(1));
+    const delivery = runWithTenantContext('tenant-channel', () =>
+      service.deliverTerminalTask(terminal)
+    );
+    threadMapRepo.findById.mockResolvedValue({
+      ...origin,
+      status: 'archived',
+    });
+    releaseBlocker();
+    await queuedAhead;
+
+    await expect(delivery).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'origin_mapping_changed',
+    });
+    expect(setThreadStatus).toHaveBeenCalledTimes(1);
+    await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
+      metadata: {
+        gateway_terminal_delivery: {
+          status: 'skipped',
+          reason: 'origin_mapping_changed',
+        },
+      },
     });
   });
 
@@ -1949,38 +2108,6 @@ describe('GatewayService terminal reconciliation', () => {
         gateway_terminal_delivery: { status: 'skipped', reason: 'origin_missing' },
       },
     });
-  });
-
-  it('continues terminal-delivery repair past a failing old page', async () => {
-    const { service, taskRepo } = makeGatewayHarness({});
-    const task = (taskId: string) =>
-      ({ task_id: taskId, session_id: `session-${taskId}`, status: TaskStatus.COMPLETED }) as Task;
-    const oldFailure = new Error('old delivery failed');
-    taskRepo.findPendingGatewayDeliveryPage.mockImplementation(
-      async (cursor?: string, pageSize = 100) => {
-        expect(pageSize).toBe(2);
-        if (!cursor) return [task('task-001'), task('task-002')];
-        if (cursor === 'task-002') return [task('task-003')];
-        return [];
-      }
-    );
-    const deliverTerminalTask = vi
-      .spyOn(service, 'deliverTerminalTask')
-      .mockImplementation(async (data) => {
-        if (data.task_id === 'task-001') throw oldFailure;
-      });
-
-    await expect(service.repairPendingTerminalDeliveries(2)).rejects.toBe(oldFailure);
-
-    expect(taskRepo.findPendingGatewayDeliveryPage.mock.calls).toEqual([
-      [undefined, 2],
-      ['task-002', 2],
-    ]);
-    expect(deliverTerminalTask.mock.calls.map(([data]) => data.task_id)).toEqual([
-      'task-001',
-      'task-002',
-      'task-003',
-    ]);
   });
 });
 

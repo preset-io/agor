@@ -174,6 +174,7 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     params?: FeathersParams & {
       suppressTerminalQueueProcessing?: boolean;
       suppressBtwCleanup?: boolean;
+      repairTerminalConsequences?: boolean;
     }
   ): Promise<boolean>;
   reconcileSessionState(
@@ -183,7 +184,6 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
       suppressBtwCleanup?: boolean;
     }
   ): Promise<Session>;
-  repairTerminalConsequences(limit?: number, params?: CoreAuthenticatedParams): Promise<void>;
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
   autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;

@@ -1,9 +1,12 @@
+import { TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const discovery = vi.hoisted(() => ({
   dispatch: vi.fn(),
   heartbeat: vi.fn(),
   termination: vi.fn(),
+  terminalConsequences: vi.fn(),
+  gatewayDelivery: vi.fn(),
 }));
 const requestExecutorTermination = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ status: 'terminal', task: {} })
@@ -20,6 +23,8 @@ vi.mock('@agor/core/db', async (importOriginal) => {
       findExpiredDispatchRefs = discovery.dispatch;
       findStaleHeartbeatRefs = discovery.heartbeat;
       findStrandedTerminationRefs = discovery.termination;
+      findIncompleteTerminalRefs = discovery.terminalConsequences;
+      findPendingGatewayDeliveryRefs = discovery.gatewayDelivery;
     },
     runWithSystemDatabaseScope: (_db: unknown, _reason: string, work: () => unknown) => work(),
     runWithTenantDatabaseScope: (_db: unknown, _tenantId: string, work: () => unknown) => work(),
@@ -41,14 +46,18 @@ const config = {
 
 function harness(tasksById: Record<string, Record<string, unknown>>) {
   const recordExecutorStartupWarning = vi.fn(async (taskId: string) => tasksById[taskId] ?? null);
+  const reconcileTerminalTask = vi.fn().mockResolvedValue(true);
+  const deliverTerminalTask = vi.fn().mockResolvedValue({ status: 'delivered' });
   const app = {
     service: (name: string) => {
       if (name === 'tasks') {
         return {
           get: vi.fn(async (taskId: string) => tasksById[taskId]),
           recordExecutorStartupWarning,
+          reconcileTerminalTask,
         };
       }
+      if (name === 'gateway') return { deliverTerminalTask };
       if (name === 'sessions') {
         return { get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }) };
       }
@@ -70,7 +79,13 @@ function harness(tasksById: Record<string, Record<string, unknown>>) {
       ...overrides,
     });
 
-  return { app, create, recordExecutorStartupWarning };
+  return {
+    app,
+    create,
+    deliverTerminalTask,
+    reconcileTerminalTask,
+    recordExecutorStartupWarning,
+  };
 }
 
 describe('TaskRuntimeReconciler', () => {
@@ -78,9 +93,193 @@ describe('TaskRuntimeReconciler', () => {
     discovery.dispatch.mockReset().mockResolvedValue([]);
     discovery.heartbeat.mockReset().mockResolvedValue([]);
     discovery.termination.mockReset().mockResolvedValue([]);
+    discovery.terminalConsequences.mockReset().mockResolvedValue([]);
+    discovery.gatewayDelivery.mockReset().mockResolvedValue([]);
     requestExecutorTermination.mockReset().mockResolvedValue({ status: 'terminal', task: {} });
     getTrackedExecutor.mockReset();
     assertTenantWritable.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('recurringly repairs tenant-routed terminal consequences and pending delivery', async () => {
+    const terminalTask = {
+      task_id: '018f0000-0000-7000-8000-000000000091',
+      session_id: '018f0000-0000-7000-8000-000000000092',
+      status: TaskStatus.COMPLETED,
+    };
+    discovery.terminalConsequences.mockResolvedValue([
+      { task_id: terminalTask.task_id, tenant_id: 'tenant-b' },
+    ]);
+    discovery.gatewayDelivery.mockResolvedValue([
+      { task_id: terminalTask.task_id, tenant_id: 'tenant-b' },
+    ]);
+    const { create, deliverTerminalTask, reconcileTerminalTask } = harness({
+      [terminalTask.task_id]: terminalTask,
+    });
+
+    await expect(create({ tenantId: undefined }).checkOnce()).resolves.toMatchObject({
+      consequenceCandidates: 1,
+      gatewayCandidates: 1,
+      processed: 2,
+      failures: 0,
+    });
+
+    expect(reconcileTerminalTask).toHaveBeenCalledWith(
+      terminalTask,
+      TaskStatus.COMPLETED,
+      expect.objectContaining({
+        repairTerminalConsequences: true,
+        tenant: expect.objectContaining({ tenant_id: 'tenant-b' }),
+      })
+    );
+    expect(deliverTerminalTask).toHaveBeenCalledWith({
+      session_id: terminalTask.session_id,
+      task_id: terminalTask.task_id,
+      state: 'done',
+    });
+  });
+
+  it('takes over a consequence that appears on a later recurring scan', async () => {
+    vi.useFakeTimers();
+    try {
+      const task = {
+        task_id: '018f0000-0000-7000-8000-000000000093',
+        session_id: '018f0000-0000-7000-8000-000000000094',
+        status: TaskStatus.COMPLETED,
+      };
+      discovery.terminalConsequences
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ task_id: task.task_id }])
+        .mockResolvedValue([]);
+      const { create, reconcileTerminalTask } = harness({ [task.task_id]: task });
+      const reconciler = create({ tickIntervalMs: 1_000, random: () => 0.5 });
+
+      reconciler.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reconcileTerminalTask).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(reconcileTerminalTask).toHaveBeenCalledOnce();
+      reconciler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps startup queue continuation suppressed until a recurring scan succeeds', async () => {
+    vi.useFakeTimers();
+    try {
+      const task = {
+        task_id: '018f0000-0000-7000-8000-000000000095',
+        session_id: '018f0000-0000-7000-8000-000000000096',
+        status: TaskStatus.COMPLETED,
+      };
+      const cursor = { task_id: task.task_id, order_at: '2026-01-01T00:00:00.000Z' };
+      discovery.terminalConsequences.mockImplementation(async (options: { after?: unknown }) =>
+        options.after ? [] : [{ task_id: task.task_id, cursor }]
+      );
+      const { create, reconcileTerminalTask } = harness({ [task.task_id]: task });
+      reconcileTerminalTask
+        .mockRejectedValueOnce(new Error('repair failed'))
+        .mockResolvedValue(true);
+      const onSuccessfulScan = vi.fn();
+      const reconciler = create({ tickIntervalMs: 1_000, random: () => 0.5 });
+
+      await expect(
+        reconciler.checkOnce({ suppressTerminalQueueProcessing: true })
+      ).resolves.toMatchObject({ failures: 1 });
+      reconciler.start({
+        suppressTerminalQueueProcessingUntilSuccess: true,
+        onSuccessfulScan,
+      });
+      expect(onSuccessfulScan).not.toHaveBeenCalled();
+      expect(reconcileTerminalTask).toHaveBeenNthCalledWith(
+        1,
+        task,
+        TaskStatus.COMPLETED,
+        expect.objectContaining({ suppressTerminalQueueProcessing: true })
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onSuccessfulScan).toHaveBeenCalledOnce();
+      expect(reconcileTerminalTask).toHaveBeenNthCalledWith(
+        2,
+        task,
+        TaskStatus.COMPLETED,
+        expect.objectContaining({ suppressTerminalQueueProcessing: true })
+      );
+      reconciler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps startup admission suppressed while a full recovery page advances to page two', async () => {
+    vi.useFakeTimers();
+    try {
+      const tasks = [
+        {
+          task_id: '018f0000-0000-7000-8000-000000000097',
+          session_id: '018f0000-0000-7000-8000-000000000107',
+          status: TaskStatus.COMPLETED,
+        },
+        {
+          task_id: '018f0000-0000-7000-8000-000000000098',
+          session_id: '018f0000-0000-7000-8000-000000000108',
+          status: TaskStatus.COMPLETED,
+        },
+        {
+          task_id: '018f0000-0000-7000-8000-000000000099',
+          session_id: '018f0000-0000-7000-8000-000000000109',
+          status: TaskStatus.COMPLETED,
+        },
+      ];
+      const cursors = tasks.map((task, index) => ({
+        task_id: task.task_id,
+        order_at: `2026-01-01T00:00:0${index}.000Z`,
+      }));
+      discovery.terminalConsequences.mockImplementation(async (options: { after?: unknown }) =>
+        options.after
+          ? [{ task_id: tasks[2]!.task_id, cursor: cursors[2] }]
+          : tasks.slice(0, 2).map((task, index) => ({
+              task_id: task.task_id,
+              cursor: cursors[index],
+            }))
+      );
+      const { create, reconcileTerminalTask } = harness(
+        Object.fromEntries(tasks.map((task) => [task.task_id, task]))
+      );
+      const onSuccessfulScan = vi.fn();
+      const reconciler = create({ scanBatchSize: 2, random: () => 0.5 });
+
+      await expect(
+        reconciler.checkOnce({ suppressTerminalQueueProcessing: true })
+      ).resolves.toMatchObject({ failures: 0, saturated: true });
+      expect(onSuccessfulScan).not.toHaveBeenCalled();
+      expect(reconcileTerminalTask).toHaveBeenCalledTimes(2);
+
+      reconciler.start({
+        suppressTerminalQueueProcessingUntilSuccess: true,
+        onSuccessfulScan,
+        preserveDiscoveryCursors: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(discovery.terminalConsequences).toHaveBeenNthCalledWith(
+        1,
+        expect.not.objectContaining({ after: expect.anything() })
+      );
+      expect(discovery.terminalConsequences).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ after: cursors[1] })
+      );
+      expect(reconcileTerminalTask).toHaveBeenCalledTimes(3);
+      for (const call of reconcileTerminalTask.mock.calls) {
+        expect(call[2]).toEqual(expect.objectContaining({ suppressTerminalQueueProcessing: true }));
+      }
+      expect(onSuccessfulScan).toHaveBeenCalledOnce();
+      reconciler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('claims the exact stale-heartbeat fact discovered by the bounded scan', async () => {

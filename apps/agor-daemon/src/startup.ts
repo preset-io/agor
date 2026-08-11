@@ -41,7 +41,10 @@ import {
 } from './services/mcp-catalog-ingestion.js';
 import { SchedulerService } from './services/scheduler.js';
 import { SessionQueueWorker } from './services/session-queue-worker.js';
-import { TaskRuntimeReconciler } from './services/task-runtime-reconciler.js';
+import {
+  TaskRuntimeReconciler,
+  type TaskRuntimeReconcilerStartOptions,
+} from './services/task-runtime-reconciler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { claimExecutorTermination, requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
@@ -82,6 +85,8 @@ export interface StartupContext {
   terminalsService: TerminalsService | null;
   /** One diagnostic identity owned by this daemon application/process. */
   distributedWorkIdentity: DistributedWorkIdentity;
+  /** Releases the process-local direct-launch fence after ordered standalone recovery. */
+  releaseTaskAdmission?: () => void;
   /**
    * Explicit activation boundary while daemon HA configuration is still
    * landing. `standalone` preserves historical active-runtime boot repair
@@ -446,8 +451,6 @@ export async function resumeRuntimeRecovery(
   ctx: StartupContext,
   cleanup: OrphanCleanupResult
 ): Promise<void> {
-  const tasks = ctx.app.service('tasks') as unknown as TasksServiceImpl;
-  const gateway = ctx.app.service('gateway') as unknown as GatewayService;
   for (const recovery of cleanup.recoveries) {
     const params = startupTenantParams(ctx.config, recovery.tenantId);
     await runWithTenantContext(recovery.tenantId, async () => {
@@ -475,26 +478,6 @@ export async function resumeRuntimeRecovery(
         await injectRestartNotices(ctx, cleanup.wasGraceful, recovery);
       } catch (error) {
         console.warn(`[startup] Failed to record restart notices for ${recovery.tenantId}:`, error);
-      }
-      try {
-        await runStartupTenantDatabaseScope(
-          ctx,
-          () => tasks.repairTerminalConsequences(100, params),
-          recovery.tenantId
-        );
-      } catch (error) {
-        console.warn(
-          `[startup] Failed to repair terminal consequences for ${recovery.tenantId}:`,
-          error
-        );
-      }
-      try {
-        await gateway.repairPendingTerminalDeliveries(100);
-      } catch (error) {
-        console.warn(
-          `[startup] Failed to repair pending gateway deliveries for ${recovery.tenantId}:`,
-          error
-        );
       }
     });
   }
@@ -637,6 +620,41 @@ export function runPostStartJob(name: string, job: () => Promise<void> | void): 
     .catch((error: unknown) => {
       console.warn(`[startup] post-start job failed: ${name}`, error);
     });
+}
+
+export async function startTaskWorkersAfterRecovery(input: {
+  recover: () => Promise<void>;
+  reconciler: {
+    checkOnce: TaskRuntimeReconciler['checkOnce'];
+    start: (options?: TaskRuntimeReconcilerStartOptions) => void;
+  };
+  startQueueWorker: () => void;
+  releaseTaskAdmission: () => void;
+}): Promise<void> {
+  const startAdmissionWorkers = () => {
+    input.startQueueWorker();
+    input.releaseTaskAdmission();
+  };
+  await input.recover();
+  let scanComplete = false;
+  let preserveDiscoveryCursors = false;
+  try {
+    const stats = await input.reconciler.checkOnce({ suppressTerminalQueueProcessing: true });
+    scanComplete = stats.failures === 0 && !stats.saturated;
+    preserveDiscoveryCursors = stats.failures === 0 && stats.saturated;
+  } catch (error) {
+    console.warn('[startup] Immediate Task runtime recovery scan failed:', error);
+  }
+  if (scanComplete) {
+    input.reconciler.start();
+    startAdmissionWorkers();
+    return;
+  }
+  input.reconciler.start({
+    suppressTerminalQueueProcessingUntilSuccess: true,
+    onSuccessfulScan: startAdmissionWorkers,
+    ...(preserveDiscoveryCursors ? { preserveDiscoveryCursors: true } : {}),
+  });
 }
 
 /** Schedule the initial scan only when the monitor exists for this topology. */
@@ -785,32 +803,8 @@ export async function startup(ctx: StartupContext): Promise<void> {
       startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
     dispatchConnectTimeoutMs: resolveDispatchConnectTimeoutMs(config.execution),
   });
-  const startTaskRuntimeReconciler = () => {
-    taskRuntimeReconciler.start();
-    console.log(
-      heartbeatConfig.enabled
-        ? `💓 Task runtime reconciler started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms, policy: ${ctx.taskRuntimePolicy})`
-        : `💓 Task runtime reconciler started with heartbeat expiry disabled (policy: ${ctx.taskRuntimePolicy})`
-    );
-  };
-  if (orphanCleanupResult) {
-    runPostStartJob('task-runtime-recovery', async () => {
-      try {
-        await resumeRuntimeRecovery(ctx, orphanCleanupResult);
-      } finally {
-        // Recovery owns every orphan until its ordered containment/repair pass
-        // finishes. Starting the fleet reconciler earlier would let it race the
-        // same STOPPING Tasks without startup's queue-suppression contract.
-        startTaskRuntimeReconciler();
-      }
-    });
-  } else {
-    startTaskRuntimeReconciler();
-  }
-
-  // 6. Start the all-daemon durable Session queue scanner. Discovery is
-  // bounded and may overlap freely; the database dispatch claim, not this
-  // timer, elects the launcher.
+  // Construct both admission workers before choosing the topology-specific
+  // start point. Standalone starts neither until ordered recovery finishes.
   const queueMultiTenancy = resolveMultiTenancyConfig(config);
   const sessionQueueWorker = new SessionQueueWorker(db, {
     tenantId: queueMultiTenancy.mode === 'static' ? queueMultiTenancy.static_tenant_id : undefined,
@@ -818,7 +812,37 @@ export async function startup(ctx: StartupContext): Promise<void> {
     processSession: (sessionId, params) =>
       ctx.sessionsService.triggerQueueProcessing(sessionId, params as never),
   });
-  sessionQueueWorker.start();
+  const startTaskRuntimeReconciler = (options?: TaskRuntimeReconcilerStartOptions) => {
+    taskRuntimeReconciler.start(options);
+    console.log(
+      heartbeatConfig.enabled
+        ? `💓 Task runtime reconciler started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms, policy: ${ctx.taskRuntimePolicy})`
+        : `💓 Task runtime reconciler started with heartbeat expiry disabled (policy: ${ctx.taskRuntimePolicy})`
+    );
+  };
+  const startAdmissionWorkers = () => {
+    sessionQueueWorker.start();
+    ctx.releaseTaskAdmission?.();
+  };
+  const startTaskWorkers = () => {
+    startTaskRuntimeReconciler();
+    startAdmissionWorkers();
+  };
+  if (orphanCleanupResult) {
+    runPostStartJob('task-runtime-recovery', () =>
+      startTaskWorkersAfterRecovery({
+        recover: () => resumeRuntimeRecovery(ctx, orphanCleanupResult),
+        reconciler: {
+          checkOnce: (options) => taskRuntimeReconciler.checkOnce(options),
+          start: startTaskRuntimeReconciler,
+        },
+        startQueueWorker: () => sessionQueueWorker.start(),
+        releaseTaskAdmission: () => ctx.releaseTaskAdmission?.(),
+      })
+    );
+  } else {
+    startTaskWorkers();
+  }
 
   // 7. Start scheduler service (background worker)
   const schedulerMultiTenancy = resolveMultiTenancyConfig(config);

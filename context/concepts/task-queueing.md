@@ -60,6 +60,13 @@ The scan cursor, startup offset, bounded backoff, and jitter are contention
 etiquette and fairness only; process death or duplicate triggers cannot affect
 correctness.
 
+Standalone boot keeps this worker and direct executor-launch admission behind
+the same process-local recovery barrier until containment, restart notices, and
+an immediate recurring-reconciler pass succeed. A failed pass keeps both paths
+fenced while that reconciler retries on its normal bounded schedule. Shared
+PostgreSQL starts the worker normally because replica startup is not orphan
+evidence.
+
 Queued rows survive daemon restart. Completion, Stop, callbacks, widgets,
 scheduled initialization, and the recovery worker may all trigger draining;
 duplicate triggers converge at the same durable claim. Callback creation and

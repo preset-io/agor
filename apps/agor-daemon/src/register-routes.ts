@@ -286,6 +286,8 @@ export interface RegisterRoutesContext {
     typeof import('./services/session-env-selections.js').createSessionEnvSelectionsService
   >;
   terminalsService: TerminalsService | null;
+  /** Process-local standalone boot fence; already resolved in shared mode. */
+  taskAdmissionReady?: Promise<void>;
 }
 
 export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | undefined {
@@ -325,6 +327,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionMCPServersService,
     sessionEnvSelectionsService,
     terminalsService: _terminalsService,
+    taskAdmissionReady = Promise.resolve(),
   } = ctx;
 
   const usersService = app.service('users');
@@ -1112,6 +1115,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   ): Promise<Task> {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Missing active tenant context for task executor startup');
+    await taskAdmissionReady;
     const stableInitialMessageId = stableInitialMessageIdForTask(
       task,
       options.stableInitialMessageId

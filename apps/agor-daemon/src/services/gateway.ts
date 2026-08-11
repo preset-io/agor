@@ -89,7 +89,6 @@ import {
   hasMinimumRole,
   ROLES,
   SessionStatus,
-  TaskStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
@@ -133,6 +132,23 @@ interface PostMessageResult {
   taskId?: TaskID;
 }
 
+type GatewayTerminalDeliveryResult =
+  | { status: 'delivered' }
+  | {
+      status: 'unavailable';
+      reason: Extract<GatewayTerminalDeliveryReceipt, { status: 'skipped' }>['reason'];
+    }
+  | { status: 'retry' };
+
+type GatewayTerminalDestination =
+  | {
+      status: 'available';
+      receipt: Extract<GatewayTerminalDeliveryReceipt, { status: 'pending' }>;
+      mapping: ThreadSessionMap;
+      channel: GatewayChannel;
+    }
+  | Extract<GatewayTerminalDeliveryResult, { status: 'unavailable' | 'retry' }>;
+
 /**
  * Outbound routing data (session → platform)
  */
@@ -152,6 +168,16 @@ const GATEWAY_LISTENER_SCAN_BATCH = 25;
 const GATEWAY_LISTENER_RENEW_SCAN_MAX_MS = 5_000;
 const GATEWAY_EVENT_PROCESSING_LEASE_MS = 2 * 60_000;
 const GATEWAY_LISTENER_STOP_TIMEOUT_MS = 5_000;
+const GATEWAY_TERMINAL_DELIVERY_LEASE_MS = 30_000;
+const GATEWAY_TERMINAL_PROVIDER_TIMEOUT_MS = 25_000;
+const GATEWAY_TERMINAL_COMMIT_MARGIN_MS = 5_000;
+
+if (
+  GATEWAY_TERMINAL_PROVIDER_TIMEOUT_MS + GATEWAY_TERMINAL_COMMIT_MARGIN_MS >
+  GATEWAY_TERMINAL_DELIVERY_LEASE_MS
+) {
+  throw new Error('Gateway terminal delivery lease must outlive its provider timeout');
+}
 
 async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -1285,17 +1311,25 @@ export class GatewayService {
     originMappingId?: ThreadSessionMapID,
     originThreadId?: string
   ): Promise<void> {
-    const previous = this.slackProgressQueues.get(data.session_id) ?? Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(() => this.updateProgressNow(data, originMappingId, originThreadId));
-    this.slackProgressQueues.set(data.session_id, next);
+    await this.serializeSlackProgress(data.session_id, () =>
+      this.updateProgressNow(data, originMappingId, originThreadId)
+    );
+  }
+
+  private async serializeSlackProgress<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.slackProgressQueues.get(sessionId) ?? Promise.resolve();
+    const result = previous.catch(() => undefined).then(work);
+    const next = result.then(
+      () => undefined,
+      () => undefined
+    );
+    this.slackProgressQueues.set(sessionId, next);
 
     try {
-      await next;
+      return await result;
     } finally {
-      if (this.slackProgressQueues.get(data.session_id) === next) {
-        this.slackProgressQueues.delete(data.session_id);
+      if (this.slackProgressQueues.get(sessionId) === next) {
+        this.slackProgressQueues.delete(sessionId);
       }
     }
   }
@@ -1375,17 +1409,22 @@ export class GatewayService {
   private async updateProgressNow(
     data: GatewayProgressData,
     originMappingId?: ThreadSessionMapID,
-    originThreadId?: string
-  ): Promise<void> {
+    originThreadId?: string,
+    terminalAdmission?: () => Promise<GatewayTerminalDestination>
+  ): Promise<GatewayTerminalDeliveryResult | undefined> {
     const isTerminal = data.state === 'done' || data.state === 'failed';
     if (!isTerminal && !(await this.shouldQueryGatewayRouting())) return;
 
-    const mapping = originMappingId
-      ? await this.threadMapRepo.findById(originMappingId)
-      : await this.threadMapRepo.findBySession(data.session_id);
+    const admitted = terminalAdmission ? await terminalAdmission() : undefined;
+    if (admitted && admitted.status !== 'available') return admitted;
+    const mapping =
+      admitted?.mapping ??
+      (originMappingId
+        ? await this.threadMapRepo.findById(originMappingId)
+        : await this.threadMapRepo.findBySession(data.session_id));
     if (!mapping || mapping.session_id !== data.session_id) return;
 
-    const channel = await this.channelRepo.findById(mapping.channel_id);
+    const channel = admitted?.channel ?? (await this.channelRepo.findById(mapping.channel_id));
     if (!channel?.enabled || channel.channel_type !== 'slack') return;
 
     const now = Date.now();
@@ -1440,7 +1479,7 @@ export class GatewayService {
       ...(toolTodos.length > 0 ? { slack_status_todos: toolTodos } : {}),
     };
 
-    const connector =
+    let connector =
       this.getActiveListener(channel.id) ??
       getConnector(channel.channel_type as ChannelType, channel.config);
     const activeTaskId =
@@ -1448,6 +1487,13 @@ export class GatewayService {
 
     try {
       if (isTerminal) {
+        if (terminalAdmission) {
+          const current = await terminalAdmission();
+          if (current.status !== 'available') return current;
+          connector =
+            this.getActiveListener(current.channel.id) ??
+            getConnector(current.channel.channel_type as ChannelType, current.channel.config);
+        }
         try {
           await this.stopSlackTaskStream(activeTaskId, connector);
         } catch (error) {
@@ -1466,7 +1512,7 @@ export class GatewayService {
           : this.stripSlackProgressMessageMetadata(metadataWithStart)),
         ...this.pickSlackRoutingMetadata(freshMetadata),
       };
-      const slackThreadId =
+      let slackThreadId =
         originThreadId ??
         (typeof metadataForWrite.slack_active_thread_id === 'string'
           ? metadataForWrite.slack_active_thread_id
@@ -1474,7 +1520,16 @@ export class GatewayService {
 
       await this.threadMapRepo.updateMetadata(mapping.id, metadataForWrite);
 
-      if (!connector.setThreadStatus) return;
+      if (terminalAdmission) {
+        // Re-enter durable claim and topology immediately before provider I/O.
+        const current = await terminalAdmission();
+        if (current.status !== 'available') return current;
+        connector =
+          this.getActiveListener(current.channel.id) ??
+          getConnector(current.channel.channel_type as ChannelType, current.channel.config);
+        slackThreadId = current.receipt.thread_id;
+      }
+      if (!connector.setThreadStatus) return terminalAdmission ? { status: 'retry' } : undefined;
 
       try {
         const loadingMessage = this.buildSlackAssistantLoadingMessage(data, metadataWithStart);
@@ -1484,6 +1539,7 @@ export class GatewayService {
           loadingMessages: loadingMessage ? [loadingMessage] : undefined,
           iconEmoji: ':hourglass_flowing_sand:',
         });
+        if (terminalAdmission) return { status: 'delivered' };
       } catch (error) {
         if (isTerminal) throw error;
         console.warn('[gateway] Failed to set Slack assistant status:', error);
@@ -3024,15 +3080,17 @@ export class GatewayService {
   private async skipTerminalDelivery(
     task: Task,
     receipt: Extract<GatewayTerminalDeliveryReceipt, { status: 'pending' }>,
+    claimToken: string,
     reason: Extract<GatewayTerminalDeliveryReceipt, { status: 'skipped' }>['reason']
-  ): Promise<void> {
+  ): Promise<boolean> {
     const completedAt = new Date().toISOString();
-    await this.taskRepo.settleGatewayTerminalDelivery(
+    const settlement = await this.taskRepo.settleGatewayTerminalDelivery(
       task.task_id,
       {
         mapping_id: receipt.mapping_id,
         channel_id: receipt.channel_id,
         thread_id: receipt.thread_id,
+        claim_token: claimToken,
       },
       {
         mapping_id: receipt.mapping_id,
@@ -3044,19 +3102,26 @@ export class GatewayService {
         reason,
       }
     );
+    return settlement.outcome === 'settled';
   }
 
-  /** Attempt one pending delivery. Provider failure remains pending for repair. */
-  async deliverTerminalTask(data: GatewayProgressData): Promise<void> {
-    if (!data.task_id) return;
-    const task = await this.taskRepo.findById(data.task_id);
+  private async renewAndResolveTerminalDestination(
+    taskId: TaskID,
+    claimToken: string
+  ): Promise<GatewayTerminalDestination> {
+    const task = await this.taskRepo.renewGatewayTerminalDeliveryClaim(taskId, {
+      claimToken,
+      leaseDurationMs: GATEWAY_TERMINAL_DELIVERY_LEASE_MS,
+    });
     const receipt = task?.metadata?.gateway_terminal_delivery;
-    if (!task || receipt?.status !== 'pending') return;
-    const mapping = await this.threadMapRepo.findById(receipt.mapping_id);
-    if (!mapping) {
-      await this.skipTerminalDelivery(task, receipt, 'origin_mapping_deleted');
-      return;
+    if (!task || receipt?.status !== 'pending' || receipt.claim?.claim_token !== claimToken) {
+      return { status: 'retry' };
     }
+    const unavailable = (
+      reason: Extract<GatewayTerminalDeliveryResult, { status: 'unavailable' }>['reason']
+    ): GatewayTerminalDestination => ({ status: 'unavailable', reason });
+    const mapping = await this.threadMapRepo.findById(receipt.mapping_id);
+    if (!mapping) return unavailable('origin_mapping_deleted');
     const mappingMetadata = (mapping.metadata ?? {}) as Record<string, unknown>;
     const aliases = Array.isArray(mappingMetadata.slack_thread_aliases)
       ? mappingMetadata.slack_thread_aliases
@@ -3067,98 +3132,129 @@ export class GatewayService {
       mapping.status !== 'active' ||
       (mapping.thread_id !== receipt.thread_id && !aliases.includes(receipt.thread_id))
     ) {
-      await this.skipTerminalDelivery(task, receipt, 'origin_mapping_changed');
-      return;
+      return unavailable('origin_mapping_changed');
     }
     const channel = await this.channelRepo.findById(mapping.channel_id);
-    if (!channel) {
-      await this.skipTerminalDelivery(task, receipt, 'origin_channel_deleted');
-      return;
-    }
-    if (!channel.enabled) {
-      await this.skipTerminalDelivery(task, receipt, 'origin_channel_disabled');
-      return;
-    }
+    if (!channel) return unavailable('origin_channel_deleted');
+    if (!channel.enabled) return unavailable('origin_channel_disabled');
     if (!hasConnector(channel.channel_type as ChannelType)) {
-      await this.skipTerminalDelivery(task, receipt, 'origin_channel_unsupported');
-      return;
+      return unavailable('origin_channel_unsupported');
     }
     if (mapping.branch_id !== channel.target_branch_id) {
-      await this.skipTerminalDelivery(task, receipt, 'origin_mapping_changed');
-      return;
+      return unavailable('origin_mapping_changed');
     }
+    return { status: 'available', receipt, mapping, channel };
+  }
 
-    if (channel.channel_type === 'slack') {
-      await this.updateProgress(data, mapping.id, receipt.thread_id);
-    } else {
-      const connector =
-        this.getActiveListener(channel.id) ??
-        getConnector(channel.channel_type as ChannelType, channel.config);
-      const message = await this.terminalAssistantText(data);
-      const { text, blocks } = normalizeOutbound(
-        connector.formatMessage ? connector.formatMessage(message) : message
+  /** Attempt one pending delivery. Provider failure remains pending for repair. */
+  async deliverTerminalTask(data: GatewayProgressData): Promise<GatewayTerminalDeliveryResult> {
+    if (!data.task_id) return { status: 'retry' };
+    const claimToken = generateId();
+    const claim = await this.taskRepo.claimGatewayTerminalDelivery(data.task_id, {
+      claimToken,
+      leaseDurationMs: GATEWAY_TERMINAL_DELIVERY_LEASE_MS,
+    });
+    if (claim.outcome !== 'claimed') {
+      const receipt = claim.task.metadata?.gateway_terminal_delivery;
+      if (receipt?.status === 'delivered') return { status: 'delivered' };
+      if (receipt?.status === 'skipped') {
+        return { status: 'unavailable', reason: receipt.reason };
+      }
+      return { status: 'retry' };
+    }
+    const pending = claim.task.metadata?.gateway_terminal_delivery;
+    if (pending?.status !== 'pending') return { status: 'retry' };
+
+    let result: GatewayTerminalDeliveryResult;
+    try {
+      result = await withGatewayTimeout(
+        (async (): Promise<GatewayTerminalDeliveryResult> => {
+          const destination = await this.renewAndResolveTerminalDestination(
+            claim.task.task_id,
+            claimToken
+          );
+          if (destination.status !== 'available') return destination;
+          if (destination.channel.channel_type === 'slack') {
+            return (
+              (await this.serializeSlackProgress(data.session_id, () =>
+                this.updateProgressNow(
+                  data,
+                  destination.mapping.id,
+                  destination.receipt.thread_id,
+                  () => this.renewAndResolveTerminalDestination(claim.task.task_id, claimToken)
+                )
+              )) ?? { status: 'retry' }
+            );
+          }
+          const connector =
+            this.getActiveListener(destination.channel.id) ??
+            getConnector(
+              destination.channel.channel_type as ChannelType,
+              destination.channel.config
+            );
+          const message = await this.terminalAssistantText(data);
+          const { text, blocks } = normalizeOutbound(
+            connector.formatMessage ? connector.formatMessage(message) : message
+          );
+          const current = await this.renewAndResolveTerminalDestination(
+            claim.task.task_id,
+            claimToken
+          );
+          if (current.status !== 'available') return current;
+          const metadata: Record<string, unknown> = {};
+          const processingCommentId = current.mapping.metadata?.processing_comment_id;
+          if (typeof processingCommentId === 'number') {
+            metadata.edit_comment_id = processingCommentId;
+          }
+          await connector.sendMessage({
+            threadId: current.receipt.thread_id,
+            text,
+            blocks,
+            metadata,
+          });
+          return { status: 'delivered' };
+        })(),
+        GATEWAY_TERMINAL_PROVIDER_TIMEOUT_MS
       );
-      const metadata: Record<string, unknown> = {};
-      const processingCommentId = mapping.metadata?.processing_comment_id;
-      if (typeof processingCommentId === 'number') metadata.edit_comment_id = processingCommentId;
-      await connector.sendMessage({
-        threadId: receipt.thread_id,
-        text,
-        blocks,
-        metadata,
-      });
+    } catch {
+      result = { status: 'retry' };
     }
 
-    await this.taskRepo.settleGatewayTerminalDelivery(
-      task.task_id,
-      {
-        mapping_id: receipt.mapping_id,
-        channel_id: receipt.channel_id,
-        thread_id: receipt.thread_id,
-      },
-      { ...receipt, status: 'delivered', delivered_at: new Date().toISOString() }
-    );
+    if (result.status === 'delivered') {
+      const { claim: _claim, ...deliveredReceipt } = pending;
+      const settlement = await this.taskRepo.settleGatewayTerminalDelivery(
+        claim.task.task_id,
+        {
+          mapping_id: pending.mapping_id,
+          channel_id: pending.channel_id,
+          thread_id: pending.thread_id,
+          claim_token: claimToken,
+        },
+        { ...deliveredReceipt, status: 'delivered', delivered_at: new Date().toISOString() }
+      );
+      if (settlement.outcome === 'stale') result = { status: 'retry' };
+    } else if (result.status === 'unavailable') {
+      if (!(await this.skipTerminalDelivery(claim.task, pending, claimToken, result.reason))) {
+        result = { status: 'retry' };
+      }
+    } else {
+      await this.taskRepo.releaseGatewayTerminalDeliveryClaim(claim.task.task_id, claimToken);
+    }
+    return result;
   }
 
   deliverTerminalTaskAfterCommit(data: GatewayProgressData, params?: unknown): void {
     deferWithTenantContext(
       params,
-      () => this.deliverTerminalTask(data),
+      async () => {
+        await this.deliverTerminalTask(data);
+      },
       (error) =>
         console.warn(
           `[gateway] Terminal delivery remains pending for Task ${shortId(data.task_id ?? '')}:`,
           error
         )
     );
-  }
-
-  /** Bounded tenant-scoped repair pass; the startup orchestrator supplies tenant identity. */
-  async repairPendingTerminalDeliveries(pageSize = 100): Promise<void> {
-    let cursor: string | undefined;
-    let firstFailure: unknown;
-    while (true) {
-      const page = await this.taskRepo.findPendingGatewayDeliveryPage(cursor, pageSize);
-      for (const task of page) {
-        try {
-          await this.deliverTerminalTask({
-            session_id: task.session_id,
-            task_id: task.task_id,
-            state:
-              task.status === TaskStatus.FAILED || task.status === TaskStatus.TIMED_OUT
-                ? 'failed'
-                : 'done',
-            ...(task.error_message ? { error_message: task.error_message } : {}),
-          });
-        } catch (error) {
-          firstFailure ??= error;
-        }
-      }
-      if (page.length < pageSize) {
-        if (firstFailure) throw firstFailure;
-        return;
-      }
-      cursor = page.at(-1)?.task_id;
-    }
   }
 
   private scheduleListenerScan(delayMs: number): void {

@@ -204,6 +204,11 @@ export type GatewayTerminalDeliveryReceipt =
       thread_id: string;
       status: 'pending';
       intended_at: string;
+      claim?: {
+        claim_token: string;
+        claimed_at: string;
+        lease_expires_at: string;
+      };
     }
   | {
       mapping_id: ThreadSessionMapID;

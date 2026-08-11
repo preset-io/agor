@@ -181,6 +181,9 @@ mapping-review point.
   drain jitter, and idle backoff reduce contention but never confer correctness.
 - Candidate writes assert the tenant write gate in the same fresh tenant
   transaction as the mutation.
+- The same recurring loop discovers routing-only references for incomplete
+  terminal consequences and pending gateway delivery, re-enters tenant scope,
+  and invokes the existing Task and gateway consequence owners.
 - Every daemon may discover the same routing refs. A Task-specific opaque
   coordination token and expiring lease unconditionally fence normal
   containment settlement. Guarded-unverified state clears the token and
@@ -382,7 +385,10 @@ admission/UI projection:
 - required reconciliation failures propagate so later terminal observation can
   retry them. Queue processing and other idempotent side effects run after
   commit;
-- callback Task creation and its source receipt are one transaction. Gateway
+- callback Task creation and its source receipt are one transaction. A BTW
+  result Message and its source-Task receipt likewise commit atomically under
+  Session-first locking; retries reuse that receipt, and archive failure keeps
+  the terminal consequence incomplete. Gateway
   ingress stores its trusted mapping, channel, and external thread once on the
   source Task. Terminal delivery uses only that immutable origin and validates
   it against current topology; a later Session mapping is never a fallback.
@@ -394,7 +400,12 @@ admission/UI projection:
   while invalidated origin topology becomes a terminal skipped receipt. A
   non-gateway Task is explicitly not applicable, while a gateway Task missing
   its trusted origin is skipped rather than routed through mutable Session
-  state;
+  state. Provider delivery first acquires a short Task-receipt lease, renews
+  and revalidates that immutable origin immediately before provider I/O, and
+  bounds provider admission with five seconds left for the lease-fenced commit.
+  Settlement requires both the claim token and a DB-time-live lease. Lease
+  expiry permits takeover; a crash
+  after provider acceptance can still duplicate the external effect;
 - `terminal_consequences_completed_at` is recorded only after Session
   projection, callback materialization, durable gateway intent, and applicable
   queue continuation succeed. The introducing migration baselines older
@@ -411,14 +422,18 @@ admission/UI projection:
 
 Standalone startup performs narrow tenant-ID discovery and re-enters each
 tenant for one ordered post-listen recovery path: resume containment, record
-restart notices, run the bounded terminal-consequence repair sweep, then run
-the gateway-owned pending-delivery repair sweep.
+restart notices, then run an immediate pass of the recurring Task runtime
+reconciler before enabling admission.
 Containment keeps only tenant identity while it waits on the runtime; claims,
 notices, and repair work use explicit short database scopes. Queue processing
 is suppressed during restart settlement and resumes through the final
-reconciliation step. The fleet Task runtime reconciler starts after this path
-so it cannot compete for the same stopping Tasks; shared PostgreSQL skips
-startup orphan recovery and starts the reconciler immediately.
+reconciliation step. The Task runtime reconciler and queue worker start
+together after this path so they cannot compete for the same stopping Tasks or
+admit later work early; a process-local barrier also fences direct launch
+admission. A failed immediate pass leaves both admission paths fenced; the same
+recurring reconciler retries through its bounded scheduler and releases them
+only after a successful pass. Shared PostgreSQL skips startup orphan recovery and starts both
+workers normally.
 Queued prompts behind an unverifiable orphan remain ordered and blocked; they
 are neither discarded nor replayed. Session projection records the terminal
 Task it applied under the Session row lock, so repair preserves a later
