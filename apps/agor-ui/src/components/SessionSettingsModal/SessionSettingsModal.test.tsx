@@ -4,6 +4,7 @@ import type { AgorClient, Session, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
+import { UIModeProvider } from '../../contexts/UIModeContext';
 import { SessionSettingsModal } from './SessionSettingsModal';
 
 const persistUserDefaultFromForm = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -168,5 +169,32 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(props.onClose).toHaveBeenCalledTimes(2));
     expect(persistUserDefaultFromForm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SessionSettingsModal — slim mode', () => {
+  it('renders as a drawer instead of a modal', () => {
+    localStorage.setItem('agor:uiMode', 'slim');
+    try {
+      render(
+        <UIModeProvider>
+          <SessionSettingsModal
+            open
+            onClose={vi.fn()}
+            session={claudeSession}
+            client={null}
+            currentUser={null}
+          />
+        </UIModeProvider>
+      );
+
+      expect(document.querySelector('.ant-drawer')).toBeInTheDocument();
+      expect(document.querySelector('.ant-modal')).toBeNull();
+      // Drawer footer keeps the Save/Cancel actions.
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    } finally {
+      localStorage.removeItem('agor:uiMode');
+    }
   });
 });

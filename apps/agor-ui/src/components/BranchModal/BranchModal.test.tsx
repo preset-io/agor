@@ -9,6 +9,7 @@
 import type { AgorClient, Branch, TeammateConfig, User } from '@agor-live/client';
 import { screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { UIModeProvider } from '../../contexts/UIModeContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { BranchModal } from './BranchModal';
@@ -192,5 +193,35 @@ describe('BranchModal — permissions tab visibility', () => {
         },
       },
     });
+  });
+});
+
+describe('BranchModal — slim mode', () => {
+  it('renders as a drawer instead of a modal', async () => {
+    localStorage.setItem('agor:uiMode', 'slim');
+    try {
+      const seb = makeUser({ user_id: 'seb', role: 'admin' });
+      renderWithApp(
+        <UIModeProvider>
+          <BranchModal
+            open={true}
+            onClose={() => {}}
+            branch={makeBranch()}
+            repo={makeRepo()}
+            sessions={[]}
+            client={makeStubClient({ owners: [seb], users: [seb] }).client}
+            currentUser={seb}
+          />
+        </UIModeProvider>
+      );
+
+      expect(await screen.findByRole('tab', { name: /general/i })).toBeInTheDocument();
+      expect(document.querySelector('.ant-drawer')).toBeInTheDocument();
+      expect(document.querySelector('.ant-modal')).toBeNull();
+      // Footer actions survive the drawer conversion.
+      expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument();
+    } finally {
+      localStorage.removeItem('agor:uiMode');
+    }
   });
 });

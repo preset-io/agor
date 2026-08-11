@@ -1,11 +1,12 @@
 import type { AgorClient, BoardEntityObject, Branch, Repo, Session, User } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { Badge, Button, Modal, Space, Tabs, theme } from 'antd';
+import { Badge, Button, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
+import { ModalOrDrawer } from '../ModalOrDrawer';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
@@ -290,16 +291,31 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     </Space>
   );
 
+  // Classic: centered modal. Slim: right-hand drawer with no mask so the
+  // board stays visible and interactive while branch settings are open.
   return (
-    <Modal
+    <ModalOrDrawer
       title={title}
       open={open}
-      onCancel={onClose}
-      footer={footer}
-      width={900}
-      mask={{ closable: false }}
-      styles={{
-        body: { padding: 0, maxHeight: '80vh', overflowY: 'auto' },
+      onClose={onClose}
+      modal={{
+        footer,
+        width: 900,
+        mask: { closable: false },
+        styles: {
+          body: { padding: 0, maxHeight: '80vh', overflowY: 'auto' },
+        },
+      }}
+      drawer={{
+        placement: 'right',
+        size: 760,
+        mask: false,
+        footer,
+        styles: {
+          body: { paddingTop: 0 },
+          footer: { textAlign: 'right' },
+          wrapper: { maxWidth: '100vw' },
+        },
       }}
     >
       <Tabs
@@ -307,6 +323,6 @@ export const BranchModal: React.FC<BranchModalProps> = ({
         onChange={(key) => setActiveTab(key as BranchModalTab)}
         items={tabItems}
       />
-    </Modal>
+    </ModalOrDrawer>
   );
 };
