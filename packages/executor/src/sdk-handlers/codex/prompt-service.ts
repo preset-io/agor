@@ -652,21 +652,23 @@ export class CodexPromptService {
     sessionId: SessionID,
     mcpToken: string | undefined,
     forUserId: UserID | undefined,
+    sessionOwnerId: UserID | undefined,
     requireMcpServers = false
   ): Promise<{ servers: CodexConfigObject; total: number }> {
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
     codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
-    const serversWithSource = await getMcpServersForSession(
-      sessionId,
+      const serversWithSource = await getMcpServersForSession(
+        sessionId,
       {
         sessionMCPRepo: this.sessionMCPServerRepo,
-        mcpServerRepo: this.mcpServerRepo,
-        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
-        forUserId,
-      },
-      { toolFiltering: 'exclude' }
-    );
+          mcpServerRepo: this.mcpServerRepo,
+          mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+          forUserId,
+          sessionOwnerId,
+        },
+        { toolFiltering: 'exclude' }
+      );
 
     const mcpServers = serversWithSource.map((s) => s.server);
 
@@ -1084,6 +1086,7 @@ export class CodexPromptService {
       sessionId,
       mcpToken,
       forUserId,
+      session.created_by,
       requireMcpServers
     );
 

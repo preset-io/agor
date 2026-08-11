@@ -6,6 +6,7 @@
 
 import type { MCPServer, MCPServerID, SessionID, SessionMCPServer } from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
+import { isMCPServerUsableInSession, MCPServerNotUsableError } from '../../mcp/ownership';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type SessionMCPServerInsert, sessionMcpServers } from '../schema';
@@ -25,22 +26,33 @@ export class SessionMCPServerRepository {
     this.mcpServerRepo = new MCPServerRepository(db);
   }
 
+  private async resolveUsablePair(
+    sessionId: SessionID,
+    serverId: MCPServerID
+  ): Promise<{ server: MCPServer }> {
+    const session = await this.sessionRepo.findById(sessionId);
+    if (!session) {
+      throw new EntityNotFoundError('Session', sessionId);
+    }
+
+    const server = await this.mcpServerRepo.findById(serverId);
+    if (!server) {
+      throw new EntityNotFoundError('MCPServer', serverId);
+    }
+
+    if (!isMCPServerUsableInSession(server, session)) {
+      throw new MCPServerNotUsableError(serverId, sessionId);
+    }
+
+    return { server };
+  }
+
   /**
    * Add MCP server to session
    */
   async addServer(sessionId: SessionID, serverId: MCPServerID): Promise<void> {
     try {
-      // Verify session exists
-      const session = await this.sessionRepo.findById(sessionId);
-      if (!session) {
-        throw new EntityNotFoundError('Session', sessionId);
-      }
-
-      // Verify MCP server exists
-      const server = await this.mcpServerRepo.findById(serverId);
-      if (!server) {
-        throw new EntityNotFoundError('MCPServer', serverId);
-      }
+      await this.resolveUsablePair(sessionId, serverId);
 
       // Insert-first instead of check-then-insert: the unique index is the
       // durable idempotency guard when two recovering daemons attach the same
@@ -64,6 +76,7 @@ export class SessionMCPServerRepository {
         .run();
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
+      if (error instanceof MCPServerNotUsableError) throw error;
       throw new RepositoryError(
         `Failed to add MCP server to session: ${error instanceof Error ? error.message : String(error)}`,
         error
@@ -141,11 +154,14 @@ export class SessionMCPServerRepository {
         .where(and(...conditions))
         .all();
 
-      // Fetch full MCP server details for each relationship
+      // Fetch full MCP server details for each relationship. Filter stale
+      // rows as well as preventing new invalid attachments: old data may have
+      // been created before ownership enforcement existed.
+      const session = await this.sessionRepo.findById(sessionId);
       const servers: MCPServer[] = [];
       for (const rel of relationships) {
         const server = await this.mcpServerRepo.findById(rel.mcp_server_id);
-        if (server) {
+        if (server && session && isMCPServerUsableInSession(server, session)) {
           servers.push(server);
         }
       }
@@ -181,10 +197,11 @@ export class SessionMCPServerRepository {
         .all();
 
       // Fetch full MCP server details with metadata for each relationship
+      const session = await this.sessionRepo.findById(sessionId);
       const results: Array<{ server: MCPServer; added_at: number; enabled: boolean }> = [];
       for (const rel of relationships) {
         const server = await this.mcpServerRepo.findById(rel.mcp_server_id);
-        if (server) {
+        if (server && session && isMCPServerUsableInSession(server, session)) {
           results.push({
             server,
             added_at: new Date(rel.added_at).getTime(), // Convert to timestamp
@@ -208,10 +225,17 @@ export class SessionMCPServerRepository {
    */
   async setServers(sessionId: SessionID, serverIds: MCPServerID[]): Promise<void> {
     try {
-      // Verify session exists
-      const session = await this.sessionRepo.findById(sessionId);
-      if (!session) {
-        throw new EntityNotFoundError('Session', sessionId);
+      // Validate the complete replacement before deleting anything, so one
+      // private/foreign server cannot partially alter the existing set.
+      for (const serverId of serverIds) {
+        await this.resolveUsablePair(sessionId, serverId);
+      }
+
+      if (serverIds.length === 0) {
+        const session = await this.sessionRepo.findById(sessionId);
+        if (!session) {
+          throw new EntityNotFoundError('Session', sessionId);
+        }
       }
 
       // Remove all existing relationships
@@ -232,6 +256,7 @@ export class SessionMCPServerRepository {
       }
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
+      if (error instanceof MCPServerNotUsableError) throw error;
       throw new RepositoryError(
         `Failed to set MCP servers for session: ${error instanceof Error ? error.message : String(error)}`,
         error

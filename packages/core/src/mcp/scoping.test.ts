@@ -94,6 +94,41 @@ describe('getMcpServersForSession', () => {
     ]);
   });
 
+  it('filters private servers by session owner, not the OAuth context user', async () => {
+    const shared = makeServer('shared', 'global');
+    const foreignPrivate = {
+      ...makeServer('foreign-private', 'global'),
+      owner_user_id: 'owner-b',
+    } as MCPServer;
+    const listEffectiveServers = vi.fn().mockResolvedValue([shared, foreignPrivate]);
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: { listEffectiveServers } as never,
+      forUserId: 'prompt-user',
+      sessionOwnerId: 'owner-a',
+    });
+
+    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['shared']);
+  });
+
+  it('passes the session owner to global repository filtering', async () => {
+    const findAll = vi.fn().mockResolvedValue([makeServer('shared', 'global')]);
+    const listServers = vi.fn().mockResolvedValue([]);
+
+    await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll } as never,
+      sessionMCPRepo: { listServers } as never,
+      forUserId: 'prompt-user',
+      sessionOwnerId: 'owner-a',
+    });
+
+    expect(findAll).toHaveBeenCalledWith(
+      { scope: 'global', enabled: true, usableByUserId: 'owner-a' },
+      'prompt-user'
+    );
+  });
+
   it('resolves an OAuth server whose only template is oauth_client_secret', async () => {
     const prevKeys = process.env.AGOR_USER_ENV_KEYS;
     const prevSecret = process.env.OAUTH_CLIENT_SECRET;

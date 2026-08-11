@@ -4,6 +4,12 @@
 
 export {
   AGOR_MCP_SERVER_NAME,
+  filterMCPServersForSession,
+  isMCPServerUsableBy,
+  isMCPServerUsableInSession,
+  MCPServerNotUsableError,
+} from './ownership';
+export {
   getMcpServersForSession,
   type MCPAuthHeadersRepository,
   type MCPResolutionDeps,

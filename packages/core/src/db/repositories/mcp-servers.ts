@@ -13,7 +13,7 @@ import type {
   UpdateMCPServerInput,
   UserID,
 } from '@agor/core/types';
-import { and, eq, like } from 'drizzle-orm';
+import { and, eq, isNull, like, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { restoreRedactedMCPAuthSecrets } from '../../tools/mcp/auth-secrets';
 import {
@@ -223,6 +223,16 @@ export class MCPServerRepository
 
       if (filters?.source) {
         conditions.push(eq(mcpServers.source, filters.source));
+      }
+
+      if (filters?.usableByUserId) {
+        conditions.push(
+          or(isNull(mcpServers.owner_user_id), eq(mcpServers.owner_user_id, filters.usableByUserId))
+        );
+      }
+
+      if (filters?.ownerless) {
+        conditions.push(isNull(mcpServers.owner_user_id));
       }
 
       if (conditions.length > 0) {

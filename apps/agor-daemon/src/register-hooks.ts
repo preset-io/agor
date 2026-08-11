@@ -47,7 +47,13 @@ import {
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
 import type { Application, FeathersService } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
+import {
+  BadRequest,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+  Unavailable,
+} from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
   boardObjectQueryValidator,
@@ -61,6 +67,7 @@ import {
   typedValidateQuery,
   userQueryValidator,
 } from '@agor/core/lib/feathers-validation';
+import { isMCPServerUsableBy } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   Board,
@@ -1799,12 +1806,43 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  // NOTE: mcp-servers is global admin-managed configuration. These rows are
-  // not branch- or session-scoped, so no RBAC find() scoping is applied.
-  // Creation/update/removal remain gated by requireMinimumRole(ADMIN).
+  const scopeMcpServerFindToUsable = async (context: HookContext): Promise<HookContext> => {
+    if (!context.params.provider) return context;
+    const user = context.params.user;
+    if (!user || (user as { _isServiceAccount?: boolean })._isServiceAccount) return context;
+    if (!hasMinimumRole(user.role, ROLES.ADMIN)) {
+      // Do not trust a caller-supplied usableByUserId; it is an internal
+      // authorization filter, not a public query capability.
+      context.params.query = {
+        ...(context.params.query ?? {}),
+        usableByUserId: user.user_id,
+      };
+    }
+    return context;
+  };
+
+  const denyMcpServerGetOfAnotherUsersPrivate = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    if (!context.params.provider) return context;
+    const user = context.params.user;
+    if (
+      !user ||
+      (user as { _isServiceAccount?: boolean })._isServiceAccount ||
+      hasMinimumRole(user.role, ROLES.ADMIN)
+    ) {
+      return context;
+    }
+    if (!isMCPServerUsableBy(context.result as MCPServer, user.user_id)) {
+      throw new NotFound(`MCP server not found: ${String(context.id)}`);
+    }
+    return context;
+  };
+
   safeService('mcp-servers')?.hooks({
     before: {
       all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
+      find: [scopeMcpServerFindToUsable],
       create: [requireMinimumRole(ROLES.ADMIN, 'create MCP servers')],
       patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
       update: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
@@ -1812,7 +1850,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
     after: {
       find: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
-      get: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
+      get: [
+        denyMcpServerGetOfAnotherUsersPrivate,
+        injectPerUserOAuthTokens,
+        redactMCPServerSecretFields,
+      ],
       create: [redactMCPServerSecretFields],
       patch: [redactMCPServerSecretFields],
       update: [redactMCPServerSecretFields],

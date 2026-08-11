@@ -97,7 +97,11 @@ describe('agor_mcp_servers_list', () => {
             };
           }
 
-          expect(params.query).toMatchObject({ scope: 'session', source: 'agor' });
+          expect(params.query).toMatchObject({
+            scope: 'session',
+            source: 'agor',
+            ownerless: true,
+          });
           return {
             data: [
               {
@@ -179,11 +183,22 @@ describe('agor_mcp_servers_list', () => {
     await list({});
     await list({ includeDisabled: true });
 
-    expect(calls[0]).toMatchObject({ scope: 'global', enabled: true });
-    expect(calls[1]).toMatchObject({ scope: 'session', source: 'agor', enabled: true });
-    expect(calls[2]).toMatchObject({ scope: 'global' });
+    expect(calls[0]).toMatchObject({ scope: 'global', enabled: true, usableByUserId: 'user-1' });
+    expect(calls[1]).toMatchObject({
+      scope: 'session',
+      source: 'agor',
+      ownerless: true,
+      enabled: true,
+      usableByUserId: 'user-1',
+    });
+    expect(calls[2]).toMatchObject({ scope: 'global', usableByUserId: 'user-1' });
     expect(calls[2]).not.toHaveProperty('enabled');
-    expect(calls[3]).toMatchObject({ scope: 'session', source: 'agor' });
+    expect(calls[3]).toMatchObject({
+      scope: 'session',
+      source: 'agor',
+      ownerless: true,
+      usableByUserId: 'user-1',
+    });
     expect(calls[3]).not.toHaveProperty('enabled');
   });
 
@@ -206,6 +221,95 @@ describe('agor_mcp_servers_list', () => {
       pagination: { total: 0, hasMore: false, nextOffset: null },
       summary: { total: 0, oauth_servers: 0, authenticated: 0, needs_auth: 0 },
     });
+  });
+
+  it('merges scopes into one stable created-at order before paging', async () => {
+    const find = async (params: { query?: { scope?: string } }) => {
+      if (params.query?.scope === 'global') {
+        return {
+          total: 2,
+          data: [
+            {
+              mcp_server_id: 'global-new',
+              name: 'global-new',
+              transport: 'http',
+              scope: 'global',
+              source: 'user',
+              enabled: true,
+              created_at: new Date('2026-08-11T10:00:00Z'),
+              auth: { type: 'none' },
+            },
+            {
+              mcp_server_id: 'global-old',
+              name: 'global-old',
+              transport: 'http',
+              scope: 'global',
+              source: 'user',
+              enabled: true,
+              created_at: new Date('2026-08-11T08:00:00Z'),
+              auth: { type: 'none' },
+            },
+          ],
+        };
+      }
+      return {
+        total: 1,
+        data: [
+          {
+            mcp_server_id: 'official-mid',
+            name: 'official-mid',
+            transport: 'http',
+            scope: 'session',
+            source: 'agor',
+            enabled: true,
+            created_at: new Date('2026-08-11T09:00:00Z'),
+            auth: { type: 'none' },
+          },
+        ],
+      };
+    };
+    const app = makeFakeApp({ 'mcp-servers': { find } });
+    const list = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      'agor_mcp_servers_list'
+    );
+
+    const firstPage = JSON.parse((await list({ limit: 2 })).content[0].text);
+    expect(
+      firstPage.mcp_servers.map((server: { mcp_server_id: string }) => server.mcp_server_id)
+    ).toEqual(['global-new', 'official-mid']);
+    expect(firstPage.pagination).toMatchObject({ total: 3, hasMore: true, nextOffset: 2 });
+
+    const finalPage = JSON.parse((await list({ limit: 2, offset: 2 })).content[0].text);
+    expect(
+      finalPage.mcp_servers.map((server: { mcp_server_id: string }) => server.mcp_server_id)
+    ).toEqual(['global-old']);
+    expect(finalPage.pagination).toMatchObject({ total: 3, hasMore: false, nextOffset: null });
+  });
+
+  it('does not expose a foreign server through direct OAuth status lookup', async () => {
+    const app = makeFakeApp({
+      'mcp-servers': {
+        get: async () => ({
+          mcp_server_id: 'foreign-server',
+          name: 'private-foreign',
+          transport: 'http',
+          scope: 'global',
+          source: 'user',
+          owner_user_id: 'user-2',
+          enabled: true,
+          auth: { type: 'oauth' },
+        }),
+      },
+    });
+    const authStatus = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      'agor_mcp_servers_auth_status'
+    );
+
+    await expect(authStatus({ mcpServerId: 'foreign-server' })).rejects.toThrow(
+      'MCP server not found'
+    );
   });
 });
 

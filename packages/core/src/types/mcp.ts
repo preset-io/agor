@@ -265,6 +265,10 @@ export interface MCPServerFilters {
   transport?: MCPTransport;
   enabled?: boolean;
   source?: MCPSource;
+  /** Shared servers plus private servers owned by this user. */
+  usableByUserId?: string;
+  /** Restrict to system-owned rows, used for the official catalog. */
+  ownerless?: boolean;
 }
 
 /**

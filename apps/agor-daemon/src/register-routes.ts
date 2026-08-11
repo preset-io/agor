@@ -47,6 +47,12 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
+import {
+  filterMCPServersForSession,
+  isMCPServerUsableInSession,
+  MCPServerNotUsableError,
+} from '@agor/core/mcp';
+import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
   AuthenticatedParams,
   HookContext,
@@ -3793,6 +3799,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     checkSessionOwnerOrAdmin(user, session, superadminOpts);
   };
 
+  const authorizeAndLoadSessionForMcpConfig = async (
+    sessionId: string,
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+    params: any
+  ): Promise<Session> => {
+    const user = params?.user;
+    if (!user) throw new NotAuthenticated('Authentication required');
+    const session = (await sessionsService.get(sessionId, { provider: undefined })) as
+      | Session
+      | undefined;
+    if (!session) throw new NotFound(`Session not found: ${sessionId}`);
+    if (!user._isServiceAccount) checkSessionOwnerOrAdmin(user, session, superadminOpts);
+    return session;
+  };
+
   // ============================================================================
   // Session MCP servers routes
   // ============================================================================
@@ -3804,7 +3825,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async find(params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        const session = await authorizeAndLoadSessionForMcpConfig(id, params);
         const enabledOnly =
           params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
         const includeGlobal =
@@ -3860,9 +3881,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               }
             })
           );
-          const entries = withMetadata.filter(
-            (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
-          );
+          const entries = withMetadata
+            .filter(
+              (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
+            )
+            .filter((entry) => isMCPServerUsableInSession(entry.server, session));
           return shouldExposeMCPServerSecrets(params, {
             allowSessionToken: true,
             sessionId: id,
@@ -3891,6 +3914,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           scope: 'global',
           ...(enabledOnly ? { enabled: true } : {}),
           ...(userId ? { forUserId: userId } : {}),
+          usableByUserId: session.created_by,
           $limit: 1000,
         };
         const globalResult = includeGlobal
@@ -3901,16 +3925,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             })
           : [];
         const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
-        const servers = includeGlobal
-          ? [
-              ...new Map(
-                [...globalServers, ...sessionServers].map((server) => [
-                  server.mcp_server_id,
-                  server,
-                ])
-              ).values(),
-            ]
-          : sessionServers;
+        const servers = filterMCPServersForSession(
+          includeGlobal
+            ? [
+                ...new Map(
+                  [...globalServers, ...sessionServers].map((server) => [
+                    server.mcp_server_id,
+                    server,
+                  ])
+                ).values(),
+              ]
+            : sessionServers,
+          session
+        );
         return shouldExposeMCPServerSecrets(params, {
           allowSessionToken: true,
           sessionId: id,
@@ -3922,13 +3949,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         if (!data.mcpServerId) throw new Error('MCP Server ID required');
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        await authorizeAndLoadSessionForMcpConfig(id, params);
 
-        await sessionMCPServersService.addServer(
-          id as import('@agor/core/types').SessionID,
-          data.mcpServerId as import('@agor/core/types').MCPServerID,
-          params
-        );
+        try {
+          await sessionMCPServersService.addServer(
+            id as import('@agor/core/types').SessionID,
+            data.mcpServerId as import('@agor/core/types').MCPServerID,
+            params
+          );
+        } catch (error) {
+          if (error instanceof MCPServerNotUsableError) {
+            throw new Forbidden('That MCP server is private to another user');
+          }
+          throw error;
+        }
 
         const relationship = {
           session_id: id,

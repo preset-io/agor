@@ -1,3 +1,4 @@
+import { NotFound } from '@agor/core/feathers';
 import {
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
@@ -104,6 +105,7 @@ export async function listAttachedMcpServers(
   sessionId: string,
   opts: { includeDisabled?: boolean } = {}
 ): Promise<McpServerSummary[]> {
+  const session = await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
   const sessionMCPServers = await ctx.app.service('session-mcp-servers').find({
     ...ctx.baseServiceParams,
     query: {
@@ -119,6 +121,9 @@ export async function listAttachedMcpServers(
       const mcpServer = await ctx.app
         .service('mcp-servers')
         .get(sms.mcp_server_id, ctx.baseServiceParams);
+      if (mcpServer.owner_user_id && mcpServer.owner_user_id !== session.created_by) {
+        continue;
+      }
       summaries.push(await summarizeMcpServer(ctx, mcpServer));
     } catch (error) {
       console.warn(`Failed to fetch MCP server ${sms.mcp_server_id}:`, error);
@@ -143,6 +148,13 @@ function getMcpCatalogFindTotal(result: McpCatalogFindResult): number {
   return Array.isArray(result) ? data.length : (result.total ?? data.length);
 }
 
+function compareCatalogServers(a: MCPServer, b: MCPServer): number {
+  const aCreated = a.created_at instanceof Date ? a.created_at.getTime() : 0;
+  const bCreated = b.created_at instanceof Date ? b.created_at.getTime() : 0;
+  if (bCreated !== aCreated) return bCreated - aCreated;
+  return a.mcp_server_id < b.mcp_server_id ? -1 : a.mcp_server_id > b.mcp_server_id ? 1 : 0;
+}
+
 /**
  * The catalog is deliberately different from the effective MCP set:
  *
@@ -163,7 +175,19 @@ function isMcpCatalogServerVisible(ctx: McpContext, mcpServer: MCPServer): boole
     return false;
   }
   if (mcpServer.scope === 'global') return true;
-  return mcpServer.scope === 'session' && mcpServer.source === 'agor' && !!ctx.sessionId;
+  return (
+    mcpServer.scope === 'session' &&
+    mcpServer.source === 'agor' &&
+    !mcpServer.owner_user_id &&
+    !!ctx.sessionId
+  );
+}
+
+function assertMcpCatalogServerVisible(ctx: McpContext, mcpServer: MCPServer): void {
+  if (!isMcpCatalogServerVisible(ctx, mcpServer)) {
+    // Do not turn a caller-supplied server ID into an existence oracle.
+    throw new NotFound('MCP server not found');
+  }
 }
 
 async function listCatalogMcpServers(
@@ -178,6 +202,9 @@ async function listCatalogMcpServers(
   const fetchLimit = limit + offset;
   const queryBase = {
     ...(includeDisabled ? {} : { enabled: true }),
+    ...(hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN)
+      ? {}
+      : { usableByUserId: ctx.userId }),
     $limit: fetchLimit,
     $skip: 0,
     $sort: { created_at: -1, mcp_server_id: 1 },
@@ -185,7 +212,14 @@ async function listCatalogMcpServers(
   const queries = [
     { ...queryBase, scope: 'global' as const },
     ...(ctx.sessionId
-      ? [{ ...queryBase, scope: 'session' as const, source: 'agor' as const }]
+      ? [
+          {
+            ...queryBase,
+            scope: 'session' as const,
+            source: 'agor' as const,
+            ownerless: true,
+          },
+        ]
       : []),
   ];
 
@@ -216,7 +250,7 @@ async function listCatalogMcpServers(
     );
   }
 
-  const catalog = [...visibleById.values()];
+  const catalog = [...visibleById.values()].sort(compareCatalogServers);
   return {
     servers: catalog.slice(offset, offset + limit),
     total: Math.max(total, catalog.length),
@@ -696,6 +730,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       const mcpServer: MCPServer = await ctx.app
         .service('mcp-servers')
         .get(args.mcpServerId, ctx.baseServiceParams);
+      assertMcpCatalogServerVisible(ctx, mcpServer);
 
       const authType = mcpServer.auth?.type || 'none';
       const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
