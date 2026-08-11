@@ -197,6 +197,11 @@ export interface RegisterServicesContext {
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   deployment: ResolvedDeploymentConfig;
+  /** Test seam for identifying the pending-OAuth sweep independently of other timers. */
+  pendingOAuthSweepScheduler?: {
+    setInterval(callback: () => void, delayMs: number): NodeJS.Timeout;
+    clearInterval(handle: NodeJS.Timeout): void;
+  };
 }
 
 /**
@@ -1277,6 +1282,10 @@ async function registerMCPServices(
   sessionsService: SessionsServiceImpl
 ): Promise<{ oauthCallbackHandler: (req: express.Request, res: express.Response) => void }> {
   const { db, app } = ctx;
+  const pendingOAuthSweepScheduler = ctx.pendingOAuthSweepScheduler ?? {
+    setInterval: (callback: () => void, delayMs: number) => setInterval(callback, delayMs),
+    clearInterval: (handle: NodeJS.Timeout) => clearInterval(handle),
+  };
   const durableOAuthFlows = isPostgresDatabaseHandle(db)
     ? new MCPOAuthPendingFlowAuthority(db)
     : null;
@@ -1402,13 +1411,16 @@ async function registerMCPServices(
 
   function startPendingOAuthFlowSweep(): void {
     if (pendingOAuthFlowSweepTimer) return;
-    pendingOAuthFlowSweepTimer = setInterval(sweepPendingOAuthFlows, 60_000);
+    pendingOAuthFlowSweepTimer = pendingOAuthSweepScheduler.setInterval(
+      sweepPendingOAuthFlows,
+      60_000
+    );
     pendingOAuthFlowSweepTimer.unref?.();
   }
 
   function stopPendingOAuthFlowSweep(): void {
     if (!pendingOAuthFlowSweepTimer) return;
-    clearInterval(pendingOAuthFlowSweepTimer);
+    pendingOAuthSweepScheduler.clearInterval(pendingOAuthFlowSweepTimer);
     pendingOAuthFlowSweepTimer = null;
   }
 

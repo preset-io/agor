@@ -8,8 +8,11 @@ import { registerServices } from './register-services.js';
 describe('registerServices application lifecycle', () => {
   it('owns the pending OAuth sweep through idempotent setup and teardown', async () => {
     vi.useFakeTimers();
-    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
-    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    const firstSweepHandle = { unref: vi.fn() } as unknown as NodeJS.Timeout;
+    const restartedSweepHandle = { unref: vi.fn() } as unknown as NodeJS.Timeout;
+    const sweepHandles = [firstSweepHandle, restartedSweepHandle];
+    const setSweepInterval = vi.fn(() => sweepHandles.shift()!);
+    const clearSweepInterval = vi.fn();
     const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
     const db = createTenantScopedDatabaseProxy(rawDb);
     const app: Application = feathersExpress(feathers());
@@ -25,11 +28,6 @@ describe('registerServices application lifecycle', () => {
         bootstrap_superadmin_users: [],
       },
     } satisfies AgorConfig;
-    const sweepCallIndexes = () =>
-      setIntervalSpy.mock.calls.flatMap((call, index) => (call[1] === 60_000 ? [index] : []));
-    const clearedCount = (handle: ReturnType<typeof setInterval>) =>
-      clearIntervalSpy.mock.calls.filter(([cleared]) => cleared === handle).length;
-
     try {
       await registerServices({
         db,
@@ -44,33 +42,35 @@ describe('registerServices application lifecycle', () => {
         allowSuperadmin: false,
         requireAuth: async (context) => context,
         deployment: { mode: 'standalone' },
+        pendingOAuthSweepScheduler: {
+          setInterval: setSweepInterval,
+          clearInterval: clearSweepInterval,
+        },
       });
-      expect(sweepCallIndexes()).toEqual([]);
+      expect(setSweepInterval).not.toHaveBeenCalled();
 
       await app.setup();
-      const firstSweepIndex = sweepCallIndexes()[0];
-      expect(sweepCallIndexes()).toEqual([firstSweepIndex]);
-      const firstSweepHandle = setIntervalSpy.mock.results[firstSweepIndex!]?.value as ReturnType<
-        typeof setInterval
-      >;
+      expect(setSweepInterval).toHaveBeenCalledOnce();
+      expect(setSweepInterval).toHaveBeenCalledWith(expect.any(Function), 60_000);
+      expect(firstSweepHandle.unref).toHaveBeenCalledOnce();
 
       await app.setup();
-      expect(sweepCallIndexes()).toEqual([firstSweepIndex]);
+      expect(setSweepInterval).toHaveBeenCalledOnce();
 
       await app.teardown();
-      expect(clearedCount(firstSweepHandle)).toBe(1);
+      expect(clearSweepInterval).toHaveBeenCalledOnce();
+      expect(clearSweepInterval).toHaveBeenLastCalledWith(firstSweepHandle);
       await app.teardown();
-      expect(clearedCount(firstSweepHandle)).toBe(1);
+      expect(clearSweepInterval).toHaveBeenCalledOnce();
 
       await app.setup();
-      const restartedSweepIndex = sweepCallIndexes()[1];
-      expect(sweepCallIndexes()).toEqual([firstSweepIndex, restartedSweepIndex]);
-      const restartedSweepHandle = setIntervalSpy.mock.results[restartedSweepIndex!]
-        ?.value as ReturnType<typeof setInterval>;
+      expect(setSweepInterval).toHaveBeenCalledTimes(2);
       expect(restartedSweepHandle).not.toBe(firstSweepHandle);
+      expect(restartedSweepHandle.unref).toHaveBeenCalledOnce();
 
       await app.teardown();
-      expect(clearedCount(restartedSweepHandle)).toBe(1);
+      expect(clearSweepInterval).toHaveBeenCalledTimes(2);
+      expect(clearSweepInterval).toHaveBeenLastCalledWith(restartedSweepHandle);
     } finally {
       await app.teardown();
       vi.clearAllTimers();
