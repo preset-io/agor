@@ -14,7 +14,12 @@ import {
   ReloadOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { SandpackPreview, SandpackProvider, type SandpackSetup } from '@codesandbox/sandpack-react';
+import {
+  type SandpackPredefinedTemplate,
+  SandpackPreview,
+  SandpackProvider,
+  type SandpackSetup,
+} from '@codesandbox/sandpack-react';
 import { Alert, Button, Layout, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
@@ -331,7 +336,9 @@ export function ArtifactFullscreenPage({
         <div className="artifact-fullscreen-sandpack" style={{ flex: 1, minHeight: 0 }}>
           <SandpackProvider
             key={payload.content_hash}
-            template={sandpackInputs.template as SandpackTemplate}
+            // The shared artifact union includes legacy `vue3`; Sandpack's
+            // provider type is narrower than the persisted compatibility set.
+            template={sandpackInputs.template as SandpackPredefinedTemplate}
             files={sandpackInputs.files}
             customSetup={sandpackInputs.customSetup as SandpackSetup | undefined}
             theme={sandpackConfig.theme as never}

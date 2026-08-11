@@ -552,6 +552,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       template: requestedTemplate,
       sandpack_config: resolvedSandpackConfig,
       files,
+      entry: existing?.entry,
     });
     const template = renderConfig.template;
     if (renderConfig.sandpack_config) {
@@ -794,6 +795,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         template: existing.template,
         sandpack_config: sanitizedConfig,
         files: existing.files,
+        entry: existing.entry,
       });
       dbUpdates.sandpack_config = normalizedConfig.sandpack_config;
       if (normalizedConfig.template !== existing.template) {
@@ -845,6 +847,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
             if (updates.archived !== undefined) {
               rollback.archived = existing.archived;
               rollback.archived_at = existing.archived_at;
+            }
+            if (updates.sandpack_config !== undefined) {
+              rollback.sandpack_config = existing.sandpack_config;
+              rollback.template = existing.template;
+              // The repository accepts null to restore a legacy row without
+              // a denormalized entry; undefined would leave the normalized
+              // value in place.
+              rollback.entry = existing.entry ?? (null as unknown as string);
             }
             if (Object.keys(rollback).length > 0) {
               await this.artifactRepo.update(fullArtifactId, rollback);
@@ -984,6 +994,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       template: artifact.template,
       sandpack_config: artifact.sandpack_config,
       files: artifact.files,
+      entry: artifact.entry,
     });
     const filesOut: Record<string, string> = { ...artifact.files };
     const requiredEnvVars = artifact.required_env_vars ?? [];
@@ -1394,6 +1405,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       template: artifact.template,
       sandpack_config: artifact.sandpack_config,
       files: artifact.files,
+      entry: artifact.entry,
     });
 
     // Strip Agor-only sidecars + the synthesized .env. CodeSandbox expects
@@ -1808,6 +1820,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       template: artifact.template,
       sandpack_config: artifact.sandpack_config,
       files,
+      entry: artifact.entry,
     });
     return this.computeHashFromFiles({
       ...files,

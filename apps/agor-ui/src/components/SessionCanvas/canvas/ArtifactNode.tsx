@@ -23,6 +23,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import {
+  type SandpackPredefinedTemplate,
   SandpackPreview,
   SandpackProvider,
   type SandpackSetup,
@@ -617,7 +618,9 @@ export const ArtifactNode = ({
           )}
           <SandpackProvider
             key={payload.content_hash}
-            template={sandpackInputs.template as SandpackTemplate}
+            // The shared artifact union includes legacy `vue3`; Sandpack's
+            // provider type is narrower than the persisted compatibility set.
+            template={sandpackInputs.template as SandpackPredefinedTemplate}
             files={sandpackInputs.files}
             customSetup={sandpackInputs.customSetup as SandpackSetup | undefined}
             theme={sandpackConfig?.theme as never}

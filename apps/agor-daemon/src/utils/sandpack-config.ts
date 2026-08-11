@@ -145,6 +145,7 @@ export function shouldUseStaticTemplate(artifact: {
   template: SandpackTemplate;
   sandpack_config?: SandpackConfig;
   files?: Record<string, string>;
+  entry?: string;
 }): boolean {
   const template = effectiveTemplateForArtifact(artifact);
   if (template === 'static') return false;
@@ -152,7 +153,9 @@ export function shouldUseStaticTemplate(artifact: {
 
   const files = artifact.files ?? {};
   const defaultEntry = template === 'vanilla-ts' ? '/index.ts' : '/index.js';
-  const configuredEntry = artifact.sandpack_config?.customSetup?.entry;
+  // `customSetup.entry` is the most specific source of truth. Older records
+  // may only have the denormalized Artifact.entry column populated.
+  const configuredEntry = artifact.sandpack_config?.customSetup?.entry ?? artifact.entry;
   if (
     configuredEntry !== undefined &&
     configuredEntry !== defaultEntry &&
@@ -176,6 +179,7 @@ export function renderTemplateForArtifact(artifact: {
   template: SandpackTemplate;
   sandpack_config?: SandpackConfig;
   files?: Record<string, string>;
+  entry?: string;
 }): SandpackTemplate {
   return shouldUseStaticTemplate(artifact) ? 'static' : effectiveTemplateForArtifact(artifact);
 }
@@ -192,6 +196,7 @@ export function normalizeSandpackConfigForRender(artifact: {
   template: SandpackTemplate;
   sandpack_config?: SandpackConfig;
   files?: Record<string, string>;
+  entry?: string;
 }): { template: SandpackTemplate; sandpack_config?: SandpackConfig } {
   const useStaticTemplate = shouldUseStaticTemplate(artifact);
   const template = useStaticTemplate ? 'static' : effectiveTemplateForArtifact(artifact);

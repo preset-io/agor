@@ -234,6 +234,16 @@ describe('HTML-first vanilla artifact rendering', () => {
     expect(
       renderTemplateForArtifact({
         template: 'vanilla',
+        entry: '/alternate.js',
+        files: {
+          '/index.js': '// conventional entry is also empty',
+          '/index.html': html,
+        },
+      })
+    ).toBe('vanilla');
+    expect(
+      renderTemplateForArtifact({
+        template: 'vanilla',
         sandpack_config: { customSetup: { entry: '/alternate.js' } },
         files: {
           '/alternate.js': '// empty',

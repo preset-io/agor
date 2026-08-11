@@ -252,6 +252,71 @@ describe('ArtifactsService source session provenance', () => {
 });
 
 describe('ArtifactsService.updateMetadata', () => {
+  dbTest('does not normalize render metadata during a metadata-only update', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const artifact = await seedArtifact(db, board.board_id, { userId: 'user-owner' });
+    const files = {
+      '/index.js': '// generated entry intentionally left empty',
+      '/index.html': '<main>HTML-first</main>',
+    };
+    await artifactRepo.update(artifact.artifact_id, {
+      template: 'vanilla',
+      files,
+      sandpack_config: { customSetup: { entry: '/index.js', environment: 'parcel' } },
+    });
+
+    await service.updateMetadata(artifact.artifact_id, { name: 'Renamed' }, 'user-owner');
+
+    const refreshed = await artifactRepo.findById(artifact.artifact_id);
+    expect(refreshed?.name).toBe('Renamed');
+    expect(refreshed?.template).toBe('vanilla');
+    expect(refreshed?.entry).toBeUndefined();
+    expect(refreshed?.sandpack_config).toEqual({
+      customSetup: { entry: '/index.js', environment: 'parcel' },
+    });
+  });
+
+  dbTest('rolls back render metadata when board placement fails', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const artifact = await seedArtifact(db, board.board_id, { userId: 'user-owner' });
+    const files = {
+      '/index.js': '// generated entry intentionally left empty',
+      '/index.html': '<main>HTML-first</main>',
+    };
+    const originalConfig = {
+      customSetup: { entry: '/index.js', environment: 'parcel' },
+    };
+    await artifactRepo.update(artifact.artifact_id, {
+      template: 'vanilla',
+      files,
+      sandpack_config: originalConfig,
+    });
+
+    const upsert = vi
+      .spyOn(BoardRepository.prototype, 'upsertBoardObject')
+      .mockRejectedValueOnce(new Error('placement unavailable'));
+    try {
+      await expect(
+        service.updateMetadata(
+          artifact.artifact_id,
+          { sandpack_config: originalConfig, x: 10 },
+          'user-owner'
+        )
+      ).rejects.toThrow('placement unavailable');
+    } finally {
+      upsert.mockRestore();
+    }
+
+    const refreshed = await artifactRepo.findById(artifact.artifact_id);
+    expect(refreshed?.template).toBe('vanilla');
+    expect(refreshed?.entry).toBeUndefined();
+    expect(refreshed?.sandpack_config).toEqual(originalConfig);
+  });
+
   dbTest('moves artifact to a new board and preserves placement', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const boardRepo = new BoardRepository(db);
