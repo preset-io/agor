@@ -54,6 +54,7 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
@@ -310,6 +311,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const { modal } = App.useApp();
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
@@ -1399,7 +1401,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       <div
         style={{
           flexShrink: 0,
-          padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px`,
+          padding: isSlim
+            ? `${token.sizeUnit * 1.5}px ${token.sizeUnit * 3}px`
+            : `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px`,
           borderBottom: `1px solid ${token.colorBorder}`,
           background: token.colorBgContainer,
         }}
@@ -1408,7 +1412,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
             <div style={{ flexShrink: 0 }}>
-              <ToolIcon tool={session.agentic_tool} size={40} />
+              <ToolIcon tool={session.agentic_tool} size={isSlim ? 24 : 40} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               {editingTitle ? (
@@ -1428,7 +1432,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   }}
                   placeholder="Untitled session"
                   variant="borderless"
-                  style={{ fontSize: 18, fontWeight: 600, padding: 0 }}
+                  style={{ fontSize: isSlim ? 14 : 18, fontWeight: 600, padding: 0 }}
                 />
               ) : (
                 <Tooltip title="Click to rename">
@@ -1454,7 +1458,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                       textAlign: 'left',
                     }}
                   >
-                    <Typography.Text strong style={{ fontSize: 18, ...getSessionTitleStyles(2) }}>
+                    <Typography.Text
+                      strong
+                      style={{
+                        fontSize: isSlim ? 14 : 18,
+                        ...getSessionTitleStyles(isSlim ? 1 : 2),
+                      }}
+                    >
                       {session.title || session.description
                         ? getSessionDisplayTitle(session, { includeAgentFallback: false })
                         : 'Untitled session'}
@@ -1471,8 +1481,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   </button>
                 </Tooltip>
               )}
-              <Badge status={getStatusColor()} text={session.status.toUpperCase()} />
-              {session.created_by && (
+              <Tooltip title={isSlim ? session.status.toUpperCase() : undefined}>
+                <Badge
+                  status={getStatusColor()}
+                  text={isSlim ? undefined : session.status.toUpperCase()}
+                />
+              </Tooltip>
+              {session.created_by && (!isSlim || session.created_by !== currentUserId) && (
                 <div style={{ marginTop: token.sizeUnit }}>
                   <CreatedByTag
                     createdBy={session.created_by}

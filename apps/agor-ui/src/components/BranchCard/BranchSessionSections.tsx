@@ -35,6 +35,7 @@ import {
 import type React from 'react';
 import { useCallback, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import {
@@ -255,6 +256,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   client,
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const { modal } = App.useApp();
   const { showSuccess, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
@@ -929,7 +931,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             }}
             title={isCreating ? 'Branch is being created...' : undefined}
           >
-            New Session
+            {isSlim ? 'Session' : 'New Session'}
           </Button>
         </div>
       )}

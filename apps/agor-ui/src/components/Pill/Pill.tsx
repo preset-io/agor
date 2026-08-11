@@ -427,6 +427,8 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   taskMetadata,
   style,
 }) => {
+  const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   // Prefer the executor-supplied snapshot — its totalTokens/maxTokens are
   // authoritative (agent-reported), and its `percentage` matches the agent's
   // own "Context XX% used" display (e.g. Codex applies a baseline subtraction
@@ -448,7 +450,66 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
     return 'red';
   };
 
-  const pill = (
+  const ringColor = !hasLimit
+    ? token.colorInfo
+    : percentage < 50
+      ? token.colorSuccess
+      : percentage < 80
+        ? token.colorWarning
+        : token.colorError;
+
+  // Slim: a small progress ring, details on click. Classic: the % tag with
+  // details on hover.
+  const RING_SIZE = 16;
+  const RING_STROKE = 2.5;
+  const radius = (RING_SIZE - RING_STROKE) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const fillFraction = hasLimit ? Math.min(percentage, 100) / 100 : 0.25;
+
+  const trigger = isSlim ? (
+    <button
+      type="button"
+      aria-label={hasLimit ? `Context ${percentage}% used` : 'Context usage unknown'}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        cursor: 'pointer',
+        lineHeight: 0,
+        background: 'none',
+        border: 'none',
+        padding: 0,
+        ...style,
+      }}
+    >
+      <svg
+        width={RING_SIZE}
+        height={RING_SIZE}
+        viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+        style={{ transform: 'rotate(-90deg)' }}
+        aria-hidden="true"
+      >
+        <circle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={radius}
+          fill="none"
+          stroke={token.colorFillSecondary}
+          strokeWidth={RING_STROKE}
+        />
+        <circle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={radius}
+          fill="none"
+          stroke={ringColor}
+          strokeWidth={RING_STROKE}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - fillFraction)}
+        />
+      </svg>
+    </button>
+  ) : (
     <Tag icon={<PercentageOutlined />} color={getColor()} style={style}>
       {hasLimit ? `${percentage}%` : '?'}
     </Tag>
@@ -465,11 +526,11 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
         />
       }
       title={null}
-      trigger="hover"
+      trigger={isSlim ? 'click' : 'hover'}
       placement="top"
       mouseEnterDelay={0.3}
     >
-      {pill}
+      {trigger}
     </Popover>
   );
 };
