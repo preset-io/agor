@@ -5,7 +5,12 @@ export function emitExecutorResult(result: unknown): void {
 }
 
 export function completeExecutorResult<T extends { success: boolean }>(result: T): void {
-  emitExecutorResult(result);
-  // Assigning exitCode lets Node drain piped stdout before the event loop exits.
-  process.exitCode = result.success ? 0 : 1;
+  const code = result.success ? 0 : 1;
+  const line = `${EXECUTOR_RESULT_PREFIX}${JSON.stringify(result)}\n`;
+  process.exitCode = code;
+  // Write the sentinel, then force-exit once it has flushed to the (possibly piped) stdout.
+  // Lingering handles such as WebSocket timers must not keep one-shot executors alive.
+  process.stdout.write(line, () => process.exit(code));
+  // If the flush callback never fires (for example, the reader closed the pipe), still exit.
+  setTimeout(() => process.exit(code), 1000).unref();
 }
