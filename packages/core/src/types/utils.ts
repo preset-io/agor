@@ -188,7 +188,7 @@ export type PartialKeys<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
   : T extends readonly (infer Item)[]
-    ? readonly DeepReadonly<Item>[]
+    ? DeepReadonly<Item>[]
     : T extends object
       ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
       : T;
