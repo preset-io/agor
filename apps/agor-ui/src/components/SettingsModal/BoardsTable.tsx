@@ -503,12 +503,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         onSave={editingBoard ? handleUpdate : handleCreate}
         saveLabel={editingBoard ? undefined : 'Create'}
       >
-        <Form
-          form={form}
-          layout="vertical"
-          style={{ maxWidth: 520 }}
-          onValuesChange={() => setDirty(true)}
-        >
+        {/* Full width (no maxWidth) so BoardFormFields' Tabs span the pane
+            instead of sitting in a narrow cluster. */}
+        <Form form={form} layout="vertical" onValuesChange={() => setDirty(true)}>
           {editingBoard ? (
             <BoardFormFields
               // Keyed on board_id so useCustomCSS state and Collapse
