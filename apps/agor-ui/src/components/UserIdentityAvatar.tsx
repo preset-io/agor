@@ -21,10 +21,6 @@ export function getUserAvatarUrl(user?: Pick<User, 'avatar_url'> | null): string
   return user?.avatar_url || undefined;
 }
 
-export function slackAvatarRadius(size: number): number {
-  return Math.max(5, Math.round(size * 0.2));
-}
-
 /** Up to two uppercase letters from the user's name (else email local part). */
 export function getUserInitials(user?: Pick<User, 'name' | 'email'> | null): string {
   const name = user?.name?.trim();
@@ -93,10 +89,9 @@ export const UserIdentityAvatar: React.FC<UserIdentityAvatarProps> = ({
     <Avatar
       {...props}
       src={avatarUrl}
-      shape="square"
+      shape="circle"
       size={size}
       style={{
-        borderRadius: slackAvatarRadius(size),
         backgroundColor: bgColor,
         color: useInitials ? getContrastingTextColor(bgColor, token) : token.colorText,
         fontSize: useInitials

@@ -43,4 +43,9 @@ describe('UserIdentityAvatar fallback', () => {
     );
     expect(screen.getByRole('img')).toHaveAttribute('src', 'https://img/avatar.png');
   });
+
+  it('renders users on a circle so they are never mistaken for boards', () => {
+    const { container } = render(<UserIdentityAvatar user={makeUser()} />);
+    expect(container.querySelector('.ant-avatar-circle')).toBeInTheDocument();
+  });
 });

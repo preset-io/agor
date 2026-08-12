@@ -10,7 +10,7 @@
 import type { ActiveUser, Board, BoardID } from '@agor-live/client';
 import { Avatar, Flex, Tooltip, theme } from 'antd';
 import type { CSSProperties } from 'react';
-import { slackAvatarRadius, UserIdentityAvatar } from '../UserIdentityAvatar';
+import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
 export interface FacepileProps {
   activeUsers: ActiveUser[];
@@ -113,10 +113,9 @@ export const Facepile: React.FC<FacepileProps> = ({
         >
           <Flex component="span" style={{ lineHeight: 1 }}>
             <Avatar
-              shape="square"
+              shape="circle"
               size={avatarSize}
               style={{
-                borderRadius: slackAvatarRadius(avatarSize),
                 backgroundColor: token.colorPrimaryBg,
                 color: token.colorText,
                 fontSize: 12,
