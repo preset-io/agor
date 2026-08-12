@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MessagesService, TasksService } from '../base/index.js';
 import {
   createAssistantMessage,
+  createSystemMessage,
   createUserMessage,
   createUserMessageFromContent,
   extractTokenUsage,
@@ -175,6 +176,38 @@ describe('extractTokenUsage', () => {
         cache_read_tokens: undefined,
         cache_creation_tokens: undefined,
       });
+    });
+  });
+});
+
+describe('createSystemMessage', () => {
+  it('preserves the executor-owned provider failure marker for daemon classification', async () => {
+    const messagesService = {
+      create: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MessagesService;
+    const sessionId = generateId() as SessionID;
+    const messageId = generateId() as MessageID;
+
+    const result = await createSystemMessage(
+      sessionId,
+      messageId,
+      [
+        {
+          type: 'text',
+          text: 'Agent SDK error (error_during_execution): Credit balance is too low',
+        },
+      ],
+      undefined,
+      0,
+      'claude-sonnet-4-6',
+      messagesService,
+      { is_provider_failure_result: true }
+    );
+
+    expect(result.metadata).toMatchObject({
+      is_meta: true,
+      is_provider_failure_result: true,
+      model: 'claude-sonnet-4-6',
     });
   });
 });

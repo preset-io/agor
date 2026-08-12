@@ -40,13 +40,18 @@ function declaresProviderFailure(data: unknown): boolean {
   );
 }
 
-/** Keep the recovery-panel discriminator owned by daemon classification. */
-export function protectExternalProviderFailureMetadata(context: HookContext): HookContext {
-  if (!context.params.provider) return context;
-  const writes = Array.isArray(context.data) ? context.data : [context.data];
+/** Reject public single/bulk DTOs that attempt to mint daemon-owned recovery states. */
+export function assertExternalProviderFailureMetadataAllowed(data: unknown): void {
+  const writes = Array.isArray(data) ? data : [data];
   if (writes.some(declaresProviderFailure)) {
     throw new Forbidden('Provider failure metadata can only be classified by the daemon');
   }
+}
+
+/** Keep the recovery-panel discriminator owned by daemon classification. */
+export function protectExternalProviderFailureMetadata(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+  assertExternalProviderFailureMetadataAllowed(context.data);
   return context;
 }
 
@@ -132,8 +137,11 @@ export function classifyMissingCredentialFailure(
 
     const isMissingCredentialFailure = data.metadata?.is_missing_credential_failure === true;
     const isZeroTurnResult = data.metadata?.is_zero_turn_result === true;
+    const isProviderFailureResult = data.metadata?.is_provider_failure_result === true;
 
-    if (!isMissingCredentialFailure && !isZeroTurnResult) return context;
+    if (!isMissingCredentialFailure && !isZeroTurnResult && !isProviderFailureResult) {
+      return context;
+    }
 
     try {
       const [task, session] = await Promise.all([
@@ -151,7 +159,7 @@ export function classifyMissingCredentialFailure(
       // Tools with no mapped key (e.g. opencode) aren't credential-gated.
       if (!keyName) return context;
 
-      if (isZeroTurnResult && !isMissingCredentialFailure) {
+      if ((isZeroTurnResult || isProviderFailureResult) && !isMissingCredentialFailure) {
         const resolution = await resolveApiKey(keyName, {
           userId: task.created_by as UserID,
           db,

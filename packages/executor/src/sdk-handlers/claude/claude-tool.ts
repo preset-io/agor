@@ -694,7 +694,8 @@ export class ClaudeTool implements ITool {
                   taskId,
                   nextIndex++,
                   resolvedModel,
-                  this.messagesService!
+                  this.messagesService!,
+                  { is_provider_failure_result: true }
                 );
                 return true;
               });
@@ -1122,7 +1123,8 @@ export class ClaudeTool implements ITool {
                   taskId,
                   nextIndex++,
                   resolvedModel,
-                  this.messagesService!
+                  this.messagesService!,
+                  { is_provider_failure_result: true }
                 );
                 return true;
               });

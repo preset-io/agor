@@ -296,6 +296,9 @@ export interface Message {
     /** Marks the synthesized message from a zero-turn success (no real model call). */
     is_zero_turn_result?: boolean;
 
+    /** Marks an executor-owned terminal SDK error result for bounded classification. */
+    is_provider_failure_result?: boolean;
+
     /**
      * Set server-side when a task failure resolves to a missing credential or
      * provider credit/quota exhaustion. Drives a recovery state instead of the

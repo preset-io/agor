@@ -4,6 +4,7 @@ import type { HookContext, Message, Session, Task } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  assertExternalProviderFailureMetadataAllowed,
   classifyMissingCredentialFailure,
   protectExternalProviderFailureMetadata,
 } from './classify-missing-credential';
@@ -75,6 +76,19 @@ describe('classifyMissingCredentialFailure', () => {
   const zeroTurnBillingResult: Partial<Message> = {
     ...zeroTurnResult,
     content: [{ type: 'text', text: 'Credit balance is too low' }],
+  };
+
+  const sdkErrorBillingResult: Partial<Message> = {
+    ...zeroTurnResult,
+    type: 'system',
+    role: MessageRole.SYSTEM,
+    content: [
+      {
+        type: 'text',
+        text: 'Agent SDK error (error_during_execution): Credit balance is too low',
+      },
+    ],
+    metadata: { is_meta: true, is_provider_failure_result: true },
   };
 
   it('normalizes an explicit executor credential-preflight failure', async () => {
@@ -170,6 +184,24 @@ describe('classifyMissingCredentialFailure', () => {
     expect(result.content_preview).not.toContain('Credit balance is too low');
   });
 
+  it('classifies the verified Anthropic credit failure from an SDK error result', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(makeContext({ ...sdkErrorBillingResult }));
+    const result = ctx.data as Message;
+
+    expect(result.metadata).toMatchObject({
+      error_kind: 'provider_credit_exhausted',
+      tool: 'claude-code',
+    });
+    expect(result.content).not.toContain('Credit balance is too low');
+  });
+
   it('classifies a stable billing signal in a short zero-turn result', async () => {
     vi.mocked(resolveApiKey).mockResolvedValue({
       apiKey: 'sk-ant-user-key',
@@ -203,6 +235,24 @@ describe('classifyMissingCredentialFailure', () => {
       expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
       expect((ctx.data as Message).content).toEqual([{ type: 'text', text: content }]);
     }
+  });
+
+  it('lets an explicit billing code win when a provider also reports HTTP 429', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(
+      makeContext({
+        ...zeroTurnResult,
+        content: [{ type: 'text', text: '429 Too Many Requests: insufficient_quota' }],
+      })
+    );
+
+    expect((ctx.data as Message).metadata?.error_kind).toBe('provider_credit_exhausted');
   });
 
   it('preserves legitimate zero-turn output when an API key resolved', async () => {
@@ -357,5 +407,23 @@ describe('protectExternalProviderFailureMetadata', () => {
     });
     internalContext.params.provider = undefined;
     expect(protectExternalProviderFailureMetadata(internalContext)).toBe(internalContext);
+  });
+
+  it('rejects forged recovery metadata in bulk payloads', () => {
+    expect(() =>
+      assertExternalProviderFailureMetadataAllowed([
+        { type: 'user', content: 'safe' },
+        { metadata: { error_kind: 'provider_credit_exhausted', tool: 'claude-code' } },
+      ])
+    ).toThrow('Provider failure metadata can only be classified by the daemon');
+  });
+
+  it('allows ordinary executor bulk messages and their classification markers', () => {
+    expect(() =>
+      assertExternalProviderFailureMetadataAllowed([
+        { metadata: { is_zero_turn_result: true } },
+        { metadata: { is_provider_failure_result: true } },
+      ])
+    ).not.toThrow();
   });
 });
