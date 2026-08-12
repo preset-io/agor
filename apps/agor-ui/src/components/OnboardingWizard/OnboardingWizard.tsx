@@ -20,16 +20,29 @@ import {
   CheckCircleOutlined,
   CheckOutlined,
   CloseOutlined,
+  CodeOutlined,
   LeftOutlined,
   LoadingOutlined,
+  ProjectOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
+import { ToolIcon } from '../ToolIcon';
+
+/** AntD icon per onboarding persona id — keeps the persona cards on-brand with the rest of the app. */
+const PERSONA_ICONS: Record<string, ReactNode> = {
+  developer: <CodeOutlined />,
+  pm: <ProjectOutlined />,
+  lead: <TeamOutlined />,
+  solo: <ThunderboltOutlined />,
+};
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -80,7 +93,6 @@ const PERSONAS = ONBOARDING_PERSONAS;
 interface LlmOption {
   id: string;
   agent: AgenticToolName;
-  symbol: string;
   provider: string;
   title: string;
   description: string;
@@ -94,7 +106,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'claude',
     agent: 'claude-code',
-    symbol: '✦',
     provider: 'Anthropic',
     title: 'Claude',
     description: 'Best for complex coding, long context, and nuanced reasoning',
@@ -106,7 +117,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'openai',
     agent: 'codex',
-    symbol: '⬡',
     provider: 'OpenAI',
     title: 'GPT',
     description: 'Fast and strong at structured reasoning and code generation',
@@ -117,7 +127,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'gemini',
     agent: 'gemini',
-    symbol: '◈',
     provider: 'Google',
     title: 'Gemini',
     description: 'Excellent at multimodal tasks and very long context windows',
@@ -128,7 +137,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'custom',
     agent: 'opencode',
-    symbol: openCodeOnboarding.symbol,
     provider: '',
     title: openCodeOnboarding.title,
     description: openCodeOnboarding.description,
@@ -1221,7 +1229,9 @@ export function OnboardingWizard({
                   width: '100%',
                 }}
               >
-                <div style={{ fontSize: 24, marginBottom: 8 }}>{persona.emoji}</div>
+                <div style={{ fontSize: 24, marginBottom: 8, color: TEXT_SECONDARY }}>
+                  {PERSONA_ICONS[persona.id]}
+                </div>
                 <div
                   style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14, marginBottom: 6 }}
                 >
@@ -1296,15 +1306,7 @@ export function OnboardingWizard({
                     gap: 12,
                   }}
                 >
-                  <span
-                    style={{
-                      fontSize: 20,
-                      flexShrink: 0,
-                      color: TEXT_SECONDARY,
-                    }}
-                  >
-                    {option.symbol}
-                  </span>
+                  <ToolIcon tool={option.agent} size={22} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div
                       style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
@@ -1612,10 +1614,10 @@ export function OnboardingWizard({
       {/* Concept pills */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 24 }}>
         {[
-          { emoji: '🌿', term: 'Branch', def: 'isolated workspace per task' },
-          { emoji: '💬', term: 'Session', def: 'conversation with your AI' },
-          { emoji: '📋', term: 'Board', def: 'kanban view of all branches' },
-        ].map(({ emoji, term, def }) => (
+          { term: 'Branch', def: 'isolated workspace per task' },
+          { term: 'Session', def: 'conversation with your AI' },
+          { term: 'Board', def: 'kanban view of all branches' },
+        ].map(({ term, def }) => (
           <div
             key={term}
             style={{
@@ -1631,7 +1633,7 @@ export function OnboardingWizard({
               boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09)',
             }}
           >
-            {emoji} <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> - {def}
+            <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> - {def}
           </div>
         ))}
       </div>
@@ -1706,7 +1708,6 @@ export function OnboardingWizard({
                   alignItems: 'flex-start',
                 }}
               >
-                <span style={{ fontSize: 18, flexShrink: 0 }}>🤖</span>
                 <div>
                   <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
                     Board's AI tool
