@@ -48,14 +48,38 @@ describe('catalogDisplayName', () => {
     expect(catalogDisplayName({ name: 'mcp/mcp' })).toBe('mcp/mcp');
   });
 
-  it('agrees with the slug about which half is the identity', () => {
+  it('reads the same identity segment out of the name as the slug does', () => {
     // One rule, two formattings. Drift here is what produced `mcp__mcp__<tool>`.
+    // Asserted as "both track the name", not as an equality between the two
+    // outputs: they coincide only for an untitled entry, and reading that
+    // coincidence as the contract is how `title` ends up feeding the slug.
     for (const name of [
       'com.deepwiki/mcp',
       'io.github.github/github-mcp-server',
       'io.sanity.www/mcp',
     ]) {
-      expect(catalogServerSlug(name)).toBe(catalogDisplayName({ name }).toLowerCase());
+      expect(catalogDisplayName({ name }).toLowerCase()).toBe(catalogServerSlug(name));
     }
+
+    // A different publisher moves both.
+    expect(catalogServerSlug('com.other/mcp')).not.toBe(catalogServerSlug('com.deepwiki/mcp'));
+    expect(catalogDisplayName({ name: 'com.other/mcp' })).not.toBe(
+      catalogDisplayName({ name: 'com.deepwiki/mcp' })
+    );
+  });
+
+  it('lets a curated title move the screen label without moving the tool namespace', () => {
+    // `curated.yaml` accepts `title`, and `deriveSharedColumns` prefers
+    // `curation.title ?? registry.title` — a live path, not a hypothetical. The
+    // slug is an agent-visible namespace: editing display copy must never
+    // rename the tools a running session already knows.
+    const name = 'com.deepwiki/mcp';
+
+    expect(catalogDisplayName({ name })).toBe('Deepwiki');
+    expect(catalogDisplayName({ name, title: 'DeepWiki' })).toBe('DeepWiki');
+    expect(catalogDisplayName({ name, title: 'Devin Wiki Search' })).toBe('Devin Wiki Search');
+
+    // Same name, three labels, one namespace.
+    expect(catalogServerSlug(name)).toBe('deepwiki');
   });
 });

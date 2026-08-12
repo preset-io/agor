@@ -34,8 +34,8 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
   const capabilities = entry.capabilities ?? [];
   const overflow = capabilities.length - VISIBLE_CAPABILITIES;
   // Whether pressing Connect will get anywhere, on the card rather than after
-  // the disclosure — most curated entries want an account this phase cannot ask
-  // for, so discovering it at the button is discovering it too late.
+  // the disclosure — most curated entries want an account the marketplace has
+  // no way to ask for, so discovering it at the button is discovering it late.
   const connect = connectStatus(entry);
 
   return (

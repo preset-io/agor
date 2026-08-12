@@ -273,6 +273,13 @@ const GENERIC_CATALOG_NAME_LABELS = new Set(['mcp', 'mcp-server', 'server', 'api
  * UI derived the publisher while connect took the last path segment, so the
  * server name the agent saw was the word "mcp" for 38 of 50 curated entries.
  * One rule, two formattings — never two rules.
+ *
+ * The publisher is the identity only while what is connectable is curated.
+ * `io.github.<user>/<repo>` inverts it — every server one GitHub user
+ * publishes shares a publisher and differs only in the path — so the day
+ * uncurated registry entries become installable, this needs a disambiguating
+ * suffix rather than a special case. `curated-loader.test.ts` holds the
+ * uniqueness invariant that would otherwise notice too late.
  */
 function catalogPublisherSegment(name: string): string | undefined {
   const [domain = ''] = name.split('/');
