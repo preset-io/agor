@@ -1979,6 +1979,25 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     </ConfigProvider>
   );
 
+  // Embedded nav is a horizontal Tabs bar, not a second Sider+Menu — otherwise
+  // drilling in from Workspace Settings stacks three nav columns on screen. The
+  // section list (and its isEditingOther tab-hiding) comes from the same
+  // navGroups the Sider uses; groups are flattened and overflow into Tabs' own
+  // "more" dropdown when there are many providers.
+  const embeddedTabItems = navGroups.flatMap((group) =>
+    group.children.map((child) => ({
+      key: child.key,
+      label: (
+        <Space size={6}>
+          {child.icon}
+          {child.status && <Badge color={statusDotColor[child.status]} />}
+          <span>{child.title}</span>
+          {child.status && <span style={SR_ONLY_STYLE}>{PROVIDER_STATUS_LABEL[child.status]}</span>}
+        </Space>
+      ),
+    }))
+  );
+
   // Drill-in mode: no outer Modal. A Back affordance replaces the modal close,
   // and this component keeps its own footer (its inline-save caption differs
   // per panel) rendered as a bottom bar.
@@ -1996,7 +2015,28 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           </Button>
         </div>
         {hiddenForms}
-        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>{layoutBody}</div>
+        {/* Persistent, non-dismissible banner so you never lose track of whose
+            account you're editing (only when editing someone else). */}
+        {isEditingOther && (
+          <Alert
+            type="info"
+            showIcon
+            icon={<UserOutlined />}
+            message={`You are editing ${user?.name || user?.email || 'this user'}'s account settings`}
+            style={{ borderRadius: 0 }}
+          />
+        )}
+        <ConfigProvider theme={scopedTheme}>
+          <Tabs
+            activeKey={activeInNav ? activeKey : undefined}
+            onChange={setActiveKey}
+            items={embeddedTabItems}
+            tabBarStyle={{ padding: '0 24px', marginBottom: 0 }}
+          />
+        </ConfigProvider>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 24px' }}>
+          {renderContent()}
+        </div>
         <div
           style={{
             padding: '12px 24px',
