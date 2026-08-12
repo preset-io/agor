@@ -122,6 +122,45 @@ describe('mcp-catalog/connect', () => {
     expect(result.starter_prompt).toBe('List the issues assigned to me this cycle.');
   });
 
+  it('names the server after its publisher, not the protocol word in its path', async () => {
+    // The name is the `<name>` in every `mcp__<name>__<tool>` the model reads.
+    // Taking the last path segment made it the literal word "mcp" for 38 of the
+    // 50 curated entries, so two installs in one session were indistinguishable.
+    const entry = {
+      ...CURATED,
+      name: 'com.deepwiki/mcp',
+      title: undefined,
+    } as unknown as MCPCatalogEntry;
+    const { app, created } = buildApp(entry);
+
+    await createMCPCatalogConnectService(app).create(
+      { ...request, catalog_key: 'com.deepwiki/mcp' },
+      params
+    );
+
+    expect(created.mcpServers[0]).toMatchObject({
+      name: 'deepwiki',
+      display_name: 'Deepwiki',
+    });
+  });
+
+  it('names a refused entry the way the drawer does', async () => {
+    const entry = {
+      ...CURATED,
+      name: 'io.sentry/mcp',
+      title: undefined,
+      probed_auth_type: 'oauth',
+    } as unknown as MCPCatalogEntry;
+    const { app } = buildApp(entry);
+
+    await expect(
+      createMCPCatalogConnectService(app).create(
+        { ...request, catalog_key: 'io.sentry/mcp' },
+        params
+      )
+    ).rejects.toThrow(/^Sentry requires authentication/);
+  });
+
   it('lands on a session with the server attached', async () => {
     const { app, created } = buildApp(CURATED);
 

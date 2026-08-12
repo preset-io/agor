@@ -12,7 +12,7 @@ import type {
   MCPCatalogProbedAuthType,
   MCPCatalogSort,
 } from '@agor/core/types';
-import { MCP_CATALOG_CATEGORIES } from '@agor/core/types';
+import { catalogDisplayName, MCP_CATALOG_CATEGORIES } from '@agor/core/types';
 
 export const CATEGORY_LABELS: Record<MCPCatalogCategory, string> = {
   'dev-tools': 'Dev tools',
@@ -110,31 +110,11 @@ export const DEFAULT_SORT: MCPCatalogSort = 'popularity';
 /**
  * Display name for an entry.
  *
- * `title` is owned by the registry mirror, and curation deliberately leaves it
- * alone — so on an install with registry sync off (the default) no entry has
- * one, and rendering `name` directly would label the whole catalog with
- * reverse-DNS strings like `com.deepwiki/mcp`. The publisher label carries the
- * identity a user recognizes, so it stands in until a real title arrives.
- *
- * It cannot recover casing: `com.deepwiki` reads "Deepwiki", not "DeepWiki".
- * Curated titles are the fix for that, not more derivation.
+ * The rule lives in `@agor/core` because connect needs it too — it names the
+ * created server and writes the refusals a user reads. Two derivations of "what
+ * is this server called" is how the agent ended up seeing `mcp__mcp__<tool>`.
  */
-export function entryTitle(entry: MCPCatalogEntry): string {
-  const title = entry.title?.trim();
-  if (title) return title;
-
-  const [domain = ''] = entry.name.split('/');
-  // Publishers routinely register the server under a subdomain — `com.figma.mcp`
-  // — so the trailing label is often the protocol's name rather than theirs.
-  const publisher = domain
-    .split('.')
-    .filter((label) => label && !GENERIC_NAME_LABELS.has(label.toLowerCase()))
-    .pop();
-  if (!publisher) return entry.name;
-  return publisher.charAt(0).toUpperCase() + publisher.slice(1);
-}
-
-const GENERIC_NAME_LABELS = new Set(['mcp', 'mcp-server', 'server', 'api', 'www']);
+export const entryTitle = catalogDisplayName;
 
 /**
  * What a user would find out by pressing Connect, said before they press it.

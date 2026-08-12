@@ -138,7 +138,8 @@ describe('marketplace install, as it lands in the database', () => {
 
     const [server] = await installedServers();
     expect(server).toMatchObject({
-      name: 'mcp',
+      // The publisher, not the protocol word `com.deepwiki/mcp` ends with.
+      name: 'deepwiki',
       scope: 'session',
       catalog_entry_name: DEEPWIKI,
       owner_user_id: user.user_id,
