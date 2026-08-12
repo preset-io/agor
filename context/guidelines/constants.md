@@ -1,10 +1,10 @@
 # Shared Runtime Identifiers
 
-**A shared runtime identifier has one domain owner. Declare it once, colocate it with that domain, and import it everywhere else.**
+**A shared runtime identifier or closed family has one domain-owned source of truth. Consumers import that declaration or its type instead of creating parallel declarations.**
 
 Runtime identifiers are strings whose exact value affects behavior or compatibility: event names, service and route names, config and metadata keys, permission or status values, channel prefixes, storage keys, and similar protocol values.
 
-This is the runtime-value companion to the "Centralize types" rule in `AGENTS.md`. A shared TypeScript type is not enough if call sites still retype its string values independently.
+This is the runtime-value companion to the "Centralize types" rule in `AGENTS.md`. A shared TypeScript type is not enough if call sites still reconstruct its string values as independent declarations.
 
 ## Decide by meaning, not repetition
 
@@ -48,42 +48,28 @@ Import the declaration rather than repeating the raw value at consumers.
 Declare the runtime values first and derive the type from them:
 
 ```ts
-// packages/core/src/types/message.ts
-export const MESSAGE_STREAM_LIFECYCLE_EVENTS = [
-  'streaming:start',
-  'streaming:chunk',
-  'streaming:end',
-  'streaming:error',
-] as const;
+// packages/core/src/types/knowledge.ts
+export const KNOWLEDGE_VISIBILITIES = ['public', 'private'] as const;
 
-export type MessageStreamLifecycleEvent = (typeof MESSAGE_STREAM_LIFECYCLE_EVENTS)[number];
+export type KnowledgeVisibility = (typeof KNOWLEDGE_VISIBILITIES)[number];
 ```
 
 This keeps the runtime list and compile-time union structurally inseparable.
 
 ### Families with meaningful subsets
 
-Name and compose subsets instead of reconstructing them at call sites:
+Name meaningful subsets instead of reconstructing them at call sites. When a broader type already owns the family, constrain the subset with `satisfies`:
 
 ```ts
-export const STREAMING_EVENT_TYPES = [
-  ...MESSAGE_STREAM_LIFECYCLE_EVENTS,
-  'thinking:start',
-  'thinking:chunk',
-  'thinking:end',
-] as const;
+// packages/core/src/types/gateway.ts
+export type ChannelType =
+  'slack' | 'discord' | 'whatsapp' | 'telegram' | 'github' | 'teams' | 'shortcut';
 
-export type StreamingEventType = (typeof STREAMING_EVENT_TYPES)[number];
-```
-
-Consumers then use the appropriate owned value or type:
-
-```ts
-events: ['queued', ...STREAMING_EVENT_TYPES, 'permission_resolved'];
-const streamingEvents = new Set(STREAMING_EVENT_TYPES);
-async function forward(event: MessageStreamLifecycleEvent) {
-  /* ... */
-}
+export const DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES = [
+  'slack',
+  'github',
+  'shortcut',
+] as const satisfies readonly ChannelType[];
 ```
 
 ## Put ownership where readers expect it
@@ -104,5 +90,5 @@ When reviewing code that introduces or changes a runtime identifier, verify that
 - its owner is clear;
 - consumers import rather than reconstruct it;
 - closed families derive their types from runtime declarations;
-- meaningful subsets are named and composed; and
+- meaningful subsets are named and constrained or composed; and
 - no parallel source of truth was introduced.

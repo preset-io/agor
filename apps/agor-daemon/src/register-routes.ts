@@ -71,7 +71,6 @@ import type {
 } from '@agor/core/types';
 import {
   hasMinimumRole,
-  isMessageStreamLifecycleEvent,
   isTaskPendingDispatch,
   MessageRole,
   ROLES,
@@ -118,7 +117,6 @@ import {
   ScheduleNotReadyError,
   type SchedulerService,
 } from './services/scheduler.js';
-import type { TaskStreamingEventType } from './services/tasks-events.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
@@ -756,9 +754,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) {
         app.service('messages').emit(data.event, data.data);
         if (isServiceAccountRoute(params)) {
-          const gatewayStreamingEvent = isMessageStreamLifecycleEvent(data.event)
-            ? data.event
-            : null;
+          const gatewayStreamingEvent =
+            data.event === 'streaming:start' ||
+            data.event === 'streaming:chunk' ||
+            data.event === 'streaming:end' ||
+            data.event === 'streaming:error'
+              ? data.event
+              : null;
 
           if (gatewayStreamingEvent) {
             deferInFreshTenantScope(params, async () => {
@@ -783,7 +785,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       async create(
         data: {
-          event: TaskStreamingEventType;
+          event: 'tool:start' | 'tool:complete' | 'thinking:chunk';
           data: Record<string, unknown>;
         },
         params: RouteParams

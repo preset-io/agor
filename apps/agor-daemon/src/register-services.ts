@@ -64,13 +64,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import {
-  hasMinimumRole,
-  isMCPOAuthGrantBindingVersion,
-  ROLES,
-  STREAMING_EVENT_TYPES,
-  TaskStatus,
-} from '@agor/core/types';
+import { hasMinimumRole, isMCPOAuthGrantBindingVersion, ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
@@ -328,10 +322,17 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   app.use('/messages', messagesService, {
     methods: [...MESSAGES_SERVICE_TRANSPORT_METHODS],
-    // Streaming/thinking deltas come from the shared STREAMING_EVENT_TYPES
-    // source of truth (see context/guidelines/constants.md). 'queued' and
-    // 'permission_resolved' are messages-only control events.
-    events: ['queued', ...STREAMING_EVENT_TYPES, 'permission_resolved'],
+    events: [
+      'queued',
+      'streaming:start',
+      'streaming:chunk',
+      'streaming:end',
+      'streaming:error',
+      'thinking:start',
+      'thinking:chunk',
+      'thinking:end',
+      'permission_resolved',
+    ],
     docs: {
       description: 'Conversation messages within AI agent sessions',
       definitions: {
