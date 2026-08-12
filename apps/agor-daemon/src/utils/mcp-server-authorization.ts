@@ -202,8 +202,7 @@ export function canConfigureMcpServers(role: unknown, policy: MCPMemberPolicy): 
  * A member widening their own server's reach, which is what
  * `allow_private_only` withholds. Only a change is refused: a payload that
  * restates the scope already stored — which is what every edit form sends —
- * has widened nothing, and refusing it would lock the owner out of a row that
- * predates the policy.
+ * has widened nothing.
  */
 function assertScopeUnchangedOrAllowed(
   policy: MCPMemberPolicy,
@@ -213,7 +212,7 @@ function assertScopeUnchangedOrAllowed(
   if (requested === undefined || requested === stored) return;
   if (mayMemberUseMCPScope(policy, requested)) return;
   throw new Forbidden(
-    'Your organization only allows members private MCP servers, which reach the sessions they are attached to; ask an admin for a workspace-wide one'
+    "This MCP server's reach cannot be widened to the whole workspace; your organization allows members private servers, which reach the sessions they are attached to"
   );
 }
 

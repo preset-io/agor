@@ -38,12 +38,14 @@ function paramsFor(userId: UserID, role: string): AuthenticatedParams {
 }
 
 function serverOwnedBy(
-  owner?: UserID
-): Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport'> {
+  owner?: UserID,
+  scope: MCPServer['scope'] = 'session'
+): Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport' | 'scope'> {
   return {
     mcp_server_id: 'server-1' as MCPServer['mcp_server_id'],
     owner_user_id: owner,
     transport: 'http',
+    scope,
   };
 }
 

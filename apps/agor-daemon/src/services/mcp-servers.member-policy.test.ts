@@ -59,6 +59,7 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
     before: {
       create: [createMcpServerWriteAuthorizationHook(db) as never],
       patch: [createMcpServerWriteAuthorizationHook(db) as never],
+      update: [createMcpServerWriteAuthorizationHook(db) as never],
     },
   } as never);
 
@@ -79,6 +80,8 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
         .create({ ...REMOTE_SERVER, ...data }, params) as Promise<MCPServer>,
     patch: (id: string, data: Record<string, unknown>) =>
       app.service('mcp-servers').patch(id, data, params) as Promise<MCPServer>,
+    update: (id: string, data: Record<string, unknown>) =>
+      app.service('mcp-servers').update(id, data, params) as Promise<MCPServer>,
     storedServers: () => new MCPServerRepository(rawDb).findAll({}),
   };
 }
@@ -120,7 +123,7 @@ describe('member policy, as it lands in mcp_servers', () => {
     const created = await create({ scope: 'session' });
 
     await expect(patch(created.mcp_server_id, { scope: 'global' })).rejects.toThrow(
-      /only allows members private MCP servers/
+      /reach cannot be widened/
     );
     const [server] = await storedServers();
     expect(server?.scope).toBe('session');
@@ -140,6 +143,21 @@ describe('member policy, as it lands in mcp_servers', () => {
     });
 
     expect(patched).toMatchObject({ scope: 'global', display_name: 'DeepWiki' });
+  });
+
+  it('refuses a widening update, and leaves one that names no scope alone', async () => {
+    // PUT reaches the same hook as PATCH. An update that states nothing must
+    // not become a widening by way of a replace.
+    const { create, update, storedServers } = await buildDaemon('allow_private_only');
+    const created = await create({ scope: 'session' });
+
+    await expect(update(created.mcp_server_id, { scope: 'global' })).rejects.toThrow(
+      /reach cannot be widened/
+    );
+    await update(created.mcp_server_id, { display_name: 'DeepWiki' });
+
+    const [server] = await storedServers();
+    expect(server).toMatchObject({ scope: 'session', display_name: 'DeepWiki' });
   });
 
   it('leaves a member free to narrow their own server', async () => {
