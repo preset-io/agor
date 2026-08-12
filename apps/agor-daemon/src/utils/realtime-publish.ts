@@ -7,7 +7,7 @@ import type { BranchRepository, SessionRepository, TenantScopeAwareDatabase } fr
 import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, HookContext, User, UserID } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { hasMinimumRole, ROLES, STREAMING_EVENT_TYPES } from '@agor/core/types';
 import {
   MAX_REALTIME_RELAY_BYTES,
   type RealtimeRelayEnvelope,
@@ -237,15 +237,9 @@ function safeRelayData(data: unknown): unknown | undefined {
 // High-frequency per-chunk events emitted on the `messages` service during a
 // streaming turn (text + thinking deltas). These fan out once per token-batch,
 // so they must be scoped to session subscribers rather than the whole tenant.
-const MESSAGE_STREAMING_EVENTS = new Set([
-  'streaming:start',
-  'streaming:chunk',
-  'streaming:end',
-  'streaming:error',
-  'thinking:start',
-  'thinking:chunk',
-  'thinking:end',
-]);
+// Sourced from the shared STREAMING_EVENT_TYPES so this set can never drift
+// from the service registration (see context/guidelines/constants.md).
+const MESSAGE_STREAMING_EVENTS: ReadonlySet<string> = new Set(STREAMING_EVENT_TYPES);
 
 // Per-chunk / per-tool events emitted on the `tasks` service during a turn.
 const TASK_STREAMING_EVENTS = new Set(['thinking:chunk', 'tool:start', 'tool:complete']);

@@ -317,16 +317,40 @@ export type MessageCreate = Omit<Message, 'message_id'> & {
 };
 
 /**
- * Streaming event types
+ * Content-streaming lifecycle events — the `streaming:*` deltas of the
+ * assistant's visible text, excluding `thinking:*` reasoning deltas. This is
+ * the subset the gateway forwards to connectors (Slack, etc.).
+ *
+ * Runtime source of truth: the `MessageStreamLifecycleEvent` union is derived
+ * from this array, so the values and the type can never drift apart.
+ */
+export const MESSAGE_STREAM_LIFECYCLE_EVENTS = [
+  'streaming:start',
+  'streaming:chunk',
+  'streaming:end',
+  'streaming:error',
+] as const;
+
+export type MessageStreamLifecycleEvent = (typeof MESSAGE_STREAM_LIFECYCLE_EVENTS)[number];
+
+/**
+ * Streaming event types — the single source of truth for these event names.
  *
  * These events are broadcast by the executor to the daemon via /messages/streaming
- * and relayed to connected clients via Socket.io for real-time message updates.
+ * and relayed to connected clients via Socket.io for real-time message updates:
+ * the visible-text `streaming:*` lifecycle plus `thinking:*` reasoning deltas.
+ *
+ * Do NOT re-list these literals at a call site (a service `events:` array, a
+ * union type, a `Set`, an equality chain). Import this constant — or the
+ * derived `StreamingEventType` / `MESSAGE_STREAM_LIFECYCLE_EVENTS` — instead.
+ * See `context/guidelines/constants.md`; enforced by
+ * `scripts/check-magic-string-drift.mjs`.
  */
-export type StreamingEventType =
-  | 'streaming:start'
-  | 'streaming:chunk'
-  | 'streaming:end'
-  | 'streaming:error'
-  | 'thinking:start'
-  | 'thinking:chunk'
-  | 'thinking:end';
+export const STREAMING_EVENT_TYPES = [
+  ...MESSAGE_STREAM_LIFECYCLE_EVENTS,
+  'thinking:start',
+  'thinking:chunk',
+  'thinking:end',
+] as const;
+
+export type StreamingEventType = (typeof STREAMING_EVENT_TYPES)[number];

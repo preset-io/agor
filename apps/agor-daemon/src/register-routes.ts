@@ -58,6 +58,7 @@ import type {
   Message,
   MessageID,
   MessageSource,
+  MessageStreamLifecycleEvent,
   Params,
   ScheduleID,
   Session,
@@ -72,6 +73,7 @@ import type {
 import {
   hasMinimumRole,
   isTaskPendingDispatch,
+  MESSAGE_STREAM_LIFECYCLE_EVENTS,
   MessageRole,
   ROLES,
   SessionStatus,
@@ -754,13 +756,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) {
         app.service('messages').emit(data.event, data.data);
         if (isServiceAccountRoute(params)) {
-          const gatewayStreamingEvent =
-            data.event === 'streaming:start' ||
-            data.event === 'streaming:chunk' ||
-            data.event === 'streaming:end' ||
-            data.event === 'streaming:error'
-              ? data.event
-              : null;
+          const gatewayStreamingEvent = (
+            MESSAGE_STREAM_LIFECYCLE_EVENTS as readonly StreamingEventType[]
+          ).includes(data.event)
+            ? (data.event as MessageStreamLifecycleEvent)
+            : null;
 
           if (gatewayStreamingEvent) {
             deferInFreshTenantScope(params, async () => {

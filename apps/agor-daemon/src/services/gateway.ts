@@ -75,6 +75,7 @@ import type {
   MCPServerID,
   Message,
   MessageSource,
+  MessageStreamLifecycleEvent,
   Session,
   SessionID,
   Task,
@@ -1497,7 +1498,7 @@ export class GatewayService {
   }
 
   async handleMessageStreamingEvent(
-    event: 'streaming:start' | 'streaming:chunk' | 'streaming:end' | 'streaming:error',
+    event: MessageStreamLifecycleEvent,
     data: Record<string, unknown>
   ): Promise<void> {
     if (!(await this.shouldQueryGatewayRouting())) return;
