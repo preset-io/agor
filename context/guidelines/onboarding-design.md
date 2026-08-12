@@ -151,15 +151,15 @@ The canonical source for user-facing voice is the Agor team Knowledge base doc
 CLAUDE.md names as the source of truth for this repo's copy. The rules above are consistent with it;
 the cross-checks below reconcile the three places this surface touches that doc.
 
-### Resolved: it's "teammate"
+### "Teammate", not "assistant" — already-established terminology, not a new call
 
-Max decided the product noun is **"teammate"**, not "assistant". Card 1's noun was updated
-accordingly — from "assistant" to "teammate" (the title now reads "Get my own personal teammate") —
-so the wizard is consistent throughout. This reconciles the messaging doc's older "assistant"
-language (2026-06-21)
-with the later `product/assistant-to-teammate-rename-audit.md` decision (2026-07-07) and the
-wizard's existing "AI teammate" copy ("Name your AI teammate", the `teammateName` step in
-`seedOnboardingTeammate.ts`) — "teammate" wins across the board.
+"Teammate" was already the product's established noun before this guideline — see the 2026-07-07
+`product/assistant-to-teammate-rename-audit.md` and the wizard's existing "Name your AI teammate"
+copy (the `teammateName` step in `seedOnboardingTeammate.ts`). Card 1's noun was corrected from
+"assistant" to "teammate" (now "Get my own personal teammate") to match that existing terminology,
+reconciling the messaging doc's older "assistant" language (2026-06-21). This isn't a new decision
+needing Max's review — it's a consistency fix against what the product already calls itself
+everywhere else.
 
 ### Two persona systems — don't conflate them
 
@@ -206,5 +206,5 @@ this in the implementation PR.
 - [ ] Skip / 0-goal path falls back to a generic default block (no goal bias, follow-the-user bootstrap line); 0/1/2-goal cases all covered.
 - [ ] Card/bootstrap copy names concrete artifacts, stays plain and second-person, and avoids hedging adjectives.
 - [ ] No card headline/subtext uses reserved technical jargon ("git branches", "sessions", "isolation modes").
-- [ ] Card 1 says "teammate" (not "assistant"), consistent with the wizard's "teammate" product noun.
+- [ ] Card 1 says "teammate" (not "assistant") — a copy-consistency check against the product's established noun, not a decision awaiting sign-off.
 - [ ] Card 1's inbox/news promise is backed by a real connector or the copy was adjusted; the gap is flagged in the PR.
