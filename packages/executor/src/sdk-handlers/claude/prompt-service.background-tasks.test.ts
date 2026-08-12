@@ -218,4 +218,146 @@ describe('ClaudePromptService background task query lifetime', () => {
     expect(activity).toHaveBeenCalledWith('progress', 'background_task.start');
     expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
   });
+
+  describe('permission_denied stream enrichment (#2063)', () => {
+    it('yields permission_denied with parentToolUseId when subagent is denied', async () => {
+      const query = fakeQuery([
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'subagent-task-42',
+          tool_use_id: 'toolu_parent_agent_call',
+          description: 'Explore codebase',
+          uuid: 'start-1',
+          session_id: 'sdk-session',
+        },
+        {
+          type: 'system',
+          subtype: 'permission_denied',
+          agent_id: 'subagent-task-42',
+          tool_name: 'Bash',
+          tool_use_id: 'toolu_denied_bash',
+          message: 'Command refused by policy',
+          uuid: 'denial-1',
+          session_id: 'sdk-session',
+        },
+        sdkResult('terminal-result'),
+      ]);
+      vi.mocked(setupQuery).mockResolvedValue({
+        query: query as never,
+        resolvedModel: 'claude-sonnet-4-6',
+        getStderr: () => '',
+      });
+
+      const events = [];
+      for await (const event of service().promptSessionStreaming(
+        sessionId,
+        'prompt',
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      )) {
+        events.push(event);
+      }
+
+      const denialEvent = events.find((e) => e.type === 'permission_denied');
+      expect(denialEvent).toBeDefined();
+      expect(denialEvent).toMatchObject({
+        type: 'permission_denied',
+        is_error: true,
+        toolName: 'Bash',
+        toolUseId: 'toolu_denied_bash',
+        agentId: 'subagent-task-42',
+        parentToolUseId: 'toolu_parent_agent_call',
+      });
+      expect(denialEvent?.message).toMatch(/refused/i);
+    });
+
+    it('yields permission_denied without parentToolUseId when correlation misses', async () => {
+      const query = fakeQuery([
+        {
+          type: 'system',
+          subtype: 'permission_denied',
+          agent_id: 'unknown-subagent',
+          tool_name: 'Bash',
+          tool_use_id: 'toolu_denied_bash',
+          message: 'Command refused by policy',
+          uuid: 'denial-1',
+          session_id: 'sdk-session',
+        },
+        sdkResult('terminal-result'),
+      ]);
+      vi.mocked(setupQuery).mockResolvedValue({
+        query: query as never,
+        resolvedModel: 'claude-sonnet-4-6',
+        getStderr: () => '',
+      });
+
+      const events = [];
+      for await (const event of service().promptSessionStreaming(
+        sessionId,
+        'prompt',
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      )) {
+        events.push(event);
+      }
+
+      const denialEvent = events.find((e) => e.type === 'permission_denied');
+      expect(denialEvent).toBeDefined();
+      expect(denialEvent).toMatchObject({
+        type: 'permission_denied',
+        is_error: true,
+      });
+      expect(denialEvent?.parentToolUseId).toBeUndefined();
+    });
+
+    it('does not yield permission_denied on successful subagent turn', async () => {
+      const query = fakeQuery([
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'subagent-task-42',
+          tool_use_id: 'toolu_parent_agent_call',
+          description: 'Explore codebase',
+          uuid: 'start-1',
+          session_id: 'sdk-session',
+        },
+        {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 'subagent-task-42',
+          status: 'completed',
+          output_file: '/tmp/task-42',
+          summary: 'done',
+          uuid: 'notification',
+          session_id: 'sdk-session',
+        },
+        sdkResult('terminal-result'),
+      ]);
+      vi.mocked(setupQuery).mockResolvedValue({
+        query: query as never,
+        resolvedModel: 'claude-sonnet-4-6',
+        getStderr: () => '',
+      });
+
+      const events = [];
+      for await (const event of service().promptSessionStreaming(
+        sessionId,
+        'prompt',
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      )) {
+        events.push(event);
+      }
+
+      const denialEvent = events.find((e) => e.type === 'permission_denied');
+      expect(denialEvent).toBeUndefined();
+    });
+  });
 });

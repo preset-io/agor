@@ -593,6 +593,10 @@ export async function executeToolTask(params: {
       completed_at: new Date().toISOString(),
     };
 
+    if (result.hadError && result.errorDetails?.length) {
+      patchData.error_message = result.errorDetails.join('; ');
+    }
+
     // Add git_state if we captured a SHA
     // Note: This will be deep-merged with existing git_state by the repository layer
     if (gitStateAtEnd) {

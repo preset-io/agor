@@ -196,7 +196,7 @@ export class ClaudeTool implements ITool {
   }
 
   private async emitTaskEvent(
-    event: 'tool:start' | 'tool:complete' | 'thinking:chunk',
+    event: 'tool:start' | 'tool:complete' | 'thinking:chunk' | 'tool:error',
     data: Record<string, unknown>
   ): Promise<void> {
     if (this.tasksStreamingService) {
@@ -422,6 +422,18 @@ export class ClaudeTool implements ITool {
         }
       }
 
+      // Handle tool permission denial
+      if (event.type === 'permission_denied') {
+        nextIndex = await this.handlePermissionDenied(
+          event,
+          sessionId,
+          taskId,
+          resolvedModel,
+          nextIndex,
+          streamingCallbacks
+        );
+      }
+
       // Check for slow API response BEFORE marking first activity.
       // This ensures the warning fires when the first event arrives after the threshold.
       const isActivityEvent =
@@ -430,6 +442,7 @@ export class ClaudeTool implements ITool {
         event.type === 'tool_start' ||
         event.type === 'message_start' ||
         event.type === 'rate_limit' ||
+        event.type === 'permission_denied' ||
         event.type === 'sdk_event' ||
         event.type === 'complete';
 
@@ -620,6 +633,7 @@ export class ClaudeTool implements ITool {
           sdkType?: string;
           sdkSubtype?: string;
           metadata?: Record<string, unknown>;
+          is_error?: boolean;
           [key: string]: unknown;
         }> = [
           {
@@ -628,6 +642,7 @@ export class ClaudeTool implements ITool {
             sdkType: sdkEvent.sdkType,
             sdkSubtype: sdkEvent.sdkSubtype,
             metadata: sdkEvent.rawMessage,
+            is_error: sdkEvent.is_error,
           },
         ];
         console.log(`📡 SDK event → system message: ${sdkEvent.summary}`);
@@ -672,7 +687,7 @@ export class ClaudeTool implements ITool {
           };
           if (sdkResult.subtype && sdkResult.subtype !== 'success') {
             hadError = true;
-            errorDetails = sdkResult.errors;
+            errorDetails = [...(errorDetails ?? []), ...(sdkResult.errors ?? [])];
             console.error(
               `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, errors=${JSON.stringify(sdkResult.errors)}`
             );
@@ -940,6 +955,143 @@ export class ClaudeTool implements ITool {
     }
   }
 
+  /** Emit tool:error, failed tool_results, and system message for a permission_denied event. */
+  private async handlePermissionDenied(
+    event: Extract<ProcessedEvent, { type: 'permission_denied' }>,
+    sessionId: SessionID,
+    taskId: TaskID | undefined,
+    resolvedModel: string | undefined,
+    nextIndex: number,
+    streamingCallbacks?: import('../base').StreamingCallbacks
+  ): Promise<number> {
+    const denialDetail =
+      event.summary || `Permission denied for tool '${event.toolName}': ${event.message}`;
+
+    if (taskId && event.toolUseId) {
+      await this.emitTaskEvent('tool:error', {
+        task_id: taskId,
+        session_id: sessionId,
+        tool_use_id: event.toolUseId,
+        tool_name: event.toolName,
+        error: event.message,
+        decision_reason: event.decisionReason,
+        decision_reason_type: event.decisionReasonType,
+      });
+    }
+
+    // Best-effort point-in-time snapshot guard against duplicate tool_result writes (degrades fail-open if repo unavailable)
+    const existingMessages = this.messagesRepo
+      ? await this.messagesRepo.findBySessionId(sessionId)
+      : [];
+
+    const hasToolResultForId = (toolUseId: string): boolean => {
+      return existingMessages.some((m) => {
+        let content = m.content;
+        if (typeof content === 'string') {
+          try {
+            content = JSON.parse(content);
+          } catch {
+            return false;
+          }
+        }
+        if (!Array.isArray(content)) return false;
+        return content.some(
+          (b) =>
+            b &&
+            typeof b === 'object' &&
+            'type' in b &&
+            b.type === 'tool_result' &&
+            'tool_use_id' in b &&
+            b.tool_use_id === toolUseId
+        );
+      });
+    };
+
+    if (event.toolUseId && !hasToolResultForId(event.toolUseId)) {
+      await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+        await createUserMessageFromContent(
+          sessionId,
+          generateId() as MessageID,
+          [
+            {
+              type: 'tool_result',
+              tool_use_id: event.toolUseId,
+              content: denialDetail,
+              is_error: true,
+            },
+          ],
+          taskId,
+          nextIndex++,
+          this.messagesService!,
+          null
+        );
+      });
+    }
+
+    if (event.parentToolUseId && !hasToolResultForId(event.parentToolUseId)) {
+      await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+        await createUserMessageFromContent(
+          sessionId,
+          generateId() as MessageID,
+          [
+            {
+              type: 'tool_result',
+              tool_use_id: event.parentToolUseId,
+              content: `Subagent failed due to permission denial: ${denialDetail}`,
+              is_error: true,
+            },
+          ],
+          taskId,
+          nextIndex++,
+          this.messagesService!,
+          null
+        );
+      });
+    }
+
+    const sdkEventContent = [
+      {
+        type: 'sdk_event',
+        text: denialDetail,
+        summary: denialDetail,
+        sdkType: 'system',
+        sdkSubtype: 'permission_denied',
+        metadata: event.rawMessage || {
+          tool_name: event.toolName,
+          tool_use_id: event.toolUseId,
+          message: event.message,
+          decision_reason: event.decisionReason,
+        },
+        is_error: true,
+      },
+    ];
+    await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+      const sdkEventMessageId = generateId() as MessageID;
+      if (streamingCallbacks) {
+        await streamingCallbacks.onStreamStart(sdkEventMessageId, {
+          session_id: sessionId,
+          task_id: taskId,
+          role: MessageRole.SYSTEM,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      await createSystemMessage(
+        sessionId,
+        sdkEventMessageId,
+        sdkEventContent,
+        taskId,
+        nextIndex++,
+        resolvedModel,
+        this.messagesService!
+      );
+      if (streamingCallbacks) {
+        await streamingCallbacks.onStreamEnd(sdkEventMessageId);
+      }
+    });
+
+    return nextIndex;
+  }
+
   /**
    * Execute a prompt against a session (non-streaming version)
    *
@@ -1041,6 +1193,17 @@ export class ClaudeTool implements ITool {
         await this.captureAgentSessionId(sessionId, capturedAgentSessionId);
       }
 
+      // Handle tool permission denial in non-streaming path
+      if (event.type === 'permission_denied') {
+        nextIndex = await this.handlePermissionDenied(
+          event,
+          sessionId,
+          taskId,
+          resolvedModel,
+          nextIndex
+        );
+      }
+
       // Handle rate_limit events in non-streaming path
       if (event.type === 'rate_limit') {
         const rateLimitEvent = event as Extract<ProcessedEvent, { type: 'rate_limit' }>;
@@ -1078,6 +1241,7 @@ export class ClaudeTool implements ITool {
                 sdkType: sdkEvent.sdkType,
                 sdkSubtype: sdkEvent.sdkSubtype,
                 metadata: sdkEvent.rawMessage,
+                is_error: sdkEvent.is_error,
               },
             ],
             taskId,
@@ -1100,7 +1264,7 @@ export class ClaudeTool implements ITool {
           };
           if (sdkResult.subtype && sdkResult.subtype !== 'success') {
             hadError = true;
-            errorDetails = sdkResult.errors;
+            errorDetails = [...(errorDetails ?? []), ...(sdkResult.errors ?? [])];
             console.error(
               `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, errors=${JSON.stringify(sdkResult.errors)}`
             );

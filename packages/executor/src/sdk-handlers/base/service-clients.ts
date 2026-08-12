@@ -44,7 +44,7 @@ export interface TasksService {
  */
 export interface TasksStreamingService {
   create(data: {
-    event: 'tool:start' | 'tool:complete' | 'thinking:chunk';
+    event: 'tool:start' | 'tool:complete' | 'thinking:chunk' | 'tool:error';
     data: Record<string, unknown>;
   }): Promise<unknown>;
 }

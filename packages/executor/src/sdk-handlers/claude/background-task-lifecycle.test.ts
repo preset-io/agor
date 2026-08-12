@@ -3,8 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { ClaudeBackgroundTaskLifecycle } from './background-task-lifecycle.js';
 
 const message = (value: Record<string, unknown>) => value as SDKMessage;
-const started = (taskId: string, taskType = 'agent') =>
-  message({ type: 'system', subtype: 'task_started', task_id: taskId, task_type: taskType });
+const started = (taskId: string, taskType = 'agent', toolUseId?: string) =>
+  message({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: taskId,
+    task_type: taskType,
+    ...(toolUseId && { tool_use_id: toolUseId }),
+  });
 const settled = (taskId: string, status: 'completed' | 'failed' | 'stopped' = 'completed') =>
   message({ type: 'system', subtype: 'task_notification', task_id: taskId, status });
 const updated = (taskId: string, status: string) =>
@@ -120,5 +126,56 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
     expect(lifecycle.observe(settled('unknown')).taskTransition).toBeUndefined();
     expect(lifecycle.clearActiveTasks()).toBe(1);
     expect(lifecycle.clearActiveTasks()).toBe(0);
+  });
+
+  it('settles active background tasks when permission_denied occurs', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('agent-1'));
+    const transition = lifecycle.observe(
+      message({
+        type: 'system',
+        subtype: 'permission_denied',
+        agent_id: 'agent-1',
+        tool_name: 'Bash',
+        tool_use_id: 'toolu_abc',
+        message: 'Command refused',
+      })
+    );
+    expect(transition.taskTransition).toBe('settled');
+    expect(lifecycle.activeTaskCount).toBe(0);
+  });
+
+  it('records the parent tool_use_id from task_started when present', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('agent-1', 'agent', 'toolu_parent_123'));
+    expect(lifecycle.getParentToolUseId('agent-1')).toBe('toolu_parent_123');
+  });
+
+  it('returns undefined for a task_id with no parent tool_use_id in task_started', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('agent-1'));
+    expect(lifecycle.getParentToolUseId('agent-1')).toBeUndefined();
+  });
+
+  it('returns undefined for an unknown task_id', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    expect(lifecycle.getParentToolUseId('unknown')).toBeUndefined();
+  });
+
+  it('provides the correct parent tool_use_id to correlate a subagent permission denial', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('task-abc', 'agent', 'toolu_launch_agent'));
+    lifecycle.observe(
+      message({
+        type: 'system',
+        subtype: 'permission_denied',
+        agent_id: 'task-abc',
+        tool_name: 'Bash',
+        tool_use_id: 'toolu_denied_tool',
+        message: 'Denied',
+      })
+    );
+    expect(lifecycle.getParentToolUseId('task-abc')).toBe('toolu_launch_agent');
+    expect(lifecycle.activeTaskCount).toBe(0);
   });
 });

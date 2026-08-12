@@ -304,6 +304,17 @@ If you continue to see authentication errors, please contact your Agor administr
             break; // Exit for-await loop
           }
 
+          if (event.type === 'permission_denied' && event.agentId) {
+            const parentToolUseId = backgroundTasks.getParentToolUseId(event.agentId);
+            if (parentToolUseId) {
+              event.parentToolUseId = parentToolUseId;
+            } else {
+              console.warn(
+                `⚠️ [permission_denied_parent_correlation_miss] agent_id=${event.agentId} tool_name=${event.toolName}`
+              );
+            }
+          }
+
           // Yield all events including result (for token usage capture)
           yield event;
         }
