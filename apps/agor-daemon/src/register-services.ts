@@ -3422,6 +3422,20 @@ async function registerMCPServices(
    * Shared servers stay admin-only here, as they were before ownership
    * existed; nothing in this phase asks to widen an endpoint that makes an
    * outbound request on a shared credential.
+   *
+   * Ownership, not scope, is the discriminator, and the `scope === 'session'
+   * → admin only` line this replaced is not a rule to restore. That line dates
+   * from #960, when every row was shared and scope was the only thing there
+   * was to key on; it was never a decision about a session-scoped row somebody
+   * owns, because none existed. A marketplace install is exactly that row, so
+   * keying on scope would mean the member who installed a server could never
+   * refresh its capabilities.
+   *
+   * Nothing that existed before this loosens: a pre-ownership row has
+   * `owner_user_id = NULL`, so the owner test fails and it falls through to
+   * the admin check exactly as it used to. The caller-visibility gate in front
+   * of this (`loadMcpServerForCaller`) is a separate question and still runs —
+   * it answers whether the row may be named at all.
    */
   const denyDiscoverOfAnotherUsersServer = (
     server: MCPServer,
