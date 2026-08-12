@@ -497,6 +497,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       task.status === TaskStatus.RUNNING ||
       task.status === TaskStatus.STOPPING ||
       task.status === TaskStatus.QUEUED;
+    // Collapsed slim rows put meta inline with the prompt line — the chips
+    // no longer earn a second row.
+    const slimInlineMeta = isSlim && !isExpanded;
     const gutterTooltip = `${callbackFailed ? 'CHILD SESSION FAILED' : task.status.toUpperCase()}${
       !isTaskActive && task.duration_ms ? ` · ${formatDuration(task.duration_ms)}` : ''
     }`;
@@ -586,6 +589,111 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         })
       : undefined;
 
+    const taskMetaChips = (
+      <Flex
+        wrap={!slimInlineMeta}
+        gap={token.sizeUnit}
+        align="center"
+        style={slimInlineMeta ? { flexShrink: 0 } : undefined}
+      >
+        {(!isSlim || isTaskActive) && (
+          <TimerPill
+            status={task.status}
+            startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
+            endedAt={
+              task.completed_at ||
+              (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
+                ? task.message_range?.end_timestamp
+                : undefined)
+            }
+            durationMs={task.duration_ms}
+            lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
+            latestExecutorPulse={task.latest_executor_pulse}
+          />
+        )}
+        {scheduledFromBranch && scheduledRunAt && (
+          <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
+        )}
+        {/* Noise budget: collapsed rows show only chips that carry signal
+                for THIS task (who else ran it, how long, context pressure,
+                commits made). Steady-state facts (own user, token counts,
+                unchanged model/SHA) appear when expanded or when they change. */}
+        {task.created_by && (!isSlim || task.created_by !== currentUserId) && (
+          <CreatedByTag
+            createdBy={task.created_by}
+            currentUserId={currentUserId}
+            userById={userById}
+            prefix="By"
+          />
+        )}
+        {normalized && !isSlim && (
+          <TokenCountPill
+            count={normalized.tokenUsage.totalTokens}
+            inputTokens={normalized.tokenUsage.inputTokens}
+            outputTokens={normalized.tokenUsage.outputTokens}
+            cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
+            cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
+          />
+        )}
+        {hasContextWindowUsage && (
+          <ContextWindowPill
+            used={contextWindowUsed}
+            limit={contextWindowLimit || 0}
+            taskMetadata={{
+              model: task.model,
+              duration_ms: task.duration_ms,
+              agentic_tool,
+              raw_sdk_response: task.raw_sdk_response,
+              normalized_sdk_response: normalized ?? undefined,
+            }}
+          />
+        )}
+        {task.model &&
+          task.model !== (isSlim ? (previousTaskModel ?? sessionModel) : sessionModel) && (
+            <ModelPill model={task.model} />
+          )}
+        {task.git_state.sha_at_start &&
+          task.git_state.sha_at_start !== 'unknown' &&
+          (!isSlim ||
+            isExpanded ||
+            (task.git_state.sha_at_end &&
+              task.git_state.sha_at_end !== 'unknown' &&
+              task.git_state.sha_at_end !== task.git_state.sha_at_start)) && (
+            <Flex gap={token.sizeUnit / 2} align="center">
+              <GitStatePill
+                branch={task.git_state.ref_at_start}
+                sha={task.git_state.sha_at_start}
+                branchName={branchName}
+                bare={isSlim}
+                style={{ fontSize: 11 }}
+              />
+              {task.git_state.sha_at_end &&
+                task.git_state.sha_at_end !== 'unknown' &&
+                task.git_state.sha_at_end !== task.git_state.sha_at_start && (
+                  <>
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                      →
+                    </Typography.Text>
+                    <GitStatePill
+                      branch={task.git_state.ref_at_end}
+                      sha={task.git_state.sha_at_end}
+                      branchName={branchName}
+                      showDirtyIndicator={true}
+                      bare={isSlim}
+                      style={{ fontSize: 11 }}
+                    />
+                  </>
+                )}
+            </Flex>
+          )}
+        {task.report && (
+          <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>
+            Report
+          </Tag>
+        )}
+      </Flex>
+    );
+
     // Task header shows when collapsed
     const taskHeader = (
       <Flex gap={token.sizeUnit * 2} style={{ width: '100%' }}>
@@ -598,11 +706,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               <UpOutlined style={{ color: token.colorPrimary, fontSize: 14 }} />
             ) : (
               <Tooltip title={gutterTooltip} placement="left">
-                {callbackFailed ? (
-                  <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
-                ) : (
-                  <TaskStatusIcon status={task.status} size={16} />
-                )}
+                <span style={{ display: 'inline-flex', lineHeight: 0 }}>
+                  {callbackFailed ? (
+                    <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
+                  ) : (
+                    <TaskStatusIcon status={task.status} size={16} />
+                  )}
+                </span>
               </Tooltip>
             )}
           </Flex>
@@ -628,125 +738,31 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               text stays in the DOM so users can recover it via the
               copy-overlay (matches MessageBlock's pattern) — no tooltip,
               which got in the way of normal hover behavior. */}
-          <CopyableContent
-            textContent={task.full_prompt || ''}
-            // Default offsets place the icon outside the wrapper, but the
-            // task header has rounded corners with overflow:hidden which
-            // clips it. Pull the icon inside the prompt row instead.
-            copyButtonOffset={{ top: 0, right: 0 }}
-          >
-            <Typography.Text
-              ellipsis
-              style={{
-                marginBottom: token.sizeUnit,
-                display: 'block',
-                paddingRight: token.sizeUnit * 3,
-              }}
-            >
-              {task.full_prompt || 'User Prompt'}
-            </Typography.Text>
-          </CopyableContent>
-
-          {/* Task metadata */}
-          <Flex wrap gap={token.sizeUnit}>
-            {(!isSlim || isTaskActive) && (
-              <TimerPill
-                status={task.status}
-                startedAt={
-                  task.started_at || task.message_range?.start_timestamp || task.created_at
-                }
-                endedAt={
-                  task.completed_at ||
-                  (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
-                    ? task.message_range?.end_timestamp
-                    : undefined)
-                }
-                durationMs={task.duration_ms}
-                lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
-                latestExecutorPulse={task.latest_executor_pulse}
-              />
-            )}
-            {scheduledFromBranch && scheduledRunAt && (
-              <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
-            )}
-            {/* Noise budget: collapsed rows show only chips that carry signal
-                for THIS task (who else ran it, how long, context pressure,
-                commits made). Steady-state facts (own user, token counts,
-                unchanged model/SHA) appear when expanded or when they change. */}
-            {task.created_by && (!isSlim || task.created_by !== currentUserId) && (
-              <CreatedByTag
-                createdBy={task.created_by}
-                currentUserId={currentUserId}
-                userById={userById}
-                prefix="By"
-              />
-            )}
-            {normalized && !isSlim && (
-              <TokenCountPill
-                count={normalized.tokenUsage.totalTokens}
-                inputTokens={normalized.tokenUsage.inputTokens}
-                outputTokens={normalized.tokenUsage.outputTokens}
-                cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
-                cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
-              />
-            )}
-            {hasContextWindowUsage && (
-              <ContextWindowPill
-                used={contextWindowUsed}
-                limit={contextWindowLimit || 0}
-                taskMetadata={{
-                  model: task.model,
-                  duration_ms: task.duration_ms,
-                  agentic_tool,
-                  raw_sdk_response: task.raw_sdk_response,
-                  normalized_sdk_response: normalized ?? undefined,
-                }}
-              />
-            )}
-            {task.model &&
-              task.model !== (isSlim ? (previousTaskModel ?? sessionModel) : sessionModel) && (
-                <ModelPill model={task.model} />
-              )}
-            {task.git_state.sha_at_start &&
-              task.git_state.sha_at_start !== 'unknown' &&
-              (!isSlim ||
-                isExpanded ||
-                (task.git_state.sha_at_end &&
-                  task.git_state.sha_at_end !== 'unknown' &&
-                  task.git_state.sha_at_end !== task.git_state.sha_at_start)) && (
-                <Flex gap={token.sizeUnit / 2} align="center">
-                  <GitStatePill
-                    branch={task.git_state.ref_at_start}
-                    sha={task.git_state.sha_at_start}
-                    branchName={branchName}
-                    bare={isSlim}
-                    style={{ fontSize: 11 }}
-                  />
-                  {task.git_state.sha_at_end &&
-                    task.git_state.sha_at_end !== 'unknown' &&
-                    task.git_state.sha_at_end !== task.git_state.sha_at_start && (
-                      <>
-                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                          →
-                        </Typography.Text>
-                        <GitStatePill
-                          branch={task.git_state.ref_at_end}
-                          sha={task.git_state.sha_at_end}
-                          branchName={branchName}
-                          showDirtyIndicator={true}
-                          bare={isSlim}
-                          style={{ fontSize: 11 }}
-                        />
-                      </>
-                    )}
-                </Flex>
-              )}
-            {task.report && (
-              <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>
-                Report
-              </Tag>
-            )}
+          <Flex align="center" gap={token.sizeUnit} style={{ minWidth: 0 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <CopyableContent
+                textContent={task.full_prompt || ''}
+                // Default offsets place the icon outside the wrapper, but the
+                // task header has rounded corners with overflow:hidden which
+                // clips it. Pull the icon inside the prompt row instead.
+                copyButtonOffset={{ top: 0, right: 0 }}
+              >
+                <Typography.Text
+                  ellipsis
+                  style={{
+                    marginBottom: slimInlineMeta ? 0 : token.sizeUnit,
+                    display: 'block',
+                    paddingRight: token.sizeUnit * 3,
+                  }}
+                >
+                  {task.full_prompt || 'User Prompt'}
+                </Typography.Text>
+              </CopyableContent>
+            </div>
+            {slimInlineMeta && taskMetaChips}
           </Flex>
+
+          {!slimInlineMeta && taskMetaChips}
         </Flex>
       </Flex>
     );
