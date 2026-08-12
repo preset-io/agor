@@ -1571,7 +1571,7 @@ describe('createBranchAsClone', () => {
 describe('categorizeGitError', () => {
   // Issue #1126 / Bug B: clone failures need to bucket into categories so the
   // UI / MCP can suggest the right next step. The auth_failed bucket is the
-  // important one — it's the path that points users at Settings → API Keys.
+  // important one — it's the path that points users at User Settings → Env Vars.
   it('categorizes private-repo authentication failures as auth_failed', () => {
     expect(
       categorizeGitError('fatal: Authentication failed for https://github.com/foo/bar.git/')
@@ -1593,6 +1593,16 @@ describe('categorizeGitError', () => {
     expect(
       categorizeGitError('fatal: unable to connect to git.example.com: Connection refused')
     ).toBe('network');
+    expect(
+      categorizeGitError(
+        'fatal: unable to access: server certificate verification failed. CAfile: none'
+      )
+    ).toBe('network');
+    expect(categorizeGitError('fatal: unable to get local issuer certificate')).toBe('network');
+    expect(categorizeGitError('fatal: certificate verify failed')).toBe('network');
+    expect(categorizeGitError('fatal: self-signed certificate in certificate chain')).toBe(
+      'network'
+    );
   });
 
   it('falls through to unknown for unrecognised stderr', () => {

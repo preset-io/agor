@@ -8,6 +8,7 @@ import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
 import { listManagedAgorVersions } from '../lib/agentic-tool-integrations.js';
+import { diagnoseGit } from '../lib/git-diagnostics.js';
 
 export default class Doctor extends Command {
   static description = 'Check this Agor installation and its agentic tools';
@@ -18,18 +19,30 @@ export default class Doctor extends Command {
   async run(): Promise<void> {
     const { flags } = await this.parse(Doctor);
     const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
+    const git = await diagnoseGit();
     const agenticTools = await diagnoseAgenticTools(agorVersion);
     const staleVersions = (await listManagedAgorVersions()).filter(
       (version) => version !== agorVersion
     );
     const policy = await resolveAgenticToolSelectionPolicy(await loadConfig());
     if (flags.json) {
-      this.log(JSON.stringify({ ok: true, policy, staleVersions, agenticTools }, null, 2));
+      this.log(
+        JSON.stringify(
+          { ok: git.status === 'ready', git, policy, staleVersions, agenticTools },
+          null,
+          2
+        )
+      );
       return;
     }
     this.log(chalk.bold('Agor doctor\n'));
     this.log(`${chalk.green('✓')} Node.js ${process.version}`);
     this.log(`${chalk.green('✓')} Agor CLI is executable`);
+    if (git.status === 'ready') {
+      this.log(`${chalk.green('✓')} Git ${git.version} is executable (${git.binary})`);
+    } else {
+      this.log(`${chalk.red('✗')} ${git.detail}`);
+    }
     this.log('');
     this.log(chalk.bold('Agentic tools'));
     this.log(`  Policy: ${policy.mode}; source: ${policy.source}`);

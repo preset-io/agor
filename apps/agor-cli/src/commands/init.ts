@@ -44,6 +44,7 @@ import {
   normalizeAgenticToolName,
   resolveManagedAgenticToolVersion,
 } from '../lib/agentic-tool-integrations.js';
+import { diagnoseGit } from '../lib/git-diagnostics.js';
 
 export function isFreshInitState(state: {
   baseExists: boolean;
@@ -289,6 +290,13 @@ export default class Init extends Command {
     };
 
     this.log('✨ Initializing Agor...\n');
+
+    // Git is a runtime prerequisite for remote clones and branch/worktree
+    // materialization. Check before creating any state so a minimal fresh host
+    // fails here with remediation instead of later in the onboarding wizard.
+    const git = await diagnoseGit();
+    if (git.status !== 'ready') this.error(git.detail ?? 'Git is unavailable.');
+    this.log(`${chalk.green('✓')} Git ${git.version} is executable (${git.binary})`);
 
     // Determine base directory early
     const baseDir = flags.local ? join(process.cwd(), '.agor') : join(homedir(), '.agor');

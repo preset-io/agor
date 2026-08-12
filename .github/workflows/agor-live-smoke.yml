@@ -197,6 +197,32 @@ jobs:
           }
           NODE
 
+          # Exercise the packaged @agor/git → simple-git → system-git boundary,
+          # not merely imports and daemon boot. A local fixture avoids external
+          # network/credential dependencies while still performing a real clone.
+          node --input-type=module - "$ROOT" <<'NODE'
+          import { existsSync } from 'node:fs';
+          import { mkdir, writeFile } from 'node:fs/promises';
+          import { pathToFileURL } from 'node:url';
+          const [root] = process.argv.slice(2);
+          const packageRoot = `${root}/prefix/lib/node_modules/agor-live`;
+          const { cloneRepo } = await import(pathToFileURL(`${packageRoot}/dist/git/index.js`).href);
+          const { simpleGit } = await import(pathToFileURL(`${packageRoot}/node_modules/simple-git/dist/esm/index.js`).href);
+          const source = `${root}/clone-source`;
+          const targetDir = `${root}/clone-smoke`;
+          await mkdir(source, { recursive: true });
+          const fixtureGit = simpleGit(source);
+          await fixtureGit.init(['--initial-branch=main']);
+          await fixtureGit.addConfig('user.name', 'Agor package smoke');
+          await fixtureGit.addConfig('user.email', 'package-smoke@invalid.example');
+          await writeFile(`${source}/README.md`, '# package smoke\n');
+          await fixtureGit.add('README.md');
+          await fixtureGit.commit('fixture');
+          const result = await cloneRepo({ url: source, targetDir, env: {} });
+          if (!existsSync(`${result.path}/.git`)) throw new Error('Packaged clone smoke missed .git');
+          console.log('✓ Packaged Git clone boundary works');
+          NODE
+
       # Install BOTH tarballs together. List the client first so npm registers
       # it before resolving agor-live's "@agor-live/client" dep — guarantees
       # the local file: source wins over the (non-existent) registry version.

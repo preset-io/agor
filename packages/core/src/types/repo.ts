@@ -147,7 +147,7 @@ export interface Repo {
    * Populated when `clone_status === 'failed'`. Cleared on retry.
    *
    * `category` exists so a UI can suggest the right next step
-   * (e.g. `auth_failed` → "configure GITHUB_TOKEN in Settings → API Keys").
+   * (e.g. `auth_failed` → "configure GITHUB_TOKEN in User Settings → Env Vars").
    */
   clone_error?: RepoCloneError;
 

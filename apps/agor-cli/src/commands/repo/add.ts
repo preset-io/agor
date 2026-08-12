@@ -133,7 +133,7 @@ export default class RepoAdd extends BaseCommand {
           const err = fetched.clone_error;
           const hint =
             err?.category === 'auth_failed'
-              ? '\nConfigure GITHUB_TOKEN in Settings → API Keys for private repos.'
+              ? '\nConfigure GITHUB_TOKEN in User Settings → Env Vars for private repos.'
               : '';
           await this.cleanupClient(client);
           this.log('');
