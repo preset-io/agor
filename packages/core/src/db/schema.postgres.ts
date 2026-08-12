@@ -869,7 +869,7 @@ export const branches = pgTable(
     environmentHealthDiscoveryIdx: index('branches_environment_health_discovery_idx')
       .on(table.tenant_id, table.branch_id)
       .where(
-        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running')`
+        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running', 'error')`
       ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),

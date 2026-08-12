@@ -238,6 +238,22 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
         });
         if (first.outcome !== 'claimed') throw new Error('Expected claim');
+        // Readiness needs CONSECUTIVE successes: a resuming tunnel can answer
+        // one stale 200 while the app behind it is still booting, so the first
+        // healthy observation records but must not promote.
+        expect(
+          await health.commit({
+            branchId: branch.branch_id,
+            claimToken: first.claim.claim_token,
+            environmentGeneration: first.claim.environment_generation,
+            observation: {
+              status: 'healthy',
+              message: 'HTTP 200',
+              recordWhileStarting: true,
+            },
+            probeIntervalMs: 5_000,
+          })
+        ).toMatchObject({ outcome: 'committed', environmentStatus: 'starting' });
         expect(
           await health.commit({
             branchId: branch.branch_id,
