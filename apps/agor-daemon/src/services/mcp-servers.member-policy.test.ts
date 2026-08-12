@@ -13,6 +13,8 @@
  * transport a member may configure, and the reach their server is held to.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   createDatabaseAsync,
   MCPServerRepository,
@@ -211,5 +213,40 @@ describe('member policy, as it lands in mcp_servers', () => {
       /does not allow members to configure MCP servers/
     );
     await expect(storedServers()).resolves.toHaveLength(0);
+  });
+});
+
+/**
+ * The gate on the endpoint that answers the policy, asserted against the
+ * registration itself.
+ *
+ * The handler is defined inside `registerRoutes` and cannot be stood up
+ * without the rest of the daemon, so this reads the registration the way
+ * `register-routes.prompt-scope.test.ts` does. What it pins is the reason the
+ * gate is where it is: half of what this endpoint answers is about the caller,
+ * so the caller a policy refuses has to be able to read it. Raising it back to
+ * member would make that answer unreachable by the only people it says no to.
+ */
+describe('the MCP member policy endpoint, as it is registered', () => {
+  const source = readFileSync(join(__dirname, '..', 'register-routes.ts'), 'utf8');
+  const registration = source.slice(
+    source.indexOf("'/mcp-member-policy'"),
+    source.indexOf('MCP marketplace connect')
+  );
+
+  it('lets any authenticated caller read it', () => {
+    expect(registration).toContain(
+      "find: { role: ROLES.VIEWER, action: 'read the MCP member policy' }"
+    );
+  });
+
+  it('keeps the write to admins', () => {
+    expect(registration).toContain(
+      "patch: { role: ROLES.ADMIN, action: 'change the MCP member policy' }"
+    );
+  });
+
+  it('answers the caller their own capability, not only the tenant value', () => {
+    expect(registration).toContain('can_configure: canConfigureMcpServers(params.user?.role');
   });
 });

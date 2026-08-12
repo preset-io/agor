@@ -60,10 +60,11 @@ function makeClient(
   const find = findError
     ? vi.fn().mockRejectedValue(findError)
     : vi.fn().mockResolvedValue(setting);
-  const patch = vi.fn(async (_id: null, data: { policy: MCPMemberPolicy }) => ({
-    ...data,
-    can_configure: canConfigureMCPServers(role, data.policy),
-  }));
+  const patch = vi.fn(async (_id: null, data: { policy: MCPMemberPolicy }) =>
+    omitCanConfigure
+      ? ({ ...data } as { policy: MCPMemberPolicy; can_configure: boolean })
+      : { ...data, can_configure: canConfigureMCPServers(role, data.policy) }
+  );
   const client = {
     // The create form subscribes to the OAuth browser-flow hint on mount.
     io: { on: vi.fn(), off: vi.fn() },
@@ -80,7 +81,7 @@ function renderTable(options: {
   currentUser: User;
   servers?: MCPServer[];
   findError?: Error;
-  /** Answer the way a daemon that predates `can_configure` would. */
+  /** Answer without the capability field, as a daemon of another version may. */
   omitCanConfigure?: boolean;
 }) {
   const { client, find, patch } = makeClient(
@@ -274,6 +275,22 @@ describe('MCPServersTable member policy', () => {
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
+  });
+
+  it('leaves an admin working after a save whose answer carries no capability', async () => {
+    // A save answers with the same shape a read does, and the admin who just
+    // changed the policy must not lose the control they changed it with.
+    const { find, patch } = renderTable({
+      policy: 'use_existing_only',
+      currentUser: ADMIN,
+      omitCanConfigure: true,
+    });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(policyRadio(/Members can add shared servers/));
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+
+    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeEnabled();
   });
 
   it('withholds every action from a read-only account, whatever the policy allows', async () => {

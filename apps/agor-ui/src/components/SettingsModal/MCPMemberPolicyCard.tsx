@@ -47,8 +47,9 @@ export const MCPMemberPolicyCard: React.FC<MCPMemberPolicyCardProps> = ({
     >
       <Space orientation="vertical" size={token.marginSM} style={{ width: '100%' }}>
         <Typography.Text type="secondary">
-          One setting for the whole workspace, not per user: it decides what members — everyone
-          below admin — may do with MCP server configuration. Admins are unaffected by it.
+          One setting for the whole workspace, not per user: it decides what members may do with MCP
+          server configuration. Admins are unaffected by it, and accounts with read-only access
+          configure nothing whatever it says.
         </Typography.Text>
         {error && <Alert type="error" showIcon title={error} />}
         {loading ? (
