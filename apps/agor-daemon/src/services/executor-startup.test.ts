@@ -129,6 +129,16 @@ describe('prepareSessionForExecutorStart tenant scope', () => {
 
     const prepareWithCreator = (creator: { unix_username: string | null } | null) => {
       const loadCreator = vi.fn(async () => creator);
+      // The loader is handed the tenant-scoped handle this startup opened.
+      const guard = {
+        loadCreator: vi.fn(() => {
+          expect(getCurrentTenantDatabaseScope()).toMatchObject({
+            kind: 'tenant',
+            tenantId: 'tenant-x',
+          });
+          return loadCreator;
+        }),
+      };
       const sessionsService = {
         get: vi.fn(async () => stampedSession),
         materializeAgenticToolPreset: vi.fn(async (loaded: Session) => loaded),
@@ -140,10 +150,10 @@ describe('prepareSessionForExecutorStart tenant scope', () => {
           stampedSession.session_id,
           {} as never,
           undefined,
-          { loadCreator }
+          guard
         )
       );
-      return { run, sessionsService, loadCreator };
+      return { run, sessionsService, loadCreator, guard };
     };
 
     it('refuses the launch when the creator has been renamed', async () => {
@@ -160,10 +170,11 @@ describe('prepareSessionForExecutorStart tenant scope', () => {
     });
 
     it('launches while the creator still owns the stamped identity', async () => {
-      const { run, loadCreator } = prepareWithCreator({ unix_username: 'alice' });
+      const { run, loadCreator, guard } = prepareWithCreator({ unix_username: 'alice' });
 
       await expect(run).resolves.toBe(stampedSession);
-      expect(loadCreator).toHaveBeenCalledOnce();
+      expect(guard.loadCreator).toHaveBeenCalledOnce();
+      expect(loadCreator).toHaveBeenCalledWith(stampedSession.created_by);
     });
 
     // `register-services.ts` builds the guard only when the resolved execution

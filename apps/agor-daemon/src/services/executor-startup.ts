@@ -7,6 +7,7 @@ import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { AgenticToolName, AuthenticatedParams, Session } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
@@ -27,9 +28,12 @@ export type ActiveExecutorSession = Session & { agentic_tool: AgenticToolName };
  * Supplied only by the Unix modes that make `session.unix_username` the OS
  * identity of the executor (`delegated`/`strict`). Omitted otherwise, so a
  * deployment that never impersonates per user pays no lookup.
+ *
+ * `loadCreator` receives the tenant-scoped handle this startup opened, so the
+ * creator read cannot escape the session's tenant.
  */
 export interface ExecutorStartupUnixIdentityGuard {
-  loadCreator: SessionCreatorLoader;
+  loadCreator: (tenantDb: TenantScopedDatabase) => SessionCreatorLoader;
 }
 
 /**
@@ -59,7 +63,7 @@ export async function prepareSessionForExecutorStart(
     const session = await sessionsService.get(sessionId, params);
     if (!session) throw new Error(`Session ${sessionId} not found`);
     if (unixIdentityGuard) {
-      await assertSessionUnixIdentityUnchanged(session, unixIdentityGuard.loadCreator);
+      await assertSessionUnixIdentityUnchanged(session, unixIdentityGuard.loadCreator(tenantDb));
     }
     const agenticTool = requireActiveAgenticTool(session.agentic_tool);
     if (!isDeploymentAgenticToolAvailable(agenticTool, deploymentPolicy)) {

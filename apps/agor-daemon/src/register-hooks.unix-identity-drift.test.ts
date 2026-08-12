@@ -104,8 +104,22 @@ const buildHarness = (options: {
   return harness;
 };
 
+/**
+ * A running executor writing its own transcript. It authenticates with a
+ * session token minted for the prompting user, so it is an ordinary user
+ * identity on the wire and only the token payload marks it as executor-scoped.
+ */
+const EXECUTOR_AUTHENTICATION = {
+  payload: {
+    type: 'executor-session',
+    purpose: 'executor-task',
+    session_id: SESSION_ID,
+    task_id: '00000000-0000-7000-8000-000000000004',
+  },
+};
+
 /** An external prompt write, as the REST/socket transports deliver it. */
-const makeContext = (path: 'messages' | 'tasks'): HookContext =>
+const makeContext = (path: 'messages' | 'tasks', asExecutor = false): HookContext =>
   ({
     path,
     method: 'create',
@@ -117,13 +131,18 @@ const makeContext = (path: 'messages' | 'tasks'): HookContext =>
       provider: 'rest',
       user: { user_id: CREATOR_ID, role: 'member' },
       query: {},
+      ...(asExecutor ? { authentication: EXECUTOR_AUTHENTICATION } : {}),
     },
   }) as unknown as HookContext;
 
-const runCreateChain = async (harness: Harness, path: 'messages' | 'tasks'): Promise<void> => {
+const runCreateChain = async (
+  harness: Harness,
+  path: 'messages' | 'tasks',
+  asExecutor = false
+): Promise<void> => {
   const chain = harness.chains.get(`${path}.create`);
   if (!chain?.length) throw new Error(`no before.create hooks captured for ${path}`);
-  let context = makeContext(path);
+  let context = makeContext(path, asExecutor);
   for (const hook of chain) {
     context = ((await hook(context)) as HookContext) ?? context;
   }
@@ -158,18 +177,47 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
       expect(harness.sessionReads).toBe(1);
       expect(harness.userReads).toBe(1);
     });
+
+    /**
+     * A running executor writes its transcript over its own authenticated
+     * transport, so it reaches this chain as a normal user. Holding it to the
+     * check would cost two reads per transcript row and, once a rename landed
+     * mid-task, would drop the rows of a process that is already running as the
+     * stamped user — the launch it could have prevented is long past.
+     */
+    it('exempts the executor writing its own transcript', async () => {
+      const harness = buildHarness({
+        branchRbac: false,
+        unixUserMode,
+        creatorUnixUsername: 'alice-renamed',
+      });
+
+      await expect(runCreateChain(harness, path, true)).resolves.toBeUndefined();
+      expect(harness.userReads).toBe(0);
+    });
   });
 
-  it('still refuses under branch_rbac with a Unix mode that stamps nothing', async () => {
+  /**
+   * `simple` and `insulated` never execute as the stamped identity —
+   * `resolveUnixUserForImpersonation` ignores `session.unix_username` in both —
+   * so refusing on drift there would lock a user out of their own sessions over
+   * an identity nothing runs as. RBAC still stamps sessions in those modes,
+   * which is what used to make the check fire.
+   */
+  it('does not consult the creator under branch_rbac when the mode ignores the stamp', async () => {
     const harness = buildHarness({
       branchRbac: true,
       unixUserMode: 'simple',
       creatorUnixUsername: 'alice-renamed',
     });
 
-    await expect(runCreateChain(harness, path)).rejects.toThrow(
-      /Session security context has changed/
-    );
+    // The branch-permission half of the chain is deliberately not stubbed: this
+    // asserts which hooks are registered, not what they decide.
+    const failure = await runCreateChain(harness, path).catch((error: Error) => error);
+
+    expect(String(failure)).not.toMatch(/Session security context has changed/);
+    expect(harness.userReads).toBe(0);
+    expect(harness.sessionReads).toBe(1);
   });
 
   /**

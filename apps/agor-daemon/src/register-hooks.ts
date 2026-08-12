@@ -1119,28 +1119,31 @@ export function registerHooks(ctx: RegisterHooksContext): void {
    * Authorization chain shared by the two externally-initiated prompt writes,
    * `messages.create` and `tasks.create`.
    *
-   * Two independently configured properties put hooks in here:
+   * Two independently configured properties put hooks in here, and each hook
+   * is gated on the one that makes it load-bearing rather than on whichever
+   * flag happens to be nearby:
    *
    *  - `branch_rbac` decides whether the caller may prompt in this branch.
-   *  - `unix_user_mode` decides whether the session may execute at all. A
-   *    session is stamped with its creator's `unix_username` at creation and
-   *    `delegated`/`strict` execute under that value (register-services.ts
-   *    feeds it to `resolveUnixUserForImpersonation`). Once the creator's
-   *    username changes, the stamp names an identity the user no longer has
-   *    and the SDK state lives in a home directory this instance cannot
-   *    reach, so the prompt must be refused — branch permissions have no
-   *    bearing on that, and an open-access instance can still run strict.
+   *  - `unix_user_mode` decides whether the session may execute as the
+   *    identity it was stamped with. Only `delegated`/`strict` consume the
+   *    stamp — `register-services.ts` feeds `session.unix_username` to
+   *    `resolveUnixUserForImpersonation`, which ignores it in `simple` and
+   *    `insulated`. Once the creator's username changes, the stamp names an
+   *    identity the user no longer has and the SDK state lives in a home
+   *    directory this instance cannot reach, so the prompt is refused. Branch
+   *    permissions have no bearing on that: an open-access instance can be
+   *    running strict, and an RBAC instance can be running simple, where
+   *    refusing would only lock a user out of their own sessions over an
+   *    identity nothing executes as.
    *
-   * The session load is the precondition of both halves and is memoised per
-   * request, so whichever combination is configured pays for it once.
+   * The session load is the precondition of both, and is memoised per request.
    */
   const promptWriteGuards = [
     ...(executionMode.appRbacEnabled || executionMode.requiresUserUnixUsername
-      ? [
-          resolveSessionContext(),
-          loadSession(sessionsService),
-          validateSessionUnixUsername(usersRepository),
-        ]
+      ? [resolveSessionContext(), loadSession(sessionsService)]
+      : []),
+    ...(executionMode.requiresUserUnixUsername
+      ? [validateSessionUnixUsername(usersRepository)]
       : []),
     ...(executionMode.appRbacEnabled
       ? [

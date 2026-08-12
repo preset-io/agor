@@ -40,6 +40,7 @@ import {
   sessions,
   shortId,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UserMCPOAuthTokenRepository,
   UsersRepository,
   visibleSessionReferenceAccessExists,
@@ -875,7 +876,10 @@ function createExecuteHandler(
   // Only the modes that impersonate per user read the creator back; the others
   // never stamped a `unix_username` for it to have drifted from.
   const unixIdentityGuard = resolveExecutionSecurityMode(config).requiresUserUnixUsername
-    ? { loadCreator: (userId: string) => new UsersRepository(db).findById(userId) }
+    ? {
+        loadCreator: (tenantDb: TenantScopedDatabase) => (userId: string) =>
+          new UsersRepository(tenantDb).findById(userId),
+      }
     : undefined;
 
   return async (

@@ -29,6 +29,7 @@ import type {
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
+import { hasExecutorRuntimeScope } from '../auth/executor-runtime-scope.js';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -1260,6 +1261,13 @@ export async function assertSessionUnixIdentityUnchanged(
  * - SDK session data would be inaccessible (stored in old home directory)
  * - Execution would happen as wrong Unix user
  *
+ * Executor-scoped requests are exempt. An executor authenticates with a
+ * session token minted for the prompting user, so it is not a service account
+ * and would otherwise be held to this check on every transcript row it writes.
+ * By then the process is already running as the stamped user: refusing its
+ * writes only loses the transcript, and the launch that mattered was already
+ * gated by `prepareSessionForExecutorStart`.
+ *
  * @param userRepo - UserRepository instance
  */
 export function validateSessionUnixUsername(
@@ -1273,6 +1281,10 @@ export function validateSessionUnixUsername(
 
     // Skip for internal calls
     if (!context.params.provider) {
+      return context;
+    }
+
+    if (hasExecutorRuntimeScope(context)) {
       return context;
     }
 
