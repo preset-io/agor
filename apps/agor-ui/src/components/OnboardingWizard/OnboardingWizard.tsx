@@ -1700,17 +1700,10 @@ export function OnboardingWizard({
       <div>
         {renderStepBadge('Connect your tools via MCP')}
 
-        {/* General MCP intro */}
+        {/* General MCP intro — plain helper text, not a card */}
         <div
           style={{
-            padding: '10px 14px',
             marginBottom: 16,
-            background: GLASS_CARD_BG,
-            border: GLASS_CARD_BORDER,
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            boxShadow: GLASS_CARD_SHADOW,
-            borderRadius: 10,
             fontSize: 12,
             color: TEXT_SECONDARY,
             lineHeight: 1.6,
