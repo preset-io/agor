@@ -1820,18 +1820,30 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     if (!context.params.provider) return context;
     const user = context.params.user;
     if (!user || (user as { _isServiceAccount?: boolean })._isServiceAccount) return context;
-    if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-    context.params.query = { ...(context.params.query ?? {}), usableByUserId: user.user_id };
+    if (!hasMinimumRole(user.role, ROLES.ADMIN)) {
+      // Do not trust a caller-supplied usableByUserId; it is an internal
+      // authorization filter, not a public query capability.
+      context.params.query = {
+        ...(context.params.query ?? {}),
+        usableByUserId: user.user_id,
+      };
+    }
     return context;
   };
 
-  const denyMcpServerGetOfOthersPrivate = async (context: HookContext): Promise<HookContext> => {
+  const denyMcpServerGetOfAnotherUsersPrivate = async (
+    context: HookContext
+  ): Promise<HookContext> => {
     if (!context.params.provider) return context;
     const user = context.params.user;
-    if (!user || (user as { _isServiceAccount?: boolean })._isServiceAccount) return context;
-    if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-    const server = context.result as MCPServer | undefined;
-    if (server && !isMCPServerUsableBy(server, user.user_id)) {
+    if (
+      !user ||
+      (user as { _isServiceAccount?: boolean })._isServiceAccount ||
+      hasMinimumRole(user.role, ROLES.ADMIN)
+    ) {
+      return context;
+    }
+    if (!isMCPServerUsableBy(context.result as MCPServer, user.user_id)) {
       throw new NotFound(`MCP server not found: ${String(context.id)}`);
     }
     return context;
@@ -1848,7 +1860,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
     after: {
       find: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
-      get: [denyMcpServerGetOfOthersPrivate, injectPerUserOAuthTokens, redactMCPServerSecretFields],
+      get: [
+        denyMcpServerGetOfAnotherUsersPrivate,
+        injectPerUserOAuthTokens,
+        redactMCPServerSecretFields,
+      ],
       create: [redactMCPServerSecretFields],
       patch: [redactMCPServerSecretFields],
       update: [redactMCPServerSecretFields],

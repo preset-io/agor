@@ -30,13 +30,14 @@ import {
   isPostgresDatabaseHandle,
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
+  mcpServers,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
   SessionMCPServerRepository,
-  type SessionMCPServerRow,
   SessionRepository,
   select,
   sessionMcpServers,
+  sessions,
   shortId,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
@@ -192,7 +193,10 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
-import { loadMcpServerForCaller } from './utils/mcp-server-authorization.js';
+import {
+  isSessionMcpServerLinkVisibleToCaller,
+  loadMcpServerForCaller,
+} from './utils/mcp-server-authorization.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
@@ -676,7 +680,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/cursor-models').hooks({ before: { find: [ctx.requireAuth] } });
 
   const branchRepository = new BranchRepository(db);
-  const { UsersRepository } = await import('@agor/core/db');
   const usersRepository = new UsersRepository(db);
   const sessionsRepository = new SessionRepository(db);
   app.use('/file', createFileService(branchRepository, db, app));
@@ -758,17 +761,44 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           )
         );
       }
-      let query = select(db).from(sessionMcpServers);
+      let query = select(db, {
+        session_id: sessionMcpServers.session_id,
+        mcp_server_id: sessionMcpServers.mcp_server_id,
+        enabled: sessionMcpServers.enabled,
+        added_at: sessionMcpServers.added_at,
+        owner_user_id: mcpServers.owner_user_id,
+        session_created_by: sessions.created_by,
+      })
+        .from(sessionMcpServers)
+        .innerJoin(mcpServers, eq(sessionMcpServers.mcp_server_id, mcpServers.mcp_server_id))
+        .innerJoin(sessions, eq(sessionMcpServers.session_id, sessions.session_id));
       if (conditions.length > 0) {
         query = query.where(and(...conditions)) as typeof query;
       }
-      const rows = await query.all();
-      return rows.map((row: SessionMCPServerRow) => ({
-        session_id: row.session_id,
-        mcp_server_id: row.mcp_server_id,
-        enabled: Boolean(row.enabled),
-        added_at: new Date(row.added_at),
-      }));
+      const rows = (await query.all()) as Array<{
+        session_id: string;
+        mcp_server_id: string;
+        enabled: boolean;
+        added_at: Date | number | string;
+        owner_user_id: string | null;
+        session_created_by: string;
+      }>;
+      return rows
+        .filter((row) =>
+          isSessionMcpServerLinkVisibleToCaller(
+            {
+              owner_user_id: row.owner_user_id,
+              session_created_by: row.session_created_by,
+            },
+            params as unknown as AuthenticatedParams
+          )
+        )
+        .map((row) => ({
+          session_id: row.session_id,
+          mcp_server_id: row.mcp_server_id,
+          enabled: Boolean(row.enabled),
+          added_at: new Date(row.added_at),
+        }));
     },
   });
 
@@ -1258,6 +1288,7 @@ async function registerMCPServices(
   sessionsService: SessionsServiceImpl
 ): Promise<{ oauthCallbackHandler: (req: express.Request, res: express.Response) => void }> {
   const { db, app } = ctx;
+  const sessionsRepository = new SessionRepository(db);
   const durableOAuthFlows = isPostgresDatabaseHandle(db)
     ? new MCPOAuthPendingFlowAuthority(db)
     : null;
@@ -2233,7 +2264,7 @@ async function registerMCPServices(
         compatibility_mode?: 'strict' | 'legacy';
         dcr_mode?: MCPOAuthDCRMode;
       },
-      params?: { connection?: { id?: string } }
+      params?: AuthenticatedParams & { connection?: { id?: string } }
     ) {
       try {
         // Completing this flow writes a shared token onto the named row and
@@ -2625,9 +2656,9 @@ async function registerMCPServices(
         // Its stored OAuth client configuration belongs to whoever owns the
         // row; a caller who may not use the server may not borrow it either.
         const savedServer = savedServerId
-          ? await runInOAuthTenantScope(db, tenantId, () =>
-              loadMcpServerForCaller(db, savedServerId, params)
-            )
+          ? await runInOAuthTenantScope(db, tenantId, () => {
+              return loadMcpServerForCaller(db, savedServerId, params);
+            })
           : null;
 
         if (
@@ -3083,10 +3114,7 @@ async function registerMCPServices(
           db,
           tenantId,
           async () => {
-            // The session's own scope, which for a shared-mode OAuth server is
-            // the only thing standing between this token and a session that may
-            // not use that server. Same rule and same key as session resolution.
-            const executorSession = await new SessionRepository(db).findById(executorSessionId);
+            const executorSession = await sessionsRepository.findById(executorSessionId);
             if (!executorSession) {
               throw new Forbidden('oauth-auth-headers requires a resolvable executor session');
             }
@@ -3493,9 +3521,8 @@ async function registerMCPServices(
           };
           if (data.mcp_server_id) {
             const server = await runInOAuthTenantScope(db, tenantId, () =>
-              mcpServerRepo.findById(data.mcp_server_id!)
+              loadMcpServerForCaller(db, data.mcp_server_id as string, params)
             );
-            if (!server) return { success: false, error: 'MCP server not found' };
             const denial = denyDiscoverOfAnotherUsersServer(server, params);
             if (denial) return denial;
             serverConfig.auth = restoreRedactedMCPAuthSecrets({
@@ -3510,9 +3537,8 @@ async function registerMCPServices(
           }
         } else if (data.mcp_server_id) {
           const server = await runInOAuthTenantScope(db, tenantId, () =>
-            mcpServerRepo.findById(data.mcp_server_id!)
+            loadMcpServerForCaller(db, data.mcp_server_id as string, params)
           );
-          if (!server) return { success: false, error: 'MCP server not found' };
           const denial = denyDiscoverOfAnotherUsersServer(server, params);
           if (denial) return denial;
           if (server.url && !isTemplated(server.url)) {

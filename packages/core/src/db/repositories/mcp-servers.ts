@@ -233,6 +233,10 @@ export class MCPServerRepository
         );
       }
 
+      if (filters?.ownerless) {
+        conditions.push(isNull(mcpServers.owner_user_id));
+      }
+
       if (conditions.length > 0) {
         query = query.where(and(...conditions));
       }

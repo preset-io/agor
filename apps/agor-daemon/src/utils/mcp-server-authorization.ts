@@ -10,6 +10,11 @@
  * Using a server is a separate question with a separate answer: see
  * `isMCPServerUsableInSession` in `@agor/core/mcp`, enforced where a server is
  * attached to a session and where a starting session's set is resolved.
+ *
+ * The caller-side reads of that same rule live at the bottom of this file —
+ * whether a caller may be shown a row, an attachment link, or load one by id.
+ * They decide visibility, not policy, so they stay beside the write authorizer
+ * rather than folding into it.
  */
 
 import {
@@ -301,19 +306,44 @@ export async function loadMcpServerForWrite(
   return (await new MCPServerRepository(db).findById(id)) ?? undefined;
 }
 
+export interface SessionMcpServerVisibilityRow {
+  owner_user_id?: string | null;
+  session_created_by: string;
+}
+
 /**
- * Load a server named by a caller-supplied id, for the endpoints that act on
- * one directly: OAuth start / refresh / disconnect and capability discovery.
- *
- * These sit outside the session path, so the session-creator rule has nothing
- * to key on — the question here is whether *this caller* may touch this row at
- * all. A private server is answered as not-found rather than forbidden: to
- * everyone but its owner and an admin it does not exist.
- *
- * They need this because each one reads or writes something that belongs to
- * the server's owner — its OAuth client configuration, its shared token, its
- * discovered capability list — none of which the ordinary CRUD authorizer
- * covers.
+ * A visible session is not enough to disclose every attached server ID. A
+ * collaborator may read a session while its creator's private MCP definition
+ * remains out of scope. Internal/service callers and admins retain the
+ * existing control-plane visibility.
+ */
+export function isSessionMcpServerLinkVisibleToCaller(
+  row: SessionMcpServerVisibilityRow,
+  params: AuthenticatedParams | undefined
+): boolean {
+  if (!params?.provider) return true;
+  const user = params.user;
+  if (!user) return false;
+  if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return true;
+  if (hasMinimumRole(user.role, ROLES.ADMIN)) return true;
+  return isMCPServerUsableBy(row, row.session_created_by) && isMCPServerUsableBy(row, user.user_id);
+}
+
+export function isMcpServerUsableByCaller(
+  server: MCPServer,
+  params: AuthenticatedParams | undefined
+): boolean {
+  if (!params?.provider) return true;
+  const user = params.user;
+  if (!user) return false;
+  if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return true;
+  return hasMinimumRole(user.role, ROLES.ADMIN) || isMCPServerUsableBy(server, user.user_id);
+}
+
+/**
+ * Load a server named by a caller-supplied ID and enforce the direct-use
+ * boundary. OAuth and discovery endpoints act on the saved configuration or
+ * shared credential, so they cannot rely on session attachment checks.
  */
 export async function loadMcpServerForCaller(
   db: TenantScopeAwareDatabase,
@@ -323,14 +353,10 @@ export async function loadMcpServerForCaller(
   const server = await new MCPServerRepository(db).findById(serverId);
   if (!server) throw new NotFound(`MCP server not found: ${serverId}`);
 
-  // Internal and service-account callers are already trusted by their route.
   if (!params?.provider) return server;
-  const user = params.user;
-  if (!user) throw new NotAuthenticated('Authentication required');
-  if ((user as { _isServiceAccount?: boolean })._isServiceAccount === true) return server;
+  if (!params.user) throw new NotAuthenticated('Authentication required');
+  if (isMcpServerUsableByCaller(server, params)) return server;
 
-  if (hasMinimumRole(user.role, ROLES.ADMIN)) return server;
-  if (isMCPServerUsableBy(server, user.user_id)) return server;
-
+  // Avoid an existence oracle for private server definitions.
   throw new NotFound(`MCP server not found: ${serverId}`);
 }

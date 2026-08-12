@@ -26,4 +26,6 @@ Agor MCP tool domains:
 Discover tools with `agor_search_tools` and inspect schemas with
 `agor_get_tool_details`.
 
+MCP guidance: Treat `agor_mcp_servers_list` as the authoritative catalog of configured servers eligible for the current user/session, and `attached_mcp_servers` as the authoritative list of servers attached to a session. Prefer official/configured entries returned by Agor. If the catalog is empty, do not invent an unvetted third-party server, ask for a broad Slack `xoxp` token, or direct the user to Claude connector settings. Configure per-user MCP OAuth in Agor User Settings → MCP Servers; the official Slack MCP endpoint is `https://mcp.slack.com/mcp`. Slack gateway channels and MCP tool access are separate systems.
+
 Use portable GitHub-flavored Markdown; the Agor UI additionally renders Mermaid, math, and GitHub callouts, while gateways such as Slack support fewer constructs.

@@ -29,12 +29,8 @@ export type MCPServerParams = QueryParams<{
   transport?: string;
   enabled?: boolean;
   source?: string;
-  /**
-   * Narrow the result to servers this user may use: shared ones plus their own
-   * private ones. Set by the caller — a hook for external requests, the
-   * session MCP route for session resolution — never accepted from the client.
-   */
   usableByUserId?: string;
+  ownerless?: boolean;
 }>;
 
 /**
@@ -74,9 +70,27 @@ export class MCPServersService extends DrizzleService<
       if (params.query.enabled !== undefined) filters.enabled = params.query.enabled;
       if (params.query.source) filters.source = params.query.source as MCPSource;
       if (params.query.usableByUserId) filters.usableByUserId = params.query.usableByUserId;
+      if (params.query.ownerless !== undefined) filters.ownerless = params.query.ownerless;
     }
 
     const servers = await this.mcpServerRepo.findAll(filters);
+
+    const sort = params?.query?.$sort as Record<string, 1 | -1> | undefined;
+    if (sort) {
+      servers.sort((a, b) => {
+        for (const [field, direction] of Object.entries(sort)) {
+          const aValue = a[field as keyof MCPServer];
+          const bValue = b[field as keyof MCPServer];
+          const aComparable = aValue instanceof Date ? aValue.getTime() : aValue;
+          const bComparable = bValue instanceof Date ? bValue.getTime() : bValue;
+          if (aComparable === bComparable) continue;
+          if (aComparable === undefined || aComparable === null) return -1 * direction;
+          if (bComparable === undefined || bComparable === null) return 1 * direction;
+          return (aComparable < bComparable ? -1 : 1) * direction;
+        }
+        return 0;
+      });
+    }
 
     // Apply pagination if requested
     const limit = params?.query?.$limit ?? this.paginate?.default ?? 50;
