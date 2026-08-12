@@ -1,5 +1,11 @@
 import type { AgorClient, Board, Branch, User } from '@agor-live/client';
-import { DownOutlined, EditOutlined, HomeOutlined, SearchOutlined } from '@ant-design/icons';
+import {
+  AppstoreOutlined,
+  DownOutlined,
+  EditOutlined,
+  HomeOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import {
   Badge,
@@ -141,7 +147,11 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
             }}
           >
             <Space size={8}>
-              <span style={{ fontSize: 18 }}>{board.icon || '📋'}</span>
+              {board.icon ? (
+                <span style={{ fontSize: 18 }}>{board.icon}</span>
+              ) : (
+                <AppstoreOutlined style={{ fontSize: 18, color: token.colorTextTertiary }} />
+              )}
               <Text strong={isActive}>{board.name}</Text>
             </Space>
             <Badge
@@ -172,10 +182,9 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       }}
     >
       <Space size={8}>
-        <span style={{ fontSize: 18 }}>🏠</span>
+        <HomeOutlined style={{ fontSize: 18 }} />
         <Text strong={!currentBoardId}>Home</Text>
       </Space>
-      <HomeOutlined style={{ color: token.colorTextTertiary }} />
     </Button>
   );
 
@@ -273,9 +282,15 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
             }}
           >
             <Space size={8} style={{ minWidth: 0, overflow: 'hidden' }}>
-              <span style={{ fontSize: 18 }}>
-                {currentBoard ? currentBoard.icon || '📋' : '🏠'}
-              </span>
+              {currentBoard ? (
+                currentBoard.icon ? (
+                  <span style={{ fontSize: 18 }}>{currentBoard.icon}</span>
+                ) : (
+                  <AppstoreOutlined style={{ fontSize: 18, color: token.colorTextTertiary }} />
+                )
+              ) : (
+                <HomeOutlined style={{ fontSize: 18, color: token.colorTextTertiary }} />
+              )}
               <Text strong ellipsis style={{ minWidth: 0 }}>
                 {currentBoard?.name || 'Home'}
               </Text>
