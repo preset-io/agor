@@ -253,6 +253,82 @@ export interface MCPCatalogEntry {
   probed_auth_scheme?: string;
 }
 
+/**
+ * Reverse-DNS labels that name the protocol rather than the publisher.
+ *
+ * Vendors routinely register the server under one — `com.figma.mcp/mcp` — so
+ * the trailing label of either half is frequently the word "mcp" rather than
+ * anything identifying.
+ */
+const GENERIC_CATALOG_NAME_LABELS = new Set(['mcp', 'mcp-server', 'server', 'api', 'www']);
+
+/**
+ * The identifying half of a reverse-DNS catalog name, lowercased.
+ *
+ * `com.deepwiki/mcp` → `deepwiki`, `io.github.github/github-mcp-server` →
+ * `github`, `io.sanity.www/mcp` → `sanity`. Undefined when every label is
+ * generic, which callers resolve their own way rather than guessing here.
+ *
+ * Shared because both sides of the wire need this and disagreed: the catalog
+ * UI derived the publisher while connect took the last path segment, so the
+ * server name the agent saw was the word "mcp" for 38 of 50 curated entries.
+ * One rule, two formattings — never two rules.
+ */
+function catalogPublisherSegment(name: string): string | undefined {
+  const [domain = ''] = name.split('/');
+  return domain
+    .split('.')
+    .filter((label) => label && !GENERIC_CATALOG_NAME_LABELS.has(label.toLowerCase()))
+    .pop()
+    ?.toLowerCase();
+}
+
+/**
+ * What to call a catalog entry on screen.
+ *
+ * A curated title wins. Otherwise the publisher stands in, because `title` is
+ * the registry mirror's column and registry sync is off by default — rendering
+ * `name` would label the whole catalog with reverse-DNS strings.
+ *
+ * It cannot recover casing: `com.deepwiki` reads "Deepwiki", not "DeepWiki".
+ * Curated titles are the fix for that, not more derivation.
+ */
+export function catalogDisplayName(entry: Pick<MCPCatalogEntry, 'name' | 'title'>): string {
+  const title = entry.title?.trim();
+  if (title) return title;
+  const publisher = catalogPublisherSegment(entry.name);
+  if (!publisher) return entry.name;
+  return publisher.charAt(0).toUpperCase() + publisher.slice(1);
+}
+
+/**
+ * The name an installed server carries into the agent's tool namespace.
+ *
+ * This is the `<name>` in every `mcp__<name>__<tool>` the model reads, so it
+ * has to identify the server: two installs sharing one produce tool names
+ * nothing can tell apart. The path segment is the wrong half of the identity —
+ * it is usually the protocol's own name — so the publisher supplies it, and the
+ * path segment is only a fallback for a name with no publisher left in it.
+ */
+export function catalogServerSlug(name: string): string {
+  const slugify = (value: string): string =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+  const fromPublisher = slugify(catalogPublisherSegment(name) ?? '');
+  if (fromPublisher) return fromPublisher;
+
+  // The path segment only helps when it is not the same generic word, or the
+  // fallback would reintroduce exactly the collision this exists to avoid.
+  const segment = name.split('/').pop() ?? '';
+  const fromSegment = GENERIC_CATALOG_NAME_LABELS.has(segment.toLowerCase())
+    ? ''
+    : slugify(segment);
+  return fromSegment || 'mcp-server';
+}
+
 /** Sort keys the catalog service accepts. */
 export type MCPCatalogSort = 'popularity' | 'name' | 'recently_updated' | 'relevance';
 

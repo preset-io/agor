@@ -31,26 +31,11 @@ import type {
   Session,
   UserID,
 } from '@agor/core/types';
+import { catalogDisplayName, catalogServerSlug } from '@agor/core/types';
 
 /** Catalog transports, as `mcp_servers` names them. */
 function toServerTransport(entry: MCPCatalogEntry): MCPTransport {
   return entry.transport === 'sse' ? 'sse' : 'http';
-}
-
-/**
- * A readable, tool-namespace-safe server name from a reverse-DNS catalog name.
- *
- * `io.github.github/github-mcp-server` becomes `github-mcp-server`: the full
- * identity stays on `catalog_entry_name`, while this is what shows up in every
- * `mcp__<name>__<tool>` the agent sees.
- */
-function serverNameFor(entry: MCPCatalogEntry): string {
-  const lastSegment = entry.name.split('/').pop() ?? entry.name;
-  const slug = lastSegment
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return slug || 'mcp-server';
 }
 
 /**
@@ -121,12 +106,12 @@ function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCat
 } {
   if (!entry.curated) {
     throw new Forbidden(
-      `Only reviewed catalog entries can be connected; ${entry.name} has not been reviewed`
+      `Only reviewed catalog entries can be connected; ${catalogDisplayName(entry)} has not been reviewed`
     );
   }
   if (!entry.has_remote || !entry.remote_url || entry.transport === 'stdio') {
     throw new BadRequest(
-      `${entry.name} has no remote endpoint; locally-run MCP servers are configured by an admin`
+      `${catalogDisplayName(entry)} has no remote endpoint; locally-run MCP servers are configured by an admin`
     );
   }
 }
@@ -150,19 +135,19 @@ function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unkn
   // the user prose they never saw has changed.
   if (!stored) {
     throw new BadRequest(
-      `${entry.name} states nothing about what it can access, so it cannot be connected`
+      `${catalogDisplayName(entry)} states nothing about what it can access, so it cannot be connected`
     );
   }
 
   const shown = typeof acknowledged === 'string' ? acknowledged.trim() : '';
   if (!shown) {
     throw new BadRequest(
-      `acknowledged_disclosure is required: connecting ${entry.name} must follow showing what it can access`
+      `acknowledged_disclosure is required: connecting ${catalogDisplayName(entry)} must follow showing what it can access`
     );
   }
   if (shown !== stored) {
     throw new BadRequest(
-      `The access disclosure for ${entry.name} has changed since it was shown; review it again before connecting`
+      `The access disclosure for ${catalogDisplayName(entry)} has changed since it was shown; review it again before connecting`
     );
   }
 }
@@ -187,9 +172,13 @@ async function resolveAuthRequirement(
   if (probed === 'none') return;
 
   if (probed === 'oauth' || probed === 'credentials') {
-    throw new BadRequest(`${entry.name} requires authentication, which is not supported yet`);
+    throw new BadRequest(
+      `${catalogDisplayName(entry)} requires authentication, which is not supported yet`
+    );
   }
-  throw new BadRequest(`${entry.name} could not be reached, so it cannot be connected`);
+  throw new BadRequest(
+    `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`
+  );
 }
 
 export interface MCPCatalogConnectService {
@@ -265,8 +254,8 @@ export function createMCPCatalogConnectService(
       const existing = await findExistingInstall(entry, userId, params);
 
       const createInput: CreateMCPServerInput = {
-        name: serverNameFor(entry),
-        display_name: entry.title ?? entry.name,
+        name: catalogServerSlug(entry.name),
+        display_name: catalogDisplayName(entry),
         description: entry.benefit ?? entry.description,
         transport: toServerTransport(entry),
         url: entry.remote_url,
@@ -300,7 +289,7 @@ export function createMCPCatalogConnectService(
             branch_id: data.branch_id,
             agentic_tool: data.agentic_tool,
             status: 'idle',
-            title: entry.title ?? entry.name,
+            title: catalogDisplayName(entry),
           },
           params
         )) as Session;
