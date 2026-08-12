@@ -2457,7 +2457,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Match the executor's render context (host IP + unix GID) and, crucially,
     // pass the environment's facts so a `sync` template referencing `{{env.*}}`
     // resolves to the running environment's real identity.
-    const config = await loadConfig();
+    const config = this.app.get('config');
     const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
     const unixGid = branch.unix_group ? getGidFromGroupName(branch.unix_group) : undefined;
 

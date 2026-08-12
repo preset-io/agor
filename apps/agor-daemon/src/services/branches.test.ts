@@ -2250,6 +2250,7 @@ describe('BranchesService.startEnvironment concurrency guard', () => {
 
   const serviceFor = (branch: unknown) => {
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
         throw new Error(`Unknown service: ${path}`);
@@ -2339,6 +2340,7 @@ describe('BranchesService remote environment readiness gate', () => {
 
   const serviceFor = (branch: unknown) => {
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
         throw new Error(`Unknown service: ${path}`);
@@ -2535,6 +2537,7 @@ describe('BranchesService no-probe startup exit', () => {
 
   const serviceFor = (branch: unknown) => {
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
         throw new Error(`Unknown service: ${path}`);
@@ -2652,6 +2655,7 @@ describe('BranchesService.renderEnvironment variant-switch fact hygiene', () => 
       },
     }));
     const app = {
+      get: () => ({}),
       sessionTokenService: { generateToken: vi.fn(async () => 'executor-token') },
       service(path: string) {
         if (path === 'repos') return { get: reposGet };
@@ -2806,6 +2810,7 @@ describe('environment health transition thresholds (characterization)', () => {
       environment_instance: env,
     };
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
         throw new Error(`Unknown service: ${path}`);
@@ -2920,6 +2925,7 @@ describe('checkHealth concurrency', () => {
       environment_instance: env,
     };
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
         throw new Error(`Unknown service: ${path}`);
@@ -2993,6 +2999,7 @@ describe('syncEnvironment concurrency', () => {
       environment_instance: { status: 'running', facts: { name: 'cs-1' } },
     };
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'repos') {
           return {
