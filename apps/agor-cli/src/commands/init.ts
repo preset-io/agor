@@ -94,6 +94,14 @@ export function parseInitialAgenticTools(value: string): InstallableAgenticTool[
   return [...new Set(normalized as InstallableAgenticTool[])];
 }
 
+export function assertInitSupportsConfiguredDatabase(dialect = process.env.AGOR_DB_DIALECT): void {
+  if (dialect === 'postgresql') {
+    throw new Error(
+      '`agor init` currently supports SQLite installations only. For PostgreSQL deployments, configure the deployment environment and run `agor db migrate --yes`; the daemon will bootstrap required database state.'
+    );
+  }
+}
+
 export default class Init extends Command {
   private initialDaemonConfig: NonNullable<AgorConfig['daemon']> = {};
   private initialConfig: AgorConfig = getDefaultConfig();
@@ -270,6 +278,7 @@ export default class Init extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Init);
+    assertInitSupportsConfiguredDatabase();
     this.nonInteractive = flags['non-interactive'];
     const requestedTools = flags['agentic-tools'] ?? process.env.AGOR_AGENTIC_TOOLS;
     if (requestedTools !== undefined) {

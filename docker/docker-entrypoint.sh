@@ -240,10 +240,16 @@ CLIENT_PID=$!
 
 echo "✅ Watch modes started (git, core, agentic tools, executor, and client will rebuild on file changes)"
 
-# Initialize database and configure daemon settings for Docker
-# (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)
-echo "📦 Initializing Agor environment..."
-pnpm agor init --skip-if-exists --non-interactive --agentic-tools "${AGOR_AGENTIC_TOOLS:-none}" --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
+# `agor init` is the SQLite installation bootstrap and intentionally creates
+# ~/.agor/agor.db. PostgreSQL deployments get their database state from the
+# migrations and daemon bootstrap below, and receive stable development
+# secrets from the postgres Compose overlay.
+if [ "${AGOR_DB_DIALECT:-sqlite}" = "postgresql" ]; then
+  echo "⏭️  Skipping SQLite agor init for PostgreSQL deployment"
+else
+  echo "📦 Initializing Agor environment..."
+  pnpm agor init --skip-if-exists --non-interactive --agentic-tools "${AGOR_AGENTIC_TOOLS:-none}" --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
+fi
 
 # Run database migrations (idempotent: safe to run on every start)
 # This ensures schema is up-to-date even when using existing database volumes
@@ -264,7 +270,7 @@ echo "$ADMIN_OUTPUT"
 # CLI (direct DB write, no Feathers hook), so the normal after-create hook that calls
 # unix.sync-user never fires. Provision the OS account explicitly here while we still have
 # a clean pre-daemon window and sudoers access.
-if [ "$AGOR_SET_UNIX_MODE" = "strict" ]; then
+if [ "${AGOR_UNIX_USER_MODE:-simple}" = "strict" ]; then
   echo "🔒 Provisioning bootstrap admin OS user (strict mode)..."
   pnpm agor local ensure-user --username admin || echo "⚠️  Could not provision admin OS user — check sudoers"
 fi

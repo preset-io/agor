@@ -12,6 +12,7 @@ import { load as loadYaml } from '@agor/core/yaml';
 import { spawn as spawnPty } from 'node-pty';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  assertInitSupportsConfiguredDatabase,
   createInstallTelemetryConfig,
   isFreshInitState,
   parseInitialAgenticTools,
@@ -217,6 +218,18 @@ async function runInteractiveReinit(home: string): Promise<{
     });
   });
 }
+
+describe('database support', () => {
+  it('accepts SQLite initialization', () => {
+    expect(() => assertInitSupportsConfiguredDatabase('sqlite')).not.toThrow();
+  });
+
+  it('fails clearly instead of mixing a SQLite client with the PostgreSQL schema', () => {
+    expect(() => assertInitSupportsConfiguredDatabase('postgresql')).toThrow(
+      /supports SQLite installations only/
+    );
+  });
+});
 
 describe('safe init state detection', () => {
   it('treats a pre-created empty .agor mount as fresh', () => {
