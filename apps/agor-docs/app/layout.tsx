@@ -5,7 +5,7 @@ import Script from 'next/script';
 import { type ReactNode, Suspense } from 'react';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
 import { GoogleAnalytics } from '../components/GoogleAnalytics';
-import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
+import { DISCORD_INVITE_URL, GITHUB_REPO_URL, HUBSPOT_FORM_ID } from '../lib/links';
 import {
   BRAND_NAME,
   DEFAULT_DESCRIPTION,
@@ -159,6 +159,48 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           strategy="afterInteractive"
           src="https://js-na2.hs-scripts.com/246818610.js"
         />
+        {/* GTM event on contact-form submission. HubSpot's forms-embed
+            runtime calls window.postMessage({type:'hsFormCallback', ...})
+            unconditionally on every form event — confirmed by reading its
+            shipped JS (js.hsforms.net/forms/embed/v2.js): the dispatch isn't
+            gated on iframe/cross-origin embedding, so this fires the same
+            way whether the form's rendered inline (as ours is, via
+            HubSpotForm) or in a HubSpot-hosted iframe. `id` is the form
+            GUID; `source_page` (when present in submissionValues) carries
+            the per-CTA attribution already stamped by HubSpotForm, so this
+            single site-wide listener covers every "Sign up for Agor Cloud"
+            entry point without needing one tag per placement. */}
+        <Script id="hs-form-submit-tracking" strategy="afterInteractive">
+          {`(function () {
+            window.addEventListener('message', function (event) {
+              var payload = event.data;
+              if (
+                !payload ||
+                payload.type !== 'hsFormCallback' ||
+                payload.eventName !== 'onFormSubmitted' ||
+                payload.id !== '${HUBSPOT_FORM_ID}'
+              ) {
+                return;
+              }
+              var submissionValues = (payload.data && payload.data.submissionValues) || {};
+              var sourcePage;
+              if (Array.isArray(submissionValues)) {
+                var match = submissionValues.filter(function (field) {
+                  return field.name === 'source_page';
+                })[0];
+                sourcePage = match && match.value;
+              } else {
+                sourcePage = submissionValues.source_page;
+              }
+              window.dataLayer = window.dataLayer || [];
+              window.dataLayer.push({
+                event: 'hubspot_interest_form_success',
+                form_name: 'agor_cloud_beta',
+                source_page: sourcePage || 'unknown',
+              });
+            });
+          })();`}
+        </Script>
         {/* Microsoft Clarity analytics (project xroxavynkf). */}
         <Script id="ms-clarity" strategy="afterInteractive">
           {`(function(c,l,a,r,i,t,y){c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);})(window,document,"clarity","script","xroxavynkf");`}
