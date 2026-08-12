@@ -37,6 +37,7 @@ import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MissingCredentialPanel } from '../MissingCredentialPanel';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
+import { ProviderBillingRecoveryPanel } from '../ProviderBillingRecoveryPanel';
 import { SystemMessage } from '../SystemMessage';
 import { ThinkingBlock } from '../ThinkingBlock';
 import {
@@ -508,6 +509,20 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       <MissingCredentialPanel
         tool={message.metadata.tool}
         client={client}
+        onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+      />
+    );
+  }
+
+  // Provider credit/quota failure — show recovery actions, not the raw result.
+  if (
+    isSystem &&
+    message.metadata?.error_kind === 'provider_credit_exhausted' &&
+    isAgenticToolName(message.metadata?.tool)
+  ) {
+    return (
+      <ProviderBillingRecoveryPanel
+        tool={message.metadata.tool}
         onOpenAgenticToolSettings={onOpenAgenticToolSettings}
       />
     );

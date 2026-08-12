@@ -1,13 +1,13 @@
 /**
- * Before-create hook that reclassifies a task failure as "missing credential"
- * without matching the provider's raw stderr. Fires on two failure shapes —
- * an explicit executor credential-preflight failure and a zero-turn "success"
- * whose current scoped connection resolves no credential.
+ * Before-create hook that reclassifies executor-scoped provider failures
+ * without matching arbitrary provider stderr. It handles explicit credential
+ * preflight failures and narrowly recognized zero-turn billing failures.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { resolveApiKey } from '@agor/core/config';
 import type { SessionRepository, TaskRepository, TenantScopeAwareDatabase } from '@agor/core/db';
+import { Forbidden } from '@agor/core/feathers';
 import type { AgenticToolName, HookContext, Message, TaskID, UserID } from '@agor/core/types';
 import {
   canonicalTenantAgenticTool,
@@ -21,6 +21,91 @@ import { hasExecutorRuntimeScope } from '../auth/executor-runtime-scope.js';
  * The web UI renders its own copy from MissingCredentialPanel instead. */
 function fallbackContent(toolDisplayName: string): string {
   return `This session needs to be connected to ${toolDisplayName} before it can run.`;
+}
+
+function providerCreditContent(toolDisplayName: string): string {
+  return `This session's ${toolDisplayName} account needs available credit or quota before it can respond.`;
+}
+
+type ProviderFailureKind = 'missing_credential' | 'provider_credit_exhausted';
+
+function declaresProviderFailure(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const metadata = (data as { metadata?: unknown }).metadata;
+  return (
+    !!metadata &&
+    typeof metadata === 'object' &&
+    !Array.isArray(metadata) &&
+    'error_kind' in metadata
+  );
+}
+
+/** Keep the recovery-panel discriminator owned by daemon classification. */
+export function protectExternalProviderFailureMetadata(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+  const writes = Array.isArray(context.data) ? context.data : [context.data];
+  if (writes.some(declaresProviderFailure)) {
+    throw new Forbidden('Provider failure metadata can only be classified by the daemon');
+  }
+  return context;
+}
+
+function classifyProviderFailure(
+  data: Partial<Message>,
+  tool: AgenticToolName,
+  toolDisplayName: string,
+  errorKind: ProviderFailureKind
+): Partial<Message> {
+  const content =
+    errorKind === 'missing_credential'
+      ? fallbackContent(toolDisplayName)
+      : providerCreditContent(toolDisplayName);
+
+  return {
+    ...data,
+    type: 'system',
+    role: MessageRole.SYSTEM,
+    content,
+    content_preview: content.substring(0, 200),
+    metadata: {
+      ...data.metadata,
+      error_kind: errorKind,
+      tool,
+    },
+  };
+}
+
+const PROVIDER_CREDIT_SIGNALS = [
+  'insufficient_quota',
+  'quota_exhausted',
+  'billing_hard_limit_reached',
+  'payment_required',
+] as const;
+
+function textContent(content: Message['content'] | undefined): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  return content
+    .filter((block) => block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text as string)
+    .join('\n');
+}
+
+function isProviderCreditFailure(
+  tool: AgenticToolName,
+  content: Message['content'] | undefined
+): boolean {
+  const text = textContent(content).trim().toLowerCase();
+  if (!text || text.length > 500) return false;
+
+  const isAnthropicCreditFailure =
+    tool === 'claude-code' && /\bcredit balance is too low\b/.test(text);
+  const hasStableCreditSignal = new RegExp(`\\b(?:${PROVIDER_CREDIT_SIGNALS.join('|')})\\b`).test(
+    text
+  );
+
+  return isAnthropicCreditFailure || hasStableCreditSignal;
 }
 
 function hasResolvedCredential(
@@ -72,28 +157,41 @@ export function classifyMissingCredentialFailure(
           db,
           tool,
         });
-        if (
+
+        const hasCredential =
           resolution.apiKey ||
           resolution.useNativeAuth ||
-          hasResolvedCredential(tool, resolution.connection)
-        ) {
+          hasResolvedCredential(tool, resolution.connection);
+        if (!hasCredential) {
+          // Missing credential wins over any provider text in the synthesized
+          // result: the scoped resolver is the source of truth here.
+          context.data = classifyProviderFailure(
+            data,
+            tool,
+            toolDisplayNames[tool] ?? tool,
+            'missing_credential'
+          );
           return context;
         }
+
+        if (!isProviderCreditFailure(tool, data.content)) return context;
+
+        context.data = classifyProviderFailure(
+          data,
+          tool,
+          toolDisplayNames[tool] ?? tool,
+          'provider_credit_exhausted'
+        );
+        return context;
       }
 
-      context.data = {
-        ...data,
-        // Normalize both pathways onto system/SYSTEM so the UI has one render branch.
-        type: 'system',
-        role: MessageRole.SYSTEM,
-        content: fallbackContent(toolDisplayNames[tool] ?? tool),
-        content_preview: fallbackContent(toolDisplayNames[tool] ?? tool).substring(0, 200),
-        metadata: {
-          ...data.metadata,
-          error_kind: 'missing_credential',
-          tool,
-        },
-      };
+      // Normalize both pathways onto system/SYSTEM so the UI has one render branch.
+      context.data = classifyProviderFailure(
+        data,
+        tool,
+        toolDisplayNames[tool] ?? tool,
+        'missing_credential'
+      );
     } catch (err) {
       console.error('[classifyMissingCredentialFailure] classification failed:', err);
     }

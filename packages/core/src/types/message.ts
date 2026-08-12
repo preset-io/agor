@@ -297,11 +297,11 @@ export interface Message {
     is_zero_turn_result?: boolean;
 
     /**
-     * Set server-side when a task failure resolves to "no credential for this
-     * session's provider". Drives the Connect-AI empty state instead of the
-     * raw error; `tool` names the provider that needs a credential.
+     * Set server-side when a task failure resolves to a missing credential or
+     * provider credit/quota exhaustion. Drives a recovery state instead of the
+     * raw error; `tool` names the provider that needs attention.
      */
-    error_kind?: 'missing_credential';
+    error_kind?: 'missing_credential' | 'provider_credit_exhausted';
     tool?: PersistedAgenticToolName;
 
     /** Additional agent-specific fields */

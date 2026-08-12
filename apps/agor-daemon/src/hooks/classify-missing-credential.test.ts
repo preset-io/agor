@@ -3,7 +3,10 @@ import type { SessionRepository, TaskRepository } from '@agor/core/db';
 import type { HookContext, Message, Session, Task } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { classifyMissingCredentialFailure } from './classify-missing-credential';
+import {
+  classifyMissingCredentialFailure,
+  protectExternalProviderFailureMetadata,
+} from './classify-missing-credential';
 
 vi.mock('@agor/core/config', () => ({ resolveApiKey: vi.fn() }));
 
@@ -69,6 +72,11 @@ describe('classifyMissingCredentialFailure', () => {
     metadata: { is_zero_turn_result: true },
   };
 
+  const zeroTurnBillingResult: Partial<Message> = {
+    ...zeroTurnResult,
+    content: [{ type: 'text', text: 'Credit balance is too low' }],
+  };
+
   it('normalizes an explicit executor credential-preflight failure', async () => {
     const ctx = await runHook()(makeContext({ ...explicitCredentialFailure }));
     const result = ctx.data as Message;
@@ -118,6 +126,85 @@ describe('classifyMissingCredentialFailure', () => {
     expect((ctx.data as Message).type).toBe('system');
   });
 
+  it('lets missing credential classification win over billing-like provider text', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: undefined,
+      connection: {},
+      source: 'none',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(makeContext({ ...zeroTurnBillingResult }));
+    const result = ctx.data as Message;
+
+    expect(result.metadata).toMatchObject({
+      error_kind: 'missing_credential',
+      tool: 'claude-code',
+    });
+    expect(result.content).toBe(
+      'This session needs to be connected to Claude Code before it can run.'
+    );
+    expect(result.content).not.toContain('Credit balance is too low');
+  });
+
+  it('classifies the verified Anthropic credit failure when a credential resolved', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(makeContext({ ...zeroTurnBillingResult }));
+    const result = ctx.data as Message;
+
+    expect(result.metadata).toMatchObject({
+      error_kind: 'provider_credit_exhausted',
+      tool: 'claude-code',
+    });
+    expect(result.type).toBe('system');
+    expect(result.content).toBe(
+      "This session's Claude Code account needs available credit or quota before it can respond."
+    );
+    expect(result.content).not.toContain('Credit balance is too low');
+    expect(result.content_preview).not.toContain('Credit balance is too low');
+  });
+
+  it('classifies a stable billing signal in a short zero-turn result', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(
+      makeContext({
+        ...zeroTurnResult,
+        content: [{ type: 'text', text: 'provider error: payment_required' }],
+      })
+    );
+
+    expect((ctx.data as Message).metadata?.error_kind).toBe('provider_credit_exhausted');
+  });
+
+  it('does not classify ordinary rate-limit text or arbitrary quota prose', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    for (const content of ['429 Too Many Requests', 'Your quota may be limited']) {
+      const ctx = await runHook()(
+        makeContext({ ...zeroTurnResult, content: [{ type: 'text', text: content }] })
+      );
+      expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+      expect((ctx.data as Message).content).toEqual([{ type: 'text', text: content }]);
+    }
+  });
+
   it('preserves legitimate zero-turn output when an API key resolved', async () => {
     vi.mocked(resolveApiKey).mockResolvedValue({
       apiKey: 'sk-ant-user-key',
@@ -130,6 +217,40 @@ describe('classifyMissingCredentialFailure', () => {
 
     expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
     expect((ctx.data as Message).type).toBe('assistant');
+  });
+
+  it('does not classify a normal assistant message without the zero-turn marker', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(
+      makeContext({
+        ...zeroTurnBillingResult,
+        metadata: {},
+      })
+    );
+
+    expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+    expect((ctx.data as Message).content).toEqual(zeroTurnBillingResult.content);
+    expect(resolveApiKey).not.toHaveBeenCalled();
+  });
+
+  it('does not classify a client-forged zero-turn marker outside executor scope', async () => {
+    const context = makeContext({ ...zeroTurnBillingResult });
+    context.params = {
+      provider: 'socketio',
+      authentication: { strategy: 'jwt', payload: { sub: 'user-1' } },
+    } as never;
+
+    const ctx = await runHook()(context);
+
+    expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+    expect((ctx.data as Message).content).toEqual(zeroTurnBillingResult.content);
+    expect(taskRepository.findById).not.toHaveBeenCalled();
   });
 
   it('preserves legitimate zero-turn output with a Claude subscription token', async () => {
@@ -213,5 +334,28 @@ describe('classifyMissingCredentialFailure', () => {
     );
     expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
     expect(resolveApiKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('protectExternalProviderFailureMetadata', () => {
+  it('rejects externally supplied recovery-panel metadata', () => {
+    const context = makeContext({
+      metadata: { error_kind: 'provider_credit_exhausted', tool: 'claude-code' },
+    });
+
+    expect(() => protectExternalProviderFailureMetadata(context)).toThrow(
+      'Provider failure metadata can only be classified by the daemon'
+    );
+  });
+
+  it('allows executor markers before daemon classification and internal projections', () => {
+    const externalContext = makeContext({ metadata: { is_zero_turn_result: true } });
+    expect(protectExternalProviderFailureMetadata(externalContext)).toBe(externalContext);
+
+    const internalContext = makeContext({
+      metadata: { error_kind: 'missing_credential', tool: 'claude-code' },
+    });
+    internalContext.params.provider = undefined;
+    expect(protectExternalProviderFailureMetadata(internalContext)).toBe(internalContext);
   });
 });
