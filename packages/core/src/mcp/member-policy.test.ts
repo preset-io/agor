@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mayMemberManageMCPServer, mayMemberUseMCPTransport } from './member-policy';
+import {
+  mayMemberManageMCPServer,
+  mayMemberUseMCPScope,
+  mayMemberUseMCPTransport,
+} from './member-policy';
 
 const OWNER = 'user-owner';
 const OTHER = 'user-other';
@@ -30,6 +34,26 @@ describe('mayMemberManageMCPServer', () => {
 
   it('refuses an unauthenticated caller a private server', () => {
     expect(mayMemberManageMCPServer({ owner_user_id: OWNER }, 'allow_crud', undefined)).toBe(false);
+  });
+});
+
+describe('mayMemberUseMCPScope', () => {
+  it('holds a member to servers they attach per session under allow_private_only', () => {
+    expect(mayMemberUseMCPScope('allow_private_only', 'session')).toBe(true);
+    expect(mayMemberUseMCPScope('allow_private_only', 'global')).toBe(false);
+  });
+
+  it('leaves the unstated scope to the caller to derive', () => {
+    expect(mayMemberUseMCPScope('allow_private_only', undefined)).toBe(true);
+  });
+
+  it('does not constrain the value that grants workspace-wide reach', () => {
+    expect(mayMemberUseMCPScope('allow_crud', 'global')).toBe(true);
+    expect(mayMemberUseMCPScope('allow_crud', 'session')).toBe(true);
+  });
+
+  it('leaves use_existing_only to the write refusal rather than answering here', () => {
+    expect(mayMemberUseMCPScope('use_existing_only', 'global')).toBe(true);
   });
 });
 

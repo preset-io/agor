@@ -141,6 +141,32 @@ describe('MCPServersTable member policy', () => {
     expect(screen.queryByLabelText('Command')).not.toBeInTheDocument();
   });
 
+  it('offers a member no workspace-wide scope under allow_private_only', async () => {
+    const { find } = renderTable({ policy: 'allow_private_only', currentUser: MEMBER });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+
+    // The endpoint refuses a member's `global` row under this policy, so the
+    // form must not invite one.
+    fireEvent.mouseDown(await screen.findByLabelText('Scope'));
+
+    // Selected and offered both render the label, so one match is the floor.
+    await waitFor(() => expect(screen.getAllByText('Session').length).toBeGreaterThan(0));
+    expect(screen.queryByText('Global (all sessions)')).not.toBeInTheDocument();
+  });
+
+  it('offers an admin workspace-wide scope', async () => {
+    const { find } = renderTable({ policy: 'allow_private_only', currentUser: ADMIN });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+
+    const scope = await screen.findByLabelText('Scope');
+    fireEvent.mouseDown(scope);
+    expect(await screen.findByText('Global (all sessions)')).toBeInTheDocument();
+  });
+
   it('offers an admin every transport', async () => {
     const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
