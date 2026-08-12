@@ -63,9 +63,17 @@ export interface MCPServerCapabilityContext {
   canConfigure: boolean;
 }
 
-/** Whether this user may add an MCP server at all. */
-export function canAddMcpServer({ canConfigure }: MCPServerCapabilityContext): boolean {
-  return canConfigure;
+/**
+ * Whether this user may add an MCP server at all.
+ *
+ * The daemon's answer, with the admin clause of that same answer as a floor
+ * under it: {@link canConfigureMCPServers} returns true for every admin under
+ * every policy, so the two cannot disagree — but an answer that arrives
+ * without the field would otherwise leave an admin looking at a disabled
+ * button and a reason that does not apply to them.
+ */
+export function canAddMcpServer({ isAdmin, canConfigure }: MCPServerCapabilityContext): boolean {
+  return isAdmin || canConfigure;
 }
 
 /**

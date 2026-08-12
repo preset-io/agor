@@ -45,11 +45,18 @@ function makeServer(overrides: Partial<MCPServer>): MCPServer {
   } as MCPServer;
 }
 
-function makeClient(policy: MCPMemberPolicy, role: string | undefined, findError?: Error) {
+function makeClient(
+  policy: MCPMemberPolicy,
+  role: string | undefined,
+  findError?: Error,
+  omitCanConfigure = false
+) {
   // The daemon answers `can_configure` from the caller's role and the policy
   // together; the fake answers it the same way rather than inventing one, so a
   // test cannot pass against a UI that recomputed the rule differently.
-  const setting = { policy, can_configure: canConfigureMCPServers(role, policy) };
+  const setting = omitCanConfigure
+    ? ({ policy } as { policy: MCPMemberPolicy; can_configure: boolean })
+    : { policy, can_configure: canConfigureMCPServers(role, policy) };
   const find = findError
     ? vi.fn().mockRejectedValue(findError)
     : vi.fn().mockResolvedValue(setting);
@@ -73,11 +80,14 @@ function renderTable(options: {
   currentUser: User;
   servers?: MCPServer[];
   findError?: Error;
+  /** Answer the way a daemon that predates `can_configure` would. */
+  omitCanConfigure?: boolean;
 }) {
   const { client, find, patch } = makeClient(
     options.policy,
     options.currentUser.role,
-    options.findError
+    options.findError,
+    options.omitCanConfigure
   );
   const mcpServerById = new Map(
     (options.servers ?? []).map((server) => [server.mcp_server_id, server])
@@ -231,6 +241,39 @@ describe('MCPServersTable member policy', () => {
     // avoids, so the editor must not offer it either.
     expect(await screen.findByLabelText('URL')).toBeInTheDocument();
     expect(screen.queryByLabelText('Command')).not.toBeInTheDocument();
+  });
+
+  it('offers an admin the add action under the policy that withholds it from members', async () => {
+    // The daemon answers `can_configure` for the caller, so this is the wiring
+    // check that the UI asks it rather than reading the policy value alone.
+    const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeEnabled();
+  });
+
+  it('leaves an admin working against an answer that carries no capability', async () => {
+    const { find } = renderTable({
+      policy: 'allow_crud',
+      currentUser: ADMIN,
+      omitCanConfigure: true,
+    });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    // An admin may configure under every policy value, so a missing field must
+    // not leave them disabled behind a reason that is not about them.
+    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeEnabled();
+  });
+
+  it('withholds from a member when the answer carries no capability', async () => {
+    const { find } = renderTable({
+      policy: 'allow_crud',
+      currentUser: MEMBER,
+      omitCanConfigure: true,
+    });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
   });
 
   it('withholds every action from a read-only account, whatever the policy allows', async () => {

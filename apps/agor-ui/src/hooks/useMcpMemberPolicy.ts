@@ -55,7 +55,9 @@ export function useMcpMemberPolicy(client: AgorClient | null): McpMemberPolicySt
       .then((result) => {
         if (!active) return;
         setPolicy(result.policy);
-        setCanConfigure(result.can_configure);
+        // An answer without the field is not an answer: coerce rather than let
+        // a non-boolean sit in this state and read as one.
+        setCanConfigure(result.can_configure === true);
         setError(null);
       })
       .catch((loadError: unknown) => {
@@ -77,7 +79,7 @@ export function useMcpMemberPolicy(client: AgorClient | null): McpMemberPolicySt
       try {
         const result = await client.service('mcp-member-policy').patch(null, { policy: next });
         setPolicy(result.policy);
-        setCanConfigure(result.can_configure);
+        setCanConfigure(result.can_configure === true);
         setError(null);
       } catch (saveError: unknown) {
         setError(describeError(saveError, 'Failed to change the MCP member policy'));

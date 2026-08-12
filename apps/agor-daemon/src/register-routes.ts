@@ -4125,7 +4125,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
-      find: { role: ROLES.MEMBER, action: 'read the MCP member policy' },
+      // Readable by any authenticated caller, because what it answers is
+      // partly about the caller: `can_configure` is their own capability, and
+      // the role floor means the interesting answer is the one a below-member
+      // caller gets. Gating this at member would leave that answer unreachable
+      // by the only people it refuses, who would then be shown a control that
+      // fails instead of a reason it is off.
+      find: { role: ROLES.VIEWER, action: 'read the MCP member policy' },
       patch: { role: ROLES.ADMIN, action: 'change the MCP member policy' },
     },
     requireAuth
