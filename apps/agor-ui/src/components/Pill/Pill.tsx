@@ -30,6 +30,7 @@ import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
+import { NeutralBoardIcon } from '../BoardTile/BoardTile';
 import { type SessionForIds, SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 import { getModelDisplayName } from './modelDisplay';
@@ -953,7 +954,7 @@ export const BoardPill: React.FC<BoardPillProps> = ({
   style,
 }) => (
   <EntityPill
-    icon={<ApartmentOutlined />}
+    icon={<NeutralBoardIcon />}
     color={ENTITY_PILL_COLORS.board}
     label={board.name}
     emoji={emoji}

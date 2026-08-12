@@ -1,9 +1,8 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: centralized categorical avatar-tile palette (muted mid-tones, tuned to Agor) — not expressible as semantic theme tokens
 import type { User } from '@agor-live/client';
 import { Avatar, type AvatarProps, theme } from 'antd';
 import type { CSSProperties } from 'react';
 import { getContrastingTextColor } from '../utils/theme';
-
-type AvatarToken = ReturnType<typeof theme.useToken>['token'];
 
 type IdentityUser = Pick<
   User,
@@ -34,31 +33,29 @@ export function getUserInitials(user?: Pick<User, 'name' | 'email'> | null): str
   return '?';
 }
 
-// Preset -6 hues (mirrors the canvas color palette) give each user a stable,
-// theme-aware tile color derived from tokens rather than a hardcoded hex.
-function avatarPalette(token: AvatarToken): string[] {
-  return [
-    token.blue6 || token.colorPrimary,
-    token.purple6 || token.colorPrimary,
-    token.cyan6 || token.colorInfo,
-    token.green6 || token.colorSuccess,
-    token.magenta6 || token.colorError,
-    token.orange6 || token.colorWarning,
-    token.gold6 || token.colorWarning,
-    token.geekblue6 || token.colorPrimary,
-  ];
-}
+// Muted, modern avatar palette (Mixpanel-ish, tuned to Agor). A centralized
+// categorical tile palette is an allowed exact-color exception per
+// context/guidelines/frontend.md — these mid-tones can't be expressed with
+// semantic theme tokens, and contrast-aware text keeps initials legible.
+const AVATAR_PALETTE = [
+  '#6E7BA6', // muted indigo
+  '#5B8A8F', // muted teal
+  '#7E9A6B', // sage
+  '#A6767E', // dusty rose
+  '#8A7BA6', // mauve-purple
+  '#B0916A', // warm sand
+  '#6C89A6', // dusty blue
+  '#9A7B9E', // muted mauve
+];
 
 /** Deterministic palette color keyed off a stable user identifier. */
 export function getUserAvatarColor(
-  user: Pick<User, 'user_id' | 'email' | 'name'> | null | undefined,
-  token: AvatarToken
+  user: Pick<User, 'user_id' | 'email' | 'name'> | null | undefined
 ): string {
   const key = user?.user_id || user?.email || user?.name || '';
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
-  const palette = avatarPalette(token);
-  return palette[hash % palette.length];
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
 }
 
 export const UserIdentityAvatar: React.FC<UserIdentityAvatarProps> = ({
@@ -78,7 +75,7 @@ export const UserIdentityAvatar: React.FC<UserIdentityAvatarProps> = ({
   // (emoji identity is reserved for assistants).
   const initials = getUserInitials(user);
   const useInitials = !avatarUrl;
-  const bgColor = avatarUrl ? token.colorBgContainer : getUserAvatarColor(user, token);
+  const bgColor = avatarUrl ? token.colorBgContainer : getUserAvatarColor(user);
 
   return (
     <Avatar

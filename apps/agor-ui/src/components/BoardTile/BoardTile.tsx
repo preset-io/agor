@@ -4,6 +4,10 @@ import { AppstoreOutlined } from '@ant-design/icons';
 import { theme } from 'antd';
 import type { CSSProperties } from 'react';
 
+/** The neutral board glyph — shared so BoardTile, BoardPill, and dropdown
+ * fallbacks all render the same icon and can't drift apart. */
+export const NeutralBoardIcon = AppstoreOutlined;
+
 /**
  * A board's face is its primary assistant's emoji — boards no longer carry
  * their own icon. Resolves `primary_teammate_id → branch → teammate emoji`
@@ -52,7 +56,7 @@ export const BoardTile: React.FC<BoardTileProps> = ({ emoji, size = 36, style })
       }}
     >
       {emoji ?? (
-        <AppstoreOutlined
+        <NeutralBoardIcon
           style={{ fontSize: Math.round(size * 0.5), color: token.colorTextSecondary }}
         />
       )}
