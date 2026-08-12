@@ -935,8 +935,10 @@ export const BranchPill: React.FC<BranchPillProps> = ({
 interface BoardPillProps extends BasePillProps {
   board: {
     name: string;
-    icon?: string | null;
   };
+  /** Pre-resolved primary-assistant emoji (see `getBoardEmoji`); falls back to
+   * the neutral board glyph when absent — never a stored board icon. */
+  emoji?: string | null;
   compact?: boolean;
   title?: string;
   onClick?: (e: EntityPillInteractionEvent) => void;
@@ -944,6 +946,7 @@ interface BoardPillProps extends BasePillProps {
 
 export const BoardPill: React.FC<BoardPillProps> = ({
   board,
+  emoji,
   compact = false,
   title,
   onClick,
@@ -953,7 +956,7 @@ export const BoardPill: React.FC<BoardPillProps> = ({
     icon={<ApartmentOutlined />}
     color={ENTITY_PILL_COLORS.board}
     label={board.name}
-    emoji={board.icon}
+    emoji={emoji}
     compact={compact}
     title={title ?? board.name}
     onClick={onClick}

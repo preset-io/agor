@@ -22,9 +22,12 @@ import {
   theme,
 } from 'antd';
 import { useMemo, useState } from 'react';
+import { useAgorStore } from '@/store/agorStore';
+import { selectBranchById } from '@/store/selectors';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
+import { getBoardEmoji } from '../BoardTile';
 import CardModal from '../CardModal/CardModal';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
@@ -51,6 +54,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
+  const branchById = useAgorStore(selectBranchById);
 
   // State
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
@@ -211,11 +215,12 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       width: 180,
       render: (boardId: string) => {
         const board = boardById.get(boardId);
+        const boardEmoji = board ? getBoardEmoji(board, branchById) : undefined;
         return (
           <Typography.Text type="secondary">
             {board ? (
               <HighlightMatch
-                text={`${board.icon ? `${board.icon} ` : ''}${board.name}`}
+                text={`${boardEmoji ? `${boardEmoji} ` : ''}${board.name}`}
                 query={cardSearchTerm}
               />
             ) : (

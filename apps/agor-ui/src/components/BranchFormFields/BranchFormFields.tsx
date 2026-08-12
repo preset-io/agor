@@ -19,6 +19,8 @@ import {
   Typography,
 } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useAgorStore } from '@/store/agorStore';
+import { selectBranchById } from '@/store/selectors';
 import {
   BRANCH_STORAGE_MODES,
   type BranchStorageConfig,
@@ -27,6 +29,7 @@ import {
   resolveUiBranchStorageConfig,
 } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { getBoardEmoji } from '../BoardTile';
 
 /**
  * Default depth pre-filled into the "Depth" input when the user selects
@@ -78,6 +81,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
 }) => {
   const [internalUseSameBranchName, setInternalUseSameBranchName] = useState(true);
   const [refType, setRefType] = useState<'branch' | 'tag'>('branch');
+  const branchById = useAgorStore(selectBranchById);
 
   // Use controlled or internal state
   const useSameBranchName = controlledUseSameBranchName ?? internalUseSameBranchName;
@@ -167,10 +171,13 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
             }
             options={mapToArray(boardById)
               .sort((a: Board, b: Board) => a.name.localeCompare(b.name))
-              .map((board: Board) => ({
-                value: board.board_id,
-                label: `${board.icon || '📋'} ${board.name}`,
-              }))}
+              .map((board: Board) => {
+                const emoji = getBoardEmoji(board, branchById);
+                return {
+                  value: board.board_id,
+                  label: emoji ? `${emoji} ${board.name}` : board.name,
+                };
+              })}
             onChange={onFormChange}
           />
         </Form.Item>
