@@ -11,11 +11,12 @@
 
 import {
   mayMemberManageMCPServer,
+  mayMemberUseMCPScope,
   mayMemberUseMCPTransport,
   mayMemberWriteMCPServers,
 } from '@agor/core/mcp/member-policy';
-import type { MCPMemberPolicy, MCPServer, MCPTransport } from '@agor-live/client';
-import { MCP_TRANSPORTS } from '@agor-live/client';
+import type { MCPMemberPolicy, MCPScope, MCPServer, MCPTransport } from '@agor-live/client';
+import { MCP_SCOPES, MCP_TRANSPORTS } from '@agor-live/client';
 
 export interface MCPMemberPolicyDescription {
   /** The value, named as a sentence about members rather than as its enum. */
@@ -33,7 +34,7 @@ export const MCP_MEMBER_POLICY_DESCRIPTIONS: Record<MCPMemberPolicy, MCPMemberPo
   allow_private_only: {
     label: 'Members can add private servers',
     meaning:
-      'Members can add remote (HTTP/SSE) servers owned by themselves, usable only in their own sessions. Servers shared with the workspace stay admin-managed.',
+      'Members can add remote (HTTP/SSE) servers owned by themselves, reaching only the sessions they attach them to. Servers shared with the workspace stay admin-managed.',
   },
   allow_crud: {
     label: 'Members can add shared servers',
@@ -64,6 +65,14 @@ export function allowedMcpTransports({
   isAdmin,
 }: Pick<MCPServerCapabilityContext, 'isAdmin'>): MCPTransport[] {
   return MCP_TRANSPORTS.filter((transport) => isAdmin || mayMemberUseMCPTransport(transport));
+}
+
+/**
+ * The scopes this user may give a server. A member under `allow_private_only`
+ * attaches their server per session rather than to every session they start.
+ */
+export function allowedMcpScopes({ isAdmin, policy }: MCPServerCapabilityContext): MCPScope[] {
+  return MCP_SCOPES.filter((scope) => isAdmin || mayMemberUseMCPScope(policy, scope));
 }
 
 /** Whether this user may change this server's configuration. */

@@ -4,8 +4,8 @@
  * One function answers it for every write — the `mcp-servers` service hooks and
  * the marketplace connect endpoint both go through {@link authorizeMcpServerWrite}
  * — so the tenant's `mcp_member_policy`, the remote-transport restriction, and
- * the private-server ownership rule are decided in a single place instead of
- * being re-derived per entry point.
+ * the ownership and reach a private server is held to are decided in a single
+ * place instead of being re-derived per entry point.
  *
  * Using a server is a separate question with a separate answer: see
  * `isMCPServerUsableInSession` in `@agor/core/mcp`, enforced where a server is
@@ -25,13 +25,16 @@ import {
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
   isMCPServerUsableBy,
+  MEMBER_PRIVATE_MCP_SCOPE,
   mayMemberManageMCPServer,
+  mayMemberUseMCPScope,
   mayMemberUseMCPTransport,
   mayMemberWriteMCPServers,
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   MCPMemberPolicy,
+  MCPScope,
   MCPServer,
   MCPTransport,
   UserID,
@@ -47,6 +50,7 @@ export interface McpServerWriteRequest {
   /** The submitted payload; absent on remove. */
   data?: {
     transport?: MCPTransport;
+    scope?: MCPScope;
     owner_user_id?: UserID | string | null;
     catalog_entry_name?: string;
   };
@@ -55,6 +59,8 @@ export interface McpServerWriteRequest {
 export interface McpServerWriteDecision {
   /** The owner to persist, for a create the caller is not free to choose. */
   owner_user_id?: UserID;
+  /** The scope to persist, for a create whose policy fixes it. */
+  scope?: MCPScope;
   /** The catalog provenance to persist, which only the install path may name. */
   catalog_entry_name?: string;
 }
@@ -192,6 +198,21 @@ export function canConfigureMcpServers(role: unknown, policy: MCPMemberPolicy): 
   return policy !== 'use_existing_only';
 }
 
+/**
+ * `allow_private_only` is a statement about reach as well as ownership: the
+ * member's server belongs to the sessions they attach it to. A stated `global`
+ * is answered rather than quietly rewritten — a caller who believes it made a
+ * tenant-wide server and a row that says otherwise is the disagreement this
+ * rule exists to remove.
+ */
+function assertScopeAllowed(policy: MCPMemberPolicy, scope: MCPScope | undefined): void {
+  if (!mayMemberUseMCPScope(policy, scope)) {
+    throw new Forbidden(
+      'Your organization only allows members to add private MCP servers, which are attached per session; ask an admin for a workspace-wide one'
+    );
+  }
+}
+
 function assertPolicyAllowsWrite(policy: MCPMemberPolicy): void {
   if (!mayMemberWriteMCPServers(policy)) {
     throw new Forbidden(
@@ -265,14 +286,18 @@ async function decidePolicyAndOwnership(
 
   if (request.method === 'create') {
     assertRemoteTransport(request.data?.transport);
+    assertScopeAllowed(policy, request.data?.scope);
     const requestedOwner = request.data?.owner_user_id ?? undefined;
     if (requestedOwner && requestedOwner !== userId) {
       throw new Forbidden('You can only create MCP servers owned by yourself');
     }
     // `allow_private_only` means exactly that: the server the member creates is
-    // theirs, whether or not they asked for it to be. `allow_crud` lets them
-    // opt into a shared server, which is the whole difference between the two.
-    if (policy === 'allow_private_only') return { owner_user_id: userId };
+    // theirs and reaches only the sessions they attach it to, whether or not
+    // they asked for either. `allow_crud` lets them opt into a shared server,
+    // which is the whole difference between the two.
+    if (policy === 'allow_private_only') {
+      return { owner_user_id: userId, scope: MEMBER_PRIVATE_MCP_SCOPE };
+    }
     return requestedOwner ? { owner_user_id: userId } : {};
   }
 
@@ -291,6 +316,10 @@ async function decidePolicyAndOwnership(
 
   if (request.method !== 'remove') {
     assertRemoteTransport(request.data?.transport ?? existing.transport);
+    // An edit is refused the widening a create is refused. The stored scope is
+    // not re-decided: a row that predates the policy stays as it is until
+    // someone who may change it does.
+    assertScopeAllowed(policy, request.data?.scope);
   }
 
   return {};
@@ -325,6 +354,9 @@ export function createMcpServerWriteAuthorizationHook(
       });
       if (decision.owner_user_id !== undefined && data) {
         data.owner_user_id = decision.owner_user_id;
+      }
+      if (decision.scope !== undefined && data) {
+        data.scope = decision.scope;
       }
       if (decision.catalog_entry_name !== undefined && data) {
         data.catalog_entry_name = decision.catalog_entry_name;

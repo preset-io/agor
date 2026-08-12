@@ -3,7 +3,9 @@
  */
 
 export {
+  MEMBER_PRIVATE_MCP_SCOPE,
   mayMemberManageMCPServer,
+  mayMemberUseMCPScope,
   mayMemberUseMCPTransport,
   mayMemberWriteMCPServers,
 } from './member-policy';

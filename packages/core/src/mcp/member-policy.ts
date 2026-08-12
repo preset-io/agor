@@ -12,7 +12,7 @@
  * {@link isMCPServerUsableBy} in `./ownership`.
  */
 
-import type { MCPMemberPolicy, MCPTransport, UserID } from '../types';
+import type { MCPMemberPolicy, MCPScope, MCPTransport, UserID } from '../types';
 import type { MCPServerOwnership } from './ownership';
 
 /**
@@ -53,4 +53,33 @@ export function mayMemberManageMCPServer(
  */
 export function mayMemberUseMCPTransport(transport: MCPTransport | undefined): boolean {
   return transport !== 'stdio';
+}
+
+/**
+ * The scope a member's own server takes under `allow_private_only`.
+ *
+ * `scope` and ownership are orthogonal in general — one says how a server
+ * reaches a session, the other whose sessions it may reach — but this policy
+ * value is a statement about both: a member brings a server into the sessions
+ * they attach it to. A `global` row would instead attach itself to every
+ * session its owner starts, and would read as tenant-wide in any list that
+ * prints `scope` without reading `owner_user_id` beside it.
+ */
+export const MEMBER_PRIVATE_MCP_SCOPE: MCPScope = 'session';
+
+/**
+ * Whether a member may give their server this scope.
+ *
+ * An unstated scope is not a refusal: the caller derives
+ * {@link MEMBER_PRIVATE_MCP_SCOPE} for it rather than letting a storage default
+ * settle the question.
+ */
+export function mayMemberUseMCPScope(
+  policy: MCPMemberPolicy,
+  scope: MCPScope | undefined
+): boolean {
+  // `allow_crud` is the value that hands out tenant-wide reach; it does not
+  // constrain scope, and `use_existing_only` refuses the write outright.
+  if (policy !== 'allow_private_only') return true;
+  return scope === undefined || scope === MEMBER_PRIVATE_MCP_SCOPE;
 }

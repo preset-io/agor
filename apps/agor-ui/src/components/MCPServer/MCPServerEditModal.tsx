@@ -1,4 +1,10 @@
-import type { AgorClient, MCPServer, MCPTransport, UpdateMCPServerInput } from '@agor-live/client';
+import type {
+  AgorClient,
+  MCPScope,
+  MCPServer,
+  MCPTransport,
+  UpdateMCPServerInput,
+} from '@agor-live/client';
 import { Form, Modal } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
@@ -16,6 +22,8 @@ export interface MCPServerEditModalProps {
    * the form does not invite a change the daemon will refuse.
    */
   offeredTransports?: MCPTransport[];
+  /** The scopes this editor may switch to, on the same terms. */
+  offeredScopes?: MCPScope[];
   onClose: () => void;
 }
 
@@ -42,6 +50,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   open,
   client,
   offeredTransports,
+  offeredScopes,
   onClose,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
@@ -252,6 +261,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       >
         <MCPServerFormFields
           offeredTransports={offeredTransports}
+          offeredScopes={offeredScopes}
           mode="edit"
           transport={transport}
           onTransportChange={setTransport}

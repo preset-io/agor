@@ -1,6 +1,7 @@
 import {
   type CreateMCPServerInput,
   hasMinimumRole,
+  type MCPScope,
   type MCPServer,
   type MCPTransport,
   ROLES,
@@ -39,6 +40,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
 import {
+  allowedMcpScopes,
   allowedMcpTransports,
   canAddMcpServer,
   canDeleteMcpServer,
@@ -118,6 +120,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   // before the policy fetch settles. The first entry is the default the create
   // form starts from — `MCP_TRANSPORTS` is ordered for that.
   const offeredTransports = useMemo(() => allowedMcpTransports({ isAdmin }), [isAdmin]);
+  // Scope, unlike transport, is the policy's own question: `allow_private_only`
+  // holds a member to servers they attach per session.
+  const offeredScopes = useMemo(
+    () => allowedMcpScopes({ isAdmin, policy: memberPolicy.policy }),
+    [isAdmin, memberPolicy.policy]
+  );
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -152,7 +160,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       display_name: values.display_name as string | undefined,
       description: values.description as string | undefined,
       transport: values.transport as 'stdio' | 'http' | 'sse',
-      scope: (values.scope as 'global' | 'session' | undefined) || 'global',
+      scope: (values.scope as MCPScope | undefined) ?? offeredScopes[0],
       enabled: (values.enabled as boolean | undefined) ?? true,
       source: 'user',
     };
@@ -619,6 +627,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             transport={transport}
             onTransportChange={setChosenTransport}
             offeredTransports={offeredTransports}
+            offeredScopes={offeredScopes}
             authType={authType}
             onAuthTypeChange={setAuthType}
             form={createForm}
@@ -637,6 +646,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         open={editModalOpen}
         client={client}
         offeredTransports={offeredTransports}
+        offeredScopes={offeredScopes}
         onClose={handleEditClose}
       />
 

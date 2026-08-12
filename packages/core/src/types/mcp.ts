@@ -151,8 +151,13 @@ export type MCPTransport = (typeof MCP_TRANSPORTS)[number];
  * reaches a session, `owner_user_id` says whose sessions it may reach.
  * - global: in every session's effective set without being attached
  * - session: only in the sessions it is attached to, via the junction table
+ *
+ * `mcp_member_policy` is the one place the two are not free of each other: see
+ * `mayMemberUseMCPScope` in `@agor/core/mcp/member-policy`.
  */
-export type MCPScope = 'global' | 'session';
+export const MCP_SCOPES = ['global', 'session'] as const;
+
+export type MCPScope = (typeof MCP_SCOPES)[number];
 
 /**
  * MCP server source types

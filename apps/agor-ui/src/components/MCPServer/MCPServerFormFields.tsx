@@ -1,5 +1,5 @@
-import type { AgorClient, MCPTransport } from '@agor-live/client';
-import { MCP_TRANSPORTS } from '@agor-live/client';
+import type { AgorClient, MCPScope, MCPTransport } from '@agor-live/client';
+import { MCP_SCOPES, MCP_TRANSPORTS } from '@agor-live/client';
 import { ApiOutlined, DownOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import {
@@ -42,6 +42,13 @@ const TRANSPORT_LABELS: Record<MCPTransport, string> = {
 
 const ALL_TRANSPORTS: MCPTransport[] = [...MCP_TRANSPORTS];
 
+const SCOPE_LABELS: Record<MCPScope, string> = {
+  global: 'Global (all sessions)',
+  session: 'Session',
+};
+
+const ALL_SCOPES: MCPScope[] = [...MCP_SCOPES];
+
 export interface MCPServerFormFieldsProps {
   mode: 'create' | 'edit';
   transport?: MCPTransport;
@@ -52,6 +59,8 @@ export interface MCPServerFormFieldsProps {
    * towards a refusal.
    */
   offeredTransports?: MCPTransport[];
+  /** The scopes this user may configure, on the same terms as the transports. */
+  offeredScopes?: MCPScope[];
   authType?: 'none' | 'bearer' | 'jwt' | 'oauth';
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
   form: FormInstance;
@@ -90,6 +99,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   transport,
   onTransportChange,
   offeredTransports = ALL_TRANSPORTS,
+  offeredScopes = ALL_SCOPES,
   authType = 'none',
   onAuthTypeChange,
   form,
@@ -438,12 +448,15 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             label="Scope"
             name="scope"
             initialValue={isCreate ? 'session' : 'global'}
-            tooltip="Where this server is available"
+            tooltip={
+              offeredScopes.includes('global')
+                ? 'Where this server is available'
+                : "Where this server is available. A workspace-wide server is admin-managed under this workspace's MCP policy."
+            }
           >
-            <Select>
-              <Select.Option value="global">Global (all sessions)</Select.Option>
-              <Select.Option value="session">Session</Select.Option>
-            </Select>
+            <Select
+              options={offeredScopes.map((value) => ({ value, label: SCOPE_LABELS[value] }))}
+            />
           </Form.Item>
         </Col>
         <Col span={12}>
