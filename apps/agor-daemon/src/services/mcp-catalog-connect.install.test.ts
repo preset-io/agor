@@ -56,12 +56,14 @@ const CURATED = {
   curated: true,
   verified: false,
   probed_auth_type: 'none',
+  permission_disclosure: 'Reads public GitHub repository content only.',
 } as unknown as MCPCatalogEntry;
 
 const CONNECT_REQUEST = {
   catalog_key: DEEPWIKI,
   branch_id: 'branch-1',
   agentic_tool: 'claude-code' as const,
+  acknowledged_disclosure: 'Reads public GitHub repository content only.',
 };
 
 /**
