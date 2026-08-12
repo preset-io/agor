@@ -50,6 +50,7 @@ export class TenantAgenticToolSettingsService {
     }
     return {
       tool,
+      deployment_available: deploymentEnabled,
       enabled: deploymentEnabled && stored.enabled !== false,
       resolution_policy: stored.resolution_policy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY,
       inline_configuration_allowed: stored.inline_configuration_allowed !== false,
@@ -73,7 +74,7 @@ export class TenantAgenticToolSettingsService {
     const tool = parseTool(id);
     if (data.enabled === true && !this.deploymentAvailable(tool)) {
       throw new BadRequest(
-        `${tool} is unavailable under this deployment's agentic-tool policy. A local operator must select it with agor install, or declare it in config.yaml and run agor install --sync.`
+        `${tool} is unavailable under this deployment's agentic-tool policy. A deployment operator must add it to agentic_tools.installed in config.yaml, run agor install --sync, and restart the daemon.`
       );
     }
     if (data.enabled !== undefined && typeof data.enabled !== 'boolean') {

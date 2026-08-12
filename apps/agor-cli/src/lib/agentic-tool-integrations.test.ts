@@ -1,10 +1,22 @@
-import { access, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   acquireAgenticToolInstallLock,
   findRestorableAgenticTools,
+  installManagedIntegration,
   listInstalledAgenticTools,
   listManagedAgorVersions,
   listManagedToolDirectories,
@@ -15,11 +27,13 @@ import {
 } from './agentic-tool-integrations.js';
 
 const originalRoot = process.env.AGOR_AGENTIC_TOOLS_DIR;
+const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   if (originalRoot === undefined) delete process.env.AGOR_AGENTIC_TOOLS_DIR;
   else process.env.AGOR_AGENTIC_TOOLS_DIR = originalRoot;
+  process.env.PATH = originalPath;
   await Promise.all(
     temporaryDirectories
       .splice(0)
@@ -128,6 +142,32 @@ describe('listInstalledAgenticTools', () => {
 });
 
 describe('managed integration cleanup', () => {
+  it.runIf(process.platform !== 'win32')(
+    'preserves the previous package and cleans staging when npm fails',
+    async () => {
+      const root = await createRoot();
+      const destination = await installFixture(root, '0.24.0', 'codex', '@agor-live/codex');
+      await writeFile(join(destination, 'previous-marker'), 'preserve me');
+      const bin = join(root, 'fixture-bin');
+      await mkdir(bin);
+      const npm = join(bin, 'npm');
+      await writeFile(npm, '#!/bin/sh\nexit 42\n');
+      await chmod(npm, 0o755);
+      process.env.PATH = `${bin}${delimiter}${originalPath ?? ''}`;
+
+      await expect(installManagedIntegration('codex', '0.24.0')).rejects.toThrow(
+        'npm install failed with exit code 42'
+      );
+
+      await expect(readFile(join(destination, 'previous-marker'), 'utf8')).resolves.toBe(
+        'preserve me'
+      );
+      expect((await readdir(join(root, '0.24.0'))).filter((name) => name.startsWith('.'))).toEqual(
+        []
+      );
+    }
+  );
+
   it('lists and removes broken current-version tool directories', async () => {
     const root = await createRoot();
     await mkdir(join(root, '0.24.0', 'codex'), { recursive: true });

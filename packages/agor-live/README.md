@@ -17,7 +17,7 @@ Prefer Homebrew on macOS or Linux? See the main docs for the brew install path.
 ## Quick Start
 
 ```bash
-# 1. Initialize Agor (creates ~/.agor/ and database)
+# 1. Initialize Agor, choose agentic tools, and install their aligned packages
 agor init
 
 # 2. Start the daemon

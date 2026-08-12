@@ -157,6 +157,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
         items={(Object.keys(TOOL_LABELS) as TenantAgenticToolName[]).map((tool) => {
           const current = settings[tool] ?? {
             tool,
+            deployment_available: true,
             enabled: true,
             resolution_policy: 'user_preferred' as const,
             inline_configuration_allowed: true,
@@ -178,12 +179,32 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                 <Space>
                   <Switch
                     checked={current.enabled}
+                    disabled={!current.deployment_available}
                     onChange={(enabled) => void patch(tool, { enabled })}
                   />
                   <Typography.Text>
-                    {current.enabled ? 'Available in this workspace' : 'Disabled in this workspace'}
+                    {!current.deployment_available
+                      ? 'Not installed by this deployment'
+                      : current.enabled
+                        ? 'Installed and available in this workspace'
+                        : 'Installed, but disabled in this workspace'}
                   </Typography.Text>
                 </Space>
+                {!current.deployment_available && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    title="This deployment did not install this agentic tool"
+                    description={
+                      <>
+                        Workspace settings cannot install deployment packages. A deployment operator
+                        must add the tool to <code>agentic_tools.installed</code> in{' '}
+                        <code>config.yaml</code>, run <code>agor install --sync</code>, and restart
+                        the daemon.
+                      </>
+                    }
+                  />
+                )}
                 <Tabs
                   defaultActiveKey="authentication"
                   items={[

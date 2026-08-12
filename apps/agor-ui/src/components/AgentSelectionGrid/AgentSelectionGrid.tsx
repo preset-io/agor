@@ -16,7 +16,7 @@
  */
 
 import type { TenantAgenticToolName } from '@agor-live/client';
-import { Select, Space, Typography, theme } from 'antd';
+import { Alert, Select, Space, Typography, theme } from 'antd';
 import { useEffect, useMemo } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import type { AgenticToolOption } from '../../types';
@@ -89,6 +89,15 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
   if (variant === 'select') {
     return (
       <>
+        {visibleAgents.length === 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            title="No agentic tools are enabled for this workspace"
+            description="Contact a workspace administrator. Deployment package changes require a separate deployment operator."
+            style={{ marginBottom: token.marginSM }}
+          />
+        )}
         <Select
           value={selectedAgentId ?? undefined}
           onChange={(id) => onSelect(id)}
@@ -111,6 +120,14 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
 
   return (
     <>
+      {visibleAgents.length === 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          title="No agentic tools are enabled for this workspace"
+          description="Contact a workspace administrator. Deployment package changes require a separate deployment operator."
+        />
+      )}
       {showHelperText && !selectedAgentId && (
         <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: 'block' }}>
           {helperText}

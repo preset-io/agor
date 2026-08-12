@@ -83,23 +83,27 @@ jobs:
       # this smoke test is to validate before publishing). Installing both
       # tarballs in a single `npm install` lets npm satisfy the sibling
       # dep locally — zero registry hits.
-      - name: Pack tarballs (agor-live + @agor-live/client)
+      - name: Pack tarballs (agor-live + client + Codex integration)
         id: pack
         run: |
           set -euo pipefail
           pnpm pack -C packages/client    --pack-destination "$RUNNER_TEMP"
+          pnpm pack -C packages/agor-codex --pack-destination "$RUNNER_TEMP"
           pnpm pack -C packages/agor-live --pack-destination "$RUNNER_TEMP"
           CLIENT=$(ls "$RUNNER_TEMP"/agor-live-client-*.tgz | head -1)
+          CODEX=$(ls "$RUNNER_TEMP"/agor-live-codex-*.tgz | head -1)
           LIVE=$(ls "$RUNNER_TEMP"/agor-live-[0-9]*.tgz | head -1)
-          if [ -z "$CLIENT" ] || [ -z "$LIVE" ]; then
+          if [ -z "$CLIENT" ] || [ -z "$CODEX" ] || [ -z "$LIVE" ]; then
             echo "::error::pnpm pack produced incomplete tarballs"
             ls "$RUNNER_TEMP"
             exit 1
           fi
           echo "client=$CLIENT" >> "$GITHUB_OUTPUT"
+          echo "codex=$CODEX" >> "$GITHUB_OUTPUT"
           echo "live=$LIVE" >> "$GITHUB_OUTPUT"
           echo "Packed:"
           echo "  client: $CLIENT"
+          echo "  codex:  $CODEX"
           echo "  live:   $LIVE"
 
       # The single grep that would have caught agor-live@0.17.1.
@@ -147,6 +151,51 @@ jobs:
               --no-fund --no-audit "$ROOT/$LOCAL_LIVE"
           )
           "$ROOT/prefix/bin/agor" doctor --json >/dev/null
+
+          # Exercise fresh global-style init from the packed artifact, not only
+          # command discovery. Rewrite the allowlisted exact Codex spec to the
+          # locally packed integration so this remains a pre-publish smoke test.
+          REAL_NPM=$(command -v npm)
+          mkdir -p "$ROOT/npm-shim"
+          cat > "$ROOT/npm-shim/npm" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          args=()
+          for arg in "$@"; do
+            if [[ "$arg" == @agor-live/codex@* ]]; then
+              args+=("$AGOR_SMOKE_CODEX_TARBALL")
+            else
+              args+=("$arg")
+            fi
+          done
+          exec "$AGOR_SMOKE_REAL_NPM" "${args[@]}"
+          SH
+          chmod +x "$ROOT/npm-shim/npm"
+          export HOME="$ROOT/init-home"
+          export PATH="$ROOT/npm-shim:$PATH"
+          export AGOR_SMOKE_REAL_NPM="$REAL_NPM"
+          export AGOR_SMOKE_CODEX_TARBALL="${{ steps.pack.outputs.codex }}"
+          unset AGOR_AGENTIC_TOOLS_DIR AGOR_VERSION
+          AGOR_TELEMETRY=0 "$ROOT/prefix/bin/agor" init \
+            --non-interactive --agentic-tools codex >"$ROOT/init.stdout" 2>"$ROOT/init.stderr"
+          test -f "$HOME/.agor/config.yaml"
+          grep -q '^agentic_tools:' "$HOME/.agor/config.yaml"
+          grep -q '^    - codex$' "$HOME/.agor/config.yaml"
+          AGOR_TELEMETRY=0 "$ROOT/prefix/bin/agor" doctor --json >"$ROOT/doctor.json"
+          node - "$ROOT/doctor.json" "$ROOT/prefix/lib/node_modules/agor-live/package.json" <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const expectedVersion = JSON.parse(fs.readFileSync(process.argv[3], 'utf8')).version;
+          const codex = report.agenticTools?.find((tool) => tool.id === 'codex');
+          if (
+            report.policy?.mode !== 'declarative' ||
+            JSON.stringify(report.policy?.selected) !== JSON.stringify(['codex']) ||
+            codex?.status !== 'ready' ||
+            codex?.version !== expectedVersion
+          ) {
+            throw new Error(`Unexpected init policy: ${JSON.stringify(report.policy)}`);
+          }
+          NODE
 
       # Install BOTH tarballs together. List the client first so npm registers
       # it before resolving agor-live's "@agor-live/client" dep — guarantees

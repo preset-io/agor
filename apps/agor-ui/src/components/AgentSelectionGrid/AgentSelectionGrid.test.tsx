@@ -5,14 +5,16 @@
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgenticToolOption } from '../../types';
 import { AgentSelectionGrid } from './AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from './availableAgents';
 
+const store = vi.hoisted(() => ({ agenticToolSettingsByName: new Map() }));
+
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (selector: (state: unknown) => unknown) =>
-    selector({ agenticToolSettingsByName: new Map() }),
+    selector({ agenticToolSettingsByName: store.agenticToolSettingsByName }),
 }));
 
 const agents: AgenticToolOption[] = [
@@ -20,11 +22,26 @@ const agents: AgenticToolOption[] = [
   { id: 'opencode', name: 'OpenCode', icon: '🌐', description: 'y' },
 ];
 
+afterEach(() => {
+  store.agenticToolSettingsByName = new Map();
+});
+
 function gridEl(container: HTMLElement): HTMLElement {
   return container.querySelector('[style*="grid"]') as HTMLElement;
 }
 
 describe('AgentSelectionGrid tile layout', () => {
+  it('shows a non-operator action when no deployment/workspace tool is available', () => {
+    store.agenticToolSettingsByName = new Map(
+      agents.map((agent) => [agent.id, { tool: agent.id, enabled: false }])
+    );
+    render(<AgentSelectionGrid agents={agents} selectedAgentId={null} onSelect={vi.fn()} />);
+    expect(screen.getByText('No agentic tools are enabled for this workspace')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Deployment package changes require a separate deployment operator/)
+    ).toBeInTheDocument();
+  });
+
   it('does not replace an unavailable persisted selection unless fallback is opted in', () => {
     const onSelect = vi.fn();
     render(
