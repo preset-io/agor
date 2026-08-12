@@ -1,6 +1,5 @@
 import type { Board, Branch, Session } from '@agor-live/client';
 import {
-  AppstoreOutlined,
   ClockCircleOutlined,
   LeftOutlined,
   PlusOutlined,
@@ -153,7 +152,7 @@ const BoardHomeCard = memo(function BoardHomeCard({
               flexShrink: 0,
             }}
           >
-            {board.icon || <AppstoreOutlined />}
+            {board.icon || '📋'}
           </div>
 
           {/* Name + meta — all aligned under each other, to the right of the icon */}

@@ -241,7 +241,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     () =>
       Array.from(boardById.values())
         .filter((b) => !b.archived)
-        .map((b) => ({ value: b.board_id, label: b.icon ? `${b.icon} ${b.name}` : b.name })),
+        .map((b) => ({ value: b.board_id, label: `${b.icon || '📋'} ${b.name}` })),
     [boardById]
   );
 
