@@ -25,14 +25,15 @@ describe('getUserInitials', () => {
 });
 
 describe('UserIdentityAvatar fallback', () => {
-  it('renders initials when there is no slack image or chosen emoji', () => {
+  it('renders initials when there is no slack image', () => {
     render(<UserIdentityAvatar user={makeUser()} />);
     expect(screen.getByText('AL')).toBeInTheDocument();
   });
 
-  it('keeps a deliberately chosen emoji as identity', () => {
+  it('renders initials — never the emoji — for a human user who has one set', () => {
     render(<UserIdentityAvatar user={makeUser({ emoji: '🦊' })} />);
-    expect(screen.getByText('🦊')).toBeInTheDocument();
+    expect(screen.getByText('AL')).toBeInTheDocument();
+    expect(screen.queryByText('🦊')).not.toBeInTheDocument();
   });
 
   it('renders the slack image when available', () => {

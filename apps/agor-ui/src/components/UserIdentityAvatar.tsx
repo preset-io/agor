@@ -7,7 +7,7 @@ type AvatarToken = ReturnType<typeof theme.useToken>['token'];
 
 type IdentityUser = Pick<
   User,
-  'user_id' | 'avatar_url' | 'avatar_source' | 'emoji' | 'name' | 'email' | 'preferences'
+  'user_id' | 'avatar_url' | 'avatar_source' | 'name' | 'email' | 'preferences'
 >;
 
 export interface UserIdentityAvatarProps extends Omit<AvatarProps, 'src' | 'style'> {
@@ -74,16 +74,11 @@ export const UserIdentityAvatar: React.FC<UserIdentityAvatarProps> = ({
   const avatarUrl =
     user?.avatar_source === 'slack' && !prefersSlackAvatar ? undefined : rawAvatarUrl;
 
-  // A user-picked emoji is deliberate identity, so keep it; the empty case now
-  // shows initials instead of a generic 👤 fallback.
-  const customEmoji = user?.emoji?.trim() || undefined;
+  // Humans always show photo-or-initials — a user's emoji is never their face
+  // (emoji identity is reserved for assistants).
   const initials = getUserInitials(user);
-  const useInitials = !avatarUrl && !customEmoji;
-  const bgColor = avatarUrl
-    ? token.colorBgContainer
-    : customEmoji
-      ? token.colorPrimaryBg
-      : getUserAvatarColor(user, token);
+  const useInitials = !avatarUrl;
+  const bgColor = avatarUrl ? token.colorBgContainer : getUserAvatarColor(user, token);
 
   return (
     <Avatar
@@ -103,7 +98,7 @@ export const UserIdentityAvatar: React.FC<UserIdentityAvatarProps> = ({
         ...style,
       }}
     >
-      {customEmoji ?? initials}
+      {initials}
     </Avatar>
   );
 };

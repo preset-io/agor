@@ -968,7 +968,6 @@ interface UserPillProps extends BasePillProps {
   user: {
     name?: string | null;
     email?: string | null;
-    emoji?: string | null;
   };
   compact?: boolean;
   title?: string;
@@ -989,7 +988,6 @@ export const UserPill: React.FC<UserPillProps> = ({
       icon={<UserOutlined />}
       color={ENTITY_PILL_COLORS.user}
       label={label}
-      emoji={user.emoji}
       compact={compact}
       title={title ?? label}
       onClick={onClick}

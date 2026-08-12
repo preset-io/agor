@@ -1006,7 +1006,7 @@ const CommentNodeComponent = ({ data }: { data: CommentNodeData }) => {
         >
           {/* Author identity (counter-rotate to keep upright) */}
           <div style={{ transform: 'rotate(45deg)' }}>
-            {user ? user.emoji || getUserInitials(user) : <CommentOutlined />}
+            {user ? getUserInitials(user) : <CommentOutlined />}
           </div>
         </div>
 
@@ -1079,9 +1079,7 @@ const CommentNodeComponent = ({ data }: { data: CommentNodeData }) => {
         >
           {/* Who and when */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <div style={{ fontSize: 14 }}>
-              {user ? user.emoji || getUserInitials(user) : <CommentOutlined />}
-            </div>
+            <div style={{ fontSize: 14 }}>{user ? getUserInitials(user) : <CommentOutlined />}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div
                 style={{
