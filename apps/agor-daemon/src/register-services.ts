@@ -53,6 +53,7 @@ import type {
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
+  MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
   MCPServerID,
   MessageSource,
@@ -61,7 +62,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, TaskStatus } from '@agor/core/types';
+import { hasMinimumRole, isMCPOAuthGrantBindingVersion, ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
@@ -148,7 +149,6 @@ import {
   hasMCPOAuthRelevantServerConfigurationChanged,
   isMCPOAuthGrantBoundToServer,
   lockMCPOAuthGrantConfiguration,
-  MCP_OAUTH_GRANT_BINDING_VERSION,
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { createMCPServersService } from './services/mcp-servers.js';
@@ -1455,7 +1455,7 @@ async function registerMCPServices(
     tokenUrlOverride?: string;
     scope?: string;
     compatibilityMode?: 'strict' | 'legacy';
-    dcrMode?: 'disabled' | 'fallback';
+    dcrMode?: MCPOAuthDCRMode;
     socketId?: string;
   };
 
@@ -1557,8 +1557,9 @@ async function registerMCPServices(
       // flow context. Daemon callers never read or populate its origin-only
       // bearer cache.
       cacheKey: opts.prefetchedAuthServerMetadata ? opts.mcpUrl : undefined,
-      // Process-global DCR credentials are not a tenant/user namespace.
-      reuseDynamicClientRegistration: !durableOAuthFlows,
+      // Process-global DCR credentials are not a tenant/user/server namespace.
+      // Daemon flows never share them, including in SQLite deployments.
+      reuseDynamicClientRegistration: false,
       resourceUri: opts.mcpUrl,
       compatibilityMode: opts.compatibilityMode,
       dcrMode: opts.dcrMode,
@@ -1777,7 +1778,7 @@ async function registerMCPServices(
           server.auth?.type !== 'oauth' ||
           (server.auth.oauth_mode ?? 'per_user') !== record.oauthMode ||
           server.url !== pendingFlow.context.resourceUri ||
-          record.configFingerprintVersion !== MCP_OAUTH_GRANT_BINDING_VERSION
+          !isMCPOAuthGrantBindingVersion(record.configFingerprintVersion)
         ) {
           throw new Error('MCP OAuth server configuration changed; restart authorization');
         }
@@ -1796,7 +1797,8 @@ async function registerMCPServices(
             redirectUri: pendingFlow.context.redirectUri,
             clientId: pendingFlow.context.clientId,
             clientSecret: pendingFlow.context.clientSecret,
-          }
+          },
+          record.configFingerprintVersion
         );
         if (fingerprint !== record.configFingerprint) {
           throw new Error('MCP OAuth grant binding changed; restart authorization');
@@ -1812,6 +1814,16 @@ async function registerMCPServices(
     pendingFlow: PendingOAuthFlow,
     logPrefix: string
   ): Promise<void> => {
+    const durableRecord = pendingFlow.durableRecord;
+    const durableGrantBindingVersion = durableRecord
+      ? (() => {
+          const version = durableRecord.configFingerprintVersion;
+          if (!isMCPOAuthGrantBindingVersion(version)) {
+            throw new Error('Unsupported MCP OAuth grant binding version');
+          }
+          return version;
+        })()
+      : undefined;
     const work = () =>
       persistOAuthToken(
         db,
@@ -1826,7 +1838,7 @@ async function registerMCPServices(
             ? {
                 grantBinding: {
                   generation: pendingFlow.durableRecord.grantGeneration,
-                  version: MCP_OAUTH_GRANT_BINDING_VERSION,
+                  version: durableGrantBindingVersion!,
                   fingerprint: pendingFlow.durableRecord.configFingerprint,
                   metadataUri: pendingFlow.context.metadataUrl,
                   resourceUri: pendingFlow.context.resourceUri,
@@ -2230,7 +2242,7 @@ async function registerMCPServices(
         grant_type?: string;
         start_browser_flow?: boolean;
         compatibility_mode?: 'strict' | 'legacy';
-        dcr_mode?: 'disabled' | 'fallback';
+        dcr_mode?: MCPOAuthDCRMode;
       },
       params?: { connection?: { id?: string } }
     ) {
@@ -2331,7 +2343,7 @@ async function registerMCPServices(
                   clientSecret: data.client_secret,
                   scope: data.scope,
                   compatibilityMode,
-                  dcrMode: data.dcr_mode ?? 'disabled',
+                  dcrMode: data.dcr_mode,
                 });
               } catch (err) {
                 if (err instanceof PublicBaseUrlNotConfiguredError) {
@@ -2602,13 +2614,30 @@ async function registerMCPServices(
         let clientIdFromConfig: string | undefined;
         let scopeOverride: string | undefined;
         let compatibilityMode: 'strict' | 'legacy' = 'strict';
-        let dcrMode: 'disabled' | 'fallback' = 'disabled';
-        const savedServer = data.mcp_server_id
+        let dcrMode: MCPOAuthDCRMode | undefined;
+        const savedServerId = data.mcp_server_id;
+        const savedServer = savedServerId
           ? await runInOAuthTenantScope(db, tenantId, () => {
               const mcpServerRepo = new MCPServerRepository(db);
-              return mcpServerRepo.findById(data.mcp_server_id as string);
+              return mcpServerRepo.findById(savedServerId);
             })
           : null;
+
+        if (
+          savedServerId &&
+          (!savedServer?.enabled || !savedServer.url || savedServer.auth?.type !== 'oauth')
+        ) {
+          return {
+            success: false,
+            error:
+              'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
+          };
+        }
+
+        // Once an ID is supplied, its tenant-scoped row is authoritative for
+        // the provider URL and client configuration. The duplicate payload
+        // fields remain accepted only for older callers.
+        const effectiveMcpUrl = savedServer?.url ?? data.mcp_url;
 
         // PostgreSQL is the shared authority, so reject transient or stale
         // server input before the first outbound probe. Doing this only in the
@@ -2617,7 +2646,7 @@ async function registerMCPServices(
         if (
           durableOAuthFlows &&
           (!savedServer?.enabled ||
-            savedServer.url !== data.mcp_url ||
+            savedServer.url !== effectiveMcpUrl ||
             savedServer.auth?.type !== 'oauth')
         ) {
           return {
@@ -2635,7 +2664,7 @@ async function registerMCPServices(
           clientSecretOverride = savedServer.auth.oauth_client_secret;
           scopeOverride = savedServer.auth.oauth_scope;
           compatibilityMode = savedServer.auth.oauth_compatibility_mode ?? 'strict';
-          dcrMode = savedServer.auth.oauth_dcr_mode ?? 'disabled';
+          dcrMode = savedServer.auth.oauth_dcr_mode;
           if (oauthMode === 'shared') {
             const currentUser =
               durableOAuthFlows && tenantId && userId
@@ -2649,7 +2678,7 @@ async function registerMCPServices(
           }
         }
 
-        let probeResponse = await oauthFetch(data.mcp_url, {
+        let probeResponse = await oauthFetch(effectiveMcpUrl, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
           body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
@@ -2657,7 +2686,7 @@ async function registerMCPServices(
         });
 
         if (probeResponse.status !== 401) {
-          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(data.mcp_url);
+          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl);
           if (fallbackProbe) {
             console.log(
               '[OAuth Start] Handshake-level probe returned no auth requirement; ' +
@@ -2678,7 +2707,7 @@ async function registerMCPServices(
         const { resolveMCPOAuthDiscovery } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
         );
-        const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, data.mcp_url, {
+        const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, effectiveMcpUrl, {
           compatibilityMode,
           allowLocalhostHttp: !durableOAuthFlows,
         });
@@ -2695,16 +2724,16 @@ async function registerMCPServices(
         let result: StartTwoPhaseOAuthResult;
         try {
           result = await startTwoPhaseMCPOAuthFlow({
-            mcpUrl: data.mcp_url,
+            mcpUrl: effectiveMcpUrl,
             wwwAuthenticate,
             resourceMetadataUrl:
               discovery.kind === 'resource-metadata' ? discovery.metadataUrl : undefined,
             prefetchedAuthServerMetadata:
               discovery.kind === 'authorization-server' ? discovery.authServerMetadata : undefined,
-            mcpServerId: data.mcp_server_id,
+            mcpServerId: savedServerId,
             userId,
             oauthMode,
-            clientId: data.client_id || clientIdFromConfig,
+            clientId: savedServer ? clientIdFromConfig : data.client_id,
             clientSecret: clientSecretOverride,
             authorizationUrlOverride,
             tokenUrlOverride,
@@ -3621,7 +3650,7 @@ async function registerMCPServices(
               tokenUrlOverride: serverConfig.auth?.oauth_token_url,
               scope: serverConfig.auth?.oauth_scope,
               compatibilityMode,
-              dcrMode: serverConfig.auth?.oauth_dcr_mode ?? 'disabled',
+              dcrMode: serverConfig.auth?.oauth_dcr_mode,
               tenantId,
               socketId: connection?.id,
             });

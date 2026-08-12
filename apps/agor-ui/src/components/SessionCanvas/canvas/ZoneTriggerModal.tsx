@@ -9,7 +9,6 @@ import type {
   AgenticToolName,
   AgorClient,
   Branch,
-  BranchID,
   DefaultModelConfig,
   EffortLevel,
   MCPServer,
@@ -25,7 +24,7 @@ import type {
 import { buildZoneTriggerContext, isAgenticToolName } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Spin, Typography } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgenticToolOption } from '../../../types';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 // Async server-side renderer — keeps Handlebars out of the browser bundle so
@@ -39,12 +38,13 @@ import {
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
 
 interface ZoneTriggerModalProps {
+  /** Stable for one drop action; changes only when a new trigger action opens. */
+  actionId: number;
   open: boolean;
   onCancel: () => void;
   client: AgorClient | null;
-  branchId: BranchID;
   branch: Branch | undefined;
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
+  sessions: readonly Session[];
   zoneName: string;
   trigger: ZoneTrigger;
   boardName?: string;
@@ -66,13 +66,12 @@ interface ZoneTriggerModalProps {
   }) => Promise<void>;
 }
 
-export const ZoneTriggerModal = ({
+const ZoneTriggerModalAction = ({
   open,
   onCancel,
   client,
-  branchId,
   branch,
-  sessionsByBranch,
+  sessions,
   zoneName,
   trigger,
   boardName,
@@ -85,26 +84,74 @@ export const ZoneTriggerModal = ({
 }: ZoneTriggerModalProps) => {
   const [form] = Form.useForm();
 
+  // A zone-trigger action is an editing transaction. Snapshot every value
+  // that supplies defaults or template context at its boundary so realtime
+  // store updates cannot silently restart that transaction. The exported
+  // boundary below remounts this component for each new actionId.
+  const [initial] = useState(() => {
+    const branchSessions = sessions.filter(
+      (session): session is Session & { agentic_tool: AgenticToolName } =>
+        isAgenticToolName(session.agentic_tool)
+    );
+    const runningSessions = branchSessions.filter((session) => session.status === 'running');
+    const defaultSession = [
+      ...(runningSessions.length > 0 ? runningSessions : branchSessions),
+    ].sort(
+      (a, b) =>
+        new Date(b.last_updated || b.created_at).getTime() -
+        new Date(a.last_updated || a.created_at).getTime()
+    )[0]?.session_id;
+    const mode = branchSessions.length > 0 ? ('reuse_existing' as const) : ('create_new' as const);
+
+    return {
+      client,
+      branch,
+      branchSessions,
+      zoneName,
+      trigger: { ...trigger },
+      boardName,
+      boardDescription,
+      boardCustomContext,
+      currentUser,
+      mode,
+      selectedSessionId: defaultSession || '',
+      selectedAgent:
+        trigger.agent === undefined
+          ? ('claude-code' as const)
+          : isAgenticToolName(trigger.agent)
+            ? trigger.agent
+            : null,
+    };
+  });
+  const branchSessions = initial.branchSessions;
+
   // Primary mode: create new or reuse existing
-  const [mode, setMode] = useState<'create_new' | 'reuse_existing'>('create_new');
+  const [mode, setMode] = useState<'create_new' | 'reuse_existing'>(initial.mode);
 
   // Agent selection (only for create_new mode)
-  const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>('claude-code');
+  const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(initial.selectedAgent);
   const requiresSupportedToolSelection =
-    mode === 'create_new' && selectedAgent === null && trigger.agent !== undefined;
+    mode === 'create_new' && selectedAgent === null && initial.trigger.agent !== undefined;
 
   // Session selection (only for reuse mode)
-  const [selectedSessionId, setSelectedSessionId] = useState<string>('');
+  const [selectedSessionId, setSelectedSessionId] = useState<string>(initial.selectedSessionId);
 
   // Action selection (only for reuse mode)
   const [selectedAction, setSelectedAction] = useState<'prompt' | 'fork' | 'spawn'>('prompt');
 
-  // Editable rendered template (user can modify before executing)
-  const [editableTemplate, setEditableTemplate] = useState<string>('');
-
-  // Drives a Spin overlay so the user doesn't see the raw `{{...}}` flash
-  // before the daemon's rendered content arrives.
-  const [isRendering, setIsRendering] = useState<boolean>(true);
+  const initialTemplateTarget =
+    initial.mode === 'reuse_existing' ? `session:${initial.selectedSessionId}` : 'new';
+  const [templateState, setTemplateState] = useState({
+    target: initialTemplateTarget,
+    value: initial.client ? '' : initial.trigger.template,
+    isRendering: Boolean(initial.client),
+  });
+  const templateEditRevisionRef = useRef(0);
+  const templateRenderRequestRef = useRef<{
+    target: string;
+    editRevision: number;
+    promise: Promise<string>;
+  } | null>(null);
 
   // Explicit state for session config (survives form mount/unmount cycles)
   const [sessionConfig, setSessionConfig] = useState<{
@@ -115,65 +162,20 @@ export const ZoneTriggerModal = ({
     mcpServerIds?: string[];
   }>({});
 
-  // Filter sessions for this branch using O(1) Map lookup
-  const branchSessions = useMemo(() => {
-    return (sessionsByBranch.get(branchId) || []).filter(
-      (session): session is Session & { agentic_tool: AgenticToolName } =>
-        isAgenticToolName(session.agentic_tool)
-    );
-  }, [sessionsByBranch, branchId]);
-
-  // Smart default: Most recent active/completed session
-  const smartDefaultSession = useMemo(() => {
-    if (branchSessions.length === 0) return '';
-
-    // Prioritize running sessions
-    const runningSessions = branchSessions.filter((s) => s.status === 'running');
-    if (runningSessions.length > 0) {
-      // Most recently updated running session
-      return runningSessions.sort(
-        (a, b) =>
-          new Date(b.last_updated || b.created_at).getTime() -
-          new Date(a.last_updated || a.created_at).getTime()
-      )[0].session_id;
-    }
-
-    // Otherwise most recent session
-    return [...branchSessions].sort(
-      (a, b) =>
-        new Date(b.last_updated || b.created_at).getTime() -
-        new Date(a.last_updated || a.created_at).getTime()
-    )[0].session_id;
-  }, [branchSessions]);
-
   // Get the currently selected session (for pre-populating form on reuse)
   const selectedSession = useMemo(() => {
     return branchSessions.find((s) => s.session_id === selectedSessionId);
   }, [selectedSessionId, branchSessions]);
 
-  // Reset to defaults when modal opens
-  useEffect(() => {
-    if (open) {
-      // Default to 'reuse_existing' if sessions are available, otherwise 'create_new'
-      setMode(branchSessions.length > 0 ? 'reuse_existing' : 'create_new');
-      setSelectedSessionId(smartDefaultSession);
-      setSelectedAction('prompt');
-      setSelectedAgent(
-        trigger.agent === undefined
-          ? 'claude-code'
-          : isAgenticToolName(trigger.agent)
-            ? trigger.agent
-            : null
-      );
-      form.resetFields();
-      setSessionConfig({}); // Clear session config state
-    }
-  }, [open, smartDefaultSession, form, branchSessions.length, trigger.agent]);
-
   // Pre-populate form AND state when creating new session
   // Priority: Most recent session > User defaults > System defaults
+  const formInitializationRef = useRef<string | null>(null);
   useEffect(() => {
     if (mode === 'create_new' && selectedAgent) {
+      const initializationKey = `new:${selectedAgent}`;
+      if (formInitializationRef.current === initializationKey) return;
+      formInitializationRef.current = initializationKey;
+
       // Find the most recent session for this branch (create a copy to avoid mutating the array)
       const mostRecentSession =
         branchSessions.length > 0
@@ -185,15 +187,16 @@ export const ZoneTriggerModal = ({
           : null;
 
       // Get user defaults for this agent as fallback
-      const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
+      const agentDefaults =
+        initial.currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
       const recentAgentSession =
         mostRecentSession?.agentic_tool === selectedAgent ? mostRecentSession : undefined;
 
       // MCP inheritance: branch config > user defaults
       const effectiveMcpServerIds =
-        branch?.mcp_server_ids && branch.mcp_server_ids.length > 0
-          ? branch.mcp_server_ids
-          : currentUser?.default_mcp_server_ids || [];
+        initial.branch?.mcp_server_ids && initial.branch.mcp_server_ids.length > 0
+          ? initial.branch.mcp_server_ids
+          : initial.currentUser?.default_mcp_server_ids || [];
 
       // Calculate config values (priority: most recent session > user defaults)
       const configValues = {
@@ -208,11 +211,15 @@ export const ZoneTriggerModal = ({
       form.setFieldsValue(configValues);
       setSessionConfig(configValues);
     }
-  }, [mode, selectedAgent, currentUser, branchSessions, form, branch?.mcp_server_ids]);
+  }, [mode, selectedAgent, initial, branchSessions, form]);
 
   // Pre-populate form with selected session's config when reusing
   useEffect(() => {
     if (mode === 'reuse_existing' && selectedSession) {
+      const initializationKey = `existing:${selectedSession.session_id}`;
+      if (formInitializationRef.current === initializationKey) return;
+      formInitializationRef.current = initializationKey;
+
       // Pre-populate with session's current config
       form.setFieldsValue({
         agent: selectedSession.agentic_tool,
@@ -224,30 +231,42 @@ export const ZoneTriggerModal = ({
     }
   }, [mode, selectedSession, form]);
 
-  // Render template preview (server-side via daemon /templates).
-  // We fetch on every dependency change; consecutive renders share the
-  // socket.io connection, and stale responses are dropped via the cancelled
-  // flag. For the user-facing preview we want the raw template (with
-  // unresolved `{{...}}`) on failure rather than a silently-blank textarea.
+  const templateTarget = mode === 'reuse_existing' ? `session:${selectedSessionId}` : 'new';
+  const templateStateMatchesTarget = templateState.target === templateTarget;
+  const editableTemplate = templateStateMatchesTarget ? templateState.value : '';
+  const isRendering = Boolean(
+    initial.client && (!templateStateMatchesTarget || templateState.isRendering)
+  );
+
+  // Render once for the initial target, and once for each deliberate target
+  // change. Reuse an in-flight request when Strict Mode replays the effect.
   useEffect(() => {
-    let cancelled = false;
-    if (!client) {
-      setEditableTemplate(trigger.template);
-      setIsRendering(false);
+    if (!initial.client) {
+      setTemplateState((current) => {
+        if (
+          current.target === templateTarget &&
+          current.value === initial.trigger.template &&
+          !current.isRendering
+        ) {
+          return current;
+        }
+        return { target: templateTarget, value: initial.trigger.template, isRendering: false };
+      });
       return;
     }
+
     const selectedSessionForCtx =
       mode === 'reuse_existing' && selectedSessionId
         ? branchSessions.find((s) => s.session_id === selectedSessionId)
         : undefined;
     const context = buildZoneTriggerContext({
-      branch,
+      branch: initial.branch,
       board: {
-        name: boardName,
-        description: boardDescription,
-        custom_context: boardCustomContext,
+        name: initial.boardName,
+        description: initial.boardDescription,
+        custom_context: initial.boardCustomContext,
       },
-      zone: { label: zoneName },
+      zone: { label: initial.zoneName },
       session: selectedSessionForCtx
         ? {
             description: selectedSessionForCtx.description,
@@ -256,29 +275,33 @@ export const ZoneTriggerModal = ({
         : undefined,
     });
 
-    setIsRendering(true);
-    renderTemplate(client, trigger.template, context, 'raw').then((rendered) => {
-      if (!cancelled) {
-        setEditableTemplate(rendered);
-        setIsRendering(false);
-      }
-    });
+    let request = templateRenderRequestRef.current;
+    if (!request || request.target !== templateTarget) {
+      templateEditRevisionRef.current += 1;
+      request = {
+        target: templateTarget,
+        editRevision: templateEditRevisionRef.current,
+        promise: renderTemplate(initial.client, initial.trigger.template, context, 'raw'),
+      };
+      templateRenderRequestRef.current = request;
+      setTemplateState({ target: templateTarget, value: '', isRendering: true });
+    }
 
+    let active = true;
+    const activeRequest = request;
+    void activeRequest.promise.then((rendered) => {
+      if (!active || templateRenderRequestRef.current !== activeRequest) return;
+      setTemplateState((current) => ({
+        target: templateTarget,
+        value:
+          templateEditRevisionRef.current === activeRequest.editRevision ? rendered : current.value,
+        isRendering: false,
+      }));
+    });
     return () => {
-      cancelled = true;
+      active = false;
     };
-  }, [
-    client,
-    trigger.template,
-    branch,
-    boardName,
-    boardDescription,
-    boardCustomContext,
-    zoneName,
-    mode,
-    selectedSessionId,
-    branchSessions,
-  ]);
+  }, [initial, mode, selectedSessionId, branchSessions, templateTarget]);
 
   const handleExecute = async () => {
     if (mode === 'create_new') {
@@ -328,7 +351,7 @@ export const ZoneTriggerModal = ({
 
   return (
     <Modal
-      title={`Zone Trigger: ${zoneName}`}
+      title={`Zone Trigger: ${initial.zoneName}`}
       open={open}
       onCancel={onCancel}
       onOk={handleExecute}
@@ -473,7 +496,7 @@ export const ZoneTriggerModal = ({
                         tool={selectedAgent}
                         mcpServerById={mcpServerById}
                         showHelpText={true}
-                        client={client}
+                        client={initial.client}
                       />
                     ) : mode === 'reuse_existing' ? (
                       <AgenticToolConfigForm
@@ -497,7 +520,15 @@ export const ZoneTriggerModal = ({
           <Spin spinning={isRendering} delay={200} description="Rendering template…">
             <Input.TextArea
               value={editableTemplate}
-              onChange={(e) => setEditableTemplate(e.target.value)}
+              aria-label="Prompt (editable)"
+              onChange={(e) => {
+                templateEditRevisionRef.current += 1;
+                setTemplateState({
+                  target: templateTarget,
+                  value: e.target.value,
+                  isRendering: false,
+                });
+              }}
               rows={8}
               style={{
                 fontFamily: 'monospace',
@@ -512,3 +543,7 @@ export const ZoneTriggerModal = ({
     </Modal>
   );
 };
+
+export const ZoneTriggerModal = (props: ZoneTriggerModalProps) => (
+  <ZoneTriggerModalAction key={props.actionId} {...props} />
+);

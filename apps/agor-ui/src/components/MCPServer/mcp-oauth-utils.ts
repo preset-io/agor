@@ -2,6 +2,7 @@ import {
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
 } from '@agor/core/tools/mcp/http-headers';
+import type { MCPOAuthDCRMode } from '@agor-live/client';
 
 /**
  * OAuth utility functions extracted from MCPServersTable for testability.
@@ -27,7 +28,7 @@ export interface OAuthConfig {
   oauth_grant_type?: string;
   oauth_mode?: 'per_user' | 'shared';
   oauth_compatibility_mode?: 'strict' | 'legacy';
-  oauth_dcr_mode?: 'disabled' | 'fallback';
+  oauth_dcr_mode?: MCPOAuthDCRMode;
 }
 
 /**
@@ -73,7 +74,10 @@ export function extractOAuthConfig(values: Record<string, unknown>): OAuthConfig
   config.oauth_mode = values.oauth_mode === 'shared' ? 'shared' : 'per_user';
   config.oauth_compatibility_mode =
     values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
-  config.oauth_dcr_mode = values.oauth_dcr_mode === 'fallback' ? 'fallback' : 'disabled';
+  config.oauth_dcr_mode =
+    values.oauth_dcr_mode === 'disabled' || values.oauth_dcr_mode === 'fallback'
+      ? values.oauth_dcr_mode
+      : 'advertised';
 
   return config;
 }
@@ -86,7 +90,7 @@ export interface TestConfig {
   scope?: string;
   grant_type?: string;
   compatibility_mode?: 'strict' | 'legacy';
-  dcr_mode?: 'disabled' | 'fallback';
+  dcr_mode?: MCPOAuthDCRMode;
 }
 
 /**
@@ -134,7 +138,10 @@ export function extractOAuthConfigForTesting(values: Record<string, unknown>): T
     config.grant_type = values.oauth_grant_type;
   }
   config.compatibility_mode = values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
-  config.dcr_mode = values.oauth_dcr_mode === 'fallback' ? 'fallback' : 'disabled';
+  config.dcr_mode =
+    values.oauth_dcr_mode === 'disabled' || values.oauth_dcr_mode === 'fallback'
+      ? values.oauth_dcr_mode
+      : 'advertised';
 
   return config;
 }
@@ -158,7 +165,7 @@ export interface BuiltAuth {
   oauth_grant_type?: string;
   oauth_mode?: 'per_user' | 'shared';
   oauth_compatibility_mode?: 'strict' | 'legacy';
-  oauth_dcr_mode?: 'disabled' | 'fallback';
+  oauth_dcr_mode?: MCPOAuthDCRMode;
 }
 
 /**
@@ -167,7 +174,10 @@ export interface BuiltAuth {
  * so callers can do `payload.auth = buildAuthFromValues(values)` without
  * an outer if/else.
  */
-export function buildAuthFromValues(values: Record<string, unknown>): BuiltAuth | undefined {
+export function buildAuthFromValues(
+  values: Record<string, unknown>,
+  options: { preserveAbsentDcrMode?: boolean } = {}
+): BuiltAuth | undefined {
   const authType = values.auth_type;
   if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') return undefined;
 
@@ -180,6 +190,9 @@ export function buildAuthFromValues(values: Record<string, unknown>): BuiltAuth 
     if (typeof values.jwt_api_secret === 'string') auth.api_secret = values.jwt_api_secret;
   } else {
     Object.assign(auth, extractOAuthConfig(values));
+    if (options.preserveAbsentDcrMode && values.oauth_dcr_mode === 'advertised') {
+      delete auth.oauth_dcr_mode;
+    }
   }
   return auth;
 }

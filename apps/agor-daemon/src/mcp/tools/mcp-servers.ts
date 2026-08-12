@@ -189,6 +189,18 @@ const mcpAuthInputSchema = z
       .enum(['per_user', 'shared'])
       .optional()
       .describe("OAuth token ownership. Defaults to 'per_user' (recommended)."),
+    oauth_compatibility_mode: z
+      .enum(['strict', 'legacy'])
+      .optional()
+      .describe(
+        'OAuth compatibility policy. Defaults to strict; use legacy explicitly for older providers.'
+      ),
+    oauth_dcr_mode: z
+      .enum(['disabled', 'advertised', 'fallback'])
+      .optional()
+      .describe(
+        'Dynamic registration policy. Defaults to advertised; fallback additionally permits the legacy issuer-relative /register guess.'
+      ),
     insecure: z.boolean().optional().describe('Allow insecure auth behavior if supported.'),
   })
   .superRefine((auth, issue) => {
@@ -211,6 +223,8 @@ const mcpAuthInputSchema = z
         'oauth_scope',
         'oauth_grant_type',
         'oauth_mode',
+        'oauth_compatibility_mode',
+        'oauth_dcr_mode',
         'insecure',
       ] as const,
     };

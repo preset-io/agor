@@ -10,7 +10,6 @@ import type {
   Branch,
   BranchID,
   CardWithType,
-  MCPServer,
   Repo,
   Session,
   SpawnConfig,
@@ -66,7 +65,7 @@ import { useUIMode } from '../../contexts/UIModeContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useStableCallback } from '../../hooks/useStableCallback';
-import { useAgorStore } from '../../store/agorStore';
+import { agorStore, useAgorStore } from '../../store/agorStore';
 import {
   makeBoardObjectsForBoardSelector,
   makeSessionsForBranchSelector,
@@ -75,7 +74,6 @@ import {
   selectCommentById,
   selectMcpServerById,
   selectRepoById,
-  selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
@@ -374,47 +372,47 @@ const EMPTY_BOARD_ENTITY_OBJECTS: BoardEntityObject[] = Object.freeze(
 
 interface BranchZoneTriggerModalProps {
   modal: {
+    actionId: number;
     branchId: BranchID;
     zoneName: string;
     zoneId: string;
     trigger: ZoneTrigger;
+    sessions: readonly Session[];
   };
   client: AgorClient | null;
-  branches: Branch[];
+  branch: Branch | undefined;
   board: Board | null;
   availableAgents: AgenticToolOption[];
-  mcpServerById: Map<string, MCPServer>;
   currentUser: User | null;
   onCancel: () => void;
   onExecute: React.ComponentProps<typeof ZoneTriggerModal>['onExecute'];
 }
 
-// The zone-trigger modal needs the full sessionsByBranch map to offer source
-// session choices, but that map changes on every streaming session patch. Keep
-// that subscription behind this tiny conditional child so the main canvas does
-// not rebuild every React Flow node while the modal is closed.
+// Keep modal-only subscriptions behind this conditional boundary. The session
+// choices are already snapshotted into the action at drop time, so this child
+// deliberately does not subscribe to streaming session state at all. MCP data
+// remains live because it supplies picker options rather than action defaults.
 const BranchZoneTriggerModal = React.memo(
   ({
     modal,
     client,
-    branches,
+    branch,
     board,
     availableAgents,
-    mcpServerById,
     currentUser,
     onCancel,
     onExecute,
   }: BranchZoneTriggerModalProps) => {
-    const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+    const mcpServerById = useAgorStore(selectMcpServerById);
 
     return (
       <ZoneTriggerModal
+        actionId={modal.actionId}
         open={true}
         onCancel={onCancel}
         client={client}
-        branchId={modal.branchId}
-        branch={branches.find((wt) => wt.branch_id === modal.branchId)}
-        sessionsByBranch={sessionsByBranch}
+        branch={branch}
+        sessions={modal.sessions}
         zoneName={modal.zoneName}
         trigger={modal.trigger}
         boardName={board?.name}
@@ -482,7 +480,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const commentById = useAgorStore(selectCommentById);
     const cardById = useAgorStore(selectCardById);
     const userById = useAgorStore(selectUserById);
-    const mcpServerById = useAgorStore(selectMcpServerById);
 
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
@@ -570,12 +567,111 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const [markdownWidth, setMarkdownWidth] = useState(500); // Default width
 
     // Branch zone trigger modal state
+    const nextBranchTriggerActionIdRef = useRef(0);
     const [branchTriggerModal, setBranchTriggerModal] = useState<{
+      actionId: number;
       branchId: BranchID;
       zoneName: string;
       zoneId: string;
       trigger: ZoneTrigger;
+      sessions: readonly Session[];
     } | null>(null);
+    const handleCancelBranchTrigger = useCallback(() => setBranchTriggerModal(null), []);
+    const handleExecuteBranchTrigger = useStableCallback(
+      async ({
+        sessionId,
+        action,
+        renderedTemplate,
+        agent,
+        agenticToolPresetId,
+        modelConfig,
+        permissionMode,
+        mcpServerIds,
+      }: Parameters<React.ComponentProps<typeof ZoneTriggerModal>['onExecute']>[0]) => {
+        const triggerModal = branchTriggerModal;
+        if (!client || !triggerModal) {
+          console.error('❌ Cannot execute trigger: client or trigger action not available');
+          setBranchTriggerModal(null);
+          return;
+        }
+
+        try {
+          let targetSessionId = sessionId;
+
+          // If creating new session, create it first
+          if (sessionId === 'new') {
+            const newSession = await client.service('sessions').create({
+              branch_id: triggerModal.branchId,
+              agentic_tool: (agent || 'claude-code') as AgenticToolName,
+              agentic_tool_preset_id: agenticToolPresetId,
+              description: `Session from zone "${triggerModal.zoneName}"`,
+              status: 'idle',
+              model_config: modelConfig
+                ? {
+                    ...modelConfig,
+                    updated_at: new Date().toISOString(),
+                  }
+                : undefined,
+              permission_config: permissionMode
+                ? {
+                    mode: permissionMode,
+                  }
+                : undefined,
+            });
+            targetSessionId = newSession.session_id;
+
+            // Attach MCP servers if provided
+            if (mcpServerIds && mcpServerIds.length > 0) {
+              for (const serverId of mcpServerIds) {
+                await client
+                  .service(`sessions/${targetSessionId}/mcp-servers`)
+                  .create({ mcpServerId: serverId });
+              }
+            }
+          }
+
+          // Execute action and capture the session the user should land on so
+          // we can route through the normal session-click pipe afterward.
+          let resultSessionId: string | undefined;
+          switch (action) {
+            case 'prompt': {
+              await client.sessions.prompt(targetSessionId, renderedTemplate, {
+                permissionMode,
+              });
+              resultSessionId = targetSessionId;
+              break;
+            }
+            case 'fork': {
+              const forkedSession = (await client
+                .service(`sessions/${targetSessionId}/fork`)
+                .create({})) as Session;
+              await client.sessions.prompt(forkedSession.session_id, renderedTemplate, {
+                permissionMode,
+              });
+              resultSessionId = forkedSession.session_id;
+              break;
+            }
+            case 'spawn': {
+              const spawnedSession = (await client
+                .service(`sessions/${targetSessionId}/spawn`)
+                .create({})) as Session;
+              await client.sessions.prompt(spawnedSession.session_id, renderedTemplate, {
+                permissionMode,
+              });
+              resultSessionId = spawnedSession.session_id;
+              break;
+            }
+          }
+
+          // Use the same URL/recenter/flag-cleanup path as a session-card click.
+          if (resultSessionId) onSessionClick?.(resultSessionId);
+        } catch (error) {
+          console.error('❌ Failed to execute zone trigger:', error);
+        } finally {
+          setBranchTriggerModal(null);
+        }
+      }
+    );
 
     // Debounce timer ref for position updates
     const layoutUpdateTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -1972,10 +2068,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     } else {
                       // Default: show_picker - open modal for session selection
                       setBranchTriggerModal({
+                        actionId: ++nextBranchTriggerActionIdRef.current,
                         branchId: nodeId as BranchID,
                         zoneName: zoneData.label,
                         zoneId,
                         trigger,
+                        sessions:
+                          agorStore.getState().sessionsByBranch.get(nodeId) ?? EMPTY_SESSIONS,
                       });
                     }
                   }
@@ -3045,110 +3144,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         {branchTriggerModal && (
           <BranchZoneTriggerModal
             modal={branchTriggerModal}
-            onCancel={() => setBranchTriggerModal(null)}
+            onCancel={handleCancelBranchTrigger}
             client={client}
-            branches={branches}
+            branch={branches.find((branch) => branch.branch_id === branchTriggerModal.branchId)}
             board={board}
             availableAgents={availableAgents}
-            mcpServerById={mcpServerById}
             currentUser={currentUserId ? userById.get(currentUserId) || null : null}
-            onExecute={async ({
-              sessionId,
-              action,
-              renderedTemplate,
-              agent,
-              agenticToolPresetId,
-              modelConfig,
-              permissionMode,
-              mcpServerIds,
-            }) => {
-              if (!client) {
-                console.error('❌ Cannot execute trigger: client not available');
-                setBranchTriggerModal(null);
-                return;
-              }
-
-              try {
-                let targetSessionId = sessionId;
-
-                // If creating new session, create it first
-                if (sessionId === 'new') {
-                  const newSession = await client.service('sessions').create({
-                    branch_id: branchTriggerModal.branchId,
-                    agentic_tool: (agent || 'claude-code') as AgenticToolName,
-                    agentic_tool_preset_id: agenticToolPresetId,
-                    description: `Session from zone "${branchTriggerModal.zoneName}"`,
-                    status: 'idle',
-                    model_config: modelConfig
-                      ? {
-                          ...modelConfig,
-                          updated_at: new Date().toISOString(),
-                        }
-                      : undefined,
-                    permission_config: permissionMode
-                      ? {
-                          mode: permissionMode,
-                        }
-                      : undefined,
-                  });
-                  targetSessionId = newSession.session_id;
-
-                  // Attach MCP servers if provided
-                  if (mcpServerIds && mcpServerIds.length > 0) {
-                    for (const serverId of mcpServerIds) {
-                      await client
-                        .service(`sessions/${targetSessionId}/mcp-servers`)
-                        .create({ mcpServerId: serverId });
-                    }
-                  }
-                }
-
-                // Execute action and capture the session the user
-                // should land on so we can route through the normal
-                // session-click pipe afterward (same URL push as
-                // handleCreateSession / a card click).
-                let resultSessionId: string | undefined;
-                switch (action) {
-                  case 'prompt': {
-                    await client.sessions.prompt(targetSessionId, renderedTemplate, {
-                      permissionMode,
-                    });
-                    resultSessionId = targetSessionId;
-                    break;
-                  }
-                  case 'fork': {
-                    const forkedSession = (await client
-                      .service(`sessions/${targetSessionId}/fork`)
-                      .create({})) as Session;
-                    await client.sessions.prompt(forkedSession.session_id, renderedTemplate, {
-                      permissionMode,
-                    });
-                    resultSessionId = forkedSession.session_id;
-                    break;
-                  }
-                  case 'spawn': {
-                    const spawnedSession = (await client
-                      .service(`sessions/${targetSessionId}/spawn`)
-                      .create({})) as Session;
-                    await client.sessions.prompt(spawnedSession.session_id, renderedTemplate, {
-                      permissionMode,
-                    });
-                    resultSessionId = spawnedSession.session_id;
-                    break;
-                  }
-                }
-
-                // Open the session the trigger landed on (new for
-                // fork/spawn/new-session, existing for prompt). Routes
-                // through the same handler as a session-card click, so
-                // URL push + recenter + flag cleanup all run in lockstep.
-                if (resultSessionId) onSessionClick?.(resultSessionId);
-              } catch (error) {
-                console.error('❌ Failed to execute zone trigger:', error);
-              } finally {
-                setBranchTriggerModal(null);
-              }
-            }}
+            onExecute={handleExecuteBranchTrigger}
           />
         )}
 
