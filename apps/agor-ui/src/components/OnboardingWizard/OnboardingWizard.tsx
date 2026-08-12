@@ -387,6 +387,10 @@ const GLASS_CARD_SHADOW = '0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,25
 const WIZARD_SELECTED_BG =
   'linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.06) 100%)';
 const WIZARD_SELECTED_BORDER = '1.5px solid rgba(46,154,146,0.95)';
+// Unselected border for *selectable* cards (goals, LLM providers). Same 1.5px
+// width as WIZARD_SELECTED_BORDER so selecting only changes the border COLOR,
+// never the width — no box-model change, no layout shift on select/deselect.
+const SELECTABLE_CARD_BORDER = '1.5px solid rgba(255,255,255,0.16)';
 const WIZARD_SELECTED_SHADOW =
   '0 0 0 3px rgba(46,154,146,0.38), 0 6px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.18)';
 
@@ -1105,7 +1109,7 @@ export function OnboardingWizard({
     return (
       <div>
         {renderStepBadge(goalsTitle)}
-        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 16 }}>
+        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 18 }}>
           Pick up to two — we'll shape your first session around them. Not sure yet? Skip and decide
           later.
         </Paragraph>
@@ -1114,7 +1118,7 @@ export function OnboardingWizard({
           style={{
             display: 'grid',
             gridTemplateColumns: '1fr 1fr',
-            gap: 10,
+            gap: 12,
           }}
         >
           {GOALS.map((goal) => {
@@ -1137,11 +1141,13 @@ export function OnboardingWizard({
                   style={{
                     position: 'relative',
                     background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                    border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                    // Constant 1.5px width in both states — only the color changes
+                    // on select, so the card never resizes/shifts (no re-click bait).
+                    border: isSelected ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
                     backdropFilter: 'blur(20px)',
                     WebkitBackdropFilter: 'blur(20px)',
                     borderRadius: 12,
-                    padding: '13px 16px',
+                    padding: '15px 16px',
                     cursor: isDisabled ? 'not-allowed' : 'pointer',
                     opacity: isDisabled ? 0.45 : 1,
                     textAlign: 'left',
@@ -1174,13 +1180,15 @@ export function OnboardingWizard({
                       color: TEXT_PRIMARY,
                       fontWeight: 600,
                       fontSize: 14,
-                      marginBottom: 4,
+                      marginBottom: 5,
                       paddingRight: 20,
                     }}
                   >
                     {goal.title}
                   </div>
-                  <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{goal.description}</div>
+                  <div style={{ color: TEXT_MUTED, fontSize: 12, lineHeight: 1.45 }}>
+                    {goal.description}
+                  </div>
                   {/* Screen-reader-only cap reason — joins the disabled card's
                       accessible name so it isn't a hover-only affordance. */}
                   {isDisabled && <span style={SR_ONLY_STYLE}>{GOAL_CAP_HINT}</span>}
@@ -1223,7 +1231,8 @@ export function OnboardingWizard({
                 key={option.id}
                 style={{
                   background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                  border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                  // Constant border width in both states — no layout shift on select.
+                  border: isSelected ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
                   backdropFilter: 'blur(20px)',
                   WebkitBackdropFilter: 'blur(20px)',
                   borderRadius: 10,

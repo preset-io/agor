@@ -193,6 +193,35 @@ describe('OnboardingWizard', () => {
     expect(document.querySelector('.ant-modal-centered')).toBeInTheDocument();
   });
 
+  it('selects a goal on a single click and keeps it selected (no self-deselect)', () => {
+    renderWizard({ initialStep: 'goals' });
+    const card = screen.getByText('Ship without the busywork').closest('button');
+    expect(card).toHaveAttribute('aria-pressed', 'false');
+    // One click = exactly one toggle → stays selected. (Regression: a double-fire
+    // would flip it straight back to false.)
+    fireEvent.click(card as HTMLButtonElement);
+    expect(card).toHaveAttribute('aria-pressed', 'true');
+    // A second, separate click is what deselects — proving one click = one toggle.
+    fireEvent.click(card as HTMLButtonElement);
+    expect(card).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('does not change a goal card border width on selection (no layout shift)', () => {
+    renderWizard({ initialStep: 'goals' });
+    const card = screen
+      .getByText('Ship without the busywork')
+      .closest('button') as HTMLButtonElement;
+    // Unselected and selected both use a 1.5px border — only the color changes —
+    // so the box model never shifts. A shift here is what made selection read as
+    // "it deselected" and baited a re-click.
+    const unselectedWidth = card.style.borderTopWidth || card.style.borderWidth;
+    expect(unselectedWidth).toBe('1.5px');
+    fireEvent.click(card);
+    expect(card).toHaveAttribute('aria-pressed', 'true');
+    const selectedWidth = card.style.borderTopWidth || card.style.borderWidth;
+    expect(selectedWidth).toBe(unselectedWidth);
+  });
+
   it('explains the multi-select interaction and why it matters, not just a mechanic label', () => {
     renderWizard({ initialStep: 'goals' });
     // What to do (pick up to two) AND why (it shapes the first session).
