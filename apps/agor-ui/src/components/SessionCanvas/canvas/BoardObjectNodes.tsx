@@ -6,6 +6,7 @@ import type { BoardComment, BoardObject, User } from '@agor-live/client';
 import {
   CaretDownOutlined,
   CaretUpOutlined,
+  CommentOutlined,
   DeleteOutlined,
   FontSizeOutlined,
   LockOutlined,
@@ -21,6 +22,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { getContrastingTextColor } from '../../../utils/theme';
+import { getUserInitials } from '../../UserIdentityAvatar';
 import { DeleteZoneModal } from './DeleteZoneModal';
 import { ZoneConfigModal } from './ZoneConfigModal';
 import type { LayerOp } from './zOrder';
@@ -1002,8 +1004,10 @@ const CommentNodeComponent = ({ data }: { data: CommentNodeData }) => {
             left: '0',
           }}
         >
-          {/* Emoji (counter-rotate to keep upright) */}
-          <div style={{ transform: 'rotate(45deg)' }}>{user?.emoji || '💬'}</div>
+          {/* Author identity (counter-rotate to keep upright) */}
+          <div style={{ transform: 'rotate(45deg)' }}>
+            {user ? user.emoji || getUserInitials(user) : <CommentOutlined />}
+          </div>
         </div>
 
         {/* Reply count badge */}
@@ -1075,7 +1079,9 @@ const CommentNodeComponent = ({ data }: { data: CommentNodeData }) => {
         >
           {/* Who and when */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <div style={{ fontSize: 14 }}>{user?.emoji || '💬'}</div>
+            <div style={{ fontSize: 14 }}>
+              {user ? user.emoji || getUserInitials(user) : <CommentOutlined />}
+            </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div
                 style={{
