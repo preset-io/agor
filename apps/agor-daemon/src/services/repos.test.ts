@@ -78,7 +78,7 @@ describe('ReposService.addLocalRepository executor boundary', () => {
         credentialFindingCount: 0,
       },
     });
-    const app = { service: vi.fn() } as unknown as Application;
+    const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
     const service = new ReposService({} as never, app);
     const create = vi.spyOn(service, 'create').mockResolvedValue({
       repo_id: 'repo-id',
@@ -111,7 +111,10 @@ describe('ReposService.addLocalRepository executor boundary', () => {
       success: false,
       error: { code: 'GIT_REPO_INSPECT_FAILED', message: 'Not a valid git repository' },
     });
-    const service = new ReposService({} as never, { service: vi.fn() } as unknown as Application);
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
     const create = vi.spyOn(service, 'create');
     await expect(
       service.addLocalRepository({ path: '/bad', slug: 'local/bad' }, {
@@ -150,6 +153,7 @@ describe('ReposService.createBranch Git lifecycle identity', () => {
       find: vi.fn(async () => ({ data: [] })),
     };
     const app = {
+      get: () => ({}),
       settings: { authentication: { secret: 'test-secret' } },
       service: vi.fn((name: string) => {
         if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
@@ -194,6 +198,7 @@ describe('ReposService.cloneRepository Git lifecycle identity', () => {
 
     const repos = { patch: vi.fn() };
     const app = {
+      get: () => ({}),
       settings: { authentication: { secret: 'test-secret' } },
       service: vi.fn((name: string) => {
         if (name === 'repos') return repos;

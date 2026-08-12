@@ -55,6 +55,7 @@ import type {
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
+  MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
   MCPServerID,
   MessageSource,
@@ -63,7 +64,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, TaskStatus } from '@agor/core/types';
+import { hasMinimumRole, isMCPOAuthGrantBindingVersion, ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
@@ -95,7 +96,10 @@ import {
   tenantUserChannelName,
 } from './realtime/routing.js';
 import { createAgenticToolPresetsService } from './services/agentic-tool-presets.js';
-import { createArtifactsService } from './services/artifacts.js';
+import {
+  ARTIFACTS_SERVICE_TRANSPORT_METHODS,
+  createArtifactsService,
+} from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { setupBoardOwnersService } from './services/board-owners.js';
@@ -116,13 +120,17 @@ import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
-import { createGatewayChannelsService } from './services/gateway-channels.js';
+import {
+  createGatewayChannelsService,
+  GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS,
+} from './services/gateway-channels.js';
 import { createGatewayChannelsAppInfoService } from './services/gateway-channels-app-info.js';
 import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
   createGroupsService,
+  GROUPS_SERVICE_TRANSPORT_METHODS,
   setupBoardAlignedBranchesService,
   setupBoardGroupGrantsService,
   setupBranchEffectiveAccessService,
@@ -131,7 +139,10 @@ import {
 } from './services/groups.js';
 import { createKnowledgeDocumentEditsService } from './services/knowledge-document-edits.js';
 import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
-import { createKnowledgeGraphService } from './services/knowledge-graph.js';
+import {
+  createKnowledgeGraphService,
+  KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS,
+} from './services/knowledge-graph.js';
 import { createKnowledgeIndexingStatusService } from './services/knowledge-indexing.js';
 import { createKnowledgeNamespacesService } from './services/knowledge-namespaces.js';
 import { createKnowledgeReindexService } from './services/knowledge-reindex.js';
@@ -150,25 +161,27 @@ import {
   hasMCPOAuthRelevantServerConfigurationChanged,
   isMCPOAuthGrantBoundToServer,
   lockMCPOAuthGrantConfiguration,
-  MCP_OAUTH_GRANT_BINDING_VERSION,
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
-import { createSchedulesService } from './services/schedules.js';
+import {
+  createSchedulesService,
+  SCHEDULES_SERVICE_TRANSPORT_METHODS,
+} from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
-import { createTasksService } from './services/tasks.js';
+import { createTasksService, TASKS_SERVICE_TRANSPORT_METHODS } from './services/tasks.js';
 import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
-import { createUsersService } from './services/users.js';
+import { createUsersService, USERS_SERVICE_TRANSPORT_METHODS } from './services/users.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
@@ -290,17 +303,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/session-streams').publish(() => []);
 
   app.use('/tasks', createTasksService(db, app), {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'patch',
-      'remove',
-      'connectExecutor',
-      'reportTerminationComplete',
-      'reportRuntimeTelemetry',
-      'reportSdkHealthFailure',
-    ],
+    methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
     // clients. Keep this in sync with every `app.service('tasks').emit(...)`
@@ -403,15 +406,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     }),
     {
       events: ['agor-query'],
-      methods: [
-        'find',
-        'get',
-        'create',
-        'patch',
-        'remove',
-        'publishFromExecutor',
-        'validateFromExecutor',
-      ],
+      methods: [...ARTIFACTS_SERVICE_TRANSPORT_METHODS],
     }
   );
   app.use('/board-comments', createBoardCommentsService(db));
@@ -457,7 +452,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   app.use('/groups', createGroupsService(db), {
-    methods: ['find', 'get', 'create', 'patch', 'remove'],
+    methods: [...GROUPS_SERVICE_TRANSPORT_METHODS],
   });
   app.use('/group-memberships', createGroupMembershipsService(db), {
     methods: ['find', 'create', 'remove'],
@@ -478,7 +473,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // First-class schedules. RBAC hooks wired in register-hooks.ts.
   // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
   app.use('/schedules', createSchedulesService(db), {
-    methods: ['find', 'get', 'create', 'patch', 'remove'],
+    methods: [...SCHEDULES_SERVICE_TRANSPORT_METHODS],
   });
 
   // ============================================================================
@@ -526,7 +521,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: ['create'],
   });
   app.use('/kb/graph', createKnowledgeGraphService(db), {
-    methods: ['find', 'create', 'link', 'neighbors'],
+    methods: [...KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS],
   });
 
   // ============================================================================
@@ -556,7 +551,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   {
     app.use('/gateway-channels', createGatewayChannelsService(db), {
-      methods: ['find', 'get', 'create', 'patch', 'remove', 'uploadFileStreamFromExecutor'],
+      methods: [...GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS],
     });
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit
@@ -608,7 +603,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Config, context, file, files, terminals
   // ============================================================================
 
-  const configService = createConfigService(db);
+  const configService = createConfigService(db, config);
   configService.app = app;
   // Host ACL/user/group operations exist only on a self-hosted daemon host. Hosted
   // registration is intentionally absent rather than forwarding privileged
@@ -637,7 +632,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
   });
 
-  app.use('/check-auth', createCheckAuthService(db));
+  app.use('/check-auth', createCheckAuthService(db, config));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
 
   registerOpenCodeServices(ctx);
@@ -814,17 +809,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
   app.use('/users', usersService, {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'patch',
-      'remove',
-      'getGitEnvironment',
-      'getAvatarSettings',
-      'updateAvatarSettings',
-      'syncAvatars',
-    ],
+    methods: [...USERS_SERVICE_TRANSPORT_METHODS],
   });
 
   // Bootstrap superadmin users
@@ -1488,7 +1473,7 @@ async function registerMCPServices(
     tokenUrlOverride?: string;
     scope?: string;
     compatibilityMode?: 'strict' | 'legacy';
-    dcrMode?: 'disabled' | 'fallback';
+    dcrMode?: MCPOAuthDCRMode;
     socketId?: string;
   };
 
@@ -1590,8 +1575,9 @@ async function registerMCPServices(
       // flow context. Daemon callers never read or populate its origin-only
       // bearer cache.
       cacheKey: opts.prefetchedAuthServerMetadata ? opts.mcpUrl : undefined,
-      // Process-global DCR credentials are not a tenant/user namespace.
-      reuseDynamicClientRegistration: !durableOAuthFlows,
+      // Process-global DCR credentials are not a tenant/user/server namespace.
+      // Daemon flows never share them, including in SQLite deployments.
+      reuseDynamicClientRegistration: false,
       resourceUri: opts.mcpUrl,
       compatibilityMode: opts.compatibilityMode,
       dcrMode: opts.dcrMode,
@@ -1810,7 +1796,7 @@ async function registerMCPServices(
           server.auth?.type !== 'oauth' ||
           (server.auth.oauth_mode ?? 'per_user') !== record.oauthMode ||
           server.url !== pendingFlow.context.resourceUri ||
-          record.configFingerprintVersion !== MCP_OAUTH_GRANT_BINDING_VERSION
+          !isMCPOAuthGrantBindingVersion(record.configFingerprintVersion)
         ) {
           throw new Error('MCP OAuth server configuration changed; restart authorization');
         }
@@ -1829,7 +1815,8 @@ async function registerMCPServices(
             redirectUri: pendingFlow.context.redirectUri,
             clientId: pendingFlow.context.clientId,
             clientSecret: pendingFlow.context.clientSecret,
-          }
+          },
+          record.configFingerprintVersion
         );
         if (fingerprint !== record.configFingerprint) {
           throw new Error('MCP OAuth grant binding changed; restart authorization');
@@ -1845,6 +1832,16 @@ async function registerMCPServices(
     pendingFlow: PendingOAuthFlow,
     logPrefix: string
   ): Promise<void> => {
+    const durableRecord = pendingFlow.durableRecord;
+    const durableGrantBindingVersion = durableRecord
+      ? (() => {
+          const version = durableRecord.configFingerprintVersion;
+          if (!isMCPOAuthGrantBindingVersion(version)) {
+            throw new Error('Unsupported MCP OAuth grant binding version');
+          }
+          return version;
+        })()
+      : undefined;
     const work = () =>
       persistOAuthToken(
         db,
@@ -1859,7 +1856,7 @@ async function registerMCPServices(
             ? {
                 grantBinding: {
                   generation: pendingFlow.durableRecord.grantGeneration,
-                  version: MCP_OAUTH_GRANT_BINDING_VERSION,
+                  version: durableGrantBindingVersion!,
                   fingerprint: pendingFlow.durableRecord.configFingerprint,
                   metadataUri: pendingFlow.context.metadataUrl,
                   resourceUri: pendingFlow.context.resourceUri,
@@ -2263,7 +2260,7 @@ async function registerMCPServices(
         grant_type?: string;
         start_browser_flow?: boolean;
         compatibility_mode?: 'strict' | 'legacy';
-        dcr_mode?: 'disabled' | 'fallback';
+        dcr_mode?: MCPOAuthDCRMode;
       },
       params?: AuthenticatedParams & { connection?: { id?: string } }
     ) {
@@ -2367,7 +2364,7 @@ async function registerMCPServices(
                   clientSecret: data.client_secret,
                   scope: data.scope,
                   compatibilityMode,
-                  dcrMode: data.dcr_mode ?? 'disabled',
+                  dcrMode: data.dcr_mode,
                 });
               } catch (err) {
                 if (err instanceof PublicBaseUrlNotConfiguredError) {
@@ -2638,12 +2635,29 @@ async function registerMCPServices(
         let clientIdFromConfig: string | undefined;
         let scopeOverride: string | undefined;
         let compatibilityMode: 'strict' | 'legacy' = 'strict';
-        let dcrMode: 'disabled' | 'fallback' = 'disabled';
-        const savedServer = data.mcp_server_id
+        let dcrMode: MCPOAuthDCRMode | undefined;
+        const savedServerId = data.mcp_server_id;
+        const savedServer = savedServerId
           ? await runInOAuthTenantScope(db, tenantId, () => {
-              return loadMcpServerForCaller(db, data.mcp_server_id as string, params);
+              return loadMcpServerForCaller(db, savedServerId, params);
             })
           : null;
+
+        if (
+          savedServerId &&
+          (!savedServer?.enabled || !savedServer.url || savedServer.auth?.type !== 'oauth')
+        ) {
+          return {
+            success: false,
+            error:
+              'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
+          };
+        }
+
+        // Once an ID is supplied, its tenant-scoped row is authoritative for
+        // the provider URL and client configuration. The duplicate payload
+        // fields remain accepted only for older callers.
+        const effectiveMcpUrl = savedServer?.url ?? data.mcp_url;
 
         // PostgreSQL is the shared authority, so reject transient or stale
         // server input before the first outbound probe. Doing this only in the
@@ -2652,7 +2666,7 @@ async function registerMCPServices(
         if (
           durableOAuthFlows &&
           (!savedServer?.enabled ||
-            savedServer.url !== data.mcp_url ||
+            savedServer.url !== effectiveMcpUrl ||
             savedServer.auth?.type !== 'oauth')
         ) {
           return {
@@ -2670,7 +2684,7 @@ async function registerMCPServices(
           clientSecretOverride = savedServer.auth.oauth_client_secret;
           scopeOverride = savedServer.auth.oauth_scope;
           compatibilityMode = savedServer.auth.oauth_compatibility_mode ?? 'strict';
-          dcrMode = savedServer.auth.oauth_dcr_mode ?? 'disabled';
+          dcrMode = savedServer.auth.oauth_dcr_mode;
           if (oauthMode === 'shared') {
             const currentUser =
               durableOAuthFlows && tenantId && userId
@@ -2684,7 +2698,7 @@ async function registerMCPServices(
           }
         }
 
-        let probeResponse = await oauthFetch(data.mcp_url, {
+        let probeResponse = await oauthFetch(effectiveMcpUrl, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
           body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
@@ -2692,7 +2706,7 @@ async function registerMCPServices(
         });
 
         if (probeResponse.status !== 401) {
-          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(data.mcp_url);
+          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl);
           if (fallbackProbe) {
             console.log(
               '[OAuth Start] Handshake-level probe returned no auth requirement; ' +
@@ -2713,7 +2727,7 @@ async function registerMCPServices(
         const { resolveMCPOAuthDiscovery } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
         );
-        const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, data.mcp_url, {
+        const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, effectiveMcpUrl, {
           compatibilityMode,
           allowLocalhostHttp: !durableOAuthFlows,
         });
@@ -2730,16 +2744,16 @@ async function registerMCPServices(
         let result: StartTwoPhaseOAuthResult;
         try {
           result = await startTwoPhaseMCPOAuthFlow({
-            mcpUrl: data.mcp_url,
+            mcpUrl: effectiveMcpUrl,
             wwwAuthenticate,
             resourceMetadataUrl:
               discovery.kind === 'resource-metadata' ? discovery.metadataUrl : undefined,
             prefetchedAuthServerMetadata:
               discovery.kind === 'authorization-server' ? discovery.authServerMetadata : undefined,
-            mcpServerId: data.mcp_server_id,
+            mcpServerId: savedServerId,
             userId,
             oauthMode,
-            clientId: data.client_id || clientIdFromConfig,
+            clientId: savedServer ? clientIdFromConfig : data.client_id,
             clientSecret: clientSecretOverride,
             authorizationUrlOverride,
             tokenUrlOverride,
@@ -3662,7 +3676,7 @@ async function registerMCPServices(
               tokenUrlOverride: serverConfig.auth?.oauth_token_url,
               scope: serverConfig.auth?.oauth_scope,
               compatibilityMode,
-              dcrMode: serverConfig.auth?.oauth_dcr_mode ?? 'disabled',
+              dcrMode: serverConfig.auth?.oauth_dcr_mode,
               tenantId,
               socketId: connection?.id,
             });

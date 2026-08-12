@@ -28,6 +28,8 @@ import type {
   MCPServerID,
   UserID,
 } from '@agor/core/types';
+import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
+import { MCP_OAUTH_GRANT_BINDING_VERSION } from './mcp-oauth-grant-binding.js';
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
 
@@ -62,7 +64,7 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.mcpServerId === 'string' &&
     (material.oauthMode === 'per_user' || material.oauthMode === 'shared') &&
     Number.isSafeInteger(material.grantGeneration) &&
-    material.configFingerprintVersion === 1 &&
+    isMCPOAuthGrantBindingVersion(material.configFingerprintVersion) &&
     typeof material.configFingerprint === 'string' &&
     typeof material.resourceUri === 'string' &&
     typeof material.issuer === 'string' &&
@@ -130,7 +132,7 @@ export class MCPOAuthPendingFlowAuthority {
         mcpServerId: input.mcpServerId,
         oauthMode: input.oauthMode,
         grantGeneration,
-        configFingerprintVersion: 1,
+        configFingerprintVersion: MCP_OAUTH_GRANT_BINDING_VERSION,
         configFingerprint: input.configFingerprint,
         resourceUri: input.context.resourceUri,
         issuer: input.context.issuer,
@@ -166,7 +168,7 @@ export class MCPOAuthPendingFlowAuthority {
         oauthMode: input.oauthMode,
         subjectUserId,
         grantGeneration,
-        configFingerprintVersion: 1,
+        configFingerprintVersion: MCP_OAUTH_GRANT_BINDING_VERSION,
         configFingerprint: input.configFingerprint,
         envelopeVersion: MCP_OAUTH_SECRET_ENVELOPE_VERSION,
         sealedMaterial,

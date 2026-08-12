@@ -42,7 +42,7 @@ function makeApp(
   }
 ) {
   const usersService = { get: vi.fn(async () => current), patch: vi.fn(async () => ({})) };
-  return { app: { service: () => usersService }, usersService };
+  return { app: { get: () => loadConfigSyncMock(), service: () => usersService }, usersService };
 }
 
 function service(app: { service: () => unknown }) {

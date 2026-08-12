@@ -24,6 +24,12 @@ services:
       - AGOR_DB_DIALECT=postgresql
       - DATABASE_URL=postgresql://agor_app:agor_dev_secret@postgres:5432/agor
 
+      # PostgreSQL startup skips the SQLite-only `agor init`, so provide the
+      # stable development secrets that production supplies via its secret
+      # manager. These values are intentionally local-environment-only.
+      - AGOR_JWT_SECRET=${AGOR_JWT_SECRET:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+      - AGOR_MASTER_SECRET=${AGOR_MASTER_SECRET:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}
+
       # Enable RBAC + Unix integration
       - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-true}
       - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-insulated}

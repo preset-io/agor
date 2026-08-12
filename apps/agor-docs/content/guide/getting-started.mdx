@@ -13,9 +13,15 @@ Install Agor, open the UI, and follow the onboarding wizard. Your **first AI tea
 
 <InstallTabs />
 
-Run `agor init` after installation. It lets you choose the agentic tools you plan to use and shows
-exactly what will be installed before running npm. Skip the selection if you are not ready—you can add
-a version-aligned tool later by editing `agentic_tools.installed` in config.yaml and running `agor install`.
+Run `agor init` after installation. It shows a multi-select for every supported agentic tool and
+requires an intentional selection of at least one. The prompt explains that each selection adds
+download time and disk use; credentials are configured later in the UI. Init writes the selection
+once to `agentic_tools.installed` and installs the exact version-aligned packages before reporting
+success. Press Ctrl+C to cancel. An intentionally tool-free headless deployment must use
+`--agentic-tools none`.
+
+To change the deployment policy later, edit `agentic_tools.installed` in `config.yaml`, run
+`agor install --sync`, and restart the daemon. Agor does not silently rewrite existing config.
 Repeat the readiness check with `agor doctor`; see
 [Agentic tools](/guide/extended-install#agentic-tools) for the complete model.
 

@@ -8,6 +8,7 @@
 import { lookup } from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
+import type { LookupFunction } from 'node:net';
 import { BlockList, isIP } from 'node:net';
 
 const blocked = new BlockList();
@@ -177,6 +178,22 @@ async function resolvePinnedAddress(
   return addresses[0] as { address: string; family: 4 | 6 };
 }
 
+/**
+ * Adapt one already-validated address to Node's two lookup callback contracts.
+ * `http(s).request` asks for `all: true` when auto-selecting a family and
+ * requires an address array in that mode; returning a scalar makes Node read
+ * an undefined address before it opens the socket.
+ */
+export function createPinnedLookup(pinned: { address: string; family: 4 | 6 }): LookupFunction {
+  return (_hostname, lookupOptions, callback) => {
+    if (lookupOptions.all) {
+      callback(null, [{ address: pinned.address, family: pinned.family }]);
+      return;
+    }
+    callback(null, pinned.address, pinned.family);
+  };
+}
+
 function requestBody(body: unknown): string | Uint8Array | undefined {
   if (body == null) return undefined;
   if (typeof body === 'string') return body;
@@ -204,6 +221,7 @@ async function requestOnce(
   }
   const requestImpl = url.protocol === 'https:' ? https.request : http.request;
   const maxBytes = options.maxResponseBytes ?? 1024 * 1024;
+  const pinnedLookup = createPinnedLookup(pinned);
 
   return new Promise<Response>((resolve, reject) => {
     let settled = false;
@@ -234,8 +252,10 @@ async function requestOnce(
         headers: Object.fromEntries(headers.entries()),
         // The TLS SNI/Host remain the validated URL hostname, while connection
         // address selection cannot perform a second DNS lookup.
-        lookup: (_hostname, _lookupOptions, callback) =>
-          callback(null, pinned.address, pinned.family),
+        lookup: pinnedLookup,
+        // Never reuse a socket opened before this request's DNS validation. A
+        // pooled global agent can bypass the lookup callback entirely.
+        agent: false,
         servername: isIP(normalizedHostname(url)) ? undefined : normalizedHostname(url),
       },
       (response) => {

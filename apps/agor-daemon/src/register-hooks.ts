@@ -10,8 +10,6 @@ import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type AgorConfig,
-  isUnixImpersonationEnabled,
-  loadConfig,
   type ResolvedDeploymentConfig,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
@@ -74,6 +72,7 @@ import type {
   BoardID,
   Branch,
   BranchID,
+  DeepReadonly,
   GroupID,
   HookContext,
   MCPServer,
@@ -217,14 +216,13 @@ export function shouldValidateRepoEnvironmentPayload(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-async function getManagedEnvExecutionMode() {
-  const config = await loadConfig();
+function getManagedEnvExecutionMode(config: DeepReadonly<AgorConfig>) {
   return config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
 }
 
-function validateRepoEnvPolicyHook() {
+function validateRepoEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
   return async (context: HookContext) => {
-    const mode = await getManagedEnvExecutionMode();
+    const mode = getManagedEnvExecutionMode(config);
     const items = Array.isArray(context.data) ? context.data : [context.data];
 
     for (const item of items as Array<Record<string, unknown>>) {
@@ -268,7 +266,7 @@ function branchEnvFieldsFromItem(item: Partial<Branch>) {
   };
 }
 
-function validateBranchEnvPolicyHook() {
+function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
   return async (context: HookContext) => {
     const items = Array.isArray(context.data) ? context.data : [context.data];
     const shouldValidate = (items as Array<Record<string, unknown>>).some((item) =>
@@ -276,7 +274,7 @@ function validateBranchEnvPolicyHook() {
     );
     if (!shouldValidate) return context;
 
-    const mode = await getManagedEnvExecutionMode();
+    const mode = getManagedEnvExecutionMode(config);
     for (const raw of items as Array<Partial<Branch>>) {
       let item = raw;
       if (context.method === 'patch' && context.id !== null && context.id !== undefined) {
@@ -1126,6 +1124,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create card types')],
+      update: [requireMinimumRole(ROLES.MEMBER, 'update card types')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update card types')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete card types')],
     },
@@ -1140,6 +1139,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create cards'), injectCreatedBy()],
+      update: [requireMinimumRole(ROLES.MEMBER, 'update cards')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update cards')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete cards')],
     },
@@ -1423,6 +1423,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create board comments'), injectCreatedBy()],
+      update: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete board comments')],
     },
@@ -1438,17 +1439,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
         requireAdminForEnvConfig(),
-        validateRepoEnvPolicyHook(),
+        validateRepoEnvPolicyHook(config),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
         requireAdminForEnvConfig(),
-        validateRepoEnvPolicyHook(),
+        validateRepoEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
         requireAdminForEnvConfig(),
-        validateRepoEnvPolicyHook(),
+        validateRepoEnvPolicyHook(config),
       ],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete repositories')],
     },
@@ -1481,17 +1482,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create branches'),
         requireAdminForEnvConfig(),
-        validateBranchEnvPolicyHook(),
+        validateBranchEnvPolicyHook(config),
         injectCreatedBy(),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
         requireAdminForEnvConfig(),
-        validateBranchEnvPolicyHook(),
+        validateBranchEnvPolicyHook(config),
       ],
       patch: [
         requireAdminForEnvConfig(),
-        validateBranchEnvPolicyHook(),
+        validateBranchEnvPolicyHook(config),
         ...(branchRbacEnabled
           ? [
               loadBranch(branchRepository),
@@ -2481,7 +2482,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               params: {
                 userId: user.user_id,
                 password: data?.password, // Pass through for password sync
-                configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
+                configureGitSafeDirectory:
+                  resolveExecutionSecurityMode(config).unixImpersonationEnabled, // Configure git when impersonating
               },
             },
             { logPrefix: '[Executor/user.create]' }
@@ -2551,7 +2553,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               params: {
                 userId: user.user_id,
                 password: data?.password, // Pass through for password sync
-                configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
+                configureGitSafeDirectory:
+                  resolveExecutionSecurityMode(config).unixImpersonationEnabled, // Configure git when impersonating
               },
             },
             { logPrefix: '[Executor/user.patch]' }
@@ -2604,6 +2607,61 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
   // Sessions hooks
   // ============================================================================
+
+  // SessionsService.update delegates straight to patch, so both verbs mutate a
+  // session the same way and must clear the same authorization chain.
+  const sessionWriteGuards = [
+    // created_by and unix_username select the OS identity a session executes as.
+    // The unix_user_mode tiers that make them load-bearing are configured
+    // independently of branch_rbac, so their immutability cannot be conditional
+    // on it — an open-access instance can still be running delegated or strict.
+    ensureSessionImmutability(),
+    ...(branchRbacEnabled
+      ? [
+          resolveSessionContext(),
+          loadSession(sessionsService),
+          loadBranchFromSession(branchRepository),
+          // Branch permission by patch type:
+          //   - Prompt-flow patches (tasks, archived, status, …) are bookkeeping
+          //     emitted by /sessions/:id/prompt and /sessions/:id/stop on behalf
+          //     of the authenticated user. They need only the same tier as
+          //     prompting the session (session-tier for own, prompt-tier for
+          //     others), matching the permission table in CLAUDE.md.
+          //   - Everything else is session metadata and still requires 'all'.
+          // Mixed-field patches fail isPromptFlowPatchOnly and fall through to
+          // the strict 'all' path, so there's no partial-trust footgun.
+          (context: HookContext) => {
+            if (isPromptFlowPatchOnly(context.data)) {
+              return ensureCanPromptInSession(superadminOpts)(context);
+            }
+            return ensureBranchPermission(
+              'all',
+              'update session metadata',
+              superadminOpts
+            )(context);
+          },
+        ]
+      : []),
+    // Validate user has prompt permission on callback target session's branch.
+    // Skip for internal calls (no provider) — patches from dispatchCompletionCallbacks
+    // spread the existing callback_config (which includes callback_session_id) and must
+    // not be blocked by this check.
+    async (context: HookContext) => {
+      const patchCbConfig = (context.data as Record<string, unknown> | undefined)
+        ?.callback_config as { callback_session_id?: string } | undefined;
+      if (patchCbConfig?.callback_session_id && context.params.provider) {
+        const userId =
+          (context.params as { user?: { user_id: string } }).user?.user_id || 'unknown';
+        await ensureCanPromptTargetSession(
+          patchCbConfig.callback_session_id,
+          userId,
+          context.app,
+          branchRepository
+        );
+      }
+      return context;
+    },
+  ];
 
   app.service('sessions').hooks({
     before: {
@@ -2699,54 +2757,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      patch: [
-        ...(branchRbacEnabled
-          ? [
-              ensureSessionImmutability(), // Prevent changing session.created_by and unix_username
-              resolveSessionContext(),
-              loadSession(sessionsService),
-              loadBranchFromSession(branchRepository),
-              // Branch permission by patch type:
-              //   - Prompt-flow patches (tasks, archived, status, …) are bookkeeping
-              //     emitted by /sessions/:id/prompt and /sessions/:id/stop on behalf
-              //     of the authenticated user. They need only the same tier as
-              //     prompting the session (session-tier for own, prompt-tier for
-              //     others), matching the permission table in CLAUDE.md.
-              //   - Everything else is session metadata and still requires 'all'.
-              // Mixed-field patches fail isPromptFlowPatchOnly and fall through to
-              // the strict 'all' path, so there's no partial-trust footgun.
-              (context: HookContext) => {
-                if (isPromptFlowPatchOnly(context.data)) {
-                  return ensureCanPromptInSession(superadminOpts)(context);
-                }
-                return ensureBranchPermission(
-                  'all',
-                  'update session metadata',
-                  superadminOpts
-                )(context);
-              },
-            ]
-          : []),
-        // Validate user has prompt permission on callback target session's branch.
-        // Skip for internal calls (no provider) — patches from dispatchCompletionCallbacks
-        // spread the existing callback_config (which includes callback_session_id) and must
-        // not be blocked by this check.
-        async (context) => {
-          const patchCbConfig = (context.data as Record<string, unknown> | undefined)
-            ?.callback_config as { callback_session_id?: string } | undefined;
-          if (patchCbConfig?.callback_session_id && context.params.provider) {
-            const userId =
-              (context.params as { user?: { user_id: string } }).user?.user_id || 'unknown';
-            await ensureCanPromptTargetSession(
-              patchCbConfig.callback_session_id,
-              userId,
-              context.app,
-              branchRepository
-            );
-          }
-          return context;
-        },
-      ],
+      update: sessionWriteGuards,
+      patch: sessionWriteGuards,
       remove: [
         ...(branchRbacEnabled
           ? [
@@ -3078,6 +3090,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       findBySlug: [ensureCanViewBoard('view this board')],
       findBySlugOrId: [ensureCanViewBoard('view this board')],
       create: [requireMinimumRole(ROLES.MEMBER, 'create boards'), injectCreatedBy()],
+      // Whole-row replacement carries the same authorization as patch. The
+      // `_action` dispatcher below is patch-only: those atomic board-object
+      // operations are addressed through PATCH and have no PUT equivalent.
+      update: [
+        requireMinimumRole(ROLES.MEMBER, 'update boards'),
+        ensureCanMutateBoard('update this board'),
+      ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update boards'),
         ensureCanMutateBoard('update this board'),

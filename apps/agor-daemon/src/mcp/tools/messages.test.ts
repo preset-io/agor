@@ -89,7 +89,11 @@ async function registerAndGetTool(ctx: { userId: string; role?: string }): Promi
   } as unknown as McpServer;
 
   registerMessageTools(fakeServer, {
-    app: {} as any,
+    app: {
+      get: () => ({
+        execution: { branch_rbac: mockIsBranchRbacEnabled() },
+      }),
+    } as any,
     db: {} as any,
     userId: ctx.userId as import('@agor/core/types').UserID,
     sessionId: 'sess-0001' as import('@agor/core/types').SessionID,

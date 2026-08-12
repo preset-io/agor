@@ -34,7 +34,7 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 ### Breaking
 
 - **`config.yaml` is immutable after initialization** — daemon startup, telemetry, Docker entrypoints, upgrades, APIs, MCP, and UI flows no longer rewrite the deployment-owned YAML file. Configure stable JWT/master secrets with environment variables or YAML before startup. The mutating `agor config set/get/unset` commands are removed; `agor config --yaml` materializes the effective read-only configuration. Existing Docker environment overrides are resolved in memory instead of being written to YAML.
-- **Agentic tool installs now support declarative and local-managed policy** — explicit `agentic_tools.installed` remains immutable YAML authority; otherwise interactive `agor install` owns a private host-local manifest and `agor install --sync` reconciles it noninteractively. `agor doctor` is the sole read-only inspection surface. Empty selections start with a warning, while selected missing or misaligned packages fail with an exact repair command.
+- **Agentic tool installs now support declarative and legacy local-managed policy** — fresh interactive init selects from every allowlisted integration, writes `agentic_tools.installed` once, and reconciles before success; fresh headless init requires an explicit list, `all`, or `none`. Older configs that omit the YAML key retain interactive `agor install` through a private host-local manifest. `agor install --sync` repairs declarative state and `agor doctor` remains read-only.
 
 ### Features
 
@@ -42,6 +42,7 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 ### Fixes
 
+- **Reliable fresh and destructive init** — interactive init requires an intentional nonempty agentic-tool selection, persists the immutable deployment policy, and finishes package reconciliation before success. Destructive re-init now refuses a live daemon, closes SQLite inspection handles, and removes WAL/SHM sidecars before replacing the database.
 - **Reliable cold-cache global installs** — removes deprecated transitive trees and bundled agent runtimes from `agor-live`, bundles selected high-fanout pure-JS dependencies, and adds package-content and low-file-descriptor installation checks. ([#2201](https://github.com/preset-io/agor/pull/2201))
 
 ### Chores

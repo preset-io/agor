@@ -2,9 +2,10 @@
 import type { Branch, Session } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { agorStore } from '../../store/agorStore';
 import type { AgenticToolOption } from '../../types';
 import SessionPanel from './SessionPanel';
 
@@ -85,6 +86,14 @@ const availableAgents: AgenticToolOption[] = [
   { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: 'Anthropic' },
   { id: 'codex', name: 'Codex', icon: '💻', description: 'OpenAI' },
 ];
+
+beforeEach(() => {
+  agorStore.getState().setAgenticToolSettings([]);
+});
+
+afterEach(() => {
+  agorStore.getState().reset();
+});
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {

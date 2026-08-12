@@ -67,7 +67,11 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
 
-      const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+      const identity = await resolveCodexUnixIdentity(
+        userId,
+        withTenantDatabase,
+        app.get('config')
+      );
       if (!identity.ok) {
         throw new BadRequest(
           `Cannot determine which Unix account holds this Codex login: ${identity.message}`

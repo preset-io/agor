@@ -91,6 +91,22 @@ function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): b
   return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
 }
 
+/**
+ * Public Task transport surface. `update` is deliberately absent so whole-row
+ * `PUT` never reaches the inherited DrizzleService implementation.
+ */
+export const TASKS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+  'connectExecutor',
+  'reportTerminationComplete',
+  'reportRuntimeTelemetry',
+  'reportSdkHealthFailure',
+] as const;
+
 export type TaskParams = QueryParams<{
   session_id?: string;
   status?: Task['status'];

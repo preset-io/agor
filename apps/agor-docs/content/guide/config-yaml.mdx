@@ -24,9 +24,14 @@ packaged daemon fails before listening if any configured integration is missing 
 Tenant administrators may disable an installed tool but cannot install packages or enable a tool
 absent from this deployment list.
 
-If `agentic_tools.installed` is absent, local CLI installs instead use a host-local managed manifest.
-Run interactive `agor install` to create or change it. The manifest is never exposed for mutation
-through API, UI, or MCP. Headless deployments should use an explicit YAML list, including `[]`.
+Fresh interactive init always writes `agentic_tools.installed` once, then installs the selected
+packages before returning. Fresh headless init requires `--agentic-tools` (or
+`AGOR_AGENTIC_TOOLS`); `all` and `none` are explicit shorthands.
+
+If `agentic_tools.installed` is absent in an older config, local CLI installs use a backward-compatible
+host-local managed manifest. Run interactive `agor install` to create or change it. The manifest is
+never exposed for mutation through API, UI, or MCP. Headless deployments should use an explicit
+YAML list, including `[]`.
 
 ## Environment precedence
 

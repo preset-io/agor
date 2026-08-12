@@ -920,13 +920,14 @@ export function resolveSessionContext() {
         sessionId = data?.session_id;
       } else if (
         context.method === 'get' ||
+        context.method === 'update' ||
         context.method === 'patch' ||
         context.method === 'remove'
       ) {
         // Id-addressed nested resources must authorize against the stored
         // parent session, not a client-supplied session_id in data/query. The
-        // prefetched record is reused by DrizzleService.get/patch/remove, so
-        // this safety read does not add a second primary-key read later.
+        // prefetched record is reused by DrizzleService.get/update/patch/remove,
+        // so this safety read does not add a second primary-key read later.
         if (context.id) {
           try {
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type

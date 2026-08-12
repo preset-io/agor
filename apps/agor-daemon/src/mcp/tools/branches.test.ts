@@ -141,6 +141,7 @@ describe('agor_branches_update', () => {
     const branchesPatch = vi.fn(async (_id, data) => ({ branch_id: 'branch-1', ...data }));
     const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
     const app = {
+      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
       service(name: string) {
         if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
         throw new Error(`Unexpected service call: ${name}`);
@@ -170,6 +171,7 @@ describe('agor_branches_update', () => {
     const sessionsGet = vi.fn(async () => ({ session_id: 'session-1', branch_id: 'branch-1' }));
     const branchesPatch = vi.fn(async () => ({ branch_id: 'branch-1', notes: 'updated' }));
     const app = {
+      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
       service(name: string) {
         if (name === 'sessions') return { get: sessionsGet };
         if (name === 'branches') return { patch: branchesPatch };
@@ -197,6 +199,7 @@ describe('agor_branches_update', () => {
       needs_attention: false,
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
         throw new Error(`Unexpected service call: ${name}`);
@@ -218,6 +221,7 @@ describe('agor_branches_update', () => {
       needs_attention: true,
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
         throw new Error(`Unexpected service call: ${name}`);
@@ -235,6 +239,7 @@ describe('agor_branches_update', () => {
   it('returns an actionable error when branchId is omitted without session context', async () => {
     const sessionsGet = vi.fn();
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'sessions') return { get: sessionsGet };
         throw new Error(`Unexpected service call: ${name}`);
@@ -272,6 +277,7 @@ describe('agor_branches_create', () => {
       default_branch: 'main',
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'repos') return { get: reposGet, createBranch };
         if (name === 'boards') return { get: vi.fn(async () => ({ board_id: 'board-1' })) };
@@ -317,6 +323,7 @@ describe('agor_branches_create', () => {
       default_branch: 'main',
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'repos') return { get: reposGet, createBranch };
         if (name === 'boards') return { get: vi.fn(async () => ({ board_id: 'board-1' })) };
@@ -377,6 +384,7 @@ describe('agor_branches_create', () => {
       default_branch: 'main',
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'repos') return { get: reposGet, createBranch };
         if (name === 'boards') return { get: vi.fn(async () => ({ board_id: 'board-1' })) };
@@ -421,6 +429,7 @@ describe('agor_branches_create', () => {
       throw new Error('boards.get should not be called when auto-creating a board');
     });
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'repos') return { get: reposGet, createBranch };
         if (name === 'boards') return { get: boardsGet, create: boardsCreate };
@@ -474,6 +483,7 @@ describe('agor_branches_create', () => {
     const reposGet = vi.fn(async () => ({ repo_id: 'repo-1', slug: 's', default_branch: 'main' }));
     const boardsCreate = vi.fn(async () => ({ board_id: 'board-auto', name: 'Helper' }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'repos') return { get: reposGet, createBranch };
         if (name === 'boards') return { get: vi.fn(), create: boardsCreate };
@@ -517,6 +527,7 @@ describe('agor_branches_create', () => {
       primary_teammate_id: 'other-teammate',
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'repos') return { get: reposGet, createBranch };
         if (name === 'boards') return { get: boardsGet, create: boardsCreate };
@@ -559,6 +570,7 @@ describe('agor_branches_create', () => {
   it('rejects passing both boardId and createBoard=true', async () => {
     const reposGet = vi.fn(async () => ({ repo_id: 'repo-1', slug: 's', default_branch: 'main' }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'repos') return { get: reposGet, createBranch: vi.fn() };
         if (name === 'boards')
@@ -589,6 +601,7 @@ describe('agor_branches_create', () => {
     const reposGet = vi.fn(async () => ({ repo_id: 'repo-1', slug: 's', default_branch: 'main' }));
     const boardsCreate = vi.fn();
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'repos') return { get: reposGet, createBranch: vi.fn() };
         if (name === 'boards') return { get: vi.fn(), create: boardsCreate };
@@ -738,6 +751,7 @@ describe('agor_branches_set_zone', () => {
       zone_id: undefined,
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'branches') return { get: branchesGet };
         if (name === 'board-objects') {
@@ -783,6 +797,7 @@ describe('agor_branches_set_zone', () => {
     }));
     const findByBranchId = vi.fn();
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'branches') return { get: branchesGet };
         if (name === 'board-objects') {
@@ -861,6 +876,7 @@ describe('agor_branches_set_zone', () => {
       status: 'running',
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'branches') return { get: branchesGet };
         if (name === 'sessions') return { get: sessionsGet };
@@ -927,6 +943,7 @@ describe('agor_branches_set_zone', () => {
     const boardObjectsPatch = vi.fn();
     const promptCreate = vi.fn();
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'branches') return { get: branchesGet };
         if (name === 'sessions') return { get: sessionsGet };
@@ -1007,6 +1024,7 @@ describe('agor_branches_list', () => {
       skip: 0,
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'branches') return { find: findFn };
         throw new Error(`Unexpected service call: ${name}`);
@@ -1095,6 +1113,7 @@ describe('agor_branches_list', () => {
       skip: 0,
     }));
     const app = {
+      get: () => ({}),
       service(name: string) {
         if (name === 'branches') return { find: findFn };
         throw new Error(`Unexpected service call: ${name}`);
@@ -1231,6 +1250,7 @@ describe('agor_branches_cleanup_candidates', () => {
       branchesFind,
       reposGet,
       app: {
+        get: () => ({}),
         service(name: string) {
           if (name === 'branches') return { find: branchesFind };
           if (name === 'repos') return { get: reposGet };
@@ -1551,6 +1571,7 @@ describe('agor_teammates_list', () => {
         ReturnType<BranchRepository['findTeammateBranches']>
       >);
     const app = {
+      get: () => ({}),
       service(name: string) {
         throw new Error(`Unexpected service call: ${name}`);
       },
@@ -1598,6 +1619,7 @@ describe('agor_teammates_list', () => {
       scheduledLegacyBranch,
     ] as Awaited<ReturnType<BranchRepository['findTeammateBranches']>>);
     const app = {
+      get: () => ({}),
       service(name: string) {
         throw new Error(`Unexpected service call: ${name}`);
       },
@@ -1633,6 +1655,7 @@ describe('agor_teammates_list', () => {
       .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);
     const app = {
+      get: () => ({ execution: { branch_rbac: true, allow_superadmin: true } }),
       service(name: string) {
         throw new Error(`Unexpected service call: ${name}`);
       },
@@ -1663,6 +1686,7 @@ describe('agor_teammates_list', () => {
       .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);
     const app = {
+      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
       service(name: string) {
         throw new Error(`Unexpected service call: ${name}`);
       },

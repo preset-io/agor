@@ -12,6 +12,7 @@ import { existsSync, type Stats } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { simpleGit } from 'simple-git';
+import { resolveGitBinary } from './git-binary';
 import {
   buildAuthHeaderEnv,
   buildGitConfigEnv,
@@ -22,7 +23,62 @@ import {
   stripGitUrlCredentials,
 } from './pure';
 
-export type RepoCloneErrorCategory = 'auth_failed' | 'not_found' | 'network' | 'unknown';
+export { resolveGitBinary } from './git-binary';
+
+export type RepoCloneErrorCategory =
+  | 'auth_failed'
+  | 'not_found'
+  | 'network'
+  | 'git_unavailable'
+  | 'unknown';
+
+export interface GitDiagnostic {
+  status: 'ready' | 'missing';
+  binary?: string;
+  version?: string;
+  detail?: string;
+}
+
+export interface GitDiagnosticOptions {
+  resolveBinary?: () => string;
+  version?: () => Promise<{
+    installed: boolean;
+    major: number;
+    minor: number;
+    patch: number;
+  }>;
+}
+
+/**
+ * Exercise the same simple-git path used by repository operations.
+ * This is local-only: it neither reads a remote nor resolves credentials.
+ * Call it in the process that will actually run the clone; daemon-side
+ * checks cannot see an executor's filtered PATH or impersonated environment.
+ */
+export async function diagnoseGit(options: GitDiagnosticOptions = {}): Promise<GitDiagnostic> {
+  try {
+    const binary = (options.resolveBinary ?? resolveGitBinary)();
+    const result = await (options.version ?? (() => createGit().git.version()))();
+    if (!result.installed) {
+      return {
+        status: 'missing',
+        detail:
+          'Git executable is unavailable. Install Git, ensure it is executable on PATH, ' +
+          'and verify `git --version` before retrying.',
+      };
+    }
+    return {
+      status: 'ready',
+      binary,
+      version: `${result.major}.${result.minor}.${result.patch}`,
+    };
+  } catch (error) {
+    return {
+      status: 'missing',
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 /**
  * Validate a user-supplied git ref (branch name, tag) before it is passed to
@@ -94,19 +150,7 @@ async function validateNamespacedGitRef(
  */
 let cachedGitBinary: string | undefined;
 function getGitBinary(): string {
-  if (cachedGitBinary !== undefined) return cachedGitBinary;
-  const commonPaths = [
-    '/opt/homebrew/bin/git', // Homebrew on Apple Silicon
-    '/usr/local/bin/git', // Homebrew on Intel
-    '/usr/bin/git', // System git (Docker and Linux)
-  ];
-  for (const path of commonPaths) {
-    if (existsSync(path)) {
-      cachedGitBinary = path;
-      return path;
-    }
-  }
-  cachedGitBinary = 'git'; // PATH fallback
+  if (cachedGitBinary === undefined) cachedGitBinary = resolveGitBinary();
   return cachedGitBinary;
 }
 
@@ -354,16 +398,23 @@ async function resolveAuthHost(repoPath: string): Promise<string> {
  * Bucket a git error message into a coarse category so callers (UI, MCP) can
  * suggest the right next step.
  *
- * Returns the canonical `RepoCloneErrorCategory` union from `@agor/core/types`
- * so callers can persist it onto `Repo.clone_error.category` without redeclaring
- * the values. The matching is intentionally loose — git's stderr varies across
+ * Returns the canonical `RepoCloneErrorCategory` union shared with the core
+ * repository types so callers can persist it onto `Repo.clone_error.category`
+ * without redeclaring the values. The matching is intentionally loose — git's stderr varies across
  * versions and remotes, and a false-positive `auth_failed` is cheaper than
  * `unknown` for the user trying to recover. `'auth_failed'` is the bucket whose
- * copy points users at Settings → API Keys (the most common reason private
+ * copy points users at User Settings → Env Vars (the most common reason private
  * clones silently failed pre-#1126).
  */
 export function categorizeGitError(stderr: string): RepoCloneErrorCategory {
   const s = stderr.toLowerCase();
+  if (
+    s.includes('git executable is unavailable') ||
+    s.includes('spawn git enoent') ||
+    (s.includes('enoent') && s.includes('git'))
+  ) {
+    return 'git_unavailable';
+  }
   if (
     s.includes('authentication failed') ||
     s.includes('could not read username') ||
@@ -390,7 +441,16 @@ export function categorizeGitError(stderr: string): RepoCloneErrorCategory {
     s.includes('connection timed out') ||
     s.includes('operation timed out') ||
     s.includes('network is unreachable') ||
-    s.includes('network error')
+    s.includes('network error') ||
+    s.includes('server certificate verification failed') ||
+    s.includes('ssl certificate problem') ||
+    s.includes('certificate verify failed') ||
+    s.includes('certificate has expired') ||
+    s.includes('self-signed certificate') ||
+    s.includes('unable to verify the first certificate') ||
+    s.includes('certificate subject name') ||
+    s.includes('problem with the ssl ca cert') ||
+    s.includes('unable to get local issuer certificate')
   ) {
     return 'network';
   }

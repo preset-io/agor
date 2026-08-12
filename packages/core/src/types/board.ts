@@ -141,6 +141,7 @@ export interface MarkdownBoardObject {
  * Sandpack template options for app board objects
  */
 export type SandpackTemplate =
+  | 'static'
   | 'react'
   | 'react-ts'
   | 'vanilla'

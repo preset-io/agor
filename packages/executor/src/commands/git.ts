@@ -24,6 +24,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
+import { diagnoseGit } from '@agor/git';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
   categorizeGitError,
@@ -668,6 +669,16 @@ export async function handleGitClone(
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.clone] Connected to daemon');
+
+    // This check must run inside the executor, after impersonation/template
+    // setup, because that is the process whose PATH and identity own the
+    // actual clone. A CLI/daemon preflight can pass while this runtime cannot
+    // resolve Git (for example, with a filtered PATH or remote executor).
+    const git = await diagnoseGit();
+    if (git.status !== 'ready') {
+      throw new Error(git.detail ?? 'Git executable is unavailable.');
+    }
+    console.log(`[git.clone] Git ${git.version} is executable (${git.binary})`);
 
     // Fetch per-user git credentials via Feathers RPC
     const env = await fetchUserGitEnvironment(client, payload.params.userId);

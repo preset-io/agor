@@ -18,7 +18,7 @@ import {
   loadConfig,
 } from '@agor/core/config';
 import {
-  createDatabase,
+  createDatabaseAsync,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   runMigrations,
@@ -32,7 +32,9 @@ import {
   loadOpenSourceTelemetryAgorVersion,
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
+import { diagnoseGit } from '@agor/git';
 import { isDaemonRunning } from '@agor-live/client';
+import { getDaemonUrl } from '@agor-live/client/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -62,6 +64,42 @@ export function createInstallTelemetryConfig(config: AgorConfig, instanceId: str
 
 export function shouldDeferAdminSetup(nonInteractive: boolean, nodeEnv = process.env.NODE_ENV) {
   return nonInteractive || (nodeEnv !== 'development' && nodeEnv !== 'test');
+}
+
+/** Parse only the fixed integration allowlist; `all` and `none` are explicit headless shorthands. */
+export function parseInitialAgenticTools(value: string): InstallableAgenticTool[] {
+  const names = value
+    .split(',')
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  if (names.length === 0) {
+    throw new Error(
+      'Agentic-tool policy cannot be empty. Use `none` for an intentionally empty deployment.'
+    );
+  }
+  if (names.length === 1 && names[0] === 'none') return [];
+  if (names.length === 1 && names[0] === 'all') {
+    return Object.keys(AGENTIC_TOOL_INTEGRATIONS) as InstallableAgenticTool[];
+  }
+  if (names.includes('all') || names.includes('none')) {
+    throw new Error('Use `all` or `none` by itself, or provide a comma-separated tool list.');
+  }
+  const normalized = names.map(normalizeAgenticToolName);
+  const unknown = names.filter((_, index) => !normalized[index]);
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown agentic tool: ${unknown.join(', ')}. Choose from ${Object.keys(AGENTIC_TOOL_INTEGRATIONS).join(', ')}, all, or none.`
+    );
+  }
+  return [...new Set(normalized as InstallableAgenticTool[])];
+}
+
+export function assertInitSupportsConfiguredDatabase(dialect = process.env.AGOR_DB_DIALECT): void {
+  if (dialect === 'postgresql') {
+    throw new Error(
+      '`agor init` currently supports SQLite installations only. For PostgreSQL deployments, configure the deployment environment and run `agor db migrate --yes`; the daemon will bootstrap required database state.'
+    );
+  }
 }
 
 export default class Init extends Command {
@@ -106,8 +144,7 @@ export default class Init extends Command {
       required: false,
     }),
     'agentic-tools': Flags.string({
-      description:
-        'Comma-separated agentic tools to configure and install during noninteractive initialization',
+      description: 'Comma-separated agentic tools to configure and install (or "all" / "none")',
       required: false,
     }),
     'non-interactive': Flags.boolean({
@@ -153,11 +190,14 @@ export default class Init extends Command {
     messages: number;
     repos: number;
   } | null> {
+    let closeDatabase: (() => void) | undefined;
     try {
-      const { createDatabase, select, sessions, tasks, messages, repos } = await import(
+      const { createDatabaseAsync, select, sessions, tasks, messages, repos } = await import(
         '@agor/core/db'
       );
-      const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
+      const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+      const client = (db as unknown as { $client?: { close?: () => void } }).$client;
+      closeDatabase = () => client?.close?.();
 
       // Count rows by selecting all and measuring length
       const sessionRows = await select(db).from(sessions).all();
@@ -173,6 +213,24 @@ export default class Init extends Command {
       };
     } catch {
       return null;
+    } finally {
+      closeDatabase?.();
+    }
+  }
+
+  private closeSQLiteDatabase(db: unknown): void {
+    (db as { $client?: { close?: () => void } }).$client?.close?.();
+  }
+
+  private async assertDaemonStoppedBeforeReinit(): Promise<void> {
+    // Use the same environment/config resolution and health probe as
+    // `agor daemon status` so re-init cannot drift from the CLI's canonical
+    // answer about which daemon endpoint is active.
+    const daemonUrl = await getDaemonUrl();
+    if (await isDaemonRunning(daemonUrl)) {
+      throw new Error(
+        `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`
+      );
     }
   }
 
@@ -220,21 +278,15 @@ export default class Init extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Init);
+    assertInitSupportsConfiguredDatabase();
     this.nonInteractive = flags['non-interactive'];
     const requestedTools = flags['agentic-tools'] ?? process.env.AGOR_AGENTIC_TOOLS;
     if (requestedTools !== undefined) {
-      const names = requestedTools
-        .split(',')
-        .map((name) => name.trim())
-        .filter(Boolean);
-      const normalized = names.map(normalizeAgenticToolName);
-      const unknown = names.filter((_, index) => !normalized[index]);
-      if (unknown.length > 0) {
-        this.error(
-          `Unknown agentic tool: ${unknown.join(', ')}. Choose from ${Object.keys(AGENTIC_TOOL_INTEGRATIONS).join(', ')}.`
-        );
+      try {
+        this.requestedAgenticTools = parseInitialAgenticTools(requestedTools);
+      } catch (error) {
+        this.error(error instanceof Error ? error.message : String(error));
       }
-      this.requestedAgenticTools = [...new Set(normalized as InstallableAgenticTool[])];
     }
     this.initialDaemonConfig = {
       host: flags['daemon-host'] ?? process.env.DAEMON_HOST ?? 'localhost',
@@ -247,6 +299,13 @@ export default class Init extends Command {
     };
 
     this.log('✨ Initializing Agor...\n');
+
+    // Git is a runtime prerequisite for remote clones and branch/worktree
+    // materialization. Check before creating any state so a minimal fresh host
+    // fails here with remediation instead of later in the onboarding wizard.
+    const git = await diagnoseGit();
+    if (git.status !== 'ready') this.error(git.detail ?? 'Git is unavailable.');
+    this.log(`${chalk.green('✓')} Git ${git.version} is executable (${git.binary})`);
 
     // Determine base directory early
     const baseDir = flags.local ? join(process.cwd(), '.agor') : join(homedir(), '.agor');
@@ -265,6 +324,12 @@ export default class Init extends Command {
       return;
     }
 
+    if (!flags.force && !this.nonInteractive && (!process.stdin.isTTY || !process.stdout.isTTY)) {
+      this.error(
+        'Interactive `agor init` requires a TTY. For headless setup, use `agor init --non-interactive --agentic-tools <comma-separated-list|all|none>`.'
+      );
+    }
+
     try {
       const dbPath = join(baseDir, 'agor.db');
       const reposDir = join(baseDir, 'repos');
@@ -275,15 +340,24 @@ export default class Init extends Command {
       const dbExists = await this.pathExists(dbPath);
       const reposExist = await this.pathExists(reposDir);
       const branchesExist = await this.pathExists(branchesDir);
+      const freshState = isFreshInitState({
+        baseExists: alreadyExists,
+        databaseExists: dbExists,
+        reposExist,
+        branchesExist,
+      });
 
-      if (
-        isFreshInitState({
-          baseExists: alreadyExists,
-          databaseExists: dbExists,
-          reposExist,
-          branchesExist,
-        })
-      ) {
+      if (freshState) {
+        if (
+          (flags.force || this.nonInteractive) &&
+          process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1' &&
+          this.requestedAgenticTools === undefined &&
+          !(await this.pathExists(getConfigPath()))
+        ) {
+          this.error(
+            'Fresh noninteractive initialization requires an explicit agentic-tool policy. Pass `--agentic-tools <comma-separated-list|all|none>` (or set AGOR_AGENTIC_TOOLS).'
+          );
+        }
         // Fresh initialization
         await this.performInit(baseDir, dbPath, flags.force || this.nonInteractive);
         return;
@@ -299,6 +373,11 @@ export default class Init extends Command {
           'Refusing noninteractive re-initialization because existing data was found. Use --skip-if-exists for idempotent startup or run interactively to confirm destructive re-initialization.'
         );
       }
+
+      // A live daemon owns the SQLite database and its WAL/SHM sidecars. Unlinking
+      // those files underneath it can make the replacement migration fail with
+      // SQLITE_IOERR (and can strand writes in the old unlinked database).
+      await this.assertDaemonStoppedBeforeReinit();
 
       // Gather information about what exists
       const dbStats = dbExists ? await this.getDbStats(dbPath) : null;
@@ -389,8 +468,9 @@ export default class Init extends Command {
     this.log('🗑️  Cleaning up existing installation...');
 
     // Delete database
-    if (await this.pathExists(dbPath)) {
-      await rm(dbPath, { force: true });
+    const databaseArtifacts = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
+    if ((await Promise.all(databaseArtifacts.map((path) => this.pathExists(path)))).some(Boolean)) {
+      await Promise.all(databaseArtifacts.map((path) => rm(path, { force: true })));
       this.log(`${chalk.green('   ✓')} Deleted database`);
     }
 
@@ -415,6 +495,11 @@ export default class Init extends Command {
     dbPath: string,
     skipPrompts: boolean = false
   ): Promise<void> {
+    // Make the deployment choice before creating any state so rejecting the
+    // empty selection (or cancelling the prompt) does not strand a partial DB.
+    const configAlreadyExists = await this.pathExists(getConfigPath());
+    const selectedTools = await this.selectInitialAgenticTools(skipPrompts);
+
     // Create directory structure
     this.log('');
     this.log('📁 Creating directory structure...');
@@ -435,16 +520,19 @@ export default class Init extends Command {
     // Initialize database
     this.log('');
     this.log('💾 Setting up database...');
-    const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
+    const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+    try {
+      await runMigrations(db);
+      this.log(`${chalk.green('   ✓')} Created ${dbPath}`);
 
-    await runMigrations(db);
-    this.log(`${chalk.green('   ✓')} Created ${dbPath}`);
-
-    // Seed initial data
-    this.log('');
-    this.log('🌱 Seeding initial data...');
-    await seedInitialData(db);
-    this.log(`${chalk.green('   ✓')} Created Main Board`);
+      // Seed initial data
+      this.log('');
+      this.log('🌱 Seeding initial data...');
+      await seedInitialData(db);
+      this.log(`${chalk.green('   ✓')} Created Main Board`);
+    } finally {
+      this.closeSQLiteDatabase(db);
+    }
 
     // Create the admin user (auth is always required — anonymous mode was removed).
     if (!skipPrompts) {
@@ -463,14 +551,17 @@ export default class Init extends Command {
         );
       } else {
         try {
-          const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
-
-          await createUser(db, {
-            email: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
-            password: DEVELOPMENT_DEFAULT_ADMIN_USER.password,
-            name: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
-            role: 'admin',
-          });
+          const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+          try {
+            await createUser(db, {
+              email: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
+              password: DEVELOPMENT_DEFAULT_ADMIN_USER.password,
+              name: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
+              role: 'admin',
+            });
+          } finally {
+            this.closeSQLiteDatabase(db);
+          }
 
           this.log(`${chalk.green('   ✓')} Development admin user created`);
           this.log(chalk.dim(`     Email: ${DEVELOPMENT_DEFAULT_ADMIN_USER.email}`));
@@ -492,23 +583,18 @@ export default class Init extends Command {
       // Explicit hard opt-out intentionally omits it.
       await this.saveTelemetryPreference(false, true);
     }
-    const configAlreadyExists = await this.pathExists(getConfigPath());
-    const useLocalManagedSelection =
-      !configAlreadyExists &&
-      !skipPrompts &&
-      process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1' &&
-      this.requestedAgenticTools === undefined;
-    if (!useLocalManagedSelection) {
-      const selectedTools = await this.selectInitialAgenticTools(skipPrompts);
-      this.initialConfig.agentic_tools = { installed: selectedTools };
-    } else {
-      delete this.initialConfig.agentic_tools;
-    }
+    this.initialConfig.agentic_tools = { installed: selectedTools };
     if (!configAlreadyExists) {
       await this.persistDuringInitialCreation(this.initialConfig);
     }
     if (process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
-      await this.config.runCommand('install', useLocalManagedSelection ? [] : ['--sync']);
+      try {
+        await this.config.runCommand('install', ['--sync']);
+      } catch (error) {
+        throw new Error(
+          `Agentic tool installation did not complete: ${error instanceof Error ? error.message : String(error)}. The new config was preserved. Recovery: agor install --sync`
+        );
+      }
     }
 
     // Success summary
@@ -523,17 +609,21 @@ export default class Init extends Command {
     this.log('');
 
     this.log(chalk.bold('Agentic tools:'));
+    const configured = new Set(this.initialConfig.agentic_tools?.installed ?? []);
     const tools = await diagnoseAgenticTools(
       resolveManagedAgenticToolVersion(this.config.version) as string
     );
     for (const tool of tools) {
       const marker = tool.status === 'ready' ? chalk.green('✓') : chalk.yellow('○');
       const detail =
-        tool.status === 'ready' ? (tool.version ?? tool.path ?? 'ready') : 'not available';
+        tool.status === 'ready'
+          ? (tool.version ?? tool.path ?? 'ready')
+          : configured.has(tool.id)
+            ? 'installation incomplete'
+            : 'not selected by this deployment';
       this.log(`   ${marker} ${tool.name}: ${detail}`);
     }
     let missingTools = tools.filter((tool) => tool.status !== 'ready');
-    const configured = new Set(this.initialConfig.agentic_tools?.installed ?? []);
     missingTools = missingTools.filter((tool) => configured.has(tool.id));
     if (missingTools.length > 0) {
       this.log(chalk.dim(`   ${missingTools.length} optional agentic tool(s) are not installed.`));
@@ -543,10 +633,8 @@ export default class Init extends Command {
     this.log('');
 
     // Check if daemon is running
-    const config = await loadConfig();
-    const host = config.daemon?.host || 'localhost';
-    const port = config.daemon?.port || 3030;
-    const daemonRunning = await isDaemonRunning(`http://${host}:${port}`);
+    const daemonUrl = await getDaemonUrl();
+    const daemonRunning = await isDaemonRunning(daemonUrl);
     const isDevMode = await this.isDevMode();
 
     this.log(chalk.bold('Next steps:'));
@@ -595,16 +683,27 @@ export default class Init extends Command {
       return existing.agentic_tools?.installed ?? [];
     }
     if (this.requestedAgenticTools) return this.requestedAgenticTools;
-    if (skipPrompts || process.env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return [];
+    if (process.env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return [];
+    if (skipPrompts) {
+      throw new Error(
+        'Fresh noninteractive initialization requires an explicit agentic-tool policy. Pass `--agentic-tools <comma-separated-list|all|none>` (or set AGOR_AGENTIC_TOOLS).'
+      );
+    }
 
     const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
     this.log('');
     this.log(chalk.bold('Agentic tool packages'));
     this.log(
       chalk.dim(
-        `Selected packages will be installed at ${agorVersion} and recorded in config.yaml.`
+        `Selected packages will be downloaded with npm, installed at ${agorVersion}, and recorded once in config.yaml.`
       )
     );
+    this.log(
+      chalk.dim(
+        'Each selection uses additional disk and setup time. Provider credentials are configured after the daemon starts.'
+      )
+    );
+    this.log(chalk.dim('Unchecked tools will not be available to workspaces on this deployment.'));
     const { selectedTools } = await inquirer.prompt<{ selectedTools: InstallableAgenticTool[] }>([
       {
         type: 'checkbox',
@@ -614,6 +713,8 @@ export default class Init extends Command {
           name: `${definition.displayName} (${definition.packageName}@${agorVersion})`,
           value: tool,
         })),
+        validate: (selection) =>
+          selection.length > 0 || 'Select at least one agentic tool, or press Ctrl+C to exit.',
       },
     ]);
     return selectedTools;
@@ -818,14 +919,17 @@ export default class Init extends Command {
     ]);
 
     // Create admin user directly in database (no daemon required)
-    const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
-
-    const _user = await createUser(db, {
-      email,
-      password,
-      name: username,
-      role: 'admin',
-    });
+    const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+    try {
+      await createUser(db, {
+        email,
+        password,
+        name: username,
+        role: 'admin',
+      });
+    } finally {
+      this.closeSQLiteDatabase(db);
+    }
 
     this.log(`${chalk.green('   ✓')} Admin user created (${chalk.gray(email)})`);
   }

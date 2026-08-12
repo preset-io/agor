@@ -6,7 +6,7 @@ Agor is a real-time collaborative platform for managing Claude Code, Codex, and 
 
 ## Installation
 
-Requires Node.js ≥ 22.12.
+Requires Node.js ≥ 22.12 and Git on `PATH`. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access.
 
 ```bash
 npm install -g agor-live
@@ -17,7 +17,7 @@ Prefer Homebrew on macOS or Linux? See the main docs for the brew install path.
 ## Quick Start
 
 ```bash
-# 1. Initialize Agor (creates ~/.agor/ and database)
+# 1. Initialize Agor, choose agentic tools, and install their aligned packages
 agor init
 
 # 2. Start the daemon

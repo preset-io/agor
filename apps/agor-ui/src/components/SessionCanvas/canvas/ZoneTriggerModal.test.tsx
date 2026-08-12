@@ -1,7 +1,11 @@
-import type { BranchID, Session } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import type { AgorClient, BranchID, Session } from '@agor-live/client';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderTemplate } from '../../../utils/templates';
 import { ZoneTriggerModal } from './ZoneTriggerModal';
+
+vi.mock('../../../utils/templates', () => ({ renderTemplate: vi.fn() }));
 
 function EffortField({
   value,
@@ -23,9 +27,7 @@ function EffortField({
   );
 }
 
-// Isolate the modal's own smart-default selection logic from its heavy config
-// children — the regression lives entirely in ZoneTriggerModal's render-time
-// useMemo, which runs regardless of what these children render.
+// Isolate the modal transaction behavior from its heavy configuration children.
 vi.mock('../../AgentSelectionGrid', () => ({
   AgentSelectionGrid: ({
     agents,
@@ -70,6 +72,16 @@ vi.mock('../../AgenticToolConfigurationPicker', async () => {
 });
 
 const BRANCH_ID = 'branch-1' as BranchID;
+const CLIENT = {} as AgorClient;
+const renderTemplateMock = vi.mocked(renderTemplate);
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 const makeSession = (id: string, status: string, lastUpdated: string, title: string): Session =>
   ({
@@ -83,6 +95,200 @@ const makeSession = (id: string, status: string, lastUpdated: string, title: str
     last_updated: lastUpdated,
   }) as unknown as Session;
 
+beforeEach(() => {
+  renderTemplateMock.mockReset();
+});
+
+describe('ZoneTriggerModal action snapshot', () => {
+  it('preserves prompt and form edits across equivalent parent data with new identities', async () => {
+    const request = deferred<string>();
+    renderTemplateMock.mockReturnValue(request.promise);
+    const onExecute = vi.fn().mockResolvedValue(undefined);
+    const props = {
+      actionId: 1,
+      open: true,
+      onCancel: () => {},
+      client: CLIENT,
+      branch: { branch_id: BRANCH_ID, mcp_server_ids: ['initial-mcp'] } as never,
+      sessions: [] as Session[],
+      zoneName: 'Review',
+      trigger: { template: 'Review {{ branch.name }}', behavior: 'show_picker' as const },
+      boardName: 'Board',
+      boardCustomContext: { sprint: 7 },
+      availableAgents: [],
+      mcpServerById: new Map(),
+      currentUser: { default_mcp_server_ids: ['user-mcp'] } as never,
+      onExecute,
+    };
+    const { rerender } = render(<ZoneTriggerModal {...props} />);
+
+    const prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
+    fireEvent.change(prompt, { target: { value: 'My edited prompt' } });
+    fireEvent.click(screen.getByText('Agentic Tool Configuration (optional)'));
+    const effort = await screen.findByLabelText('zone-effort');
+    fireEvent.change(effort, { target: { value: 'xhigh' } });
+
+    rerender(
+      <ZoneTriggerModal
+        {...props}
+        branch={{ branch_id: BRANCH_ID, mcp_server_ids: ['initial-mcp'] } as never}
+        sessions={[]}
+        trigger={{ template: 'Review {{ branch.name }}', behavior: 'show_picker' }}
+        boardCustomContext={{ sprint: 7 }}
+        mcpServerById={new Map()}
+        currentUser={{ default_mcp_server_ids: ['user-mcp'] } as never}
+      />
+    );
+
+    expect(renderTemplateMock).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveValue('My edited prompt');
+    expect(effort).toHaveValue('xhigh');
+    expect(screen.getByRole('button', { name: 'Execute Trigger' })).toBeEnabled();
+    await act(async () => {
+      request.resolve('Rendered once');
+      await request.promise;
+    });
+    expect(prompt).toHaveValue('My edited prompt');
+  });
+
+  it('rerenders once and resets the prompt when the user deliberately changes session', async () => {
+    renderTemplateMock.mockImplementation(async (_client, _template, context) => {
+      const session = context.session as { description?: string } | undefined;
+      return `Prompt for ${session?.description}`;
+    });
+    const older = {
+      ...makeSession('s-old', 'completed', '2026-06-01T00:00:00.000Z', 'Older session'),
+      description: 'older',
+    } as Session;
+    const newer = {
+      ...makeSession('s-new', 'completed', '2026-06-20T00:00:00.000Z', 'Newer session'),
+      description: 'newer',
+    } as Session;
+
+    render(
+      <ZoneTriggerModal
+        actionId={1}
+        open
+        onCancel={() => {}}
+        client={CLIENT}
+        branch={undefined}
+        sessions={[older, newer]}
+        zoneName="Review"
+        trigger={{ template: 'Template', behavior: 'show_picker' }}
+        availableAgents={[]}
+        mcpServerById={new Map()}
+        onExecute={async () => {}}
+      />
+    );
+
+    const prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
+    await waitFor(() => expect(prompt).toHaveValue('Prompt for newer'));
+    fireEvent.change(prompt, { target: { value: 'Edited newer prompt' } });
+
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    const olderOptions = await screen.findAllByText(/Older session/);
+    fireEvent.click(olderOptions.at(-1) as HTMLElement);
+
+    await waitFor(() => expect(prompt).toHaveValue('Prompt for older'));
+    expect(renderTemplateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts a clean render exactly once for a new zone action or reopened action', async () => {
+    const zoneA = deferred<string>();
+    const zoneB = deferred<string>();
+    const reopenedZoneA = deferred<string>();
+    renderTemplateMock
+      .mockReturnValueOnce(zoneA.promise)
+      .mockReturnValueOnce(zoneB.promise)
+      .mockReturnValueOnce(reopenedZoneA.promise);
+    const common = {
+      open: true,
+      onCancel: () => {},
+      client: CLIENT,
+      branch: undefined,
+      sessions: [] as Session[],
+      availableAgents: [],
+      mcpServerById: new Map(),
+      onExecute: async () => {},
+    };
+    const { rerender } = render(
+      <ZoneTriggerModal
+        {...common}
+        actionId={1}
+        zoneName="Zone A"
+        trigger={{ template: 'Template A', behavior: 'show_picker' }}
+      />
+    );
+    let prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
+    expect(prompt).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Execute Trigger' })).toBeDisabled();
+    zoneA.resolve('Rendered A');
+    await waitFor(() => expect(prompt).toHaveValue('Rendered A'));
+    fireEvent.change(prompt, { target: { value: 'Edited A' } });
+
+    rerender(
+      <ZoneTriggerModal
+        {...common}
+        actionId={2}
+        zoneName="Zone B"
+        trigger={{ template: 'Template B', behavior: 'show_picker' }}
+      />
+    );
+    prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
+    expect(screen.getByText('Zone Trigger: Zone B')).toBeInTheDocument();
+    expect(prompt).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Execute Trigger' })).toBeDisabled();
+    zoneB.resolve('Rendered B');
+    await waitFor(() => expect(prompt).toHaveValue('Rendered B'));
+
+    rerender(
+      <ZoneTriggerModal
+        {...common}
+        actionId={3}
+        zoneName="Zone A"
+        trigger={{ template: 'Template A', behavior: 'show_picker' }}
+      />
+    );
+    prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
+    expect(prompt).toHaveValue('');
+    reopenedZoneA.resolve('Reopened A');
+    await waitFor(() => expect(prompt).toHaveValue('Reopened A'));
+    expect(renderTemplateMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('shares the initial render request when Strict Mode replays effects', async () => {
+    const request = deferred<string>();
+    renderTemplateMock.mockReturnValue(request.promise);
+
+    render(
+      <StrictMode>
+        <ZoneTriggerModal
+          actionId={1}
+          open
+          onCancel={() => {}}
+          client={CLIENT}
+          branch={undefined}
+          sessions={[]}
+          zoneName="Strict"
+          trigger={{ template: 'Strict template', behavior: 'show_picker' }}
+          availableAgents={[]}
+          mcpServerById={new Map()}
+          onExecute={async () => {}}
+        />
+      </StrictMode>
+    );
+
+    expect(renderTemplateMock).toHaveBeenCalledTimes(1);
+    request.resolve('Strict rendered');
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: 'Prompt (editable)' })).toHaveValue(
+        'Strict rendered'
+      )
+    );
+    expect(renderTemplateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ZoneTriggerModal smart-default session selection', () => {
   it('resolves the most-recent session without mutating the frozen store bucket', () => {
     const older = makeSession('s-old', 'completed', '2026-06-01T00:00:00.000Z', 'Older session');
@@ -92,17 +298,15 @@ describe('ZoneTriggerModal smart-default session selection', () => {
     // bucket. Sorting such an array in place throws, so the modal must sort a
     // copy. Freeze here to reproduce the store's contract.
     const frozenBucket = Object.freeze([older, newer]);
-    const sessionsByBranch = new Map<string, Session[]>([[BRANCH_ID, frozenBucket]]);
-
     expect(() =>
       render(
         <ZoneTriggerModal
+          actionId={1}
           open
           onCancel={() => {}}
           client={null}
-          branchId={BRANCH_ID}
           branch={undefined}
-          sessionsByBranch={sessionsByBranch}
+          sessions={frozenBucket}
           zoneName="Zone"
           trigger={{ template: 'do {{thing}}' } as never}
           availableAgents={[]}
@@ -126,12 +330,12 @@ describe('ZoneTriggerModal smart-default session selection', () => {
 
     render(
       <ZoneTriggerModal
+        actionId={1}
         open
         onCancel={() => {}}
         client={null}
-        branchId={BRANCH_ID}
         branch={undefined}
-        sessionsByBranch={new Map([[BRANCH_ID, [historical]]])}
+        sessions={[historical]}
         zoneName="Zone"
         trigger={{ template: 'do {{thing}}' } as never}
         availableAgents={[]}
@@ -148,12 +352,12 @@ describe('ZoneTriggerModal smart-default session selection', () => {
     const onExecute = vi.fn().mockResolvedValue(undefined);
     render(
       <ZoneTriggerModal
+        actionId={1}
         open
         onCancel={() => {}}
         client={null}
-        branchId={BRANCH_ID}
         branch={undefined}
-        sessionsByBranch={new Map()}
+        sessions={[]}
         zoneName="Zone"
         trigger={{
           template: 'prompt',
@@ -192,12 +396,12 @@ describe('ZoneTriggerModal reasoning effort', () => {
 
     render(
       <ZoneTriggerModal
+        actionId={1}
         open
         onCancel={() => {}}
         client={null}
-        branchId={BRANCH_ID}
         branch={{ mcp_server_ids: ['branch-mcp'] } as never}
-        sessionsByBranch={new Map([[BRANCH_ID, [claudeSession]]])}
+        sessions={[claudeSession]}
         zoneName="Zone"
         trigger={{ template: 'prompt' } as never}
         availableAgents={[{ id: 'codex', name: 'Codex' } as never]}
@@ -235,12 +439,12 @@ describe('ZoneTriggerModal reasoning effort', () => {
 
     render(
       <ZoneTriggerModal
+        actionId={1}
         open
         onCancel={() => {}}
         client={null}
-        branchId={BRANCH_ID}
         branch={undefined}
-        sessionsByBranch={new Map([[BRANCH_ID, [codexSession]]])}
+        sessions={[codexSession]}
         zoneName="Zone"
         trigger={{ template: 'prompt' } as never}
         availableAgents={[{ id: 'codex', name: 'Codex' } as never]}
@@ -268,12 +472,12 @@ describe('ZoneTriggerModal reasoning effort', () => {
     const onExecute = vi.fn().mockResolvedValue(undefined);
     render(
       <ZoneTriggerModal
+        actionId={1}
         open
         onCancel={() => {}}
         client={null}
-        branchId={BRANCH_ID}
         branch={undefined}
-        sessionsByBranch={new Map()}
+        sessions={[]}
         zoneName="Zone"
         trigger={{ template: 'prompt' } as never}
         availableAgents={[{ id: 'codex', name: 'Codex' } as never]}
@@ -321,12 +525,12 @@ describe('ZoneTriggerModal reasoning effort', () => {
 
       render(
         <ZoneTriggerModal
+          actionId={1}
           open
           onCancel={() => {}}
           client={null}
-          branchId={BRANCH_ID}
           branch={undefined}
-          sessionsByBranch={new Map([[BRANCH_ID, [session]]])}
+          sessions={[session]}
           zoneName="Zone"
           trigger={{ template: 'prompt' } as never}
           availableAgents={[]}

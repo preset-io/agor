@@ -15,6 +15,9 @@ services:
       - DAEMON_PORT=${DAEMON_PORT:-3030}
       - DAEMON_HOST=0.0.0.0
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      # Explicit fresh-install package policy. The entrypoint defaults to the
+      # intentionally tool-free "none" policy when this is omitted.
+      - AGOR_AGENTIC_TOOLS=${AGOR_AGENTIC_TOOLS:-none}
       # Optional first-run bootstrap password. If unset on an empty database,
       # Agor writes a random password to /home/agor/.agor/admin-credentials
       # (mode 0600) and logs only that file path.
