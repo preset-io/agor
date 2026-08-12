@@ -1,4 +1,4 @@
-import { buildGoalBootstrapGuidance } from './onboardingGoals';
+import { buildGoalBootstrapGuidance, findOnboardingGoal } from './onboardingGoals';
 
 export interface TeammateBootstrapPromptInput {
   displayName: string;
@@ -28,6 +28,12 @@ export interface TeammateBootstrapPromptContext {
   };
   /** Goal-driven guidance lines; present when goals were supplied. */
   goalGuidance?: string[];
+  /**
+   * True only when the user actually picked at least one goal. Gates the
+   * "act on the primary goal" opener — a skip (empty goals) or a non-onboarding
+   * teammate (no goals) has no primary goal to reference.
+   */
+  leadWithPrimaryGoal?: boolean;
   suggestedIntegrations?: string[];
   firstSession: true;
 }
@@ -77,7 +83,12 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
   );
   lines.push('');
   lines.push(
-    'Open with a concrete first win rather than interviewing the user — take the primary goal above and act on it.'
+    context.leadWithPrimaryGoal
+      ? 'Open with a concrete first win rather than interviewing the user — take the primary goal above and act on it.'
+      : // No goal was picked (skip / non-onboarding teammate): there is no primary
+        // goal to act on, so nudge toward an early win without overriding the
+        // follow-the-user guidance above or referencing a goal that is not there.
+        'Open with a concrete first step toward an early win, and keep any questions to the single most useful one.'
   );
   if (context.suggestedIntegrations?.length) {
     // CP-11: the recommended integrations must be actively proposed, not just
@@ -122,6 +133,9 @@ export function buildTeammateBootstrapPromptContext({
     // A supplied (even empty) goals array marks an onboarding teammate and gets
     // goal-driven guidance; omitting goals entirely leaves the block off.
     ...(goals ? { goalGuidance: buildGoalBootstrapGuidance(goals) } : {}),
+    // Only lead with the primary-goal opener when a goal actually resolves — an
+    // empty (skip) or all-unknown goals array has no primary goal to act on.
+    ...(goals?.some((id) => findOnboardingGoal(id)) ? { leadWithPrimaryGoal: true } : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
     firstSession: true,
   };

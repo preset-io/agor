@@ -28,7 +28,9 @@ describe('buildTeammateBootstrapPrompt', () => {
     expect(prompt).toContain('- AI teammate description: Reviews pull requests');
     expect(prompt).toContain('- User: Max <max@example.com>');
     expect(prompt).toContain('Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md');
-    expect(prompt).toContain('concrete first win');
+    // No goal supplied → neutral opener, not the primary-goal one.
+    expect(prompt).toContain('concrete first step toward an early win');
+    expect(prompt).not.toContain('take the primary goal above');
     expect(prompt).not.toMatch(/\{\{\s*#?\/?\s*(assistant|user)\b/);
     // No goals supplied → no goal-guidance block.
     expect(prompt).not.toContain('What the user wants:');
@@ -108,5 +110,30 @@ describe('buildTeammateBootstrapPrompt', () => {
     const prompt = buildTeammateBootstrapPrompt({ displayName: 'Board Bot', goals: [] });
     expect(prompt).toContain('What the user wants:');
     expect(prompt).toMatch(/follow their lead/i);
+  });
+
+  it('leads with the primary-goal opener only when a goal actually resolves', () => {
+    // Real goal → the "act on the primary goal above" opener is present.
+    const withGoal = buildTeammateBootstrapPrompt({
+      displayName: 'Board Bot',
+      goals: ['ship-without-busywork'],
+    });
+    expect(withGoal).toContain('take the primary goal above and act on it');
+
+    // Skip (empty goals): the opener must NOT claim a primary goal — that would
+    // contradict the "follow their lead / do not assume a goal" guidance above.
+    const skipped = buildTeammateBootstrapPrompt({ displayName: 'Board Bot', goals: [] });
+    expect(skipped).not.toContain('take the primary goal above');
+    expect(skipped).toMatch(/concrete first step toward an early win/i);
+
+    // Non-onboarding teammate (no goals block at all): no primary goal exists,
+    // so the opener must not reference "the primary goal above".
+    const nonOnboarding = buildTeammateBootstrapPrompt({ displayName: 'Board Bot' });
+    expect(nonOnboarding).not.toContain('take the primary goal above');
+    expect(nonOnboarding).toMatch(/concrete first step toward an early win/i);
+
+    // All-unknown goal ids resolve to nothing → treated like a skip, no primary goal.
+    const unknown = buildTeammateBootstrapPrompt({ displayName: 'Board Bot', goals: ['nope'] });
+    expect(unknown).not.toContain('take the primary goal above');
   });
 });
