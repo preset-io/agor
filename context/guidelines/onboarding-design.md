@@ -31,19 +31,25 @@ prompt. Don't carry that framing forward.
 
 ---
 
-## The four goal cards (locked copy)
+## The six goal cards (locked copy)
 
 These went through several rounds of copywriting. **Do not rewrite them.** The one exception on
 record: card 1's noun was changed from "assistant" to "teammate" per an explicit resolved decision
 (see "Resolved: it's 'teammate'" below) — a one-word correction to match the product noun, not an
 ad hoc rewrite. The "locked copy" rule still holds for everything else.
 
+**House test for titles:** every title must pass the **"I want to ___"** test — it should read
+naturally as something a user would say they want ("I want to *hand off the build*"). This is the
+convention for this surface, not a one-off polish pass; hold new or edited titles to it.
+
 | # | Card | Description |
 | - | ---- | ----------- |
-| 1 | 🔍 **Finally, a personal teammate** | Reads your inbox, Slack, and news so you don't have to. |
+| 1 | 🔍 **Get my own personal teammate** | Reads your inbox, Slack, and news so you don't have to. |
 | 2 | ✍️ **Never chase a status update again** | Meeting notes, action items, and project updates — drafted for you. |
 | 3 | 🛠️ **Ship without the busywork** | PRs, bug triage, release notes — handled. |
-| 4 | 👥 **Give your team an AI teammate** | One helper who knows everyone's Slack, docs, and boards — not just yours. |
+| 4 | 👥 **Give my team an AI teammate** | One helper who knows everyone's Slack, docs, and boards — not just yours. |
+| 5 | 🧱 **Hand off the build** | A working app, dashboard, or prototype — live on your board, ready to use. |
+| 6 | 🔬 **Dig into anything** | Ask a question, get real research back — competitors, markets, data. |
 
 ---
 
@@ -84,8 +90,9 @@ Each goal is a small reusable **block** with two parts:
    and how to open the conversation.
 
 When a user picks two goals, **merge the two blocks with one shared rule** — never write bespoke
-copy per combination. There are 10 possible 1-or-2-goal combinations; hardcoding them all is the
-"persona explosion" failure mode this redesign exists to avoid.
+copy per combination. With six goals capped at two picks there are **21** possible selections
+(15 pairs + 6 singles); hardcoding them all is the "persona explosion" failure mode this redesign
+exists to avoid — and the argument only gets stronger as the goal set grows.
 
 Selection order matters: the **first-picked** goal is the **primary**, the second is the
 **secondary**. Both merges below lean on that ordering. The implementation must therefore hold
@@ -120,10 +127,12 @@ coverage.
 
 | Goal | MCP recs | Bootstrap line |
 | ---- | -------- | -------------- |
-| Finally, a personal teammate | Slack, + existing web-search / knowledge-base tools (no email/news connector yet — see gap) | Wants a daily brief across scattered sources. Ask what's overwhelming them most (Slack, industry news) and propose a recurring digest as the first win. |
+| Get my own personal teammate | Slack, + existing web-search / knowledge-base tools (no email/news connector yet — see gap) | Wants a daily brief across scattered sources. Ask what's overwhelming them most (Slack, industry news) and propose a recurring digest as the first win. |
 | Never chase a status update again | Linear, Shortcut/Jira, Slack, Calendar | Drowning in status-chasing. Ask about their current project or last meeting, offer to draft the recap + action items as the first win. |
 | Ship without the busywork | GitHub, Sentry, Datadog | Wants execution handled. Ask which repo, offer to scan open issues/PRs for a quick win. |
-| Give your team an AI teammate | Slack, HubSpot, Linear, Datadog | Wants a shared teammate for the team. Ask what the team repeats manually across people, propose seeding a shared teammate onto the team board. |
+| Give my team an AI teammate | Slack, HubSpot, Linear, Datadog | Wants a shared teammate for the team. Ask what the team repeats manually across people, propose seeding a shared teammate onto the team board. |
+| Hand off the build | GitHub, Figma | Wants a working thing built, not a spec. Ask what they want built (a prototype, an internal tool, a dashboard) and start building something live on the board as the first win. |
+| Dig into anything | Amplitude, HubSpot | Wants active research/analysis on demand, not a scheduled digest (that's goal 1's job). Ask what they want dug into (a competitor, a market, a dataset) and deliver one real finding as the first win, not a to-do list. |
 
 ---
 
@@ -144,9 +153,10 @@ the cross-checks below reconcile the three places this surface touches that doc.
 
 ### Resolved: it's "teammate"
 
-Max decided the product noun is **"teammate"**, not "assistant". Card 1 was updated accordingly,
-from "Finally, a personal **assistant**" to "Finally, a personal **teammate**", so the wizard is
-consistent throughout. This reconciles the messaging doc's older "assistant" language (2026-06-21)
+Max decided the product noun is **"teammate"**, not "assistant". Card 1's noun was updated
+accordingly — from "assistant" to "teammate" (the title now reads "Get my own personal teammate") —
+so the wizard is consistent throughout. This reconciles the messaging doc's older "assistant"
+language (2026-06-21)
 with the later `product/assistant-to-teammate-rename-audit.md` decision (2026-07-07) and the
 wizard's existing "AI teammate" copy ("Name your AI teammate", the `teammateName` step in
 `seedOnboardingTeammate.ts`) — "teammate" wins across the board.
@@ -156,14 +166,14 @@ wizard's existing "AI teammate" copy ("Name your AI teammate", the `teammateName
 The messaging doc has its own **"Personas & use-cases"** section defining four **GTM/marketing
 audience personas** (AI enabler, orchestrator/builder EPD, team-that-learns-together, Slack-native
 business user). Those are a **top-of-funnel marketing** segmentation — a different system for a
-different purpose than the four **onboarding goal cards** in this guideline, which are **first-day,
+different purpose than the six **onboarding goal cards** in this guideline, which are **first-day,
 in-product outcome selection**. They are not a renaming of each other and must not be mapped 1:1;
 keep the two systems separate when editing either.
 
 ### Banned-jargon compliance
 
 The messaging doc's appendix reserves technical nouns — **"git branches", "sessions", "isolation
-modes"** — for the technical/reference tier only. Checked: **none of the four card headlines or
+modes"** — for the technical/reference tier only. Checked: **none of the six card headlines or
 subtexts use any of them.** Future editors should keep it that way — this bar was verified, not
 assumed.
 
@@ -171,7 +181,7 @@ assumed.
 
 ## Known gap: card 1 promises connectors that don't exist
 
-Card 1 ("Finally, a personal teammate") promises reading your **inbox and news**, but there is
+Card 1 ("Get my own personal teammate") promises reading your **inbox and news**, but there is
 **no email or news-source MCP connector in the codebase today**. Existing integrations are Slack,
 GitHub, HubSpot, Linear, Sentry, Datadog, Figma, Stripe, and Amplitude.
 
@@ -185,7 +195,8 @@ this in the implementation PR.
 
 - [ ] First question asks goal/outcome, not role/job title.
 - [ ] The step badge label is "Goals", not "You".
-- [ ] The four card titles and descriptions match the locked copy exactly.
+- [ ] All six card titles and descriptions match the locked copy exactly.
+- [ ] Every card title passes the "I want to ___" test.
 - [ ] Selection is multi-select capped at 2, and the step is still skippable.
 - [ ] Selections stored in `preferences.onboarding.goals: string[]` (order-preserving, max 2); legacy `persona` left untouched and not migrated.
 - [ ] Selection state is an order-preserving array (append/splice), not a `Set`, so first-picked = primary holds.
@@ -195,5 +206,5 @@ this in the implementation PR.
 - [ ] Skip / 0-goal path falls back to a generic default block (no goal bias, follow-the-user bootstrap line); 0/1/2-goal cases all covered.
 - [ ] Card/bootstrap copy names concrete artifacts, stays plain and second-person, and avoids hedging adjectives.
 - [ ] No card headline/subtext uses reserved technical jargon ("git branches", "sessions", "isolation modes").
-- [ ] Card 1 says "personal teammate" (not "assistant"), consistent with the wizard's "teammate" product noun.
+- [ ] Card 1 says "teammate" (not "assistant"), consistent with the wizard's "teammate" product noun.
 - [ ] Card 1's inbox/news promise is backed by a real connector or the copy was adjusted; the gap is flagged in the PR.
