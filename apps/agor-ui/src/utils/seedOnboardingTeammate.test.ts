@@ -25,7 +25,8 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     teammateEmoji: '🤖',
     agent: 'claude-code',
     suggestedIntegrations: ['Slack', 'GitHub'],
-    user: { name: 'Ada', email: 'ada@example.com', persona: 'developer' },
+    goals: ['ship-without-busywork'],
+    user: { name: 'Ada', email: 'ada@example.com' },
     client: {} as SeedOnboardingTeammateInput['client'],
     repoById: new Map(),
     onCreateBranch,
@@ -73,12 +74,13 @@ describe('seedOnboardingTeammate', () => {
       expect.objectContaining({
         branch_id: 'branch-1',
         agent: 'claude-code',
-        title: '🤖 Rusty onboarding',
+        title: '🤖 Rusty — first session',
       })
     );
     const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
     expect(initialPrompt).toContain('Rusty');
-    expect(initialPrompt).toContain('developer');
+    // The selected goal's bootstrap line is threaded into the first-session prompt.
+    expect(initialPrompt).toContain('Wants execution handled');
     expect(initialPrompt).toContain('- Suggested integrations: Slack, GitHub');
     expect(initialPrompt).toContain('Read ONBOARDING.md');
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');

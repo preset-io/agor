@@ -70,7 +70,7 @@ import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
-  buildTeammateOnboardingSessionTitle,
+  buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
@@ -1030,14 +1030,13 @@ export const App: React.FC<AppProps> = ({
       branch_id: branch.branch_id,
       agent: result.agent,
       agenticToolPresetId: result.agenticToolPresetId,
-      title: buildTeammateOnboardingSessionTitle(result),
+      title: buildTeammateFirstSessionTitle(result),
       initialPrompt: buildTeammateBootstrapPrompt({
         displayName: result.displayName,
         emoji: result.emoji,
         description: result.description,
         userName: user?.name,
         userEmail: user?.email,
-        persona: user?.preferences?.onboarding?.persona,
       }),
       modelConfig: result.modelConfig,
       effort: result.effort,

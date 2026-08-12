@@ -2,7 +2,7 @@
 /**
  * OnboardingWizard — redesigned 5-step first-run flow.
  *
- * Steps: persona → workspace → llm → integrations → done
+ * Steps: goals → llm → workspace → integrations → done
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
@@ -20,12 +20,8 @@ import {
   CheckCircleOutlined,
   CheckOutlined,
   CloseOutlined,
-  CodeOutlined,
   LeftOutlined,
   LoadingOutlined,
-  ProjectOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -40,22 +36,19 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
-import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
+import {
+  MAX_ONBOARDING_GOALS,
+  type McpRecommendation,
+  mergeGoalMcpRecs,
+  ONBOARDING_GOALS,
+} from '../../utils/onboardingGoals';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 import { McpLogo } from '../McpLogo';
 import { ToolIcon } from '../ToolIcon';
-
-/** AntD icon per onboarding persona id — keeps the persona cards on-brand with the rest of the app. */
-const PERSONA_ICONS: Record<string, ReactNode> = {
-  developer: <CodeOutlined />,
-  pm: <ProjectOutlined />,
-  lead: <TeamOutlined />,
-  solo: <ThunderboltOutlined />,
-};
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -63,7 +56,7 @@ const openCodeOnboarding = getAgenticToolUIIntegration('opencode').onboardingOpt
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type WizardStep = 'persona' | 'llm' | 'workspace' | 'integrations' | 'done';
+export type WizardStep = 'goals' | 'llm' | 'workspace' | 'integrations' | 'done';
 type AuthMethod =
   | 'api-key'
   | 'claude-subscription-token'
@@ -91,7 +84,7 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: WizardStep[] = ['persona', 'llm', 'workspace', 'integrations', 'done'];
+const STEPS: WizardStep[] = ['goals', 'llm', 'workspace', 'integrations', 'done'];
 
 // Prefilled so the required workspace step never blocks on an empty field; the
 // user can rename it. Named the teammate and the board the wizard creates.
@@ -106,14 +99,14 @@ const NO_CLIENT_BOARD_ERROR =
 // The workspace step creates the user's board + first teammate, so it is NOT
 // skippable — completing the wizard must always yield a board to land on.
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
-  persona: { number: 1, label: 'You', skippable: true },
+  goals: { number: 1, label: 'Goals', skippable: true },
   llm: { number: 2, label: 'AI', skippable: true },
   workspace: { number: 3, label: 'Workspace', skippable: false },
   integrations: { number: 4, label: 'Tools', skippable: false },
   done: { number: 5, label: "You're ready", skippable: false },
 };
 
-const PERSONAS = ONBOARDING_PERSONAS;
+const GOALS = ONBOARDING_GOALS;
 
 interface LlmOption {
   id: string;
@@ -171,159 +164,7 @@ const LLM_OPTIONS: LlmOption[] = [
   },
 ];
 
-interface McpRecommendation {
-  id: string;
-  name: string;
-  description: string;
-  docsUrl: string;
-  featured?: boolean;
-}
-
-const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
-  developer: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Get notified when sessions finish, send prompts from Slack, and schedule agents that post daily build reports.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'github',
-      name: 'GitHub',
-      description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
-      docsUrl: 'https://agor.live/docs/mcp/github',
-    },
-    {
-      id: 'sentry',
-      name: 'Sentry',
-      description: 'Let your AI read error traces and fix bugs straight from the issue.',
-      docsUrl: 'https://agor.live/docs/mcp/sentry',
-    },
-    {
-      id: 'datadog',
-      name: 'Datadog',
-      description: 'Query metrics, read alerts, and have your AI investigate anomalies for you.',
-      docsUrl: 'https://agor.live/docs/mcp/datadog',
-    },
-  ],
-  pm: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Post standup summaries, unblock threads, and set up agents that DM you scheduled status reports.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'hubspot',
-      name: 'HubSpot',
-      description: 'Pull customer context into sessions - your AI knows who you are building for.',
-      docsUrl: 'https://agor.live/docs/mcp/hubspot',
-    },
-    {
-      id: 'amplitude',
-      name: 'Amplitude',
-      description: 'Ask your AI what the data says without writing a single query.',
-      docsUrl: 'https://agor.live/docs/mcp/amplitude',
-    },
-    {
-      id: 'figma',
-      name: 'Figma',
-      description: 'Read design files and write feedback without switching tabs.',
-      docsUrl: 'https://agor.live/docs/mcp/figma',
-    },
-  ],
-  lead: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Broadcast outcomes, surface blockers, and schedule weekly digest agents that report to your team channel.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'hubspot',
-      name: 'HubSpot',
-      description:
-        'Keep an eye on the pipeline without leaving your session - revenue visibility in context.',
-      docsUrl: 'https://agor.live/docs/mcp/hubspot',
-    },
-    {
-      id: 'linear',
-      name: 'Linear',
-      description:
-        'See what is in progress, what is blocked, and what shipped - without chasing updates.',
-      docsUrl: 'https://agor.live/docs/mcp/linear',
-    },
-    {
-      id: 'datadog',
-      name: 'Datadog',
-      description: 'Get a live health read on your systems without pinging the on-call engineer.',
-      docsUrl: 'https://agor.live/docs/mcp/datadog',
-    },
-  ],
-  solo: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Get pinged when sessions finish and run agents that talk to you on Slack - like a personal AI assistant.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'github',
-      name: 'GitHub',
-      description: 'Open PRs, push commits, and manage your repos hands-free.',
-      docsUrl: 'https://agor.live/docs/mcp/github',
-    },
-    {
-      id: 'stripe',
-      name: 'Stripe',
-      description: 'Ask your AI what revenue looks like today - no dashboard needed.',
-      docsUrl: 'https://agor.live/docs/mcp/stripe',
-    },
-    {
-      id: 'hubspot',
-      name: 'HubSpot',
-      description:
-        'Let your AI handle follow-ups, log calls, and keep your pipeline moving while you build.',
-      docsUrl: 'https://agor.live/docs/mcp/hubspot',
-    },
-  ],
-  _default: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'github',
-      name: 'GitHub',
-      description: 'Open PRs, review code, and sync issues automatically.',
-      docsUrl: 'https://agor.live/docs/mcp/github',
-    },
-    {
-      id: 'linear',
-      name: 'Linear',
-      description: 'Pick up issues and update status automatically.',
-      docsUrl: 'https://agor.live/docs/mcp/linear',
-    },
-    {
-      id: 'notion',
-      name: 'Notion',
-      description: 'Write and update docs as your AI works.',
-      docsUrl: 'https://agor.live/docs/mcp/notion',
-    },
-  ],
-};
+const MCP_DOCS_URL = 'https://agor.live/docs/mcp';
 
 function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | null {
   const k = key.trim();
@@ -479,11 +320,12 @@ export interface OnboardingWizardProps {
     teammateEmoji?: string;
     /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
     agent?: AgenticToolName | null;
-    /** Persona-tailored MCP integration names to seed into the bootstrap prompt. */
+    /** Goal-tailored MCP integration names to seed into the bootstrap prompt. */
     suggestedIntegrations?: string[];
-    /** Persona chosen in step 1, threaded straight through so the completion
-     * handler never has to wait on the async preference save. */
-    persona?: string | null;
+    /** Goal ids chosen in step 1 (order-preserving, primary first; [] if
+     * skipped), threaded straight through so the completion handler never has
+     * to wait on the async preference save. */
+    goals?: string[];
     // May run async (teammate creation) — the wizard awaits it and shows a
     // loading state until it resolves, so the modal covers the whole operation.
   }) => void | Promise<void>;
@@ -546,10 +388,17 @@ export function OnboardingWizard({
   const CARD_SELECTED_SHADOW = WIZARD_SELECTED_SHADOW;
 
   // ── Step state ──────────────────────────────────────────────────────────
-  const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'persona');
+  const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'goals');
 
-  // ── Step 1: persona ─────────────────────────────────────────────────────
-  const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
+  // ── Step 1: goals — multi-select, order-preserving (primary first), max 2 ──
+  const [selectedGoals, setSelectedGoals] = useState<string[]>([]);
+  const toggleGoal = useCallback((id: string) => {
+    setSelectedGoals((prev) => {
+      if (prev.includes(id)) return prev.filter((goalId) => goalId !== id);
+      if (prev.length >= MAX_ONBOARDING_GOALS) return prev;
+      return [...prev, id];
+    });
+  }, []);
 
   // ── Step 2: LLM ─────────────────────────────────────────────────────────
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
@@ -587,8 +436,8 @@ export function OnboardingWizard({
   // always fresh. Excludes `user` to avoid resetting mid-flow on live user refreshes.
   useEffect(() => {
     if (!open) return;
-    setCurrentStep(initialStep || 'persona');
-    setSelectedPersona(null);
+    setCurrentStep(initialStep || 'goals');
+    setSelectedGoals([]);
     setSelectedAgent(null);
     setApiKey('');
     setAuthMethod('api-key');
@@ -775,8 +624,8 @@ export function OnboardingWizard({
 
   const primaryEnabled = useMemo(() => {
     switch (currentStep) {
-      case 'persona':
-        return !!selectedPersona;
+      case 'goals':
+        return selectedGoals.length > 0;
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
@@ -808,7 +657,7 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedPersona,
+    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -822,8 +671,8 @@ export function OnboardingWizard({
   const disabledReason = useMemo((): string | null => {
     if (llmSaving || boardCreating) return null;
     switch (currentStep) {
-      case 'persona':
-        return selectedPersona ? null : 'Pick one, or skip for now';
+      case 'goals':
+        return selectedGoals.length > 0 ? null : 'Pick up to two, or skip for now';
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
@@ -850,7 +699,7 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedPersona,
+    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -865,7 +714,7 @@ export function OnboardingWizard({
 
   const primaryLabel = useMemo(() => {
     switch (currentStep) {
-      case 'persona':
+      case 'goals':
         return 'Continue →';
       case 'llm': {
         if (
@@ -957,9 +806,9 @@ export function OnboardingWizard({
 
   const handlePrimary = useCallback(async () => {
     switch (currentStep) {
-      case 'persona': {
-        if (selectedPersona) {
-          saveOnboardingProgress({ persona: selectedPersona });
+      case 'goals': {
+        if (selectedGoals.length > 0) {
+          saveOnboardingProgress({ goals: selectedGoals });
         }
         goToStep('llm');
         break;
@@ -1093,10 +942,9 @@ export function OnboardingWizard({
       }
       case 'done': {
         const boardIdToUse = createdBoardId || verifiedBoard?.board_id || '';
-        // Suggested MCP integrations for the chosen persona (same set shown on
-        // the integrations step) — threaded into the teammate's bootstrap prompt.
-        const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
-        const suggestedIntegrations = recs.map((rec) => rec.name);
+        // Merged MCP integrations for the chosen goals (same set shown on the
+        // integrations step) — threaded into the teammate's bootstrap prompt.
+        const suggestedIntegrations = mergeGoalMcpRecs(selectedGoals).map((rec) => rec.name);
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
         setCompleting(true);
@@ -1111,7 +959,7 @@ export function OnboardingWizard({
             teammateEmoji,
             agent: selectedAgent,
             suggestedIntegrations,
-            persona: selectedPersona,
+            goals: selectedGoals,
           });
         } finally {
           setCompleting(false);
@@ -1121,7 +969,7 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedPersona,
+    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -1221,16 +1069,18 @@ export function OnboardingWizard({
     </div>
   );
 
-  const renderPersona = () => {
+  const renderGoals = () => {
     const firstName = user?.name?.split(' ')[0];
-    const personaTitle = firstName
-      ? `${firstName}, let's make this yours.`
-      : "Let's make this yours.";
+    const goalsTitle = firstName
+      ? `${firstName}, what do you want done?`
+      : 'What do you want done?';
+    const atCap = selectedGoals.length >= MAX_ONBOARDING_GOALS;
     return (
       <div>
-        {renderStepBadge(personaTitle)}
+        {renderStepBadge(goalsTitle)}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-          How do you work? We'll tailor your setup to what you actually need.
+          Pick up to two — we'll set your teammate up around them. Not sure yet? Skip and decide
+          later.
         </Paragraph>
 
         <div
@@ -1240,38 +1090,66 @@ export function OnboardingWizard({
             gap: 12,
           }}
         >
-          {PERSONAS.map((persona) => {
-            const isSelected = selectedPersona === persona.id;
+          {GOALS.map((goal) => {
+            const isSelected = selectedGoals.includes(goal.id);
+            // At the cap, unselected cards can't be added until one is dropped.
+            const isDisabled = !isSelected && atCap;
             return (
               <button
-                key={persona.id}
+                key={goal.id}
                 type="button"
                 aria-pressed={isSelected}
+                disabled={isDisabled}
                 className="onb-card"
-                onClick={() => setSelectedPersona(persona.id)}
+                onClick={() => toggleGoal(goal.id)}
                 style={{
+                  position: 'relative',
                   background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
                   border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
                   backdropFilter: 'blur(20px)',
                   WebkitBackdropFilter: 'blur(20px)',
                   borderRadius: 12,
                   padding: '16px',
-                  cursor: 'pointer',
+                  cursor: isDisabled ? 'not-allowed' : 'pointer',
+                  opacity: isDisabled ? 0.45 : 1,
                   textAlign: 'left',
                   boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
                   transition: 'all 0.15s ease',
                   width: '100%',
                 }}
               >
-                <div style={{ fontSize: 24, marginBottom: 8, color: TEXT_SECONDARY }}>
-                  {PERSONA_ICONS[persona.id]}
-                </div>
+                {isSelected && (
+                  <div
+                    className="onb-check"
+                    style={{
+                      position: 'absolute',
+                      top: 12,
+                      right: 12,
+                      width: 20,
+                      height: 20,
+                      borderRadius: '50%',
+                      background: PRIMARY,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 10 }} />
+                  </div>
+                )}
+                <div style={{ fontSize: 24, marginBottom: 8 }}>{goal.emoji}</div>
                 <div
-                  style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14, marginBottom: 6 }}
+                  style={{
+                    color: TEXT_PRIMARY,
+                    fontWeight: 600,
+                    fontSize: 14,
+                    marginBottom: 6,
+                    paddingRight: 20,
+                  }}
                 >
-                  {persona.title}
+                  {goal.title}
                 </div>
-                <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{persona.desc}</div>
+                <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{goal.description}</div>
               </button>
             );
           })}
@@ -1705,7 +1583,7 @@ export function OnboardingWizard({
   );
 
   const renderIntegrations = () => {
-    const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
+    const recs: McpRecommendation[] = mergeGoalMcpRecs(selectedGoals);
     return (
       <div>
         {renderStepBadge('Recommended tools')}
@@ -2063,7 +1941,7 @@ export function OnboardingWizard({
               zIndex: 1,
             }}
           >
-            {currentStep === 'persona' && renderPersona()}
+            {currentStep === 'goals' && renderGoals()}
             {currentStep === 'llm' && renderLlm()}
             {currentStep === 'workspace' && renderWorkspace()}
             {currentStep === 'integrations' && renderIntegrations()}

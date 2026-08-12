@@ -712,7 +712,7 @@ function AppContent() {
     teammateEmoji?: string;
     agent?: AgenticToolName | null;
     suggestedIntegrations?: string[];
-    persona?: string | null;
+    goals?: string[];
   }) => {
     // The wizard awaits this and stays open in a loading state until it
     // resolves, so we do the teammate creation + navigation FIRST and only
@@ -780,12 +780,12 @@ function AppContent() {
       teammateEmoji: result.teammateEmoji,
       agent: result.agent,
       suggestedIntegrations: result.suggestedIntegrations,
+      // Goals drive the first-session prompt; [] (skipped) yields the generic
+      // follow-the-user guidance. Passed straight from the wizard.
+      goals: result.goals,
       user: {
         name: currentUser.name,
         email: currentUser.email,
-        // Prefer the wizard's authoritative selection; the persisted preference
-        // is an async save that a fast completion can outrun.
-        persona: result.persona ?? currentUser.preferences?.onboarding?.persona,
       },
       client,
       repoById: agorStore.getState().repoById,

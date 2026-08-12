@@ -1,5 +1,5 @@
 /**
- * Tests for the redesigned 5-step OnboardingWizard (persona → llm → workspace →
+ * Tests for the redesigned 5-step OnboardingWizard (goals → llm → workspace →
  * integrations → done).
  *
  * The wizard no longer clones a "framework" repo, auto-creates a branch/session,
@@ -146,18 +146,18 @@ describe('OnboardingWizard', () => {
     ).toContain('@media (prefers-reduced-motion: reduce)');
   });
 
-  it('starts on the persona step; selecting a persona advances to LLM and saves onboarding progress', async () => {
+  it('starts on the goals step; selecting a goal advances to LLM and saves onboarding progress', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
-    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
-    expect(screen.getByText('I write code')).toBeInTheDocument();
-    expect(screen.getByText('I manage projects')).toBeInTheDocument();
-    // Persona step is optional — no back button on the first step.
+    expect(screen.getByText(/what do you want done/i)).toBeInTheDocument();
+    expect(screen.getByText('Ship without the busywork')).toBeInTheDocument();
+    expect(screen.getByText('Dig into anything')).toBeInTheDocument();
+    // Goals step is optional — no back button on the first step.
     expect(screen.queryByText('Back')).not.toBeInTheDocument();
 
-    clickButton('I write code');
-    clickButton(/^continue →/i);
+    clickButton('Ship without the busywork');
+    clickButton(/^continue/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     await waitFor(() => {
@@ -165,14 +165,42 @@ describe('OnboardingWizard', () => {
         'user-1',
         expect.objectContaining({
           preferences: expect.objectContaining({
-            onboarding: expect.objectContaining({ persona: 'developer' }),
+            onboarding: expect.objectContaining({ goals: ['ship-without-busywork'] }),
           }),
         })
       );
     });
   });
 
-  it('disables Continue until a persona is picked; Skip is the only way through unselected', async () => {
+  it('is multi-select, order-preserving, and caps at two goals', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'goals' });
+
+    // First-picked = primary, second-picked = secondary (order preserved).
+    clickButton('Dig into anything');
+    clickButton('Ship without the busywork');
+
+    // A third pick is blocked at the cap — its card is disabled.
+    const thirdCard = screen.getByText('Hand off the build').closest('button');
+    expect(thirdCard).toBeDisabled();
+
+    // Advance straight to done via skips to inspect the emitted goals + merged recs.
+    clickButton(/^continue/i);
+    await findAndClickButton(/skip for now/i); // llm
+    clickButton(/skip for now/i); // workspace
+    clickButton(/skip for now/i); // integrations
+    clickButton(/open my board/i);
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        goals: ['dig-into-anything', 'ship-without-busywork'],
+        // Merge: first two of primary (dig) then first two of secondary (ship).
+        suggestedIntegrations: ['Amplitude', 'HubSpot', 'GitHub', 'Sentry'],
+      })
+    );
+  });
+
+  it('disables Continue until a goal is picked; Skip is the only way through unselected', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
@@ -180,7 +208,7 @@ describe('OnboardingWizard', () => {
     expect(continueButton).toBeDisabled();
 
     fireEvent.click(continueButton as HTMLButtonElement);
-    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
+    expect(screen.getByText(/what do you want done/i)).toBeInTheDocument();
 
     clickButton(/skip for now/i);
 
@@ -483,10 +511,10 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
   });
 
-  it('integrations step shows persona-tailored MCP recommendations', async () => {
+  it('integrations step shows goal-tailored MCP recommendations', async () => {
     renderWizard({ initialStep: 'integrations' });
 
-    // No persona chosen — falls back to the default rec set.
+    // No goal chosen — falls back to the default rec set.
     expect(screen.getByText('Slack')).toBeInTheDocument();
     expect(screen.getByText('Notion')).toBeInTheDocument();
     // Recommendations only: nothing is connected here; the AI teammate does it later.
@@ -497,7 +525,7 @@ describe('OnboardingWizard', () => {
     const onComplete = vi.fn();
     const { onCreateRepo, onCreateBranch, onCreateSession } = renderWizard({ onComplete });
 
-    // persona (optional — Continue is disabled without a selection, so skip)
+    // goals (optional — Continue is disabled without a selection, so skip)
     clickButton(/skip for now/i);
 
     // llm
@@ -535,10 +563,10 @@ describe('OnboardingWizard', () => {
       teammateName: 'Rusty',
       teammateEmoji: '🤖',
       agent: 'claude-code',
-      // Persona was skipped → the default MCP suggestion set flows through, and
-      // the persona threaded to the completion handler is null.
+      // Goals were skipped → the default MCP suggestion set flows through, and
+      // the goals threaded to the completion handler are empty.
       suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
-      persona: null,
+      goals: [],
     });
     // The teammate branch/session is created by the app shell on completion, not
     // by the wizard — the wizard itself never invokes these provisioning props.
@@ -547,12 +575,11 @@ describe('OnboardingWizard', () => {
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
-  it('requires the workspace + tools steps but lets persona/llm skip, always yielding a board', async () => {
+  it('requires the workspace + tools steps but lets goals/llm skip, always yielding a board', async () => {
     const onComplete = vi.fn();
     const { boardsService } = renderWizard({ onComplete });
 
-    // persona and llm stay optional.
-    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
+    expect(screen.getByText(/what do you want done/i)).toBeInTheDocument();
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
@@ -594,7 +621,7 @@ describe('OnboardingWizard', () => {
     const onComplete = vi.fn();
     const { boardsService } = renderWizard({ onComplete });
 
-    // persona — skipped.
+    // goals — skipped.
     clickButton(/skip for now/i);
 
     // llm — highlight a provider but never connect it, then skip. Selecting a
@@ -684,12 +711,17 @@ describe('OnboardingWizard', () => {
   it('Back navigates to the previous step and preserves prior selections', async () => {
     renderWizard();
 
-    clickButton('I write code');
-    clickButton(/^continue →/i);
+    clickButton('Ship without the busywork');
+    clickButton(/^continue/i);
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
 
     clickButton('Back');
-    expect(await screen.findByText(/let's make this yours/i)).toBeInTheDocument();
+    expect(await screen.findByText(/what do you want done/i)).toBeInTheDocument();
+    // The prior goal selection survives the round-trip.
+    expect(screen.getByText('Ship without the busywork').closest('button')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
   });
 
   it('dismiss button calls onDismiss and is hidden on the final step', async () => {
@@ -698,7 +730,7 @@ describe('OnboardingWizard', () => {
 
     expect(document.querySelector('button[aria-label="Close"]')).not.toBeInTheDocument();
 
-    renderWizard({ onDismiss, initialStep: 'persona' });
+    renderWizard({ onDismiss, initialStep: 'goals' });
     const closeButtons = document.querySelectorAll('button[aria-label="Close"]');
     expect(closeButtons.length).toBeGreaterThan(0);
     fireEvent.click(closeButtons[closeButtons.length - 1]);

@@ -1,4 +1,4 @@
-import { findOnboardingPersona } from './onboardingPersonas';
+import { buildGoalBootstrapGuidance } from './onboardingGoals';
 
 export interface TeammateBootstrapPromptInput {
   displayName: string;
@@ -6,9 +6,13 @@ export interface TeammateBootstrapPromptInput {
   description?: string | null;
   userName?: string | null;
   userEmail?: string | null;
-  /** Onboarding persona id (see ONBOARDING_PERSONAS); shapes how the teammate introduces itself. */
-  persona?: string | null;
-  /** Persona-tailored MCP integration names surfaced in the onboarding wizard. */
+  /**
+   * Onboarding goal ids (see ONBOARDING_GOALS), order-preserving with the
+   * first-picked goal primary. Present (possibly empty) for onboarding-created
+   * teammates; omit entirely for teammates created outside onboarding.
+   */
+  goals?: string[] | null;
+  /** Goal-tailored MCP integration names surfaced in the onboarding wizard. */
   suggestedIntegrations?: string[] | null;
 }
 
@@ -22,16 +26,17 @@ export interface TeammateBootstrapPromptContext {
     name?: string;
     email?: string;
   };
-  persona?: { id: string; title?: string };
+  /** Goal-driven guidance lines; present when goals were supplied. */
+  goalGuidance?: string[];
   suggestedIntegrations?: string[];
   firstSession: true;
 }
 
-export function buildTeammateOnboardingSessionTitle({
+export function buildTeammateFirstSessionTitle({
   displayName,
   emoji,
 }: Pick<TeammateBootstrapPromptInput, 'displayName' | 'emoji'>): string {
-  return `${emoji ? `${emoji} ` : ''}${displayName} onboarding`;
+  return `${emoji ? `${emoji} ` : ''}${displayName} — first session`;
 }
 
 function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext): string {
@@ -54,19 +59,33 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
     lines.push(`- User email: ${context.user.email}`);
   }
 
-  if (context.persona) {
-    const suffix = context.persona.title ? ` (${context.persona.title})` : '';
-    lines.push(`- User persona: ${context.persona.id}${suffix}`);
-  }
-
   if (context.suggestedIntegrations?.length) {
     lines.push(`- Suggested integrations: ${context.suggestedIntegrations.join(', ')}`);
   }
 
+  if (context.goalGuidance?.length) {
+    lines.push('');
+    lines.push('What the user wants:');
+    for (const line of context.goalGuidance) {
+      lines.push(`- ${line}`);
+    }
+  }
+
   lines.push('');
   lines.push(
-    "Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user. Use the supplied context and live Agor state, and ask only the next useful question if the user's goal is not already clear."
+    'Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user using the supplied context and live Agor state.'
   );
+  lines.push('');
+  lines.push(
+    'Open with a concrete first win rather than interviewing the user — take the primary goal above and act on it.'
+  );
+  if (context.suggestedIntegrations?.length) {
+    // CP-11: the recommended integrations must be actively proposed, not just
+    // listed as context, or the teammate silently ignores them.
+    lines.push(
+      'When one of the suggested integrations above would unlock that win, proactively propose connecting it — name the integration, say what it unlocks, and point the user to Settings → MCP. Do not wait to be asked.'
+    );
+  }
 
   return lines.join('\n');
 }
@@ -77,13 +96,11 @@ export function buildTeammateBootstrapPromptContext({
   description,
   userName,
   userEmail,
-  persona,
+  goals,
   suggestedIntegrations,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
-  const personaId = persona?.trim();
-  const personaProfile = findOnboardingPersona(personaId);
   const normalizedIntegrations = suggestedIntegrations
     ?.map((name) => name.trim())
     .filter((name) => name.length > 0);
@@ -102,9 +119,9 @@ export function buildTeammateBootstrapPromptContext({
           },
         }
       : {}),
-    ...(personaId
-      ? { persona: { id: personaId, ...(personaProfile ? { title: personaProfile.title } : {}) } }
-      : {}),
+    // A supplied (even empty) goals array marks an onboarding teammate and gets
+    // goal-driven guidance; omitting goals entirely leaves the block off.
+    ...(goals ? { goalGuidance: buildGoalBootstrapGuidance(goals) } : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
     firstSession: true,
   };

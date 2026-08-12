@@ -2,7 +2,7 @@ import type { AgenticToolName, AgorClient, Repo } from '@agor-live/client';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
-  buildTeammateOnboardingSessionTitle,
+  buildTeammateFirstSessionTitle,
 } from './teammateBootstrapPrompt';
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
 
@@ -19,9 +19,11 @@ export interface SeedOnboardingTeammateInput {
    * skip handling in `seedOnboardingTeammate`.
    */
   agent?: AgenticToolName | null;
-  /** Persona-tailored MCP integration names to suggest in the onboarding prompt. */
+  /** Goal-tailored MCP integration names to suggest in the onboarding prompt. */
   suggestedIntegrations?: string[];
-  user?: { name?: string | null; email?: string | null; persona?: string | null } | null;
+  /** Onboarding goal ids (order-preserving, primary first); [] when skipped. */
+  goals?: string[];
+  user?: { name?: string | null; email?: string | null } | null;
   client: AgorClient | null;
   repoById: TeammateCreationDeps['repoById'];
   onCreateBranch: TeammateCreationDeps['onCreateBranch'];
@@ -33,7 +35,7 @@ export interface SeedOnboardingTeammateInput {
 
 /**
  * Seeds the user's first AI teammate at the end of onboarding: a branch on the
- * framework repo plus a persona-primed onboarding session, reusing the board the
+ * framework repo plus a goal-primed onboarding session, reusing the board the
  * wizard already created.
  *
  * Best-effort by contract: if the framework repo isn't ready yet, or branch /
@@ -101,7 +103,7 @@ export async function seedOnboardingTeammate(
       sessionConfig: {
         branch_id: branch.branch_id,
         agent: input.agent,
-        title: buildTeammateOnboardingSessionTitle({
+        title: buildTeammateFirstSessionTitle({
           displayName: teammateName,
           emoji: input.teammateEmoji,
         }),
@@ -110,7 +112,7 @@ export async function seedOnboardingTeammate(
           emoji: input.teammateEmoji,
           userName: input.user?.name,
           userEmail: input.user?.email,
-          persona: input.user?.persona,
+          goals: input.goals,
           suggestedIntegrations: input.suggestedIntegrations,
         }),
       },
