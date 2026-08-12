@@ -119,6 +119,7 @@ import {
   ScheduleNotReadyError,
   type SchedulerService,
 } from './services/scheduler.js';
+import type { TaskStreamingEventType } from './services/tasks-events.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
@@ -785,7 +786,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       async create(
         data: {
-          event: 'tool:start' | 'tool:complete' | 'thinking:chunk';
+          event: TaskStreamingEventType;
           data: Record<string, unknown>;
         },
         params: RouteParams

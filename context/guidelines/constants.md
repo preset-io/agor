@@ -1,16 +1,16 @@
 # Constants / No Magic Strings
 
-**A string literal that is compared, emitted/listened for, or used as an identity key in 2+ places is a named export — declared once, colocated with its domain, never retyped at the call site.**
+**A closed family of runtime identity strings has one exported declaration, colocated with its domain. Call sites import the family or its derived type instead of independently re-listing multiple members.**
 
-Applies to: event names, config key paths, channel/room prefixes, permission tiers, service paths, metadata keys — any literal whose _value_ carries meaning across files. It does **not** apply to log/UI copy or one-off literals used in a single place.
+Applies to event families, config-key families, channel/room prefixes, permission tiers, service paths, and metadata keys whose values form one protocol or lookup domain. It does **not** apply to log/UI copy, one-off literals, or a single type-narrowing comparison against an already shared union.
 
-> This is the runtime-string companion to the "Centralize types" rule (`AGENTS.md`). That rule covers TypeScript _types_; this one covers the _values_ compared and emitted at runtime. The canonical union already existed for streaming events (`StreamingEventType`) while three call sites still hand-retyped the same literals — a type alone doesn't stop drift.
+> This is the runtime-string companion to the "Centralize types" rule (`AGENTS.md`). That rule covers TypeScript _types_; this one covers the _values_ compared and emitted at runtime. The canonical union already existed for streaming events (`StreamingEventType`) while four call sites still hand-retyped the same literals — a type alone doesn't stop drift.
 
 ---
 
 ## The rule in one line
 
-If you're about to write the same string literal a second time, export it from one place and import it instead.
+If you're about to declare the same semantic family a second time, export it from its owner and import it instead.
 
 Prefer, in order:
 
@@ -33,9 +33,12 @@ async handleMessageStreamingEvent(
 
 // register-routes.ts — a third copy as an equality chain
 data.event === 'streaming:start' || data.event === 'streaming:chunk' || …
+
+// realtime-publish.ts — a fourth copy as a Set
+new Set(['streaming:start', 'streaming:chunk', 'streaming:end', …])
 ```
 
-Three copies of the same protocol. Add an event in one, forget the others, and streaming silently half-works.
+Four copies of the same protocol. Add an event in one, forget the others, and streaming silently half-works.
 
 ## DO — one source of truth, derive everything else
 
@@ -65,7 +68,7 @@ export type StreamingEventType = (typeof STREAMING_EVENT_TYPES)[number];
 // realtime-publish.ts         const MESSAGE_STREAMING_EVENTS = new Set(STREAMING_EVENT_TYPES)
 ```
 
-A single-literal comparison against an already-typed value — `if (event === 'streaming:chunk')` — is fine. The rule targets re-declaring the _set_, not every mention of a member.
+A single-literal comparison against an already-typed value — `if (event === 'streaming:chunk')` — is fine. The rule targets re-declaring a closed family, not every mention of one member.
 
 ---
 
@@ -74,7 +77,7 @@ A single-literal comparison against an already-typed value — `if (event === 's
 Colocate with the domain that owns the value, next to its type:
 
 - **Has a canonical type already?** Put the runtime array beside it and derive the type from the array (as above). Streaming events live in `packages/core/src/types/message.ts`; task events in `apps/agor-daemon/src/services/tasks-events.ts`.
-- **Daemon-only, no core type?** A small `*-events.ts` / `*-keys.ts` beside the service (e.g. the `MESSAGE_STREAMING_EVENTS` / `TASK_STREAMING_EVENTS` sets in `apps/agor-daemon/src/utils/realtime-publish.ts`).
+- **Daemon-only, no core type?** A small `*-events.ts` / `*-keys.ts` beside the service. Task streaming events live in `apps/agor-daemon/src/services/tasks-events.ts`; consumers import `TASK_STREAMING_EVENT_TYPES` or its derived type.
 - **Shared across packages?** It belongs in `packages/core` so every consumer imports the same identity.
 
 Don't stash shared constants in whichever file happened to need them first — put them where the next reader would look for the domain.
@@ -83,4 +86,4 @@ Don't stash shared constants in whichever file happened to need them first — p
 
 ## Enforcement
 
-Regression is guarded for the streaming-event case by `scripts/check-magic-string-drift.mjs` (wired into `pnpm check` as `check:magic-string-drift`). It fails CI if those event names are re-listed as a union / array / `Set` / equality chain outside the shared constant. It is **not** a general-purpose linter — extend it (or the guard's scope) when you centralize the next family of literals. Per-line escape hatch: `// magic-string-guard:ignore <reason>`.
+Regression is guarded for the message-streaming family by `scripts/check-magic-string-drift.mjs` (wired into `pnpm check` as `check:magic-string-drift`). It reads the canonical values from `STREAMING_EVENT_TYPES` and uses the TypeScript AST to reject unions, arrays / `Set`s, and equality chains that re-list multiple members. It is **not** a general-purpose magic-string linter. Per-construct escape hatch: `// magic-string-guard:ignore <reason>`; the reason is required.

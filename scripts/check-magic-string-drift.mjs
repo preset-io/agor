@@ -1,137 +1,289 @@
 #!/usr/bin/env node
 /**
- * Regression guard: forbid re-listing the streaming/thinking event names.
+ * Regression guard: forbid re-declaring the message streaming event family.
  *
- * The daemon broadcasts a fixed set of per-chunk streaming events on the
- * `messages` service — `streaming:start|chunk|end|error` and
- * `thinking:start|chunk|end`. Their single source of truth is the
- * `STREAMING_EVENT_TYPES` array (and the derived `StreamingEventType` /
- * `MESSAGE_STREAM_LIFECYCLE_EVENTS`) in `packages/core/src/types/message.ts`.
- * These names used to be re-typed by hand in `register-services.ts` (a service
- * `events:` array), `gateway.ts` (a union type), and `register-routes.ts` (an
- * equality chain); a typo or an added event in one place silently diverged
- * from the others. See `context/guidelines/constants.md`.
+ * The canonical runtime values live in STREAMING_EVENT_TYPES. This check reads
+ * that declaration, then uses the TypeScript AST to find call-site unions,
+ * arrays/Sets, and logical-OR equality chains that re-list two or more members.
+ * Individual type-narrowing comparisons remain valid.
  *
- * This script greps `apps/agor-daemon/src` — the surface that was
- * deduplicated — for the two shapes that RE-LIST the set as raw literals:
- *
- *   A. Two or more quoted event literals on one line — a union type
- *      (`'streaming:start' | 'streaming:chunk' | ...`), a single-line array
- *      or `Set`, or an equality chain (`e === 'streaming:start' || e === ...`).
- *
- *   B. A line that is just one quoted event literal (optional trailing comma)
- *      — the element of a hand-written multi-line array.
- *
- * It deliberately does NOT flag an idiomatic single-literal comparison
- * (`if (event === 'streaming:chunk')`) against an already-typed union, and it
- * is NOT a general-purpose magic-string linter — that is future work (see
- * `context/guidelines/constants.md`). It guards exactly the case just fixed.
- *
- * Exits non-zero on any violation. Wire into CI via `pnpm check:magic-string-drift`.
- *
- * Per-line escape hatch: `// magic-string-guard:ignore <reason>` on the
- * offending line itself or the line directly above. The pragma must explain
- * why the literal is legitimately not sourced from the shared constant.
- *
- * Allowlist (whole-file): the shared-constant declaration itself lives in
- * `packages/core` (outside the scanned tree). `tasks-events.ts` is the
- * canonical task-events list and legitimately names `thinking:chunk` as one
- * of the custom `tasks` events, so it is exempt.
+ * Per-construct escape hatch:
+ *   // magic-string-guard:ignore <why this declaration has a separate owner>
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import ts from 'typescript';
 
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TARGETS = ['apps/agor-daemon/src'];
+const CANONICAL_FILE = 'packages/core/src/types/message.ts';
+const CANONICAL_NAME = 'STREAMING_EVENT_TYPES';
 const IGNORE_DIRS = new Set(['node_modules', 'dist', 'build', '.next', '.turbo', '.cache']);
+const PRAGMA = 'magic-string-guard:ignore';
 
-const ALLOWLIST = new Set([
-  // Canonical custom-events list for the `tasks` service. `thinking:chunk` is
-  // genuinely one of these events; it is declared here as its own source of
-  // truth, not re-listed from the message-streaming set.
-  'apps/agor-daemon/src/services/tasks-events.ts',
+function sourceFile(file, text) {
+  return ts.createSourceFile(
+    file,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+}
+
+function unwrapExpression(node) {
+  let current = node;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function declaredArrays(source) {
+  const declarations = new Map();
+
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      ts.isArrayLiteralExpression(unwrapExpression(node.initializer))
+    ) {
+      declarations.set(node.name.text, unwrapExpression(node.initializer));
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source);
+  return declarations;
+}
+
+function resolveStringArray(name, declarations, resolving = new Set()) {
+  if (resolving.has(name)) throw new Error(`Circular canonical array spread through ${name}`);
+  const declaration = declarations.get(name);
+  if (!declaration) throw new Error(`Canonical array ${name} was not found`);
+
+  resolving.add(name);
+  const values = [];
+  for (const element of declaration.elements) {
+    if (ts.isStringLiteralLike(element)) {
+      values.push(element.text);
+    } else if (ts.isSpreadElement(element) && ts.isIdentifier(element.expression)) {
+      values.push(...resolveStringArray(element.expression.text, declarations, resolving));
+    } else {
+      throw new Error(
+        `Canonical array ${name} must contain only string literals or named array spreads`
+      );
+    }
+  }
+  resolving.delete(name);
+  return values;
+}
+
+async function canonicalEvents(root, canonicalFile, canonicalName) {
+  const file = path.join(root, canonicalFile);
+  const text = await fs.readFile(file, 'utf8');
+  const values = resolveStringArray(canonicalName, declaredArrays(sourceFile(file, text)));
+  if (new Set(values).size !== values.length) {
+    throw new Error(`Canonical array ${canonicalName} contains duplicate values`);
+  }
+  if (values.length < 2) throw new Error(`Canonical array ${canonicalName} must contain a family`);
+  return new Set(values);
+}
+
+function directStringEvents(nodes, canonical) {
+  return nodes
+    .map(unwrapExpression)
+    .filter(ts.isStringLiteralLike)
+    .map((node) => node.text)
+    .filter((value) => canonical.has(value));
+}
+
+function unionEvents(node, canonical) {
+  return node.types
+    .filter(ts.isLiteralTypeNode)
+    .map((type) => type.literal)
+    .filter(ts.isStringLiteralLike)
+    .map((literal) => literal.text)
+    .filter((value) => canonical.has(value));
+}
+
+function isLogicalOr(node) {
+  const expression = unwrapExpression(node);
+  return (
+    ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+  );
+}
+
+function logicalOrParent(node) {
+  let parent = node.parent;
+  while (parent && ts.isParenthesizedExpression(parent)) parent = parent.parent;
+  return parent ? isLogicalOr(parent) : false;
+}
+
+const EQUALITY_OPERATORS = new Set([
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
 ]);
 
-// A single quoted streaming/thinking event literal.
-const QUOTED_EVENT = `['"](?:streaming:(?:start|chunk|end|error)|thinking:(?:start|chunk|end))['"]`;
+function comparisonEvents(node, canonical) {
+  const expression = unwrapExpression(node);
+  if (!ts.isBinaryExpression(expression)) return [];
+  if (expression.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+    return [
+      ...comparisonEvents(expression.left, canonical),
+      ...comparisonEvents(expression.right, canonical),
+    ];
+  }
+  if (!EQUALITY_OPERATORS.has(expression.operatorToken.kind)) return [];
+  return directStringEvents(
+    [unwrapExpression(expression.left), unwrapExpression(expression.right)],
+    canonical
+  );
+}
 
-const PATTERNS = [
-  // A. Two or more quoted event literals on one line (union / array / Set /
-  //    equality chain that re-lists the set).
-  new RegExp(`${QUOTED_EVENT}[^\\n]*${QUOTED_EVENT}`),
-  // B. A standalone quoted event literal — a hand-written array element.
-  new RegExp(String.raw`^\s*${QUOTED_EVENT},?\s*$`),
-];
+function uniqueFamily(events) {
+  return [...new Set(events)].sort();
+}
 
-const PRAGMA_RE = /magic-string-guard:ignore\b/;
+function containingConstruct(node) {
+  let current = node;
+  while (
+    current.parent &&
+    !ts.isStatement(current) &&
+    !ts.isTypeAliasDeclaration(current) &&
+    !ts.isPropertySignature(current) &&
+    !ts.isParameter(current)
+  ) {
+    current = current.parent;
+  }
+  return current;
+}
 
-function lineMatches(line) {
-  return PATTERNS.some((re) => re.test(line));
+function pragmaDisposition(lines, source, node) {
+  const nodeLine = source.getLineAndCharacterOfPosition(node.getStart(source)).line;
+  const construct = containingConstruct(node);
+  const constructLine = source.getLineAndCharacterOfPosition(construct.getStart(source)).line;
+  const candidates = new Set([nodeLine, nodeLine - 1, constructLine, constructLine - 1]);
+
+  for (const lineNumber of candidates) {
+    if (lineNumber < 0) continue;
+    const line = lines[lineNumber] ?? '';
+    const index = line.indexOf(PRAGMA);
+    if (index === -1) continue;
+    const reason = line
+      .slice(index + PRAGMA.length)
+      .replace(/\*\/.*$/, '')
+      .trim();
+    return reason ? 'ignored' : 'missing-reason';
+  }
+  return 'none';
+}
+
+function scanSource(file, text, canonical) {
+  const source = sourceFile(file, text);
+  const lines = text.split('\n');
+  const violations = [];
+
+  function record(node, kind, events) {
+    const family = uniqueFamily(events);
+    if (family.length < 2) return;
+    const pragma = pragmaDisposition(lines, source, node);
+    if (pragma === 'ignored') return;
+    const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
+    const detail =
+      pragma === 'missing-reason'
+        ? `${PRAGMA} requires a reason`
+        : `re-lists ${family.map((value) => JSON.stringify(value)).join(', ')}`;
+    violations.push(`${file}:${line + 1}:${character + 1}: ${kind} ${detail}`);
+  }
+
+  function visit(node) {
+    if (ts.isUnionTypeNode(node)) record(node, 'union', unionEvents(node, canonical));
+    if (ts.isArrayLiteralExpression(node)) {
+      record(node, 'array', directStringEvents([...node.elements], canonical));
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
+      !logicalOrParent(node)
+    ) {
+      record(node, 'equality chain', comparisonEvents(node, canonical));
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source);
+  return violations;
 }
 
 async function* walk(dir) {
-  const ents = await fs.readdir(dir, { withFileTypes: true });
-  for (const ent of ents) {
-    if (IGNORE_DIRS.has(ent.name)) continue;
-    const full = path.join(dir, ent.name);
-    if (ent.isDirectory()) {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (IGNORE_DIRS.has(entry.name)) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
       yield* walk(full);
-    } else if (ent.isFile() && /\.(ts|tsx)$/.test(ent.name)) {
+    } else if (entry.isFile() && /\.(ts|tsx)$/.test(entry.name)) {
       yield full;
     }
   }
 }
 
-async function dirExists(abs) {
+async function dirExists(dir) {
   try {
-    await fs.stat(abs);
-    return true;
+    return (await fs.stat(dir)).isDirectory();
   } catch {
     return false;
   }
 }
 
-async function main() {
-  let violations = 0;
-  for (const dir of TARGETS) {
-    const abs = path.join(ROOT, dir);
-    if (!(await dirExists(abs))) continue;
-    for await (const file of walk(abs)) {
-      const rel = path.relative(ROOT, file);
-      if (ALLOWLIST.has(rel)) continue;
+export async function checkMagicStringDrift({
+  root = ROOT,
+  targets = TARGETS,
+  canonicalFile = CANONICAL_FILE,
+  canonicalName = CANONICAL_NAME,
+} = {}) {
+  const canonical = await canonicalEvents(root, canonicalFile, canonicalName);
+  const violations = [];
+
+  for (const target of targets) {
+    const absoluteTarget = path.join(root, target);
+    if (!(await dirExists(absoluteTarget))) continue;
+    for await (const file of walk(absoluteTarget)) {
       const text = await fs.readFile(file, 'utf8');
-      const lines = text.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        if (!lineMatches(lines[i])) continue;
-        const prev = lines[i - 1] ?? '';
-        if (PRAGMA_RE.test(prev) || PRAGMA_RE.test(lines[i])) continue;
-        console.error(`${rel}:${i + 1}: ${lines[i].trim()}`);
-        violations++;
-      }
+      violations.push(...scanSource(path.relative(root, file), text, canonical));
     }
   }
 
-  if (violations > 0) {
-    console.error(
-      `\n❌ ${violations} re-listed streaming event name${violations === 1 ? '' : 's'} found.\n` +
-        `\nThe streaming/thinking event names have a single source of truth:\n` +
-        `\`STREAMING_EVENT_TYPES\` (and the derived \`StreamingEventType\` /\n` +
-        `\`MESSAGE_STREAM_LIFECYCLE_EVENTS\`) in\n` +
-        `\`packages/core/src/types/message.ts\`. Import and spread/derive from it\n` +
-        `instead of retyping the literals as a union, array, Set, or equality\n` +
-        `chain at the call site. See \`context/guidelines/constants.md\`.\n` +
-        `\nAn idiomatic single-literal comparison against an already-typed union\n` +
-        `(\`if (event === 'streaming:chunk')\`) is fine and is not flagged. If a\n` +
-        `line legitimately needs to name these events, add\n` +
-        `\`// magic-string-guard:ignore <reason>\` on the line above (or same line).`
-    );
-    process.exit(1);
-  }
-
-  console.log('✅ No re-listed streaming event names found.');
+  return violations;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+async function main() {
+  const violations = await checkMagicStringDrift();
+  if (violations.length > 0) {
+    console.error(`${violations.join('\n')}\n`);
+    console.error(
+      `❌ ${violations.length} streaming-event declaration${violations.length === 1 ? '' : 's'} must use ` +
+        '`STREAMING_EVENT_TYPES`, its derived type, or a shared subset.\n' +
+        'See `context/guidelines/constants.md`.'
+    );
+    process.exitCode = 1;
+    return;
+  }
+  console.log('✅ No re-listed streaming event families found.');
+}
+
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

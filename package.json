@@ -32,7 +32,7 @@
     "check:fix": "pnpm lint:fix && pnpm typecheck && pnpm check:shortid && pnpm check:magic-string-drift && pnpm check:multitenancy-boundaries && pnpm check:daemon-filesystem-boundaries && pnpm check:realtime-boundaries && turbo run build --filter='!@agor/docs'",
     "check:clean": "turbo run typecheck build --filter='!@agor/docs' --force && pnpm lint && pnpm check:shortid && pnpm check:magic-string-drift && pnpm check:daemon-filesystem-boundaries && pnpm check:realtime-boundaries",
     "check:shortid": "node scripts/check-no-ad-hoc-shortid.mjs",
-    "check:magic-string-drift": "node scripts/check-magic-string-drift.mjs",
+    "check:magic-string-drift": "node --test scripts/check-magic-string-drift.test.mjs && node scripts/check-magic-string-drift.mjs",
     "clean": "turbo run clean && rm -rf node_modules",
     "prepare": "husky",
     "cli:link": "pnpm -C apps/agor-cli link --global",

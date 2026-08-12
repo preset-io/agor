@@ -13,6 +13,7 @@ import {
   type RealtimeRelayEnvelope,
 } from '../realtime/redis-realtime.js';
 import { tenantChannelName } from '../realtime/routing.js';
+import { TASK_STREAMING_EVENT_TYPES } from '../services/tasks-events.js';
 import { isSuperAdmin } from './branch-authorization.js';
 import {
   isKnowledgeRealtimeSuppressedEvent,
@@ -242,7 +243,7 @@ function safeRelayData(data: unknown): unknown | undefined {
 const MESSAGE_STREAMING_EVENTS: ReadonlySet<string> = new Set(STREAMING_EVENT_TYPES);
 
 // Per-chunk / per-tool events emitted on the `tasks` service during a turn.
-const TASK_STREAMING_EVENTS = new Set(['thinking:chunk', 'tool:start', 'tool:complete']);
+const TASK_STREAMING_EVENTS: ReadonlySet<string> = new Set(TASK_STREAMING_EVENT_TYPES);
 
 function isStreamingEvent(context: PublishContext): boolean {
   if (context.path === 'messages/streaming') return true;
