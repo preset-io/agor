@@ -154,7 +154,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
       {error && <Alert title={error} type="error" closable onClose={() => setError(null)} />}
       <Space size={8} align="center">
         <ToolIcon tool={tool} size={24} />
-        <Typography.Title level={4} style={{ margin: 0 }}>
+        <Typography.Title level={4} style={{ margin: 0, fontWeight: 500 }}>
           {TOOL_LABELS[tool]}
         </Typography.Title>
       </Space>
@@ -164,97 +164,104 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
           {current.enabled ? 'Available in this workspace' : 'Disabled in this workspace'}
         </Typography.Text>
       </Space>
-      <Tabs
-        activeKey={subTab}
-        onChange={(key) => setSubTab(key as 'authentication' | 'presets')}
-        items={[
-          {
-            key: 'authentication',
-            label: 'Authentication',
-            children:
-              TENANT_TOOL_FIELDS[tool].length > 0 ? (
-                <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-                  <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-                    <Typography.Text strong>Credential resolution</Typography.Text>
-                    <Select
-                      value={current.resolution_policy}
-                      style={{ width: '100%', maxWidth: 420 }}
-                      options={RESOLUTION_POLICIES.map((policy) => ({
-                        value: policy.value,
-                        label: policy.label,
-                        title: policy.description,
-                      }))}
-                      onChange={(resolution_policy) => void patch({ resolution_policy })}
+      {/* No point showing Authentication/Presets config for a tool that's off. */}
+      {current.enabled && (
+        <Tabs
+          activeKey={subTab}
+          onChange={(key) => setSubTab(key as 'authentication' | 'presets')}
+          items={[
+            {
+              key: 'authentication',
+              label: 'Authentication',
+              children:
+                TENANT_TOOL_FIELDS[tool].length > 0 ? (
+                  <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+                    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+                      <Typography.Text style={{ fontWeight: 500 }}>
+                        Credential resolution
+                      </Typography.Text>
+                      <Select
+                        value={current.resolution_policy}
+                        style={{ width: '100%', maxWidth: 420 }}
+                        options={RESOLUTION_POLICIES.map((policy) => ({
+                          value: policy.value,
+                          label: policy.label,
+                          title: policy.description,
+                        }))}
+                        onChange={(resolution_policy) => void patch({ resolution_policy })}
+                      />
+                      <Typography.Text type="secondary">
+                        {
+                          RESOLUTION_POLICIES.find(
+                            (policy) => policy.value === current.resolution_policy
+                          )?.description
+                        }
+                      </Typography.Text>
+                    </Space>
+                    <ApiKeyFields
+                      tool={tool as AgenticToolName}
+                      fields={TENANT_TOOL_FIELDS[tool]}
+                      fieldStatus={fieldStatus}
+                      onSave={async (field, value) => {
+                        setSaving((state) => ({ ...state, [field]: true }));
+                        try {
+                          await patch({ connection: { [field]: value } });
+                        } finally {
+                          setSaving((state) => ({ ...state, [field]: false }));
+                        }
+                      }}
+                      onClear={async (field) => {
+                        setSaving((state) => ({ ...state, [field]: true }));
+                        try {
+                          await patch({ connection: { [field]: null } });
+                        } finally {
+                          setSaving((state) => ({ ...state, [field]: false }));
+                        }
+                      }}
+                      saving={saving}
                     />
+                  </Space>
+                ) : (
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="No workspace authentication settings"
+                    description={`${TOOL_LABELS[tool]} does not currently expose a centrally managed connection.`}
+                  />
+                ),
+            },
+            {
+              key: 'presets',
+              label: 'Presets',
+              children: (
+                <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+                  <Space orientation="vertical" size="small">
+                    <Space>
+                      <Switch
+                        checked={current.inline_configuration_allowed}
+                        onChange={(inline_configuration_allowed) =>
+                          void patch({ inline_configuration_allowed })
+                        }
+                      />
+                      <Typography.Text style={{ fontWeight: 500 }}>
+                        Allow inline configuration
+                      </Typography.Text>
+                    </Space>
                     <Typography.Text type="secondary">
-                      {
-                        RESOLUTION_POLICIES.find(
-                          (policy) => policy.value === current.resolution_policy
-                        )?.description
-                      }
+                      {current.inline_configuration_allowed
+                        ? 'Members may choose a preset or define configuration directly.'
+                        : 'Members must choose an administrator-managed preset.'}
                     </Typography.Text>
                   </Space>
-                  <ApiKeyFields
-                    tool={tool as AgenticToolName}
-                    fields={TENANT_TOOL_FIELDS[tool]}
-                    fieldStatus={fieldStatus}
-                    onSave={async (field, value) => {
-                      setSaving((state) => ({ ...state, [field]: true }));
-                      try {
-                        await patch({ connection: { [field]: value } });
-                      } finally {
-                        setSaving((state) => ({ ...state, [field]: false }));
-                      }
-                    }}
-                    onClear={async (field) => {
-                      setSaving((state) => ({ ...state, [field]: true }));
-                      try {
-                        await patch({ connection: { [field]: null } });
-                      } finally {
-                        setSaving((state) => ({ ...state, [field]: false }));
-                      }
-                    }}
-                    saving={saving}
-                  />
+                  {client && (
+                    <AgenticToolPresetsManager client={client} tool={tool} onError={setError} />
+                  )}
                 </Space>
-              ) : (
-                <Alert
-                  type="info"
-                  showIcon
-                  title="No workspace authentication settings"
-                  description={`${TOOL_LABELS[tool]} does not currently expose a centrally managed connection.`}
-                />
               ),
-          },
-          {
-            key: 'presets',
-            label: 'Presets',
-            children: (
-              <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-                <Space orientation="vertical" size="small">
-                  <Space>
-                    <Switch
-                      checked={current.inline_configuration_allowed}
-                      onChange={(inline_configuration_allowed) =>
-                        void patch({ inline_configuration_allowed })
-                      }
-                    />
-                    <Typography.Text strong>Allow inline configuration</Typography.Text>
-                  </Space>
-                  <Typography.Text type="secondary">
-                    {current.inline_configuration_allowed
-                      ? 'Members may choose a preset or define configuration directly.'
-                      : 'Members must choose an administrator-managed preset.'}
-                  </Typography.Text>
-                </Space>
-                {client && (
-                  <AgenticToolPresetsManager client={client} tool={tool} onError={setError} />
-                )}
-              </Space>
-            ),
-          },
-        ]}
-      />
+            },
+          ]}
+        />
+      )}
     </Space>
   );
 };
