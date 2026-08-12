@@ -32,6 +32,7 @@ import type {
   UserRole,
 } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import {
   createMcpServerWriteAuthorizationHook,
   type McpServerWriteHookContext,
@@ -66,6 +67,11 @@ const CONNECT_REQUEST = {
 /**
  * The daemon as connect meets it: the real `mcp-servers` service carrying the
  * real write hook, with the services connect merely calls through stood in for.
+ *
+ * The hook is attached here rather than by `registerHooks`, so these tests
+ * describe what a create does once it reaches the hook, not that the daemon
+ * puts it there. That second claim is asserted separately at the bottom of
+ * this file, against the production registration itself.
  */
 async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
@@ -216,15 +222,79 @@ describe('marketplace install, as it lands in the database', () => {
   });
 });
 
+/**
+ * Take the `before.create` chain off `mcp-servers` as `registerHooks` — the
+ * production registration — actually leaves it.
+ *
+ * The app is a stub that records what each service is registered with, the
+ * approach `register-hooks.test.ts` already uses for the schedules hooks. The
+ * database is real, because the ownership hook resolves `mcp_member_policy`
+ * and reads rows; everything else `registerHooks` wants decides nothing here.
+ *
+ * Only `before.create` is collected: the tenant-path loops register `all`,
+ * `around`, and `after` hooks on `mcp-servers` too, and none of them are the
+ * claim under test.
+ */
+function captureRegisteredMcpServerCreateHooks(
+  db: TenantScopeAwareDatabase
+): Array<(context: McpServerWriteHookContext) => Promise<unknown>> {
+  const captured: Array<(context: McpServerWriteHookContext) => Promise<unknown>> = [];
+  const app = {
+    service(path: string) {
+      return {
+        hooks(hooks: { before?: { create?: unknown[] } }) {
+          if (path.replace(/^\//, '') !== 'mcp-servers') return;
+          captured.push(
+            ...((hooks.before?.create ?? []) as Array<
+              (context: McpServerWriteHookContext) => Promise<unknown>
+            >)
+          );
+        },
+      };
+    },
+    use() {},
+    publish() {},
+  };
+
+  registerHooks({
+    db,
+    app: app as unknown as RegisterHooksContext['app'],
+    config: { database: { dialect: 'sqlite' } } as RegisterHooksContext['config'],
+    jwtSecret: 'mcp-server-wiring-test-secret',
+    branchRbacEnabled: false,
+    requireAuth: async (context) => context,
+    superadminOpts: { allowSuperadmin: true },
+    sessionsService: {} as RegisterHooksContext['sessionsService'],
+    messagesService: {} as RegisterHooksContext['messagesService'],
+    boardsService: undefined,
+    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    usersRepository: {} as RegisterHooksContext['usersRepository'],
+    sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    deployment: { mode: 'standalone' } as RegisterHooksContext['deployment'],
+  });
+
+  return captured;
+}
+
 describe('the write hook this seam depends on', () => {
-  it('is the one the mcp-servers service is registered with', async () => {
-    // A stand-in for the assertion the other tests cannot make: that the hook
-    // is reached at all. If `mcp-servers` were ever registered without it, the
-    // create below would persist the client's own owner_user_id.
+  /**
+   * The assertion the rest of this file cannot make: not that the guard decides
+   * correctly, but that `registerHooks` puts it on the path a create travels.
+   * Every other test here — and every test in
+   * `mcp-server-authorization.test.ts` — builds the hook itself, so all of them
+   * keep passing if the `create: [authorizeMcpServerWriteHook]` line is deleted
+   * from `register-hooks.ts`. These two do not: they run whatever that file
+   * registered, and nothing else.
+   *
+   * That distinction is the bug this suite exists for. The unowned marketplace
+   * install shipped because a guard was well covered in isolation and never
+   * checked to be reachable.
+   */
+  const standUpDaemonHooks = async (policy: MCPMemberPolicy = 'allow_crud') => {
     const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
     const db = rawDb as unknown as TenantScopeAwareDatabase;
     await runMigrations(rawDb);
-    await setMcpMemberPolicy(db, 'allow_crud', undefined, null);
+    await setMcpMemberPolicy(db, policy, undefined, null);
 
     const users = new UsersRepository(rawDb);
     const bob = (await users.create({
@@ -238,16 +308,40 @@ describe('the write hook this seam depends on', () => {
       role: 'member',
     })) as User;
 
-    const hook = createMcpServerWriteAuthorizationHook(db);
-    const context = {
-      method: 'create',
-      data: { transport: 'http', owner_user_id: bob.user_id },
-      params: {
-        provider: 'rest',
-        user: { user_id: mallory.user_id, role: 'member' },
-      } as unknown as AuthenticatedParams,
-    } satisfies McpServerWriteHookContext;
+    const registeredHooks = captureRegisteredMcpServerCreateHooks(db);
+    const createAs = async (caller: User, data: Record<string, unknown>) => {
+      const context = {
+        method: 'create',
+        data,
+        params: {
+          provider: 'rest',
+          user: { user_id: caller.user_id, role: 'member' },
+        } as unknown as AuthenticatedParams,
+      } satisfies McpServerWriteHookContext;
+      for (const hook of registeredHooks) await hook(context);
+      return context;
+    };
 
-    await expect(hook(context)).rejects.toThrow(/only create MCP servers owned by yourself/);
+    return { bob, mallory, createAs };
+  };
+
+  it('is registered on mcp-servers create by registerHooks, not just constructible', async () => {
+    const { bob, mallory, createAs } = await standUpDaemonHooks();
+
+    await expect(
+      createAs(mallory, { transport: 'http', owner_user_id: bob.user_id })
+    ).rejects.toThrow(/only create MCP servers owned by yourself/);
+  });
+
+  it('runs as the registered chain, not as a blanket denier', async () => {
+    // Guards the test above: a chain that rejected everything would satisfy it
+    // just as well as the real hook. This one only passes if what
+    // `registerHooks` registered lets a legitimate create through *and* stamps
+    // the owner the way `allow_private_only` requires.
+    const { bob, createAs } = await standUpDaemonHooks('allow_private_only');
+
+    const context = await createAs(bob, { transport: 'http' });
+
+    expect((context.data as { owner_user_id?: string }).owner_user_id).toBe(bob.user_id);
   });
 });
