@@ -181,7 +181,7 @@ describe('extractTokenUsage', () => {
 });
 
 describe('createSystemMessage', () => {
-  it('preserves the executor-owned provider failure marker for daemon classification', async () => {
+  it('preserves the provider failure marker without allowing reserved metadata overrides', async () => {
     const messagesService = {
       create: vi.fn().mockResolvedValue(undefined),
     } as unknown as MessagesService;
@@ -201,7 +201,11 @@ describe('createSystemMessage', () => {
       0,
       'claude-sonnet-4-6',
       messagesService,
-      { is_provider_failure_result: true }
+      {
+        is_provider_failure_result: true,
+        is_meta: false,
+        model: 'spoofed-model',
+      } as NonNullable<import('@agor/core/types').Message['metadata']>
     );
 
     expect(result.metadata).toMatchObject({

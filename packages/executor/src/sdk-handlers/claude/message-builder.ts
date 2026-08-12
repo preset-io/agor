@@ -248,7 +248,7 @@ export async function createSystemMessage(
   nextIndex: number,
   resolvedModel: string | undefined,
   messagesService: MessagesService,
-  metadata?: Message['metadata']
+  metadata?: Pick<NonNullable<Message['metadata']>, 'is_provider_failure_result'>
 ): Promise<Message> {
   const message: Message = {
     message_id: messageId,
