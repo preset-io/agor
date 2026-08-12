@@ -34,6 +34,7 @@ import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
+import { McpLogo } from '../McpLogo';
 import { ToolIcon } from '../ToolIcon';
 
 /** AntD icon per onboarding persona id — keeps the persona cards on-brand with the rest of the app. */
@@ -149,7 +150,6 @@ const LLM_OPTIONS: LlmOption[] = [
 interface McpRecommendation {
   id: string;
   name: string;
-  emoji: string;
   description: string;
   docsUrl: string;
   featured?: boolean;
@@ -162,7 +162,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Get notified when sessions finish, send prompts from Slack, and schedule agents that post daily build reports.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -171,21 +170,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'github',
       name: 'GitHub',
-      emoji: '🐙',
       description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
       docsUrl: 'https://agor.live/docs/mcp/github',
     },
     {
       id: 'sentry',
       name: 'Sentry',
-      emoji: '🚨',
       description: 'Let your AI read error traces and fix bugs straight from the issue.',
       docsUrl: 'https://agor.live/docs/mcp/sentry',
     },
     {
       id: 'datadog',
       name: 'Datadog',
-      emoji: '🐕',
       description: 'Query metrics, read alerts, and have your AI investigate anomalies for you.',
       docsUrl: 'https://agor.live/docs/mcp/datadog',
     },
@@ -194,7 +190,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Post standup summaries, unblock threads, and set up agents that DM you scheduled status reports.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -203,21 +198,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'hubspot',
       name: 'HubSpot',
-      emoji: '🟠',
       description: 'Pull customer context into sessions - your AI knows who you are building for.',
       docsUrl: 'https://agor.live/docs/mcp/hubspot',
     },
     {
       id: 'amplitude',
       name: 'Amplitude',
-      emoji: '📈',
       description: 'Ask your AI what the data says without writing a single query.',
       docsUrl: 'https://agor.live/docs/mcp/amplitude',
     },
     {
       id: 'figma',
       name: 'Figma',
-      emoji: '🎨',
       description: 'Read design files and write feedback without switching tabs.',
       docsUrl: 'https://agor.live/docs/mcp/figma',
     },
@@ -226,7 +218,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Broadcast outcomes, surface blockers, and schedule weekly digest agents that report to your team channel.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -235,7 +226,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'hubspot',
       name: 'HubSpot',
-      emoji: '🟠',
       description:
         'Keep an eye on the pipeline without leaving your session - revenue visibility in context.',
       docsUrl: 'https://agor.live/docs/mcp/hubspot',
@@ -243,7 +233,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'linear',
       name: 'Linear',
-      emoji: '🎯',
       description:
         'See what is in progress, what is blocked, and what shipped - without chasing updates.',
       docsUrl: 'https://agor.live/docs/mcp/linear',
@@ -251,7 +240,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'datadog',
       name: 'Datadog',
-      emoji: '🐕',
       description: 'Get a live health read on your systems without pinging the on-call engineer.',
       docsUrl: 'https://agor.live/docs/mcp/datadog',
     },
@@ -260,7 +248,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Get pinged when sessions finish and run agents that talk to you on Slack - like a personal AI assistant.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -269,21 +256,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'github',
       name: 'GitHub',
-      emoji: '🐙',
       description: 'Open PRs, push commits, and manage your repos hands-free.',
       docsUrl: 'https://agor.live/docs/mcp/github',
     },
     {
       id: 'stripe',
       name: 'Stripe',
-      emoji: '💳',
       description: 'Ask your AI what revenue looks like today - no dashboard needed.',
       docsUrl: 'https://agor.live/docs/mcp/stripe',
     },
     {
       id: 'hubspot',
       name: 'HubSpot',
-      emoji: '🟠',
       description:
         'Let your AI handle follow-ups, log calls, and keep your pipeline moving while you build.',
       docsUrl: 'https://agor.live/docs/mcp/hubspot',
@@ -293,7 +277,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -302,21 +285,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'github',
       name: 'GitHub',
-      emoji: '🐙',
       description: 'Open PRs, review code, and sync issues automatically.',
       docsUrl: 'https://agor.live/docs/mcp/github',
     },
     {
       id: 'linear',
       name: 'Linear',
-      emoji: '🎯',
       description: 'Pick up issues and update status automatically.',
       docsUrl: 'https://agor.live/docs/mcp/linear',
     },
     {
       id: 'notion',
       name: 'Notion',
-      emoji: '📝',
       description: 'Write and update docs as your AI works.',
       docsUrl: 'https://agor.live/docs/mcp/notion',
     },
@@ -1788,7 +1768,7 @@ export function OnboardingWizard({
                   gap: 12,
                 }}
               >
-                <span style={{ fontSize: 20, flexShrink: 0 }}>{rec.emoji}</span>
+                <McpLogo id={rec.id} name={rec.name} size={20} color={TEXT_PRIMARY} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
