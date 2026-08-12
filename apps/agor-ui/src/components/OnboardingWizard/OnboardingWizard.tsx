@@ -1591,77 +1591,51 @@ export function OnboardingWizard({
         change everything anytime.
       </Paragraph>
 
-      {hasExistingBoard ? (
-        <div
-          style={{
-            background: 'rgba(16,185,129,0.08)',
-            border: '1px solid rgba(16,185,129,0.25)',
-            borderRadius: 10,
-            padding: '14px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-          }}
-        >
-          <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 18 }} />
-          <div>
-            <Text style={{ color: SUCCESS_GREEN, fontWeight: 500, fontSize: 14 }}>
-              Board already set up
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div>
+          <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}>
+            Teammate name
+          </Text>
+          <div style={{ display: 'flex', gap: 0 }}>
+            <EmojiPickerInput value={teammateEmoji} onChange={setTeammateEmoji} defaultEmoji="🤖" />
+            <Input
+              aria-label="Teammate name"
+              placeholder="e.g. Rusty, Ada, Scout…"
+              value={teammateName}
+              onChange={(e) => setTeammateName(e.target.value)}
+              style={{
+                background: 'rgba(0,0,0,0.3)',
+                borderColor: 'rgba(255,255,255,0.12)',
+                borderTopLeftRadius: 0,
+                borderBottomLeftRadius: 0,
+                flex: 1,
+              }}
+            />
+          </div>
+          {hasExistingBoard && (
+            <Text style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}>
+              They'll join your existing board
+              {verifiedBoard?.name ? ` "${verifiedBoard.name}"` : ''}.
             </Text>
+          )}
+        </div>
+        {(() => {
+          const chosenOption = LLM_OPTIONS.find((o) => o.agent === selectedAgent);
+          return (
             <div>
-              <Text style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
-                {verifiedBoard?.name || 'Your board is ready.'}
+              <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
+                Board's AI tool
               </Text>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div>
-            <Text
-              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
-            >
-              Teammate name
-            </Text>
-            <div style={{ display: 'flex', gap: 0 }}>
-              <EmojiPickerInput
-                value={teammateEmoji}
-                onChange={setTeammateEmoji}
-                defaultEmoji="🤖"
-              />
-              <Input
-                aria-label="Teammate name"
-                placeholder="e.g. Rusty, Ada, Scout…"
-                value={teammateName}
-                onChange={(e) => setTeammateName(e.target.value)}
-                style={{
-                  background: 'rgba(0,0,0,0.3)',
-                  borderColor: 'rgba(255,255,255,0.12)',
-                  borderTopLeftRadius: 0,
-                  borderBottomLeftRadius: 0,
-                  flex: 1,
-                }}
-              />
-            </div>
-          </div>
-          {(() => {
-            const chosenOption = LLM_OPTIONS.find((o) => o.agent === selectedAgent);
-            return (
-              <div>
-                <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
-                  Board's AI tool
-                </Text>
-                <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
-                  Each board runs on one AI tool for every session created here.
-                  {chosenOption
-                    ? ` Currently: ${chosenOption.title}. Change anytime in Settings.`
-                    : ' Connect your AI in the previous step.'}
-                </div>
+              <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
+                Each board runs on one AI tool for every session created here.
+                {chosenOption
+                  ? ` Currently: ${chosenOption.title}. Change anytime in Settings.`
+                  : ' Connect your AI in the previous step.'}
               </div>
-            );
-          })()}
-        </div>
-      )}
+            </div>
+          );
+        })()}
+      </div>
 
       {/* Concept pills */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 }}>

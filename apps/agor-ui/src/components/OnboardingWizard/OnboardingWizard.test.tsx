@@ -377,8 +377,10 @@ describe('OnboardingWizard', () => {
       user: makeUser({ preferences: { mainBoardId: 'board-existing' } } as Partial<User>),
     });
 
-    expect(screen.getByText('Board already set up')).toBeInTheDocument();
-    expect(screen.getByText('Existing board')).toBeInTheDocument();
+    // Teammate-first: the name UI always renders; the existing board is only a
+    // muted caption, not a replacement for the name field.
+    expect(screen.getByLabelText('Teammate name')).toBeInTheDocument();
+    expect(screen.getByText(/join your existing board/i)).toHaveTextContent('Existing board');
 
     clickButton(/keep going/i);
 
@@ -405,8 +407,8 @@ describe('OnboardingWizard', () => {
     });
 
     await waitFor(() => expect(boardsService.get).toHaveBeenCalledWith('board-existing'));
-    expect(await screen.findByText('Board already set up')).toBeInTheDocument();
-    expect(screen.getByText('My board')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Teammate name')).toBeInTheDocument();
+    expect(screen.getByText(/join your existing board/i)).toHaveTextContent('My board');
 
     clickButton(/keep going/i);
     expect(boardsService.create).not.toHaveBeenCalled();
