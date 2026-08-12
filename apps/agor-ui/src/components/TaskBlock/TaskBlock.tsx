@@ -658,7 +658,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 prefix="By"
               />
             )}
-            {normalized && (!isSlim || isExpanded) && (
+            {normalized && !isSlim && (
               <TokenCountPill
                 count={normalized.tokenUsage.totalTokens}
                 inputTokens={normalized.tokenUsage.inputTokens}
@@ -684,13 +684,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               task.model !== (isSlim ? (previousTaskModel ?? sessionModel) : sessionModel) && (
                 <ModelPill model={task.model} />
               )}
-            {task.git_state.sha_at_start &&
-              task.git_state.sha_at_start !== 'unknown' &&
-              (!isSlim ||
-                isExpanded ||
-                (task.git_state.sha_at_end &&
-                  task.git_state.sha_at_end !== 'unknown' &&
-                  task.git_state.sha_at_end !== task.git_state.sha_at_start)) && (
+            {!isSlim &&
+              task.git_state.sha_at_start &&
+              task.git_state.sha_at_start !== 'unknown' && (
                 <Flex gap={token.sizeUnit / 2} align="center">
                   <GitStatePill
                     branch={task.git_state.ref_at_start}
@@ -722,6 +718,41 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               </Tag>
             )}
           </Flex>
+          {/* Slim: the sha lives on a quiet line under the timer chip instead
+              of occupying chip-row width. Shown when expanded or when the
+              task made commits. */}
+          {isSlim &&
+            task.git_state.sha_at_start &&
+            task.git_state.sha_at_start !== 'unknown' &&
+            (isExpanded ||
+              (task.git_state.sha_at_end &&
+                task.git_state.sha_at_end !== 'unknown' &&
+                task.git_state.sha_at_end !== task.git_state.sha_at_start)) && (
+              <Flex gap={token.sizeUnit / 2} align="center" style={{ marginTop: 2 }}>
+                <GitStatePill
+                  branch={task.git_state.ref_at_start}
+                  sha={task.git_state.sha_at_start}
+                  branchName={branchName}
+                  style={{ fontSize: 10 }}
+                />
+                {task.git_state.sha_at_end &&
+                  task.git_state.sha_at_end !== 'unknown' &&
+                  task.git_state.sha_at_end !== task.git_state.sha_at_start && (
+                    <>
+                      <Typography.Text type="secondary" style={{ fontSize: 10 }}>
+                        →
+                      </Typography.Text>
+                      <GitStatePill
+                        branch={task.git_state.ref_at_end}
+                        sha={task.git_state.sha_at_end}
+                        branchName={branchName}
+                        showDirtyIndicator={true}
+                        style={{ fontSize: 10 }}
+                      />
+                    </>
+                  )}
+              </Flex>
+            )}
         </Flex>
       </Flex>
     );

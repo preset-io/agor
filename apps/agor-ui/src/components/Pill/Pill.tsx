@@ -515,7 +515,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
     </Tag>
   );
 
-  return (
+  const popover = (
     <Popover
       content={
         <ContextWindowPopoverContent
@@ -533,6 +533,21 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
       {trigger}
     </Popover>
   );
+
+  // Slim's click trigger sits inside the clickable task row — stop the click
+  // at this boundary so opening the popover doesn't also expand the card.
+  if (isSlim) {
+    return (
+      <span
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        style={{ display: 'inline-flex', lineHeight: 0 }}
+      >
+        {popover}
+      </span>
+    );
+  }
+  return popover;
 };
 
 interface ModelPillProps extends BasePillProps {
