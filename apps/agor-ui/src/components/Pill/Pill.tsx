@@ -25,7 +25,7 @@ import {
   UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
+import { Badge, Collapse, Popover, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useUIMode } from '../../contexts/UIModeContext';
 import { copyToClipboard } from '../../utils/clipboard';

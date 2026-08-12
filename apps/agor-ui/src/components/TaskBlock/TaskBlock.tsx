@@ -31,7 +31,7 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Alert, Button, Collapse, Flex, Spin, Typography, theme } from 'antd';
+import { Alert, Button, Collapse, Flex, Spin, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo, useRef, useState } from 'react';
 import { useUIMode } from '../../contexts/UIModeContext';
 import { getContextWindowGradient } from '../../utils/contextWindow';
