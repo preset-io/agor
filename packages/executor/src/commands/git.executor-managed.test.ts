@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   createExecutorClient: vi.fn(),
+  diagnoseGit: vi.fn(),
   parseAgorYml: vi.fn(),
   writeAgorYml: vi.fn(),
   deleteBranchDirectory: vi.fn(),
@@ -57,6 +58,11 @@ vi.mock('../git/index.js', async () => {
     scanGitConfigRemoteCredentials: mocks.scanGitConfigRemoteCredentials,
     scrubGitConfigRemoteCredentials: mocks.scrubGitConfigRemoteCredentials,
   };
+});
+
+vi.mock('@agor/git', async () => {
+  const actual = await vi.importActual<typeof import('@agor/git')>('@agor/git');
+  return { ...actual, diagnoseGit: mocks.diagnoseGit };
 });
 
 vi.mock('../services/feathers-client.js', () => ({
@@ -170,6 +176,11 @@ function createClient(records: {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getReposDir.mockReturnValue('/safe/repos');
+  mocks.diagnoseGit.mockResolvedValue({
+    status: 'ready',
+    binary: '/usr/bin/git',
+    version: '2.47.1',
+  });
   mocks.gitRaw.mockImplementation(async (args: string[]) => {
     if (args.includes('status')) return '';
     if (args.includes('--abbrev-ref')) return 'main\n';
@@ -200,6 +211,41 @@ beforeEach(() => {
 });
 
 describe('managed executor git/fs commands', () => {
+  it('fails closed before clone when executor Git is unavailable', async () => {
+    const patchedRepos: Array<Record<string, unknown>> = [];
+    createClient({ repo: { repo_id: repoId }, patchedRepos });
+    mocks.diagnoseGit.mockResolvedValueOnce({
+      status: 'missing',
+      detail: 'Git executable is unavailable. Install Git and retry.',
+    });
+
+    const result = await handleGitClone(
+      {
+        command: 'git.clone',
+        sessionToken: 'tenant-token',
+        params: {
+          url: 'https://example.com/repo.git',
+          slug: 'repo',
+          repoId,
+          createDbRecord: false,
+        },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: 'GIT_CLONE_FAILED', message: expect.stringContaining('Install Git') },
+    });
+    expect(mocks.cloneRepo).not.toHaveBeenCalled();
+    expect(patchedRepos).toContainEqual(
+      expect.objectContaining({
+        clone_status: 'failed',
+        clone_error: expect.objectContaining({ category: 'git_unavailable' }),
+      })
+    );
+  });
+
   it('resolves trusted repo metadata just-in-time inside git.branch.add', async () => {
     createClient({
       repo: {

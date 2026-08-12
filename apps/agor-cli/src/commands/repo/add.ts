@@ -4,7 +4,8 @@
  * Clones the repo to ~/.agor/repos/<name> and registers it with the daemon.
  */
 
-import type { Repo } from '@agor-live/client';
+import { getRepoCloneErrorHint, type Repo } from '@agor/core/types';
+import { redactGitUrlCredentials } from '@agor/git';
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -48,13 +49,14 @@ export default class RepoAdd extends BaseCommand {
   async run(): Promise<void> {
     const { args, flags } = await this.parse(RepoAdd);
     const client = await this.connectToDaemon();
+    const displayUrl = redactGitUrlCredentials(args.url);
 
     try {
       // Validate git URL format
       if (!isValidGitUrl(args.url)) {
         await this.cleanupClient(client);
         this.error(
-          `Invalid git URL: ${args.url}\n\n` +
+          `Invalid git URL: ${displayUrl}\n\n` +
             `Please provide a valid git repository URL:\n` +
             `  SSH: ${chalk.cyan('git@github.com:apache/superset.git')}\n` +
             `  HTTPS: ${chalk.cyan('https://github.com/apache/superset.git')}\n\n` +
@@ -85,7 +87,7 @@ export default class RepoAdd extends BaseCommand {
 
       this.log('');
       this.log(chalk.bold(`Cloning ${chalk.cyan(slug)}...`));
-      this.log(chalk.dim(`URL: ${args.url}`));
+      this.log(chalk.dim(`URL: ${displayUrl}`));
       this.log('');
 
       // Daemon returns `{ status, slug, repo_id }` immediately while the
@@ -131,10 +133,7 @@ export default class RepoAdd extends BaseCommand {
         }
         if (fetched.clone_status === 'failed') {
           const err = fetched.clone_error;
-          const hint =
-            err?.category === 'auth_failed'
-              ? '\nConfigure GITHUB_TOKEN in User Settings → Env Vars for private repos.'
-              : '';
+          const hint = getRepoCloneErrorHint(err);
           await this.cleanupClient(client);
           this.log('');
           this.log(chalk.red(`✗ Clone failed: ${err?.message ?? 'unknown error'}${hint}`));

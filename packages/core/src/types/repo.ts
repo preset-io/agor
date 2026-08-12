@@ -173,6 +173,45 @@ export interface RepoCloneError {
 }
 
 /**
+ * Return a safe, actionable remediation hint for a remote-clone failure.
+ *
+ * This deliberately lives with the browser-safe repository types so every
+ * client (CLI, UI, and API consumers) uses the same category semantics
+ * without importing the Node-only Git implementation.
+ */
+export function getRepoCloneErrorHint(error?: {
+  category?: RepoCloneErrorCategory;
+  message?: string;
+}): string {
+  if (!error) return '';
+
+  if (error.category === 'git_unavailable') {
+    return ' — Git is unavailable to the Agor executor. Install Git there, ensure it is executable on PATH, and retry';
+  }
+
+  if (error.category === 'auth_failed') {
+    return ' — configure GITHUB_TOKEN in User Settings → Env Vars for private repos';
+  }
+
+  if (error.category === 'not_found') {
+    return ' — verify the repository URL and default branch, and confirm the repository is accessible';
+  }
+
+  if (error.category === 'network') {
+    const message = error.message?.toLowerCase() ?? '';
+    if (/(certificate|ssl|tls|ca cert|cafile|capath|ca bundle|issuer)/.test(message)) {
+      return (
+        ' — Git could not verify the server certificate. Install/enable the operating system CA trust store ' +
+        "or configure Git's approved CA bundle for your proxy; do not disable SSL verification"
+      );
+    }
+    return ' — check DNS, firewall, proxy, and network access for the daemon/executor, then retry';
+  }
+
+  return '';
+}
+
+/**
  * Return shape of `reposService.cloneRepository` (and the REST + MCP layers
  * that wrap it).
  *

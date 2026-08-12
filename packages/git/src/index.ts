@@ -39,16 +39,26 @@ export interface GitDiagnostic {
   detail?: string;
 }
 
+export interface GitDiagnosticOptions {
+  resolveBinary?: () => string;
+  version?: () => Promise<{
+    installed: boolean;
+    major: number;
+    minor: number;
+    patch: number;
+  }>;
+}
+
 /**
  * Exercise the same simple-git path used by repository operations.
  * This is local-only: it neither reads a remote nor resolves credentials.
  * Call it in the process that will actually run the clone; daemon-side
  * checks cannot see an executor's filtered PATH or impersonated environment.
  */
-export async function diagnoseGit(): Promise<GitDiagnostic> {
+export async function diagnoseGit(options: GitDiagnosticOptions = {}): Promise<GitDiagnostic> {
   try {
-    const binary = resolveGitBinary();
-    const result = await createGit().git.version();
+    const binary = (options.resolveBinary ?? resolveGitBinary)();
+    const result = await (options.version ?? (() => createGit().git.version()))();
     if (!result.installed) {
       return {
         status: 'missing',

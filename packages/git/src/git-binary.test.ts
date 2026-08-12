@@ -35,11 +35,25 @@ describe('resolveGitBinary', () => {
 });
 
 describe('diagnoseGit', () => {
-  it('exercises the configured simple-git runtime', async () => {
-    await expect(diagnoseGit()).resolves.toMatchObject({
+  it('reports a ready injected runtime without requiring host Git', async () => {
+    await expect(
+      diagnoseGit({
+        resolveBinary: () => '/fixture/bin/git',
+        version: async () => ({ installed: true, major: 2, minor: 47, patch: 1 }),
+      })
+    ).resolves.toMatchObject({
       status: 'ready',
-      binary: expect.any(String),
-      version: expect.stringMatching(/^\d+\.\d+\.\d+$/),
+      binary: '/fixture/bin/git',
+      version: '2.47.1',
     });
+  });
+
+  it('reports a missing injected runtime with actionable detail', async () => {
+    await expect(
+      diagnoseGit({
+        resolveBinary: () => '/fixture/bin/git',
+        version: async () => ({ installed: false, major: 0, minor: 0, patch: 0 }),
+      })
+    ).resolves.toMatchObject({ status: 'missing', detail: expect.stringContaining('Install Git') });
   });
 });
