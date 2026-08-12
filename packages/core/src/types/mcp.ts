@@ -123,9 +123,22 @@ export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
 export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
 
 /**
+ * The payload of the `mcp-member-policy` endpoint, read and written.
+ *
+ * A wrapper rather than the bare value so the setting can gain a field — who
+ * last changed it, whether a per-user override applies — without every caller
+ * changing shape.
+ */
+export interface MCPMemberPolicySetting {
+  policy: MCPMemberPolicy;
+}
+
+/**
  * MCP transport types
  */
-export type MCPTransport = 'stdio' | 'http' | 'sse';
+export const MCP_TRANSPORTS = ['stdio', 'http', 'sse'] as const;
+
+export type MCPTransport = (typeof MCP_TRANSPORTS)[number];
 
 /**
  * MCP server scope levels. Orthogonal to ownership: `scope` says how a server

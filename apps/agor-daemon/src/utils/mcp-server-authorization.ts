@@ -23,7 +23,12 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
-import { isMCPServerUsableBy } from '@agor/core/mcp';
+import {
+  isMCPServerUsableBy,
+  mayMemberManageMCPServer,
+  mayMemberUseMCPTransport,
+  mayMemberWriteMCPServers,
+} from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   MCPMemberPolicy,
@@ -132,14 +137,9 @@ function resolveCatalogInstall(
   return { entry_name: entryName, owner_user_id: userId };
 }
 
-/**
- * A `stdio` server is a command line the executor process runs on its host.
- * Letting members configure one turns "may register an MCP server" into "may
- * run any binary as the executor user", which is not the grant either
- * permissive policy value is meant to hand out. Admins keep it.
- */
+/** Admins keep `stdio`; see {@link mayMemberUseMCPTransport} for why members do not. */
 function assertRemoteTransport(transport: MCPTransport | undefined): void {
-  if (transport === 'stdio') {
+  if (!mayMemberUseMCPTransport(transport)) {
     throw new Forbidden(
       'Only admins can configure stdio MCP servers; members can configure remote (http/sse) servers'
     );
@@ -193,7 +193,7 @@ export function canConfigureMcpServers(role: unknown, policy: MCPMemberPolicy): 
 }
 
 function assertPolicyAllowsWrite(policy: MCPMemberPolicy): void {
-  if (policy === 'use_existing_only') {
+  if (!mayMemberWriteMCPServers(policy)) {
     throw new Forbidden(
       'Your organization does not allow members to configure MCP servers; ask an admin to add one'
     );
@@ -281,13 +281,11 @@ async function decidePolicyAndOwnership(
     throw new Forbidden('MCP server not found');
   }
 
-  if (existing.owner_user_id) {
-    if (existing.owner_user_id !== userId) {
-      throw new Forbidden("You cannot modify another user's private MCP server");
-    }
-  } else if (policy === 'allow_private_only') {
+  if (!mayMemberManageMCPServer(existing, policy, userId)) {
     throw new Forbidden(
-      'Your organization only allows members to manage their own private MCP servers'
+      existing.owner_user_id
+        ? "You cannot modify another user's private MCP server"
+        : 'Your organization only allows members to manage their own private MCP servers'
     );
   }
 

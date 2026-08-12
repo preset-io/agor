@@ -3,6 +3,11 @@
  */
 
 export {
+  mayMemberManageMCPServer,
+  mayMemberUseMCPTransport,
+  mayMemberWriteMCPServers,
+} from './member-policy';
+export {
   filterMCPServersForSession,
   isMCPServerUsableBy,
   isMCPServerUsableInSession,
