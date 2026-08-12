@@ -192,12 +192,28 @@ export function canConfigureMcpServers(role: unknown, policy: MCPMemberPolicy): 
   return policy !== 'use_existing_only';
 }
 
-function assertPolicyAllowsWrite(policy: MCPMemberPolicy): void {
-  if (policy === 'use_existing_only') {
-    throw new Forbidden(
-      'Your organization does not allow members to configure MCP servers; ask an admin to add one'
-    );
-  }
+/**
+ * Refuse a write the tenant's policy does not permit.
+ *
+ * The marketplace gets its own sentence. Installing a curated entry is a much
+ * narrower thing than configuring a server — the entry is chosen from a list,
+ * remote, and unauthenticated — so somebody who clicked Connect and is told
+ * their organization "does not allow members to configure MCP servers" is being
+ * answered about a capability they did not ask for, and reasonably reads it as
+ * the marketplace being broken.
+ *
+ * Neither sentence promises the grant is coming. `use_existing_only` refusing
+ * the marketplace is the deliberate current state, not a gap waiting on a fix:
+ * the policy value that would permit installing from the curated list without
+ * permitting arbitrary configuration does not exist yet.
+ */
+function assertPolicyAllowsWrite(policy: MCPMemberPolicy, isCatalogInstall: boolean): void {
+  if (policy !== 'use_existing_only') return;
+  throw new Forbidden(
+    isCatalogInstall
+      ? 'Your organization does not allow members to add MCP servers, so this entry cannot be installed; ask an admin to add it'
+      : 'Your organization does not allow members to configure MCP servers; ask an admin to add one'
+  );
 }
 
 /**
@@ -261,19 +277,32 @@ async function decidePolicyAndOwnership(
   assertAtLeastMember(user.role);
 
   const policy = await resolveMcpMemberPolicy(db, userId, params.tenant?.tenant_id);
-  assertPolicyAllowsWrite(policy);
+  // Only the marketplace connect service sets this, and it cannot arrive on a
+  // request — see `McpCatalogInstallParams`. So it is a safe way to tell the
+  // caller which of the two things they were refused.
+  const isCatalogInstall = (params as McpCatalogInstallParams).mcpCatalogInstall !== undefined;
+  assertPolicyAllowsWrite(policy, isCatalogInstall);
 
   if (request.method === 'create') {
     assertRemoteTransport(request.data?.transport);
+    // An absent field and an explicit `null` are different requests. Only the
+    // second is a decision to publish; the first is a caller who never
+    // considered the question, which is most of them — the MCP tool does not
+    // expose ownership at all. Collapsing the two with `??` made silence mean
+    // "shared", so the ordinary create produced a row every session in the
+    // tenant can reach, and left a deliberate publish unexpressible.
+    const ownerNamed = request.data !== undefined && Object.hasOwn(request.data, 'owner_user_id');
     const requestedOwner = request.data?.owner_user_id ?? undefined;
     if (requestedOwner && requestedOwner !== userId) {
       throw new Forbidden('You can only create MCP servers owned by yourself');
     }
-    // `allow_private_only` means exactly that: the server the member creates is
-    // theirs, whether or not they asked for it to be. `allow_crud` lets them
-    // opt into a shared server, which is the whole difference between the two.
+    // `allow_private_only` means exactly that: the server is theirs whether or
+    // not they asked, and asking to share it does not change the answer.
     if (policy === 'allow_private_only') return { owner_user_id: userId };
-    return requestedOwner ? { owner_user_id: userId } : {};
+    // `allow_crud` is the difference between the two policies: it permits
+    // publishing a server the whole tenant may use. It has to be said out loud.
+    const publishing = ownerNamed && request.data?.owner_user_id === null;
+    return publishing ? {} : { owner_user_id: userId };
   }
 
   const existing = request.existing;
