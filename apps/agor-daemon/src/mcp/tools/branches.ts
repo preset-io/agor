@@ -1,4 +1,3 @@
-import { isBranchRbacEnabled, loadConfig } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
 import type {
   Board,
@@ -126,10 +125,10 @@ function notesPreview(notes: string | undefined, maxLength = 200): string | null
 }
 
 async function shouldScopeTeammateDiscoveryToUser(ctx: McpContext): Promise<boolean> {
-  if (!isBranchRbacEnabled()) return false;
+  if (ctx.app.get('config').execution?.branch_rbac !== true) return false;
   if (ctx.authenticatedUser?._isServiceAccount) return false;
 
-  const config = await loadConfig();
+  const config = ctx.app.get('config');
   const allowSuperadmin = config.execution?.allow_superadmin === true;
   return !isSuperAdmin(ctx.authenticatedUser?.role, allowSuperadmin);
 }
@@ -366,7 +365,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         {
           logPrefix: '[MCP branches.cleanupCandidates.status]',
           asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
           ),
         }
       );
@@ -1084,7 +1083,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // Handle owner additions/removals via the owners service (includes unix sync hooks)
       const ownerErrors: string[] = [];
       if (hasOwnerChanges) {
-        if (!isBranchRbacEnabled()) {
+        if (ctx.app.get('config').execution?.branch_rbac !== true) {
           ownerErrors.push(
             'Owner changes ignored: branch RBAC is not enabled. Enable branch_rbac in config to manage owners.'
           );

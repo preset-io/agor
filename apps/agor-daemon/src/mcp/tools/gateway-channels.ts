@@ -1246,7 +1246,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         {
           logPrefix: `[Upload materialize ${ctx.sessionId}]`,
           asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
           ),
         }
       );
@@ -1738,7 +1738,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           {
             logPrefix: `[Gateway Slack upload ${target.channel.id}]`,
             asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-              resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+              resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
             ),
           }
         );

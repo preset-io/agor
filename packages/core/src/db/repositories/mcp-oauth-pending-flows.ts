@@ -14,6 +14,7 @@ import type {
   MCPServerID,
   UserID,
 } from '@agor/core/types';
+import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import {
@@ -231,7 +232,7 @@ export class MCPOAuthPendingFlowRepository {
       !SHA256_HEX.test(input.configFingerprint) ||
       !Number.isSafeInteger(input.grantGeneration) ||
       input.grantGeneration <= 0 ||
-      input.configFingerprintVersion !== 1 ||
+      !isMCPOAuthGrantBindingVersion(input.configFingerprintVersion) ||
       input.envelopeVersion !== 1 ||
       (input.oauthMode === 'per_user' && input.subjectUserId !== input.userId) ||
       (input.oauthMode === 'shared' && input.subjectUserId !== null)

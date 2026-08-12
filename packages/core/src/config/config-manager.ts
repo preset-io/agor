@@ -1023,6 +1023,7 @@ export function resolveEffectiveConfig(
       ...(env.AGOR_DAEMON_UNIX_USER ? { unix_user: env.AGOR_DAEMON_UNIX_USER } : {}),
       ...(env.AGOR_JWT_SECRET ? { jwtSecret: env.AGOR_JWT_SECRET } : {}),
       ...(env.AGOR_MASTER_SECRET ? { masterSecret: env.AGOR_MASTER_SECRET } : {}),
+      ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
     },
     ui: { ...defaults.ui, ...config.ui },
     execution: {

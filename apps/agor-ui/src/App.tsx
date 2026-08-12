@@ -70,6 +70,7 @@ import {
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import type { CreateRepoOptions } from './types';
+import { cloneErrorHint } from './utils/cloneErrorHint';
 import { isMobileDevice } from './utils/deviceDetection';
 import { completeForcedPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
@@ -565,14 +566,11 @@ function AppContent() {
         } else if (repo.clone_status === 'failed') {
           settled = true;
           const err = repo.clone_error;
-          // Authoring-failed clones almost always mean the user has no
-          // `GITHUB_TOKEN` configured (or it expired). Surface that hint
-          // alongside the raw git message so the recovery path is one click.
-          const hint =
-            err?.category === 'auth_failed'
-              ? ' — configure GITHUB_TOKEN in Settings → API Keys for private repos'
-              : '';
-          if (!options.silent) {
+          // Keep Git's first-line diagnostic, then add category-specific
+          // remediation. In particular, TLS failures need a CA-store hint;
+          // never suggest disabling certificate verification.
+          const hint = cloneErrorHint(err);
+          if (!options.silent || options.showErrors) {
             showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
               key: toastKey,
             });
@@ -580,21 +578,28 @@ function AppContent() {
           cleanup();
         }
       };
-      const handleCloneError = (payload: { slug?: string; url?: string; error?: string }) => {
+      const handleCloneError = (payload: {
+        slug?: string;
+        url?: string;
+        error?: string;
+        clone_error?: Repo['clone_error'];
+      }) => {
         if (settled) return;
         if (payload.slug !== data.slug && payload.url !== data.url) return;
         settled = true;
-        if (!options.silent) {
-          showError(`Failed to clone ${data.slug}: ${payload.error ?? 'unknown error'}`, {
-            key: toastKey,
-          });
+        const hint = cloneErrorHint(payload.clone_error);
+        if (!options.silent || options.showErrors) {
+          showError(
+            `Failed to clone ${data.slug}: ${payload.clone_error?.message ?? payload.error ?? 'unknown error'}${hint}`,
+            { key: toastKey }
+          );
         }
         cleanup();
       };
       const timeoutHandle = setTimeout(() => {
         if (settled) return;
         settled = true;
-        if (!options.silent) {
+        if (!options.silent || options.showErrors) {
           showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
             key: toastKey,
           });
@@ -627,7 +632,7 @@ function AppContent() {
       } catch (error) {
         if (!settled) {
           settled = true;
-          if (!options.silent) {
+          if (!options.silent || options.showErrors) {
             showError(
               `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
               { key: toastKey }
@@ -655,11 +660,11 @@ function AppContent() {
     () => (frameworkRepo ? [frameworkRepo] : EMPTY_REPOS),
     [frameworkRepo]
   );
-  // Suppress the shared clone toasts for the onboarding auto-clone — a fresh user
-  // mid-wizard shouldn't see "Cloning…"/"Cloned"/token-hint toasts from behind
-  // the modal. handleCreateRepo's own `silent` branches already gate every toast.
+  // Suppress loading/success toasts for the onboarding auto-clone — a fresh user
+  // mid-wizard shouldn't see "Cloning…"/"Cloned" toasts from behind the modal.
+  // Keep failures visible: a CA/Git/auth error needs to be actionable now.
   const onboardingCreateRepo = useCallback(
-    (data: CreateRepoRequest) => handleCreateRepo(data, { silent: true }),
+    (data: CreateRepoRequest) => handleCreateRepo(data, { silent: true, showErrors: true }),
     [handleCreateRepo]
   );
   useEnsureFrameworkRepo(frameworkRepoList, onboardingCreateRepo, {

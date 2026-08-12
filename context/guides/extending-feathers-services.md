@@ -117,6 +117,7 @@ app.service('boards').hooks({
   before: {
     all: [validateQuery, requireAuth],
     create: [requireMinimumRole('member', 'create boards')],
+    update: [requireMinimumRole('member', 'update boards')],
     patch: [requireMinimumRole('member', 'update boards')],
     remove: [requireMinimumRole('admin', 'delete boards')],
     // Hooks apply to custom methods too!
@@ -145,6 +146,20 @@ app.service('boards').hooks({
   },
 });
 ```
+
+> **Gate `update` wherever you gate `patch`.** On a `DrizzleService` they are
+> the same operation, not two tiers of one. `DrizzleService.update`
+> (`apps/agor-daemon/src/adapters/drizzle.ts:376-385`) and the single-id branch
+> of `patch` (`:417-425`) are the same three lines — `get` the row, then
+> `repository.update(id, stripTenantMutation(data))` — and the repositories take
+> a `Partial<T>` they merge over the current row. So `update` is _not_
+> whole-row replacement, and omitted columns are _not_ nulled: a `PUT` writes
+> exactly the columns a `PATCH` with the same body would.
+>
+> Listing `'update'` in `methods` (step 2 above) routes `PUT /<service>/:id` to
+> it. A hook block that names `create`/`patch`/`remove` but not `update` leaves
+> that route guarded by the `all` chain alone — usually just `requireAuth`.
+> Either gate the verb, or leave it out of `methods` so it is never routed.
 
 ### 4. Client usage
 

@@ -99,6 +99,23 @@ function tenantInsertValues(params?: Params): { tenant_id?: string } {
   return tenantId && usersTableHasTenantColumn() ? { tenant_id: tenantId } : {};
 }
 
+/**
+ * Public User transport surface. UsersService is not a DrizzleService and
+ * defines no `update` — listing the verb here would make Feathers' hook wiring
+ * throw "Can not apply hooks. 'update' is not a function" at startup.
+ */
+export const USERS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+  'getGitEnvironment',
+  'getAvatarSettings',
+  'updateAvatarSettings',
+  'syncAvatars',
+] as const;
+
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
 export const AUTH_INTERNAL_USER_LOOKUP_PARAM = Symbol('agor.users.auth-internal-lookup');
 

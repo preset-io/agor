@@ -28,12 +28,73 @@ vi.mock('../utils/tenant-db-scope.js', () => ({
 
 import { TasksService } from './tasks';
 
+type TasksServicePrivateMethods = {
+  deferTenantOrchestration(
+    label: string,
+    params: Parameters<TasksService['reportTerminationComplete']>[1],
+    work: () => Promise<void>
+  ): void;
+};
+
 describe('TasksService executor termination report', () => {
   beforeEach(() => {
     claimExecutorTermination.mockReset();
     requestExecutorTermination.mockReset().mockResolvedValue({});
     deferred.work = undefined;
     deferred.schedule.mockReset();
+  });
+
+  it('redacts caught values from shared deferred orchestration logs', () => {
+    const markerSecret = 'TASK-ORCHESTRATION-MARKER-SECRET';
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const service = Object.create(TasksService.prototype) as TasksService;
+
+    (service as unknown as TasksServicePrivateMethods).deferTenantOrchestration(
+      'materializeTerminalConsequences',
+      { tenant: { tenant_id: 'tenant-a' } } as never,
+      async () => undefined
+    );
+    const onError = deferred.schedule.mock.calls[0]?.[1] as ((error: unknown) => void) | undefined;
+    onError?.(new Error(markerSecret));
+
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('operation="materializeTerminalConsequences"')
+    );
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(markerSecret);
+    warning.mockRestore();
+  });
+
+  it('redacts caught values from deferred termination coordination logs', async () => {
+    const markerSecret = 'TASK-TERMINATION-MARKER-SECRET';
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+        executor_quiesced_at: '2026-07-23T12:00:00.125Z',
+      },
+    } as Task;
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', {
+      recordExecutorQuiescence: vi.fn().mockResolvedValue(task),
+    });
+    Reflect.set(service, 'app', { service: () => ({ emit: vi.fn() }) });
+
+    await service.reportTerminationComplete(
+      { task_id: task.task_id, requested_at: task.termination_request!.requested_at },
+      { tenant: { tenant_id: 'tenant-a' } } as never
+    );
+    const onError = deferred.schedule.mock.calls[0]?.[1] as ((error: unknown) => void) | undefined;
+    onError?.(new Error(markerSecret));
+
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringContaining('operation="request" outcome="failed"')
+    );
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(markerSecret);
+    errorLog.mockRestore();
   });
 
   it('returns STOPPING and defers normal local completion to the release coordinator', async () => {
@@ -79,6 +140,47 @@ describe('TasksService executor termination report', () => {
         params: expect.objectContaining({ provider: undefined }),
       })
     );
+  });
+
+  it('redacts caught session projection failures during executor settlement', async () => {
+    const markerSecret = 'TASK-SESSION-PROJECTION-MARKER-SECRET';
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'runtime_settlement',
+        requested_at: '2026-07-23T12:00:00.000Z',
+        executor_quiesced_at: '2026-07-23T12:00:00.000Z',
+        executor_settlement: { status: TaskStatus.COMPLETED },
+      },
+    } as Task;
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', {
+      settleExecutorOutcome: vi.fn().mockResolvedValue({ outcome: 'stopping', task }),
+    });
+    Reflect.set(service, 'app', {
+      service: (name: string) =>
+        name === 'tasks'
+          ? { emit: vi.fn() }
+          : name === 'sessions'
+            ? { patch: vi.fn().mockRejectedValue(new Error(markerSecret)) }
+            : {},
+    });
+
+    await service.reportExecutorSettlement(
+      { task_id: task.task_id, kind: 'quiesced', result: 'success' },
+      { tenant: { tenant_id: 'tenant-a' } } as never
+    );
+
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'operation="project_stopping_session" outcome="failed" session_id="018f00000000700080000000" error_code="operation_failed"'
+      )
+    );
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(markerSecret);
+    warning.mockRestore();
   });
 
   it('persists and publishes quiescence before coordinating after the service transaction', async () => {

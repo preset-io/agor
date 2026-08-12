@@ -30,6 +30,7 @@ import { createFeathersBackedRepositories } from '../../db/feathers-repositories
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { createExecutionPermissionService } from '../../permissions/permission-service.js';
+import { resolveContextUserId } from '../../sdk-handlers/base/context-user.js';
 import { enrichContentBlocks } from '../../sdk-handlers/base/diff-enrichment.js';
 import { EMPTY_MCP_TOOL_PERMISSION_INDEX } from '../../sdk-handlers/base/mcp-tool-permissions.js';
 import { createCanUseToolCallback } from '../../sdk-handlers/base/permission-hooks.js';
@@ -92,6 +93,11 @@ export async function executeOpenCodeTask(params: {
     const { dataHome } = parseOpenCodeExecutorContext(params.agenticToolContext);
 
     const repos = createFeathersBackedRepositories(client);
+    const contextUserId = await resolveContextUserId({
+      session,
+      taskId,
+      tasksService: repos.tasksService,
+    });
     const branch = session.branch_id ? await repos.branches.findById(session.branch_id) : null;
     if (!branch?.path) throw new Error('OpenCode requires an Agor branch working directory');
 
@@ -106,6 +112,7 @@ export async function executeOpenCodeTask(params: {
     const assistantMessageId = generateId() as MessageID;
     const tool = new OpenCodeTool({
       resolveMcpServers: async (targetSessionId) => {
+        const targetSession = await repos.sessionsService.get(targetSessionId);
         const reporter = collectWithheldMcpServers();
         const servers = await getMcpServersForSession(
           targetSessionId,
@@ -113,7 +120,8 @@ export async function executeOpenCodeTask(params: {
             sessionMCPRepo: repos.sessionMCP,
             mcpServerRepo: repos.mcpServers,
             mcpOAuthAuthHeadersRepo: repos.mcpOAuthAuthHeaders,
-            forUserId: session.created_by,
+            forUserId: contextUserId,
+            sessionOwnerId: targetSession.created_by,
             onServerWithheld: reporter.onServerWithheld,
           },
           // OpenCode's invocation config carries no per-tool filter, so a server

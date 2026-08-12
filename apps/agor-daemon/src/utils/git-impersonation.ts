@@ -19,8 +19,10 @@
  * required.
  */
 
+import { userInfo } from 'node:os';
+import { type AgorConfig, resolveExecutionSecurityMode } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import type { Branch, UserID } from '@agor/core/types';
+import type { Branch, DeepReadonly, UserID } from '@agor/core/types';
 
 /**
  * Resolve the configured daemon user for `sudo -u` group-refresh wrapping,
@@ -32,8 +34,8 @@ import type { Branch, UserID } from '@agor/core/types';
  * single source of truth prevents the drift that caused #1143 — the same
  * stale gate copy-pasted across files.
  *
- * Dynamic config import is intentional: `loadConfigSync` reads from disk
- * and we don't want to pay that cost at module-load time.
+ * The effective daemon configuration is supplied explicitly so this helper
+ * cannot drift from deployment environment overrides.
  *
  * Note: existence-validation of the returned daemon user (e.g. via
  * `validateResolvedUnixUser`) is the responsibility of strict/insulated
@@ -41,23 +43,22 @@ import type { Branch, UserID } from '@agor/core/types';
  * answers "do we need a wrap, and if so, as whom?" — it does not vouch
  * for the resolved user.
  */
-export async function resolveDaemonUserForGroupRefresh(): Promise<string | undefined> {
-  const { getDaemonUser, isUnixGroupRefreshNeeded } = await import('@agor/core/config');
-
-  // No supplemental groups → no need for sudo. Avoids requiring sudoers
-  // for users on the default open-access setup. (#1140, #1143)
-  if (!isUnixGroupRefreshNeeded()) {
+export function resolveDaemonUserForGroupRefresh(
+  config: DeepReadonly<AgorConfig>
+): string | undefined {
+  if (!resolveExecutionSecurityMode(config).unixGroupRefreshNeeded) return undefined;
+  try {
+    return config.daemon?.unix_user ?? userInfo().username;
+  } catch {
     return undefined;
   }
-
-  return getDaemonUser();
 }
 
 /**
  * Resolve Unix user for git operations.
  *
  * Returns the daemon user when group refresh via `sudo -u` is needed
- * (non-simple unix_user_mode — see `isUnixGroupRefreshNeeded`). Returns
+ * (non-simple unix_user_mode). Returns
  * `undefined` in simple mode so callers spawn directly without sudo wrap
  * (#1140), regardless of app-level branch RBAC.
  *
@@ -72,9 +73,10 @@ export async function resolveDaemonUserForGroupRefresh(): Promise<string | undef
  */
 export async function resolveGitImpersonationForUser(
   _db: TenantScopeAwareDatabase,
-  _userId: UserID | undefined
+  _userId: UserID | undefined,
+  config: DeepReadonly<AgorConfig>
 ): Promise<string | undefined> {
-  return resolveDaemonUserForGroupRefresh();
+  return resolveDaemonUserForGroupRefresh(config);
 }
 
 /**
@@ -84,7 +86,8 @@ export async function resolveGitImpersonationForUser(
  */
 export async function resolveGitImpersonationForBranch(
   db: TenantScopeAwareDatabase,
-  branch: Branch
+  branch: Branch,
+  config: DeepReadonly<AgorConfig>
 ): Promise<string | undefined> {
-  return resolveGitImpersonationForUser(db, branch.created_by);
+  return resolveGitImpersonationForUser(db, branch.created_by, config);
 }

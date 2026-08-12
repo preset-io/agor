@@ -2,6 +2,7 @@ import type { HookContext } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   executorRuntimeScopeGuard,
+  isTaskScopedExecutorSessionRead,
   requireExecutorRuntimeToken,
   scopeExecutorRuntimeAuth,
 } from './executor-runtime-scope';
@@ -235,8 +236,65 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
   });
 
+  it('allows get only for the repo resolved from the token-scoped branch', async () => {
+    const context = ctx({
+      path: 'repos',
+      method: 'get',
+      id: 'repo-1',
+      app: {
+        service: (path: string) => {
+          expect(path).toBe('branches');
+          return {
+            get: async (branchId: string, params: HookContext['params']) => {
+              expect(branchId).toBe('branch-1');
+              expect(params.provider).toBeUndefined();
+              return { branch_id: branchId, repo_id: 'repo-1' };
+            },
+          };
+        },
+      } as HookContext['app'],
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it('preserves tenant context and rejects a repo outside the token branch', async () => {
+    const context = ctx({
+      path: 'repos',
+      method: 'get',
+      id: 'tenant-b-repo',
+      params: {
+        authentication: { payload },
+        query: {},
+        provider: 'socketio',
+        tenant: { tenant_id: 'tenant-a' },
+      },
+      app: {
+        service: () => ({
+          get: async (_branchId: string, params: HookContext['params']) => {
+            expect(params.tenant?.tenant_id).toBe('tenant-a');
+            return { branch_id: 'branch-1', repo_id: 'tenant-a-repo' };
+          },
+        }),
+      } as HookContext['app'],
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/repo scope/);
+  });
+
+  it.each(['find', 'create', 'patch', 'remove'])(
+    'rejects executor tokens for repos.%s',
+    async (method) => {
+      const context = ctx({ path: 'repos', method, id: method === 'find' ? undefined : 'repo-1' });
+
+      await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+        /not valid for this endpoint/
+      );
+    }
+  );
+
   it('rejects executor tokens on unrecognized endpoints', async () => {
-    const context = ctx({ path: 'repos', method: 'find' });
+    const context = ctx({ path: 'unknown', method: 'find' });
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
       /not valid for this endpoint/
@@ -396,23 +454,46 @@ describe('executorRuntimeScopeGuard', () => {
     });
 
     await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+    expect(isTaskScopedExecutorSessionRead(context.params, 'session-1')).toBe(true);
+    expect(isTaskScopedExecutorSessionRead(context.params, 'session-2')).toBe(false);
   });
 
-  it('rejects session MCP server writes under executor token auth', async () => {
-    const context = ctx({
-      path: 'sessions/:id/mcp-servers',
-      method: 'create',
-      params: {
-        authentication: { payload },
-        query: {},
-        route: { id: 'session-1' },
-        provider: 'socketio',
-      },
-    });
+  it.each(['create', 'update', 'patch', 'remove'])(
+    'rejects session MCP server %s under executor token auth',
+    async (method) => {
+      const context = ctx({
+        path: 'sessions/:id/mcp-servers',
+        method,
+        id: method === 'create' ? undefined : 'server-1',
+        params: {
+          authentication: { payload },
+          query: {},
+          route: { id: 'session-1' },
+          provider: 'socketio',
+        },
+      });
 
-    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
-      /not valid for this endpoint/
-    );
+      await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+        /not valid for this endpoint/
+      );
+    }
+  );
+
+  it('does not recognize a session-only token without a task claim as task-scoped MCP read', () => {
+    expect(
+      isTaskScopedExecutorSessionRead(
+        {
+          authentication: {
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              session_id: 'session-1',
+            },
+          },
+        } as never,
+        'session-1'
+      )
+    ).toBe(false);
   });
 
   it('rejects session MCP server reads for another session', async () => {

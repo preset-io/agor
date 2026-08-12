@@ -1392,7 +1392,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const settlementAt = await this.mutationNow(txDb, fullId, input.now);
       const terminal = withTerminalTiming(settledTask, { status: finalStatus }, settlementAt);
       const completedAt = new Date(terminal.completed_at!);
-      const failure = input.sdkFailure ?? current.sdk_failure ?? executorSettlement?.sdk_failure;
+      const failure =
+        input.sdkFailure ??
+        (current.termination_request.cause === 'runtime_settlement'
+          ? (executorSettlement?.sdk_failure ?? current.sdk_failure)
+          : (current.sdk_failure ?? executorSettlement?.sdk_failure));
       const data = {
         ...this.taskToInsert(settledTask).data,
         duration_ms: terminal.duration_ms,

@@ -74,6 +74,8 @@ import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { startup } from './startup.js';
+import { configureResolvedConfigSlice } from './utils/build-resolved-config-slice.js';
+import { deepFreezeClone } from './utils/deep-freeze.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
@@ -213,8 +215,12 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   await configureAnalyticsLogger(config);
   const envTelemetryConfig = ensureOpenSourceTelemetryEnvEnabledConfig(config);
   if (envTelemetryConfig.changed) config = envTelemetryConfig.config;
-  configureOpenSourceTelemetryLogger(config);
-  if (config.telemetry?.enabled === undefined) {
+  // Detach the snapshot before freezing so callers that supplied
+  // DaemonStartOptions.config retain ownership of their object graph.
+  const effectiveConfig = deepFreezeClone(config);
+  configureResolvedConfigSlice(effectiveConfig);
+  configureOpenSourceTelemetryLogger(effectiveConfig);
+  if (effectiveConfig.telemetry?.enabled === undefined) {
     console.warn(
       'ℹ  Community telemetry is not configured; no telemetry will be sent. ' +
         'Set AGOR_TELEMETRY=1/0 or edit telemetry.enabled in operator-managed config.yaml.'
@@ -222,7 +228,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   }
 
   // Surface a clear migration note for accepted-but-ignored upgrade keys.
-  warnDeprecatedConfig(config);
+  warnDeprecatedConfig(effectiveConfig);
 
   // --------------------------------------------------------------------------
   // Auth configuration
@@ -269,19 +275,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Ports, daemon URL, credentials
   // --------------------------------------------------------------------------
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
-  const DAEMON_PORT = envPort ?? config.daemon?.port ?? 3030;
-  const DAEMON_HOST = process.env.DAEMON_HOST ?? config.daemon?.host ?? 'localhost';
+  const DAEMON_PORT = envPort ?? effectiveConfig.daemon?.port ?? 3030;
+  const DAEMON_HOST = process.env.DAEMON_HOST ?? effectiveConfig.daemon?.host ?? 'localhost';
 
   const envUiPort = process.env.UI_PORT ? Number.parseInt(process.env.UI_PORT, 10) : undefined;
-  const UI_PORT = envUiPort || config.ui?.port || 5173;
+  const UI_PORT = envUiPort || effectiveConfig.ui?.port || 5173;
 
-  // Handle INSTANCE_LABEL env var override (for Docker deployments)
-  if (process.env.INSTANCE_LABEL) {
-    config.daemon = config.daemon || {};
-    config.daemon.instanceLabel = process.env.INSTANCE_LABEL;
-  }
-
-  const daemonUrl = config.daemon?.public_url || `http://localhost:${DAEMON_PORT}`;
+  const daemonUrl = effectiveConfig.daemon?.public_url || `http://localhost:${DAEMON_PORT}`;
   configureDaemonUrl(daemonUrl);
 
   // Wire the configured executor command template + impersonation user so the
@@ -289,7 +289,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // their own config-threading code. Local-subprocess remains the default
   // when execution.executor_command_template is unset (no behavior change
   // for existing deployments).
-  configureExecutor(config.execution, {
+  configureExecutor(effectiveConfig.execution, {
     requireTenantContext: multiTenancy.mode === 'required_from_auth',
   });
 
@@ -320,7 +320,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Infinity (truthy), and Express interprets `trust proxy = Infinity` as
   // "trust everything" — which is the exact spoofing posture we are
   // defending against. Reject non-finite values (Infinity, NaN) to 0.
-  const rawHops = Number(config.daemon?.trust_proxy_hops ?? 0);
+  const rawHops = Number(effectiveConfig.daemon?.trust_proxy_hops ?? 0);
   const trustProxyHops = Number.isFinite(rawHops) ? Math.max(0, Math.floor(rawHops)) : 0;
   app.set('trust proxy', trustProxyHops);
   if (trustProxyHops > 0) {
@@ -346,13 +346,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   //   - CORS mode/origins (plus legacy daemon.cors_* backcompat)
   //   - CORS_ORIGIN env var precedence
   //   - credentials:true + wildcard/reflect rejection at load time
-  const resolvedSecurity: ResolvedSecurity = resolveSecurity(config, {
+  const resolvedSecurity: ResolvedSecurity = resolveSecurity(effectiveConfig, {
     daemonUrl,
     corsOriginEnv: process.env.CORS_ORIGIN,
-    legacyCorsOrigins: config.daemon?.cors_origins,
+    legacyCorsOrigins: effectiveConfig.daemon?.cors_origins,
     legacyAllowSandpack:
-      config.daemon?.cors_allow_sandpack !== undefined
-        ? config.daemon.cors_allow_sandpack
+      effectiveConfig.daemon?.cors_allow_sandpack !== undefined
+        ? effectiveConfig.daemon.cors_allow_sandpack
         : undefined,
   });
 
@@ -374,7 +374,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // and let the cors helper drop credentials so the daemon stays usable.
   // `execution.deployment_mode` is intentionally read defensively — the key
   // may not yet be defined in older configs.
-  const deploymentMode = (config.execution as { deployment_mode?: string } | undefined)
+  const deploymentMode = (effectiveConfig.execution as { deployment_mode?: string } | undefined)
     ?.deployment_mode;
   if (isWildcard) {
     const banner =
@@ -572,7 +572,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const jwtResolution = await resolvePersistedSecret({
     name: 'JWT secret',
     envVar: 'AGOR_JWT_SECRET',
-    existing: config.daemon?.jwtSecret,
+    existing: effectiveConfig.daemon?.jwtSecret,
     configKey: 'daemon.jwtSecret',
   });
   const jwtSecret = jwtResolution.value;
@@ -592,7 +592,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // process.env in their constructor. Resolving it here (rather than later in
   // startup()) is what lets deployments that keep the secret in config.yaml
   // (daemon.masterSecret), not an env var, boot on Postgres.
-  const masterSecretSource = await resolveMasterSecretIntoEnv(config);
+  const masterSecretSource = await resolveMasterSecretIntoEnv(effectiveConfig);
   console.log(
     masterSecretSource === 'env'
       ? '🔐 API key encryption enabled (AGOR_MASTER_SECRET set)'
@@ -611,7 +611,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     // `allow_web_terminal: false` kill-switch is enforced on the WebSocket
     // transport too. Without this the terminal:* relay events would still
     // accept traffic when the HTTP modal is disabled.
-    webTerminalEnabled: config.execution?.allow_web_terminal !== false,
+    webTerminalEnabled: effectiveConfig.execution?.allow_web_terminal !== false,
     // Build info for the version-sync banner. Emitted as the `server-info`
     // welcome event on every connect (and reconnect), so UI tabs can detect
     // FE/BE drift after a deploy without waiting for the next /health poll.
@@ -629,29 +629,29 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const { db } = await initializeDatabase(DB_PATH, {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     requireTenantScope: multiTenancy.mode === 'required_from_auth',
-    skipFirstRunAdminBootstrap: config.external_launch?.enabled === true,
+    skipFirstRunAdminBootstrap: effectiveConfig.external_launch?.enabled === true,
     // The URL may come from DATABASE_URL, but operators still need to size the
     // per-replica pool from config.yaml. Keep this deliberately limited to max:
     // the public idleTimeout setting is documented in milliseconds while the
     // postgres.js client boundary uses seconds, and `min` is not implemented.
-    pool: config.database?.postgresql?.pool?.max
-      ? { max: config.database.postgresql.pool.max }
+    pool: effectiveConfig.database?.postgresql?.pool?.max
+      ? { max: effectiveConfig.database.postgresql.pool.max }
       : undefined,
   });
-  configureUploadStagingStoreFromConfig(config, undefined, db);
+  configureUploadStagingStoreFromConfig(effectiveConfig, undefined, db);
 
   // --------------------------------------------------------------------------
   // RBAC flags
   // --------------------------------------------------------------------------
-  const branchRbacEnabled = config.execution?.branch_rbac === true;
-  const allowSuperadmin = config.execution?.allow_superadmin === true;
+  const branchRbacEnabled = effectiveConfig.execution?.branch_rbac === true;
+  const allowSuperadmin = effectiveConfig.execution?.allow_superadmin === true;
   const superadminOpts = { allowSuperadmin };
 
   // Stash the shared Drizzle handle on the Feathers app so lifecycle
   // utilities that are not constructed with a database argument can resolve
   // it via `getDb(app)`. Services using constructor injection are unaffected.
   app.set('database', db);
-  app.set('config', config);
+  app.set('config', effectiveConfig);
 
   if (openSourceTelemetryLogger.isEnabled()) {
     const startupTelemetryProperties = {
@@ -665,7 +665,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       os_family: platform(),
       node_major: Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10),
       branch_rbac: branchRbacEnabled,
-      unix_user_mode: config.execution?.unix_user_mode ?? 'simple',
+      unix_user_mode: effectiveConfig.execution?.unix_user_mode ?? 'simple',
     };
 
     openSourceTelemetryLogger.track({
@@ -673,7 +673,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       properties: startupTelemetryProperties,
     });
 
-    const daemonActive = shouldEmitOpenSourceTelemetryDaemonActive(config);
+    const daemonActive = shouldEmitOpenSourceTelemetryDaemonActive(effectiveConfig);
     if (daemonActive.shouldEmit) {
       openSourceTelemetryLogger.track({
         event: 'daemon.active',
@@ -685,18 +685,20 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     }
 
     if (
-      config.telemetry?.last_reported_version &&
-      config.telemetry.last_reported_version !== AGOR_VERSION
+      effectiveConfig.telemetry?.last_reported_version &&
+      effectiveConfig.telemetry.last_reported_version !== AGOR_VERSION
     ) {
       openSourceTelemetryLogger.track({
         event: 'daemon.upgraded',
         properties: {
-          from_version: config.telemetry.last_reported_version,
+          from_version: effectiveConfig.telemetry.last_reported_version,
           to_version: AGOR_VERSION,
         },
       });
     }
-    startOpenSourceTelemetryUsageSummaryInterval(db, { tenantId: multiTenancy.static_tenant_id });
+    startOpenSourceTelemetryUsageSummaryInterval(db, effectiveConfig, {
+      tenantId: multiTenancy.static_tenant_id,
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -705,7 +707,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const services = await registerServices({
     db,
     app,
-    config,
+    config: effectiveConfig,
     jwtSecret,
     daemonUrl,
     bundledUiAvailable,
@@ -723,7 +725,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   registerHooks({
     db,
     app,
-    config,
+    config: effectiveConfig,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
@@ -752,7 +754,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   await registerRoutes({
     db,
     app,
-    config,
+    config: effectiveConfig,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
@@ -785,7 +787,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   await startup({
     app,
     db,
-    config,
+    config: effectiveConfig,
     DAEMON_PORT,
     DAEMON_HOST,
     safeService,

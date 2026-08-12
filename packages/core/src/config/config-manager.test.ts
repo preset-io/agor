@@ -105,8 +105,14 @@ describe('resolveEffectiveConfig', () => {
       DAEMON_HOST: 'env-host',
       AGOR_RBAC_ENABLED: 'true',
       AGOR_UNIX_USER_MODE: 'delegated',
+      INSTANCE_LABEL: 'replica-a',
     });
-    expect(resolved.daemon).toMatchObject({ host: 'env-host', port: 4321, mcpEnabled: true });
+    expect(resolved.daemon).toMatchObject({
+      host: 'env-host',
+      port: 4321,
+      mcpEnabled: true,
+      instanceLabel: 'replica-a',
+    });
     expect(resolved.execution).toMatchObject({ branch_rbac: true, unix_user_mode: 'delegated' });
     expect(resolved.multi_tenancy?.mode).toBe('static');
     expect(input).toEqual({ daemon: { host: 'yaml-host', port: 1234 } });

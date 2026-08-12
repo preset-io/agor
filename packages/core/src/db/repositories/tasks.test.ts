@@ -1592,6 +1592,47 @@ describe('TaskRepository.settleExecutorOutcome', () => {
     }
   );
 
+  dbTest(
+    'prefers a native timeout settlement over earlier observe-only evidence after verified release',
+    async ({ db }) => {
+      const { taskRepo, task } = await createExecutorDispatch(db);
+      await taskRepo.connectExecutor(task.task_id);
+      await taskRepo.recordSdkHealthObservation(task.task_id, {
+        reason: 'no_first_progress',
+        detected_at: '2026-01-01T00:03:00.000Z',
+        tool: 'codex',
+        watchdog_action: 'would_fire',
+        termination: 'not_requested',
+      });
+
+      await taskRepo.settleExecutorOutcome({
+        taskId: task.task_id,
+        status: TaskStatus.FAILED,
+        sdkFailure: {
+          reason: 'agentic_tool_timeout',
+          detected_at: '2026-01-01T00:05:00.000Z',
+          tool: 'codex',
+          termination: 'verified',
+        },
+      });
+      const released = await settleWithTestCoordination(taskRepo, {
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+      });
+
+      expect(released).toMatchObject({
+        outcome: 'transitioned',
+        task: {
+          status: TaskStatus.FAILED,
+          sdk_failure: {
+            reason: 'agentic_tool_timeout',
+            termination: 'verified',
+          },
+        },
+      });
+    }
+  );
+
   dbTest('makes duplicate executor settlement idempotent', async ({ db }) => {
     const { taskRepo, task } = await createExecutorDispatch(db);
     await taskRepo.connectExecutor(task.task_id);

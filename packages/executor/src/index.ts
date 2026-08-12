@@ -422,8 +422,10 @@ export class AgorExecutor {
             return 'superseded';
           }
           return 'retry';
-        } catch (error) {
-          console.error('[executor] Failed to report SDK health:', error);
+        } catch {
+          console.error(
+            '[executor.sdk_health] operation=report outcome=failed error_code=operation_failed'
+          );
           return 'retry';
         }
       }

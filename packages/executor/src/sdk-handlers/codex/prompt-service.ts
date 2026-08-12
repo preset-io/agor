@@ -658,9 +658,13 @@ export class CodexPromptService {
   private async buildMcpServersConfig(
     sessionId: SessionID,
     mcpToken: string | undefined,
-    forUserId: UserID | undefined,
-    requireMcpServers = false
+    context: {
+      forUserId?: UserID;
+      sessionOwnerId: UserID;
+      requireMcpServers?: boolean;
+    }
   ): Promise<{ servers: CodexConfigObject; total: number }> {
+    const { forUserId, sessionOwnerId, requireMcpServers = false } = context;
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
     codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
@@ -671,6 +675,7 @@ export class CodexPromptService {
         mcpServerRepo: this.mcpServerRepo,
         mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
         forUserId,
+        sessionOwnerId,
       },
       { toolFiltering: 'exclude' }
     );
@@ -1102,8 +1107,11 @@ export class CodexPromptService {
     const { servers: mcpServersConfig, total: mcpServerCount } = await this.buildMcpServersConfig(
       sessionId,
       mcpToken,
-      forUserId,
-      requireMcpServers
+      {
+        forUserId,
+        sessionOwnerId: session.created_by as UserID,
+        requireMcpServers,
+      }
     );
 
     const codexConfigPayload: CodexConfigObject = {

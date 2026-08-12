@@ -68,14 +68,15 @@ describe('Task worker startup ordering', () => {
   it.each(['returned failure', 'thrown failure'] as const)(
     'keeps admission fenced and gives %s retry to the recurring reconciler',
     async (failure) => {
+      const markerSecret = 'STARTUP-SCAN-MARKER-SECRET';
       const checkOnce = vi.fn(async () => {
-        if (failure === 'thrown failure') throw new Error('scan failed');
+        if (failure === 'thrown failure') throw new Error(markerSecret);
         return { failures: 1 };
       });
       const start = vi.fn();
       const startQueueWorker = vi.fn();
       const releaseTaskAdmission = vi.fn();
-      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
       await startTaskWorkersAfterRecovery({
         recover: vi.fn(async () => undefined),
@@ -96,6 +97,12 @@ describe('Task worker startup ordering', () => {
       retry.onSuccessfulScan();
       expect(startQueueWorker).toHaveBeenCalledOnce();
       expect(releaseTaskAdmission).toHaveBeenCalledOnce();
+      expect(JSON.stringify(warning.mock.calls)).not.toContain(markerSecret);
+      if (failure === 'thrown failure') {
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining('error_code="operation_failed"')
+        );
+      }
     }
   );
 
@@ -569,14 +576,15 @@ describe('startup tenant database scope', () => {
   });
 
   it('continues restart repair when one containment attempt fails', async () => {
+    const markerSecret = 'STARTUP-CONTAINMENT-MARKER-SECRET';
     const task = makeTask({});
     const { ctx } = makeStartupContextWithGuardedDb({ orphanedTasks: [task] });
     vi.spyOn(terminationCoordinator, 'requestExecutorTermination').mockRejectedValue(
-      new Error('transient containment failure')
+      new Error(markerSecret)
     );
     vi.spyOn(SessionRepository.prototype, 'countMessages').mockResolvedValue(0);
     vi.spyOn(systemMessages, 'appendSystemMessage').mockResolvedValue({ index: 0 } as never);
-    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await resumeRuntimeRecovery(ctx, {
       wasGraceful: false,
@@ -588,6 +596,9 @@ describe('startup tenant database scope', () => {
         },
       ],
     } as unknown as Awaited<ReturnType<typeof cleanupOrphanStatuses>>);
+
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('operation="resume_containment"'));
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(markerSecret);
   });
 });
 

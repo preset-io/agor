@@ -7,6 +7,7 @@
  * - Application instance
  */
 
+import type { AgorConfig } from '@agor/core/config';
 import type { DistributedWorkIdentity } from '@agor/core/coordination';
 import type {
   TaskDispatchClaimResult,
@@ -29,6 +30,7 @@ import type {
   CreateHookContext as CoreCreateHookContext,
   HookContext as CoreHookContext,
   CreateSessionInput,
+  DeepReadonly,
   Params as FeathersParams,
   Message,
   Repo,
@@ -55,6 +57,8 @@ export type HookContext<T = unknown> = CoreHookContext<T>;
  * Application type for the daemon
  */
 export type Application = ExpressApplication & {
+  get(name: 'config'): DeepReadonly<AgorConfig>;
+  set(name: 'config', value: DeepReadonly<AgorConfig>): ExpressApplication;
   get(name: 'distributedWorkIdentity'): DistributedWorkIdentity | undefined;
   set(name: 'distributedWorkIdentity', value: DistributedWorkIdentity): ExpressApplication;
 };

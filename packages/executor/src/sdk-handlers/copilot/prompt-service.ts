@@ -36,6 +36,7 @@ import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import { RuntimeCleanupError } from '../../terminal-task.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
+import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import {
   collectWithheldMcpServers,
@@ -193,6 +194,16 @@ export class CopilotPromptService {
     const copilotMcpServers: Record<string, unknown> = {};
 
     // Fetch MCP servers for this session
+    const session = await this.sessionsRepo.findById(sessionId);
+    if (!session) {
+      console.warn(`⚠️  [Copilot MCP] Session ${sessionId} not found; skipping MCP servers`);
+      return copilotMcpServers;
+    }
+    const contextUserId = await resolveContextUserId({
+      session,
+      taskId,
+      tasksService: this.tasksService,
+    });
     const reporter = collectWithheldMcpServers();
     const serversWithSource = await getMcpServersForSession(
       sessionId,
@@ -200,6 +211,8 @@ export class CopilotPromptService {
         sessionMCPRepo: this.sessionMCPServerRepo,
         mcpServerRepo: this.mcpServerRepo,
         mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+        forUserId: contextUserId,
+        sessionOwnerId: session.created_by,
         onServerWithheld: reporter.onServerWithheld,
       },
       // The per-server `tools` field below is an include-list, which cannot

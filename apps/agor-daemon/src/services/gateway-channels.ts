@@ -48,6 +48,19 @@ type PersistedGatewayChannelWriteData =
   | PersistedGatewayChannelCreateData
   | PersistedGatewayChannelPatchData;
 
+/**
+ * Public GatewayChannel transport surface. `update` is deliberately absent so
+ * whole-row `PUT` never reaches the inherited DrizzleService implementation.
+ */
+export const GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+  'uploadFileStreamFromExecutor',
+] as const;
+
 export class GatewayChannelsService extends DrizzleService<
   GatewayChannel,
   PersistedGatewayChannelWriteData

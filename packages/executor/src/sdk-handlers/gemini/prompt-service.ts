@@ -767,6 +767,7 @@ export class GeminiPromptService {
             mcpServerRepo: this.mcpServerRepo,
             mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
             forUserId: contextUserId,
+            sessionOwnerId: session.created_by,
           },
           { toolFiltering: 'exclude' }
         );

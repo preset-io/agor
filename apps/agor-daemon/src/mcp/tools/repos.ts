@@ -66,9 +66,9 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         'Get detailed information about a specific repository, including async clone state. ' +
         'For repos created via agor_repos_create_remote, check `clone_status` ' +
         '(`cloning` | `ready` | `failed`). On `failed`, `clone_error.category` ' +
-        '(`auth_failed` | `not_found` | `network` | `unknown`) tells you what went wrong; ' +
+        '(`auth_failed` | `not_found` | `network` | `git_unavailable` | `unknown`) tells you what went wrong; ' +
         '`auth_failed` usually means the calling user has not configured a `GITHUB_TOKEN` ' +
-        'in Settings → API Keys (or it has expired/lost access).',
+        'in User Settings → Env Vars (or it has expired/lost access).',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: mcpRequiredId('repoId', 'Repository'),
@@ -89,7 +89,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         'slug, repo_id }` while the clone runs in the background. Poll `agor_repos_get(repo_id)` ' +
         'until `clone_status` is `ready` (success) or `failed` (see `clone_error` for details). ' +
         'Private repos require the calling user to have `GITHUB_TOKEN` configured in ' +
-        'Settings → API Keys; without it, the clone will fail with `clone_error.category: ' +
+        'User Settings → Env Vars; without it, the clone will fail with `clone_error.category: ' +
         '"auth_failed"`. Retrying after a failed clone is supported — the previous failed row ' +
         'is replaced.',
       inputSchema: z.object({

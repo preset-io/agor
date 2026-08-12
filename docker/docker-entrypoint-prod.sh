@@ -14,6 +14,7 @@ echo "📦 Initializing Agor environment..."
 agor init \
   --skip-if-exists \
   --non-interactive \
+  --agentic-tools "${AGOR_AGENTIC_TOOLS:-none}" \
   --daemon-port "${DAEMON_PORT:-3030}" \
   --daemon-host "${DAEMON_HOST:-0.0.0.0}"
 

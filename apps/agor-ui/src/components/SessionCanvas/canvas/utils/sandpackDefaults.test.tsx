@@ -141,4 +141,24 @@ describe('useStableSandpackProviderInputs', () => {
     expect(result.current.files['/App.tsx']).toContain('return 2');
     expect(result.current.options.recompileMode).toBe('immediate');
   });
+
+  it('preserves the static HTML entry for both artifact render surfaces', () => {
+    const html = '<main style="font-family: Inter">Styled artifact</main>';
+    const { result } = renderHook(() =>
+      useStableSandpackProviderInputs({
+        template: 'static',
+        files: {
+          '/index.js': '// generated entry intentionally left empty\n',
+          '/index.html': html,
+        },
+        customSetup: { entry: '/index.html' },
+        entryFile: '/index.html',
+      })
+    );
+
+    expect(result.current.template).toBe('static');
+    expect(result.current.files['/index.html']).toBe(html);
+    expect(result.current.customSetup).toMatchObject({ entry: '/index.html' });
+    expect(result.current.options).toMatchObject({ activeFile: '/index.html' });
+  });
 });

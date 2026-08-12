@@ -321,9 +321,10 @@ describe('AgorExecutor watchdog handoff', () => {
   });
 
   it('keeps runtime ownership when the daemon does not authorize containment', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const markerSecret = 'SDK-HEALTH-MARKER-SECRET';
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    const executor = harness(() => Promise.reject(new Error('offline')));
+    const executor = harness(() => Promise.reject(new Error(markerSecret)));
     const heartbeat = executor.heartbeat;
 
     await executor.handleWatchdogDecision(evidence);
@@ -332,6 +333,10 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(executor.heartbeat).toBe(heartbeat);
     expect(executor.abortController.signal.aborted).toBe(false);
     expect(exit).not.toHaveBeenCalled();
+    expect(errorLog).toHaveBeenCalledWith(
+      '[executor.sdk_health] operation=report outcome=failed error_code=operation_failed'
+    );
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(markerSecret);
   });
 
   it('invalidates enforced evidence when its progress flush acknowledges newer work', async () => {

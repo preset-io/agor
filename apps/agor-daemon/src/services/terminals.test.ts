@@ -93,6 +93,7 @@ import { buildBranchShellTabName, buildZellijSessionName, TerminalsService } fro
 function makeApp() {
   const emit = vi.fn();
   return {
+    get: () => ({ execution: { branch_rbac: false, unix_user_mode: 'simple' } }),
     emit,
     // The service subscribes to executor ready/error app events in its
     // constructor; a no-op recorder keeps that wiring from throwing under test.

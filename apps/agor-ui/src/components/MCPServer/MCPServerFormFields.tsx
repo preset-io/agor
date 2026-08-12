@@ -148,7 +148,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     ].some((v) => typeof v === 'string' && v.trim().length > 0) ||
     (typeof watchedOauthMode === 'string' && watchedOauthMode !== 'per_user') ||
     watchedCompatibilityMode === 'legacy' ||
-    watchedDcrMode === 'fallback';
+    (typeof watchedDcrMode === 'string' && watchedDcrMode !== 'advertised');
 
   const handleStartOAuthFlow = async () => {
     if (!client) {
@@ -774,7 +774,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Client ID"
                     name="oauth_client_id"
-                    tooltip="Register an OAuth app with the provider and paste its client ID. Dynamic Client Registration is used only when explicitly enabled below."
+                    tooltip="Register an OAuth app with the provider and paste its client ID. Otherwise Agor can use a registration endpoint advertised by the provider."
                   >
                     <Input
                       placeholder="Enter client ID or {{ user.env.OAUTH_CLIENT_ID }}"
@@ -784,14 +784,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Dynamic Client Registration"
                     name="oauth_dcr_mode"
-                    initialValue="disabled"
-                    tooltip="Pre-registration is preferred. Enable fallback only for a server that explicitly advertises a compatible registration endpoint."
+                    initialValue="advertised"
+                    tooltip="Advertised registration uses only validated provider metadata. Legacy fallback additionally guesses an issuer-relative /register endpoint."
                   >
                     <Select>
+                      <Select.Option value="advertised">
+                        Advertised endpoint (recommended)
+                      </Select.Option>
                       <Select.Option value="disabled">
                         Disabled — pre-registered client
                       </Select.Option>
-                      <Select.Option value="fallback">Explicit DCR fallback</Select.Option>
+                      <Select.Option value="fallback">Legacy /register fallback</Select.Option>
                     </Select>
                   </Form.Item>
                   <Form.Item

@@ -17,13 +17,19 @@
  */
 
 import {
+  type AgorConfig,
   hasTenantSafeExecutorCredentialHome,
-  loadConfigSync,
   unixUserModeRequiresUsername,
 } from '@agor/core/config';
 import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type { AgenticAuthMethods, AuthenticatedParams, User, UserID } from '@agor/core/types';
+import type {
+  AgenticAuthMethods,
+  AuthenticatedParams,
+  DeepReadonly,
+  User,
+  UserID,
+} from '@agor/core/types';
 import {
   resolveUnixUserForImpersonation,
   type UnixUserMode,
@@ -33,6 +39,7 @@ import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
 import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 
 export interface AppLike {
+  get(name: 'config'): DeepReadonly<AgorConfig>;
   service(path: string): unknown;
 }
 
@@ -76,9 +83,9 @@ export type CodexUnixIdentityResolution =
  */
 export async function resolveCodexUnixIdentity(
   userId: UserID | undefined,
-  withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>
+  withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>,
+  config: DeepReadonly<AgorConfig>
 ): Promise<CodexUnixIdentityResolution> {
-  const config = loadConfigSync();
   const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
 
   if (!hasTenantSafeExecutorCredentialHome(config)) {

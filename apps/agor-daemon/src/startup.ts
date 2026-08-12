@@ -54,6 +54,7 @@ import {
   getDaemonUrl,
   runExecutorCommand,
 } from './utils/spawn-executor.js';
+import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
 
 const DEBUG_STARTUP =
   process.env.AGOR_DEBUG_STARTUP === '1' || process.env.DEBUG?.includes('startup');
@@ -468,8 +469,12 @@ export async function resumeRuntimeRecovery(
           });
         } catch (error) {
           console.warn(
-            `[startup] Failed to resume containment for Task ${shortId(task.task_id)}:`,
-            error
+            formatStructuredLog('[startup.runtime_recovery]', {
+              operation: 'resume_containment',
+              outcome: 'failed',
+              task_id: shortId(task.task_id),
+              error_code: structuredLogErrorCode(error),
+            })
           );
         }
       }
@@ -477,7 +482,14 @@ export async function resumeRuntimeRecovery(
       try {
         await injectRestartNotices(ctx, cleanup.wasGraceful, recovery);
       } catch (error) {
-        console.warn(`[startup] Failed to record restart notices for ${recovery.tenantId}:`, error);
+        console.warn(
+          formatStructuredLog('[startup.runtime_recovery]', {
+            operation: 'record_restart_notices',
+            outcome: 'failed',
+            tenant_id: recovery.tenantId,
+            error_code: structuredLogErrorCode(error),
+          })
+        );
       }
     });
   }
@@ -643,7 +655,13 @@ export async function startTaskWorkersAfterRecovery(input: {
     scanComplete = stats.failures === 0 && !stats.saturated;
     preserveDiscoveryCursors = stats.failures === 0 && stats.saturated;
   } catch (error) {
-    console.warn('[startup] Immediate Task runtime recovery scan failed:', error);
+    console.warn(
+      formatStructuredLog('[startup.runtime_recovery]', {
+        operation: 'immediate_scan',
+        outcome: 'failed',
+        error_code: structuredLogErrorCode(error),
+      })
+    );
   }
   if (scanComplete) {
     input.reconciler.start();

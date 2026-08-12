@@ -1,6 +1,6 @@
-import { loadConfigSync } from '@agor/core/config';
+import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import type { User, UserID } from '@agor/core/types';
+import type { DeepReadonly, User, UserID } from '@agor/core/types';
 import { resolveUnixUserForImpersonation } from '@agor/core/unix';
 
 /**
@@ -16,9 +16,9 @@ import { resolveUnixUserForImpersonation } from '@agor/core/unix';
  */
 export async function resolveExecutorReadAsUser(
   db: TenantScopeAwareDatabase,
-  userOrId: User | UserID | string | undefined | null
+  userOrId: User | UserID | string | undefined | null,
+  config: DeepReadonly<AgorConfig>
 ): Promise<string | undefined> {
-  const config = loadConfigSync();
   const unixMode = config.execution?.unix_user_mode ?? 'simple';
   const needsRequestingUser =
     unixMode === 'strict' ||

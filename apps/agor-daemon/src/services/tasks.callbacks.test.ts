@@ -26,6 +26,7 @@ type PendingGatewayTerminalDeliveryReceipt = Extract<
   { status: 'pending' }
 >;
 type TasksServicePrivateMethods = {
+  runAfterTenantDatabaseCommit(label: string, work: () => Promise<void>): Promise<void>;
   projectTerminalSession(
     task: Task,
     status: Task['status'],
@@ -288,6 +289,25 @@ async function reconcile(
 }
 
 describe('TasksService completion callbacks', () => {
+  it('redacts caught values from post-commit orchestration logs', async () => {
+    const markerSecret = 'TASK-POST-COMMIT-MARKER-SECRET';
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const service = Object.create(TasksService.prototype) as TasksService;
+
+    await privateTasksService(service).runAfterTenantDatabaseCommit(
+      'publish termination settlement',
+      async () => {
+        throw new Error(markerSecret);
+      }
+    );
+
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('operation="publish termination settlement"')
+    );
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(markerSecret);
+    warning.mockRestore();
+  });
+
   it('propagates queue-processor failure to terminal consequence reconciliation', async () => {
     const sessions = Object.create(SessionsService.prototype) as SessionsService;
     sessions.setQueueProcessor(async () => {

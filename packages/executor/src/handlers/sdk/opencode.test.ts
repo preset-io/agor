@@ -9,12 +9,24 @@ const mocks = vi.hoisted(() => ({
   permissionRegister: vi.fn(),
   permissionUnregister: vi.fn(),
   flushPending: vi.fn(),
+  openCodeConstructor: vi.fn(),
+  getMcpServersForSession: vi.fn(),
+  tasksGet: vi.fn(),
+  sessionsGet: vi.fn(),
+}));
+
+vi.mock('@agor/core/mcp', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/mcp')>()),
+  getMcpServersForSession: mocks.getMcpServersForSession,
 }));
 
 vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
   isOpenCodeCleanupUnverifiedError: (error: unknown) =>
     error instanceof Error && error.name === 'OpenCodeCleanupUnverifiedError',
   OpenCodeTool: class {
+    constructor(options: unknown) {
+      mocks.openCodeConstructor(options);
+    }
     runTurn = mocks.runTurn;
   },
 }));
@@ -27,8 +39,8 @@ vi.mock('../../db/feathers-repositories.js', () => ({
     sessionMCP: {},
     mcpServers: {},
     mcpOAuthAuthHeaders: {},
-    tasksService: {},
-    sessionsService: {},
+    tasksService: { get: mocks.tasksGet },
+    sessionsService: { get: mocks.sessionsGet },
   }),
 }));
 
@@ -110,6 +122,9 @@ beforeEach(() => {
       metadata: {},
     },
   });
+  mocks.getMcpServersForSession.mockResolvedValue([]);
+  mocks.tasksGet.mockResolvedValue({ created_by: 'task-creator' });
+  mocks.sessionsGet.mockResolvedValue({ created_by: 'session-owner' });
 });
 
 describe('OpenCode executor adapter', () => {
@@ -141,6 +156,25 @@ describe('OpenCode executor adapter', () => {
     );
     expect(state.services.sessions.patch).not.toHaveBeenCalled();
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
+  });
+
+  it('hydrates MCP OAuth for the task creator while filtering definitions by session owner', async () => {
+    const state = client({ created_by: 'session-owner' });
+
+    await execute(state.value);
+    const options = mocks.openCodeConstructor.mock.calls[0][0] as {
+      resolveMcpServers(sessionId: string): Promise<unknown>;
+    };
+    await options.resolveMcpServers(sessionId);
+
+    expect(mocks.getMcpServersForSession).toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({
+        forUserId: 'task-creator',
+        sessionOwnerId: 'session-owner',
+      }),
+      { toolFiltering: 'none' }
+    );
   });
 
   it('persists a newly-created native session before completing the task', async () => {

@@ -11416,6 +11416,63 @@
       }
     },
     "/sessions/{id}/mcp-servers/{id_2}": {
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "id parameter"
+          },
+          {
+            "in": "path",
+            "name": "id_2",
+            "description": "ID of :id to update",
+            "schema": {
+              "type": "integer"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_id"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "404": {
+            "description": "not found"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
+        "tags": ["sessions"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_id"
+              }
+            }
+          }
+        }
+      },
       "patch": {
         "parameters": [
           {

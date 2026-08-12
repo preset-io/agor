@@ -157,6 +157,15 @@ export class FeathersMCPServersRepository {
     if (filters?.enabled !== undefined) {
       query.enabled = filters.enabled;
     }
+    if (filters?.source) {
+      query.source = filters.source;
+    }
+    if (filters?.usableByUserId) {
+      query.usableByUserId = filters.usableByUserId;
+    }
+    if (filters?.ownerless !== undefined) {
+      query.ownerless = filters.ownerless;
+    }
 
     // Pass user ID for per-user OAuth token injection
     // This allows the daemon to inject per-user tokens even when socket auth isn't available

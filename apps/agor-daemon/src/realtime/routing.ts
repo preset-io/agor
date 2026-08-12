@@ -4,6 +4,7 @@ import type {
   MCPOAuthAttemptID,
   MCPServerID,
   PresenceUpdatedEvent,
+  RepoCloneError,
 } from '@agor/core/types';
 
 /** One authoritative naming scheme for Socket.IO rooms and Feathers channels. */
@@ -28,6 +29,7 @@ interface HaNativeSocketPayloads {
     url: string;
     error: string;
     repo_id: string;
+    clone_error?: RepoCloneError;
   };
   'oauth:completed': {
     attempt_id: MCPOAuthAttemptID;

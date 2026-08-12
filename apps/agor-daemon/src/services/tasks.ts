@@ -77,6 +77,7 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
+import { formatStructuredLog, structuredLogErrorCode } from '../utils/structured-log.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import type { GatewayProgressData, GatewayService } from './gateway.js';
 import type { SessionsService } from './sessions';
@@ -89,6 +90,23 @@ function executorTerminalStatus(
     ? TaskStatus.TIMED_OUT
     : TaskStatus.FAILED;
 }
+
+/**
+ * Public Task transport surface. `update` is deliberately absent so whole-row
+ * `PUT` never reaches the inherited DrizzleService implementation.
+ */
+export const TASKS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+  'connectExecutor',
+  'reportTerminationComplete',
+  'reportExecutorSettlement',
+  'reportRuntimeTelemetry',
+  'reportSdkHealthFailure',
+] as const;
 
 export type TaskParams = QueryParams<{
   session_id?: string;
@@ -532,8 +550,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         await work();
       } catch (error) {
         console.warn(
-          `⚠️  [TasksService] ${label} failed:`,
-          error instanceof Error ? error.message : String(error)
+          formatStructuredLog('[tasks.deferred]', {
+            operation: label,
+            outcome: 'failed',
+            error_code: structuredLogErrorCode(error),
+          })
         );
       }
     };
@@ -571,8 +592,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   ): void {
     deferWithTenantContext(params, work, (error) => {
       console.warn(
-        `⚠️  [TasksService] ${label} failed:`,
-        error instanceof Error ? error.message : String(error)
+        formatStructuredLog('[tasks.orchestration]', {
+          operation: label,
+          outcome: 'failed',
+          error_code: structuredLogErrorCode(error),
+        })
       );
     });
   }
@@ -617,8 +641,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         });
       } catch (error) {
         console.warn(
-          `[gateway] Failed to project runtime state for Task ${shortId(task.task_id)}:`,
-          error
+          formatStructuredLog('[gateway.runtime_projection]', {
+            operation: 'update',
+            outcome: 'failed',
+            task_id: shortId(task.task_id),
+            error_code: structuredLogErrorCode(error),
+          })
         );
       }
     });
@@ -1342,8 +1370,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           app: this.app,
           params: coordinatorParams,
         }).then(() => undefined),
-      (error) =>
-        console.error(`[termination] Failed to coordinate Task ${shortId(input.taskId)}:`, error)
+      (error) => {
+        console.error(
+          formatStructuredLog('[termination.coordination]', {
+            operation: 'request',
+            outcome: 'failed',
+            task_id: shortId(input.taskId),
+            error_code: structuredLogErrorCode(error),
+          })
+        );
+      }
     );
   }
 
@@ -1473,8 +1509,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           );
       } catch (error) {
         console.warn(
-          `[settlement] Failed to project STOPPING onto session ${shortId(result.task.session_id)}:`,
-          error instanceof Error ? error.message : String(error)
+          formatStructuredLog('[tasks.settlement]', {
+            operation: 'project_stopping_session',
+            outcome: 'failed',
+            session_id: shortId(result.task.session_id),
+            error_code: structuredLogErrorCode(error),
+          })
         );
       }
       this.deferExecutorTermination(

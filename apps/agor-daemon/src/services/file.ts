@@ -95,7 +95,11 @@ export class FileService
       },
       {
         logPrefix: `[FileService ${branchId}]`,
-        asUser: await resolveExecutorReadAsUser(this.db, params?.user?.user_id),
+        asUser: await resolveExecutorReadAsUser(
+          this.db,
+          params?.user?.user_id,
+          this.app.get('config')
+        ),
       }
     );
   }

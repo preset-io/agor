@@ -405,7 +405,11 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
 
       // Resolve the destination identity up front so a strict-mode user with
       // no unix_username fails fast instead of after approving the code.
-      const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+      const identity = await resolveCodexUnixIdentity(
+        userId,
+        withTenantDatabase,
+        app.get('config')
+      );
       if (!identity.ok) {
         throw new BadRequest(
           `Cannot determine which Unix account should hold this Codex login: ${identity.message}`

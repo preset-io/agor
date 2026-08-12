@@ -44,6 +44,18 @@ import {
 } from '../utils/agentic-configuration-sources.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
+/**
+ * Public Schedule transport surface. `update` is deliberately absent so
+ * whole-row `PUT` never reaches the inherited DrizzleService implementation.
+ */
+export const SCHEDULES_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+] as const;
+
 export type ScheduleParams = QueryParams<{
   branch_id?: BranchID;
   enabled?: boolean;
