@@ -63,7 +63,8 @@ import { Tabs } from 'nextra/components';
 
     # Set an admin password before first boot.
     # Start from docker/.env.prod.example for the full list of options.
-    echo "AGOR_ADMIN_PASSWORD=replace-with-a-long-random-password" > .env.prod
+    cp docker/.env.prod.example .env.prod
+    # Edit AGOR_ADMIN_PASSWORD and choose AGOR_AGENTIC_TOOLS before first boot.
 
     docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
     ```
@@ -71,6 +72,8 @@ import { Tabs } from 'nextra/components';
     Open [http://localhost:3030](http://localhost:3030) and log in as `admin@agor.live` (health check: `curl http://localhost:3030/health`).
 
     > **Skipped the password?** Agor generates one on first boot and writes it to `/home/agor/.agor/admin-credentials` inside the container — retrieve it with `docker compose -f docker-compose.prod.yml exec agor-prod cat /home/agor/.agor/admin-credentials`. Either way, this bootstrap only runs once, against an empty database; setting `AGOR_ADMIN_PASSWORD` later won't reset an existing user's password.
+
+    > `AGOR_AGENTIC_TOOLS` is the immutable fresh-install package policy. Set a comma-separated list, `all`, or `none`; the container defaults to the explicit safe value `none` when it is omitted. Changing the environment variable later does not rewrite existing config — edit `agentic_tools.installed` deliberately and run `agor install --sync` inside the container.
 
     > For hot-reload dev environments, multi-branch setups, and PostgreSQL, see `docker/README.md` and the [Development Guide](/guide/development). For Kubernetes-style executor isolation, see [Containerized Execution](/guide/containerized-execution).
 

@@ -278,6 +278,15 @@ describe('initial agentic tool selection', () => {
     expect(() => parseInitialAgenticTools('all,codex')).toThrow(/Use `all` or `none` by itself/);
   });
 
+  it.each(['', '   ', ',,,', ' , , '])(
+    'rejects blank policy %j instead of treating it as none',
+    (policy) => {
+      expect(() => parseInitialAgenticTools(policy)).toThrow(
+        'Use `none` for an intentionally empty deployment'
+      );
+    }
+  );
+
   it('rejects a non-TTY interactive invocation before creating partial state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-init-nontty-'));
     temporaryDirectories.push(root);

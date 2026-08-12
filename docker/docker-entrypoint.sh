@@ -243,7 +243,7 @@ echo "✅ Watch modes started (git, core, agentic tools, executor, and client wi
 # Initialize database and configure daemon settings for Docker
 # (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)
 echo "📦 Initializing Agor environment..."
-pnpm agor init --skip-if-exists --non-interactive --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
+pnpm agor init --skip-if-exists --non-interactive --agentic-tools "${AGOR_AGENTIC_TOOLS:-none}" --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
 
 # Run database migrations (idempotent: safe to run on every start)
 # This ensures schema is up-to-date even when using existing database volumes

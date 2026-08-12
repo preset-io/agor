@@ -40,5 +40,7 @@ describe('AgenticToolsSection deployment availability', () => {
       screen.getByText(/Workspace settings cannot install deployment packages/)
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /install/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Credential resolution')).not.toBeInTheDocument();
+    expect(screen.queryByText('Allow inline configuration')).not.toBeInTheDocument();
   });
 });

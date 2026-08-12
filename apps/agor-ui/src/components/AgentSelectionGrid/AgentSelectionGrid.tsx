@@ -16,7 +16,7 @@
  */
 
 import type { TenantAgenticToolName } from '@agor-live/client';
-import { Alert, Select, Space, Typography, theme } from 'antd';
+import { Alert, Select, Space, Spin, Typography, theme } from 'antd';
 import { useEffect, useMemo } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import type { AgenticToolOption } from '../../types';
@@ -71,10 +71,15 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
 }) => {
   const { token } = theme.useToken();
   const settings = useAgorStore((state) => state.agenticToolSettingsByName);
+  const settingsHydrated = useAgorStore((state) => state.agenticToolSettingsHydrated);
   const visibleAgents = useMemo(
     () =>
-      agents.filter((agent) => settings.get(agent.id as TenantAgenticToolName)?.enabled !== false),
-    [agents, settings]
+      settingsHydrated
+        ? agents.filter(
+            (agent) => settings.get(agent.id as TenantAgenticToolName)?.enabled !== false
+          )
+        : [],
+    [agents, settings, settingsHydrated]
   );
   useEffect(() => {
     if (
@@ -86,6 +91,17 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
       onSelect(visibleAgents[0].id);
     }
   }, [fallbackToFirstVisibleAgent, onSelect, selectedAgentId, visibleAgents]);
+  if (!settingsHydrated) {
+    return (
+      <div
+        role="status"
+        aria-label="Loading agentic tool availability"
+        style={{ display: 'flex', justifyContent: 'center', padding: token.paddingLG }}
+      >
+        <Spin size="small" />
+      </div>
+    );
+  }
   if (variant === 'select') {
     return (
       <>

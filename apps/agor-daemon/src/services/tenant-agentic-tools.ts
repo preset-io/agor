@@ -19,6 +19,7 @@ import {
   TENANT_AGENTIC_TOOL_NAMES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
 } from '@agor/core/types';
+import { deploymentAgenticToolUnavailableMessage } from './agentic-tool-deployment.js';
 
 function parseTool(id: string): TenantAgenticToolName {
   if ((TENANT_AGENTIC_TOOL_NAMES as readonly string[]).includes(id)) {
@@ -73,9 +74,7 @@ export class TenantAgenticToolSettingsService {
   ): Promise<TenantAgenticToolSettings> {
     const tool = parseTool(id);
     if (data.enabled === true && !this.deploymentAvailable(tool)) {
-      throw new BadRequest(
-        `${tool} is unavailable under this deployment's agentic-tool policy. A deployment operator must add it to agentic_tools.installed in config.yaml, run agor install --sync, and restart the daemon.`
-      );
+      throw new BadRequest(deploymentAgenticToolUnavailableMessage(tool));
     }
     if (data.enabled !== undefined && typeof data.enabled !== 'boolean') {
       throw new BadRequest('enabled must be a boolean');

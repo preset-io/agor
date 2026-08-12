@@ -10,11 +10,17 @@ import type { AgenticToolOption } from '../../types';
 import { AgentSelectionGrid } from './AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from './availableAgents';
 
-const store = vi.hoisted(() => ({ agenticToolSettingsByName: new Map() }));
+const store = vi.hoisted(() => ({
+  agenticToolSettingsByName: new Map(),
+  agenticToolSettingsHydrated: true,
+}));
 
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (selector: (state: unknown) => unknown) =>
-    selector({ agenticToolSettingsByName: store.agenticToolSettingsByName }),
+    selector({
+      agenticToolSettingsByName: store.agenticToolSettingsByName,
+      agenticToolSettingsHydrated: store.agenticToolSettingsHydrated,
+    }),
 }));
 
 const agents: AgenticToolOption[] = [
@@ -24,6 +30,7 @@ const agents: AgenticToolOption[] = [
 
 afterEach(() => {
   store.agenticToolSettingsByName = new Map();
+  store.agenticToolSettingsHydrated = true;
 });
 
 function gridEl(container: HTMLElement): HTMLElement {
@@ -31,6 +38,23 @@ function gridEl(container: HTMLElement): HTMLElement {
 }
 
 describe('AgentSelectionGrid tile layout', () => {
+  it('does not expose or select tools before deployment settings hydrate', () => {
+    store.agenticToolSettingsHydrated = false;
+    const onSelect = vi.fn();
+    render(
+      <AgentSelectionGrid
+        agents={agents}
+        selectedAgentId="claude-code-cli"
+        onSelect={onSelect}
+        fallbackToFirstVisibleAgent
+      />
+    );
+
+    expect(screen.getByLabelText('Loading agentic tool availability')).toBeInTheDocument();
+    expect(screen.queryByText('Claude Code')).not.toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it('shows a non-operator action when no deployment/workspace tool is available', () => {
     store.agenticToolSettingsByName = new Map(
       agents.map((agent) => [agent.id, { tool: agent.id, enabled: false }])

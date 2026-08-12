@@ -76,6 +76,7 @@ import {
 } from '../utils/branch-authorization.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
+import { deploymentAgenticToolUnavailableMessage } from './agentic-tool-deployment.js';
 
 type MaterializedAgenticToolConfiguration = Awaited<
   ReturnType<typeof materializeAgenticToolConfiguration>
@@ -243,9 +244,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
   private assertDeploymentToolConfigured(tool: AgenticToolName): void {
     if (this.deploymentAvailable(tool)) return;
-    throw new BadRequest(
-      `${tool} is unavailable under this deployment's agentic-tool policy. A local operator must select it with agor install, or declare it in config.yaml and run agor install --sync.`
-    );
+    throw new BadRequest(deploymentAgenticToolUnavailableMessage(tool));
   }
 
   private assertSupportedModelConfig(

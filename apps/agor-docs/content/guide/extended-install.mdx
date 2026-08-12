@@ -105,7 +105,8 @@ agor init --non-interactive --agentic-tools claude,codex
 Headless fresh init requires the flag (or `AGOR_AGENTIC_TOOLS`). Use `--agentic-tools all` for every
 allowlisted tool or `--agentic-tools none` for an intentionally empty deployment. Init performs the
 initial reconciliation synchronously; a later `agor install --sync` is the idempotent repair/upgrade
-command.
+command. Empty, whitespace-only, and comma-only values are rejected; use the literal `none` to make
+an empty policy intentional.
 
 Set `AGOR_AGENTIC_TOOLS_DIR` when integrations must live in an administrator-provisioned shared
 read-only location. Executors receive the resolved absolute directory across Agor's supported Unix

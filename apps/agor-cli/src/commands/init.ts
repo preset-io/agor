@@ -71,7 +71,12 @@ export function parseInitialAgenticTools(value: string): InstallableAgenticTool[
     .split(',')
     .map((name) => name.trim().toLowerCase())
     .filter(Boolean);
-  if (names.length === 0 || (names.length === 1 && names[0] === 'none')) return [];
+  if (names.length === 0) {
+    throw new Error(
+      'Agentic-tool policy cannot be empty. Use `none` for an intentionally empty deployment.'
+    );
+  }
+  if (names.length === 1 && names[0] === 'none') return [];
   if (names.length === 1 && names[0] === 'all') {
     return Object.keys(AGENTIC_TOOL_INTEGRATIONS) as InstallableAgenticTool[];
   }
