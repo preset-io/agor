@@ -140,6 +140,38 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/missing task scope/);
   });
 
+  /**
+   * The custom prompt/run routes admit their Task through the repository, so
+   * neither `protectExternalTaskCreate` nor the `tasks.create` chain ever sees
+   * them, and their own gate is role-only. What keeps a live executor token off
+   * them is this guard: `registerAuthenticatedRoute` splices it into every
+   * method named in a route's authConfig (`utils/authorization.ts`), and an
+   * endpoint the allowlist does not name fails closed.
+   *
+   * That containment is what the executor exemption in
+   * `validateSessionUnixUsername` rests on, and nothing else pinned it.
+   */
+  it.each(['sessions/:id/prompt', 'sessions/:id/spawn-prompt', 'tasks/:id/run'])(
+    'refuses an executor-session token on the custom route %s',
+    async (path) => {
+      const context = ctx({
+        path,
+        method: 'create',
+        data: { prompt: 'queue me' },
+        params: {
+          authentication: { payload },
+          query: {},
+          provider: 'rest',
+          route: { id: 'session-1' },
+        },
+      });
+
+      await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+        /not valid for this endpoint/
+      );
+    }
+  );
+
   it('narrows branch find queries to branch scope', async () => {
     const context = ctx({ path: 'branches', method: 'find' });
 
