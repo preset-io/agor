@@ -172,6 +172,14 @@ describe('OnboardingWizard', () => {
     });
   });
 
+  it('explains the multi-select interaction and why it matters, not just a mechanic label', () => {
+    renderWizard({ initialStep: 'goals' });
+    // What to do (pick up to two) AND why (it shapes the first session).
+    expect(
+      screen.getByText(/pick up to two — we'll shape your first session around them/i)
+    ).toBeInTheDocument();
+  });
+
   it('is multi-select, order-preserving, and caps at two goals', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete, initialStep: 'goals' });
@@ -180,9 +188,15 @@ describe('OnboardingWizard', () => {
     clickButton('Dig into anything');
     clickButton('Ship without the busywork');
 
-    // A third pick is blocked at the cap — its card is disabled.
+    // A third pick is blocked at the cap — its card is marked disabled (aria-disabled
+    // keeps it focusable so the explanatory tooltip stays reachable) and clicking
+    // it is a no-op rather than a fourth selection.
     const thirdCard = screen.getByText('Hand off the build').closest('button');
-    expect(thirdCard).toBeDisabled();
+    expect(thirdCard).toHaveAttribute('aria-disabled', 'true');
+    // The reason is exposed to assistive tech (part of the card's name), not hover-only.
+    expect(thirdCard).toHaveTextContent('Deselect one to swap it for this.');
+    fireEvent.click(thirdCard as HTMLButtonElement);
+    expect(thirdCard).toHaveAttribute('aria-pressed', 'false');
 
     // Advance straight to done via skips to inspect the emitted goals + merged recs.
     clickButton(/^continue/i);

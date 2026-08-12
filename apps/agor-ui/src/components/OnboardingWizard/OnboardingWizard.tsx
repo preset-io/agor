@@ -36,7 +36,15 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import {
   MAX_ONBOARDING_GOALS,
@@ -165,6 +173,25 @@ const LLM_OPTIONS: LlmOption[] = [
 ];
 
 const MCP_DOCS_URL = 'https://agor.live/docs/mcp';
+
+// Why an unselected goal card is disabled once two are picked. Surfaced both as
+// an AntD Tooltip (hover/focus) and as visually-hidden text inside the card, so
+// the reason isn't a hover-only affordance (see frontend.md a11y guidance).
+const GOAL_CAP_HINT = 'Deselect one to swap it for this.';
+
+// Visually hidden but exposed to assistive tech — carries the cap hint text
+// rendered inside disabled cards so it joins their accessible name.
+const SR_ONLY_STYLE: CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+};
 
 function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | null {
   const k = key.trim();
@@ -1079,7 +1106,7 @@ export function OnboardingWizard({
       <div>
         {renderStepBadge(goalsTitle)}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-          Pick up to two — we'll set your teammate up around them. Not sure yet? Skip and decide
+          Pick up to two — we'll shape your first session around them. Not sure yet? Skip and decide
           later.
         </Paragraph>
 
@@ -1094,63 +1121,72 @@ export function OnboardingWizard({
             const isSelected = selectedGoals.includes(goal.id);
             // At the cap, unselected cards can't be added until one is dropped.
             const isDisabled = !isSelected && atCap;
+            // aria-disabled (not the native `disabled` attribute) keeps the card
+            // focusable and lets the Tooltip trigger on hover AND keyboard focus;
+            // the click is guarded to a no-op instead.
             return (
-              <button
-                key={goal.id}
-                type="button"
-                aria-pressed={isSelected}
-                disabled={isDisabled}
-                className="onb-card"
-                onClick={() => toggleGoal(goal.id)}
-                style={{
-                  position: 'relative',
-                  background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                  border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
-                  borderRadius: 12,
-                  padding: '16px',
-                  cursor: isDisabled ? 'not-allowed' : 'pointer',
-                  opacity: isDisabled ? 0.45 : 1,
-                  textAlign: 'left',
-                  boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
-                  transition: 'all 0.15s ease',
-                  width: '100%',
-                }}
-              >
-                {isSelected && (
-                  <div
-                    className="onb-check"
-                    style={{
-                      position: 'absolute',
-                      top: 12,
-                      right: 12,
-                      width: 20,
-                      height: 20,
-                      borderRadius: '50%',
-                      background: PRIMARY,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 10 }} />
-                  </div>
-                )}
-                <div style={{ fontSize: 24, marginBottom: 8 }}>{goal.emoji}</div>
-                <div
+              <Tooltip key={goal.id} title={isDisabled ? GOAL_CAP_HINT : undefined}>
+                <button
+                  type="button"
+                  aria-pressed={isSelected}
+                  aria-disabled={isDisabled || undefined}
+                  className="onb-card"
+                  onClick={() => {
+                    if (!isDisabled) toggleGoal(goal.id);
+                  }}
                   style={{
-                    color: TEXT_PRIMARY,
-                    fontWeight: 600,
-                    fontSize: 14,
-                    marginBottom: 6,
-                    paddingRight: 20,
+                    position: 'relative',
+                    background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
+                    border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                    backdropFilter: 'blur(20px)',
+                    WebkitBackdropFilter: 'blur(20px)',
+                    borderRadius: 12,
+                    padding: '16px',
+                    cursor: isDisabled ? 'not-allowed' : 'pointer',
+                    opacity: isDisabled ? 0.45 : 1,
+                    textAlign: 'left',
+                    boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
+                    transition: 'all 0.15s ease',
+                    width: '100%',
                   }}
                 >
-                  {goal.title}
-                </div>
-                <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{goal.description}</div>
-              </button>
+                  {isSelected && (
+                    <div
+                      className="onb-check"
+                      style={{
+                        position: 'absolute',
+                        top: 12,
+                        right: 12,
+                        width: 20,
+                        height: 20,
+                        borderRadius: '50%',
+                        background: PRIMARY,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 10 }} />
+                    </div>
+                  )}
+                  <div style={{ fontSize: 24, marginBottom: 8 }}>{goal.emoji}</div>
+                  <div
+                    style={{
+                      color: TEXT_PRIMARY,
+                      fontWeight: 600,
+                      fontSize: 14,
+                      marginBottom: 6,
+                      paddingRight: 20,
+                    }}
+                  >
+                    {goal.title}
+                  </div>
+                  <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{goal.description}</div>
+                  {/* Screen-reader-only cap reason — joins the disabled card's
+                      accessible name so it isn't a hover-only affordance. */}
+                  {isDisabled && <span style={SR_ONLY_STYLE}>{GOAL_CAP_HINT}</span>}
+                </button>
+              </Tooltip>
             );
           })}
         </div>

@@ -13,7 +13,6 @@ export interface McpRecommendation {
   name: string;
   emoji: string;
   description: string;
-  docsUrl: string;
   /** Set on the top recommendation of a rendered list, not stored per-entry. */
   featured?: boolean;
 }
@@ -29,8 +28,6 @@ export interface OnboardingGoal {
   bootstrapLine: string;
 }
 
-const docs = (id: string) => `https://agor.live/docs/mcp/${id}`;
-
 /** MCP integrations referenced by goals + the skip fallback, keyed by id. */
 export const MCP_RECOMMENDATIONS: Record<string, McpRecommendation> = {
   slack: {
@@ -39,14 +36,12 @@ export const MCP_RECOMMENDATIONS: Record<string, McpRecommendation> = {
     emoji: '💬',
     description:
       'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
-    docsUrl: docs('slack'),
   },
   github: {
     id: 'github',
     name: 'GitHub',
     emoji: '🐙',
     description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
-    docsUrl: docs('github'),
   },
   linear: {
     id: 'linear',
@@ -54,7 +49,6 @@ export const MCP_RECOMMENDATIONS: Record<string, McpRecommendation> = {
     emoji: '🎯',
     description:
       "See what's in progress, what's blocked, and what shipped — without chasing updates.",
-    docsUrl: docs('linear'),
   },
   shortcut: {
     id: 'shortcut',
@@ -62,7 +56,6 @@ export const MCP_RECOMMENDATIONS: Record<string, McpRecommendation> = {
     emoji: '🎫',
     description:
       'Pull tickets into context and keep their status moving without leaving your session.',
-    docsUrl: docs('shortcut'),
   },
   calendar: {
     id: 'calendar',
@@ -70,49 +63,42 @@ export const MCP_RECOMMENDATIONS: Record<string, McpRecommendation> = {
     emoji: '📅',
     description:
       'Your AI reads your schedule, preps for meetings, and turns discussions into action items.',
-    docsUrl: docs('calendar'),
   },
   sentry: {
     id: 'sentry',
     name: 'Sentry',
     emoji: '🚨',
     description: 'Let your AI read error traces and fix bugs straight from the issue.',
-    docsUrl: docs('sentry'),
   },
   datadog: {
     id: 'datadog',
     name: 'Datadog',
     emoji: '🐕',
     description: 'Query metrics, read alerts, and have your AI investigate anomalies for you.',
-    docsUrl: docs('datadog'),
   },
   hubspot: {
     id: 'hubspot',
     name: 'HubSpot',
     emoji: '🟠',
     description: "Pull customer context into sessions — your AI knows who you're building for.",
-    docsUrl: docs('hubspot'),
   },
   figma: {
     id: 'figma',
     name: 'Figma',
     emoji: '🎨',
     description: 'Read design files and turn them into working UI without switching tabs.',
-    docsUrl: docs('figma'),
   },
   amplitude: {
     id: 'amplitude',
     name: 'Amplitude',
     emoji: '📈',
     description: 'Ask your AI what the data says without writing a single query.',
-    docsUrl: docs('amplitude'),
   },
   notion: {
     id: 'notion',
     name: 'Notion',
     emoji: '📝',
     description: 'Write and update docs as your AI works.',
-    docsUrl: docs('notion'),
   },
 };
 
