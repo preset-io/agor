@@ -158,7 +158,12 @@ export interface Repo {
 
 export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
 
-export type RepoCloneErrorCategory = 'auth_failed' | 'not_found' | 'network' | 'unknown';
+export type RepoCloneErrorCategory =
+  | 'auth_failed'
+  | 'not_found'
+  | 'network'
+  | 'git_unavailable'
+  | 'unknown';
 
 export interface RepoCloneError {
   exit_code: number;

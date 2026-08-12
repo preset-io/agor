@@ -4,11 +4,11 @@ import {
   resolveManagedAgenticToolVersion,
 } from '@agor/core/agentic-integrations';
 import { loadConfig } from '@agor/core/config';
+import { diagnoseGit } from '@agor/git';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
 import { listManagedAgorVersions } from '../lib/agentic-tool-integrations.js';
-import { diagnoseGit } from '../lib/git-diagnostics.js';
 
 export default class Doctor extends Command {
   static description = 'Check this Agor installation and its agentic tools';

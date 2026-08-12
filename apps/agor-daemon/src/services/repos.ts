@@ -340,10 +340,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         },
         onExit: (code) => {
           if (code !== 0 && code !== null) {
-            // Broadcast clone failure to all connected clients (the existing
-            // toast UX). Persistent failure state lives on the repo row.
             console.error(
-              `[clone ${slug}] Clone failed with exit code ${code}, broadcasting error`
+              `[clone ${slug}] Clone failed with exit code ${code}; resolving durable error`
             );
             const io = (
               app as unknown as {
@@ -352,56 +350,51 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
                 };
               }
             ).io;
-            if (io && tenantId) {
-              // Include the pinned branch in the message so an operator who
-              // typo'd the Default Branch can self-diagnose. `git clone
-              // --branch <X>` failure is one of the most common reasons a
-              // clone exits non-zero, but the executor's stderr is consumed
-              // by spawnExecutorFireAndForget — without this hint the user
-              // sees only "Clone failed (exit code 128)" and has no idea
-              // the branch field is the cause.
-              const branchHint = data.default_branch
-                ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
-                : '';
-              emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
-                slug,
-                url: remoteUrl,
-                error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
-                repo_id: repoId,
-              });
-            } else if (io) {
-              // Never fall back to a global raw Socket.IO broadcast. The
-              // durable repos.patched event below remains the source of truth.
-              console.warn(`[clone ${slug}] Missing tenant scope; skipping clone-error toast`);
-            }
-
-            // Safety net: if the executor crashed before it could patch the
-            // row (e.g. lost daemon connection), the repo would be stuck in
-            // `'cloning'` forever. Force it to `'failed'` here, but only if
-            // it's still 'cloning' (don't clobber a 'failed' write the
-            // executor already made with a richer category/message).
-            //
-            // Use the service (no `params` → internal call, bypasses auth
-            // hooks) so the patched event fires for any client that joined
-            // after the initial broadcast above.
+            // Resolve the durable row before emitting the fallback event. If
+            // the executor already persisted a categorized error, include the
+            // same structured payload so the fallback toast cannot lose the
+            // auth/CA/Git remediation hints. If the executor crashed before
+            // patching, preserve the safety-net failure row and emit that one.
             void (async () => {
+              let current: Repo | undefined;
               try {
-                const current = (await reposService.get(repoId)) as Repo;
+                current = (await reposService.get(repoId)) as Repo;
                 if (current.clone_status === 'cloning') {
-                  await reposService.patch(repoId, {
+                  current = (await reposService.patch(repoId, {
                     clone_status: 'failed',
                     clone_error: {
                       exit_code: code,
                       category: 'unknown',
                       message: `Clone exited with code ${code} before reporting an error.`,
                     },
-                  });
+                  })) as Repo;
                 }
               } catch (err) {
                 console.error(
                   `[clone ${slug}] Failed to mark repo as failed in onExit safety net:`,
                   err instanceof Error ? err.message : String(err)
                 );
+              }
+
+              if (io && tenantId) {
+                // Include the pinned branch in the message so an operator who
+                // typo'd the Default Branch can self-diagnose.
+                const branchHint = data.default_branch
+                  ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
+                  : '';
+                emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
+                  slug,
+                  url: remoteUrl,
+                  error:
+                    current?.clone_error?.message ??
+                    `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
+                  repo_id: repoId,
+                  ...(current?.clone_error ? { clone_error: current.clone_error } : {}),
+                });
+              } else if (io) {
+                // Never fall back to a global raw Socket.IO broadcast. The
+                // durable repos.patched event remains the source of truth.
+                console.warn(`[clone ${slug}] Missing tenant scope; skipping clone-error toast`);
               }
             })();
           }

@@ -578,14 +578,21 @@ function AppContent() {
           cleanup();
         }
       };
-      const handleCloneError = (payload: { slug?: string; url?: string; error?: string }) => {
+      const handleCloneError = (payload: {
+        slug?: string;
+        url?: string;
+        error?: string;
+        clone_error?: Repo['clone_error'];
+      }) => {
         if (settled) return;
         if (payload.slug !== data.slug && payload.url !== data.url) return;
         settled = true;
+        const hint = cloneErrorHint(payload.clone_error);
         if (!options.silent || options.showErrors) {
-          showError(`Failed to clone ${data.slug}: ${payload.error ?? 'unknown error'}`, {
-            key: toastKey,
-          });
+          showError(
+            `Failed to clone ${data.slug}: ${payload.clone_error?.message ?? payload.error ?? 'unknown error'}${hint}`,
+            { key: toastKey }
+          );
         }
         cleanup();
       };

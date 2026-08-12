@@ -28,6 +28,7 @@ on:
       - 'packages/agor-live/**'
       - 'packages/client/**'
       - 'packages/core/**'
+      - 'packages/git/**'
       - 'packages/executor/**'
       - 'apps/agor-daemon/**'
       - 'apps/agor-cli/**'

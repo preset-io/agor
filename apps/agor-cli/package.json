@@ -18,6 +18,7 @@
     "@agor-live/client": "workspace:*",
     "@agor/agentic-tool-opencode": "workspace:*",
     "@agor/core": "workspace:*",
+    "@agor/git": "workspace:*",
     "@agor/daemon": "workspace:*",
     "@oclif/core": "^4.13.3",
     "@oclif/plugin-help": "^6.2.56",

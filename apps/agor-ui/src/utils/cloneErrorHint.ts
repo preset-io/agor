@@ -8,6 +8,10 @@
 export function cloneErrorHint(error?: { category?: string; message?: string }): string {
   if (!error) return '';
 
+  if (error.category === 'git_unavailable') {
+    return ' — Git is unavailable to the Agor executor. Install Git there, ensure it is executable on PATH, and retry';
+  }
+
   if (error.category === 'auth_failed') {
     return ' — configure GITHUB_TOKEN in User Settings → Env Vars for private repos';
   }

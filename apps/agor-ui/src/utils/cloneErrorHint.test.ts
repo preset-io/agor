@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { cloneErrorHint } from './cloneErrorHint';
 
 describe('cloneErrorHint', () => {
+  it('explains when Git is unavailable to the executor', () => {
+    expect(cloneErrorHint({ category: 'git_unavailable' })).toContain('executor');
+  });
+
   it('points private clones at the user environment settings', () => {
     expect(cloneErrorHint({ category: 'auth_failed' })).toContain('GITHUB_TOKEN');
   });

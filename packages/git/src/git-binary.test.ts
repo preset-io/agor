@@ -1,6 +1,6 @@
-import { delimiter } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveGitBinary } from './git-binary';
+import { diagnoseGit, resolveGitBinary } from './index';
 
 describe('resolveGitBinary', () => {
   it('prefers an executable common absolute path', () => {
@@ -15,13 +15,14 @@ describe('resolveGitBinary', () => {
 
   it('searches PATH without invoking a shell', () => {
     const path = ['/first/bin', '/managed/bin'].join(delimiter);
+    const expectedGit = join('/managed/bin', 'git');
     expect(
       resolveGitBinary({
         path,
         commonPaths: [],
-        isExecutable: (candidate) => candidate === '/managed/bin/git',
+        isExecutable: (candidate) => candidate === expectedGit,
       })
-    ).toBe('/managed/bin/git');
+    ).toBe(expectedGit);
   });
 
   it('fails with an actionable error when Git is absent', () => {
@@ -30,5 +31,15 @@ describe('resolveGitBinary', () => {
     ).toThrow(
       'Git executable is unavailable. Install Git, ensure it is executable on PATH, and verify `git --version` before retrying.'
     );
+  });
+});
+
+describe('diagnoseGit', () => {
+  it('exercises the configured simple-git runtime', async () => {
+    await expect(diagnoseGit()).resolves.toMatchObject({
+      status: 'ready',
+      binary: expect.any(String),
+      version: expect.stringMatching(/^\d+\.\d+\.\d+$/),
+    });
   });
 });

@@ -19,6 +19,9 @@ import {
 } from './init.js';
 
 const temporaryDirectories: string[] = [];
+=======
+import { describe, expect, it } from 'vitest';
+>>>>>>> 3b9fbb1 (fix: validate executor git runtime for clones)
 
 afterEach(async () => {
   await Promise.all(

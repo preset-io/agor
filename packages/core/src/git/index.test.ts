@@ -1581,6 +1581,15 @@ describe('categorizeGitError', () => {
     expect(categorizeGitError('terminal prompts disabled')).toBe('auth_failed');
   });
 
+  it('categorizes missing Git as git_unavailable', () => {
+    expect(
+      categorizeGitError(
+        'Git executable is unavailable. Install Git and verify `git --version` before retrying.'
+      )
+    ).toBe('git_unavailable');
+    expect(categorizeGitError('Error: spawn git ENOENT')).toBe('git_unavailable');
+  });
+
   it('categorizes missing repos as not_found', () => {
     expect(categorizeGitError('remote: Repository not found.')).toBe('not_found');
     expect(categorizeGitError('error: 404 not found')).toBe('not_found');

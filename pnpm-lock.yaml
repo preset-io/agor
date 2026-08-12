@@ -129,6 +129,9 @@ importers:
       '@agor/daemon':
         specifier: workspace:*
         version: link:../agor-daemon
+      '@agor/git':
+        specifier: workspace:*
+        version: link:../../packages/git
       '@oclif/core':
         specifier: ^4.13.3
         version: 4.13.3

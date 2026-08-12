@@ -32,6 +32,7 @@ import {
   loadOpenSourceTelemetryAgorVersion,
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
+import { diagnoseGit } from '@agor/git';
 import { isDaemonRunning } from '@agor-live/client';
 import { getDaemonUrl } from '@agor-live/client/config';
 import { Command, Flags } from '@oclif/core';
@@ -44,7 +45,6 @@ import {
   normalizeAgenticToolName,
   resolveManagedAgenticToolVersion,
 } from '../lib/agentic-tool-integrations.js';
-import { diagnoseGit } from '../lib/git-diagnostics.js';
 
 export function isFreshInitState(state: {
   baseExists: boolean;

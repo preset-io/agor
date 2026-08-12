@@ -650,7 +650,7 @@ export const repos = pgTable(
         clone_status?: 'cloning' | 'ready' | 'failed';
         clone_error?: {
           exit_code: number;
-          category: 'auth_failed' | 'not_found' | 'network' | 'unknown';
+          category: 'auth_failed' | 'not_found' | 'network' | 'git_unavailable' | 'unknown';
           message: string;
         };
         // v2 environment config — source of truth. Named variants + optional
