@@ -5,7 +5,12 @@ import Script from 'next/script';
 import { type ReactNode, Suspense } from 'react';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
 import { GoogleAnalytics } from '../components/GoogleAnalytics';
-import { DISCORD_INVITE_URL, GITHUB_REPO_URL, HUBSPOT_FORM_ID } from '../lib/links';
+import {
+  AGOR_CLOUD_DEMO_URL,
+  DISCORD_INVITE_URL,
+  GITHUB_REPO_URL,
+  HUBSPOT_FORM_ID,
+} from '../lib/links';
 import {
   BRAND_NAME,
   DEFAULT_DESCRIPTION,
@@ -19,6 +24,7 @@ import './styles.css';
 
 const basePath = getBasePath();
 const siteUrl = getSiteUrl();
+const hubspotMeetingOrigin = new URL(AGOR_CLOUD_DEMO_URL).origin;
 const googleAnalyticsId = process.env.NEXT_PUBLIC_GA_ID;
 const analyticsEnabled =
   Boolean(googleAnalyticsId) &&
@@ -198,6 +204,42 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 form_name: 'agor_cloud_beta',
                 source_page: sourcePage || 'unknown',
               });
+            });
+          })();`}
+        </Script>
+        {/* GTM events for the "Book a demo" HubSpot meeting scheduler.
+            Unlike the contact form, this is a genuinely cross-origin iframe
+            (meetings-na2.hubspot.com), so its postMessage contract is much
+            narrower — confirmed by reading its shipped JS bundle
+            (MeetingsPublic .../bundles/project.js): it only ever posts a
+            consent-readiness handshake, an iframe-resize notice, and a
+            final `{meetingBookSucceeded}`/`{meetingBookFailed}` on booking
+            completion. There's no "opened" or "in progress" signal — the
+            scheduler never tells the embedder someone's picking a date.
+            "Opened" is tracked separately, client-side, in MeetingEmbed
+            (HubSpotMeetingModal.tsx), since we already know that moment
+            ourselves without needing HubSpot's cooperation. Origin-checked
+            here (unlike the form listener above) because this really is a
+            different origin posting to us, not our own same-window script. */}
+        <Script id="hs-meeting-book-tracking" strategy="afterInteractive">
+          {`(function () {
+            window.addEventListener('message', function (event) {
+              if (event.origin !== '${hubspotMeetingOrigin}') {
+                return;
+              }
+              var payload = event.data;
+              if (!payload || typeof payload !== 'object') {
+                return;
+              }
+              window.dataLayer = window.dataLayer || [];
+              if (payload.meetingBookSucceeded) {
+                window.dataLayer.push({
+                  event: 'hubspot_meeting_booked',
+                  form_name: 'agor_cloud_demo',
+                });
+              } else if (payload.meetingBookFailed) {
+                window.dataLayer.push({ event: 'hubspot_meeting_book_failed' });
+              }
             });
           })();`}
         </Script>
