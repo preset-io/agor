@@ -23,6 +23,7 @@ import {
 } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
 import {
+  CloseCircleOutlined,
   DownOutlined,
   FileTextOutlined,
   GithubOutlined,
@@ -48,6 +49,7 @@ import {
   TimerPill,
   TokenCountPill,
 } from '../Pill';
+import { formatDuration } from '../Pill/TimerPill';
 import { RateLimitBlock } from '../RateLimitBlock';
 import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
@@ -487,6 +489,17 @@ export const TaskBlock = React.memo<TaskBlockProps>(
   }) => {
     const { token } = theme.useToken();
     const { isSlim } = useUIMode();
+    // Callback tasks complete successfully even when they announce a child
+    // FAILURE — surface the child's outcome, not the courier's.
+    const callbackFailed =
+      !!task.metadata?.is_agor_callback && /has failed/i.test(task.full_prompt || '');
+    const isTaskActive =
+      task.status === TaskStatus.RUNNING ||
+      task.status === TaskStatus.STOPPING ||
+      task.status === TaskStatus.QUEUED;
+    const gutterTooltip = `${callbackFailed ? 'CHILD SESSION FAILED' : task.status.toUpperCase()}${
+      !isTaskActive && task.duration_ms ? ` · ${formatDuration(task.duration_ms)}` : ''
+    }`;
 
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
@@ -584,7 +597,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             {isExpanded ? (
               <UpOutlined style={{ color: token.colorPrimary, fontSize: 14 }} />
             ) : (
-              <TaskStatusIcon status={task.status} size={16} />
+              <Tooltip title={gutterTooltip} placement="left">
+                {callbackFailed ? (
+                  <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
+                ) : (
+                  <TaskStatusIcon status={task.status} size={16} />
+                )}
+              </Tooltip>
             )}
           </Flex>
         ) : (
@@ -630,19 +649,23 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
           {/* Task metadata */}
           <Flex wrap gap={token.sizeUnit}>
-            <TimerPill
-              status={task.status}
-              startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
-              endedAt={
-                task.completed_at ||
-                (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
-                  ? task.message_range?.end_timestamp
-                  : undefined)
-              }
-              durationMs={task.duration_ms}
-              lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
-              latestExecutorPulse={task.latest_executor_pulse}
-            />
+            {(!isSlim || isTaskActive) && (
+              <TimerPill
+                status={task.status}
+                startedAt={
+                  task.started_at || task.message_range?.start_timestamp || task.created_at
+                }
+                endedAt={
+                  task.completed_at ||
+                  (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
+                    ? task.message_range?.end_timestamp
+                    : undefined)
+                }
+                durationMs={task.duration_ms}
+                lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
+                latestExecutorPulse={task.latest_executor_pulse}
+              />
+            )}
             {scheduledFromBranch && scheduledRunAt && (
               <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
             )}
