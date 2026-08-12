@@ -46,21 +46,21 @@ afterAll(() => {
   }
 });
 
-type CreatorState = 'matching' | 'mismatched' | 'missing';
+type IdentityState = 'matching' | 'mismatched' | 'missingCreator' | 'missingUsername';
 
 async function createPendingLaunch(input: {
-  creatorState: CreatorState;
+  identityState: IdentityState;
   status: TaskPendingDispatchStatus;
 }): Promise<{ session: Session; task: Task }> {
   const creatorId = generateId() as UUID;
   const suffix = creatorId.slice(-12);
-  const stampedUsername = `alice-${suffix}`;
-  if (input.creatorState === 'matching' || input.creatorState === 'mismatched') {
+  const stampedUsername = input.identityState === 'missingUsername' ? null : `alice-${suffix}`;
+  if (input.identityState !== 'missingCreator') {
     await runWithTenantDatabaseScope(activeDb, activeTenantId, (tenantDb) =>
       new UsersRepository(tenantDb).create({
         user_id: creatorId,
         email: `${suffix}@active.example`,
-        unix_username: input.creatorState === 'matching' ? stampedUsername : `bob-${suffix}`,
+        unix_username: input.identityState === 'mismatched' ? `bob-${suffix}` : stampedUsername,
       })
     );
   }
@@ -104,7 +104,7 @@ async function createPendingLaunch(input: {
 async function exerciseProductionLaunchSeam(input: {
   mode: UnixUserMode;
   branchRbac: boolean;
-  creatorState: CreatorState;
+  identityState: IdentityState;
   status: TaskPendingDispatchStatus;
 }) {
   const { session, task } = await createPendingLaunch(input);
@@ -184,11 +184,11 @@ const unguardedMatrix = (['simple', 'insulated'] as const).flatMap((mode) =>
   )
 );
 const rejectedMatrix = guardedMatrix.flatMap(({ mode, branchRbac }) =>
-  (['mismatched', 'missing'] as const).flatMap((creatorState) =>
+  (['mismatched', 'missingCreator', 'missingUsername'] as const).flatMap((identityState) =>
     ([TaskStatus.CREATED, TaskStatus.QUEUED] as const).map((status) => ({
       mode,
       branchRbac,
-      creatorState,
+      identityState,
       status,
     }))
   )
@@ -201,7 +201,7 @@ describe('production pre-claim Unix identity orchestration', () => {
       const observed = await exerciseProductionLaunchSeam({
         mode,
         branchRbac,
-        creatorState: 'matching',
+        identityState: 'matching',
         status: TaskStatus.QUEUED,
       });
 
@@ -218,23 +218,27 @@ describe('production pre-claim Unix identity orchestration', () => {
   );
 
   it.each(rejectedMatrix)(
-    '$mode with branch_rbac=$branchRbac rejects $creatorState creator before claim/spawn and leaves $status pending',
-    async ({ mode, branchRbac, creatorState, status }) => {
+    '$mode with branch_rbac=$branchRbac rejects $identityState identity before claim/spawn and leaves $status pending',
+    async ({ mode, branchRbac, identityState, status }) => {
       const observed = await exerciseProductionLaunchSeam({
         mode,
         branchRbac,
-        creatorState,
+        identityState,
         status,
       });
 
       expect(observed.error).toBeInstanceOf(Error);
       expect((observed.error as Error).message).toMatch(
-        creatorState === 'mismatched'
+        identityState === 'mismatched'
           ? /Session security context has changed/
-          : /Session creator not found/
+          : identityState === 'missingCreator'
+            ? /Session creator not found/
+            : /requires a unix_username/
       );
-      expect(observed.events).toEqual(['lookup']);
-      expect(observed.creatorLookupCalls).toEqual([[observed.task.created_by]]);
+      expect(observed.events).toEqual(identityState === 'missingUsername' ? [] : ['lookup']);
+      expect(observed.creatorLookupCalls).toEqual(
+        identityState === 'missingUsername' ? [] : [[observed.task.created_by]]
+      );
       expect(observed.claimDispatch).not.toHaveBeenCalled();
       expect(observed.continueClaimedLaunch).not.toHaveBeenCalled();
       expect(observed.deferExecutorSpawn).not.toHaveBeenCalled();
@@ -249,7 +253,7 @@ describe('production pre-claim Unix identity orchestration', () => {
       const observed = await exerciseProductionLaunchSeam({
         mode,
         branchRbac,
-        creatorState: 'missing',
+        identityState: 'missingCreator',
         status,
       });
 

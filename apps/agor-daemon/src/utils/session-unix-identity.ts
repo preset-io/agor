@@ -10,6 +10,7 @@ import {
 import { Forbidden } from '@agor/core/feathers';
 import type { InternalUser, Session, Task, TaskPendingDispatchStatus } from '@agor/core/types';
 import { isTaskPendingDispatch } from '@agor/core/types';
+import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 
 type SessionUnixIdentity = Pick<Session, 'created_by' | 'unix_username'>;
 
@@ -73,6 +74,7 @@ export async function launchPendingTask({
     await assertTenantWritable(tenantDb, tenantId);
     const unixUserMode = execution?.unix_user_mode ?? 'simple';
     if (unixUserModeRequiresUsername(unixUserMode)) {
+      assertUnixUsernameSatisfiesMode(session.unix_username, unixUserMode, 'the session');
       // Fresh point-in-time fence only: user updates are not locked across the later spawn.
       await assertSessionUnixIdentityMatchesCreator(session, new UsersRepository(tenantDb));
     }
