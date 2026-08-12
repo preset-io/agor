@@ -812,20 +812,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 },
               },
               children: (
-                <div
-                  style={{
-                    paddingTop: token.sizeUnit,
-                    // Slim: one continuous timeline down the task instead of
-                    // per-bubble gutters.
-                    ...(isSlim
-                      ? {
-                          borderLeft: `2px solid ${token.colorBorderSecondary}`,
-                          paddingLeft: token.sizeUnit * 2,
-                          marginLeft: token.sizeUnit,
-                        }
-                      : {}),
-                  }}
-                >
+                <div style={{ paddingTop: token.sizeUnit }}>
                   {isVerifiedRuntimeInterruption(task, isLatestTask) && (
                     <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
                   )}

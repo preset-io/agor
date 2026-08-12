@@ -655,17 +655,27 @@ export const AgentChain = React.memo<AgentChainProps>(
             </Tag>
           ))}
 
-        {/* Result stats */}
-        {stats.successCount > 0 && (
-          <Tag icon={<CheckCircleOutlined />} color="success" style={{ fontSize: 11, margin: 0 }}>
-            {stats.successCount} success
-          </Tag>
-        )}
-        {stats.errorCount > 0 && (
-          <Tag icon={<CloseCircleOutlined />} color="error" style={{ fontSize: 11, margin: 0 }}>
-            {stats.errorCount} error
-          </Tag>
-        )}
+        {/* Result stats — slim: bare glyph + count, no words, no box */}
+        {stats.successCount > 0 &&
+          (isSlim ? (
+            <span style={{ color: token.colorSuccess, fontSize: 11, whiteSpace: 'nowrap' }}>
+              <CheckCircleOutlined /> {stats.successCount}
+            </span>
+          ) : (
+            <Tag icon={<CheckCircleOutlined />} color="success" style={{ fontSize: 11, margin: 0 }}>
+              {stats.successCount} success
+            </Tag>
+          ))}
+        {stats.errorCount > 0 &&
+          (isSlim ? (
+            <span style={{ color: token.colorError, fontSize: 11, whiteSpace: 'nowrap' }}>
+              <CloseCircleOutlined /> {stats.errorCount}
+            </span>
+          ) : (
+            <Tag icon={<CloseCircleOutlined />} color="error" style={{ fontSize: 11, margin: 0 }}>
+              {stats.errorCount} error
+            </Tag>
+          ))}
 
         {/* Files affected */}
         {stats.filesAffected.length > 0 && (
