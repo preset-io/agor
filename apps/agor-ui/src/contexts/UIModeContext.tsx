@@ -30,6 +30,9 @@ const UI_MODE_KEY = 'agor:uiMode';
 
 export const UIModeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [uiMode, setUIModeState] = useState<UIMode>(() => {
+    // Non-persisting URL override for demo pages and screenshot tooling.
+    const param = new URLSearchParams(window.location.search).get('uiMode');
+    if (param === 'slim' || param === 'classic') return param;
     const stored = localStorage.getItem(UI_MODE_KEY);
     return stored === 'slim' ? 'slim' : 'classic';
   });
