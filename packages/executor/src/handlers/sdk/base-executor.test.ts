@@ -91,6 +91,50 @@ describe('resolveApiKeyForTask', () => {
 });
 
 describe('settleTaskFailure', () => {
+  it('persists provider credit exhaustion as safe classified state', async () => {
+    const unsafeBody = 'Credit balance is too low; provider-secret-body-marker';
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const messageCreate = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service(name: string) {
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') {
+          return {
+            find: vi.fn().mockResolvedValue({ total: 0, data: [] }),
+            create: messageCreate,
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await settleTaskFailure(
+      client,
+      'session-1' as never,
+      'task-1' as never,
+      new Error(unsafeBody),
+      { status: 'failed', error_message: unsafeBody },
+      'claude-code'
+    );
+
+    expect(messageCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'The model provider has no available credit or quota for this request.',
+        metadata: {
+          is_task_failure: true,
+          error_kind: 'provider_credit_exhausted',
+          error_code: 'PROVIDER_CREDIT_EXHAUSTED',
+          tool: 'claude-code',
+        },
+      })
+    );
+    expect(taskPatch).toHaveBeenCalledWith('task-1', {
+      status: 'failed',
+      error_message: 'The model provider has no available credit or quota for this request.',
+    });
+    expect(JSON.stringify(messageCreate.mock.calls)).not.toContain('provider-secret-body-marker');
+  });
+
   it('does not persist Drizzle query parameters in task or transcript diagnostics', async () => {
     const secret = 'secret-binary-tool-result';
     const taskPatch = vi.fn().mockResolvedValue(undefined);

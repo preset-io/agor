@@ -247,7 +247,8 @@ export async function createSystemMessage(
   taskId: TaskID | undefined,
   nextIndex: number,
   resolvedModel: string | undefined,
-  messagesService: MessagesService
+  messagesService: MessagesService,
+  metadata?: Message['metadata']
 ): Promise<Message> {
   const message: Message = {
     message_id: messageId,
@@ -262,6 +263,7 @@ export async function createSystemMessage(
     metadata: {
       ...(resolvedModel ? { model: resolvedModel } : {}),
       is_meta: true, // Mark as synthetic system message
+      ...metadata,
     },
   };
 

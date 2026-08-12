@@ -5,6 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const showSuccess = vi.fn();
 const showError = vi.fn();
 
+type FormFieldsMockProps = {
+  onSaveBeforeOAuthRetry?: () => Promise<boolean>;
+};
+
 vi.mock('@/utils/message', () => ({
   useThemedMessage: () => ({
     showSuccess,
@@ -15,12 +19,23 @@ vi.mock('@/utils/message', () => ({
 }));
 
 vi.mock('./MCPServerFormFields', async () => {
-  const { Form, Input } = await import('antd');
+  const { Button, Form, Input } = await import('antd');
   return {
-    MCPServerFormFields: () => (
-      <Form.Item label="Description" name="description">
-        <Input />
-      </Form.Item>
+    MCPServerFormFields: ({ onSaveBeforeOAuthRetry }: FormFieldsMockProps) => (
+      <>
+        <Form.Item label="Description" name="description">
+          <Input />
+        </Form.Item>
+        <Form.Item label="Client ID" name="oauth_client_id">
+          <Input />
+        </Form.Item>
+        <Form.Item label="Client Secret" name="oauth_client_secret">
+          <Input />
+        </Form.Item>
+        <Button onClick={() => void onSaveBeforeOAuthRetry?.()}>
+          Save OAuth settings &amp; retry
+        </Button>
+      </>
     ),
   };
 });
@@ -59,6 +74,50 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     const updates = patch.mock.calls[0]?.[1] as { auth?: Record<string, unknown> };
     expect(updates.auth).not.toHaveProperty('oauth_dcr_mode');
     expect(showSuccess).toHaveBeenCalled();
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it('persists edited OAuth client credentials without closing before a retry', async () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const onClose = vi.fn();
+    const client = {
+      service: vi.fn().mockReturnValue({ patch }),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000002',
+      name: 'oauth-server',
+      display_name: 'OAuth Server',
+      description: 'server',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      scope: 'global',
+      enabled: true,
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'stale-client-id',
+        oauth_client_secret: 'stale-client-secret',
+      },
+    } as MCPServer;
+
+    render(<MCPServerEditModal server={server} open client={client} onClose={onClose} />);
+
+    fireEvent.change(await screen.findByLabelText('Client ID'), {
+      target: { value: 'fresh-client-id' },
+    });
+    fireEvent.change(screen.getByLabelText('Client Secret'), {
+      target: { value: 'fresh-client-secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save OAuth settings & retry' }));
+
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    const updates = patch.mock.calls[0]?.[1] as { auth?: Record<string, unknown> };
+    expect(updates.auth).toMatchObject({
+      type: 'oauth',
+      oauth_client_id: 'fresh-client-id',
+      oauth_client_secret: 'fresh-client-secret',
+    });
+    expect(onClose).not.toHaveBeenCalled();
     expect(showError).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCursorAssistantContent,
+  buildCursorTaskResultPersistence,
+  getCursorReturnedFailure,
   normalizeCursorToolInput,
   normalizeCursorToolName,
 } from './cursor.js';
@@ -59,5 +61,45 @@ describe('Cursor SDK handler helpers', () => {
       cursor_tool_name: 'edit',
       status: 'completed',
     });
+  });
+
+  it('sanitizes returned provider credit failures before task persistence', () => {
+    const unsafeBody = 'Credit balance is too low; provider-secret-body-marker';
+    const result = buildCursorTaskResultPersistence({
+      runResult: {
+        id: 'run-1',
+        status: 'error',
+        error: { message: unsafeBody, code: 'provider-secret-code' },
+      },
+      rawMessages: [],
+      agentId: 'agent-1',
+      toolCallMessageIds: [],
+    });
+
+    expect(result).toMatchObject({
+      errorMessage: 'The model provider has no available credit or quota for this request.',
+      rawSdkResponse: {
+        error_kind: 'provider_credit_exhausted',
+        error_code: 'PROVIDER_CREDIT_EXHAUSTED',
+        tool: 'cursor',
+      },
+      isClassifiedProviderFailure: true,
+    });
+    expect(JSON.stringify(result)).not.toContain('provider-secret-body-marker');
+    expect(JSON.stringify(result)).not.toContain('provider-secret-code');
+  });
+
+  it('preserves structured provider codes through task failure settlement', () => {
+    const failure = getCursorReturnedFailure({
+      id: 'run-2',
+      status: 'error',
+      error: { message: 'request failed', code: 'insufficient_quota' },
+    });
+
+    expect(failure?.safeMessage.metadata).toMatchObject({
+      error_code: 'PROVIDER_CREDIT_EXHAUSTED',
+    });
+    expect(failure).toBeDefined();
+    expect((failure as { error: Error & { code?: string } }).error.code).toBe('insufficient_quota');
   });
 });

@@ -7,6 +7,7 @@
 
 import type { PersistedAgenticToolName } from './agentic-tool';
 import type { MessageID, SessionID, TaskID } from './id';
+import type { ProviderErrorCode, ProviderErrorKind } from './provider-error';
 import type { WidgetMessageMetadata } from './widget';
 
 /**
@@ -301,7 +302,8 @@ export interface Message {
      * session's provider". Drives the Connect-AI empty state instead of the
      * raw error; `tool` names the provider that needs a credential.
      */
-    error_kind?: 'missing_credential';
+    error_kind?: 'missing_credential' | ProviderErrorKind;
+    error_code?: ProviderErrorCode;
     tool?: PersistedAgenticToolName;
 
     /** Additional agent-specific fields */

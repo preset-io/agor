@@ -25,10 +25,11 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import type { McpServerConfig, Run, SDKMessage } from '@cursor/sdk';
+import type { McpServerConfig, Run, RunResult, SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
+import { buildSafeProviderFailureMessage } from '../../provider-error.js';
 import { resolveContextUserId } from '../../sdk-handlers/base/context-user.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import {
@@ -67,6 +68,109 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+interface CursorReturnedFailure {
+  error: Error;
+  safeMessage: ReturnType<typeof buildSafeProviderFailureMessage>;
+}
+
+export function getCursorReturnedFailure(runResult: RunResult): CursorReturnedFailure | undefined {
+  if (runResult.status !== 'error') return undefined;
+
+  // Keep structured provider fields (notably `code`) on the internal Error so
+  // the later settleTaskFailure call makes the same classification decision as
+  // this helper. Those fields are never persisted; only safeMessage is.
+  const error = Object.assign(
+    new Error(runResult.error?.message || 'Cursor returned an error result.'),
+    asRecord(runResult.error)
+  );
+  return {
+    error,
+    safeMessage: buildSafeProviderFailureMessage(
+      runResult.error ?? runResult,
+      error.message,
+      'cursor'
+    ),
+  };
+}
+
+async function redactCursorMessages(args: {
+  client: AgorClient;
+  messageIds: ReadonlyArray<MessageID>;
+  safeMessage: ReturnType<typeof buildSafeProviderFailureMessage>;
+}): Promise<boolean> {
+  const messageIds = [...new Set(args.messageIds)];
+  const results = await Promise.allSettled(
+    messageIds.map(async (messageId) => {
+      try {
+        await args.client.service('messages').patch(messageId, {
+          content: args.safeMessage.content,
+          content_preview: args.safeMessage.content.substring(0, 200),
+          metadata: {
+            is_task_failure: true,
+            ...args.safeMessage.metadata,
+          },
+        });
+      } catch (patchError) {
+        // If the message cannot be rewritten, prefer removing it over leaving
+        // a provider response durable. The caller logs any final cleanup gap.
+        try {
+          await args.client.service('messages').remove(messageId);
+        } catch (removeError) {
+          throw new Error(`Could not redact Cursor message ${messageId}: ${String(removeError)}`, {
+            cause: patchError,
+          });
+        }
+      }
+    })
+  );
+  const failedMessageIds = results.flatMap((result, index) =>
+    result.status === 'rejected' ? [messageIds[index]] : []
+  );
+  if (failedMessageIds.length > 0) {
+    console.error(
+      `[cursor] failed to redact ${failedMessageIds.length} streamed message(s) after provider failure`,
+      failedMessageIds
+    );
+    return false;
+  }
+  return true;
+}
+
+export function buildCursorTaskResultPersistence(args: {
+  runResult: RunResult;
+  rawMessages: ReadonlyArray<SDKMessage>;
+  agentId: string;
+  toolCallMessageIds: ReadonlyArray<MessageID>;
+}): {
+  errorMessage?: string;
+  rawSdkResponse: unknown;
+  isClassifiedProviderFailure: boolean;
+} {
+  const returnedFailure = getCursorReturnedFailure(args.runResult);
+  const providerFailure = returnedFailure?.safeMessage;
+  const isClassifiedProviderFailure = Boolean(providerFailure?.metadata?.error_code);
+
+  if (isClassifiedProviderFailure && providerFailure) {
+    // A classified provider failure must not retain the provider response or
+    // streamed messages, which may contain the same sensitive response body.
+    return {
+      errorMessage: providerFailure.content,
+      rawSdkResponse: providerFailure.metadata,
+      isClassifiedProviderFailure: true,
+    };
+  }
+
+  return {
+    rawSdkResponse: {
+      run: args.runResult,
+      messages: args.rawMessages,
+      agentId: args.agentId,
+      toolCallMessageIds: args.toolCallMessageIds,
+    },
+    isClassifiedProviderFailure: false,
+  };
 }
 
 export function normalizeCursorToolName(name: string): string {
@@ -350,7 +454,10 @@ async function createAssistantMessage(args: {
   });
 }
 
-function getToolMessageContent(event: Extract<SDKMessage, { type: 'tool_call' }>): {
+function getToolMessageContent(
+  event: Extract<SDKMessage, { type: 'tool_call' }>,
+  includeResult = true
+): {
   content: ContentBlock[];
   preview: string;
 } {
@@ -369,7 +476,7 @@ function getToolMessageContent(event: Extract<SDKMessage, { type: 'tool_call' }>
     },
   ];
 
-  if (event.status !== 'running') {
+  if (includeResult && event.status !== 'running') {
     content.push({
       type: 'tool_result',
       tool_use_id: event.call_id,
@@ -381,7 +488,7 @@ function getToolMessageContent(event: Extract<SDKMessage, { type: 'tool_call' }>
 
   return {
     content,
-    preview: `${toolName}: ${input.command ? String(input.command) : resultText}`,
+    preview: `${toolName}: ${includeResult ? (input.command ? String(input.command) : resultText) : `[${event.status}]`}`,
   };
 }
 
@@ -392,9 +499,10 @@ async function createToolMessage(args: {
   index: number;
   event: Extract<SDKMessage, { type: 'tool_call' }>;
   model?: string;
+  includeResult?: boolean;
 }): Promise<MessageID> {
   const messageId = generateId() as MessageID;
-  const { content, preview } = getToolMessageContent(args.event);
+  const { content, preview } = getToolMessageContent(args.event, args.includeResult);
 
   await createAssistantMessage({
     client: args.client,
@@ -413,8 +521,9 @@ async function updateToolMessage(args: {
   client: AgorClient;
   messageId: MessageID;
   event: Extract<SDKMessage, { type: 'tool_call' }>;
+  includeResult?: boolean;
 }): Promise<void> {
-  const { content, preview } = getToolMessageContent(args.event);
+  const { content, preview } = getToolMessageContent(args.event, args.includeResult);
   await args.client.service('messages').patch(args.messageId, {
     content,
     content_preview: preview.substring(0, 200),
@@ -532,6 +641,7 @@ export async function executeCursorTask(params: {
       let thinkingText = '';
       const toolCallMessageIds: MessageID[] = [];
       const toolCallMessageIdsByCallId = new Map<string, MessageID>();
+      const toolCallEventsByCallId = new Map<string, Extract<SDKMessage, { type: 'tool_call' }>>();
       const rawMessages: SDKMessage[] = [];
 
       currentRun = await agent.send(prompt, {
@@ -569,6 +679,7 @@ export async function executeCursorTask(params: {
           setThinkingText: (value) => {
             thinkingText = value;
           },
+          toolCallEventsByCallId,
           isAssistantStreamStarted: () => assistantStreamStarted,
           setAssistantStreamStarted: (value) => {
             assistantStreamStarted = value;
@@ -589,12 +700,37 @@ export async function executeCursorTask(params: {
       }
 
       const runResult = await currentRun.wait();
+      const failed = runResult.status === 'error';
+      const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
+      const returnedFailure = failed ? getCursorReturnedFailure(runResult) : undefined;
+      const taskResultPersistence = buildCursorTaskResultPersistence({
+        runResult,
+        rawMessages,
+        agentId: agent.agentId,
+        toolCallMessageIds,
+      });
+      const classifiedProviderFailure = taskResultPersistence?.isClassifiedProviderFailure === true;
+      if (!classifiedProviderFailure) {
+        await Promise.all(
+          [...toolCallEventsByCallId.entries()].map(([callId, event]) => {
+            const messageId = toolCallMessageIdsByCallId.get(callId);
+            return messageId
+              ? updateToolMessage({
+                  client,
+                  messageId,
+                  event,
+                  includeResult: true,
+                })
+              : undefined;
+          })
+        );
+      }
       const resultText = typeof runResult.result === 'string' ? runResult.result : '';
       const finalText = resultText.length > assistantText.length ? resultText : assistantText;
       const finalContent = buildCursorAssistantContent({ text: finalText, thinkingText });
       // SDK echo > configured selection; undefined if neither.
       const recordedModel = runResult.model?.id ?? configuredModel;
-      if (finalContent.length > 0) {
+      if (finalContent.length > 0 && !classifiedProviderFailure) {
         await createAssistantMessage({
           client,
           sessionId,
@@ -607,19 +743,26 @@ export async function executeCursorTask(params: {
         });
       }
 
-      const failed = runResult.status === 'error';
-      const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
       const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
       const taskPatch: Partial<Task> = {
         status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
         ...(recordedModel ? { model: recordedModel } : {}),
-        raw_sdk_response: {
-          run: runResult,
-          messages: rawMessages,
-          agentId: agent.agentId,
-          toolCallMessageIds,
-        },
+        ...(taskResultPersistence
+          ? {
+              ...(taskResultPersistence.errorMessage
+                ? { error_message: taskResultPersistence.errorMessage }
+                : {}),
+              raw_sdk_response: taskResultPersistence.rawSdkResponse,
+            }
+          : {
+              raw_sdk_response: {
+                run: runResult,
+                messages: rawMessages,
+                agentId: agent.agentId,
+                toolCallMessageIds,
+              },
+            }),
       };
       if (gitStateAtEnd) {
         // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
@@ -628,7 +771,26 @@ export async function executeCursorTask(params: {
           sha_at_end: gitStateAtEnd.sha,
         };
       }
-      await client.service('tasks').patch(taskId, taskPatch);
+      if (classifiedProviderFailure && returnedFailure) {
+        const redacted = await redactCursorMessages({
+          client,
+          messageIds: [assistantMessageId, ...toolCallMessageIds],
+          safeMessage: returnedFailure.safeMessage,
+        });
+        if (!redacted) {
+          console.error('[cursor] provider failure settlement completed with redaction gaps');
+        }
+        await settleTaskFailure(
+          client,
+          sessionId,
+          taskId,
+          returnedFailure.error,
+          taskPatch,
+          'cursor'
+        );
+      } else {
+        await client.service('tasks').patch(taskId, taskPatch);
+      }
     } finally {
       agent.close();
     }
@@ -648,7 +810,7 @@ export async function executeCursorTask(params: {
         sha_at_end: gitStateAtEnd.sha,
       };
     }
-    await settleTaskFailure(client, sessionId, taskId, err, taskPatch);
+    await settleTaskFailure(client, sessionId, taskId, err, taskPatch, 'cursor');
     throw err;
   } finally {
     params.abortController.signal.removeEventListener('abort', abortHandler);
@@ -674,6 +836,7 @@ async function handleCursorEvent(args: {
   setAssistantText: (value: string) => void;
   getThinkingText: () => string;
   setThinkingText: (value: string) => void;
+  toolCallEventsByCallId: Map<string, Extract<SDKMessage, { type: 'tool_call' }>>;
   isAssistantStreamStarted: () => boolean;
   setAssistantStreamStarted: (value: boolean) => void;
   ensureAssistantMessageIndex: () => number;
@@ -726,12 +889,14 @@ async function handleCursorEvent(args: {
     }
 
     case 'tool_call': {
+      args.toolCallEventsByCallId.set(args.event.call_id, args.event);
       const existingMessageId = args.toolCallMessageIdsByCallId.get(args.event.call_id);
       if (existingMessageId) {
         await updateToolMessage({
           client: args.client,
           messageId: existingMessageId,
           event: args.event,
+          includeResult: false,
         });
         return;
       }
@@ -743,6 +908,7 @@ async function handleCursorEvent(args: {
         index: args.getNextIndex(),
         event: args.event,
         model: args.model,
+        includeResult: false,
       });
       args.toolCallMessageIdsByCallId.set(args.event.call_id, messageId);
       args.toolCallMessageIds.push(messageId);

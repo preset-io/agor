@@ -190,11 +190,18 @@ export async function executeOpenCodeTask(params: {
       return;
     }
     if (!params.abortController.signal.aborted) {
-      await settleTaskFailure(client, sessionId, taskId, failure, {
-        status: 'failed',
-        completed_at: new Date().toISOString(),
-        error_message: failure.message,
-      });
+      await settleTaskFailure(
+        client,
+        sessionId,
+        taskId,
+        failure,
+        {
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: failure.message,
+        },
+        'opencode'
+      );
     }
     throw failure;
   } finally {

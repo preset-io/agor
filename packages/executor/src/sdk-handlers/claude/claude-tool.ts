@@ -23,6 +23,7 @@ import type {
   SessionRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
+import { buildSafeProviderFailureMessage } from '../../provider-error.js';
 import { truncateContentIfNeeded } from '../../services/tool-result-truncator.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 // Removed import of calculateModelContextWindowUsage - inlined instead
@@ -673,13 +674,17 @@ export class ClaudeTool implements ITool {
           if (sdkResult.subtype && sdkResult.subtype !== 'success') {
             hadError = true;
             errorDetails = sdkResult.errors;
+            const failureMessage = buildSafeProviderFailureMessage(
+              sdkResult.errors ?? [],
+              `Agent SDK error (${sdkResult.subtype}): ${sdkResult.errors?.join('\n') ?? ''}`,
+              this.toolType
+            );
             console.error(
-              `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, errors=${JSON.stringify(sdkResult.errors)}`
+              `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, code=${failureMessage.metadata?.error_code ?? 'UNCLASSIFIED'}`
             );
 
             // Create a system message with the error details so it's visible in the conversation UI
             if (this.messagesService && sdkResult.errors?.length) {
-              const errorText = sdkResult.errors.join('\n');
               const errorMessageId = generateId() as MessageID;
               await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
                 await createSystemMessage(
@@ -688,13 +693,14 @@ export class ClaudeTool implements ITool {
                   [
                     {
                       type: 'text',
-                      text: `Agent SDK error (${sdkResult.subtype}): ${errorText}`,
+                      text: failureMessage.content,
                     },
                   ],
                   taskId,
                   nextIndex++,
                   resolvedModel,
-                  this.messagesService!
+                  this.messagesService!,
+                  failureMessage.metadata
                 );
                 return true;
               });
@@ -1101,13 +1107,17 @@ export class ClaudeTool implements ITool {
           if (sdkResult.subtype && sdkResult.subtype !== 'success') {
             hadError = true;
             errorDetails = sdkResult.errors;
+            const failureMessage = buildSafeProviderFailureMessage(
+              sdkResult.errors ?? [],
+              `Agent SDK error (${sdkResult.subtype}): ${sdkResult.errors?.join('\n') ?? ''}`,
+              this.toolType
+            );
             console.error(
-              `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, errors=${JSON.stringify(sdkResult.errors)}`
+              `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, code=${failureMessage.metadata?.error_code ?? 'UNCLASSIFIED'}`
             );
 
             // Create a system message with the error details so it's visible in the conversation UI
             if (this.messagesService && sdkResult.errors?.length) {
-              const errorText = sdkResult.errors.join('\n');
               const errorMessageId = generateId() as MessageID;
               await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
                 await createSystemMessage(
@@ -1116,13 +1126,14 @@ export class ClaudeTool implements ITool {
                   [
                     {
                       type: 'text',
-                      text: `Agent SDK error (${sdkResult.subtype}): ${errorText}`,
+                      text: failureMessage.content,
                     },
                   ],
                   taskId,
                   nextIndex++,
                   resolvedModel,
-                  this.messagesService!
+                  this.messagesService!,
+                  failureMessage.metadata
                 );
                 return true;
               });

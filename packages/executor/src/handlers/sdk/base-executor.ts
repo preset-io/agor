@@ -25,6 +25,7 @@ import type {
 import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
+import { buildSafeProviderFailureMessage } from '../../provider-error.js';
 import { formatExecutorFailure } from '../../safe-executor-error.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
@@ -49,9 +50,13 @@ async function appendTaskFailureMessage(
   client: AgorClient,
   sessionId: SessionID,
   taskId: TaskID,
-  failure: Error
+  failure: Error,
+  tool?: AgenticToolName
 ): Promise<void> {
-  const safeFailure = formatExecutorFailure(failure);
+  const fallbackContent = formatExecutorFailure(failure);
+  const safeFailure = tool
+    ? buildSafeProviderFailureMessage(failure, fallbackContent, tool)
+    : { content: fallbackContent };
   try {
     const existingMessages = await client.service('messages').find({
       query: { session_id: sessionId, $limit: 0 },
@@ -71,13 +76,14 @@ async function appendTaskFailureMessage(
       role: MessageRole.SYSTEM,
       index: messageCount,
       timestamp: new Date().toISOString(),
-      content: safeFailure,
-      content_preview: safeFailure.substring(0, 200),
+      content: safeFailure.content,
+      content_preview: safeFailure.content.substring(0, 200),
       metadata: {
         is_task_failure: true,
         ...(failure instanceof MissingCredentialError
           ? { is_missing_credential_failure: true }
           : {}),
+        ...safeFailure.metadata,
       },
     });
   } catch (error) {
@@ -90,14 +96,19 @@ export async function settleTaskFailure(
   sessionId: SessionID,
   taskId: TaskID,
   failure: Error,
-  patch: Partial<Task>
+  patch: Partial<Task>,
+  tool?: AgenticToolName
 ): Promise<void> {
   // Terminal task hooks may drain the next queued turn, so reserve the current
   // transcript index before publishing terminality. Message failure stays best-effort.
-  await appendTaskFailureMessage(client, sessionId, taskId, failure);
+  const fallbackContent = formatExecutorFailure(failure);
+  const safeFailure = tool
+    ? buildSafeProviderFailureMessage(failure, fallbackContent, tool)
+    : { content: fallbackContent };
+  await appendTaskFailureMessage(client, sessionId, taskId, failure, tool);
   await client.service('tasks').patch(taskId, {
     ...patch,
-    ...(patch.error_message ? { error_message: formatExecutorFailure(failure) } : {}),
+    ...(patch.error_message ? { error_message: safeFailure.content } : {}),
   });
 }
 
@@ -580,10 +591,17 @@ export async function executeToolTask(params: {
     // - wasStopped: user explicitly stopped the task
     // - hadError: SDK returned an error subtype (e.g., error_during_execution)
     const taskStatus = result.wasStopped ? 'stopped' : result.hadError ? 'failed' : 'completed';
+    const providerFailure = result.hadError
+      ? buildSafeProviderFailureMessage(
+          result.errorDetails ?? result.rawSdkResponse,
+          result.errorDetails?.join('; ') ?? 'The provider returned an error result.',
+          toolName
+        )
+      : undefined;
 
     if (result.hadError) {
       console.error(
-        `[${toolName}] SDK returned error result for session ${shortId(sessionId)}, marking task as failed${result.errorDetails?.length ? `: ${result.errorDetails.join('; ')}` : ''}`
+        `[${toolName}] SDK returned error result for session ${shortId(sessionId)}, marking task as failed${providerFailure?.metadata?.error_code ? ` (code=${providerFailure.metadata.error_code})` : ''}`
       );
     }
 
@@ -605,15 +623,23 @@ export async function executeToolTask(params: {
 
     // Add SDK response data for token accounting
     // Store both raw (for debugging) and normalized (for UI/analytics)
+    if (providerFailure?.metadata?.error_code) {
+      patchData.error_message = providerFailure.content;
+    }
     if (result.rawSdkResponse) {
-      patchData.raw_sdk_response = result.rawSdkResponse;
-      // `modelHint` refines context-window lookup for tools whose SDK
-      // event omits the model; never used as primaryModel.
-      const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse, {
-        modelHint: result.model,
-      });
-      if (normalized) {
-        patchData.normalized_sdk_response = normalized;
+      if (providerFailure?.metadata?.error_code) {
+        // Do not retain a provider response body once it has been classified.
+        patchData.raw_sdk_response = providerFailure.metadata;
+      } else {
+        patchData.raw_sdk_response = result.rawSdkResponse;
+        // `modelHint` refines context-window lookup for tools whose SDK
+        // event omits the model; never used as primaryModel.
+        const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse, {
+          modelHint: result.model,
+        });
+        if (normalized) {
+          patchData.normalized_sdk_response = normalized;
+        }
       }
     }
 
@@ -697,7 +723,7 @@ export async function executeToolTask(params: {
       };
     }
 
-    await settleTaskFailure(client, sessionId, taskId, err, patchData);
+    await settleTaskFailure(client, sessionId, taskId, err, patchData, toolName);
 
     throw err;
   } finally {

@@ -9,6 +9,7 @@
  * - User emoji avatars
  */
 
+import { PROVIDER_CREDIT_EXHAUSTED_ERROR_KIND } from '@agor/core/types';
 import {
   type AgenticToolName,
   type AgorClient,
@@ -37,6 +38,7 @@ import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MissingCredentialPanel } from '../MissingCredentialPanel';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
+import { ProviderCreditExhaustedPanel } from '../ProviderCreditExhaustedPanel';
 import { SystemMessage } from '../SystemMessage';
 import { ThinkingBlock } from '../ThinkingBlock';
 import {
@@ -508,6 +510,21 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       <MissingCredentialPanel
         tool={message.metadata.tool}
         client={client}
+        onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+      />
+    );
+  }
+
+  // Provider credit/quota failure — keep the workspace and teammate intact,
+  // and replace the provider's raw error body with recovery guidance.
+  if (
+    isSystem &&
+    message.metadata?.error_kind === PROVIDER_CREDIT_EXHAUSTED_ERROR_KIND &&
+    isAgenticToolName(message.metadata?.tool)
+  ) {
+    return (
+      <ProviderCreditExhaustedPanel
+        tool={message.metadata.tool}
         onOpenAgenticToolSettings={onOpenAgenticToolSettings}
       />
     );

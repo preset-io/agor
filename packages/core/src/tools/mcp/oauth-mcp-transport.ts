@@ -8,7 +8,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
-import type { MCPOAuthDCRMode } from '../../types/mcp.js';
+import type { MCPOAuthDCRDiagnostic, MCPOAuthDCRMode } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
@@ -107,6 +107,23 @@ export class OAuthCallbackValidationError extends Error {
   ) {
     super(`OAuth callback validation failed (${failureCode})`);
     this.name = 'OAuthCallbackValidationError';
+  }
+}
+
+/**
+ * A safe, actionable Dynamic Client Registration failure.
+ *
+ * The diagnostic is intentionally structured so daemon/UI callers do not need
+ * to parse provider response text. Only sanitized `error` fields are carried;
+ * response bodies and registration credentials are never retained.
+ */
+export class OAuthDCRFailure extends Error {
+  constructor(
+    message: string,
+    readonly diagnostic: MCPOAuthDCRDiagnostic
+  ) {
+    super(message);
+    this.name = 'OAuthDCRFailure';
   }
 }
 
@@ -411,6 +428,152 @@ const dynamicClientCache = new Map<
   { client_id: string; client_secret?: string; redirect_uri: string }
 >();
 
+const MAX_DCR_RESPONSE_BODY_CHARS = 16 * 1024;
+const MAX_DCR_PROVIDER_DETAIL_CHARS = 280;
+
+const SECRET_VALUE_PATTERN =
+  /(["']?(?:client[_ -]?secret|access[_ -]?token|refresh[_ -]?token|authorization[_ -]?code|code[_ -]?verifier|api[_ -]?key|password|secret|token)["']?)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
+const SECRET_QUERY_PARAMETER_PATTERN =
+  /([?&](?:client_secret|access_token|refresh_token|code|code_verifier|api_key|password|secret|token)=)[^&\s]+/gi;
+
+function sanitizeProviderDetail(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+
+  const sanitized = normalized
+    .replace(SECRET_VALUE_PATTERN, '$1=[redacted]')
+    .replace(SECRET_QUERY_PARAMETER_PATTERN, '$1[redacted]')
+    .replace(/\b(Bearer|Basic)\s+[^\s,;]+/gi, '$1 [redacted]');
+
+  return sanitized.length > MAX_DCR_PROVIDER_DETAIL_CHARS
+    ? `${sanitized.slice(0, MAX_DCR_PROVIDER_DETAIL_CHARS - 1)}…`
+    : sanitized;
+}
+
+async function readDcrResponseJson(response: Response): Promise<Record<string, unknown> | null> {
+  try {
+    // `safeOutboundFetch` bounds the response in production. Slice again here
+    // so test doubles and future transports cannot turn provider text into an
+    // unbounded diagnostic.
+    let body: string;
+    if (typeof response.text === 'function') {
+      body = (await response.text()).slice(0, MAX_DCR_RESPONSE_BODY_CHARS);
+    } else {
+      body = JSON.stringify(await response.json()).slice(0, MAX_DCR_RESPONSE_BODY_CHARS);
+    }
+    const parsed: unknown = JSON.parse(body);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function registrationDiagnostic(
+  httpStatus: number,
+  providerResponse: Record<string, unknown> | null
+): MCPOAuthDCRDiagnostic {
+  const diagnostic: MCPOAuthDCRDiagnostic = {
+    stage: 'dcr_registration',
+    http_status: httpStatus,
+  };
+  const error = sanitizeProviderDetail(providerResponse?.error);
+  const errorDescription = sanitizeProviderDetail(providerResponse?.error_description);
+  if (error) diagnostic.error = error;
+  if (errorDescription) diagnostic.error_description = errorDescription;
+  return diagnostic;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/** Parse only the fields the OAuth flow understands from an untrusted body. */
+function parseDynamicClientRegistrationResponse(
+  body: Record<string, unknown>
+): DynamicClientRegistrationResponse | null {
+  if (typeof body.client_id !== 'string') return null;
+
+  const result: DynamicClientRegistrationResponse = { client_id: body.client_id };
+  const stringFields = ['client_secret', 'token_endpoint_auth_method', 'client_name'] as const;
+  for (const field of stringFields) {
+    const value = body[field];
+    if (value !== undefined && typeof value !== 'string') return null;
+    if (typeof value === 'string') result[field] = value;
+  }
+
+  const numberFields = ['client_id_issued_at', 'client_secret_expires_at'] as const;
+  for (const field of numberFields) {
+    const value = body[field];
+    if (value !== undefined && typeof value !== 'number') return null;
+    if (typeof value === 'number') result[field] = value;
+  }
+
+  const arrayFields = ['redirect_uris', 'grant_types', 'response_types'] as const;
+  for (const field of arrayFields) {
+    const value = body[field];
+    if (value !== undefined && !isStringArray(value)) return null;
+    if (isStringArray(value)) result[field] = value;
+  }
+
+  return result;
+}
+
+function diagnosticStatus(diagnostic: MCPOAuthDCRDiagnostic): string {
+  return diagnostic.http_status === undefined ? '' : ` (HTTP ${diagnostic.http_status})`;
+}
+
+function diagnosticDetails(diagnostic: MCPOAuthDCRDiagnostic): string {
+  const details = [diagnostic.error, diagnostic.error_description].filter(Boolean);
+  return details.length > 0 ? ` Provider response: ${details.join(' — ')}.` : '';
+}
+
+function isRedirectUriRejection(diagnostic: MCPOAuthDCRDiagnostic): boolean {
+  return (
+    `${diagnostic.error ?? ''} ${diagnostic.error_description ?? ''}`.match(
+      /redirect[ _-]?uri|redirect[ _-]?url|approved redirect/i
+    ) !== null
+  );
+}
+
+function dcrRecoveryGuidance(diagnostic: MCPOAuthDCRDiagnostic): string {
+  const manualClient =
+    'enter the Client ID and Client Secret for a pre-registered OAuth app in Advanced — OAuth settings, then retry.';
+
+  if (isRedirectUriRejection(diagnostic)) {
+    return `The provider rejected the configured OAuth redirect URI. Approve that callback URL in the provider application, or ${manualClient}`;
+  }
+  if (diagnostic.http_status === 404) {
+    return `The advertised registration endpoint returned HTTP 404 and is unavailable or stale. Verify the provider OAuth metadata, or ${manualClient}`;
+  }
+  return `The provider rejected Dynamic Client Registration. Review its client-registration requirements, or ${manualClient}`;
+}
+
+function registrationFailure(
+  diagnostic: MCPOAuthDCRDiagnostic,
+  lead = 'Dynamic Client Registration failed'
+): OAuthDCRFailure {
+  const failureLead = lead.startsWith('Dynamic Client Registration failed')
+    ? lead
+    : `Dynamic Client Registration failed: ${lead}`;
+  return new OAuthDCRFailure(
+    `${failureLead}${diagnosticStatus(diagnostic)} at stage ${diagnostic.stage}.${diagnosticDetails(diagnostic)} ${dcrRecoveryGuidance(diagnostic)}`,
+    diagnostic
+  );
+}
+
+function missingRegistrationEndpointFailure(): OAuthDCRFailure {
+  const diagnostic: MCPOAuthDCRDiagnostic = { stage: 'dcr_endpoint_discovery' };
+  return new OAuthDCRFailure(
+    'OAuth client_id is required because the authorization server does not advertise a Dynamic Client Registration endpoint (stage: dcr_endpoint_discovery). The provider may require a pre-registered OAuth app. Enter the Client ID and Client Secret in Advanced — OAuth settings, then retry.',
+    diagnostic
+  );
+}
+
 /**
  * Test-only hook: snapshot the DCR client cache size. Used to verify that
  * `clearAuthCodeTokenCache` clears DCR registrations on blanket clears.
@@ -479,42 +642,77 @@ async function registerDynamicClient(
     body: JSON.stringify(registrationRequest),
     redirect: 'error',
     timeoutMs: 15_000,
+    maxResponseBytes: MAX_DCR_RESPONSE_BODY_CHARS,
     allowLocalhostHttp,
   });
 
   if (!response.ok) {
-    throw new Error(
-      `Dynamic Client Registration failed (${response.status}).\n\n` +
-        'This MCP server does not support Dynamic Client Registration (RFC 7591). ' +
-        "You need to register an OAuth app in the provider's developer portal " +
-        '(e.g. figma.com/developers/apps for Figma) and enter the Client ID and ' +
-        'Client Secret in the MCP server configuration.'
+    throw registrationFailure(
+      registrationDiagnostic(response.status, await readDcrResponseJson(response))
     );
   }
 
-  const result = (await response.json()) as DynamicClientRegistrationResponse;
+  const responseBody = await readDcrResponseJson(response);
+  if (!responseBody) {
+    throw registrationFailure(
+      { stage: 'dcr_registration', http_status: response.status },
+      'Dynamic Client Registration returned an invalid response'
+    );
+  }
+  const result = parseDynamicClientRegistrationResponse(responseBody);
+
+  if (!result) {
+    const invalidClientId = responseBody.client_id;
+    throw registrationFailure(
+      { stage: 'dcr_registration', http_status: response.status },
+      typeof invalidClientId !== 'string' || !invalidClientId.trim()
+        ? 'Dynamic Client Registration returned an invalid client ID'
+        : 'Dynamic Client Registration returned an invalid response'
+    );
+  }
 
   if (typeof result.client_id !== 'string' || !result.client_id.trim()) {
-    throw new Error('Dynamic Client Registration returned an invalid client ID');
+    throw registrationFailure(
+      { stage: 'dcr_registration', http_status: response.status },
+      'Dynamic Client Registration returned an invalid client ID'
+    );
   }
   if (!result.redirect_uris?.includes(redirectUri)) {
-    throw new Error('Dynamic Client Registration did not bind the required redirect URI');
+    throw registrationFailure(
+      { stage: 'dcr_registration', http_status: response.status },
+      'Dynamic Client Registration did not bind the required redirect URI'
+    );
   }
   const authMethod = result.token_endpoint_auth_method ?? 'none';
   if (!['none', 'client_secret_basic'].includes(authMethod)) {
-    throw new Error('Dynamic Client Registration returned an unsupported token auth method');
+    throw registrationFailure(
+      { stage: 'dcr_registration', http_status: response.status },
+      'Dynamic Client Registration returned an unsupported token auth method'
+    );
   }
   if (authMethod === 'client_secret_basic' && !result.client_secret) {
-    throw new Error('Dynamic Client Registration omitted the required client secret');
+    throw registrationFailure(
+      { stage: 'dcr_registration', http_status: response.status },
+      'Dynamic Client Registration omitted the required client secret'
+    );
   }
   if (authMethod === 'none' && result.client_secret) {
-    throw new Error('Dynamic Client Registration returned incompatible public-client credentials');
+    throw registrationFailure(
+      { stage: 'dcr_registration', http_status: response.status },
+      'Dynamic Client Registration returned incompatible public-client credentials'
+    );
   }
   if (result.grant_types && !result.grant_types.includes('authorization_code')) {
-    throw new Error('Dynamic Client Registration did not enable the authorization-code grant');
+    throw registrationFailure(
+      { stage: 'dcr_registration', http_status: response.status },
+      'Dynamic Client Registration did not enable the authorization-code grant'
+    );
   }
   if (result.response_types && !result.response_types.includes('code')) {
-    throw new Error('Dynamic Client Registration did not enable the code response type');
+    throw registrationFailure(
+      { stage: 'dcr_registration', http_status: response.status },
+      'Dynamic Client Registration did not enable the code response type'
+    );
   }
 
   if (reuseLocalCache) {
@@ -1353,12 +1551,9 @@ async function startMCPOAuthFlowWithAS(opts: {
         );
         actualClientId = registration.client_id;
         resolvedClientSecret = registration.client_secret;
-      } catch {
-        throw new Error(
-          'Dynamic Client Registration failed.\n\n' +
-            "Register an OAuth app in the provider's developer portal and enter " +
-            'the Client ID (and Client Secret if required) in the MCP server configuration.'
-        );
+      } catch (error) {
+        if (error instanceof OAuthDCRFailure) throw error;
+        throw registrationFailure({ stage: 'dcr_registration' });
       }
     } else if (hasFullOverrides) {
       throw new Error(
@@ -1366,12 +1561,7 @@ async function startMCPOAuthFlowWithAS(opts: {
           'Please provide a client_id in the MCP server configuration.'
       );
     } else {
-      throw new Error(
-        'OAuth client_id is required but the authorization server does not advertise ' +
-          'a Dynamic Client Registration endpoint (RFC 7591).\n\n' +
-          "Register an OAuth app in the provider's developer portal and enter " +
-          'the Client ID (and Client Secret if required) in the MCP server configuration.'
-      );
+      throw missingRegistrationEndpointFailure();
     }
   } else if (!actualClientId) {
     throw new Error(
