@@ -1,3 +1,4 @@
+import type { MCPOAuthDCRDiagnostic } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { ApiOutlined, DownOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
@@ -56,6 +57,8 @@ export interface MCPServerFormFieldsProps {
   } | null;
   /** Callback to save server first before OAuth flow (for new servers) */
   onSaveFirst?: () => Promise<string | null>;
+  /** Persist edited OAuth settings before retrying an existing server's flow. */
+  onSaveBeforeOAuthRetry?: () => Promise<boolean>;
 }
 
 /**
@@ -83,11 +86,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   testing = false,
   testResult,
   onSaveFirst,
+  onSaveBeforeOAuthRetry,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testingAuth, setTestingAuth] = useState(false);
   const [oauthBrowserFlowAvailable, setOauthBrowserFlowAvailable] = useState(false);
   const [startingOAuthFlow, setStartingOAuthFlow] = useState(false);
+  const [oauthFailure, setOauthFailure] = useState<{
+    message: string;
+    diagnostic?: MCPOAuthDCRDiagnostic;
+  } | null>(null);
+  const [oauthAdvancedOpen, setOauthAdvancedOpen] = useState(false);
 
   // OAuth flow state
   const [oauthCallbackModalVisible, setOauthCallbackModalVisible] = useState(false);
@@ -168,6 +177,13 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       setEffectiveServerId(newServerId);
     }
 
+    const isOAuthRetry = oauthFailure !== null;
+    if (isOAuthRetry && targetServerId && onSaveBeforeOAuthRetry) {
+      showInfo('Saving OAuth settings before retrying...');
+      const saved = await onSaveBeforeOAuthRetry();
+      if (!saved) return;
+    }
+
     const values = form.getFieldsValue(true);
     const requestData = extractOAuthConfigForTesting(values);
     if (!requestData) {
@@ -176,6 +192,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     }
 
     setStartingOAuthFlow(true);
+    setOauthFailure(null);
 
     try {
       showInfo('Starting OAuth authentication flow...');
@@ -191,6 +208,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         authorizationUrl?: string;
         attempt_id?: string;
         state?: string;
+        diagnostic?: MCPOAuthDCRDiagnostic;
       };
 
       if (data.success && data.authorizationUrl && data.attempt_id) {
@@ -218,6 +236,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               showSuccess('OAuth authentication successful!');
               setOauthCallbackModalVisible(false);
               setOauthBrowserFlowAvailable(false);
+              setOauthFailure(null);
             } else {
               showError(oauthAttemptFailureMessage(attempt.status));
               setOauthCallbackModalVisible(false);
@@ -231,10 +250,15 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             if (!controller.signal.aborted) cleanup();
           });
       } else {
-        showError(data.error || 'Failed to start OAuth flow');
+        setOauthFailure({
+          message: data.error || 'Failed to start OAuth flow',
+          diagnostic: data.diagnostic,
+        });
       }
     } catch (error) {
-      showError(`OAuth flow error: ${error instanceof Error ? error.message : String(error)}`);
+      setOauthFailure({
+        message: `OAuth flow error: ${error instanceof Error ? error.message : String(error)}`,
+      });
     } finally {
       setStartingOAuthFlow(false);
     }
@@ -277,6 +301,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
     const values = form.getFieldsValue(true);
     const currentAuthType = values.auth_type || authType;
+    if (currentAuthType === 'oauth') setOauthFailure(null);
 
     setTestingAuth(true);
     try {
@@ -528,6 +553,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     oauth_scope: undefined,
                   });
                 }
+                setOauthFailure(null);
                 onAuthTypeChange?.(value as 'none' | 'bearer' | 'jwt' | 'oauth');
               }}
             >
@@ -592,7 +618,9 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             )}
             {authType === 'oauth' && oauthBrowserFlowAvailable && (
               <Button type="primary" loading={startingOAuthFlow} onClick={handleStartOAuthFlow}>
-                Start OAuth Flow
+                {oauthFailure && mode === 'edit'
+                  ? 'Save OAuth settings & retry'
+                  : 'Start OAuth Flow'}
               </Button>
             )}
             {authType === 'oauth' && effectiveServerId && !oauthBrowserFlowAvailable && (
@@ -717,12 +745,47 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         />
       )}
 
+      {oauthFailure && (
+        <Alert
+          type="error"
+          title="OAuth setup needs attention"
+          description={
+            <Space orientation="vertical" size={4}>
+              <Typography.Text>{oauthFailure.message}</Typography.Text>
+              {oauthFailure.diagnostic && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Stage: {oauthFailure.diagnostic.stage.replaceAll('_', ' ')}
+                  {oauthFailure.diagnostic.http_status !== undefined
+                    ? ` · HTTP ${oauthFailure.diagnostic.http_status}`
+                    : ''}
+                </Typography.Text>
+              )}
+            </Space>
+          }
+          action={
+            <Button size="small" onClick={() => setOauthAdvancedOpen(true)}>
+              Open OAuth settings
+            </Button>
+          }
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
       {/* Advanced — long tail of OAuth endpoints that are normally
           auto-discovered. Collapsed by default; a dot on the header
           signals that one or more values have been customized. */}
       {showAdvancedSection && (
         <Collapse
           ghost
+          activeKey={oauthAdvancedOpen ? ['advanced-oauth'] : []}
+          onChange={(activeKey) => {
+            setOauthAdvancedOpen(
+              Array.isArray(activeKey)
+                ? activeKey.includes('advanced-oauth')
+                : activeKey === 'advanced-oauth'
+            );
+          }}
           // Keep panel children mounted when collapsed so Form.Items inside
           // don't lose their values (and Form.useWatch keeps reporting them).
           destroyOnHidden={false}
@@ -759,7 +822,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                         </li>
                         <li>
                           Set Client ID / Client Secret only for servers that require a
-                          pre-registered OAuth app (e.g. Figma, GitHub).
+                          pre-registered OAuth app.
                         </li>
                         <li>
                           Override the URLs only if the server doesn't expose a discovery document
@@ -811,7 +874,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Client Secret"
                     name="oauth_client_secret"
-                    tooltip="Required for servers that use confidential clients (e.g. Figma). The secret is sent via HTTP Basic Auth during token exchange."
+                    tooltip="Required for servers that use confidential clients. The secret is sent via HTTP Basic Auth during token exchange."
                   >
                     <Input.Password
                       placeholder="Enter client secret or {{ user.env.OAUTH_CLIENT_SECRET }}"

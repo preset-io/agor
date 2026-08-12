@@ -48,6 +48,16 @@ import {
   startMCPOAuthFlow,
 } from './oauth-mcp-transport';
 
+async function rejectedError<T extends Error>(promise: Promise<unknown>): Promise<T> {
+  try {
+    await promise;
+  } catch (failure) {
+    if (failure instanceof Error) return failure as T;
+    throw failure;
+  }
+  throw new Error('Expected OAuth flow to reject');
+}
+
 // ---------------------------------------------------------------------------
 // completeMCPOAuthFlow — token exchange request contract
 // ---------------------------------------------------------------------------
@@ -1168,6 +1178,137 @@ describe('strict current MCP OAuth profile', () => {
       `${issuer}/register`,
       expect.objectContaining({ method: 'POST' })
     );
+  });
+
+  it('preserves a missing advertised registration endpoint as an actionable diagnostic', async () => {
+    globalThis.fetch = strictFetch();
+
+    await expect(
+      startMCPOAuthFlow(
+        `Bearer resource_metadata="${metadataUri}"`,
+        undefined,
+        'https://agor.example.com/mcp-servers/oauth-callback',
+        { resourceUri }
+      )
+    ).rejects.toMatchObject({
+      diagnostic: { stage: 'dcr_endpoint_discovery' },
+    });
+
+    await expect(
+      startMCPOAuthFlow(
+        `Bearer resource_metadata="${metadataUri}"`,
+        undefined,
+        'https://agor.example.com/mcp-servers/oauth-callback',
+        { resourceUri }
+      )
+    ).rejects.toThrow(/pre-registered OAuth app|Client ID and Client Secret/i);
+  });
+
+  it('preserves a provider registration 404 without the old provider-specific copy', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'not_found' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      })
+    ) as unknown as typeof fetch;
+
+    const result = startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
+      prefetchedAuthServerMetadata: {
+        issuer: 'https://auth.reo.dev',
+        authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+        token_endpoint: 'https://auth.reo.dev/oauth/token',
+        registration_endpoint: 'https://auth.reo.dev/oauth/register',
+      },
+      cacheKey: 'https://mcp.reo.dev/mcp',
+      resourceUri: 'https://mcp.reo.dev/mcp',
+      compatibilityMode: 'legacy',
+      dcrMode: 'fallback',
+      allowLocalhostHttp: true,
+    });
+
+    await expect(result).rejects.toMatchObject({
+      diagnostic: { stage: 'dcr_registration', http_status: 404, error: 'not_found' },
+    });
+    await expect(result).rejects.toThrow(/advertised registration endpoint.*HTTP 404/i);
+    await expect(result).rejects.not.toThrow(/figma/i);
+  });
+
+  it('turns approved-redirect-URI rejection details into manual-client guidance', async () => {
+    const clientSecret = 'CLIENT_SECRET_SHOULD_NOT_APPEAR';
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: 'invalid_client_metadata',
+          error_description: `The redirect URI is not in the approved redirect URI list; client_secret=${clientSecret}`,
+        }),
+        { status: 400, headers: { 'content-type': 'application/json' } }
+      )
+    ) as unknown as typeof fetch;
+
+    const result = startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
+      prefetchedAuthServerMetadata: {
+        issuer: 'https://auth.reo.dev',
+        authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+        token_endpoint: 'https://auth.reo.dev/oauth/token',
+        registration_endpoint: 'https://auth.reo.dev/oauth/register',
+      },
+      cacheKey: 'https://mcp.reo.dev/mcp',
+      resourceUri: 'https://mcp.reo.dev/mcp',
+      compatibilityMode: 'legacy',
+      dcrMode: 'fallback',
+      allowLocalhostHttp: true,
+    });
+
+    const error = await rejectedError<
+      Error & {
+        diagnostic: { error?: string; error_description?: string; http_status?: number };
+      }
+    >(result);
+    expect(error).toMatchObject({
+      diagnostic: {
+        stage: 'dcr_registration',
+        http_status: 400,
+        error: 'invalid_client_metadata',
+      },
+    });
+    expect(error.diagnostic.error_description).toMatch(/redirect URI/i);
+    expect(error.message).toMatch(/rejected the configured OAuth redirect URI/i);
+    expect(error.message).toMatch(/Client ID and Client Secret/i);
+    expect(error.message).not.toContain(clientSecret);
+  });
+
+  it('bounds and sanitizes provider error descriptions', async () => {
+    const accessToken = 'ACCESS_TOKEN_SHOULD_NOT_APPEAR';
+    const longDescription = `Provider detail access_token=${accessToken} ${'x'.repeat(2_000)}`;
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: 'invalid_request', error_description: longDescription }),
+          { status: 400, headers: { 'content-type': 'application/json' } }
+        )
+      ) as unknown as typeof fetch;
+
+    const error = await rejectedError<Error & { diagnostic: { error_description?: string } }>(
+      startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://auth.reo.dev',
+          authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+          token_endpoint: 'https://auth.reo.dev/oauth/token',
+          registration_endpoint: 'https://auth.reo.dev/oauth/register',
+        },
+        cacheKey: 'https://mcp.reo.dev/mcp',
+        resourceUri: 'https://mcp.reo.dev/mcp',
+        compatibilityMode: 'legacy',
+        dcrMode: 'fallback',
+        allowLocalhostHttp: true,
+      })
+    );
+
+    expect(error.diagnostic.error_description).toMatch(/access_token=\[redacted\]/i);
+    expect(error.diagnostic.error_description?.length).toBeLessThanOrEqual(280);
+    expect(error.message).not.toContain(accessToken);
+    expect(error.message.length).toBeLessThan(1_200);
   });
 
   it('guesses issuer-relative /register only for explicit legacy fallback', async () => {

@@ -54,6 +54,22 @@ export interface MCPOAuthRefreshResult {
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
 export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
+
+/**
+ * Safe diagnostics for a failed OAuth Dynamic Client Registration attempt.
+ *
+ * These fields are deliberately limited to provider error identifiers and
+ * descriptions. They must never contain the response body, credentials, or
+ * OAuth protocol secrets.
+ */
+export type MCPOAuthDCRDiagnosticStage = 'dcr_endpoint_discovery' | 'dcr_registration';
+export interface MCPOAuthDCRDiagnostic {
+  stage: MCPOAuthDCRDiagnosticStage;
+  http_status?: number;
+  error?: string;
+  error_description?: string;
+}
+
 export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2] as const;
 export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
 

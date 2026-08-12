@@ -50,11 +50,13 @@ import type {
   OAuthFlowContext,
   OAuthTokenResponse,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type {
   AuthenticatedParams,
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
+  MCPOAuthDCRDiagnostic,
   MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
   MCPServerID,
@@ -1447,6 +1449,10 @@ async function registerMCPServices(
     '(3) /.well-known/oauth-authorization-server at MCP origin (RFC 8414), ' +
     '(4) /.well-known/openid-configuration at MCP origin (OIDC).';
 
+  function oauthDcrDiagnostic(error: unknown): MCPOAuthDCRDiagnostic | undefined {
+    return error instanceof OAuthDCRFailure ? error.diagnostic : undefined;
+  }
+
   type StartTwoPhaseOAuthOptions = {
     mcpUrl: string;
     wwwAuthenticate: string;
@@ -2400,10 +2406,12 @@ async function registerMCPServices(
                   flowError instanceof Error ? flowError.name : 'unknown'
                 }`
               );
+              const diagnostic = oauthDcrDiagnostic(flowError);
               return {
                 success: false,
                 error: `OAuth 2.1 browser flow failed: ${flowError instanceof Error ? flowError.message : String(flowError)}`,
                 oauthType: 'oauth2.1',
+                ...(diagnostic ? { diagnostic } : {}),
               };
             }
           }
@@ -2783,7 +2791,12 @@ async function registerMCPServices(
         console.error(
           `[OAuth Start] Failed category=${error instanceof Error ? error.name : 'unknown'}`
         );
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        const diagnostic = oauthDcrDiagnostic(error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          ...(diagnostic ? { diagnostic } : {}),
+        };
       }
     },
   });
