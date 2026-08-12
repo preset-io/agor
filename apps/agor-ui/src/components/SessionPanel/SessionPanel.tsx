@@ -50,7 +50,6 @@ import {
   theme,
 } from 'antd';
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
@@ -59,7 +58,7 @@ import { useUIMode } from '../../contexts/UIModeContext';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
-import { agorStore, useAgorStore } from '../../store/agorStore';
+import { useAgorStore } from '../../store/agorStore';
 import {
   selectMcpServerById,
   selectUserAuthenticatedMcpServerIds,
@@ -299,73 +298,6 @@ export interface SessionPanelProps {
   open: boolean;
   onClose: () => void;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
-}
-
-/** Slim-only header dropdown for jumping between this branch's sessions.
- * Menu items are built at open time from a non-reactive store read, so the
- * panel keeps its narrow-subscription contract (no re-render on session
- * churn). Lives in its own component so useNavigate() only runs when a
- * Router is guaranteed. */
-function SessionSwitcher({
-  currentSessionId,
-  branchId,
-}: {
-  currentSessionId: string;
-  branchId: string;
-}) {
-  const navigate = useNavigate();
-  const [items, setItems] = React.useState<NonNullable<MenuProps['items']>>([]);
-
-  const buildItems = React.useCallback(() => {
-    const sessions = agorStore.getState().sessionsByBranch.get(branchId) ?? [];
-    setItems(
-      sessions
-        .filter((s) => !s.archived)
-        .sort(
-          (a, b) =>
-            new Date(b.last_updated ?? 0).getTime() - new Date(a.last_updated ?? 0).getTime()
-        )
-        .slice(0, 15)
-        .map((s) => ({
-          key: s.session_id,
-          label: (
-            <Typography.Text
-              strong={s.session_id === currentSessionId}
-              ellipsis
-              style={{ maxWidth: 280, display: 'inline-block' }}
-            >
-              {getSessionDisplayTitle(s, { includeAgentFallback: false }) || 'Untitled session'}
-            </Typography.Text>
-          ),
-        }))
-    );
-  }, [branchId, currentSessionId]);
-
-  return (
-    <Dropdown
-      menu={{
-        items,
-        selectedKeys: [currentSessionId],
-        onClick: ({ key }) => {
-          if (key !== currentSessionId) navigate(`/s/${shortId(key)}/`);
-        },
-      }}
-      trigger={['click']}
-      placement="bottomLeft"
-      onOpenChange={(open) => {
-        if (open) buildItems();
-      }}
-    >
-      <Tooltip title="Switch session">
-        <Button
-          type="text"
-          size="small"
-          aria-label="Switch session"
-          icon={<DownOutlined style={{ fontSize: 10 }} />}
-        />
-      </Tooltip>
-    </Dropdown>
-  );
 }
 
 const SessionPanel: React.FC<SessionPanelProps> = ({
@@ -1548,12 +1480,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                     />
                   </button>
                 </Tooltip>
-              )}
-              {isSlim && branch && (
-                <SessionSwitcher
-                  currentSessionId={session.session_id}
-                  branchId={branch.branch_id}
-                />
               )}
               <Tooltip title={isSlim ? session.status.toUpperCase() : undefined}>
                 <Badge
