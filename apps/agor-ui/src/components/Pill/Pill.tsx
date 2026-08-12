@@ -619,6 +619,8 @@ interface GitStatePillProps extends BasePillProps {
   sha: string;
   branchName?: string; // Hide branch name if it matches branch name
   showDirtyIndicator?: boolean;
+  /** Unboxed rendering for dense rows: plain text, no Tag chrome. */
+  bare?: boolean;
 }
 
 export const GitStatePill: React.FC<GitStatePillProps> = ({
@@ -626,6 +628,7 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
   sha,
   branchName,
   showDirtyIndicator = true,
+  bare = false,
   style,
 }) => {
   const { token } = theme.useToken();
@@ -644,6 +647,30 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
     e.stopPropagation();
     await copyToClipboard(cleanSha);
   };
+
+  if (bare) {
+    // Unboxed variant for dense chip rows: plain tertiary monospace text,
+    // same tooltip and click-to-copy.
+    return (
+      <Tooltip title={tooltip}>
+        <Typography.Text
+          onClick={handleClick}
+          style={{
+            fontFamily: token.fontFamilyCode,
+            fontSize: 11,
+            color: token.colorTextTertiary,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            ...style,
+          }}
+        >
+          {shouldShowBranch && `${branch} : `}
+          {displaySha}
+          {showDirty && <DirtyDot />}
+        </Typography.Text>
+      </Tooltip>
+    );
+  }
 
   return (
     <Tooltip title={tooltip}>
