@@ -33,6 +33,7 @@ import {
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
 import { isDaemonRunning } from '@agor-live/client';
+import { getDaemonUrl } from '@agor-live/client/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -208,12 +209,13 @@ export default class Init extends Command {
   }
 
   private async assertDaemonStoppedBeforeReinit(): Promise<void> {
-    const config = await loadConfig();
-    const host = config.daemon?.host || 'localhost';
-    const port = config.daemon?.port || 3030;
-    if (await isDaemonRunning(`http://${host}:${port}`)) {
+    // Use the same environment/config resolution and health probe as
+    // `agor daemon status` so re-init cannot drift from the CLI's canonical
+    // answer about which daemon endpoint is active.
+    const daemonUrl = await getDaemonUrl();
+    if (await isDaemonRunning(daemonUrl)) {
       throw new Error(
-        `The Agor daemon is running at http://${host}:${port}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`
+        `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`
       );
     }
   }
@@ -609,10 +611,8 @@ export default class Init extends Command {
     this.log('');
 
     // Check if daemon is running
-    const config = await loadConfig();
-    const host = config.daemon?.host || 'localhost';
-    const port = config.daemon?.port || 3030;
-    const daemonRunning = await isDaemonRunning(`http://${host}:${port}`);
+    const daemonUrl = await getDaemonUrl();
+    const daemonRunning = await isDaemonRunning(daemonUrl);
     const isDevMode = await this.isDevMode();
 
     this.log(chalk.bold('Next steps:'));

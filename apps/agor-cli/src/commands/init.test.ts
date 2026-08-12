@@ -69,6 +69,28 @@ console.log('fixture npm installed ' + packageName + '@' + version);
   await chmod(npmPath, 0o755);
 }
 
+function createInitEnvironment(
+  home: string,
+  overrides: Record<string, string> = {}
+): Record<string, string> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: home,
+    AGOR_AGENTIC_TOOLS_DIR: join(home, '.agor', 'agentic-tools'),
+    AGOR_MANAGED_AGENTIC_TOOLS: '1',
+    AGOR_TELEMETRY: '0',
+    AGOR_VERSION: '9.8.7-test',
+    ...overrides,
+  };
+  // The parent Agor session points at its own daemon. A clean-install fixture
+  // must resolve daemon status only from the fixture's HOME/config, exactly as
+  // a fresh shell would.
+  delete env.DAEMON_URL;
+  delete env.PORT;
+  delete env.AGOR_CONFIG_PATH;
+  return env as Record<string, string>;
+}
+
 async function runInteractiveInit(
   home: string,
   fixtureBin: string
@@ -82,15 +104,9 @@ async function runInteractiveInit(
     cwd: cliRoot,
     cols: 100,
     rows: 40,
-    env: {
-      ...process.env,
-      HOME: home,
-      AGOR_AGENTIC_TOOLS_DIR: join(home, '.agor', 'agentic-tools'),
-      AGOR_MANAGED_AGENTIC_TOOLS: '1',
-      AGOR_TELEMETRY: '0',
-      AGOR_VERSION: '9.8.7-test',
+    env: createInitEnvironment(home, {
       PATH: `${fixtureBin}${delimiter}${process.env.PATH ?? ''}`,
-    },
+    }),
   });
 
   let output = '';
@@ -145,14 +161,7 @@ async function runInitWithoutPty(
   const child = spawn(process.execPath, [tsxCli, join(cliRoot, 'bin', 'dev.ts'), 'init', ...args], {
     cwd: cliRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      HOME: home,
-      AGOR_AGENTIC_TOOLS_DIR: join(home, '.agor', 'agentic-tools'),
-      AGOR_MANAGED_AGENTIC_TOOLS: '1',
-      AGOR_TELEMETRY: '0',
-      AGOR_VERSION: '9.8.7-test',
-    },
+    env: createInitEnvironment(home),
   });
   let output = '';
   child.stdout.on('data', (data) => {
@@ -177,14 +186,7 @@ async function runInteractiveReinit(home: string): Promise<{
     cwd: cliRoot,
     cols: 100,
     rows: 40,
-    env: {
-      ...process.env,
-      HOME: home,
-      AGOR_AGENTIC_TOOLS_DIR: join(home, '.agor', 'agentic-tools'),
-      AGOR_MANAGED_AGENTIC_TOOLS: '1',
-      AGOR_TELEMETRY: '0',
-      AGOR_VERSION: '9.8.7-test',
-    },
+    env: createInitEnvironment(home),
   });
 
   let output = '';
