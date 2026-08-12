@@ -355,6 +355,20 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
   });
 
+  it("workspace step renders the concept tags at the bottom, below the Board's AI tool helper", () => {
+    renderWizard({ initialStep: 'workspace' });
+
+    const aiTool = screen.getByText("Board's AI tool");
+    const branchTag = screen.getByText('Branch');
+    const sessionTag = screen.getByText('Session');
+    expect(branchTag).toBeInTheDocument();
+    expect(sessionTag).toBeInTheDocument();
+    // Tags moved below the name field + AI-tool helper (Fix 2).
+    expect(
+      aiTool.compareDocumentPosition(branchTag) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it('workspace step skips board creation when the user already has one', async () => {
     const boardById = new Map<string, Board>([['board-existing', makeBoard()]]);
     const { boardsService } = renderWizard({
