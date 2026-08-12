@@ -9,6 +9,7 @@ import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface TeammatesTableProps {
@@ -232,16 +233,10 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
 
   return (
     <div>
-      <Space
-        orientation="vertical"
-        size={token.sizeUnit * 2}
-        style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
-      >
-        <Typography.Text type="secondary">
-          Teammates are persistent AI companions backed by a framework repo. They maintain memory,
-          orchestrate work across branches, and run on scheduled heartbeats.
-        </Typography.Text>
-        <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
+      <ListPanelHeader
+        title="Teammates"
+        description="Teammates are persistent AI companions backed by a framework repo. They maintain memory, orchestrate work across branches, and run on scheduled heartbeats."
+        search={
           <Input
             allowClear
             placeholder="Search teammates..."
@@ -249,6 +244,8 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{ maxWidth: token.sizeUnit * 40 }}
           />
+        }
+        actions={
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -257,8 +254,8 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
           >
             Create AI teammate
           </Button>
-        </Space>
-      </Space>
+        }
+      />
 
       {teammates.length === 0 && !searchTerm && (
         <div

@@ -8,6 +8,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { Tag } from '../Tag';
+import { ListPanelHeader } from './panelPrimitives';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
 interface ReposTableProps {
@@ -172,18 +173,10 @@ export const ReposTable: React.FC<ReposTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Connect remote or local git repositories for your sessions.
-        </Typography.Text>
-        <Space>
+      <ListPanelHeader
+        title="Repositories"
+        description="Connect remote or local git repositories for your sessions."
+        search={
           <Input
             allowClear
             placeholder="Search name, slug, URL, path, type, or branch"
@@ -191,11 +184,13 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 340 }}
           />
+        }
+        actions={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             New Repository
           </Button>
-        </Space>
-      </div>
+        }
+      />
 
       {repos.length === 0 ? (
         <div

@@ -23,6 +23,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { HighlightMatch } from '../HighlightMatch';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -353,25 +354,19 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Live web application artifacts created by agents via MCP tools.
-        </Typography.Text>
-        <Input
-          allowClear
-          placeholder="Search name, description, template, branch, or board"
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.target.value)}
-          style={{ width: 360 }}
-        />
-      </div>
+      <ListPanelHeader
+        title="Artifacts"
+        description="Live web application artifacts created by agents via MCP tools."
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, description, template, branch, or board"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: 360 }}
+          />
+        }
+      />
 
       {dataSource.length === 0 ? (
         <div

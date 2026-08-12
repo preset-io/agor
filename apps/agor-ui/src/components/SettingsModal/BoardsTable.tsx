@@ -40,6 +40,7 @@ import { ArchiveToggleButton } from '../ArchiveButton';
 import { BoardFormFields, extractBoardFormValues, isCustomCSS } from '../forms/BoardFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -532,43 +533,41 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Create and manage boards for organizing sessions.
-        </Typography.Text>
-        <Space>
-          <Select
-            value={archiveFilter}
-            onChange={(value) => setArchiveFilter(value)}
-            style={{ width: 120 }}
-            options={[
-              { value: 'active', label: 'Active' },
-              { value: 'all', label: 'All' },
-              { value: 'archived', label: 'Archived' },
-            ]}
-          />
-          <Input
-            allowClear
-            placeholder="Search name, slug, description, or ID"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 300 }}
-          />
-          <Button icon={<UploadOutlined />} onClick={handleImportClick}>
-            Import Board
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            New Board
-          </Button>
-        </Space>
-      </div>
+      <ListPanelHeader
+        title="Boards"
+        description="Create and manage boards for organizing sessions."
+        search={
+          <Space>
+            <Select
+              value={archiveFilter}
+              onChange={(value) => setArchiveFilter(value)}
+              style={{ width: 120 }}
+              options={[
+                { value: 'active', label: 'Active' },
+                { value: 'all', label: 'All' },
+                { value: 'archived', label: 'Archived' },
+              ]}
+            />
+            <Input
+              allowClear
+              placeholder="Search name, slug, description, or ID"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: 300 }}
+            />
+          </Space>
+        }
+        actions={
+          <>
+            <Button icon={<UploadOutlined />} onClick={handleImportClick}>
+              Import Board
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              New Board
+            </Button>
+          </>
+        }
+      />
 
       {boards.length === 0 ? (
         <div

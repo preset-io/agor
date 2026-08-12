@@ -32,6 +32,7 @@ import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { BranchFormFields } from '../BranchFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { renderEnvCell } from './BranchEnvColumn';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BranchesTableProps {
@@ -542,15 +543,10 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
   return (
     <div>
-      <Space
-        orientation="vertical"
-        size={token.sizeUnit * 2}
-        style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
-      >
-        <Typography.Text type="secondary">
-          Manage git branches for isolated development contexts across sessions.
-        </Typography.Text>
-        <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
+      <ListPanelHeader
+        title="Branches"
+        description="Manage git branches for isolated development contexts across sessions."
+        search={
           <Space>
             <Input
               allowClear
@@ -572,6 +568,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               ]}
             />
           </Space>
+        }
+        actions={
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -580,8 +578,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           >
             Create Branch
           </Button>
-        </Space>
-      </Space>
+        }
+      />
 
       {repos.length === 0 && (
         <div

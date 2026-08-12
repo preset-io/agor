@@ -31,6 +31,7 @@ import { useThemedMessage } from '../../utils/message';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 import { UserAvatarsTab } from './UserAvatarsTab';
@@ -269,16 +270,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
 
   const usersTable = (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">Manage user accounts and permissions.</Typography.Text>
-        <Space>
+      <ListPanelHeader
+        title="Users"
+        description="Manage user accounts and permissions."
+        search={
           <Input
             allowClear
             placeholder="Search name, email, username, role, or groups"
@@ -286,11 +281,13 @@ export const UsersTable: React.FC<UsersTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 320 }}
           />
+        }
+        actions={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             New User
           </Button>
-        </Space>
-      </div>
+        }
+      />
 
       <Table
         dataSource={users}

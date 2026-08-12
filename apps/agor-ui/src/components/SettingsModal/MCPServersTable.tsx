@@ -1,17 +1,6 @@
 import { type CreateMCPServerInput, type MCPServer, shortId } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
-import {
-  Badge,
-  Button,
-  Descriptions,
-  Form,
-  Input,
-  Popconfirm,
-  Space,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
+import { Badge, Button, Descriptions, Form, Input, Popconfirm, Table, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
@@ -19,6 +8,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -522,18 +512,10 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Configure Model Context Protocol servers for enhanced AI capabilities.
-        </Typography.Text>
-        <Space>
+      <ListPanelHeader
+        title="MCP Servers"
+        description="Configure Model Context Protocol servers for enhanced AI capabilities."
+        search={
           <Input
             allowClear
             placeholder="Search name, URL, command, tools, transport, or scope"
@@ -541,11 +523,13 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 360 }}
           />
+        }
+        actions={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             New MCP Server
           </Button>
-        </Space>
-      </div>
+        }
+      />
 
       <Table
         dataSource={servers}

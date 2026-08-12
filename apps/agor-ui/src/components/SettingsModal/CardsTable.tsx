@@ -17,6 +17,7 @@ import {
   Popconfirm,
   Space,
   Table,
+  Tag,
   Typography,
   theme,
 } from 'antd';
@@ -29,6 +30,7 @@ import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { MetaRow } from '../MetaRow';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -323,36 +325,17 @@ export const CardsTable: React.FC<CardsTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Space>
-          <Typography.Title level={5} style={{ margin: 0 }}>
-            Cards
-          </Typography.Title>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              padding: '1px 6px',
-              borderRadius: 4,
-              background: token.colorWarningBg,
-              color: token.colorWarningText,
-              border: `1px solid ${token.colorWarningBorder}`,
-            }}
-          >
-            Beta
-          </span>
-        </Space>
-        <Typography.Text type="secondary">
-          Manage card types and view cards across all boards
-        </Typography.Text>
-      </div>
+      <ListPanelHeader
+        title={
+          <Space>
+            <span>Cards</span>
+            <Tag color="warning" style={{ fontSize: token.fontSizeSM }}>
+              Beta
+            </Tag>
+          </Space>
+        }
+        description="Manage card types and view cards across all boards"
+      />
 
       <Layout
         style={{
