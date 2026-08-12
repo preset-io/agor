@@ -15,6 +15,7 @@ export * from './useConfirmNukeEnvironment';
 export * from './useIdentityGuardedAsync';
 export * from './useInitialLoaderPhase';
 export * from './useLocalStorage';
+export * from './useMcpMemberPolicy';
 export * from './useMessages';
 export * from './usePermissions';
 export * from './useRecentBoards';

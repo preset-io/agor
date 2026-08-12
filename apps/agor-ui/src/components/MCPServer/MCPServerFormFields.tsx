@@ -1,4 +1,5 @@
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, MCPTransport } from '@agor-live/client';
+import { MCP_TRANSPORTS } from '@agor-live/client';
 import { ApiOutlined, DownOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import {
@@ -29,14 +30,28 @@ import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-u
 
 const { TextArea } = Input;
 
-function isRemoteTransportValue(transport?: 'stdio' | 'http' | 'sse'): boolean {
+function isRemoteTransportValue(transport?: MCPTransport): boolean {
   return transport !== 'stdio';
 }
 
+const TRANSPORT_LABELS: Record<MCPTransport, string> = {
+  stdio: 'stdio (Local process)',
+  http: 'HTTP',
+  sse: 'SSE (Server-Sent Events)',
+};
+
+const ALL_TRANSPORTS: MCPTransport[] = [...MCP_TRANSPORTS];
+
 export interface MCPServerFormFieldsProps {
   mode: 'create' | 'edit';
-  transport?: 'stdio' | 'http' | 'sse';
-  onTransportChange?: (transport: 'stdio' | 'http' | 'sse') => void;
+  transport?: MCPTransport;
+  onTransportChange?: (transport: MCPTransport) => void;
+  /**
+   * The transports this user may configure. Omit to offer all of them — the
+   * daemon still decides, so this only keeps a form from being filled in
+   * towards a refusal.
+   */
+  offeredTransports?: MCPTransport[];
   authType?: 'none' | 'bearer' | 'jwt' | 'oauth';
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
   form: FormInstance;
@@ -74,6 +89,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   mode,
   transport,
   onTransportChange,
+  offeredTransports = ALL_TRANSPORTS,
   authType = 'none',
   onAuthTypeChange,
   form,
@@ -461,14 +477,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         label="Transport"
         name="transport"
         rules={mode === 'create' ? [{ required: true }] : []}
-        initialValue={mode === 'create' ? 'stdio' : undefined}
-        tooltip="Connection method: stdio for local processes, HTTP/SSE for remote servers"
+        initialValue={mode === 'create' ? offeredTransports[0] : undefined}
+        tooltip={
+          offeredTransports.includes('stdio')
+            ? 'Connection method: stdio for local processes, HTTP/SSE for remote servers'
+            : 'Connection method. A stdio server runs a command on the executor host, which only admins can configure.'
+        }
       >
-        <Select onChange={(value) => onTransportChange?.(value as 'stdio' | 'http' | 'sse')}>
-          <Select.Option value="stdio">stdio (Local process)</Select.Option>
-          <Select.Option value="http">HTTP</Select.Option>
-          <Select.Option value="sse">SSE (Server-Sent Events)</Select.Option>
-        </Select>
+        <Select
+          options={offeredTransports.map((value) => ({ value, label: TRANSPORT_LABELS[value] }))}
+          onChange={(value) => onTransportChange?.(value as MCPTransport)}
+        />
       </Form.Item>
 
       {transport === 'stdio' ? (

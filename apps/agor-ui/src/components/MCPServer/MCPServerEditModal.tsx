@@ -1,4 +1,4 @@
-import type { AgorClient, MCPServer, UpdateMCPServerInput } from '@agor-live/client';
+import type { AgorClient, MCPServer, MCPTransport, UpdateMCPServerInput } from '@agor-live/client';
 import { Form, Modal } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
@@ -10,6 +10,12 @@ export interface MCPServerEditModalProps {
   server: MCPServer | null;
   open: boolean;
   client: AgorClient | null;
+  /**
+   * The transports this editor may switch to. Omit to offer all of them — a
+   * caller that knows the user is held to remote transports passes those, so
+   * the form does not invite a change the daemon will refuse.
+   */
+  offeredTransports?: MCPTransport[];
   onClose: () => void;
 }
 
@@ -35,11 +41,12 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   server,
   open,
   client,
+  offeredTransports,
   onClose,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [form] = Form.useForm();
-  const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
+  const [transport, setTransport] = useState<MCPTransport>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
@@ -244,6 +251,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         }}
       >
         <MCPServerFormFields
+          offeredTransports={offeredTransports}
           mode="edit"
           transport={transport}
           onTransportChange={setTransport}

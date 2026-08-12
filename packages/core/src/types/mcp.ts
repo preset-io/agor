@@ -131,6 +131,12 @@ export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
  */
 export interface MCPMemberPolicySetting {
   policy: MCPMemberPolicy;
+  /**
+   * Whether this caller may configure servers at all — role floor and policy
+   * together, answered by the daemon so a client greys out its control instead
+   * of rebuilding the rule. Advisory: the write path is what authorizes.
+   */
+  can_configure: boolean;
 }
 
 /**

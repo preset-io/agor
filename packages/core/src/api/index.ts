@@ -36,6 +36,7 @@ import type {
   MCPCatalogConnectData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
+  MCPMemberPolicySetting,
   MCPServer,
   Message,
   OpenCodeModelCatalog,
@@ -214,6 +215,7 @@ export interface ServiceTypes {
   'mcp-servers': MCPServer;
   'mcp-catalog': MCPCatalogEntry;
   'mcp-catalog/connect': MCPCatalogConnectResult;
+  'mcp-member-policy': MCPMemberPolicySetting;
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
   'kb/versions': KnowledgeDocumentVersion;
@@ -355,6 +357,18 @@ export interface OpenCodeModelsService {
  */
 export interface MCPCatalogConnectService {
   create(data: MCPCatalogConnectData, params?: Params): Promise<MCPCatalogConnectResult>;
+}
+
+/**
+ * Singleton tenant-wide MCP member policy endpoint.
+ *
+ * Readable by members — the value explains why a write of theirs was refused —
+ * and writable by admins. The daemon enforces both; this typing only describes
+ * the shape.
+ */
+export interface MCPMemberPolicyService {
+  find(params?: Params): Promise<MCPMemberPolicySetting>;
+  patch(id: null, data: MCPMemberPolicySetting, params?: Params): Promise<MCPMemberPolicySetting>;
 }
 
 /**
@@ -698,6 +712,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'mcp-servers'): AgorService<MCPServer>;
   service(path: 'mcp-catalog'): AgorService<MCPCatalogEntry>;
   service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
+  service(path: 'mcp-member-policy'): MCPMemberPolicyService;
   service(path: 'templates'): TemplatesService;
 
   // Generic fallback for custom routes and dynamic paths

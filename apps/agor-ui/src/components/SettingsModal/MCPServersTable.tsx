@@ -1,5 +1,20 @@
-import { type CreateMCPServerInput, type MCPServer, shortId } from '@agor-live/client';
-import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
+import {
+  type CreateMCPServerInput,
+  hasMinimumRole,
+  type MCPServer,
+  type MCPTransport,
+  ROLES,
+  shortId,
+  type User,
+} from '@agor-live/client';
+import {
+  DeleteOutlined,
+  EditOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  TeamOutlined,
+  UserOutlined,
+} from '@ant-design/icons';
 import {
   Badge,
   Button,
@@ -11,23 +26,71 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
+import { userSelectLabel } from '@/utils/selectSearch';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
+import {
+  allowedMcpTransports,
+  canAddMcpServer,
+  canDeleteMcpServer,
+  canEditMcpServer,
+  explainAddRestriction,
+  explainManageRestriction,
+  type MCPServerCapabilityContext,
+} from '../MCPServer/memberPolicy';
+import { MCPMemberPolicyCard } from './MCPMemberPolicyCard';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
   client: import('@agor-live/client').AgorClient | null;
+  /** Resolves `owner_user_id` to a person; unowned servers name no user. */
+  userById: Map<string, User>;
+  currentUser?: User | null;
   onCreate?: (data: CreateMCPServerInput) => void;
   onDelete?: (serverId: string) => void;
 }
+
+/** How an unowned server reads: it is the workspace's, not nobody's. */
+const SHARED_OWNER_LABEL = 'Shared with workspace';
+const SHARED_OWNER_HINT = 'No owner — everyone in this workspace can use this server.';
+
+const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…";
+const POLICY_UNREADABLE_HINT =
+  "This workspace's MCP policy could not be read, so nothing is offered here.";
+
+const getServerHealth = (server: MCPServer) => {
+  const toolCount = server.tools?.length || 0;
+  const transport = server.transport || (server.url ? 'http' : 'stdio');
+
+  if (transport === 'stdio') {
+    return {
+      status: 'default' as const,
+      text: 'Local process',
+    };
+  }
+
+  if (toolCount > 0) {
+    return {
+      status: 'success' as const,
+      text: `${toolCount} tools`,
+    };
+  }
+
+  return {
+    status: 'default' as const,
+    text: 'Not tested',
+  };
+};
 
 interface TestResult {
   success: boolean;
@@ -43,17 +106,29 @@ interface TestResult {
 export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   mcpServerById,
   client,
+  userById,
+  currentUser,
   onCreate,
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
+  const memberPolicy = useMcpMemberPolicy(client);
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  // Which transports a user may configure turns on role alone, so this is known
+  // before the policy fetch settles. The first entry is the default the create
+  // form starts from — `MCP_TRANSPORTS` is ordered for that.
+  const offeredTransports = useMemo(() => allowedMcpTransports({ isAdmin }), [isAdmin]);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
   const [viewingServer, setViewingServer] = useState<MCPServer | null>(null);
   const [createForm] = Form.useForm();
-  const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
+  // Null means "whatever this user's first offered transport is" — held as a
+  // derivation rather than a mount-time snapshot, so the field and the payload
+  // cannot disagree if the signed-in user resolves after the first render.
+  const [chosenTransport, setChosenTransport] = useState<MCPTransport | null>(null);
+  const transport = chosenTransport ?? offeredTransports[0];
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
   const [alreadyCreatedInOAuthFlow, setAlreadyCreatedInOAuthFlow] = useState(false);
@@ -117,7 +192,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const resetCreateModal = () => {
     createForm.resetFields();
     setCreateModalOpen(false);
-    setTransport('stdio');
+    setChosenTransport(null);
     setAuthType('none');
     setTestResult(null);
     setAlreadyCreatedInOAuthFlow(false);
@@ -220,155 +295,236 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     }
   };
 
-  const handleEdit = (server: MCPServer) => {
+  const handleEdit = useCallback((server: MCPServer) => {
     setEditingServer(server);
     setEditModalOpen(true);
-  };
+  }, []);
 
   const handleEditClose = () => {
     setEditModalOpen(false);
     setEditingServer(null);
   };
 
-  const handleView = (server: MCPServer) => {
+  const handleView = useCallback((server: MCPServer) => {
     setViewingServer(server);
     setViewModalOpen(true);
-  };
+  }, []);
 
-  const handleDelete = (serverId: string) => {
-    onDelete?.(serverId);
-  };
+  const handleDelete = useCallback(
+    (serverId: string) => {
+      onDelete?.(serverId);
+    },
+    [onDelete]
+  );
 
-  const getServerHealth = (server: MCPServer) => {
-    const toolCount = server.tools?.length || 0;
-    const transport = server.transport || (server.url ? 'http' : 'stdio');
+  // Until the policy is known the table offers nothing and says only that. The
+  // restrictive value it falls back to — while loading, or when the read failed
+  // — is a safe assumption to act on, not a fact about this workspace to quote
+  // back as the reason.
+  const policyPending = memberPolicy.loading || memberPolicy.error !== null;
+  const policyPendingHint = memberPolicy.error ? POLICY_UNREADABLE_HINT : POLICY_LOADING_HINT;
 
-    if (transport === 'stdio') {
+  const capability = useMemo<MCPServerCapabilityContext>(
+    () => ({ isAdmin, policy: memberPolicy.policy, userId: currentUser?.user_id }),
+    [isAdmin, currentUser?.user_id, memberPolicy.policy]
+  );
+
+  const describeOwner = useCallback(
+    (server: MCPServer) => {
+      if (!server.owner_user_id) {
+        return { text: SHARED_OWNER_LABEL, hint: SHARED_OWNER_HINT, shared: true };
+      }
+      const owner = userById.get(server.owner_user_id);
+      const isSelf = server.owner_user_id === currentUser?.user_id;
+      const text = owner ? owner.name?.trim() || owner.email : shortId(server.owner_user_id);
       return {
-        status: 'default' as const,
-        text: 'Local process',
+        text: isSelf ? `${text} (you)` : text,
+        hint: `Private to ${owner ? userSelectLabel(owner) : server.owner_user_id} — usable only in their own sessions.`,
+        shared: false,
       };
-    }
+    },
+    [userById, currentUser?.user_id]
+  );
 
-    if (toolCount > 0) {
-      return {
-        status: 'success' as const,
-        text: `${toolCount} tools`,
-      };
-    }
-
-    return {
-      status: 'default' as const,
-      text: 'Not tested',
-    };
-  };
-
-  const columns = [
-    {
-      title: 'Name',
-      dataIndex: 'name',
-      key: 'name',
-      width: 180,
-      render: (_: string, server: MCPServer) => (
-        <div>
+  const columns = useMemo(
+    () => [
+      {
+        title: 'Name',
+        dataIndex: 'name',
+        key: 'name',
+        width: 180,
+        render: (_: string, server: MCPServer) => (
           <div>
-            <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
+            <div>
+              <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
+            </div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              <HighlightMatch text={server.name} query={searchTerm} />
+            </Typography.Text>
           </div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            <HighlightMatch text={server.name} query={searchTerm} />
-          </Typography.Text>
-        </div>
-      ),
-    },
-    {
-      title: 'Transport',
-      dataIndex: 'transport',
-      key: 'transport',
-      width: 100,
-      render: (transport: string) => (
-        <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
-      ),
-    },
-    {
-      title: 'Scope',
-      dataIndex: 'scope',
-      key: 'scope',
-      width: 100,
-      render: (scope: string) => {
-        const colors: Record<string, string> = {
-          global: 'purple',
-          repo: 'cyan',
-          session: 'magenta',
-        };
-        return <Tag color={colors[scope]}>{scope}</Tag>;
-      },
-    },
-    {
-      title: 'Status',
-      dataIndex: 'enabled',
-      key: 'enabled',
-      width: 80,
-      render: (enabled: boolean) =>
-        enabled ? (
-          <Badge status="success" text="Enabled" />
-        ) : (
-          <Badge status="default" text="Disabled" />
         ),
-    },
-    {
-      title: 'Health',
-      key: 'health',
-      width: 120,
-      render: (_: unknown, server: MCPServer) => {
-        const health = getServerHealth(server);
-        return <Badge status={health.status} text={health.text} />;
       },
-    },
-    {
-      title: 'Source',
-      dataIndex: 'source',
-      key: 'source',
-      width: 100,
-      render: (source: string) => (
-        <Typography.Text type="secondary">
-          <HighlightMatch text={source} query={searchTerm} />
-        </Typography.Text>
-      ),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      width: 96,
-      render: (_: unknown, server: MCPServer) => (
-        <SettingsActionGroup>
-          <Button
-            type="text"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => handleView(server)}
-            title="View details"
-          />
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(server)}
-            title="Edit"
-          />
-          <Popconfirm
-            title="Delete MCP server?"
-            description={`Are you sure you want to delete "${server.display_name || server.name}"?`}
-            onConfirm={() => handleDelete(server.mcp_server_id)}
-            okText="Delete"
-            cancelText="Cancel"
-            okButtonProps={{ danger: true }}
-          >
-            <Button type="text" size="small" icon={<DeleteOutlined />} danger title="Delete" />
-          </Popconfirm>
-        </SettingsActionGroup>
-      ),
-    },
-  ];
+      {
+        title: 'Transport',
+        dataIndex: 'transport',
+        key: 'transport',
+        width: 100,
+        render: (transport: string) => (
+          <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
+        ),
+      },
+      {
+        title: 'Scope',
+        dataIndex: 'scope',
+        key: 'scope',
+        width: 100,
+        render: (scope: string) => {
+          const colors: Record<string, string> = {
+            global: 'purple',
+            repo: 'cyan',
+            session: 'magenta',
+          };
+          return <Tag color={colors[scope]}>{scope}</Tag>;
+        },
+      },
+      {
+        title: 'Status',
+        dataIndex: 'enabled',
+        key: 'enabled',
+        width: 80,
+        render: (enabled: boolean) =>
+          enabled ? (
+            <Badge status="success" text="Enabled" />
+          ) : (
+            <Badge status="default" text="Disabled" />
+          ),
+      },
+      {
+        title: 'Health',
+        key: 'health',
+        width: 120,
+        render: (_: unknown, server: MCPServer) => {
+          const health = getServerHealth(server);
+          return <Badge status={health.status} text={health.text} />;
+        },
+      },
+      {
+        title: 'Owner',
+        dataIndex: 'owner_user_id',
+        key: 'owner',
+        width: 170,
+        render: (_: string | undefined, server: MCPServer) => {
+          const owner = describeOwner(server);
+          return (
+            <Tooltip title={owner.hint}>
+              <Tag
+                icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
+                color={owner.shared ? 'default' : 'geekblue'}
+              >
+                <HighlightMatch text={owner.text} query={searchTerm} />
+              </Tag>
+            </Tooltip>
+          );
+        },
+      },
+      {
+        title: 'Source',
+        dataIndex: 'source',
+        key: 'source',
+        width: 100,
+        render: (source: string) => (
+          <Typography.Text type="secondary">
+            <HighlightMatch text={source} query={searchTerm} />
+          </Typography.Text>
+        ),
+      },
+      {
+        title: 'Actions',
+        key: 'actions',
+        width: 96,
+        render: (_: unknown, server: MCPServer) => {
+          const editable = canEditMcpServer(server, capability);
+          const deletable = canDeleteMcpServer(server, capability);
+          const restriction = policyPending
+            ? policyPendingHint
+            : explainManageRestriction(capability.policy);
+          return (
+            <SettingsActionGroup>
+              <Button
+                type="text"
+                size="small"
+                icon={<EyeOutlined />}
+                onClick={() => handleView(server)}
+                title="View details"
+              />
+              {editable ? (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={() => handleEdit(server)}
+                  title="Edit"
+                />
+              ) : (
+                <Tooltip title={restriction}>
+                  <span>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<EditOutlined />}
+                      aria-label="Edit"
+                      disabled
+                    />
+                  </span>
+                </Tooltip>
+              )}
+              {deletable ? (
+                <Popconfirm
+                  title="Delete MCP server?"
+                  description={`Are you sure you want to delete "${server.display_name || server.name}"?`}
+                  onConfirm={() => handleDelete(server.mcp_server_id)}
+                  okText="Delete"
+                  cancelText="Cancel"
+                  okButtonProps={{ danger: true }}
+                >
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<DeleteOutlined />}
+                    danger
+                    title="Delete"
+                  />
+                </Popconfirm>
+              ) : (
+                <Tooltip title={restriction}>
+                  <span>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<DeleteOutlined />}
+                      aria-label="Delete"
+                      danger
+                      disabled
+                    />
+                  </span>
+                </Tooltip>
+              )}
+            </SettingsActionGroup>
+          );
+        },
+      },
+    ],
+    [
+      capability,
+      describeOwner,
+      handleDelete,
+      handleEdit,
+      handleView,
+      policyPending,
+      policyPendingHint,
+      searchTerm,
+    ]
+  );
 
   const servers = useMemo(() => {
     const sorted = mapToSortedArray(mcpServerById, (a, b) =>
@@ -386,11 +542,23 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       (server) => server.args,
       (server) => server.enabled,
       (server) => server.tools?.flatMap((tool) => [tool.name, tool.description]),
+      (server) => describeOwner(server).text,
     ]);
-  }, [mcpServerById, searchTerm]);
+  }, [mcpServerById, searchTerm, describeOwner]);
+
+  const canAdd = !policyPending && canAddMcpServer(capability);
 
   return (
     <div>
+      <MCPMemberPolicyCard
+        policy={memberPolicy.policy}
+        loading={memberPolicy.loading}
+        saving={memberPolicy.saving}
+        error={memberPolicy.error}
+        editable={capability.isAdmin}
+        onChange={memberPolicy.save}
+      />
+
       <div
         style={{
           marginBottom: 16,
@@ -405,14 +573,26 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         <Space>
           <Input
             allowClear
-            placeholder="Search name, URL, command, tools, transport, or scope"
+            placeholder="Search name, owner, URL, command, tools, transport, or scope"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 360 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-            New MCP Server
-          </Button>
+          {canAdd ? (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+              New MCP Server
+            </Button>
+          ) : (
+            <Tooltip
+              title={policyPending ? policyPendingHint : explainAddRestriction(capability.policy)}
+            >
+              <span>
+                <Button type="primary" icon={<PlusOutlined />} disabled>
+                  New MCP Server
+                </Button>
+              </span>
+            </Tooltip>
+          )}
         </Space>
       </div>
 
@@ -437,7 +617,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           <MCPServerFormFields
             mode="create"
             transport={transport}
-            onTransportChange={setTransport}
+            onTransportChange={setChosenTransport}
+            offeredTransports={offeredTransports}
             authType={authType}
             onAuthTypeChange={setAuthType}
             form={createForm}
@@ -455,6 +636,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         server={editingServer}
         open={editModalOpen}
         client={client}
+        offeredTransports={offeredTransports}
         onClose={handleEditClose}
       />
 
@@ -495,6 +677,14 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             <Descriptions.Item label="Scope">
               <Tag>{viewingServer.scope}</Tag>
             </Descriptions.Item>
+            <Descriptions.Item label="Owner">
+              <Space orientation="vertical" size={0}>
+                <span>{describeOwner(viewingServer).text}</span>
+                <Typography.Text type="secondary">
+                  {describeOwner(viewingServer).hint}
+                </Typography.Text>
+              </Space>
+            </Descriptions.Item>
             <Descriptions.Item label="Source">{viewingServer.source}</Descriptions.Item>
             <Descriptions.Item label="Status">
               {viewingServer.enabled ? (
@@ -524,13 +714,22 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
               </Descriptions.Item>
             )}
 
-            {viewingServer.env && Object.keys(viewingServer.env).length > 0 && (
-              <Descriptions.Item label="Environment Variables">
-                <pre style={{ margin: 0, fontSize: 12 }}>
-                  {JSON.stringify(viewingServer.env, null, 2)}
-                </pre>
-              </Descriptions.Item>
-            )}
+            {/*
+              Header and auth values arrive redacted from the API; environment
+              values do not, and a server's env routinely holds its credentials.
+              Printing them only for the people who may change the server is a
+              narrowing, not a boundary — the redaction belongs beside the one
+              the other secret fields already get.
+            */}
+            {canEditMcpServer(viewingServer, capability) &&
+              viewingServer.env &&
+              Object.keys(viewingServer.env).length > 0 && (
+                <Descriptions.Item label="Environment Variables">
+                  <pre style={{ margin: 0, fontSize: 12 }}>
+                    {JSON.stringify(viewingServer.env, null, 2)}
+                  </pre>
+                </Descriptions.Item>
+              )}
 
             {viewingServer.tools && viewingServer.tools.length > 0 && (
               <Descriptions.Item label="Tools">
