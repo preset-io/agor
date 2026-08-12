@@ -185,6 +185,18 @@ describe('OnboardingWizard', () => {
     ).toBeInTheDocument();
   });
 
+  it('reserves a fixed 2-line block for goal title and description so cards align in height', () => {
+    renderWizard({ initialStep: 'goals' });
+    // A short description ("PRs, bug triage, release notes — handled.") still
+    // reserves two lines of height so its card matches the taller ones — this is
+    // what keeps all six cards the same height regardless of copy length.
+    const shortDesc = screen.getByText('PRs, bug triage, release notes — handled.');
+    expect(shortDesc).toHaveStyle({ minHeight: '2.8em' });
+    // A one-line title ("Ship without the busywork") reserves two lines too.
+    const shortTitle = screen.getByText('Ship without the busywork');
+    expect(shortTitle).toHaveStyle({ minHeight: '2.6em' });
+  });
+
   it('centers the modal so the footer stays on-screen on shorter viewports', () => {
     renderWizard({ initialStep: 'goals' });
     // antd flags a vertically-centered modal with ant-modal-centered on the wrap;

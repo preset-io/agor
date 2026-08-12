@@ -1118,7 +1118,7 @@ export function OnboardingWizard({
           style={{
             display: 'grid',
             gridTemplateColumns: '1fr 1fr',
-            gap: 12,
+            gap: 10,
           }}
         >
           {GOALS.map((goal) => {
@@ -1147,7 +1147,7 @@ export function OnboardingWizard({
                     backdropFilter: 'blur(20px)',
                     WebkitBackdropFilter: 'blur(20px)',
                     borderRadius: 12,
-                    padding: '15px 16px',
+                    padding: '15px 13px',
                     cursor: isDisabled ? 'not-allowed' : 'pointer',
                     opacity: isDisabled ? 0.45 : 1,
                     textAlign: 'left',
@@ -1175,18 +1175,34 @@ export function OnboardingWizard({
                       <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 10 }} />
                     </div>
                   )}
+                  {/* Reserve a fixed 2-line title block too: some titles wrap to
+                      two lines and some to one, so without this the cards would
+                      still differ in height even with uniform descriptions. */}
                   <div
                     style={{
                       color: TEXT_PRIMARY,
                       fontWeight: 600,
                       fontSize: 14,
+                      lineHeight: 1.3,
+                      minHeight: '2.6em',
                       marginBottom: 5,
                       paddingRight: 20,
                     }}
                   >
                     {goal.title}
                   </div>
-                  <div style={{ color: TEXT_MUTED, fontSize: 12, lineHeight: 1.45 }}>
+                  {/* Reserve a fixed 2-line block so every card is the same
+                      height regardless of description length. Font/line-height
+                      are tuned so the longest description fits in 2 lines at the
+                      standard modal width without shrinking the copy. */}
+                  <div
+                    style={{
+                      color: TEXT_MUTED,
+                      fontSize: 11.5,
+                      lineHeight: 1.4,
+                      minHeight: '2.8em',
+                    }}
+                  >
                     {goal.description}
                   </div>
                   {/* Screen-reader-only cap reason — joins the disabled card's
