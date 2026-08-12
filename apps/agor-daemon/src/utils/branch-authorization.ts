@@ -1202,6 +1202,51 @@ export function setSessionUnixUsername(
   };
 }
 
+/** Loads a user by id for an identity-consistency comparison. */
+export type SessionCreatorLoader = (
+  userId: string
+) => Promise<{ unix_username?: string | null } | null | undefined>;
+
+/**
+ * Refuse a session whose creator no longer owns the `unix_username` the
+ * session was stamped with.
+ *
+ * The stamp is the OS identity the executor runs as under `delegated`/`strict`
+ * (`register-services.ts` feeds `session.unix_username` to
+ * `resolveUnixUserForImpersonation`). Once it drifts, that identity is no
+ * longer the caller's, and the SDK state the session resumes from lives in a
+ * home directory this instance cannot read.
+ *
+ * Shared by the transport guard ({@link validateSessionUnixUsername}) and the
+ * executor-startup guard, so both refuse on the same terms with the same
+ * message.
+ *
+ * A session with no stamp is not covered: `simple`/`insulated` never stamp
+ * one, and there is no identity to have drifted.
+ */
+export async function assertSessionUnixIdentityUnchanged(
+  session: { created_by: string; unix_username?: string | null },
+  loadCreator: SessionCreatorLoader
+): Promise<void> {
+  if (!session.unix_username) return;
+
+  const creator = await loadCreator(session.created_by);
+
+  if (!creator) {
+    throw new Forbidden(`Session creator not found: ${session.created_by}`);
+  }
+
+  if (creator.unix_username !== session.unix_username) {
+    throw new Forbidden(
+      `Session security context has changed. ` +
+        `Session was created with unix_username="${session.unix_username}" ` +
+        `but creator's current unix_username="${creator.unix_username || 'null'}". ` +
+        `Cannot execute this session with a different unix user. ` +
+        `SDK session data is stored in the original user's home directory and cannot be accessed.`
+    );
+  }
+}
+
 /**
  * Validate session unix_username before prompting
  *
@@ -1237,28 +1282,7 @@ export function validateSessionUnixUsername(
       throw new Error('loadSession hook must run before validateSessionUnixUsername');
     }
 
-    // If session has no unix_username, allow (backward compatibility)
-    if (!session.unix_username) {
-      return context;
-    }
-
-    // Load session creator to check current unix_username
-    const creator = await userRepo.findById(session.created_by);
-
-    if (!creator) {
-      throw new Forbidden(`Session creator not found: ${session.created_by}`);
-    }
-
-    // DEFENSIVE CHECK: Creator's current unix_username must match session's
-    if (creator.unix_username !== session.unix_username) {
-      throw new Forbidden(
-        `Session security context has changed. ` +
-          `Session was created with unix_username="${session.unix_username}" ` +
-          `but creator's current unix_username="${creator.unix_username || 'null'}". ` +
-          `Cannot execute this session with a different unix user. ` +
-          `SDK session data is stored in the original user's home directory and cannot be accessed.`
-      );
-    }
+    await assertSessionUnixIdentityUnchanged(session, (userId) => userRepo.findById(userId));
 
     return context;
   };

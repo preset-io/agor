@@ -872,6 +872,11 @@ function createExecuteHandler(
 ) {
   const { db, app, config, daemonUrl } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
+  // Only the modes that impersonate per user read the creator back; the others
+  // never stamped a `unix_username` for it to have drifted from.
+  const unixIdentityGuard = resolveExecutionSecurityMode(config).requiresUserUnixUsername
+    ? { loadCreator: (userId: string) => new UsersRepository(db).findById(userId) }
+    : undefined;
 
   return async (
     sessionId: string,
@@ -891,7 +896,8 @@ function createExecuteHandler(
       sessionsService,
       sessionId,
       params,
-      deploymentAgenticToolPolicy
+      deploymentAgenticToolPolicy,
+      unixIdentityGuard
     );
     assertHaTaskPermissionSupported(ctx.deployment, {
       session,

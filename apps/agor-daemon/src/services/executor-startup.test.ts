@@ -118,6 +118,73 @@ describe('prepareSessionForExecutorStart tenant scope', () => {
     );
   });
 
+  /**
+   * `/sessions/:id/prompt` admits its Task through the repository and treats
+   * the `messages.create` write — where the transport guard lives — as
+   * best-effort, so the launch itself has to refuse a session whose creator no
+   * longer owns the stamped `unix_username`.
+   */
+  describe('stale unix identity', () => {
+    const stampedSession = { ...session, created_by: 'user-1', unix_username: 'alice' } as Session;
+
+    const prepareWithCreator = (creator: { unix_username: string | null } | null) => {
+      const loadCreator = vi.fn(async () => creator);
+      const sessionsService = {
+        get: vi.fn(async () => stampedSession),
+        materializeAgenticToolPreset: vi.fn(async (loaded: Session) => loaded),
+      };
+      const run = runWithTenantContext('tenant-x', () =>
+        prepareSessionForExecutorStart(
+          { run: vi.fn() } as never,
+          sessionsService as never,
+          stampedSession.session_id,
+          {} as never,
+          undefined,
+          { loadCreator }
+        )
+      );
+      return { run, sessionsService, loadCreator };
+    };
+
+    it('refuses the launch when the creator has been renamed', async () => {
+      const { run, sessionsService } = prepareWithCreator({ unix_username: 'alice-renamed' });
+
+      await expect(run).rejects.toThrow(/Session security context has changed/);
+      expect(sessionsService.materializeAgenticToolPreset).not.toHaveBeenCalled();
+    });
+
+    it('refuses the launch when the creator no longer exists', async () => {
+      const { run } = prepareWithCreator(null);
+
+      await expect(run).rejects.toThrow(/Session creator not found/);
+    });
+
+    it('launches while the creator still owns the stamped identity', async () => {
+      const { run, loadCreator } = prepareWithCreator({ unix_username: 'alice' });
+
+      await expect(run).resolves.toBe(stampedSession);
+      expect(loadCreator).toHaveBeenCalledOnce();
+    });
+
+    // `register-services.ts` builds the guard only when the resolved execution
+    // mode requires a per-user `unix_username`; every other mode launches
+    // through this same call with no guard and therefore no creator read.
+    it('launches with no guard at all when the caller supplies none', async () => {
+      const sessionsService = createSessionsService();
+
+      await expect(
+        runWithTenantContext('tenant-x', () =>
+          prepareSessionForExecutorStart(
+            { run: vi.fn() } as never,
+            sessionsService as never,
+            session.session_id,
+            {} as never
+          )
+        )
+      ).resolves.toBe(session);
+    });
+  });
+
   it('fails fast for missing, mismatched, and system tenant identity', async () => {
     const db = { run: vi.fn() } as never;
     const sessionsService = createSessionsService();
