@@ -332,7 +332,6 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             )}
             <Space orientation="vertical" size={0} style={{ minWidth: 0, flex: 1 }}>
               <Typography.Link
-                strong
                 ellipsis
                 title={name}
                 onClick={() => onRowClick?.(record)}

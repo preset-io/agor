@@ -190,7 +190,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       render: (email: string, user: User) => (
         <Space>
           <UserIdentityAvatar user={user} size={28} fontSize="20px" />
-          <Typography.Link strong ellipsis title={email} onClick={() => openEdit(user)}>
+          <Typography.Link ellipsis title={email} onClick={() => openEdit(user)}>
             <HighlightMatch text={email} query={searchTerm} />
           </Typography.Link>
         </Space>

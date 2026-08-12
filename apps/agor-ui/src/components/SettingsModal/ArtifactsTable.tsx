@@ -143,7 +143,6 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         return (
           <Space orientation="vertical" size={0} style={{ width: '100%' }}>
             <Typography.Link
-              strong
               ellipsis
               title={displayName}
               style={artifactTextStyle}

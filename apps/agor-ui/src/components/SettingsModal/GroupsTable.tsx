@@ -312,7 +312,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
               render: (_: string, group: Group) => (
                 <Space>
                   <TeamOutlined />
-                  <Typography.Link strong title={group.name} onClick={() => openEdit(group)}>
+                  <Typography.Link title={group.name} onClick={() => openEdit(group)}>
                     <HighlightMatch text={group.name} query={searchTerm} />
                   </Typography.Link>
                   <Tag>

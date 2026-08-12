@@ -22,7 +22,8 @@ export interface PanelHeaderProps {
 export const PanelHeader: React.FC<PanelHeaderProps> = ({ title, icon, extra }) => (
   <Flex align="center" gap={12} style={{ marginBottom: 20 }}>
     {icon}
-    <Title level={4} style={{ margin: 0, flex: icon || extra ? 1 : undefined }}>
+    {/* Size, not boldness, carries hierarchy: regular/medium weight. */}
+    <Title level={4} style={{ margin: 0, flex: icon || extra ? 1 : undefined, fontWeight: 500 }}>
       {title}
     </Title>
     {extra}

@@ -151,7 +151,8 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
           aria-label="Back"
           style={{ marginInlineStart: -token.marginXS }}
         />
-        <Typography.Title level={4} style={{ margin: 0, flex: 1 }}>
+        {/* Size — not boldness — carries hierarchy: regular/medium weight. */}
+        <Typography.Title level={4} style={{ margin: 0, flex: 1, fontWeight: 500 }}>
           {title}
         </Typography.Title>
         {extra}

@@ -414,7 +414,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       dataIndex: 'name',
       key: 'name',
       render: (name: string, board: Board) => (
-        <Typography.Link strong ellipsis title={name} onClick={() => openEdit(board)}>
+        <Typography.Link ellipsis title={name} onClick={() => openEdit(board)}>
           <HighlightMatch text={name} query={searchTerm} />
         </Typography.Link>
       ),

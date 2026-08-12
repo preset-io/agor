@@ -276,7 +276,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       render: (_: string, server: MCPServer) => (
         <div>
           <Typography.Link
-            strong
             ellipsis
             title={server.display_name || server.name}
             onClick={() => openEdit(server)}

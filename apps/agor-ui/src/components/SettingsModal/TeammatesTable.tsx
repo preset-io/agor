@@ -110,7 +110,6 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
               <RobotOutlined style={{ color: token.colorInfo }} />
             )}
             <Typography.Link
-              strong
               ellipsis
               title={config?.displayName ?? record.name}
               onClick={() => onRowClick?.(record)}

@@ -239,12 +239,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                 title={
                   <Space>
                     <FolderOutlined />
-                    <Typography.Link
-                      strong
-                      ellipsis
-                      title={repo.name}
-                      onClick={() => openEdit(repo)}
-                    >
+                    <Typography.Link ellipsis title={repo.name} onClick={() => openEdit(repo)}>
                       <HighlightMatch text={repo.name} query={searchTerm} />
                     </Typography.Link>
                     <Tag color={tagColor} style={{ marginLeft: 8 }}>
