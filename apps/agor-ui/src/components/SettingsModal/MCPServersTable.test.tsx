@@ -1,3 +1,4 @@
+import { canConfigureMCPServers } from '@agor/core/mcp/member-policy';
 import type { AgorClient, MCPMemberPolicy, MCPServer, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
@@ -16,6 +17,13 @@ const MEMBER: User = {
   email: 'bob@agor.live',
   name: 'Bob Member',
   role: 'member',
+} as User;
+
+const VIEWER: User = {
+  user_id: 'user-viewer',
+  email: 'val@agor.live',
+  name: 'Val Viewer',
+  role: 'viewer',
 } as User;
 
 const USER_BY_ID = new Map<string, User>([
@@ -37,11 +45,18 @@ function makeServer(overrides: Partial<MCPServer>): MCPServer {
   } as MCPServer;
 }
 
-function makeClient(policy: MCPMemberPolicy, findError?: Error) {
+function makeClient(policy: MCPMemberPolicy, role: string | undefined, findError?: Error) {
+  // The daemon answers `can_configure` from the caller's role and the policy
+  // together; the fake answers it the same way rather than inventing one, so a
+  // test cannot pass against a UI that recomputed the rule differently.
+  const setting = { policy, can_configure: canConfigureMCPServers(role, policy) };
   const find = findError
     ? vi.fn().mockRejectedValue(findError)
-    : vi.fn().mockResolvedValue({ policy });
-  const patch = vi.fn(async (_id: null, data: { policy: MCPMemberPolicy }) => data);
+    : vi.fn().mockResolvedValue(setting);
+  const patch = vi.fn(async (_id: null, data: { policy: MCPMemberPolicy }) => ({
+    ...data,
+    can_configure: canConfigureMCPServers(role, data.policy),
+  }));
   const client = {
     // The create form subscribes to the OAuth browser-flow hint on mount.
     io: { on: vi.fn(), off: vi.fn() },
@@ -59,7 +74,11 @@ function renderTable(options: {
   servers?: MCPServer[];
   findError?: Error;
 }) {
-  const { client, find, patch } = makeClient(options.policy, options.findError);
+  const { client, find, patch } = makeClient(
+    options.policy,
+    options.currentUser.role,
+    options.findError
+  );
   const mcpServerById = new Map(
     (options.servers ?? []).map((server) => [server.mcp_server_id, server])
   );
@@ -212,6 +231,34 @@ describe('MCPServersTable member policy', () => {
     // avoids, so the editor must not offer it either.
     expect(await screen.findByLabelText('URL')).toBeInTheDocument();
     expect(screen.queryByLabelText('Command')).not.toBeInTheDocument();
+  });
+
+  it('withholds every action from a read-only account, whatever the policy allows', async () => {
+    const { find } = renderTable({
+      policy: 'allow_crud',
+      currentUser: VIEWER,
+      servers: [makeServer({ mcp_server_id: 'shared', name: 'workspace-server' })],
+    });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    // Queried through the DOM rather than by role: Ant Design's table styles
+    // defeat jsdom's CSS parser, which an accessibility query would run.
+    const add = screen.getByText('New MCP Server').closest('button') as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    // View stays; edit and delete do not.
+    const actions = Array.from(rowFor('workspace-server').querySelectorAll('button'));
+    expect(actions.map((button) => button.disabled)).toEqual([false, true, true]);
+  });
+
+  it('tells a read-only account about its role, not about the workspace policy', async () => {
+    const { find } = renderTable({ policy: 'allow_crud', currentUser: VIEWER });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    fireEvent.mouseOver(screen.getByRole('button', { name: /New MCP Server/i }));
+
+    // Naming the policy would be a false lead: changing it would not help.
+    expect(await screen.findByText(/read-only access/i)).toBeInTheDocument();
+    expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
   });
 
   it('reads the policy once, not once per server row', async () => {
