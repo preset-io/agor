@@ -731,7 +731,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     app,
     config: effectiveConfig,
     jwtSecret,
-    branchRbacEnabled,
     requireAuth,
     superadminOpts,
     sessionsService: services.sessionsService,
