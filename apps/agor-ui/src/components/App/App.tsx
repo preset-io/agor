@@ -503,6 +503,24 @@ export const App: React.FC<AppProps> = ({
     ? setCommentsPanelCollapsedSession
     : setCommentsPanelCollapsedStored;
 
+  // Slim: opening a session collapses the side panel to its rail so the
+  // canvas and session panel keep their width; closing the session restores
+  // the pre-session state unless the user re-expanded it meanwhile.
+  const sessionWasOpenRef = useRef(false);
+  const panelBeforeSessionRef = useRef(true);
+  useEffect(() => {
+    const wasOpen = sessionWasOpenRef.current;
+    const isOpen = !!effectiveSelectedSessionId;
+    sessionWasOpenRef.current = isOpen;
+    if (!isSlim) return;
+    if (isOpen && !wasOpen) {
+      panelBeforeSessionRef.current = commentsPanelCollapsedSession;
+      setCommentsPanelCollapsedSession(true);
+    } else if (!isOpen && wasOpen && commentsPanelCollapsedSession) {
+      setCommentsPanelCollapsedSession(panelBeforeSessionRef.current);
+    }
+  }, [effectiveSelectedSessionId, isSlim, commentsPanelCollapsedSession]);
+
   // Left panel size persistence (percentage of available width), scoped per user.
   const [commentsPanelSize, setCommentsPanelSize] = useUserLocalStorage<number>(
     user?.user_id,
