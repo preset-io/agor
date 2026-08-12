@@ -151,6 +151,7 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
+import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import {
   buildPromptTaskMetadata,
   type InternalPromptTaskMetadataInput,
@@ -4096,8 +4097,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/mcp-member-policy',
     {
       async find(params: RouteParams) {
+        const policy = await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId());
+        // The policy alone does not answer "may I add one?" — the role floor
+        // beneath it does too. Answering here keeps a client from rebuilding
+        // the rule out of `isAdmin` and a policy value, which is the shape that
+        // loses the floor. Advisory: the write path still decides.
         return {
-          policy: await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId()),
+          policy,
+          can_configure: canConfigureMcpServers(params.user?.role, policy),
         };
       },
       async patch(_id: unknown, data: { policy: MCPMemberPolicy }, params: RouteParams) {
