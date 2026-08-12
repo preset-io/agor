@@ -333,8 +333,20 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const policyPendingHint = memberPolicy.error ? POLICY_UNREADABLE_HINT : POLICY_LOADING_HINT;
 
   const capability = useMemo<MCPServerCapabilityContext>(
-    () => ({ isAdmin, policy: memberPolicy.policy, userId: currentUser?.user_id }),
-    [isAdmin, currentUser?.user_id, memberPolicy.policy]
+    () => ({
+      role: currentUser?.role,
+      isAdmin,
+      policy: memberPolicy.policy,
+      userId: currentUser?.user_id,
+      canConfigure: memberPolicy.canConfigure,
+    }),
+    [
+      isAdmin,
+      currentUser?.role,
+      currentUser?.user_id,
+      memberPolicy.policy,
+      memberPolicy.canConfigure,
+    ]
   );
 
   // An editor must be able to show the scope a row already carries, including
@@ -466,7 +478,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           const deletable = canDeleteMcpServer(server, capability);
           const restriction = policyPending
             ? policyPendingHint
-            : explainManageRestriction(capability.policy);
+            : explainManageRestriction(capability);
           return (
             <SettingsActionGroup>
               <Button
@@ -602,9 +614,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
               New MCP Server
             </Button>
           ) : (
-            <Tooltip
-              title={policyPending ? policyPendingHint : explainAddRestriction(capability.policy)}
-            >
+            <Tooltip title={policyPending ? policyPendingHint : explainAddRestriction(capability)}>
               <span>
                 <Button type="primary" icon={<PlusOutlined />} disabled>
                   New MCP Server

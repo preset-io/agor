@@ -3,6 +3,8 @@
  */
 
 export {
+  canConfigureMCPServers,
+  isAtLeastMemberRole,
   MEMBER_PRIVATE_MCP_SCOPE,
   mayMemberManageMCPServer,
   mayMemberUseMCPScope,

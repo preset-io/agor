@@ -368,7 +368,13 @@ export interface MCPCatalogConnectService {
  */
 export interface MCPMemberPolicyService {
   find(params?: Params): Promise<MCPMemberPolicySetting>;
-  patch(id: null, data: MCPMemberPolicySetting, params?: Params): Promise<MCPMemberPolicySetting>;
+  // `can_configure` is the daemon's answer about the caller, not a field a
+  // caller submits, so a write names the policy and nothing else.
+  patch(
+    id: null,
+    data: Pick<MCPMemberPolicySetting, 'policy'>,
+    params?: Params
+  ): Promise<MCPMemberPolicySetting>;
 }
 
 /**

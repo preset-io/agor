@@ -12,6 +12,12 @@ import { useCallback, useEffect, useState } from 'react';
 
 export interface McpMemberPolicyState {
   policy: MCPMemberPolicy;
+  /**
+   * The daemon's answer to whether this caller may configure servers at all —
+   * the role floor and the policy in one, so a client does not rebuild it.
+   * False until the read succeeds: an unknown answer withholds.
+   */
+  canConfigure: boolean;
   loading: boolean;
   saving: boolean;
   /** A load or save failure, phrased for the reader. */
@@ -28,6 +34,7 @@ export function useMcpMemberPolicy(client: AgorClient | null): McpMemberPolicySt
   // which actions are offered, and a permissive guess would flash affordances
   // the workspace does not allow.
   const [policy, setPolicy] = useState<MCPMemberPolicy>(DEFAULT_MCP_MEMBER_POLICY);
+  const [canConfigure, setCanConfigure] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +55,7 @@ export function useMcpMemberPolicy(client: AgorClient | null): McpMemberPolicySt
       .then((result) => {
         if (!active) return;
         setPolicy(result.policy);
+        setCanConfigure(result.can_configure);
         setError(null);
       })
       .catch((loadError: unknown) => {
@@ -69,6 +77,7 @@ export function useMcpMemberPolicy(client: AgorClient | null): McpMemberPolicySt
       try {
         const result = await client.service('mcp-member-policy').patch(null, { policy: next });
         setPolicy(result.policy);
+        setCanConfigure(result.can_configure);
         setError(null);
       } catch (saveError: unknown) {
         setError(describeError(saveError, 'Failed to change the MCP member policy'));
@@ -79,5 +88,5 @@ export function useMcpMemberPolicy(client: AgorClient | null): McpMemberPolicySt
     [client]
   );
 
-  return { policy, loading, saving, error, save };
+  return { policy, canConfigure, loading, saving, error, save };
 }

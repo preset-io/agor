@@ -1,0 +1,2275 @@
+diff --git a/apps/agor-daemon/src/register-routes.ts b/apps/agor-daemon/src/register-routes.ts
+index 326891ad..32f23c8c 100755
+--- a/apps/agor-daemon/src/register-routes.ts
++++ b/apps/agor-daemon/src/register-routes.ts
+@@ -54,6 +54,7 @@ import type {
+   AuthenticatedParams,
+   HookContext,
+   MCPMemberPolicy,
++  MCPMemberPolicySetting,
+   Message,
+   MessageID,
+   MessageSource,
+@@ -4059,12 +4060,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void>
+     app,
+     '/mcp-member-policy',
+     {
+-      async find(params: RouteParams) {
++      async find(params: RouteParams): Promise<MCPMemberPolicySetting> {
+         return {
+           policy: await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId()),
+         };
+       },
+-      async patch(_id: unknown, data: { policy: MCPMemberPolicy }, params: RouteParams) {
++      async patch(
++        _id: unknown,
++        data: { policy: MCPMemberPolicy },
++        params: RouteParams
++      ): Promise<MCPMemberPolicySetting> {
+         if (!MCP_MEMBER_POLICIES.includes(data?.policy)) {
+           throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
+         }
+diff --git a/apps/agor-daemon/src/services/mcp-servers.member-policy.test.ts b/apps/agor-daemon/src/services/mcp-servers.member-policy.test.ts
+new file mode 100644
+index 00000000..6157a1b6
+--- /dev/null
++++ b/apps/agor-daemon/src/services/mcp-servers.member-policy.test.ts
+@@ -0,0 +1,215 @@
++/**
++ * What `mcp_member_policy` lets a member land in `mcp_servers`, driven through
++ * the endpoint.
++ *
++ * The rest of this seam is tested by calling `authorizeMcpServerWrite` directly,
++ * which proves the decision and nothing about the row. A policy is only worth
++ * what the database ends up holding, so this drives the real `mcp-servers`
++ * service carrying the real write hook against a real database, as an
++ * authenticated member reaches it, and reads back what landed.
++ *
++ * Ownership is covered where an install lands it (`mcp-catalog-connect.install`);
++ * this file is the matrix for the other two fields a policy decides — the
++ * transport a member may configure, and the reach their server is held to.
++ */
++
++import {
++  createDatabaseAsync,
++  MCPServerRepository,
++  runMigrations,
++  setMcpMemberPolicy,
++  type TenantScopeAwareDatabase,
++  UsersRepository,
++} from '@agor/core/db';
++import { feathers } from '@agor/core/feathers';
++import type {
++  AuthenticatedParams,
++  MCPMemberPolicy,
++  MCPServer,
++  User,
++  UserRole,
++} from '@agor/core/types';
++import { describe, expect, it } from 'vitest';
++import { createMcpServerWriteAuthorizationHook } from '../utils/mcp-server-authorization.js';
++import { createMCPServersService } from './mcp-servers.js';
++
++const REMOTE_SERVER = {
++  name: 'deepwiki',
++  transport: 'http' as const,
++  url: 'https://mcp.example.com/mcp',
++  source: 'user' as const,
++  enabled: true,
++};
++
++async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
++  const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
++  const db = rawDb as unknown as TenantScopeAwareDatabase;
++  await runMigrations(rawDb);
++  await setMcpMemberPolicy(db, policy, undefined, null);
++
++  const user = (await new UsersRepository(rawDb).create({
++    email: 'bob@agor.live',
++    name: 'Bob',
++    role,
++  })) as User;
++
++  const app = feathers();
++  app.use('mcp-servers', createMCPServersService(db));
++  app.service('mcp-servers').hooks({
++    before: {
++      create: [createMcpServerWriteAuthorizationHook(db) as never],
++      patch: [createMcpServerWriteAuthorizationHook(db) as never],
++      update: [createMcpServerWriteAuthorizationHook(db) as never],
++    },
++  } as never);
++
++  // The shape a REST request arrives with: an external provider and the
++  // authenticated caller.
++  const params = {
++    provider: 'rest',
++    authenticated: true,
++    user: { user_id: user.user_id, role },
++  } as unknown as AuthenticatedParams;
++
++  return {
++    user,
++    setPolicy: (next: MCPMemberPolicy) => setMcpMemberPolicy(db, next, undefined, null),
++    create: (data: Record<string, unknown>) =>
++      app
++        .service('mcp-servers')
++        .create({ ...REMOTE_SERVER, ...data }, params) as Promise<MCPServer>,
++    patch: (id: string, data: Record<string, unknown>) =>
++      app.service('mcp-servers').patch(id, data, params) as Promise<MCPServer>,
++    update: (id: string, data: Record<string, unknown>) =>
++      app.service('mcp-servers').update(id, data, params) as Promise<MCPServer>,
++    storedServers: () => new MCPServerRepository(rawDb).findAll({}),
++  };
++}
++
++describe('member policy, as it lands in mcp_servers', () => {
++  it('holds a member’s server to the session it is attached to under allow_private_only', async () => {
++    const { user, create, storedServers } = await buildDaemon('allow_private_only');
++
++    await create({ scope: 'session' });
++
++    const [server] = await storedServers();
++    expect(server).toMatchObject({ scope: 'session', owner_user_id: user.user_id });
++  });
++
++  it('takes the scope rather than the payload’s, the way it takes the owner', async () => {
++    // The CLI flag and the MCP tool both put `global` in the payload by
++    // default, so a member never chose it and must not be refused for it.
++    const { create, storedServers } = await buildDaemon('allow_private_only');
++
++    const created = await create({ scope: 'global' });
++
++    expect(created.scope).toBe('session');
++    const [server] = await storedServers();
++    expect(server?.scope).toBe('session');
++  });
++
++  it('supplies the scope a member stated nowhere', async () => {
++    const { create, storedServers } = await buildDaemon('allow_private_only');
++
++    await create({});
++
++    const [server] = await storedServers();
++    expect(server?.scope).toBe('session');
++  });
++
++  it('refuses a member widening their own server to workspace-wide', async () => {
++    const { create, patch, storedServers } = await buildDaemon('allow_private_only');
++
++    const created = await create({ scope: 'session' });
++
++    await expect(patch(created.mcp_server_id, { scope: 'global' })).rejects.toThrow(
++      /reach cannot be widened/
++    );
++    const [server] = await storedServers();
++    expect(server?.scope).toBe('session');
++  });
++
++  it('leaves the owner of a row that predates the policy able to edit it', async () => {
++    // Created while `allow_crud` allowed it, then the policy tightened. The
++    // edit form resends the stored scope, which has widened nothing.
++    const { user, create, patch, setPolicy } = await buildDaemon('allow_crud');
++    const created = await create({ scope: 'global', owner_user_id: user.user_id });
++    expect(created.scope).toBe('global');
++    await setPolicy('allow_private_only');
++
++    const patched = await patch(created.mcp_server_id, {
++      scope: 'global',
++      display_name: 'DeepWiki',
++    });
++
++    expect(patched).toMatchObject({ scope: 'global', display_name: 'DeepWiki' });
++  });
++
++  it('refuses a widening update, and leaves one that names no scope alone', async () => {
++    // PUT reaches the same hook as PATCH. An update that states nothing must
++    // not become a widening by way of a replace.
++    const { create, update, storedServers } = await buildDaemon('allow_private_only');
++    const created = await create({ scope: 'session' });
++
++    await expect(update(created.mcp_server_id, { scope: 'global' })).rejects.toThrow(
++      /reach cannot be widened/
++    );
++    await update(created.mcp_server_id, { display_name: 'DeepWiki' });
++
++    const [server] = await storedServers();
++    expect(server).toMatchObject({ scope: 'session', display_name: 'DeepWiki' });
++  });
++
++  it('leaves a member free to narrow their own server', async () => {
++    const { user, create, patch, setPolicy } = await buildDaemon('allow_crud');
++    const created = await create({ scope: 'global', owner_user_id: user.user_id });
++    await setPolicy('allow_private_only');
++
++    const patched = await patch(created.mcp_server_id, { scope: 'session' });
++
++    expect(patched.scope).toBe('session');
++  });
++
++  it('leaves workspace-wide scope to allow_crud, which is the value that grants it', async () => {
++    const { user, create, storedServers } = await buildDaemon('allow_crud');
++
++    await create({ scope: 'global' });
++
++    const [server] = await storedServers();
++    // Unowned, because `allow_crud` reads "no owner requested" as opting into a
++    // server the whole workspace may use. A shared server reads back with no
++    // owner at all, which is what `isMCPServerUsableBy` treats as everyone's.
++    expect(server?.scope).toBe('global');
++    expect(server?.owner_user_id ?? null).toBeNull();
++    expect(server?.owner_user_id).not.toBe(user.user_id);
++  });
++
++  it('leaves an admin every scope under every policy value', async () => {
++    const { create, patch, storedServers } = await buildDaemon('allow_private_only', 'admin');
++
++    const created = await create({ scope: 'global' });
++    await patch(created.mcp_server_id, { scope: 'session' });
++    await patch(created.mcp_server_id, { scope: 'global' });
++
++    const [server] = await storedServers();
++    expect(server?.scope).toBe('global');
++  });
++
++  it('refuses a member a stdio server, whatever the scope', async () => {
++    const { create, storedServers } = await buildDaemon('allow_crud');
++
++    await expect(
++      create({ scope: 'session', transport: 'stdio', command: '/bin/sh', url: undefined })
++    ).rejects.toThrow(/Only admins can configure stdio MCP servers/);
++    await expect(storedServers()).resolves.toHaveLength(0);
++  });
++
++  it('refuses a member every write under the default use_existing_only', async () => {
++    const { create, storedServers } = await buildDaemon('use_existing_only');
++
++    await expect(create({ scope: 'session' })).rejects.toThrow(
++      /does not allow members to configure MCP servers/
++    );
++    await expect(storedServers()).resolves.toHaveLength(0);
++  });
++});
+diff --git a/apps/agor-daemon/src/utils/mcp-server-authorization.test.ts b/apps/agor-daemon/src/utils/mcp-server-authorization.test.ts
+index 38966814..1c910874 100644
+--- a/apps/agor-daemon/src/utils/mcp-server-authorization.test.ts
++++ b/apps/agor-daemon/src/utils/mcp-server-authorization.test.ts
+@@ -33,12 +33,14 @@ function paramsFor(userId: UserID, role: string): AuthenticatedParams {
+ }
+ 
+ function serverOwnedBy(
+-  owner?: UserID
+-): Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport'> {
++  owner?: UserID,
++  scope: MCPServer['scope'] = 'session'
++): Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport' | 'scope'> {
+   return {
+     mcp_server_id: 'server-1' as MCPServer['mcp_server_id'],
+     owner_user_id: owner,
+     transport: 'http',
++    scope,
+   };
+ }
+ 
+@@ -90,7 +92,7 @@ describe('authorizeMcpServerWrite', () => {
+     expect(resolveMcpMemberPolicy).not.toHaveBeenCalled();
+   });
+ 
+-  it('stamps the creator as owner under allow_private_only', async () => {
++  it('stamps the creator as owner and the session reach under allow_private_only', async () => {
+     resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
+ 
+     await expect(
+@@ -98,7 +100,7 @@ describe('authorizeMcpServerWrite', () => {
+         method: 'create',
+         data: remoteCreate,
+       })
+-    ).resolves.toEqual({ owner_user_id: ALICE });
++    ).resolves.toEqual({ owner_user_id: ALICE, scope: 'session' });
+   });
+ 
+   it('refuses to create a server owned by someone else', async () => {
+@@ -257,7 +259,11 @@ describe('authorizeMcpServerWrite', () => {
+ 
+     await expect(
+       authorizeMcpServerWrite(db, installParams, { method: 'create', data: remoteCreate })
+-    ).resolves.toEqual({ owner_user_id: ALICE, catalog_entry_name: 'com.linear/linear' });
++    ).resolves.toEqual({
++      owner_user_id: ALICE,
++      scope: 'session',
++      catalog_entry_name: 'com.linear/linear',
++    });
+   });
+ 
+   it.each([
+diff --git a/apps/agor-daemon/src/utils/mcp-server-authorization.ts b/apps/agor-daemon/src/utils/mcp-server-authorization.ts
+index 6cef35eb..5939bf82 100644
+--- a/apps/agor-daemon/src/utils/mcp-server-authorization.ts
++++ b/apps/agor-daemon/src/utils/mcp-server-authorization.ts
+@@ -4,8 +4,8 @@
+  * One function answers it for every write — the `mcp-servers` service hooks and
+  * the marketplace connect endpoint both go through {@link authorizeMcpServerWrite}
+  * — so the tenant's `mcp_member_policy`, the remote-transport restriction, and
+- * the private-server ownership rule are decided in a single place instead of
+- * being re-derived per entry point.
++ * the ownership and reach a private server is held to are decided in a single
++ * place instead of being re-derived per entry point.
+  *
+  * Using a server is a separate question with a separate answer: see
+  * `isMCPServerUsableInSession` in `@agor/core/mcp`, enforced where a server is
+@@ -18,10 +18,18 @@ import {
+   type TenantScopeAwareDatabase,
+ } from '@agor/core/db';
+ import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+-import { isMCPServerUsableBy } from '@agor/core/mcp';
++import {
++  isMCPServerUsableBy,
++  MEMBER_PRIVATE_MCP_SCOPE,
++  mayMemberManageMCPServer,
++  mayMemberUseMCPScope,
++  mayMemberUseMCPTransport,
++  mayMemberWriteMCPServers,
++} from '@agor/core/mcp';
+ import type {
+   AuthenticatedParams,
+   MCPMemberPolicy,
++  MCPScope,
+   MCPServer,
+   MCPTransport,
+   UserID,
+@@ -33,10 +41,11 @@ export type McpServerWriteMethod = 'create' | 'update' | 'patch' | 'remove';
+ export interface McpServerWriteRequest {
+   method: McpServerWriteMethod;
+   /** The row being changed or deleted; absent on create. */
+-  existing?: Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport'>;
++  existing?: Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport' | 'scope'>;
+   /** The submitted payload; absent on remove. */
+   data?: {
+     transport?: MCPTransport;
++    scope?: MCPScope;
+     owner_user_id?: UserID | string | null;
+     catalog_entry_name?: string;
+   };
+@@ -45,6 +54,8 @@ export interface McpServerWriteRequest {
+ export interface McpServerWriteDecision {
+   /** The owner to persist, for a create the caller is not free to choose. */
+   owner_user_id?: UserID;
++  /** The scope to persist, for a create whose policy fixes it. */
++  scope?: MCPScope;
+   /** The catalog provenance to persist, which only the install path may name. */
+   catalog_entry_name?: string;
+ }
+@@ -127,22 +138,35 @@ function resolveCatalogInstall(
+   return { entry_name: entryName, owner_user_id: userId };
+ }
+ 
+-/**
+- * A `stdio` server is a command line the executor process runs on its host.
+- * Letting members configure one turns "may register an MCP server" into "may
+- * run any binary as the executor user", which is not the grant either
+- * permissive policy value is meant to hand out. Admins keep it.
+- */
++/** Admins keep `stdio`; see {@link mayMemberUseMCPTransport} for why members do not. */
+ function assertRemoteTransport(transport: MCPTransport | undefined): void {
+-  if (transport === 'stdio') {
++  if (!mayMemberUseMCPTransport(transport)) {
+     throw new Forbidden(
+       'Only admins can configure stdio MCP servers; members can configure remote (http/sse) servers'
+     );
+   }
+ }
+ 
++/**
++ * A member widening their own server's reach, which is what
++ * `allow_private_only` withholds. Only a change is refused: a payload that
++ * restates the scope already stored — which is what every edit form sends —
++ * has widened nothing.
++ */
++function assertScopeUnchangedOrAllowed(
++  policy: MCPMemberPolicy,
++  requested: MCPScope | undefined,
++  stored: MCPScope
++): void {
++  if (requested === undefined || requested === stored) return;
++  if (mayMemberUseMCPScope(policy, requested)) return;
++  throw new Forbidden(
++    "This MCP server's reach cannot be widened to the whole workspace; your organization allows members private servers, which reach the sessions they are attached to"
++  );
++}
++
+ function assertPolicyAllowsWrite(policy: MCPMemberPolicy): void {
+-  if (policy === 'use_existing_only') {
++  if (!mayMemberWriteMCPServers(policy)) {
+     throw new Forbidden(
+       'Your organization does not allow members to configure MCP servers; ask an admin to add one'
+     );
+@@ -217,9 +241,14 @@ async function decidePolicyAndOwnership(
+       throw new Forbidden('You can only create MCP servers owned by yourself');
+     }
+     // `allow_private_only` means exactly that: the server the member creates is
+-    // theirs, whether or not they asked for it to be. `allow_crud` lets them
+-    // opt into a shared server, which is the whole difference between the two.
+-    if (policy === 'allow_private_only') return { owner_user_id: userId };
++    // theirs and reaches only the sessions they attach it to, whether or not
++    // they asked for either. Both are decided rather than refused, because
++    // `global` is what several clients put in the payload by default rather
++    // than something a person chose. `allow_crud` lets them opt into a shared
++    // server, which is the whole difference between the two.
++    if (policy === 'allow_private_only') {
++      return { owner_user_id: userId, scope: MEMBER_PRIVATE_MCP_SCOPE };
++    }
+     return requestedOwner ? { owner_user_id: userId } : {};
+   }
+ 
+@@ -228,18 +257,17 @@ async function decidePolicyAndOwnership(
+     throw new Forbidden('MCP server not found');
+   }
+ 
+-  if (existing.owner_user_id) {
+-    if (existing.owner_user_id !== userId) {
+-      throw new Forbidden("You cannot modify another user's private MCP server");
+-    }
+-  } else if (policy === 'allow_private_only') {
++  if (!mayMemberManageMCPServer(existing, policy, userId)) {
+     throw new Forbidden(
+-      'Your organization only allows members to manage their own private MCP servers'
++      existing.owner_user_id
++        ? "You cannot modify another user's private MCP server"
++        : 'Your organization only allows members to manage their own private MCP servers'
+     );
+   }
+ 
+   if (request.method !== 'remove') {
+     assertRemoteTransport(request.data?.transport ?? existing.transport);
++    assertScopeUnchangedOrAllowed(policy, request.data?.scope, existing.scope);
+   }
+ 
+   return {};
+@@ -275,6 +303,9 @@ export function createMcpServerWriteAuthorizationHook(
+       if (decision.owner_user_id !== undefined && data) {
+         data.owner_user_id = decision.owner_user_id;
+       }
++      if (decision.scope !== undefined && data) {
++        data.scope = decision.scope;
++      }
+       if (decision.catalog_entry_name !== undefined && data) {
+         data.catalog_entry_name = decision.catalog_entry_name;
+       }
+diff --git a/apps/agor-ui/src/App.tsx b/apps/agor-ui/src/App.tsx
+index 1b3b8887..2b426911 100644
+--- a/apps/agor-ui/src/App.tsx
++++ b/apps/agor-ui/src/App.tsx
+@@ -504,9 +504,10 @@ function AppContent() {
+   const integrationsHydrated = useAgorStore(
+     (s) => s.mcpServersHydrated && s.gatewayChannelsHydrated
+   );
+-  // Whether this user can actually reach the MCP settings tab. Mirrors the tab's
+-  // own gate in SettingsModal (`mcpEnabled && isAdmin`), so the "Connect tools"
+-  // banner is never a dead-end for users who can't open it.
++  // The "Connect tools" banner asks for workspace-wide setup — MCP servers and
++  // Slack/GitHub channels — so it is offered to the role that can complete it.
++  // Members reach the MCP settings tab without it, to read the policy that
++  // governs them.
+   const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+ 
+   // Keep the global ErrorBoundary's crash context populated so a render
+diff --git a/apps/agor-ui/src/components/MCPServer/MCPServerEditModal.tsx b/apps/agor-ui/src/components/MCPServer/MCPServerEditModal.tsx
+index 7ce23bda..e7b580d3 100644
+--- a/apps/agor-ui/src/components/MCPServer/MCPServerEditModal.tsx
++++ b/apps/agor-ui/src/components/MCPServer/MCPServerEditModal.tsx
+@@ -1,4 +1,10 @@
+-import type { AgorClient, MCPServer, UpdateMCPServerInput } from '@agor-live/client';
++import type {
++  AgorClient,
++  MCPScope,
++  MCPServer,
++  MCPTransport,
++  UpdateMCPServerInput,
++} from '@agor-live/client';
+ import { Form, Modal } from 'antd';
+ import { useEffect, useState } from 'react';
+ import { useThemedMessage } from '@/utils/message';
+@@ -10,6 +16,14 @@ export interface MCPServerEditModalProps {
+   server: MCPServer | null;
+   open: boolean;
+   client: AgorClient | null;
++  /**
++   * The transports this editor may switch to. Omit to offer all of them — a
++   * caller that knows the user is held to remote transports passes those, so
++   * the form does not invite a change the daemon will refuse.
++   */
++  offeredTransports?: MCPTransport[];
++  /** The scopes this editor may switch to, on the same terms. */
++  offeredScopes?: MCPScope[];
+   onClose: () => void;
+ }
+ 
+@@ -35,11 +49,13 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
+   server,
+   open,
+   client,
++  offeredTransports,
++  offeredScopes,
+   onClose,
+ }) => {
+   const { showSuccess, showError } = useThemedMessage();
+   const [form] = Form.useForm();
+-  const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
++  const [transport, setTransport] = useState<MCPTransport>('stdio');
+   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
+   const [testing, setTesting] = useState(false);
+   const [testResult, setTestResult] = useState<TestResult | null>(null);
+@@ -244,6 +260,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
+         }}
+       >
+         <MCPServerFormFields
++          offeredTransports={offeredTransports}
++          offeredScopes={offeredScopes}
+           mode="edit"
+           transport={transport}
+           onTransportChange={setTransport}
+diff --git a/apps/agor-ui/src/components/MCPServer/MCPServerFormFields.tsx b/apps/agor-ui/src/components/MCPServer/MCPServerFormFields.tsx
+index 821ad096..26adb517 100644
+--- a/apps/agor-ui/src/components/MCPServer/MCPServerFormFields.tsx
++++ b/apps/agor-ui/src/components/MCPServer/MCPServerFormFields.tsx
+@@ -1,4 +1,5 @@
+-import type { AgorClient } from '@agor-live/client';
++import type { AgorClient, MCPScope, MCPTransport } from '@agor-live/client';
++import { MCP_SCOPES, MCP_TRANSPORTS } from '@agor-live/client';
+ import { ApiOutlined, DownOutlined } from '@ant-design/icons';
+ import type { FormInstance } from 'antd';
+ import {
+@@ -29,14 +30,37 @@ import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-u
+ 
+ const { TextArea } = Input;
+ 
+-function isRemoteTransportValue(transport?: 'stdio' | 'http' | 'sse'): boolean {
++function isRemoteTransportValue(transport?: MCPTransport): boolean {
+   return transport !== 'stdio';
+ }
+ 
++const TRANSPORT_LABELS: Record<MCPTransport, string> = {
++  stdio: 'stdio (Local process)',
++  http: 'HTTP',
++  sse: 'SSE (Server-Sent Events)',
++};
++
++const ALL_TRANSPORTS: MCPTransport[] = [...MCP_TRANSPORTS];
++
++const SCOPE_LABELS: Record<MCPScope, string> = {
++  global: 'Global (all sessions)',
++  session: 'Session',
++};
++
++const ALL_SCOPES: MCPScope[] = [...MCP_SCOPES];
++
+ export interface MCPServerFormFieldsProps {
+   mode: 'create' | 'edit';
+-  transport?: 'stdio' | 'http' | 'sse';
+-  onTransportChange?: (transport: 'stdio' | 'http' | 'sse') => void;
++  transport?: MCPTransport;
++  onTransportChange?: (transport: MCPTransport) => void;
++  /**
++   * The transports this user may configure. Omit to offer all of them — the
++   * daemon still decides, so this only keeps a form from being filled in
++   * towards a refusal.
++   */
++  offeredTransports?: MCPTransport[];
++  /** The scopes this user may configure, on the same terms as the transports. */
++  offeredScopes?: MCPScope[];
+   authType?: 'none' | 'bearer' | 'jwt' | 'oauth';
+   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
+   form: FormInstance;
+@@ -74,6 +98,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
+   mode,
+   transport,
+   onTransportChange,
++  offeredTransports = ALL_TRANSPORTS,
++  offeredScopes = ALL_SCOPES,
+   authType = 'none',
+   onAuthTypeChange,
+   form,
+@@ -422,12 +448,15 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
+             label="Scope"
+             name="scope"
+             initialValue={isCreate ? 'session' : 'global'}
+-            tooltip="Where this server is available"
++            tooltip={
++              offeredScopes.includes('global')
++                ? 'Where this server is available'
++                : "Where this server is available. A workspace-wide server is admin-managed under this workspace's MCP policy."
++            }
+           >
+-            <Select>
+-              <Select.Option value="global">Global (all sessions)</Select.Option>
+-              <Select.Option value="session">Session</Select.Option>
+-            </Select>
++            <Select
++              options={offeredScopes.map((value) => ({ value, label: SCOPE_LABELS[value] }))}
++            />
+           </Form.Item>
+         </Col>
+         <Col span={12}>
+@@ -461,14 +490,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
+         label="Transport"
+         name="transport"
+         rules={mode === 'create' ? [{ required: true }] : []}
+-        initialValue={mode === 'create' ? 'stdio' : undefined}
+-        tooltip="Connection method: stdio for local processes, HTTP/SSE for remote servers"
++        initialValue={mode === 'create' ? offeredTransports[0] : undefined}
++        tooltip={
++          offeredTransports.includes('stdio')
++            ? 'Connection method: stdio for local processes, HTTP/SSE for remote servers'
++            : 'Connection method. A stdio server runs a command on the executor host, which only admins can configure.'
++        }
+       >
+-        <Select onChange={(value) => onTransportChange?.(value as 'stdio' | 'http' | 'sse')}>
+-          <Select.Option value="stdio">stdio (Local process)</Select.Option>
+-          <Select.Option value="http">HTTP</Select.Option>
+-          <Select.Option value="sse">SSE (Server-Sent Events)</Select.Option>
+-        </Select>
++        <Select
++          options={offeredTransports.map((value) => ({ value, label: TRANSPORT_LABELS[value] }))}
++          onChange={(value) => onTransportChange?.(value as MCPTransport)}
++        />
+       </Form.Item>
+ 
+       {transport === 'stdio' ? (
+diff --git a/apps/agor-ui/src/components/MCPServer/memberPolicy.ts b/apps/agor-ui/src/components/MCPServer/memberPolicy.ts
+new file mode 100644
+index 00000000..c65808fc
+--- /dev/null
++++ b/apps/agor-ui/src/components/MCPServer/memberPolicy.ts
+@@ -0,0 +1,109 @@
++/**
++ * The MCP member policy, as the UI states it.
++ *
++ * The daemon decides every write — `authorizeMcpServerWrite` is the boundary,
++ * and it is the only place that may refuse one. What lives here is the reading
++ * of that decision a person needs: what each policy value means in words, and
++ * which affordances are worth offering under it. The rules themselves come from
++ * `@agor/core/mcp/member-policy`, which the daemon's authorizer also calls, so
++ * an offered button and an accepted write cannot come to differ.
++ */
++
++import {
++  mayMemberManageMCPServer,
++  mayMemberUseMCPScope,
++  mayMemberUseMCPTransport,
++  mayMemberWriteMCPServers,
++} from '@agor/core/mcp/member-policy';
++import type { MCPMemberPolicy, MCPScope, MCPServer, MCPTransport } from '@agor-live/client';
++import { MCP_SCOPES, MCP_TRANSPORTS } from '@agor-live/client';
++
++export interface MCPMemberPolicyDescription {
++  /** The value, named as a sentence about members rather than as its enum. */
++  label: string;
++  /** What members can and cannot do under it. */
++  meaning: string;
++}
++
++export const MCP_MEMBER_POLICY_DESCRIPTIONS: Record<MCPMemberPolicy, MCPMemberPolicyDescription> = {
++  use_existing_only: {
++    label: 'Use existing servers only',
++    meaning:
++      'Members can use the MCP servers an admin has already configured. They cannot add, change, or remove any.',
++  },
++  allow_private_only: {
++    label: 'Members can add private servers',
++    meaning:
++      'Members can add remote (HTTP/SSE) servers owned by themselves, reaching only the sessions they attach them to. Servers shared with the workspace stay admin-managed.',
++  },
++  allow_crud: {
++    label: 'Members can add shared servers',
++    meaning:
++      "Members can add, change, and remove remote (HTTP/SSE) servers, including ones shared with the whole workspace. Another member's private server stays out of reach.",
++  },
++};
++
++export interface MCPServerCapabilityContext {
++  /** Admins administer every server, private ones included. */
++  isAdmin: boolean;
++  policy: MCPMemberPolicy;
++  /** The signed-in user, whose private servers are theirs to manage. */
++  userId?: string;
++}
++
++/** Whether this user may add an MCP server at all. */
++export function canAddMcpServer({ isAdmin, policy }: MCPServerCapabilityContext): boolean {
++  return isAdmin || mayMemberWriteMCPServers(policy);
++}
++
++/**
++ * The transports this user may configure. Members are held to remote ones, so
++ * a form offers what the write will accept rather than a 403. Role alone
++ * decides it — no policy value widens it.
++ */
++export function allowedMcpTransports({
++  isAdmin,
++}: Pick<MCPServerCapabilityContext, 'isAdmin'>): MCPTransport[] {
++  return MCP_TRANSPORTS.filter((transport) => isAdmin || mayMemberUseMCPTransport(transport));
++}
++
++/**
++ * The scopes this user may give a server. A member under `allow_private_only`
++ * attaches their server per session rather than to every session they start.
++ */
++export function allowedMcpScopes({ isAdmin, policy }: MCPServerCapabilityContext): MCPScope[] {
++  return MCP_SCOPES.filter((scope) => isAdmin || mayMemberUseMCPScope(policy, scope));
++}
++
++/** Whether this user may change this server's configuration. */
++export function canEditMcpServer(
++  server: Pick<MCPServer, 'owner_user_id' | 'transport'>,
++  context: MCPServerCapabilityContext
++): boolean {
++  if (context.isAdmin) return true;
++  return (
++    mayMemberManageMCPServer(server, context.policy, context.userId) &&
++    mayMemberUseMCPTransport(server.transport)
++  );
++}
++
++/** Whether this user may delete this server. */
++export function canDeleteMcpServer(
++  server: Pick<MCPServer, 'owner_user_id'>,
++  context: MCPServerCapabilityContext
++): boolean {
++  return context.isAdmin || mayMemberManageMCPServer(server, context.policy, context.userId);
++}
++
++/**
++ * Why a refused action is refused, phrased so the reader can act on it — ask an
++ * admin, rather than look for a bug in the button.
++ */
++export function explainAddRestriction(policy: MCPMemberPolicy): string {
++  return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you add MCP servers. An admin can add one, or change the policy.`;
++}
++
++/** Why changing or removing this particular server is refused. */
++export function explainManageRestriction(policy: MCPMemberPolicy): string {
++  return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you change this server. An admin can change it, or change the policy.`;
++}
+diff --git a/apps/agor-ui/src/components/SettingsModal/MCPMemberPolicyCard.tsx b/apps/agor-ui/src/components/SettingsModal/MCPMemberPolicyCard.tsx
+new file mode 100644
+index 00000000..c4863ef4
+--- /dev/null
++++ b/apps/agor-ui/src/components/SettingsModal/MCPMemberPolicyCard.tsx
+@@ -0,0 +1,94 @@
++/**
++ * The MCP member policy, shown where the servers it governs are listed.
++ *
++ * Members see it read-only rather than not at all: when a Connect button or an
++ * edit is refused, this is the sentence that explains the refusal, and reading
++ * it should not require an admin.
++ */
++
++import type { MCPMemberPolicy } from '@agor-live/client';
++import { MCP_MEMBER_POLICIES } from '@agor-live/client';
++import { Alert, Card, Radio, Skeleton, Space, Tag, Typography, theme } from 'antd';
++import { MCP_MEMBER_POLICY_DESCRIPTIONS } from '../MCPServer/memberPolicy';
++
++const DESCRIPTION_ID_PREFIX = 'mcp-member-policy-';
++
++export interface MCPMemberPolicyCardProps {
++  policy: MCPMemberPolicy;
++  loading: boolean;
++  saving: boolean;
++  error: string | null;
++  /** Admins may change the value; everyone else reads it. */
++  editable: boolean;
++  onChange: (next: MCPMemberPolicy) => void;
++}
++
++export const MCPMemberPolicyCard: React.FC<MCPMemberPolicyCardProps> = ({
++  policy,
++  loading,
++  saving,
++  error,
++  editable,
++  onChange,
++}) => {
++  const { token } = theme.useToken();
++  const inForce = MCP_MEMBER_POLICY_DESCRIPTIONS[policy];
++  // A value that is still loading, or that failed to load, is not this
++  // workspace's policy — it is the restrictive value the UI acts on meanwhile.
++  // Say the options, name none of them in force.
++  const known = !loading && error === null;
++
++  return (
++    <Card
++      size="small"
++      title="MCP member policy"
++      extra={known ? <Tag color="blue">{inForce.label}</Tag> : null}
++      style={{ marginBottom: token.marginMD }}
++    >
++      <Space orientation="vertical" size={token.marginSM} style={{ width: '100%' }}>
++        <Typography.Text type="secondary">
++          One setting for the whole workspace, not per user: it decides what members — everyone
++          below admin — may do with MCP server configuration. Admins are unaffected by it.
++        </Typography.Text>
++        {error && <Alert type="error" showIcon title={error} />}
++        {loading ? (
++          <Skeleton active paragraph={{ rows: 3 }} title={false} />
++        ) : (
++          <Radio.Group
++            aria-label="MCP member policy"
++            value={known ? policy : undefined}
++            disabled={!known || !editable || saving}
++            onChange={(event) => onChange(event.target.value as MCPMemberPolicy)}
++          >
++            <Space orientation="vertical" size={token.marginSM}>
++              {MCP_MEMBER_POLICIES.map((value) => (
++                // The meaning sits beside the radio rather than inside its
++                // label, so the option is named by its label and described by
++                // its sentence instead of announcing all of both.
++                <div key={value}>
++                  <Radio value={value} aria-describedby={`${DESCRIPTION_ID_PREFIX}${value}`}>
++                    <Typography.Text strong>
++                      {MCP_MEMBER_POLICY_DESCRIPTIONS[value].label}
++                    </Typography.Text>
++                  </Radio>
++                  <Typography.Paragraph
++                    id={`${DESCRIPTION_ID_PREFIX}${value}`}
++                    type="secondary"
++                    style={{ marginBottom: 0, paddingInlineStart: token.paddingLG }}
++                  >
++                    {MCP_MEMBER_POLICY_DESCRIPTIONS[value].meaning}
++                  </Typography.Paragraph>
++                </div>
++              ))}
++            </Space>
++          </Radio.Group>
++        )}
++        {!editable && known && (
++          <Typography.Text type="secondary">
++            In force: {inForce.label} — {inForce.meaning} Only an admin can change it.
++          </Typography.Text>
++        )}
++      </Space>
++    </Card>
++  );
++};
+diff --git a/apps/agor-ui/src/components/SettingsModal/MCPServersTable.test.tsx b/apps/agor-ui/src/components/SettingsModal/MCPServersTable.test.tsx
+new file mode 100644
+index 00000000..43fc0921
+--- /dev/null
++++ b/apps/agor-ui/src/components/SettingsModal/MCPServersTable.test.tsx
+@@ -0,0 +1,305 @@
++import type { AgorClient, MCPMemberPolicy, MCPServer, User } from '@agor-live/client';
++import { fireEvent, render, screen, waitFor } from '@testing-library/react';
++import { App as AntdApp } from 'antd';
++import { describe, expect, it, vi } from 'vitest';
++import { MCPServersTable } from './MCPServersTable';
++
++const ADMIN: User = {
++  user_id: 'user-admin',
++  email: 'admin@agor.live',
++  name: 'Ada Admin',
++  role: 'admin',
++} as User;
++
++const MEMBER: User = {
++  user_id: 'user-member',
++  email: 'bob@agor.live',
++  name: 'Bob Member',
++  role: 'member',
++} as User;
++
++const USER_BY_ID = new Map<string, User>([
++  [ADMIN.user_id, ADMIN],
++  [MEMBER.user_id, MEMBER],
++]);
++
++function makeServer(overrides: Partial<MCPServer>): MCPServer {
++  return {
++    mcp_server_id: 'server-1',
++    name: 'shared-server',
++    transport: 'http',
++    url: 'https://mcp.example.com',
++    scope: 'global',
++    source: 'user',
++    enabled: true,
++    created_at: '2026-01-01T00:00:00.000Z',
++    ...overrides,
++  } as MCPServer;
++}
++
++function makeClient(policy: MCPMemberPolicy, findError?: Error) {
++  const find = findError
++    ? vi.fn().mockRejectedValue(findError)
++    : vi.fn().mockResolvedValue({ policy });
++  const patch = vi.fn(async (_id: null, data: { policy: MCPMemberPolicy }) => data);
++  const client = {
++    // The create form subscribes to the OAuth browser-flow hint on mount.
++    io: { on: vi.fn(), off: vi.fn() },
++    service: (path: string) => {
++      if (path === 'mcp-member-policy') return { find, patch };
++      return {};
++    },
++  } as unknown as AgorClient;
++  return { client, find, patch };
++}
++
++function renderTable(options: {
++  policy: MCPMemberPolicy;
++  currentUser: User;
++  servers?: MCPServer[];
++  findError?: Error;
++}) {
++  const { client, find, patch } = makeClient(options.policy, options.findError);
++  const mcpServerById = new Map(
++    (options.servers ?? []).map((server) => [server.mcp_server_id, server])
++  );
++  render(
++    <AntdApp>
++      <MCPServersTable
++        mcpServerById={mcpServerById}
++        client={client}
++        userById={USER_BY_ID}
++        currentUser={options.currentUser}
++      />
++    </AntdApp>
++  );
++  return { find, patch };
++}
++
++const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
++
++describe('MCPServersTable member policy', () => {
++  it('lets an admin read the policy in plain language and change it', async () => {
++    const { find, patch } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
++
++    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
++
++    expect(screen.getByText(/One setting for the whole workspace, not per user/i)).toBeVisible();
++    const inForce = policyRadio(/Use existing servers only/);
++    expect(inForce).toBeChecked();
++    expect(inForce).toBeEnabled();
++    expect(
++      screen.getByText(/Members can use the MCP servers an admin has already configured/i)
++    ).toBeVisible();
++
++    fireEvent.click(policyRadio(/Members can add shared servers/));
++
++    await waitFor(() => expect(patch).toHaveBeenCalledWith(null, { policy: 'allow_crud' }));
++  });
++
++  it('shows a member the policy read-only, with the reason adding is refused', async () => {
++    const { find, patch } = renderTable({ policy: 'use_existing_only', currentUser: MEMBER });
++
++    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
++
++    expect(policyRadio(/Use existing servers only/)).toBeDisabled();
++    expect(policyRadio(/Members can add shared servers/)).toBeDisabled();
++    expect(screen.getByText(/Only an admin can change it/i)).toBeVisible();
++    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
++
++    fireEvent.click(policyRadio(/Members can add shared servers/));
++    expect(patch).not.toHaveBeenCalled();
++  });
++
++  it('offers a member the add action once the policy allows it', async () => {
++    const { find } = renderTable({ policy: 'allow_private_only', currentUser: MEMBER });
++
++    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
++
++    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeEnabled();
++  });
++
++  it('withholds the add action, without naming a policy, until the policy is known', () => {
++    // No `await`: this is the state between mount and the fetch resolving.
++    renderTable({ policy: 'allow_crud', currentUser: MEMBER });
++
++    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
++    expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
++  });
++
++  it('offers a member only the transports the daemon accepts from them', async () => {
++    const { find } = renderTable({ policy: 'allow_crud', currentUser: MEMBER });
++    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
++
++    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
++
++    // stdio runs a command on the executor host, so it is admin-only: a member
++    // must not be handed a form pre-filled towards a refusal. The form follows
++    // the selected transport, so a URL field and no command field is the
++    // rendered proof that it did not default to stdio.
++    expect(await screen.findByLabelText('URL')).toBeInTheDocument();
++    expect(screen.queryByLabelText('Command')).not.toBeInTheDocument();
++  });
++
++  it('offers a member no workspace-wide scope under allow_private_only', async () => {
++    const { find } = renderTable({ policy: 'allow_private_only', currentUser: MEMBER });
++    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
++
++    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
++
++    // The endpoint refuses a member's `global` row under this policy, so the
++    // form must not invite one.
++    fireEvent.mouseDown(await screen.findByLabelText('Scope'));
++
++    // Selected and offered both render the label, so one match is the floor.
++    await waitFor(() => expect(screen.getAllByText('Session').length).toBeGreaterThan(0));
++    expect(screen.queryByText('Global (all sessions)')).not.toBeInTheDocument();
++  });
++
++  it('offers an admin workspace-wide scope', async () => {
++    const { find } = renderTable({ policy: 'allow_private_only', currentUser: ADMIN });
++    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
++
++    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
++
++    const scope = await screen.findByLabelText('Scope');
++    fireEvent.mouseDown(scope);
++    expect(await screen.findByText('Global (all sessions)')).toBeInTheDocument();
++  });
++
++  it('offers an admin every transport', async () => {
++    const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
++    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
++
++    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
++
++    expect(await screen.findByLabelText('Command')).toBeInTheDocument();
++  });
++
++  it('states no policy at all when the policy could not be read', async () => {
++    renderTable({
++      policy: 'allow_crud',
++      currentUser: MEMBER,
++      findError: new Error('Network request failed'),
++    });
++
++    await waitFor(() => expect(screen.getByText('Network request failed')).toBeInTheDocument());
++
++    // The workspace may well allow adding; the daemon was simply unreachable.
++    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
++    expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
++    expect(policyRadio(/Use existing servers only/)).not.toBeChecked();
++  });
++
++  it('holds the edit form to the transports a member may switch to', async () => {
++    const { find } = renderTable({
++      policy: 'allow_private_only',
++      currentUser: MEMBER,
++      servers: [
++        makeServer({
++          mcp_server_id: 'mine',
++          name: 'my-server',
++          owner_user_id: MEMBER.user_id as MCPServer['owner_user_id'],
++        }),
++      ],
++    });
++    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
++
++    const [, edit] = Array.from(rowFor('my-server').querySelectorAll('button'));
++    fireEvent.click(edit as HTMLButtonElement);
++
++    // Switching an editable server to stdio is the same refusal the create form
++    // avoids, so the editor must not offer it either.
++    expect(await screen.findByLabelText('URL')).toBeInTheDocument();
++    expect(screen.queryByLabelText('Command')).not.toBeInTheDocument();
++  });
++
++  it('reads the policy once, not once per server row', async () => {
++    const { find } = renderTable({
++      policy: 'allow_crud',
++      currentUser: ADMIN,
++      servers: [
++        makeServer({ mcp_server_id: 'server-1', name: 'alpha' }),
++        makeServer({ mcp_server_id: 'server-2', name: 'beta' }),
++        makeServer({ mcp_server_id: 'server-3', name: 'gamma' }),
++      ],
++    });
++
++    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
++    expect(find).toHaveBeenCalledTimes(1);
++  });
++});
++
++// Ant Design's table styles defeat jsdom's CSS parser, so rows are asserted on
++// presence and attributes rather than through computed visibility.
++const rowFor = (cellText: string): HTMLElement => {
++  // The name column prints the display name and the slug, so match the first.
++  const row = screen.getAllByText(cellText)[0]?.closest('tr');
++  if (!row) throw new Error(`No table row rendered for "${cellText}"`);
++  return row as HTMLElement;
++};
++
++describe('MCPServersTable ownership', () => {
++  it('renders an unowned server as shared with the workspace rather than blank', async () => {
++    const { find } = renderTable({
++      policy: 'use_existing_only',
++      currentUser: ADMIN,
++      servers: [makeServer({ owner_user_id: undefined })],
++    });
++
++    await waitFor(() => expect(find).toHaveBeenCalled());
++
++    expect(screen.getByText('Shared with workspace')).toBeInTheDocument();
++  });
++
++  it('names the owner of a private server', async () => {
++    const { find } = renderTable({
++      policy: 'allow_private_only',
++      currentUser: ADMIN,
++      servers: [makeServer({ owner_user_id: MEMBER.user_id as MCPServer['owner_user_id'] })],
++    });
++
++    await waitFor(() => expect(find).toHaveBeenCalled());
++
++    expect(screen.getByText('Bob Member')).toBeInTheDocument();
++    expect(screen.queryByText('Shared with workspace')).not.toBeInTheDocument();
++  });
++
++  it('marks the signed-in member as the owner of their own server', async () => {
++    const { find } = renderTable({
++      policy: 'allow_private_only',
++      currentUser: MEMBER,
++      servers: [makeServer({ owner_user_id: MEMBER.user_id as MCPServer['owner_user_id'] })],
++    });
++
++    await waitFor(() => expect(find).toHaveBeenCalled());
++
++    expect(screen.getByText('Bob Member (you)')).toBeInTheDocument();
++  });
++
++  it('leaves a member the actions on their own server and withholds the rest', async () => {
++    const { find } = renderTable({
++      policy: 'allow_private_only',
++      currentUser: MEMBER,
++      servers: [
++        makeServer({
++          mcp_server_id: 'mine',
++          name: 'my-server',
++          owner_user_id: MEMBER.user_id as MCPServer['owner_user_id'],
++        }),
++        makeServer({ mcp_server_id: 'shared', name: 'workspace-server' }),
++      ],
++    });
++
++    await waitFor(() => expect(find).toHaveBeenCalled());
++
++    // Each row renders view, edit and delete in that order. Under
++    // `allow_private_only` a member manages their own server and only reads
++    // the workspace's.
++    const own = Array.from(rowFor('my-server').querySelectorAll('button'));
++    const shared = Array.from(rowFor('workspace-server').querySelectorAll('button'));
++
++    expect(own.map((button) => button.disabled)).toEqual([false, false, false]);
++    expect(shared.map((button) => button.disabled)).toEqual([false, true, true]);
++  });
++});
+diff --git a/apps/agor-ui/src/components/SettingsModal/MCPServersTable.tsx b/apps/agor-ui/src/components/SettingsModal/MCPServersTable.tsx
+index 52cfb9c5..948aa043 100644
+--- a/apps/agor-ui/src/components/SettingsModal/MCPServersTable.tsx
++++ b/apps/agor-ui/src/components/SettingsModal/MCPServersTable.tsx
+@@ -1,5 +1,21 @@
+-import { type CreateMCPServerInput, type MCPServer, shortId } from '@agor-live/client';
+-import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
++import {
++  type CreateMCPServerInput,
++  hasMinimumRole,
++  type MCPScope,
++  type MCPServer,
++  type MCPTransport,
++  ROLES,
++  shortId,
++  type User,
++} from '@agor-live/client';
++import {
++  DeleteOutlined,
++  EditOutlined,
++  EyeOutlined,
++  PlusOutlined,
++  TeamOutlined,
++  UserOutlined,
++} from '@ant-design/icons';
+ import {
+   Badge,
+   Button,
+@@ -11,24 +27,73 @@ import {
+   Space,
+   Table,
+   Tag,
++  Tooltip,
+   Typography,
+ } from 'antd';
+-import { useEffect, useMemo, useState } from 'react';
++import { useCallback, useEffect, useMemo, useState } from 'react';
++import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
+ import { mapToSortedArray } from '@/utils/mapHelpers';
+ import { useThemedMessage } from '@/utils/message';
++import { userSelectLabel } from '@/utils/selectSearch';
+ import { filterBySettingsSearch } from '@/utils/settingsSearch';
+ import { HighlightMatch } from '../HighlightMatch';
+ import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
+ import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
++import {
++  allowedMcpScopes,
++  allowedMcpTransports,
++  canAddMcpServer,
++  canDeleteMcpServer,
++  canEditMcpServer,
++  explainAddRestriction,
++  explainManageRestriction,
++  type MCPServerCapabilityContext,
++} from '../MCPServer/memberPolicy';
++import { MCPMemberPolicyCard } from './MCPMemberPolicyCard';
+ import { SettingsActionGroup } from './SettingsActionGroup';
+ 
+ interface MCPServersTableProps {
+   mcpServerById: Map<string, MCPServer>;
+   client: import('@agor-live/client').AgorClient | null;
++  /** Resolves `owner_user_id` to a person; unowned servers name no user. */
++  userById: Map<string, User>;
++  currentUser?: User | null;
+   onCreate?: (data: CreateMCPServerInput) => void;
+   onDelete?: (serverId: string) => void;
+ }
+ 
++/** How an unowned server reads: it is the workspace's, not nobody's. */
++const SHARED_OWNER_LABEL = 'Shared with workspace';
++const SHARED_OWNER_HINT = 'No owner — everyone in this workspace can use this server.';
++
++const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…";
++const POLICY_UNREADABLE_HINT =
++  "This workspace's MCP policy could not be read, so nothing is offered here.";
++
++const getServerHealth = (server: MCPServer) => {
++  const toolCount = server.tools?.length || 0;
++  const transport = server.transport || (server.url ? 'http' : 'stdio');
++
++  if (transport === 'stdio') {
++    return {
++      status: 'default' as const,
++      text: 'Local process',
++    };
++  }
++
++  if (toolCount > 0) {
++    return {
++      status: 'success' as const,
++      text: `${toolCount} tools`,
++    };
++  }
++
++  return {
++    status: 'default' as const,
++    text: 'Not tested',
++  };
++};
++
+ interface TestResult {
+   success: boolean;
+   toolCount: number;
+@@ -43,17 +108,35 @@ interface TestResult {
+ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+   mcpServerById,
+   client,
++  userById,
++  currentUser,
+   onCreate,
+   onDelete,
+ }) => {
+   const { showError } = useThemedMessage();
++  const memberPolicy = useMcpMemberPolicy(client);
++  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
++  // Which transports a user may configure turns on role alone, so this is known
++  // before the policy fetch settles. The first entry is the default the create
++  // form starts from — `MCP_TRANSPORTS` is ordered for that.
++  const offeredTransports = useMemo(() => allowedMcpTransports({ isAdmin }), [isAdmin]);
++  // Scope, unlike transport, is the policy's own question: `allow_private_only`
++  // holds a member to servers they attach per session.
++  const offeredScopes = useMemo(
++    () => allowedMcpScopes({ isAdmin, policy: memberPolicy.policy }),
++    [isAdmin, memberPolicy.policy]
++  );
+   const [createModalOpen, setCreateModalOpen] = useState(false);
+   const [editModalOpen, setEditModalOpen] = useState(false);
+   const [viewModalOpen, setViewModalOpen] = useState(false);
+   const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
+   const [viewingServer, setViewingServer] = useState<MCPServer | null>(null);
+   const [createForm] = Form.useForm();
+-  const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
++  // Null means "whatever this user's first offered transport is" — held as a
++  // derivation rather than a mount-time snapshot, so the field and the payload
++  // cannot disagree if the signed-in user resolves after the first render.
++  const [chosenTransport, setChosenTransport] = useState<MCPTransport | null>(null);
++  const transport = chosenTransport ?? offeredTransports[0];
+   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
+   const [testing, setTesting] = useState(false);
+   const [alreadyCreatedInOAuthFlow, setAlreadyCreatedInOAuthFlow] = useState(false);
+@@ -77,7 +160,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+       display_name: values.display_name as string | undefined,
+       description: values.description as string | undefined,
+       transport: values.transport as 'stdio' | 'http' | 'sse',
+-      scope: (values.scope as 'global' | 'session' | undefined) || 'global',
++      scope: (values.scope as MCPScope | undefined) ?? offeredScopes[0],
+       enabled: (values.enabled as boolean | undefined) ?? true,
+       source: 'user',
+     };
+@@ -117,7 +200,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+   const resetCreateModal = () => {
+     createForm.resetFields();
+     setCreateModalOpen(false);
+-    setTransport('stdio');
++    setChosenTransport(null);
+     setAuthType('none');
+     setTestResult(null);
+     setAlreadyCreatedInOAuthFlow(false);
+@@ -220,155 +303,247 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+     }
+   };
+ 
+-  const handleEdit = (server: MCPServer) => {
++  const handleEdit = useCallback((server: MCPServer) => {
+     setEditingServer(server);
+     setEditModalOpen(true);
+-  };
++  }, []);
+ 
+   const handleEditClose = () => {
+     setEditModalOpen(false);
+     setEditingServer(null);
+   };
+ 
+-  const handleView = (server: MCPServer) => {
++  const handleView = useCallback((server: MCPServer) => {
+     setViewingServer(server);
+     setViewModalOpen(true);
+-  };
++  }, []);
+ 
+-  const handleDelete = (serverId: string) => {
+-    onDelete?.(serverId);
+-  };
++  const handleDelete = useCallback(
++    (serverId: string) => {
++      onDelete?.(serverId);
++    },
++    [onDelete]
++  );
+ 
+-  const getServerHealth = (server: MCPServer) => {
+-    const toolCount = server.tools?.length || 0;
+-    const transport = server.transport || (server.url ? 'http' : 'stdio');
++  // Until the policy is known the table offers nothing and says only that. The
++  // restrictive value it falls back to — while loading, or when the read failed
++  // — is a safe assumption to act on, not a fact about this workspace to quote
++  // back as the reason.
++  const policyPending = memberPolicy.loading || memberPolicy.error !== null;
++  const policyPendingHint = memberPolicy.error ? POLICY_UNREADABLE_HINT : POLICY_LOADING_HINT;
+ 
+-    if (transport === 'stdio') {
+-      return {
+-        status: 'default' as const,
+-        text: 'Local process',
+-      };
+-    }
++  const capability = useMemo<MCPServerCapabilityContext>(
++    () => ({ isAdmin, policy: memberPolicy.policy, userId: currentUser?.user_id }),
++    [isAdmin, currentUser?.user_id, memberPolicy.policy]
++  );
++
++  // An editor must be able to show the scope a row already carries, including
++  // one the policy would no longer let its owner pick; narrowing it stays
++  // available, and restating it is not a change the daemon refuses.
++  const editableScopes = useMemo(
++    () =>
++      editingServer && !offeredScopes.includes(editingServer.scope)
++        ? [...offeredScopes, editingServer.scope]
++        : offeredScopes,
++    [offeredScopes, editingServer]
++  );
+ 
+-    if (toolCount > 0) {
++  const describeOwner = useCallback(
++    (server: MCPServer) => {
++      if (!server.owner_user_id) {
++        return { text: SHARED_OWNER_LABEL, hint: SHARED_OWNER_HINT, shared: true };
++      }
++      const owner = userById.get(server.owner_user_id);
++      const isSelf = server.owner_user_id === currentUser?.user_id;
++      const text = owner ? owner.name?.trim() || owner.email : shortId(server.owner_user_id);
+       return {
+-        status: 'success' as const,
+-        text: `${toolCount} tools`,
++        text: isSelf ? `${text} (you)` : text,
++        hint: `Private to ${owner ? userSelectLabel(owner) : server.owner_user_id} — usable only in their own sessions.`,
++        shared: false,
+       };
+-    }
+-
+-    return {
+-      status: 'default' as const,
+-      text: 'Not tested',
+-    };
+-  };
++    },
++    [userById, currentUser?.user_id]
++  );
+ 
+-  const columns = [
+-    {
+-      title: 'Name',
+-      dataIndex: 'name',
+-      key: 'name',
+-      width: 180,
+-      render: (_: string, server: MCPServer) => (
+-        <div>
++  const columns = useMemo(
++    () => [
++      {
++        title: 'Name',
++        dataIndex: 'name',
++        key: 'name',
++        width: 180,
++        render: (_: string, server: MCPServer) => (
+           <div>
+-            <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
++            <div>
++              <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
++            </div>
++            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
++              <HighlightMatch text={server.name} query={searchTerm} />
++            </Typography.Text>
+           </div>
+-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+-            <HighlightMatch text={server.name} query={searchTerm} />
+-          </Typography.Text>
+-        </div>
+-      ),
+-    },
+-    {
+-      title: 'Transport',
+-      dataIndex: 'transport',
+-      key: 'transport',
+-      width: 100,
+-      render: (transport: string) => (
+-        <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
+-      ),
+-    },
+-    {
+-      title: 'Scope',
+-      dataIndex: 'scope',
+-      key: 'scope',
+-      width: 100,
+-      render: (scope: string) => {
+-        const colors: Record<string, string> = {
+-          global: 'purple',
+-          repo: 'cyan',
+-          session: 'magenta',
+-        };
+-        return <Tag color={colors[scope]}>{scope}</Tag>;
++        ),
+       },
+-    },
+-    {
+-      title: 'Status',
+-      dataIndex: 'enabled',
+-      key: 'enabled',
+-      width: 80,
+-      render: (enabled: boolean) =>
+-        enabled ? (
+-          <Badge status="success" text="Enabled" />
+-        ) : (
+-          <Badge status="default" text="Disabled" />
++      {
++        title: 'Transport',
++        dataIndex: 'transport',
++        key: 'transport',
++        width: 100,
++        render: (transport: string) => (
++          <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
+         ),
+-    },
+-    {
+-      title: 'Health',
+-      key: 'health',
+-      width: 120,
+-      render: (_: unknown, server: MCPServer) => {
+-        const health = getServerHealth(server);
+-        return <Badge status={health.status} text={health.text} />;
+       },
+-    },
+-    {
+-      title: 'Source',
+-      dataIndex: 'source',
+-      key: 'source',
+-      width: 100,
+-      render: (source: string) => (
+-        <Typography.Text type="secondary">
+-          <HighlightMatch text={source} query={searchTerm} />
+-        </Typography.Text>
+-      ),
+-    },
+-    {
+-      title: 'Actions',
+-      key: 'actions',
+-      width: 96,
+-      render: (_: unknown, server: MCPServer) => (
+-        <SettingsActionGroup>
+-          <Button
+-            type="text"
+-            size="small"
+-            icon={<EyeOutlined />}
+-            onClick={() => handleView(server)}
+-            title="View details"
+-          />
+-          <Button
+-            type="text"
+-            size="small"
+-            icon={<EditOutlined />}
+-            onClick={() => handleEdit(server)}
+-            title="Edit"
+-          />
+-          <Popconfirm
+-            title="Delete MCP server?"
+-            description={`Are you sure you want to delete "${server.display_name || server.name}"?`}
+-            onConfirm={() => handleDelete(server.mcp_server_id)}
+-            okText="Delete"
+-            cancelText="Cancel"
+-            okButtonProps={{ danger: true }}
+-          >
+-            <Button type="text" size="small" icon={<DeleteOutlined />} danger title="Delete" />
+-          </Popconfirm>
+-        </SettingsActionGroup>
+-      ),
+-    },
+-  ];
++      {
++        title: 'Scope',
++        dataIndex: 'scope',
++        key: 'scope',
++        width: 100,
++        render: (scope: string) => {
++          const colors: Record<string, string> = {
++            global: 'purple',
++            repo: 'cyan',
++            session: 'magenta',
++          };
++          return <Tag color={colors[scope]}>{scope}</Tag>;
++        },
++      },
++      {
++        title: 'Status',
++        dataIndex: 'enabled',
++        key: 'enabled',
++        width: 80,
++        render: (enabled: boolean) =>
++          enabled ? (
++            <Badge status="success" text="Enabled" />
++          ) : (
++            <Badge status="default" text="Disabled" />
++          ),
++      },
++      {
++        title: 'Health',
++        key: 'health',
++        width: 120,
++        render: (_: unknown, server: MCPServer) => {
++          const health = getServerHealth(server);
++          return <Badge status={health.status} text={health.text} />;
++        },
++      },
++      {
++        title: 'Owner',
++        dataIndex: 'owner_user_id',
++        key: 'owner',
++        width: 170,
++        render: (_: string | undefined, server: MCPServer) => {
++          const owner = describeOwner(server);
++          return (
++            <Tooltip title={owner.hint}>
++              <Tag
++                icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
++                color={owner.shared ? 'default' : 'geekblue'}
++              >
++                <HighlightMatch text={owner.text} query={searchTerm} />
++              </Tag>
++            </Tooltip>
++          );
++        },
++      },
++      {
++        title: 'Source',
++        dataIndex: 'source',
++        key: 'source',
++        width: 100,
++        render: (source: string) => (
++          <Typography.Text type="secondary">
++            <HighlightMatch text={source} query={searchTerm} />
++          </Typography.Text>
++        ),
++      },
++      {
++        title: 'Actions',
++        key: 'actions',
++        width: 96,
++        render: (_: unknown, server: MCPServer) => {
++          const editable = canEditMcpServer(server, capability);
++          const deletable = canDeleteMcpServer(server, capability);
++          const restriction = policyPending
++            ? policyPendingHint
++            : explainManageRestriction(capability.policy);
++          return (
++            <SettingsActionGroup>
++              <Button
++                type="text"
++                size="small"
++                icon={<EyeOutlined />}
++                onClick={() => handleView(server)}
++                title="View details"
++              />
++              {editable ? (
++                <Button
++                  type="text"
++                  size="small"
++                  icon={<EditOutlined />}
++                  onClick={() => handleEdit(server)}
++                  title="Edit"
++                />
++              ) : (
++                <Tooltip title={restriction}>
++                  <span>
++                    <Button
++                      type="text"
++                      size="small"
++                      icon={<EditOutlined />}
++                      aria-label="Edit"
++                      disabled
++                    />
++                  </span>
++                </Tooltip>
++              )}
++              {deletable ? (
++                <Popconfirm
++                  title="Delete MCP server?"
++                  description={`Are you sure you want to delete "${server.display_name || server.name}"?`}
++                  onConfirm={() => handleDelete(server.mcp_server_id)}
++                  okText="Delete"
++                  cancelText="Cancel"
++                  okButtonProps={{ danger: true }}
++                >
++                  <Button
++                    type="text"
++                    size="small"
++                    icon={<DeleteOutlined />}
++                    danger
++                    title="Delete"
++                  />
++                </Popconfirm>
++              ) : (
++                <Tooltip title={restriction}>
++                  <span>
++                    <Button
++                      type="text"
++                      size="small"
++                      icon={<DeleteOutlined />}
++                      aria-label="Delete"
++                      danger
++                      disabled
++                    />
++                  </span>
++                </Tooltip>
++              )}
++            </SettingsActionGroup>
++          );
++        },
++      },
++    ],
++    [
++      capability,
++      describeOwner,
++      handleDelete,
++      handleEdit,
++      handleView,
++      policyPending,
++      policyPendingHint,
++      searchTerm,
++    ]
++  );
+ 
+   const servers = useMemo(() => {
+     const sorted = mapToSortedArray(mcpServerById, (a, b) =>
+@@ -386,11 +561,23 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+       (server) => server.args,
+       (server) => server.enabled,
+       (server) => server.tools?.flatMap((tool) => [tool.name, tool.description]),
++      (server) => describeOwner(server).text,
+     ]);
+-  }, [mcpServerById, searchTerm]);
++  }, [mcpServerById, searchTerm, describeOwner]);
++
++  const canAdd = !policyPending && canAddMcpServer(capability);
+ 
+   return (
+     <div>
++      <MCPMemberPolicyCard
++        policy={memberPolicy.policy}
++        loading={memberPolicy.loading}
++        saving={memberPolicy.saving}
++        error={memberPolicy.error}
++        editable={capability.isAdmin}
++        onChange={memberPolicy.save}
++      />
++
+       <div
+         style={{
+           marginBottom: 16,
+@@ -405,14 +592,26 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+         <Space>
+           <Input
+             allowClear
+-            placeholder="Search name, URL, command, tools, transport, or scope"
++            placeholder="Search name, owner, URL, command, tools, transport, or scope"
+             value={searchTerm}
+             onChange={(event) => setSearchTerm(event.target.value)}
+             style={{ width: 360 }}
+           />
+-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+-            New MCP Server
+-          </Button>
++          {canAdd ? (
++            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
++              New MCP Server
++            </Button>
++          ) : (
++            <Tooltip
++              title={policyPending ? policyPendingHint : explainAddRestriction(capability.policy)}
++            >
++              <span>
++                <Button type="primary" icon={<PlusOutlined />} disabled>
++                  New MCP Server
++                </Button>
++              </span>
++            </Tooltip>
++          )}
+         </Space>
+       </div>
+ 
+@@ -437,7 +636,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+           <MCPServerFormFields
+             mode="create"
+             transport={transport}
+-            onTransportChange={setTransport}
++            onTransportChange={setChosenTransport}
++            offeredTransports={offeredTransports}
++            offeredScopes={offeredScopes}
+             authType={authType}
+             onAuthTypeChange={setAuthType}
+             form={createForm}
+@@ -455,6 +656,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+         server={editingServer}
+         open={editModalOpen}
+         client={client}
++        offeredTransports={offeredTransports}
++        offeredScopes={editableScopes}
+         onClose={handleEditClose}
+       />
+ 
+@@ -495,6 +698,14 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+             <Descriptions.Item label="Scope">
+               <Tag>{viewingServer.scope}</Tag>
+             </Descriptions.Item>
++            <Descriptions.Item label="Owner">
++              <Space orientation="vertical" size={0}>
++                <span>{describeOwner(viewingServer).text}</span>
++                <Typography.Text type="secondary">
++                  {describeOwner(viewingServer).hint}
++                </Typography.Text>
++              </Space>
++            </Descriptions.Item>
+             <Descriptions.Item label="Source">{viewingServer.source}</Descriptions.Item>
+             <Descriptions.Item label="Status">
+               {viewingServer.enabled ? (
+@@ -524,13 +735,22 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+               </Descriptions.Item>
+             )}
+ 
+-            {viewingServer.env && Object.keys(viewingServer.env).length > 0 && (
+-              <Descriptions.Item label="Environment Variables">
+-                <pre style={{ margin: 0, fontSize: 12 }}>
+-                  {JSON.stringify(viewingServer.env, null, 2)}
+-                </pre>
+-              </Descriptions.Item>
+-            )}
++            {/*
++              Header and auth values arrive redacted from the API; environment
++              values do not, and a server's env routinely holds its credentials.
++              Printing them only for the people who may change the server is a
++              narrowing, not a boundary — the redaction belongs beside the one
++              the other secret fields already get.
++            */}
++            {canEditMcpServer(viewingServer, capability) &&
++              viewingServer.env &&
++              Object.keys(viewingServer.env).length > 0 && (
++                <Descriptions.Item label="Environment Variables">
++                  <pre style={{ margin: 0, fontSize: 12 }}>
++                    {JSON.stringify(viewingServer.env, null, 2)}
++                  </pre>
++                </Descriptions.Item>
++              )}
+ 
+             {viewingServer.tools && viewingServer.tools.length > 0 && (
+               <Descriptions.Item label="Tools">
+diff --git a/apps/agor-ui/src/components/SettingsModal/SettingsModal.tsx b/apps/agor-ui/src/components/SettingsModal/SettingsModal.tsx
+index 58dbbfbc..dcbbb2d5 100644
+--- a/apps/agor-ui/src/components/SettingsModal/SettingsModal.tsx
++++ b/apps/agor-ui/src/components/SettingsModal/SettingsModal.tsx
+@@ -209,11 +209,16 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
+   const { token } = theme.useToken();
+   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
+ 
+-  // Role gate — MCP Servers and Gateway Channels are global admin-managed
++  // Role gate — Agentic Tools and Gateway Channels are global admin-managed
+   // configuration (credentials, webhook URLs, env vars). The daemon enforces
+   // ADMIN role on writes for both services (see register-hooks.ts); hiding
+   // the menu entries here avoids showing members a tab where every action
+   // would 403.
++  //
++  // The MCP Servers tab is offered to everyone. What a member may do there is
++  // the tenant's `mcp_member_policy`, which members may read precisely so a
++  // refusal is legible to the person it refuses; the tab shows them that
++  // policy and the servers they can already use.
+   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+ 
+   // Menu items for left sidebar navigation
+@@ -288,15 +293,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
+                 },
+               ]
+             : []),
+-          ...(isAdmin
+-            ? [
+-                {
+-                  key: 'mcp',
+-                  label: 'MCP Servers',
+-                  icon: <ApiOutlined />,
+-                },
+-              ]
+-            : []),
++          {
++            key: 'mcp',
++            label: 'MCP Servers',
++            icon: <ApiOutlined />,
++          },
+           ...(isAdmin
+             ? [
+                 {
+@@ -430,6 +431,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
+           <MCPServersTable
+             mcpServerById={mcpServerById}
+             client={client}
++            userById={userById}
++            currentUser={currentUser}
+             onCreate={onCreateMCPServer}
+             onDelete={onDeleteMCPServer}
+           />
+diff --git a/apps/agor-ui/src/hooks/index.ts b/apps/agor-ui/src/hooks/index.ts
+index 61438917..6693d18d 100644
+--- a/apps/agor-ui/src/hooks/index.ts
++++ b/apps/agor-ui/src/hooks/index.ts
+@@ -15,6 +15,7 @@ export * from './useConfirmNukeEnvironment';
+ export * from './useIdentityGuardedAsync';
+ export * from './useInitialLoaderPhase';
+ export * from './useLocalStorage';
++export * from './useMcpMemberPolicy';
+ export * from './useMessages';
+ export * from './usePermissions';
+ export * from './useRecentBoards';
+diff --git a/apps/agor-ui/src/hooks/useMcpMemberPolicy.ts b/apps/agor-ui/src/hooks/useMcpMemberPolicy.ts
+new file mode 100644
+index 00000000..f5bcfd37
+--- /dev/null
++++ b/apps/agor-ui/src/hooks/useMcpMemberPolicy.ts
+@@ -0,0 +1,83 @@
++/**
++ * The tenant-wide MCP member policy, read once for whoever renders it.
++ *
++ * One value for the whole settings surface: the card that displays it and the
++ * table that dims what it forbids read the same state, so the two can never
++ * disagree about what the workspace allows.
++ */
++
++import type { AgorClient, MCPMemberPolicy } from '@agor-live/client';
++import { DEFAULT_MCP_MEMBER_POLICY } from '@agor-live/client';
++import { useCallback, useEffect, useState } from 'react';
++
++export interface McpMemberPolicyState {
++  policy: MCPMemberPolicy;
++  loading: boolean;
++  saving: boolean;
++  /** A load or save failure, phrased for the reader. */
++  error: string | null;
++  /** Write the tenant-wide value. Refused by the daemon for non-admins. */
++  save: (next: MCPMemberPolicy) => Promise<void>;
++}
++
++const describeError = (error: unknown, fallback: string): string =>
++  error instanceof Error && error.message ? error.message : fallback;
++
++export function useMcpMemberPolicy(client: AgorClient | null): McpMemberPolicyState {
++  // Start at the restrictive default rather than at "unknown": the value drives
++  // which actions are offered, and a permissive guess would flash affordances
++  // the workspace does not allow.
++  const [policy, setPolicy] = useState<MCPMemberPolicy>(DEFAULT_MCP_MEMBER_POLICY);
++  const [loading, setLoading] = useState(true);
++  const [saving, setSaving] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++
++  useEffect(() => {
++    if (!client) {
++      // Disconnected is a knowable state, not a pending one: settle so callers
++      // fall back to the restrictive default instead of waiting forever.
++      setLoading(false);
++      setError('Not connected to the Agor daemon');
++      return;
++    }
++    let active = true;
++    setLoading(true);
++    client
++      .service('mcp-member-policy')
++      .find()
++      .then((result) => {
++        if (!active) return;
++        setPolicy(result.policy);
++        setError(null);
++      })
++      .catch((loadError: unknown) => {
++        if (!active) return;
++        setError(describeError(loadError, 'Failed to load the MCP member policy'));
++      })
++      .finally(() => {
++        if (active) setLoading(false);
++      });
++    return () => {
++      active = false;
++    };
++  }, [client]);
++
++  const save = useCallback(
++    async (next: MCPMemberPolicy) => {
++      if (!client) return;
++      setSaving(true);
++      try {
++        const result = await client.service('mcp-member-policy').patch(null, { policy: next });
++        setPolicy(result.policy);
++        setError(null);
++      } catch (saveError: unknown) {
++        setError(describeError(saveError, 'Failed to change the MCP member policy'));
++      } finally {
++        setSaving(false);
++      }
++    },
++    [client]
++  );
++
++  return { policy, loading, saving, error, save };
++}
+diff --git a/packages/core/package.json b/packages/core/package.json
+index a7b07ab3..354b6c1a 100644
+--- a/packages/core/package.json
++++ b/packages/core/package.json
+@@ -370,6 +370,12 @@
+       "import": "./dist/mcp/index.js",
+       "require": "./dist/mcp/index.cjs"
+     },
++    "./mcp/member-policy": {
++      "source": "./src/mcp/member-policy.ts",
++      "types": "./dist/mcp/member-policy.d.ts",
++      "import": "./dist/mcp/member-policy.js",
++      "require": "./dist/mcp/member-policy.cjs"
++    },
+     "./gateway": {
+       "source": "./src/gateway/index.ts",
+       "types": "./dist/gateway/index.d.ts",
+diff --git a/packages/core/src/api/index.ts b/packages/core/src/api/index.ts
+index 20a41440..1e3f9012 100644
+--- a/packages/core/src/api/index.ts
++++ b/packages/core/src/api/index.ts
+@@ -36,6 +36,7 @@ import type {
+   MCPCatalogConnectData,
+   MCPCatalogConnectResult,
+   MCPCatalogEntry,
++  MCPMemberPolicySetting,
+   MCPServer,
+   Message,
+   OpenCodeModelCatalog,
+@@ -214,6 +215,7 @@ export interface ServiceTypes {
+   'mcp-servers': MCPServer;
+   'mcp-catalog': MCPCatalogEntry;
+   'mcp-catalog/connect': MCPCatalogConnectResult;
++  'mcp-member-policy': MCPMemberPolicySetting;
+   'kb/namespaces': KnowledgeNamespace;
+   'kb/documents': KnowledgeDocument;
+   'kb/versions': KnowledgeDocumentVersion;
+@@ -357,6 +359,18 @@ export interface MCPCatalogConnectService {
+   create(data: MCPCatalogConnectData, params?: Params): Promise<MCPCatalogConnectResult>;
+ }
+ 
++/**
++ * Singleton tenant-wide MCP member policy endpoint.
++ *
++ * Readable by members — the value explains why a write of theirs was refused —
++ * and writable by admins. The daemon enforces both; this typing only describes
++ * the shape.
++ */
++export interface MCPMemberPolicyService {
++  find(params?: Params): Promise<MCPMemberPolicySetting>;
++  patch(id: null, data: MCPMemberPolicySetting, params?: Params): Promise<MCPMemberPolicySetting>;
++}
++
+ /**
+  * Sessions service with custom methods for forking, spawning, and genealogy
+  */
+@@ -698,6 +712,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
+   service(path: 'mcp-servers'): AgorService<MCPServer>;
+   service(path: 'mcp-catalog'): AgorService<MCPCatalogEntry>;
+   service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
++  service(path: 'mcp-member-policy'): MCPMemberPolicyService;
+   service(path: 'templates'): TemplatesService;
+ 
+   // Generic fallback for custom routes and dynamic paths
+diff --git a/packages/core/src/mcp/index.ts b/packages/core/src/mcp/index.ts
+index cbbbf50b..80c0ccea 100644
+--- a/packages/core/src/mcp/index.ts
++++ b/packages/core/src/mcp/index.ts
+@@ -2,6 +2,13 @@
+  * MCP (Model Context Protocol) utilities
+  */
+ 
++export {
++  MEMBER_PRIVATE_MCP_SCOPE,
++  mayMemberManageMCPServer,
++  mayMemberUseMCPScope,
++  mayMemberUseMCPTransport,
++  mayMemberWriteMCPServers,
++} from './member-policy';
+ export {
+   filterMCPServersForSession,
+   isMCPServerUsableBy,
+diff --git a/packages/core/src/mcp/member-policy.test.ts b/packages/core/src/mcp/member-policy.test.ts
+new file mode 100644
+index 00000000..666c87bb
+--- /dev/null
++++ b/packages/core/src/mcp/member-policy.test.ts
+@@ -0,0 +1,70 @@
++import { describe, expect, it } from 'vitest';
++import {
++  mayMemberManageMCPServer,
++  mayMemberUseMCPScope,
++  mayMemberUseMCPTransport,
++} from './member-policy';
++
++const OWNER = 'user-owner';
++const OTHER = 'user-other';
++
++describe('mayMemberManageMCPServer', () => {
++  it('refuses every server under use_existing_only', () => {
++    expect(mayMemberManageMCPServer({}, 'use_existing_only', OWNER)).toBe(false);
++    expect(mayMemberManageMCPServer({ owner_user_id: OWNER }, 'use_existing_only', OWNER)).toBe(
++      false
++    );
++  });
++
++  it('gives a member their own private server under either permissive value', () => {
++    expect(mayMemberManageMCPServer({ owner_user_id: OWNER }, 'allow_private_only', OWNER)).toBe(
++      true
++    );
++    expect(mayMemberManageMCPServer({ owner_user_id: OWNER }, 'allow_crud', OWNER)).toBe(true);
++  });
++
++  it("keeps another member's private server out of reach", () => {
++    expect(mayMemberManageMCPServer({ owner_user_id: OTHER }, 'allow_crud', OWNER)).toBe(false);
++  });
++
++  it('opens the shared, unowned servers only at allow_crud', () => {
++    expect(mayMemberManageMCPServer({}, 'allow_private_only', OWNER)).toBe(false);
++    expect(mayMemberManageMCPServer({}, 'allow_crud', OWNER)).toBe(true);
++  });
++
++  it('refuses an unauthenticated caller a private server', () => {
++    expect(mayMemberManageMCPServer({ owner_user_id: OWNER }, 'allow_crud', undefined)).toBe(false);
++  });
++});
++
++describe('mayMemberUseMCPScope', () => {
++  it('holds a member to servers they attach per session under allow_private_only', () => {
++    expect(mayMemberUseMCPScope('allow_private_only', 'session')).toBe(true);
++    expect(mayMemberUseMCPScope('allow_private_only', 'global')).toBe(false);
++  });
++
++  it('leaves the unstated scope to the caller to supply', () => {
++    expect(mayMemberUseMCPScope('allow_private_only', undefined)).toBe(true);
++  });
++
++  it('does not constrain the value that grants workspace-wide reach', () => {
++    expect(mayMemberUseMCPScope('allow_crud', 'global')).toBe(true);
++    expect(mayMemberUseMCPScope('allow_crud', 'session')).toBe(true);
++  });
++
++  it('leaves use_existing_only to the write refusal rather than answering here', () => {
++    expect(mayMemberUseMCPScope('use_existing_only', 'global')).toBe(true);
++  });
++});
++
++describe('mayMemberUseMCPTransport', () => {
++  it('holds members to remote transports', () => {
++    expect(mayMemberUseMCPTransport('http')).toBe(true);
++    expect(mayMemberUseMCPTransport('sse')).toBe(true);
++    expect(mayMemberUseMCPTransport('stdio')).toBe(false);
++  });
++
++  it('leaves an unstated transport to whoever defaults it', () => {
++    expect(mayMemberUseMCPTransport(undefined)).toBe(true);
++  });
++});
+diff --git a/packages/core/src/mcp/member-policy.ts b/packages/core/src/mcp/member-policy.ts
+new file mode 100644
+index 00000000..cbf39d1f
+--- /dev/null
++++ b/packages/core/src/mcp/member-policy.ts
+@@ -0,0 +1,86 @@
++/**
++ * What the `mcp_member_policy` lets a member do with an MCP server row.
++ *
++ * The daemon decides every write and is the only place that may refuse one
++ * (`authorizeMcpServerWrite`), but the UI has to predict the same answer to
++ * decide which buttons to offer, and a button that always fails is its own kind
++ * of defect. Both sides call these predicates so there is one rule rather than a
++ * rule and a copy of it; the daemon adds the refusal message, the UI adds the
++ * explanation.
++ *
++ * Using a server is a separate question with its own predicate — see
++ * {@link isMCPServerUsableBy} in `./ownership`.
++ */
++
++import type { MCPMemberPolicy, MCPScope, MCPTransport, UserID } from '../types';
++import type { MCPServerOwnership } from './ownership';
++
++/**
++ * Whether a member may write MCP server configuration at all.
++ *
++ * The first question every write asks, and the one an offered "add" button
++ * predicts.
++ */
++export function mayMemberWriteMCPServers(policy: MCPMemberPolicy): boolean {
++  return policy !== 'use_existing_only';
++}
++
++/**
++ * Whether policy and ownership place this server in a member's hands.
++ *
++ * Admins are not members: they administer every server, so callers answer that
++ * by role before consulting this.
++ */
++export function mayMemberManageMCPServer(
++  server: MCPServerOwnership,
++  policy: MCPMemberPolicy,
++  userId: UserID | string | undefined | null
++): boolean {
++  if (!mayMemberWriteMCPServers(policy)) return false;
++  // An unowned server belongs to the whole tenant, so managing one is the step
++  // up that separates the two permissive values.
++  if (!server.owner_user_id) return policy === 'allow_crud';
++  return Boolean(userId) && server.owner_user_id === userId;
++}
++
++/**
++ * Whether a member may configure this transport.
++ *
++ * A `stdio` server is a command line the executor process runs on its host, so
++ * letting members configure one turns "may register an MCP server" into "may
++ * run any binary as the executor user" — a grant neither permissive policy
++ * value hands out. An unstated transport is decided by whoever defaults it.
++ */
++export function mayMemberUseMCPTransport(transport: MCPTransport | undefined): boolean {
++  return transport !== 'stdio';
++}
++
++/**
++ * The scope a member's own server takes under `allow_private_only`.
++ *
++ * `scope` and ownership are orthogonal in general — one says how a server
++ * reaches a session, the other whose sessions it may reach — but this policy
++ * value is a statement about both: a member brings a server into the sessions
++ * they attach it to. A `global` row would instead attach itself to every
++ * session its owner starts, and would read as tenant-wide in any list that
++ * prints `scope` without reading `owner_user_id` beside it.
++ */
++export const MEMBER_PRIVATE_MCP_SCOPE: MCPScope = 'session';
++
++/**
++ * Whether a member may give their server this scope.
++ *
++ * A create does not ask: it takes {@link MEMBER_PRIVATE_MCP_SCOPE} the way it
++ * takes its owner, because `global` is what several clients put in a payload by
++ * default rather than something a person chose. What this answers is whether a
++ * member may *change* a stored scope to this one.
++ */
++export function mayMemberUseMCPScope(
++  policy: MCPMemberPolicy,
++  scope: MCPScope | undefined
++): boolean {
++  // `allow_crud` is the value that hands out tenant-wide reach; it does not
++  // constrain scope, and `use_existing_only` refuses the write outright.
++  if (policy !== 'allow_private_only') return true;
++  return scope === undefined || scope === MEMBER_PRIVATE_MCP_SCOPE;
++}
+diff --git a/packages/core/src/types/mcp.ts b/packages/core/src/types/mcp.ts
+index e1ce2fa2..9078d8d2 100644
+--- a/packages/core/src/types/mcp.ts
++++ b/packages/core/src/types/mcp.ts
+@@ -122,18 +122,36 @@ export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
+ 
+ export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
+ 
++/**
++ * The payload of the `mcp-member-policy` endpoint, read and written.
++ *
++ * A wrapper rather than the bare value so the setting can gain a field — who
++ * last changed it, whether a per-user override applies — without every caller
++ * changing shape.
++ */
++export interface MCPMemberPolicySetting {
++  policy: MCPMemberPolicy;
++}
++
+ /**
+  * MCP transport types
+  */
+-export type MCPTransport = 'stdio' | 'http' | 'sse';
++export const MCP_TRANSPORTS = ['stdio', 'http', 'sse'] as const;
++
++export type MCPTransport = (typeof MCP_TRANSPORTS)[number];
+ 
+ /**
+  * MCP server scope levels. Orthogonal to ownership: `scope` says how a server
+  * reaches a session, `owner_user_id` says whose sessions it may reach.
+  * - global: in every session's effective set without being attached
+  * - session: only in the sessions it is attached to, via the junction table
++ *
++ * `mcp_member_policy` is the one place the two are not free of each other: see
++ * `mayMemberUseMCPScope` in `@agor/core/mcp/member-policy`.
+  */
+-export type MCPScope = 'global' | 'session';
++export const MCP_SCOPES = ['global', 'session'] as const;
++
++export type MCPScope = (typeof MCP_SCOPES)[number];
+ 
+ /**
+  * MCP server source types
+diff --git a/packages/core/tsup.config.ts b/packages/core/tsup.config.ts
+index 28bd0500..3191f548 100644
+--- a/packages/core/tsup.config.ts
++++ b/packages/core/tsup.config.ts
+@@ -65,6 +65,7 @@ export default defineConfig({
+     'local-actions/index': 'src/local-actions/index.ts', // Shared host-local admin actions
+     'local-actions/identity': 'src/local-actions/identity.ts', // Daemon host identity/group actions only
+     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
++    'mcp/member-policy': 'src/mcp/member-policy.ts', // Browser-safe mcp_member_policy predicates (no scoping deps)
+     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
+     'gateway/connectors/slack-manifest': 'src/gateway/connectors/slack-manifest.ts', // Browser-safe Slack manifest/scope derivation (no connector deps)
+     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export

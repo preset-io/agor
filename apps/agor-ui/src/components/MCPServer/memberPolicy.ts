@@ -10,10 +10,10 @@
  */
 
 import {
+  isAtLeastMemberRole,
   mayMemberManageMCPServer,
   mayMemberUseMCPScope,
   mayMemberUseMCPTransport,
-  mayMemberWriteMCPServers,
 } from '@agor/core/mcp/member-policy';
 import type { MCPMemberPolicy, MCPScope, MCPServer, MCPTransport } from '@agor-live/client';
 import { MCP_SCOPES, MCP_TRANSPORTS } from '@agor-live/client';
@@ -44,16 +44,28 @@ export const MCP_MEMBER_POLICY_DESCRIPTIONS: Record<MCPMemberPolicy, MCPMemberPo
 };
 
 export interface MCPServerCapabilityContext {
+  /**
+   * The role as the daemon reads it — raw, because the roles beneath member are
+   * the ones this has to tell apart, and a boolean cannot.
+   */
+  role: string | undefined;
   /** Admins administer every server, private ones included. */
   isAdmin: boolean;
   policy: MCPMemberPolicy;
   /** The signed-in user, whose private servers are theirs to manage. */
   userId?: string;
+  /**
+   * The daemon's answer to "may this caller configure servers at all", from
+   * `GET /mcp-member-policy`. Read rather than recomputed: role floor and
+   * policy are one question, and the client that answers it a second time is
+   * the client that answers it differently.
+   */
+  canConfigure: boolean;
 }
 
 /** Whether this user may add an MCP server at all. */
-export function canAddMcpServer({ isAdmin, policy }: MCPServerCapabilityContext): boolean {
-  return isAdmin || mayMemberWriteMCPServers(policy);
+export function canAddMcpServer({ canConfigure }: MCPServerCapabilityContext): boolean {
+  return canConfigure;
 }
 
 /**
@@ -71,7 +83,10 @@ export function allowedMcpTransports({
  * The scopes this user may give a server. A member under `allow_private_only`
  * attaches their server per session rather than to every session they start.
  */
-export function allowedMcpScopes({ isAdmin, policy }: MCPServerCapabilityContext): MCPScope[] {
+export function allowedMcpScopes({
+  isAdmin,
+  policy,
+}: Pick<MCPServerCapabilityContext, 'isAdmin' | 'policy'>): MCPScope[] {
   return MCP_SCOPES.filter((scope) => isAdmin || mayMemberUseMCPScope(policy, scope));
 }
 
@@ -81,6 +96,10 @@ export function canEditMcpServer(
   context: MCPServerCapabilityContext
 ): boolean {
   if (context.isAdmin) return true;
+  // The endpoint answers "may I configure at all"; which server, and whether
+  // its transport is one a member may hold, it cannot — so the floor is asked
+  // here too rather than assumed from the policy.
+  if (!isAtLeastMemberRole(context.role)) return false;
   return (
     mayMemberManageMCPServer(server, context.policy, context.userId) &&
     mayMemberUseMCPTransport(server.transport)
@@ -92,18 +111,29 @@ export function canDeleteMcpServer(
   server: Pick<MCPServer, 'owner_user_id'>,
   context: MCPServerCapabilityContext
 ): boolean {
-  return context.isAdmin || mayMemberManageMCPServer(server, context.policy, context.userId);
+  if (context.isAdmin) return true;
+  if (!isAtLeastMemberRole(context.role)) return false;
+  return mayMemberManageMCPServer(server, context.policy, context.userId);
 }
+
+const READ_ONLY_RESTRICTION =
+  'Your account has read-only access, so it cannot configure MCP servers. An admin can change your role.';
 
 /**
  * Why a refused action is refused, phrased so the reader can act on it — ask an
  * admin, rather than look for a bug in the button.
+ *
+ * A reader refused for their role is told that, not told about the workspace's
+ * policy: the policy is not what is stopping them, and changing it would not
+ * help.
  */
-export function explainAddRestriction(policy: MCPMemberPolicy): string {
+export function explainAddRestriction({ role, policy }: MCPServerCapabilityContext): string {
+  if (!isAtLeastMemberRole(role)) return READ_ONLY_RESTRICTION;
   return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you add MCP servers. An admin can add one, or change the policy.`;
 }
 
 /** Why changing or removing this particular server is refused. */
-export function explainManageRestriction(policy: MCPMemberPolicy): string {
+export function explainManageRestriction({ role, policy }: MCPServerCapabilityContext): string {
+  if (!isAtLeastMemberRole(role)) return READ_ONLY_RESTRICTION;
   return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you change this server. An admin can change it, or change the policy.`;
 }

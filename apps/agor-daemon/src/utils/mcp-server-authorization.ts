@@ -24,6 +24,7 @@ import {
 } from '@agor/core/db';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
+  isAtLeastMemberRole,
   isMCPServerUsableBy,
   MEMBER_PRIVATE_MCP_SCOPE,
   mayMemberManageMCPServer,
@@ -164,39 +165,21 @@ function assertRemoteTransport(transport: MCPTransport | undefined): void {
  * configuring servers under `allow_private_only`, and under `allow_crud` an
  * unowned one that every session in the tenant can then reach.
  *
- * Decided on the raw role rather than a normalized one. `normalizeRole` answers
- * MEMBER for an absent or empty value, so `hasMinimumRole(user.role, MEMBER)`
- * on its own would admit precisely the caller with no role to speak of. An
- * unrecognized role ranks 0 and is refused for the same reason: a role this
- * code does not know is not one it may assume is privileged.
+ * The rule itself is {@link isAtLeastMemberRole}, which a client asks too — a
+ * floor enforced here and re-derived there is the arrangement that lost it.
  */
-function isAtLeastMember(role: unknown): boolean {
-  const named = typeof role === 'string' && role.length > 0;
-  return named && hasMinimumRole(role, ROLES.MEMBER);
-}
-
 function assertAtLeastMember(role: unknown): void {
-  if (!isAtLeastMember(role)) {
+  if (!isAtLeastMemberRole(role)) {
     throw new Forbidden('You need member access to configure MCP servers');
   }
 }
 
 /**
- * Whether this role and policy together permit configuring a server at all.
- *
- * The same decision {@link authorizeMcpServerWrite} makes, minus the per-request
- * detail, so a client can grey out a control instead of discovering the refusal
- * by being refused. It is exported so callers read the rule rather than
- * reconstructing it from `isAdmin` and a policy value — reducing role to a
- * boolean is what let the role floor go missing here in the first place.
- *
- * Advisory only. Nothing is authorized by this function; the write path decides.
+ * Whether this role and policy together permit configuring a server at all,
+ * for the endpoint that answers it to clients. The decision is
+ * {@link canConfigureMCPServers}; nothing is authorized by reading it.
  */
-export function canConfigureMcpServers(role: unknown, policy: MCPMemberPolicy): boolean {
-  if (typeof role === 'string' && hasMinimumRole(role, ROLES.ADMIN)) return true;
-  if (!isAtLeastMember(role)) return false;
-  return policy !== 'use_existing_only';
-}
+export { canConfigureMCPServers as canConfigureMcpServers } from '@agor/core/mcp';
 
 /**
  * A member widening their own server's reach, which is what

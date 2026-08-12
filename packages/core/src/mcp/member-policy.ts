@@ -13,13 +13,51 @@
  */
 
 import type { MCPMemberPolicy, MCPScope, MCPTransport, UserID } from '../types';
+// Imported from the module rather than the types barrel: this file is bundled
+// on its own for the browser, and the barrel would come with it.
+import { hasMinimumRole, ROLES } from '../types/user';
 import type { MCPServerOwnership } from './ownership';
 
 /**
- * Whether a member may write MCP server configuration at all.
+ * The role floor the policy sits on top of.
  *
- * The first question every write asks, and the one an offered "add" button
- * predicts.
+ * A policy value answers what a *member* may do; it says nothing about the
+ * roles beneath one. `viewer` is a real role ("Read-only access"), so a rule
+ * that only separates admin from everyone else hands a read-only account
+ * whatever the tenant grants members.
+ *
+ * Decided on the raw role rather than a normalized one: `normalizeRole` answers
+ * MEMBER for an absent or empty value, so `hasMinimumRole(role, MEMBER)` alone
+ * would admit precisely the caller carrying no role at all. An unrecognized
+ * role ranks 0 and is refused for the same reason — a role this code does not
+ * know is not one it may assume is privileged.
+ */
+export function isAtLeastMemberRole(role: unknown): boolean {
+  const named = typeof role === 'string' && role.length > 0;
+  return named && hasMinimumRole(role, ROLES.MEMBER);
+}
+
+/**
+ * Whether this role and policy together permit configuring a server at all.
+ *
+ * The daemon answers it on `GET /mcp-member-policy` so a client greys out its
+ * control instead of rebuilding the rule from a role boolean and a policy
+ * value — which is the shape that lost the floor in the first place. Both sides
+ * call this one, so the greyed control and the refused write cannot part ways.
+ *
+ * Advisory where a client calls it: the write path is what authorizes.
+ */
+export function canConfigureMCPServers(role: unknown, policy: MCPMemberPolicy): boolean {
+  if (typeof role === 'string' && hasMinimumRole(role, ROLES.ADMIN)) return true;
+  if (!isAtLeastMemberRole(role)) return false;
+  return mayMemberWriteMCPServers(policy);
+}
+
+/**
+ * Whether the policy permits a member to write MCP server configuration.
+ *
+ * The policy half of {@link canConfigureMCPServers}; callers that have already
+ * established the role floor ask this directly.
  */
 export function mayMemberWriteMCPServers(policy: MCPMemberPolicy): boolean {
   return policy !== 'use_existing_only';
