@@ -296,12 +296,27 @@ async function decidePolicyAndOwnership(
     if (requestedOwner && requestedOwner !== userId) {
       throw new Forbidden('You can only create MCP servers owned by yourself');
     }
-    // `allow_private_only` means exactly that: the server is theirs whether or
-    // not they asked, and asking to share it does not change the answer.
-    if (policy === 'allow_private_only') return { owner_user_id: userId };
-    // `allow_crud` is the difference between the two policies: it permits
-    // publishing a server the whole tenant may use. It has to be said out loud.
+    // Publishing — a server with no owner, which every session in the tenant
+    // can reach — is the one thing `allow_crud` grants that `allow_private_only`
+    // does not, so it has to be asked for by name rather than fallen into.
     const publishing = ownerNamed && request.data?.owner_user_id === null;
+
+    if (policy === 'allow_private_only') {
+      // Refused rather than quietly turned into a private server. The caller
+      // asked for something this policy does not permit; answering "created"
+      // while creating something else reports one thing and does another, and
+      // leaves the client no way to notice. The same policy already refuses the
+      // shared case on patch a few lines below, and this module already refuses
+      // a payload it will not honour rather than dropping it — see the
+      // caller-supplied catalog stamp.
+      if (publishing) {
+        throw new Forbidden(
+          'Your organization only allows members their own private MCP servers, so this one cannot be shared with the workspace'
+        );
+      }
+      return { owner_user_id: userId };
+    }
+
     return publishing ? {} : { owner_user_id: userId };
   }
 

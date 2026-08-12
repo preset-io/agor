@@ -165,13 +165,30 @@ describe('authorizeMcpServerWrite', () => {
     expect(absent).not.toEqual(explicitNull);
   });
 
-  it('keeps allow_private_only private even when asked to share', async () => {
+  // Refused, not quietly turned into a private server. The caller asked to
+  // publish; answering "created" while creating something else reports one
+  // thing and does another, and the client has no way to notice. It also
+  // matches how this policy already treats the shared case on patch, and how
+  // this module already treats a payload it will not honour — a caller-supplied
+  // catalog stamp is refused rather than dropped, for the same reason.
+  it('refuses to publish under allow_private_only rather than silently privatising', async () => {
     resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
 
     await expect(
       authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
         method: 'create',
         data: { ...remoteCreate, owner_user_id: null },
+      })
+    ).rejects.toThrow(/cannot be shared with the workspace/);
+  });
+
+  it('still gives that member their own server when they never mention ownership', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
+
+    await expect(
+      authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+        method: 'create',
+        data: remoteCreate,
       })
     ).resolves.toEqual({ owner_user_id: ALICE });
   });
