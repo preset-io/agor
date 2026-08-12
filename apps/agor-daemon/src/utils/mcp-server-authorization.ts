@@ -46,7 +46,7 @@ export type McpServerWriteMethod = 'create' | 'update' | 'patch' | 'remove';
 export interface McpServerWriteRequest {
   method: McpServerWriteMethod;
   /** The row being changed or deleted; absent on create. */
-  existing?: Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport'>;
+  existing?: Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport' | 'scope'>;
   /** The submitted payload; absent on remove. */
   data?: {
     transport?: MCPTransport;
@@ -199,18 +199,22 @@ export function canConfigureMcpServers(role: unknown, policy: MCPMemberPolicy): 
 }
 
 /**
- * `allow_private_only` is a statement about reach as well as ownership: the
- * member's server belongs to the sessions they attach it to. A stated `global`
- * is answered rather than quietly rewritten — a caller who believes it made a
- * tenant-wide server and a row that says otherwise is the disagreement this
- * rule exists to remove.
+ * A member widening their own server's reach, which is what
+ * `allow_private_only` withholds. Only a change is refused: a payload that
+ * restates the scope already stored — which is what every edit form sends —
+ * has widened nothing, and refusing it would lock the owner out of a row that
+ * predates the policy.
  */
-function assertScopeAllowed(policy: MCPMemberPolicy, scope: MCPScope | undefined): void {
-  if (!mayMemberUseMCPScope(policy, scope)) {
-    throw new Forbidden(
-      'Your organization only allows members to add private MCP servers, which are attached per session; ask an admin for a workspace-wide one'
-    );
-  }
+function assertScopeUnchangedOrAllowed(
+  policy: MCPMemberPolicy,
+  requested: MCPScope | undefined,
+  stored: MCPScope
+): void {
+  if (requested === undefined || requested === stored) return;
+  if (mayMemberUseMCPScope(policy, requested)) return;
+  throw new Forbidden(
+    'Your organization only allows members private MCP servers, which reach the sessions they are attached to; ask an admin for a workspace-wide one'
+  );
 }
 
 function assertPolicyAllowsWrite(policy: MCPMemberPolicy): void {
@@ -286,15 +290,16 @@ async function decidePolicyAndOwnership(
 
   if (request.method === 'create') {
     assertRemoteTransport(request.data?.transport);
-    assertScopeAllowed(policy, request.data?.scope);
     const requestedOwner = request.data?.owner_user_id ?? undefined;
     if (requestedOwner && requestedOwner !== userId) {
       throw new Forbidden('You can only create MCP servers owned by yourself');
     }
     // `allow_private_only` means exactly that: the server the member creates is
     // theirs and reaches only the sessions they attach it to, whether or not
-    // they asked for either. `allow_crud` lets them opt into a shared server,
-    // which is the whole difference between the two.
+    // they asked for either. Both are decided rather than refused, because
+    // `global` is what several clients put in the payload by default rather
+    // than something a person chose. `allow_crud` lets them opt into a shared
+    // server, which is the whole difference between the two.
     if (policy === 'allow_private_only') {
       return { owner_user_id: userId, scope: MEMBER_PRIVATE_MCP_SCOPE };
     }
@@ -316,10 +321,7 @@ async function decidePolicyAndOwnership(
 
   if (request.method !== 'remove') {
     assertRemoteTransport(request.data?.transport ?? existing.transport);
-    // An edit is refused the widening a create is refused. The stored scope is
-    // not re-decided: a row that predates the policy stays as it is until
-    // someone who may change it does.
-    assertScopeAllowed(policy, request.data?.scope);
+    assertScopeUnchangedOrAllowed(policy, request.data?.scope, existing.scope);
   }
 
   return {};

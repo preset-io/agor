@@ -43,7 +43,7 @@ describe('mayMemberUseMCPScope', () => {
     expect(mayMemberUseMCPScope('allow_private_only', 'global')).toBe(false);
   });
 
-  it('leaves the unstated scope to the caller to derive', () => {
+  it('leaves the unstated scope to the caller to supply', () => {
     expect(mayMemberUseMCPScope('allow_private_only', undefined)).toBe(true);
   });
 

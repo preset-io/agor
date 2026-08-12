@@ -337,6 +337,17 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     [isAdmin, currentUser?.user_id, memberPolicy.policy]
   );
 
+  // An editor must be able to show the scope a row already carries, including
+  // one the policy would no longer let its owner pick; narrowing it stays
+  // available, and restating it is not a change the daemon refuses.
+  const editableScopes = useMemo(
+    () =>
+      editingServer && !offeredScopes.includes(editingServer.scope)
+        ? [...offeredScopes, editingServer.scope]
+        : offeredScopes,
+    [offeredScopes, editingServer]
+  );
+
   const describeOwner = useCallback(
     (server: MCPServer) => {
       if (!server.owner_user_id) {
@@ -646,7 +657,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         open={editModalOpen}
         client={client}
         offeredTransports={offeredTransports}
-        offeredScopes={offeredScopes}
+        offeredScopes={editableScopes}
         onClose={handleEditClose}
       />
 

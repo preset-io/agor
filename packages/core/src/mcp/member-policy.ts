@@ -70,9 +70,10 @@ export const MEMBER_PRIVATE_MCP_SCOPE: MCPScope = 'session';
 /**
  * Whether a member may give their server this scope.
  *
- * An unstated scope is not a refusal: the caller derives
- * {@link MEMBER_PRIVATE_MCP_SCOPE} for it rather than letting a storage default
- * settle the question.
+ * A create does not ask: it takes {@link MEMBER_PRIVATE_MCP_SCOPE} the way it
+ * takes its owner, because `global` is what several clients put in a payload by
+ * default rather than something a person chose. What this answers is whether a
+ * member may *change* a stored scope to this one.
  */
 export function mayMemberUseMCPScope(
   policy: MCPMemberPolicy,

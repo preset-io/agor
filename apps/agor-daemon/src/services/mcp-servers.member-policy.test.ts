@@ -72,6 +72,7 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
 
   return {
     user,
+    setPolicy: (next: MCPMemberPolicy) => setMcpMemberPolicy(db, next, undefined, null),
     create: (data: Record<string, unknown>) =>
       app
         .service('mcp-servers')
@@ -83,16 +84,7 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
 }
 
 describe('member policy, as it lands in mcp_servers', () => {
-  it('refuses a member a workspace-wide server under allow_private_only, storing nothing', async () => {
-    const { create, storedServers } = await buildDaemon('allow_private_only');
-
-    await expect(create({ scope: 'global' })).rejects.toThrow(
-      /only allows members to add private MCP servers/
-    );
-    await expect(storedServers()).resolves.toHaveLength(0);
-  });
-
-  it('stores a session-scoped server owned by the member who added it', async () => {
+  it('holds a member’s server to the session it is attached to under allow_private_only', async () => {
     const { user, create, storedServers } = await buildDaemon('allow_private_only');
 
     await create({ scope: 'session' });
@@ -101,7 +93,19 @@ describe('member policy, as it lands in mcp_servers', () => {
     expect(server).toMatchObject({ scope: 'session', owner_user_id: user.user_id });
   });
 
-  it('derives the scope a member did not state rather than letting storage default it', async () => {
+  it('takes the scope rather than the payload’s, the way it takes the owner', async () => {
+    // The CLI flag and the MCP tool both put `global` in the payload by
+    // default, so a member never chose it and must not be refused for it.
+    const { create, storedServers } = await buildDaemon('allow_private_only');
+
+    const created = await create({ scope: 'global' });
+
+    expect(created.scope).toBe('session');
+    const [server] = await storedServers();
+    expect(server?.scope).toBe('session');
+  });
+
+  it('supplies the scope a member stated nowhere', async () => {
     const { create, storedServers } = await buildDaemon('allow_private_only');
 
     await create({});
@@ -116,19 +120,36 @@ describe('member policy, as it lands in mcp_servers', () => {
     const created = await create({ scope: 'session' });
 
     await expect(patch(created.mcp_server_id, { scope: 'global' })).rejects.toThrow(
-      /only allows members to add private MCP servers/
+      /only allows members private MCP servers/
     );
     const [server] = await storedServers();
     expect(server?.scope).toBe('session');
   });
 
-  it('leaves an unrelated edit of a member’s own server alone', async () => {
-    const { create, patch } = await buildDaemon('allow_private_only');
+  it('leaves the owner of a row that predates the policy able to edit it', async () => {
+    // Created while `allow_crud` allowed it, then the policy tightened. The
+    // edit form resends the stored scope, which has widened nothing.
+    const { user, create, patch, setPolicy } = await buildDaemon('allow_crud');
+    const created = await create({ scope: 'global', owner_user_id: user.user_id });
+    expect(created.scope).toBe('global');
+    await setPolicy('allow_private_only');
 
-    const created = await create({ scope: 'session' });
-    const patched = await patch(created.mcp_server_id, { display_name: 'DeepWiki' });
+    const patched = await patch(created.mcp_server_id, {
+      scope: 'global',
+      display_name: 'DeepWiki',
+    });
 
-    expect(patched).toMatchObject({ scope: 'session', display_name: 'DeepWiki' });
+    expect(patched).toMatchObject({ scope: 'global', display_name: 'DeepWiki' });
+  });
+
+  it('leaves a member free to narrow their own server', async () => {
+    const { user, create, patch, setPolicy } = await buildDaemon('allow_crud');
+    const created = await create({ scope: 'global', owner_user_id: user.user_id });
+    await setPolicy('allow_private_only');
+
+    const patched = await patch(created.mcp_server_id, { scope: 'session' });
+
+    expect(patched.scope).toBe('session');
   });
 
   it('leaves workspace-wide scope to allow_crud, which is the value that grants it', async () => {
@@ -146,9 +167,11 @@ describe('member policy, as it lands in mcp_servers', () => {
   });
 
   it('leaves an admin every scope under every policy value', async () => {
-    const { create, storedServers } = await buildDaemon('allow_private_only', 'admin');
+    const { create, patch, storedServers } = await buildDaemon('allow_private_only', 'admin');
 
-    await create({ scope: 'global' });
+    const created = await create({ scope: 'global' });
+    await patch(created.mcp_server_id, { scope: 'session' });
+    await patch(created.mcp_server_id, { scope: 'global' });
 
     const [server] = await storedServers();
     expect(server?.scope).toBe('global');
