@@ -147,7 +147,7 @@ export interface Repo {
    * Populated when `clone_status === 'failed'`. Cleared on retry.
    *
    * `category` exists so a UI can suggest the right next step
-   * (e.g. `auth_failed` → "configure GITHUB_TOKEN in Settings → API Keys").
+   * (e.g. `auth_failed` → "configure GITHUB_TOKEN in User Settings → Env Vars").
    */
   clone_error?: RepoCloneError;
 
@@ -158,13 +158,57 @@ export interface Repo {
 
 export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
 
-export type RepoCloneErrorCategory = 'auth_failed' | 'not_found' | 'network' | 'unknown';
+export type RepoCloneErrorCategory =
+  | 'auth_failed'
+  | 'not_found'
+  | 'network'
+  | 'git_unavailable'
+  | 'unknown';
 
 export interface RepoCloneError {
   exit_code: number;
   category: RepoCloneErrorCategory;
   /** Short, user-facing first-line message (stderr excerpt or wrapper message). */
   message: string;
+}
+
+/**
+ * Return a safe, actionable remediation hint for a remote-clone failure.
+ *
+ * This deliberately lives with the browser-safe repository types so every
+ * client (CLI, UI, and API consumers) uses the same category semantics
+ * without importing the Node-only Git implementation.
+ */
+export function getRepoCloneErrorHint(error?: {
+  category?: RepoCloneErrorCategory;
+  message?: string;
+}): string {
+  if (!error) return '';
+
+  if (error.category === 'git_unavailable') {
+    return ' — Git is unavailable to the Agor executor. Install Git there, ensure it is executable on PATH, and retry';
+  }
+
+  if (error.category === 'auth_failed') {
+    return ' — configure GITHUB_TOKEN in User Settings → Env Vars for private repos';
+  }
+
+  if (error.category === 'not_found') {
+    return ' — verify the repository URL and default branch, and confirm the repository is accessible';
+  }
+
+  if (error.category === 'network') {
+    const message = error.message?.toLowerCase() ?? '';
+    if (/(certificate|ssl|tls|ca cert|cafile|capath|ca bundle|issuer)/.test(message)) {
+      return (
+        ' — Git could not verify the server certificate. Install/enable the operating system CA trust store ' +
+        "or configure Git's approved CA bundle for your proxy; do not disable SSL verification"
+      );
+    }
+    return ' — check DNS, firewall, proxy, and network access for the daemon/executor, then retry';
+  }
+
+  return '';
 }
 
 /**

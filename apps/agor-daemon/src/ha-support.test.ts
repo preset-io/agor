@@ -16,7 +16,7 @@ describe('constrained HA support profile', () => {
     capabilities: {
       taskExecution: true as const,
       executorTokenAuthority: true as const,
-      interactivePermissions: false as const,
+      agorManagedInteractivePermissions: true as const,
       scheduler: true as const,
       sessionQueue: true as const,
       taskRuntimeReconciliation: true as const,
@@ -25,6 +25,7 @@ describe('constrained HA support profile', () => {
       completionCallbackDurableAdmission: true as const,
       completionCallbackPreAdmissionRecovery: false as const,
       widgetResolutionDurableClaim: true as const,
+      githubInstall: true as const,
       codexCredentialFiles: true,
       codexDeviceAuth: false as const,
       processAffineAuth: false as const,
@@ -47,13 +48,13 @@ describe('constrained HA support profile', () => {
     },
   };
 
-  it('fails interactive permissions with an explicit stable feature code', () => {
-    expect(() => rejectInConstrainedHa(ha, 'interactivePermissions')({} as HookContext)).toThrow(
-      /durable decision replay/
-    );
-    expect(haUnavailable('interactivePermissions').data).toMatchObject({
+  it('keeps unsupported provider-native prompts behind an explicit stable feature code', () => {
+    expect(() =>
+      rejectInConstrainedHa(ha, 'providerNativeInteractivePermissions')({} as HookContext)
+    ).toThrow(/provider-native interactive permission modes/);
+    expect(haUnavailable('providerNativeInteractivePermissions').data).toMatchObject({
       code: 'HA_FEATURE_UNSUPPORTED',
-      feature: 'interactivePermissions',
+      feature: 'providerNativeInteractivePermissions',
       support_profile: 'constrained-active-active',
     });
   });
@@ -72,13 +73,16 @@ describe('constrained HA support profile', () => {
     ).toBe(true);
   });
 
-  it('rejects a mode that can create a process-local permission waiter', () => {
-    expect(() =>
-      assertHaTaskPermissionSupported(ha, {
-        session: { agentic_tool: 'claude-code', permission_config: { mode: 'auto' } } as never,
-      })
-    ).toThrow(/interactive permission modes/);
-  });
+  it.each(['claude-code', 'copilot', 'opencode'] as const)(
+    'admits %s interactive execution through the task-private realtime route',
+    (agenticTool) => {
+      expect(() =>
+        assertHaTaskPermissionSupported(ha, {
+          session: { agentic_tool: agenticTool, permission_config: { mode: 'ask' } } as never,
+        })
+      ).not.toThrow();
+    }
+  );
 
   it.each([
     ['claude-code', { mode: 'dontAsk' }],
@@ -95,11 +99,24 @@ describe('constrained HA support profile', () => {
     }
   );
 
+  it.each([
+    ['gemini', { mode: 'default' }],
+    ['codex', { mode: 'allow-all', codex: { approvalPolicy: 'on-request' } }],
+  ] as const)(
+    'still rejects provider-native %s confirmation modes',
+    (agenticTool, permission_config) => {
+      expect(() =>
+        assertHaTaskPermissionSupported(ha, {
+          session: { agentic_tool: agenticTool, permission_config } as never,
+        })
+      ).toThrow(/provider-native interactive permission modes/);
+    }
+  );
+
   it('keeps the audited process-affine inventory explicit', () => {
     expect(Object.keys(HA_UNSUPPORTED_FEATURES)).toEqual([
-      'interactivePermissions',
+      'providerNativeInteractivePermissions',
       'mcpOAuth',
-      'githubInstall',
       'codexAuth',
       'codexDeviceAuth',
       'openCodeAuth',
@@ -123,8 +140,8 @@ describe('constrained HA support profile', () => {
 
   it('does not change standalone behavior', () => {
     const context = {} as HookContext;
-    expect(rejectInConstrainedHa({ mode: 'standalone' }, 'interactivePermissions')(context)).toBe(
-      context
-    );
+    expect(
+      rejectInConstrainedHa({ mode: 'standalone' }, 'providerNativeInteractivePermissions')(context)
+    ).toBe(context);
   });
 });

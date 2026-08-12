@@ -428,6 +428,7 @@ export async function setupQuery(
           sessionMCPRepo: deps.sessionMCPRepo,
           mcpServerRepo: deps.mcpServerRepo,
           mcpOAuthAuthHeadersRepo: deps.mcpOAuthAuthHeadersRepo,
+          sessionOwnerId: session.created_by,
         },
         { toolFiltering: 'exclude' }
       );

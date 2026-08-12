@@ -84,6 +84,7 @@ export async function executeOpenCodeTask(params: {
     const permissionLocks = new Map<SessionID, Promise<void>>();
     const tool = new OpenCodeTool({
       resolveMcpServers: async (targetSessionId) => {
+        const targetSession = await repos.sessionsService.get(targetSessionId);
         const reporter = collectWithheldMcpServers();
         const servers = await getMcpServersForSession(
           targetSessionId,
@@ -91,6 +92,7 @@ export async function executeOpenCodeTask(params: {
             sessionMCPRepo: repos.sessionMCP,
             mcpServerRepo: repos.mcpServers,
             mcpOAuthAuthHeadersRepo: repos.mcpOAuthAuthHeaders,
+            sessionOwnerId: targetSession.created_by,
             onServerWithheld: reporter.onServerWithheld,
           },
           // OpenCode's invocation config carries no per-tool filter, so a server
@@ -174,7 +176,7 @@ export async function executeOpenCodeTask(params: {
     });
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
-    console.error('[opencode] Execution failed:', failure);
+    console.error('[opencode] execution failed category=task_execution');
 
     if (isOpenCodeCleanupUnverifiedError(failure)) {
       // Keep the task active. Executor exit hands containment to the daemon;

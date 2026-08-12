@@ -8,6 +8,17 @@ import {
 } from './message-boundary';
 
 const externalParams = { provider: 'rest' } as never;
+const executorParams = {
+  provider: 'socketio',
+  authentication: {
+    payload: {
+      type: 'executor-session',
+      purpose: 'executor-task',
+      task_id: 'task-1',
+      session_id: 'session-1',
+    },
+  },
+} as never;
 
 function widgetMessage(status: 'pending' | 'resolving' | 'submitted'): Message {
   const messageId = 'widget-message' as MessageID;
@@ -116,6 +127,9 @@ describe('external widget Message boundary', () => {
   it('rejects transport creation of widget messages and widget metadata', async () => {
     const { service } = makeTransportService([]);
     await expect(service.create(pending, externalParams)).rejects.toThrow(
+      'only be created by the daemon'
+    );
+    await expect(service.create(pending, executorParams)).rejects.toThrow(
       'only be created by the daemon'
     );
     await expect(

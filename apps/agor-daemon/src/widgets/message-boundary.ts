@@ -54,7 +54,6 @@ export function protectExternalWidgetMessageWrites(loadMessage: WidgetMessageLoa
     if (context.method === 'patch' && declaresWidgetMessage(context.data)) {
       throw new Forbidden('Widget lifecycle metadata is daemon-owned');
     }
-
     const message = await loadMessage(String(context.id) as MessageID);
     const widget = message?.metadata?.widget;
     const isWidget = message?.type === 'widget_request' || widget !== undefined;

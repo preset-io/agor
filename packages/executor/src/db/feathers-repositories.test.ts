@@ -3,6 +3,7 @@ import type { SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   FeathersMCPOAuthAuthHeadersRepository,
+  FeathersMCPServersRepository,
   FeathersMessagesRepository,
   FeathersSessionMCPServersRepository,
 } from './feathers-repositories';
@@ -123,5 +124,37 @@ describe('FeathersSessionMCPServersRepository', () => {
         enabled: true,
       },
     ]);
+  });
+});
+
+describe('FeathersMCPServersRepository.findAll', () => {
+  it('forwards ownership and source filters to the daemon', async () => {
+    const find = vi.fn(async () => ({ data: [] }));
+    const repo = new FeathersMCPServersRepository({
+      service: () => ({ find }),
+    } as never);
+
+    await repo.findAll(
+      {
+        scope: 'global',
+        enabled: true,
+        source: 'agor',
+        usableByUserId: 'user-a',
+        ownerless: true,
+      },
+      'user-a'
+    );
+
+    expect(find).toHaveBeenCalledWith({
+      query: {
+        $limit: 1000,
+        scope: 'global',
+        enabled: true,
+        source: 'agor',
+        usableByUserId: 'user-a',
+        ownerless: true,
+        forUserId: 'user-a',
+      },
+    });
   });
 });

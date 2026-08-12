@@ -53,6 +53,18 @@ export interface MCPOAuthRefreshResult {
 
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
+export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
+export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2] as const;
+export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
+
+export function isMCPOAuthGrantBindingVersion(
+  value: unknown
+): value is MCPOAuthGrantBindingVersion {
+  return (
+    typeof value === 'number' &&
+    MCP_OAUTH_GRANT_BINDING_VERSIONS.includes(value as MCPOAuthGrantBindingVersion)
+  );
+}
 
 /**
  * Secret-bearing material required to exchange an authorization code.
@@ -69,7 +81,7 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   mcpServerId: MCPServerID;
   oauthMode: MCPOAuthMode;
   grantGeneration: number;
-  configFingerprintVersion: 1;
+  configFingerprintVersion: MCPOAuthGrantBindingVersion;
   configFingerprint: string;
   resourceUri: string;
   issuer: string;
@@ -121,8 +133,12 @@ export interface MCPAuth {
   oauth_grant_type?: string;
   /** Strict current MCP Authorization behavior is the default. */
   oauth_compatibility_mode?: 'strict' | 'legacy';
-  /** Dynamic Client Registration is disabled unless explicitly enabled. */
-  oauth_dcr_mode?: 'disabled' | 'fallback';
+  /**
+   * Dynamic Client Registration policy. Missing values use `advertised` for
+   * compatibility with servers that publish an RFC 7591 endpoint. The
+   * `fallback` mode additionally permits the legacy guessed `/register` URL.
+   */
+  oauth_dcr_mode?: MCPOAuthDCRMode;
   // OAuth 2.1 runtime tokens (obtained via browser flow)
   oauth_access_token?: string;
   oauth_token_expires_at?: number; // Unix timestamp in milliseconds
@@ -265,6 +281,10 @@ export interface MCPServerFilters {
   transport?: MCPTransport;
   enabled?: boolean;
   source?: MCPSource;
+  /** Shared servers plus private servers owned by this user. */
+  usableByUserId?: string;
+  /** Restrict to system-owned rows, used for the official catalog. */
+  ownerless?: boolean;
 }
 
 /**

@@ -2072,6 +2072,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
 // codex-rs/codex-mcp/src/mcp/mod.rs::mcp_permission_prompt_is_auto_approved.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('CodexPromptService - buildMcpServersConfig', () => {
+  const sessionOwnerId = '019e3700-owner-owner-owner-owner000001';
   const mockMcpServerRepo = {
     findById: vi.fn(),
   } as any;
@@ -2098,7 +2099,8 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      'agor-bearer-token'
+      'agor-bearer-token',
+      { sessionOwnerId }
     );
 
     expect(total).toBe(1);
@@ -2111,11 +2113,18 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
   it('relies on the task-scoped executor identity for per-user OAuth', async () => {
     const service = makeService();
 
-    await (service as any).buildMcpServersConfig('019e3700-aaaa-bbbb-cccc-dddddddddddd');
+    await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      { sessionOwnerId }
+    );
 
+    const resolutionDeps = mcpScopingMocks.getMcpServersForSession.mock.calls[0][1];
+    expect(resolutionDeps).toMatchObject({ sessionOwnerId });
+    expect(resolutionDeps).not.toHaveProperty('forUserId');
     expect(mcpScopingMocks.getMcpServersForSession).toHaveBeenCalledWith(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      expect.not.objectContaining({ forUserId: expect.anything() }),
+      resolutionDeps,
       // Codex can drop individual tools but has no way to prompt.
       { toolFiltering: 'exclude' }
     );
@@ -2136,7 +2145,9 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
 
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
-      '019e3700-aaaa-bbbb-cccc-dddddddddddd'
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      { sessionOwnerId }
     );
 
     expect(total).toBe(1);
@@ -2159,7 +2170,9 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
 
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
-      '019e3700-aaaa-bbbb-cccc-dddddddddddd'
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      { sessionOwnerId }
     );
 
     expect(total).toBe(1);
@@ -2191,7 +2204,8 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const service = makeService();
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-      'agor-bearer-token'
+      'agor-bearer-token',
+      { sessionOwnerId }
     );
 
     expect(total).toBe(3);
@@ -2207,7 +2221,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       'agor-bearer-token',
-      true
+      { sessionOwnerId, requireMcpServers: true }
     );
 
     expect(total).toBe(1);
@@ -2241,7 +2255,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       'agor-bearer-token',
-      true
+      { sessionOwnerId, requireMcpServers: true }
     );
 
     expect(total).toBe(3);
@@ -2270,7 +2284,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       undefined,
-      true
+      { sessionOwnerId, requireMcpServers: true }
     );
 
     expect(total).toBe(1);
@@ -2306,7 +2320,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const { servers, total } = await (service as any).buildMcpServersConfig(
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       undefined,
-      true
+      { sessionOwnerId, requireMcpServers: true }
     );
 
     expect(total).toBe(2);

@@ -1,4 +1,5 @@
-import { loadConfigSync } from '@agor/core/config';
+import type { AgorConfig } from '@agor/core/config';
+import type { DeepReadonly } from '@agor/core/types';
 
 /**
  * Decide whether clone-mode branch creation should borrow objects from the
@@ -13,7 +14,6 @@ import { loadConfigSync } from '@agor/core/config';
  * commands run as the daemon/executor identity that owns the managed object
  * cache.
  */
-export function shouldUseCloneReferencePath(): boolean {
-  const config = loadConfigSync();
+export function shouldUseCloneReferencePath(config: DeepReadonly<AgorConfig>): boolean {
   return (config.execution?.unix_user_mode ?? 'simple') !== 'strict';
 }

@@ -1,8 +1,9 @@
-import { loadConfigSync } from '@agor/core/config';
+import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  DeepReadonly,
   OpenCodeOAuthAttempt,
   OpenCodeOAuthAttemptPatch,
   OpenCodeOAuthConnectRequest,
@@ -99,12 +100,15 @@ function scheduleAttemptPrune(attempt: StoredOAuthAttempt): void {
 }
 
 export class OpenCodeAuthService {
-  constructor(private readonly db: TenantScopeAwareDatabase) {}
+  constructor(
+    private readonly db: TenantScopeAwareDatabase,
+    private readonly config: DeepReadonly<AgorConfig>
+  ) {}
 
   private credentialContext(
     params?: AuthenticatedParams
   ): Promise<AuthenticatedOpenCodeSubjectContext> {
-    return resolveAuthenticatedOpenCodeSubjectContext(this.db, params);
+    return resolveAuthenticatedOpenCodeSubjectContext(this.db, this.config, params);
   }
 
   private async execute(
@@ -153,12 +157,11 @@ export class OpenCodeAuthService {
   async find(
     params?: AuthenticatedParams & { query?: { branch_id?: unknown } }
   ): Promise<OpenCodeProviderSettings> {
-    const config = loadConfigSync();
-    const context = await resolveAuthenticatedOpenCodeSubjectContext(this.db, params, config);
+    const context = await resolveAuthenticatedOpenCodeSubjectContext(this.db, this.config, params);
     const directory = await resolveOpenCodeConfigurationDirectory({
       db: this.db,
       context,
-      config,
+      config: this.config,
       params,
     });
     const result = await this.execute(context, {
@@ -402,6 +405,9 @@ export class OpenCodeAuthService {
   }
 }
 
-export function createOpenCodeAuthService(db: TenantScopeAwareDatabase) {
-  return new OpenCodeAuthService(db);
+export function createOpenCodeAuthService(
+  db: TenantScopeAwareDatabase,
+  config: DeepReadonly<AgorConfig>
+) {
+  return new OpenCodeAuthService(db, config);
 }

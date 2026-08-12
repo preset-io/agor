@@ -14,8 +14,10 @@ The [Getting Started](/guide/getting-started) guide covers the recommended user 
 ## Requirements
 
 - **Node.js ≥ 22.12** (see [nodejs.org](https://nodejs.org) for installation).
+- **Git** available on `PATH` (verify with `git --version`).
+- A working system CA trust store for HTTPS remotes. Minimal Linux images may need the `ca-certificates` package. SSH remotes additionally require an SSH client, keys or agent access, and host-key configuration.
 
-That's the only hard requirement for npm installs. The Homebrew formula installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
+The Homebrew formula installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
 
 ## Install paths
 
@@ -40,11 +42,12 @@ npm install -g agor-live@latest
 agor init
 ```
 
-The original npm installation never downloads optional runtimes. On a local installation, run
-`agor install` and choose tools interactively. Agor records the choice in a private, host-local
-manifest beside the packages; it never rewrites `config.yaml`.
+The original npm installation never downloads optional runtimes. Interactive `agor init` shows all
+six supported tools in a multi-select and requires you to select at least one. Press Ctrl+C to cancel
+instead of creating a deployment accidentally. Init records the final selection in the newly created
+immutable `config.yaml` and reconciles the packages before it reports success.
 
-For a declarative or headless deployment, explicitly configure the selection:
+The generated deployment policy has this shape:
 
 ```yaml filename="~/.agor/config.yaml"
 agentic_tools:
@@ -53,8 +56,18 @@ agentic_tools:
     - codex
 ```
 
-Then run `agor install --sync` to reconcile disk state noninteractively. An explicit `installed: []`
-is valid and removes all managed tools. Merely omitting the key selects local-managed mode.
+After initialization, edit this list explicitly and run `agor install --sync` to change or repair the
+package set. It installs missing packages and removes unselected or stale versions without rewriting
+the file. If an init-time npm operation fails, the config and any completed atomic package installs
+remain in place; fix npm registry/proxy/permission issues and run exactly `agor install --sync`.
+
+Stop the daemon before accepting destructive re-initialization. `agor init` refuses to remove a live
+daemon's SQLite database; after shutdown it closes its own inspection handle and removes the database
+plus WAL/SHM sidecars before migrating the replacement.
+
+Configurations created before this onboarding contract may omit `agentic_tools.installed`. Those
+installations retain the backward-compatible host-local manifest mode: run `agor install` once to
+choose tools interactively. New init flows always create a declarative list.
 
 `agor install` uses your configured npm registry, proxy, authentication, and integrity verification,
 but installs into Agor's private runtime directory rather than changing global npm state. Installation
@@ -68,8 +81,12 @@ agor doctor
 ```
 
 The packaged daemon refuses to start when a selected integration is absent, corrupt, or from a
-different Agor version. An empty selection does not block startup; a missing local manifest produces
-an actionable warning. Unselected tools are unavailable to tenants.
+different Agor version. An explicitly empty headless selection does not block startup; a missing
+legacy local manifest produces an actionable warning. Unselected tools are unavailable to tenants.
+In the UI, workspace admins see **Not installed by this deployment** separately from **Disabled in
+this workspace**; users configure credentials only for installed, enabled tools, and transient
+provider probes use a separate status-unavailable state. Workspace and tenant admins cannot install
+deployment packages.
 
 | Agentic tool   | Configuration value | Managed package       |
 | -------------- | ------------------- | --------------------- |
@@ -85,8 +102,13 @@ For automated images and CI, run the same noninteractive commands after installi
 ```bash
 npm install -g agor-live@latest
 agor init --non-interactive --agentic-tools claude,codex
-agor install --sync
 ```
+
+Headless fresh init requires the flag (or `AGOR_AGENTIC_TOOLS`). Use `--agentic-tools all` for every
+allowlisted tool or `--agentic-tools none` for an intentionally empty deployment. Init performs the
+initial reconciliation synchronously; a later `agor install --sync` is the idempotent repair/upgrade
+command. Empty, whitespace-only, and comma-only values are rejected; use the literal `none` to make
+an empty policy intentional.
 
 Set `AGOR_AGENTIC_TOOLS_DIR` when integrations must live in an administrator-provisioned shared
 read-only location. Executors receive the resolved absolute directory across Agor's supported Unix
@@ -96,6 +118,11 @@ Run `agor install` as the user the daemon runs as. Integrations install under th
 directory, so installing them with `sudo` places them in root's home where the daemon cannot see
 them — `agor doctor` then reports them as missing. Set `AGOR_AGENTIC_TOOLS_DIR` explicitly when the
 daemon and its executors run as different users.
+
+Tool selection and exact-version validation are identical in `simple`, `delegated`, `insulated`, and
+`strict` execution modes. The difference is filesystem identity: every daemon/executor Unix identity
+that loads the shared packages must be able to traverse and read `AGOR_AGENTIC_TOOLS_DIR`; only the
+deployment installer should be able to write it.
 
 ### Upgrading
 
@@ -113,9 +140,10 @@ removes current-version packages absent from `agentic_tools.installed`, deletes 
 directory, and cleans interrupted staging/backup directories. There is currently no compatibility
 range or keep-old mode: every managed wrapper must exactly match `agor-live`.
 
-On local upgrades where the YAML key and local manifest are both absent, `agor install --sync`
-fails without changing packages and directs the operator to interactive `agor install`. Docker and
-Kubernetes deployments should always declare `agentic_tools.installed` and use `--sync`.
+On upgrades from a legacy configuration where the YAML key and local manifest are both absent,
+`agor install --sync` fails without changing packages and directs the operator to interactive
+`agor install`. Docker and Kubernetes deployments should always declare
+`agentic_tools.installed` and use `--sync`.
 
 Microsoft Teams gateway support remains optional and separate from agentic tools:
 
@@ -176,7 +204,13 @@ If pgvector is missing or the Agor DB user cannot enable it, semantic search ret
 
 ### PostgreSQL offline-cutover migrations
 
-Migrations `0074_knowledge_embedding_claims` and `0078_mcp_oauth_pending_flows` change distributed ownership/state protocols. Existing PostgreSQL installations must apply either pending migration as a **stop-the-world cutover**. Rolling old and new daemons against the same database is not supported.
+Some migrations change distributed ownership or callback protocols and must be applied as a **stop-the-world cutover** on existing PostgreSQL installations:
+
+- `0074_knowledge_embedding_claims` changes the ownership protocol used by Knowledge embedding workers.
+- `0078_mcp_oauth_pending_flows` replaces plaintext, unfenced MCP OAuth grants with durable sealed callback and refresh authority.
+- `0082_github_install_state` moves GitHub App install callback state from a per-daemon Map to PostgreSQL. Old daemons cannot consume state issued by new daemons, and new daemons cannot consume state issued by old daemons.
+
+Rolling old and new daemons against the same database across any cutover is not supported.
 
 1. Stop every Agor daemon connected to the database.
 2. From the new release, run:
@@ -191,7 +225,11 @@ Normal daemon startup and `agor db migrate --yes` deliberately refuse these migr
 
 Migration `0078` deletes existing MCP OAuth grant rows because the old plaintext, unfenced rows are not compatible with active-active callback and rotating-refresh ownership. Users must reconnect MCP OAuth after the upgrade. Take a backup before the cutover. A rollback to an older daemon requires restoring the pre-cutover backup; do not run an older cohort against the new OAuth schema.
 
-Tenant archives deliberately omit MCP OAuth grants. The encrypted grant envelope is bound to the source tenant ID, server, generation, and deployment master secret, so importing or re-homing a tenant restores the MCP server configuration but requires users to reconnect OAuth. Pending OAuth attempts and executor token authorities are likewise non-portable.
+Tenant archives deliberately omit MCP OAuth grants. The encrypted grant envelope is bound to the source tenant ID, server, generation, and deployment master secret, so importing or re-homing a tenant restores the MCP server configuration but requires users to reconnect OAuth. Pending OAuth attempts, executor token authorities, and GitHub install state are likewise non-portable.
+
+GitHub App setup URLs necessarily carry a short-lived one-time `state` value in their query string. The daemon does not log or persist that raw value and sends `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, but those response headers cannot stop an ingress, load balancer, or reverse proxy from logging the incoming request target first. Configure every HTTP logging layer to omit or redact query strings for `/api/github/setup/new` and `/api/github/setup/callback` (or globally), including failure-path and upstream error logs. Some proxies use fixed error-log formats that cannot redact the request target; suppress those route-specific error logs while retaining a redacted access log with status and upstream diagnostics. A route-specific rule must match the application's path semantics, including case and optional trailing slashes; the checked-in nginx matcher is case-insensitive because Express is case-insensitive by default. Treat copied browser/GitHub setup URLs as secrets until the 10-minute state expires or is consumed.
+
+A binary rollback does not automatically reverse database migrations. Stop the new cohort before starting only old-version daemons. After a rollback across `0082`, the old version ignores PostgreSQL install-state hashes and uses its former per-process flow; those hash rows contain no raw bearer but will remain inert until the new version resumes expiry cleanup, a new-version tenant deletion removes them, or an operator deliberately rolls back/drops the additive table. Older tenant-deletion code refuses to delete against a database whose migration watermark is ahead of that binary.
 
 ---
 

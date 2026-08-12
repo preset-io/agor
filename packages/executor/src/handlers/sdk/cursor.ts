@@ -40,6 +40,7 @@ import type { AgorClient } from '../../services/feathers-client.js';
 import {
   captureGitStateAtTaskEnd,
   createStreamingCallbacks,
+  settleTaskFailure,
   stampGitStateAtTaskStart,
 } from './base-executor.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
@@ -198,6 +199,7 @@ async function buildCursorMcpServers(args: {
   taskId: TaskID;
   mcpToken?: string;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
+  sessionOwnerId?: string;
 }): Promise<Record<string, McpServerConfig> | undefined> {
   const claimed = new Set<string>();
   const mcpServers: Record<string, McpServerConfig> = {};
@@ -221,6 +223,7 @@ async function buildCursorMcpServers(args: {
       sessionMCPRepo: args.repos.sessionMCP,
       mcpServerRepo: args.repos.mcpServers,
       mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
+      sessionOwnerId: args.sessionOwnerId,
       onServerWithheld: reporter.onServerWithheld,
     },
     // Cursor's MCP config carries no per-tool filter, so a server with gated
@@ -277,10 +280,6 @@ async function getSessionMessages(client: AgorClient, sessionId: SessionID): Pro
 
 function getNextMessageIndexFrom(messages: ReadonlyArray<Message>): number {
   return messages.length;
-}
-
-async function getNextMessageIndex(client: AgorClient, sessionId: SessionID): Promise<number> {
-  return getNextMessageIndexFrom(await getSessionMessages(client, sessionId));
 }
 
 async function createUserMessage(args: {
@@ -426,26 +425,6 @@ async function updateToolMessage(args: {
   });
 }
 
-async function createSystemErrorMessage(args: {
-  client: AgorClient;
-  sessionId: SessionID;
-  taskId: TaskID;
-  message: string;
-}): Promise<void> {
-  const index = await getNextMessageIndex(args.client, args.sessionId);
-  await args.client.service('messages').create({
-    message_id: generateId() as MessageID,
-    session_id: args.sessionId,
-    task_id: args.taskId,
-    type: 'system',
-    role: MessageRole.SYSTEM,
-    index,
-    timestamp: new Date().toISOString(),
-    content: args.message,
-    content_preview: args.message.substring(0, 200),
-  });
-}
-
 /**
  * Execute Cursor task (Feathers/WebSocket architecture).
  */
@@ -504,6 +483,7 @@ export async function executeCursorTask(params: {
       taskId,
       mcpToken: session.mcp_token,
       repos,
+      sessionOwnerId: session.created_by,
     });
 
     const agent = session.sdk_session_id
@@ -652,7 +632,7 @@ export async function executeCursorTask(params: {
     }
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
-    console.error('[cursor] Execution failed:', err);
+    console.error('[cursor] execution failed category=task_execution');
     const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
     const taskPatch: Partial<Task> = {
       status: 'failed',
@@ -666,8 +646,7 @@ export async function executeCursorTask(params: {
         sha_at_end: gitStateAtEnd.sha,
       };
     }
-    await client.service('tasks').patch(taskId, taskPatch);
-    await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
+    await settleTaskFailure(client, sessionId, taskId, err, taskPatch);
     throw err;
   } finally {
     params.abortController.signal.removeEventListener('abort', abortHandler);

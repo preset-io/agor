@@ -693,7 +693,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       }
     }
 
-    if (context.path === 'tasks' && context.event === 'termination_requested') {
+    const isExecutorControlEvent =
+      (context.path === 'tasks' && context.event === 'termination_requested') ||
+      (context.path === 'messages' && context.event === 'permission_resolved');
+    if (isExecutorControlEvent) {
       const taskId = extractTaskId(data);
       if (!tenantId || !taskId) return { delivery: [] as PublishChannel[], tenantId };
       const room = existingChannel(app, executorTaskChannelName(tenantId, taskId));

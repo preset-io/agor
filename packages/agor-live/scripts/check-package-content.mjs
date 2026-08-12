@@ -2,7 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 
 const limits = {
-  files: 2400,
+  // Raised from 2400 once main measured 2419: the Redis HA foundation, the MCP
+  // catalog data layer (which ships its own dist tree plus curated.yaml), and
+  // the MCP protocol work all landed after the budget was first set. The
+  // headroom is deliberately modest so the ratchet still trips on the next
+  // unexplained jump rather than absorbing it silently.
+  files: 2600,
   // A modest byte increase buys a much larger inode/package reduction: select
   // high-fanout pure-JS trees are bundled into dist instead of extracted as
   // hundreds of dependency files during a cold global npm install.

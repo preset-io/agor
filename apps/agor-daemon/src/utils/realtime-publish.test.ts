@@ -106,6 +106,34 @@ describe('configureRealtimePublish executor control scope', () => {
     expect(result[0]?.connections).toEqual([executor]);
   });
 
+  it('routes a standalone permission decision only to the private room for that Task', async () => {
+    const browser = { user: user('browser') };
+    const executor = { user: user('executor') };
+    const room = executorTaskChannelName('tenant-a', 'task-1');
+    const app = makeApp([browser, executor], {}, { [room]: [executor] });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+
+    const result = (await app.runPublish(
+      { requestId: 'request-1', taskId: 'task-1', allow: true },
+      {
+        path: 'messages',
+        method: 'patch',
+        event: 'permission_resolved',
+        params: {},
+      }
+    )) as unknown as FakeChannel[];
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.connections).toEqual([executor]);
+    expect(result[0]?.connections).not.toContain(browser);
+  });
+
   it('does not materialize a room when Stop wins before executor connect', async () => {
     const app = makeApp([]);
     configureRealtimePublish({
@@ -196,6 +224,53 @@ describe('HA Feathers publication relay', () => {
       method: 'patch',
       id: 'task-1',
       data: { task_id: 'task-1', status: 'stopping' },
+    });
+
+    expect(app.emit).toHaveBeenCalledOnce();
+    const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
+    expect(channel.connections).toEqual([executorA]);
+    expect(channel.connections).not.toContain(executorB);
+  });
+
+  it('bridges permission delivery across replicas without crossing tenant Task rooms', async () => {
+    const executorA = { user: user('executor-a') };
+    const executorB = { user: user('executor-b') };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: vi.fn((handler) => {
+        remoteHandler = handler;
+      }),
+    };
+    const app = makeApp(
+      [],
+      {},
+      {
+        [executorTaskChannelName('tenant-a', 'task-1')]: [executorA],
+        [executorTaskChannelName('tenant-b', 'task-1')]: [executorB],
+      }
+    );
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: relay,
+    });
+
+    await remoteHandler?.({
+      version: 1,
+      tenantId: 'tenant-a',
+      path: 'messages',
+      event: 'permission_resolved',
+      method: 'patch',
+      id: 'message-1',
+      data: { requestId: 'request-1', taskId: 'task-1', allow: true },
     });
 
     expect(app.emit).toHaveBeenCalledOnce();

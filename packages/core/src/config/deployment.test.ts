@@ -45,7 +45,7 @@ describe('resolveDeploymentConfig', () => {
       capabilities: {
         taskExecution: true,
         executorTokenAuthority: true,
-        interactivePermissions: false,
+        agorManagedInteractivePermissions: true,
         gatewayListeners: true,
         gatewayOutboundExactlyOnce: false,
         environmentHealthMonitor: true,
@@ -53,6 +53,7 @@ describe('resolveDeploymentConfig', () => {
         completionCallbackDurableAdmission: true,
         completionCallbackPreAdmissionRecovery: false,
         widgetResolutionDurableClaim: true,
+        githubInstall: true,
         codexCredentialFiles: true,
         codexDeviceAuth: false,
       },

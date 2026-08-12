@@ -1,8 +1,8 @@
 /**
  * Startup & Shutdown
  *
- * Orchestrates post-boot steps: orphan cleanup, health monitor, master secret,
- * server listen, scheduler, gateway init, and graceful shutdown.
+ * Orchestrates post-boot steps: orphan cleanup, health monitor, server listen,
+ * scheduler, gateway init, and graceful shutdown.
  */
 
 import { promises as fs } from 'node:fs';
@@ -601,35 +601,6 @@ export function initializeEnvironmentHealthMonitor(
 }
 
 // ---------------------------------------------------------------------------
-// Master secret
-// ---------------------------------------------------------------------------
-
-async function ensureMasterSecret(config: AgorConfig): Promise<void> {
-  // AGOR_MASTER_SECRET: env > existing config value > fail-fast.
-  //
-  // Same fail-fast reasoning as the JWT path: a fresh master secret on every
-  // restart corrupts every stored encrypted API key.
-  const { resolvePersistedSecret } = await import('./setup/persisted-secret.js');
-  const resolution = await resolvePersistedSecret({
-    name: 'AGOR_MASTER_SECRET (API key encryption)',
-    envVar: 'AGOR_MASTER_SECRET',
-    existing: config.daemon?.masterSecret,
-    configKey: 'daemon.masterSecret',
-  });
-  // Side effect: downstream code (encrypted-creds resolver, etc.) reads this
-  // off process.env, not off a parameter. Keep that contract.
-  process.env.AGOR_MASTER_SECRET = resolution.value;
-  switch (resolution.source) {
-    case 'env':
-      console.log('🔐 API key encryption enabled (AGOR_MASTER_SECRET set)');
-      break;
-    case 'config':
-      console.log('🔐 Using saved AGOR_MASTER_SECRET from config');
-      break;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Main startup
 // ---------------------------------------------------------------------------
 
@@ -676,10 +647,8 @@ export async function startup(ctx: StartupContext): Promise<void> {
   }
   app.set('environmentHealthMonitor', healthMonitor);
 
-  // 3. Validate/generate master secret for API key encryption
-  await ensureMasterSecret(config);
-
-  // 4. Start server
+  // 3. Start server. Deployment secrets were resolved before service
+  // registration in startDaemon(); consumers may already have captured them.
   const server = await app.listen(DAEMON_PORT, DAEMON_HOST);
 
   const displayHost = DAEMON_HOST === '0.0.0.0' ? 'localhost' : DAEMON_HOST;

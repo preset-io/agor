@@ -96,6 +96,15 @@ describe('initializeDatabase logging', () => {
     expect(dbMocks.createDatabaseAsync).toHaveBeenCalledWith({ url });
   });
 
+  it('forwards configured PostgreSQL pool settings to the database client', async () => {
+    const url = 'postgresql://localhost/agor';
+    const pool = { max: 25 };
+
+    await initializeDatabase(url, { pool, skipFirstRunAdminBootstrap: true });
+
+    expect(dbMocks.createDatabaseAsync).toHaveBeenCalledWith({ url, pool });
+  });
+
   it('does not log a hostile SQLite directory when creating it', async () => {
     const url = 'file:/tmp/SQLITE_DIRECTORY_SENTINEL/agor.db';
     fsMocks.access.mockRejectedValueOnce(new Error('missing directory'));

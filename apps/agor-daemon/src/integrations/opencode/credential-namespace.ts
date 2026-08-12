@@ -5,7 +5,7 @@ import {
   type OpenCodeNativeUnixUserMode,
   resolveOpenCodeCredentialNamespace,
 } from '@agor/agentic-tool-opencode/daemon';
-import { type AgorConfig, isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
+import { type AgorConfig, isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -13,7 +13,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams, UserID } from '@agor/core/types';
+import type { AuthenticatedParams, DeepReadonly, UserID } from '@agor/core/types';
 import {
   getHomedirFromUsername,
   resolveUnixUserForImpersonation,
@@ -47,8 +47,8 @@ export type AuthenticatedOpenCodeSubjectContext = OpenCodeCredentialNamespace & 
 /** Resolve the authenticated caller's one native OpenCode execution context. */
 export async function resolveAuthenticatedOpenCodeSubjectContext(
   db: TenantScopeAwareDatabase,
-  params?: AuthenticatedParams,
-  config: AgorConfig = loadConfigSync()
+  config: DeepReadonly<AgorConfig>,
+  params?: AuthenticatedParams
 ): Promise<AuthenticatedOpenCodeSubjectContext> {
   const callerId = params?.user?.user_id as UserID | undefined;
   if (!callerId) throw new NotAuthenticated('Sign in before using OpenCode.');

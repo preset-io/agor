@@ -71,6 +71,7 @@ vi.mock('../../utils/upload-staging.js', () => ({
 type ServiceStub = Record<string, (...args: unknown[]) => unknown>;
 function makeFakeApp(services: Record<string, ServiceStub>) {
   return {
+    get: () => ({}),
     service: (name: string) => {
       const svc = services[name];
       if (!svc) throw new Error(`Unexpected service call: ${name}`);

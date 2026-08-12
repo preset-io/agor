@@ -42,6 +42,7 @@ import type {
   InboundFile,
   OutboundPayload,
 } from '../connector';
+import { GatewayListenerError } from '../listener-error';
 import { createSlackSdkLogger } from './slack-sdk-logger';
 
 // Block Kit table block limits (Slack docs, native block introduced Aug 2025).
@@ -1884,16 +1885,15 @@ export class SlackConnector implements GatewayConnector {
     options: GatewayListenerOptions = {}
   ): Promise<void> {
     if (!this.config.app_token) {
-      console.error('[slack] ERROR: app_token is missing from config');
-      throw new Error('Slack Socket Mode requires app_token in config');
+      throw new GatewayListenerError(
+        'slack_app_token_missing',
+        'permanent',
+        'Configure a Slack app-level token with connections:write.'
+      );
     }
 
-    this.socketMode = new SocketModeClient({
-      appToken: this.config.app_token,
-      logger: createSlackSdkLogger(),
-    });
-
-    // Fetch bot user ID for mention detection
+    // Validate the bot token before constructing Socket Mode. A listener without
+    // a bot identity cannot enforce mentions safely and must not partially start.
     let botMentionPattern: RegExp | null = null;
     let botMentionReplacePattern: RegExp | null = null;
     try {
@@ -1903,10 +1903,36 @@ export class SlackConnector implements GatewayConnector {
       botMentionPattern = new RegExp(`<@${this.botUserId}>`);
       botMentionReplacePattern = new RegExp(`<@${this.botUserId}>\\s*`, 'g');
     } catch (error) {
-      console.error('[slack] Failed to fetch bot user ID:', error);
-      console.error('[slack] This usually means the bot_token is invalid or expired');
-      console.warn('[slack] Mention detection will be disabled');
+      const code = extractSlackErrorDetail(error).code;
+      if (
+        code &&
+        [
+          'invalid_auth',
+          'not_authed',
+          'token_revoked',
+          'token_expired',
+          'account_inactive',
+          'missing_scope',
+          'no_permission',
+        ].includes(code)
+      ) {
+        throw new GatewayListenerError(
+          'slack_bot_token_invalid',
+          'permanent',
+          'Replace the Slack bot token and verify the required bot scopes.'
+        );
+      }
+      throw new GatewayListenerError(
+        'slack_api_unavailable',
+        'transient',
+        'Slack is unavailable; Agor will retry automatically.'
+      );
     }
+
+    this.socketMode = new SocketModeClient({
+      appToken: this.config.app_token,
+      logger: createSlackSdkLogger(),
+    });
 
     // Read config options (with defaults matching UI)
     const enableChannels = this.config.enable_channels ?? false;
@@ -2223,7 +2249,29 @@ export class SlackConnector implements GatewayConnector {
       }
     });
 
-    await this.socketMode.start();
+    try {
+      await this.socketMode.start();
+    } catch (error) {
+      this.socketMode = null;
+      const code =
+        typeof error === 'object' && error !== null
+          ? `${String((error as { code?: unknown }).code ?? '')} ${String(
+              (error as { data?: { error?: unknown } }).data?.error ?? ''
+            )}`
+          : '';
+      if (/invalid_auth|not_authed|token_revoked|account_inactive/i.test(code)) {
+        throw new GatewayListenerError(
+          'slack_app_token_invalid',
+          'permanent',
+          'Replace the Slack app-level token and verify connections:write.'
+        );
+      }
+      throw new GatewayListenerError(
+        'slack_socket_unavailable',
+        'transient',
+        'Slack Socket Mode is unavailable; Agor will retry automatically.'
+      );
+    }
   }
 
   /**

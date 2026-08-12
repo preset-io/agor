@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import type { AgenticToolOption } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { PendingToolChoicePanel } from './PendingToolChoicePanel';
 
@@ -15,6 +16,14 @@ const agents: AgenticToolOption[] = [
   { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: 'Anthropic' },
   { id: 'codex', name: 'Codex', icon: '💻', description: 'OpenAI' },
 ];
+
+beforeEach(() => {
+  agorStore.getState().setAgenticToolSettings([]);
+});
+
+afterEach(() => {
+  agorStore.getState().reset();
+});
 
 describe('PendingToolChoicePanel', () => {
   it('renders one tile per available agent and the inert composer bar', () => {

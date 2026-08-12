@@ -26,12 +26,13 @@ import {
   isPostgresDatabaseHandle,
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
+  mcpServers,
   runWithoutTenantDatabaseScope,
   SessionMCPServerRepository,
-  type SessionMCPServerRow,
   SessionRepository,
   select,
   sessionMcpServers,
+  sessions,
   shortId,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
@@ -49,6 +50,7 @@ import type {
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
+  MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
   MCPServerID,
   Params,
@@ -56,7 +58,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { hasMinimumRole, isMCPOAuthGrantBindingVersion, ROLES } from '@agor/core/types';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
 import type {
@@ -77,7 +79,10 @@ import {
   tenantUserChannelName,
 } from './realtime/routing.js';
 import { createAgenticToolPresetsService } from './services/agentic-tool-presets.js';
-import { createArtifactsService } from './services/artifacts.js';
+import {
+  ARTIFACTS_SERVICE_TRANSPORT_METHODS,
+  createArtifactsService,
+} from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { setupBoardOwnersService } from './services/board-owners.js';
@@ -97,13 +102,17 @@ import { createCursorModelsService } from './services/cursor-models.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
-import { createGatewayChannelsService } from './services/gateway-channels.js';
+import {
+  createGatewayChannelsService,
+  GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS,
+} from './services/gateway-channels.js';
 import { createGatewayChannelsAppInfoService } from './services/gateway-channels-app-info.js';
 import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
   createGroupsService,
+  GROUPS_SERVICE_TRANSPORT_METHODS,
   setupBoardAlignedBranchesService,
   setupBoardGroupGrantsService,
   setupBranchEffectiveAccessService,
@@ -112,7 +121,10 @@ import {
 } from './services/groups.js';
 import { createKnowledgeDocumentEditsService } from './services/knowledge-document-edits.js';
 import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
-import { createKnowledgeGraphService } from './services/knowledge-graph.js';
+import {
+  createKnowledgeGraphService,
+  KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS,
+} from './services/knowledge-graph.js';
 import { createKnowledgeIndexingStatusService } from './services/knowledge-indexing.js';
 import { createKnowledgeNamespacesService } from './services/knowledge-namespaces.js';
 import { createKnowledgeReindexService } from './services/knowledge-reindex.js';
@@ -131,26 +143,27 @@ import {
   hasMCPOAuthRelevantServerConfigurationChanged,
   isMCPOAuthGrantBoundToServer,
   lockMCPOAuthGrantConfiguration,
-  MCP_OAUTH_GRANT_BINDING_VERSION,
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
-import { createSchedulesService } from './services/schedules.js';
+import {
+  createSchedulesService,
+  SCHEDULES_SERVICE_TRANSPORT_METHODS,
+} from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
-import { createTasksService } from './services/tasks.js';
+import { createTasksService, TASKS_SERVICE_TRANSPORT_METHODS } from './services/tasks.js';
 import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
-import { createUsersService } from './services/users.js';
-
+import { createUsersService, USERS_SERVICE_TRANSPORT_METHODS } from './services/users.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { escapeHtml } from './utils/html.js';
@@ -158,6 +171,10 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
+import {
+  isSessionMcpServerLinkVisibleToCaller,
+  loadMcpServerForCaller,
+} from './utils/mcp-server-authorization.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -264,17 +281,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/session-streams').publish(() => []);
 
   app.use('/tasks', createTasksService(db, app), {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'patch',
-      'remove',
-      'connectExecutor',
-      'reportTerminationComplete',
-      'reportRuntimeTelemetry',
-      'reportSdkHealthFailure',
-    ],
+    methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
     // clients. Keep this in sync with every `app.service('tasks').emit(...)`
@@ -377,15 +384,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     }),
     {
       events: ['agor-query'],
-      methods: [
-        'find',
-        'get',
-        'create',
-        'patch',
-        'remove',
-        'publishFromExecutor',
-        'validateFromExecutor',
-      ],
+      methods: [...ARTIFACTS_SERVICE_TRANSPORT_METHODS],
     }
   );
   app.use('/board-comments', createBoardCommentsService(db));
@@ -431,7 +430,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   app.use('/groups', createGroupsService(db), {
-    methods: ['find', 'get', 'create', 'patch', 'remove'],
+    methods: [...GROUPS_SERVICE_TRANSPORT_METHODS],
   });
   app.use('/group-memberships', createGroupMembershipsService(db), {
     methods: ['find', 'create', 'remove'],
@@ -452,7 +451,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // First-class schedules. RBAC hooks wired in register-hooks.ts.
   // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
   app.use('/schedules', createSchedulesService(db), {
-    methods: ['find', 'get', 'create', 'patch', 'remove'],
+    methods: [...SCHEDULES_SERVICE_TRANSPORT_METHODS],
   });
 
   // ============================================================================
@@ -500,7 +499,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: ['create'],
   });
   app.use('/kb/graph', createKnowledgeGraphService(db), {
-    methods: ['find', 'create', 'link', 'neighbors'],
+    methods: [...KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS],
   });
 
   // ============================================================================
@@ -530,7 +529,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   {
     app.use('/gateway-channels', createGatewayChannelsService(db), {
-      methods: ['find', 'get', 'create', 'patch', 'remove', 'uploadFileStreamFromExecutor'],
+      methods: [...GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS],
     });
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit
@@ -575,7 +574,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       daemonUrl,
       db,
       config: ctx.config,
-      setupEnabled: !isConstrainedHa(ctx.deployment),
     });
   }
 
@@ -583,7 +581,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Config, context, file, files, terminals
   // ============================================================================
 
-  const configService = createConfigService(db);
+  const configService = createConfigService(db, config);
   configService.app = app;
   // Host ACL/user/group operations exist only on a self-hosted daemon host. Hosted
   // registration is intentionally absent rather than forwarding privileged
@@ -612,7 +610,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
   });
 
-  app.use('/check-auth', createCheckAuthService(db));
+  app.use('/check-auth', createCheckAuthService(db, config));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
 
   registerOpenCodeServices(ctx);
@@ -739,17 +737,44 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           )
         );
       }
-      let query = select(db).from(sessionMcpServers);
+      let query = select(db, {
+        session_id: sessionMcpServers.session_id,
+        mcp_server_id: sessionMcpServers.mcp_server_id,
+        enabled: sessionMcpServers.enabled,
+        added_at: sessionMcpServers.added_at,
+        owner_user_id: mcpServers.owner_user_id,
+        session_created_by: sessions.created_by,
+      })
+        .from(sessionMcpServers)
+        .innerJoin(mcpServers, eq(sessionMcpServers.mcp_server_id, mcpServers.mcp_server_id))
+        .innerJoin(sessions, eq(sessionMcpServers.session_id, sessions.session_id));
       if (conditions.length > 0) {
         query = query.where(and(...conditions)) as typeof query;
       }
-      const rows = await query.all();
-      return rows.map((row: SessionMCPServerRow) => ({
-        session_id: row.session_id,
-        mcp_server_id: row.mcp_server_id,
-        enabled: Boolean(row.enabled),
-        added_at: new Date(row.added_at),
-      }));
+      const rows = (await query.all()) as Array<{
+        session_id: string;
+        mcp_server_id: string;
+        enabled: boolean;
+        added_at: Date | number | string;
+        owner_user_id: string | null;
+        session_created_by: string;
+      }>;
+      return rows
+        .filter((row) =>
+          isSessionMcpServerLinkVisibleToCaller(
+            {
+              owner_user_id: row.owner_user_id,
+              session_created_by: row.session_created_by,
+            },
+            params as unknown as AuthenticatedParams
+          )
+        )
+        .map((row) => ({
+          session_id: row.session_id,
+          mcp_server_id: row.mcp_server_id,
+          enabled: Boolean(row.enabled),
+          added_at: new Date(row.added_at),
+        }));
     },
   });
 
@@ -762,17 +787,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
   app.use('/users', usersService, {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'patch',
-      'remove',
-      'getGitEnvironment',
-      'getAvatarSettings',
-      'updateAvatarSettings',
-      'syncAvatars',
-    ],
+    methods: [...USERS_SERVICE_TRANSPORT_METHODS],
   });
 
   // Bootstrap superadmin users
@@ -809,6 +824,7 @@ async function registerMCPServices(
   sessionsService: SessionsServiceImpl
 ): Promise<{ oauthCallbackHandler: (req: express.Request, res: express.Response) => void }> {
   const { db, app } = ctx;
+  const sessionsRepository = new SessionRepository(db);
   const durableOAuthFlows = isPostgresDatabaseHandle(db)
     ? new MCPOAuthPendingFlowAuthority(db)
     : null;
@@ -995,7 +1011,7 @@ async function registerMCPServices(
     tokenUrlOverride?: string;
     scope?: string;
     compatibilityMode?: 'strict' | 'legacy';
-    dcrMode?: 'disabled' | 'fallback';
+    dcrMode?: MCPOAuthDCRMode;
     socketId?: string;
   };
 
@@ -1097,8 +1113,9 @@ async function registerMCPServices(
       // flow context. Daemon callers never read or populate its origin-only
       // bearer cache.
       cacheKey: opts.prefetchedAuthServerMetadata ? opts.mcpUrl : undefined,
-      // Process-global DCR credentials are not a tenant/user namespace.
-      reuseDynamicClientRegistration: !durableOAuthFlows,
+      // Process-global DCR credentials are not a tenant/user/server namespace.
+      // Daemon flows never share them, including in SQLite deployments.
+      reuseDynamicClientRegistration: false,
       resourceUri: opts.mcpUrl,
       compatibilityMode: opts.compatibilityMode,
       dcrMode: opts.dcrMode,
@@ -1317,7 +1334,7 @@ async function registerMCPServices(
           server.auth?.type !== 'oauth' ||
           (server.auth.oauth_mode ?? 'per_user') !== record.oauthMode ||
           server.url !== pendingFlow.context.resourceUri ||
-          record.configFingerprintVersion !== MCP_OAUTH_GRANT_BINDING_VERSION
+          !isMCPOAuthGrantBindingVersion(record.configFingerprintVersion)
         ) {
           throw new Error('MCP OAuth server configuration changed; restart authorization');
         }
@@ -1336,7 +1353,8 @@ async function registerMCPServices(
             redirectUri: pendingFlow.context.redirectUri,
             clientId: pendingFlow.context.clientId,
             clientSecret: pendingFlow.context.clientSecret,
-          }
+          },
+          record.configFingerprintVersion
         );
         if (fingerprint !== record.configFingerprint) {
           throw new Error('MCP OAuth grant binding changed; restart authorization');
@@ -1352,6 +1370,16 @@ async function registerMCPServices(
     pendingFlow: PendingOAuthFlow,
     logPrefix: string
   ): Promise<void> => {
+    const durableRecord = pendingFlow.durableRecord;
+    const durableGrantBindingVersion = durableRecord
+      ? (() => {
+          const version = durableRecord.configFingerprintVersion;
+          if (!isMCPOAuthGrantBindingVersion(version)) {
+            throw new Error('Unsupported MCP OAuth grant binding version');
+          }
+          return version;
+        })()
+      : undefined;
     const work = () =>
       persistOAuthToken(
         db,
@@ -1366,7 +1394,7 @@ async function registerMCPServices(
             ? {
                 grantBinding: {
                   generation: pendingFlow.durableRecord.grantGeneration,
-                  version: MCP_OAUTH_GRANT_BINDING_VERSION,
+                  version: durableGrantBindingVersion!,
                   fingerprint: pendingFlow.durableRecord.configFingerprint,
                   metadataUri: pendingFlow.context.metadataUrl,
                   resourceUri: pendingFlow.context.resourceUri,
@@ -1770,11 +1798,14 @@ async function registerMCPServices(
         grant_type?: string;
         start_browser_flow?: boolean;
         compatibility_mode?: 'strict' | 'legacy';
-        dcr_mode?: 'disabled' | 'fallback';
+        dcr_mode?: MCPOAuthDCRMode;
       },
-      params?: { connection?: { id?: string } }
+      params?: AuthenticatedParams & { connection?: { id?: string } }
     ) {
       try {
+        if (data.mcp_server_id) {
+          await loadMcpServerForCaller(db, data.mcp_server_id, params);
+        }
         console.log('[OAuth Test] Probing configured MCP server');
 
         let probeResponse: Response;
@@ -1871,7 +1902,7 @@ async function registerMCPServices(
                   clientSecret: data.client_secret,
                   scope: data.scope,
                   compatibilityMode,
-                  dcrMode: data.dcr_mode ?? 'disabled',
+                  dcrMode: data.dcr_mode,
                 });
               } catch (err) {
                 if (err instanceof PublicBaseUrlNotConfiguredError) {
@@ -2142,13 +2173,29 @@ async function registerMCPServices(
         let clientIdFromConfig: string | undefined;
         let scopeOverride: string | undefined;
         let compatibilityMode: 'strict' | 'legacy' = 'strict';
-        let dcrMode: 'disabled' | 'fallback' = 'disabled';
-        const savedServer = data.mcp_server_id
+        let dcrMode: MCPOAuthDCRMode | undefined;
+        const savedServerId = data.mcp_server_id;
+        const savedServer = savedServerId
           ? await runInOAuthTenantScope(db, tenantId, () => {
-              const mcpServerRepo = new MCPServerRepository(db);
-              return mcpServerRepo.findById(data.mcp_server_id as string);
+              return loadMcpServerForCaller(db, savedServerId, params);
             })
           : null;
+
+        if (
+          savedServerId &&
+          (!savedServer?.enabled || !savedServer.url || savedServer.auth?.type !== 'oauth')
+        ) {
+          return {
+            success: false,
+            error:
+              'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
+          };
+        }
+
+        // Once an ID is supplied, its tenant-scoped row is authoritative for
+        // the provider URL and client configuration. The duplicate payload
+        // fields remain accepted only for older callers.
+        const effectiveMcpUrl = savedServer?.url ?? data.mcp_url;
 
         // PostgreSQL is the shared authority, so reject transient or stale
         // server input before the first outbound probe. Doing this only in the
@@ -2157,7 +2204,7 @@ async function registerMCPServices(
         if (
           durableOAuthFlows &&
           (!savedServer?.enabled ||
-            savedServer.url !== data.mcp_url ||
+            savedServer.url !== effectiveMcpUrl ||
             savedServer.auth?.type !== 'oauth')
         ) {
           return {
@@ -2175,7 +2222,7 @@ async function registerMCPServices(
           clientSecretOverride = savedServer.auth.oauth_client_secret;
           scopeOverride = savedServer.auth.oauth_scope;
           compatibilityMode = savedServer.auth.oauth_compatibility_mode ?? 'strict';
-          dcrMode = savedServer.auth.oauth_dcr_mode ?? 'disabled';
+          dcrMode = savedServer.auth.oauth_dcr_mode;
           if (oauthMode === 'shared') {
             const currentUser =
               durableOAuthFlows && tenantId && userId
@@ -2189,7 +2236,7 @@ async function registerMCPServices(
           }
         }
 
-        let probeResponse = await oauthFetch(data.mcp_url, {
+        let probeResponse = await oauthFetch(effectiveMcpUrl, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
           body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
@@ -2197,7 +2244,7 @@ async function registerMCPServices(
         });
 
         if (probeResponse.status !== 401) {
-          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(data.mcp_url);
+          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl);
           if (fallbackProbe) {
             console.log(
               '[OAuth Start] Handshake-level probe returned no auth requirement; ' +
@@ -2218,7 +2265,7 @@ async function registerMCPServices(
         const { resolveMCPOAuthDiscovery } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
         );
-        const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, data.mcp_url, {
+        const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, effectiveMcpUrl, {
           compatibilityMode,
           allowLocalhostHttp: !durableOAuthFlows,
         });
@@ -2235,16 +2282,16 @@ async function registerMCPServices(
         let result: StartTwoPhaseOAuthResult;
         try {
           result = await startTwoPhaseMCPOAuthFlow({
-            mcpUrl: data.mcp_url,
+            mcpUrl: effectiveMcpUrl,
             wwwAuthenticate,
             resourceMetadataUrl:
               discovery.kind === 'resource-metadata' ? discovery.metadataUrl : undefined,
             prefetchedAuthServerMetadata:
               discovery.kind === 'authorization-server' ? discovery.authServerMetadata : undefined,
-            mcpServerId: data.mcp_server_id,
+            mcpServerId: savedServerId,
             userId,
             oauthMode,
-            clientId: data.client_id || clientIdFromConfig,
+            clientId: savedServer ? clientIdFromConfig : data.client_id,
             clientSecret: clientSecretOverride,
             authorizationUrlOverride,
             tokenUrlOverride,
@@ -2400,6 +2447,7 @@ async function registerMCPServices(
   // OAuth disconnect
   app.use('/mcp-servers/oauth-disconnect', {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
+      await loadMcpServerForCaller(db, data.mcp_server_id, params);
       const tenantId = tenantIdFromParams(params);
       const currentUser =
         tenantId && params?.user?.user_id
@@ -2447,7 +2495,12 @@ async function registerMCPServices(
         const now = new Date();
         const authenticatedServerIds = new Set<MCPServerID>();
         const serverRepo = new MCPServerRepository(db);
+        const visibleServers = await serverRepo.findAll(
+          hasMinimumRole(params?.user?.role, ROLES.ADMIN) ? undefined : { usableByUserId: userId }
+        );
+        const visibleServerIds = new Set(visibleServers.map((server) => server.mcp_server_id));
         for (const token of tokens) {
+          if (!visibleServerIds.has(token.mcp_server_id)) continue;
           if (token.oauth_token_expires_at && token.oauth_token_expires_at <= now) continue;
           if (token.refresh_status === 'ambiguous') continue;
           if (isPostgresDatabaseHandle(db)) {
@@ -2600,16 +2653,23 @@ async function registerMCPServices(
         const { attachedServers, globalServers } = await runInOAuthTenantScope(
           db,
           tenantId,
-          async () => ({
-            attachedServers: await new SessionMCPServerRepository(db).listServers(
-              executorSessionId as SessionID,
-              true
-            ),
-            globalServers: await new MCPServerRepository(db).findAll({
-              scope: 'global',
-              enabled: true,
-            }),
-          })
+          async () => {
+            const executorSession = await sessionsRepository.findById(executorSessionId);
+            if (!executorSession) {
+              throw new Forbidden('oauth-auth-headers requires a resolvable executor session');
+            }
+            return {
+              attachedServers: await new SessionMCPServerRepository(db).listServers(
+                executorSessionId as SessionID,
+                true
+              ),
+              globalServers: await new MCPServerRepository(db).findAll({
+                scope: 'global',
+                enabled: true,
+                usableByUserId: executorSession.created_by,
+              }),
+            };
+          }
         );
         const allowedServerIds = new Set([
           ...globalServers.map((server) => server.mcp_server_id),
@@ -2790,9 +2850,8 @@ async function registerMCPServices(
 
       try {
         const server = await runInOAuthTenantScope(db, tenantId, () =>
-          new MCPServerRepository(db).findById(serverId)
+          loadMcpServerForCaller(db, serverId, params)
         );
-        if (!server) return { success: false, error: 'server_not_found' };
         if (server.auth?.type !== 'oauth') return { success: false, error: 'not_oauth_server' };
 
         const mode = server.auth.oauth_mode ?? 'per_user';
@@ -2974,10 +3033,7 @@ async function registerMCPServices(
             name: 'inline-test',
           };
           if (data.mcp_server_id) {
-            const server = await runInOAuthTenantScope(db, tenantId, () =>
-              mcpServerRepo.findById(data.mcp_server_id!)
-            );
-            if (!server) return { success: false, error: 'MCP server not found' };
+            const server = await loadMcpServerForCaller(db, data.mcp_server_id, params);
             if (params?.provider && params.user) {
               const userId = params.user.user_id;
               const userRole = params.user.role?.toLowerCase();
@@ -3005,10 +3061,7 @@ async function registerMCPServices(
             serverId = data.mcp_server_id;
           }
         } else if (data.mcp_server_id) {
-          const server = await runInOAuthTenantScope(db, tenantId, () =>
-            mcpServerRepo.findById(data.mcp_server_id!)
-          );
-          if (!server) return { success: false, error: 'MCP server not found' };
+          const server = await loadMcpServerForCaller(db, data.mcp_server_id, params);
           if (params?.provider && params.user) {
             const userId = params.user.user_id;
             const userRole = params.user.role?.toLowerCase();
@@ -3161,7 +3214,7 @@ async function registerMCPServices(
               tokenUrlOverride: serverConfig.auth?.oauth_token_url,
               scope: serverConfig.auth?.oauth_scope,
               compatibilityMode,
-              dcrMode: serverConfig.auth?.oauth_dcr_mode ?? 'disabled',
+              dcrMode: serverConfig.auth?.oauth_dcr_mode,
               tenantId,
               socketId: connection?.id,
             });

@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import type { MCPOAuthDCRMode } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
@@ -970,29 +971,12 @@ export async function performMCPOAuthFlow(
         actualClientId = registration.client_id;
         clientSecret = registration.client_secret;
       } else {
-        // No DCR support and no client_id provided - check for well-known MCP registration endpoint
-        // Some MCP servers use /register at the auth server URL
-        const mcpRegisterEndpoint = `${authServerUrl}/register`;
-        try {
-          const registration = await registerDynamicClient(
-            mcpRegisterEndpoint,
-            callback.url,
-            'Agor MCP Client',
-            scopeString,
-            true,
-            true
-          );
-          actualClientId = registration.client_id;
-          clientSecret = registration.client_secret;
-        } catch {
-          throw new Error(
-            'OAuth client_id is required but the authorization server does not support ' +
-              'Dynamic Client Registration.\n\n' +
-              "Register an OAuth app in the provider's developer portal and enter " +
-              'the Client ID (and Client Secret if required) in the MCP server configuration.\n\n' +
-              'The registration attempt was rejected.'
-          );
-        }
+        throw new Error(
+          'OAuth client_id is required but the authorization server does not advertise ' +
+            'a Dynamic Client Registration endpoint (RFC 7591).\n\n' +
+            "Register an OAuth app in the provider's developer portal and enter " +
+            'the Client ID (and Client Secret if required) in the MCP server configuration.'
+        );
       }
     }
 
@@ -1260,7 +1244,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   resourceUri: string;
   issuer: string;
   compatibilityMode: 'strict' | 'legacy';
-  dcrMode: 'disabled' | 'fallback';
+  dcrMode: MCPOAuthDCRMode;
   allowLocalhostHttp: boolean;
 }): Promise<OAuthFlowContext> {
   const {
@@ -1300,56 +1284,9 @@ async function startMCPOAuthFlowWithAS(opts: {
       ? resourceScopesSupported.join(' ')
       : undefined;
 
-  // Client ID resolution (DCR if available)
-  let actualClientId = clientId;
-  let resolvedClientSecret = opts.clientSecret;
-
-  if (!actualClientId && dcrMode === 'fallback') {
-    const registrationEndpoint =
-      authServerMetadata?.registration_endpoint || fallbackRegistrationEndpoint;
-    if (registrationEndpoint) {
-      console.log('[MCP OAuth] Using Dynamic Client Registration');
-      try {
-        const registration = await registerDynamicClient(
-          registrationEndpoint,
-          actualRedirectUri,
-          'Agor MCP Client',
-          scopeString,
-          opts.reuseDynamicClientRegistration !== false,
-          allowLocalhostHttp
-        );
-        actualClientId = registration.client_id;
-        resolvedClientSecret = registration.client_secret;
-      } catch {
-        throw new Error(
-          'Dynamic Client Registration failed.\n\n' +
-            "Register an OAuth app in the provider's developer portal and enter " +
-            'the Client ID (and Client Secret if required) in the MCP server configuration.'
-        );
-      }
-    } else if (hasFullOverrides) {
-      throw new Error(
-        'OAuth client_id is required when using manual OAuth URL overrides.\n\n' +
-          'Please provide a client_id in the MCP server configuration.'
-      );
-    } else {
-      throw new Error(
-        'OAuth client_id is required but the authorization server does not advertise ' +
-          'a Dynamic Client Registration endpoint (RFC 7591).\n\n' +
-          "Register an OAuth app in the provider's developer portal and enter " +
-          'the Client ID (and Client Secret if required) in the MCP server configuration.'
-      );
-    }
-  } else if (!actualClientId) {
-    throw new Error(
-      'OAuth client_id is required. Configure a pre-registered client, or explicitly enable Dynamic Client Registration fallback for this server.'
-    );
-  }
-
-  // CSRF state
-  const state = crypto.randomUUID();
-
-  // Resolve token + auth endpoints
+  // Validate the authorization contract before DCR creates durable state at
+  // the provider. A strict-profile rejection must not leave an unused client
+  // registration behind.
   const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
   if (!tokenEndpoint) {
     throw new Error(
@@ -1394,6 +1331,56 @@ async function startMCPOAuthFlowWithAS(opts: {
       throw new Error('Strict MCP OAuth token endpoint override does not match metadata');
     }
   }
+
+  // Client ID resolution (DCR if available)
+  let actualClientId = clientId;
+  let resolvedClientSecret = opts.clientSecret;
+
+  if (!actualClientId && dcrMode !== 'disabled') {
+    const registrationEndpoint =
+      authServerMetadata?.registration_endpoint ||
+      (dcrMode === 'fallback' ? fallbackRegistrationEndpoint : undefined);
+    if (registrationEndpoint) {
+      console.log('[MCP OAuth] Using Dynamic Client Registration');
+      try {
+        const registration = await registerDynamicClient(
+          registrationEndpoint,
+          actualRedirectUri,
+          'Agor MCP Client',
+          scopeString,
+          opts.reuseDynamicClientRegistration !== false,
+          allowLocalhostHttp
+        );
+        actualClientId = registration.client_id;
+        resolvedClientSecret = registration.client_secret;
+      } catch {
+        throw new Error(
+          'Dynamic Client Registration failed.\n\n' +
+            "Register an OAuth app in the provider's developer portal and enter " +
+            'the Client ID (and Client Secret if required) in the MCP server configuration.'
+        );
+      }
+    } else if (hasFullOverrides) {
+      throw new Error(
+        'OAuth client_id is required when using manual OAuth URL overrides.\n\n' +
+          'Please provide a client_id in the MCP server configuration.'
+      );
+    } else {
+      throw new Error(
+        'OAuth client_id is required but the authorization server does not advertise ' +
+          'a Dynamic Client Registration endpoint (RFC 7591).\n\n' +
+          "Register an OAuth app in the provider's developer portal and enter " +
+          'the Client ID (and Client Secret if required) in the MCP server configuration.'
+      );
+    }
+  } else if (!actualClientId) {
+    throw new Error(
+      'OAuth client_id is required because Dynamic Client Registration is disabled for this server.'
+    );
+  }
+
+  // CSRF state
+  const state = crypto.randomUUID();
 
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
@@ -1458,14 +1445,14 @@ export async function startMCPOAuthFlow(
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
     compatibilityMode?: 'strict' | 'legacy';
-    dcrMode?: 'disabled' | 'fallback';
+    dcrMode?: MCPOAuthDCRMode;
     /** Exact loopback HTTP exception for standalone development only. */
     allowLocalhostHttp?: boolean;
   }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
   const compatibilityMode = options?.compatibilityMode ?? 'strict';
-  const dcrMode = options?.dcrMode ?? 'disabled';
+  const dcrMode = options?.dcrMode ?? 'advertised';
   const allowLocalhostHttp = options?.allowLocalhostHttp === true;
   const resourceUri = options?.resourceUri;
   if (!resourceUri) throw new Error('MCP OAuth requires an exact protected resource URI');

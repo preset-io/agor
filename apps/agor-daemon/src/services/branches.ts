@@ -14,8 +14,6 @@ import {
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   getBranchesDir,
-  loadConfig,
-  loadConfigSync,
   PAGINATION,
   resolveBranchStorageConfig,
   resolveExecutionSecurityMode,
@@ -210,7 +208,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   private async getManagedEnvExecutionMode(): Promise<ManagedEnvExecutionMode> {
-    const config = await loadConfig();
+    const config = this.app.get('config');
     return config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
   }
 
@@ -353,7 +351,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     asUser?: string;
     env: Record<string, string>;
   }> {
-    const config = await loadConfig();
+    const config = this.app.get('config');
     const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
     return this.withTenantDatabase(params, async () => {
       let asUser: string | undefined;
@@ -671,7 +669,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     ensureBranchStorageModeAllowed(storageMode);
     if (
       storageMode === 'worktree' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
@@ -1298,7 +1296,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // mode so we don't try to sudo on hosts without passwordless sudoers
       // (#1140 root cause; #1143 fixed the branch-remove sister bug by
       // centralizing the gate inside the resolver itself).
-      const asUser = await resolveGitImpersonationForBranch(this.db, branch);
+      const asUser = await resolveGitImpersonationForBranch(
+        this.db,
+        branch,
+        this.app.get('config')
+      );
 
       // Generate session token for executor authentication. Hook chain
       // enforces auth before we get here, so non-null assertion is safe.
@@ -1556,7 +1558,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     if (
       (branch.storage_mode ?? 'worktree') === 'worktree' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         'Historical worktree branches cannot be restored in hosted multi-tenant mode.'
@@ -1609,7 +1611,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       },
       {
         logPrefix: `[BranchesService.unarchive.status ${branch.name}]`,
-        asUser: await resolveExecutorReadAsUser(this.db, params?.user?.user_id),
+        asUser: await resolveExecutorReadAsUser(
+          this.db,
+          params?.user?.user_id,
+          this.app.get('config')
+        ),
       }
     );
     if (!statusResult.success) {
@@ -1683,10 +1689,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               restoreMode: true,
               // Unix group isolation
               initUnixGroup,
-              ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
+              ...(initUnixGroup ? { daemonUser: this.app.get('config').daemon?.unix_user } : {}),
               fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
               useReference:
-                storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
+                storageMode === 'clone' &&
+                !!repo.local_path &&
+                shouldUseCloneReferencePath(this.app.get('config')),
             },
           },
           {
@@ -2547,7 +2555,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     // Resolve host IP + unix GID (matches executor's renderEnvironmentTemplates).
-    const config = await loadConfig();
+    const config = this.app.get('config');
     const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
     const unixGid = branch.unix_group ? getGidFromGroupName(branch.unix_group) : undefined;
 

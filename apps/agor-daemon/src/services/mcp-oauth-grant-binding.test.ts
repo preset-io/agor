@@ -43,7 +43,10 @@ const resolved = {
   clientSecret: 'registered-secret',
 } satisfies MCPOAuthResolvedGrantBinding;
 
-function tokenFor(fingerprint: string): UserMCPOAuthToken {
+function tokenFor(
+  fingerprint: string,
+  version: UserMCPOAuthToken['grant_binding_version'] = MCP_OAUTH_GRANT_BINDING_VERSION
+): UserMCPOAuthToken {
   return {
     user_id: null,
     mcp_server_id: server.mcp_server_id,
@@ -57,7 +60,7 @@ function tokenFor(fingerprint: string): UserMCPOAuthToken {
     oauth_token_endpoint: resolved.tokenEndpoint,
     oauth_redirect_uri: resolved.redirectUri,
     grant_generation: 7,
-    grant_binding_version: MCP_OAUTH_GRANT_BINDING_VERSION,
+    grant_binding_version: version,
     grant_binding_fingerprint: fingerprint,
     refresh_status: 'idle',
     refresh_generation: 0,
@@ -67,6 +70,38 @@ function tokenFor(fingerprint: string): UserMCPOAuthToken {
 }
 
 describe('MCP OAuth grant configuration binding', () => {
+  it('records advertised as the effective default while preserving version-1 fingerprints', () => {
+    const withoutPolicy: ServerBinding = {
+      ...server,
+      auth: { ...server.auth, oauth_dcr_mode: undefined },
+    };
+    const advertised: ServerBinding = {
+      ...server,
+      auth: { ...server.auth, oauth_dcr_mode: 'advertised' },
+    };
+    const disabled: ServerBinding = {
+      ...server,
+      auth: { ...server.auth, oauth_dcr_mode: 'disabled' },
+    };
+
+    const currentFingerprint = (candidate: ServerBinding) =>
+      fingerprintMCPOAuthGrantConfiguration(masterSecret, candidate, resolved);
+    expect(currentFingerprint(withoutPolicy)).toBe(currentFingerprint(advertised));
+    expect(currentFingerprint(withoutPolicy)).not.toBe(currentFingerprint(disabled));
+
+    const legacyFingerprint = (candidate: ServerBinding) =>
+      fingerprintMCPOAuthGrantConfiguration(masterSecret, candidate, resolved, 1);
+    expect(legacyFingerprint(withoutPolicy)).toBe(legacyFingerprint(disabled));
+    expect(legacyFingerprint(withoutPolicy)).not.toBe(legacyFingerprint(advertised));
+    expect(
+      isMCPOAuthGrantBoundToServer(
+        masterSecret,
+        withoutPolicy,
+        tokenFor(legacyFingerprint(withoutPolicy), 1)
+      )
+    ).toBe(true);
+  });
+
   it('binds every provider, client, callback, server, mode, and version input', () => {
     const original = fingerprintMCPOAuthGrantConfiguration(masterSecret, server, resolved);
     const variants: Array<[string, ServerBinding, MCPOAuthResolvedGrantBinding]> = [
@@ -120,7 +155,7 @@ describe('MCP OAuth grant configuration binding', () => {
         label
       ).not.toBe(original);
     }
-    expect(MCP_OAUTH_GRANT_BINDING_VERSION).toBe(1);
+    expect(MCP_OAUTH_GRANT_BINDING_VERSION).toBe(2);
   });
 
   it('revalidates a stored grant and rejects a configuration change', () => {
@@ -143,6 +178,17 @@ describe('MCP OAuth grant configuration binding', () => {
       hasMCPOAuthRelevantServerConfigurationChanged(server, {
         ...server,
         auth: { ...server.auth, oauth_mode: 'shared' },
+      })
+    ).toBe(true);
+
+    const withoutPolicy: ServerBinding = {
+      ...server,
+      auth: { ...server.auth, oauth_dcr_mode: undefined },
+    };
+    expect(
+      hasMCPOAuthRelevantServerConfigurationChanged(withoutPolicy, {
+        ...withoutPolicy,
+        auth: { ...withoutPolicy.auth, oauth_dcr_mode: 'disabled' },
       })
     ).toBe(true);
     expect(

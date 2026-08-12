@@ -56,21 +56,30 @@ afterEach(() => {
 describe('resolveGitImpersonationForUser', () => {
   it('returns undefined in open-access default (no RBAC, simple mode) — #1140', async () => {
     mockIsUnixGroupRefreshNeeded.mockReturnValue(false);
-    const result = await resolveGitImpersonationForUser(fakeDb, fakeUserId);
+    const result = await resolveGitImpersonationForUser(fakeDb, fakeUserId, {
+      execution: { unix_user_mode: mockIsUnixGroupRefreshNeeded() ? 'strict' : 'simple' },
+      daemon: { unix_user: mockGetDaemonUser() },
+    });
     expect(result).toBeUndefined();
   });
 
   it('returns daemon user when group refresh is needed (insulated/strict)', async () => {
     mockIsUnixGroupRefreshNeeded.mockReturnValue(true);
-    const result = await resolveGitImpersonationForUser(fakeDb, fakeUserId);
+    const result = await resolveGitImpersonationForUser(fakeDb, fakeUserId, {
+      execution: { unix_user_mode: mockIsUnixGroupRefreshNeeded() ? 'strict' : 'simple' },
+      daemon: { unix_user: mockGetDaemonUser() },
+    });
     expect(result).toBe('agorpg');
   });
 
-  it('returns undefined when group refresh is needed but daemon user not configured', async () => {
+  it('falls back to the process user when group refresh is needed but daemon user is omitted', async () => {
     mockIsUnixGroupRefreshNeeded.mockReturnValue(true);
     mockGetDaemonUser.mockReturnValue(undefined);
-    const result = await resolveGitImpersonationForUser(fakeDb, fakeUserId);
-    expect(result).toBeUndefined();
+    const result = await resolveGitImpersonationForUser(fakeDb, fakeUserId, {
+      execution: { unix_user_mode: mockIsUnixGroupRefreshNeeded() ? 'strict' : 'simple' },
+      daemon: { unix_user: mockGetDaemonUser() },
+    });
+    expect(result).toBeTruthy();
   });
 
   // The resolver is the SOLE gate — callers (including service-account paths
@@ -79,11 +88,17 @@ describe('resolveGitImpersonationForUser', () => {
   // `userId ?` check (as repos.ts did in #1143) doesn't regress.
   it('accepts an undefined userId and still applies the group-refresh gate', async () => {
     mockIsUnixGroupRefreshNeeded.mockReturnValue(false);
-    const noUser = await resolveGitImpersonationForUser(fakeDb, undefined);
+    const noUser = await resolveGitImpersonationForUser(fakeDb, undefined, {
+      execution: { unix_user_mode: mockIsUnixGroupRefreshNeeded() ? 'strict' : 'simple' },
+      daemon: { unix_user: mockGetDaemonUser() },
+    });
     expect(noUser).toBeUndefined();
 
     mockIsUnixGroupRefreshNeeded.mockReturnValue(true);
-    const refreshNeeded = await resolveGitImpersonationForUser(fakeDb, undefined);
+    const refreshNeeded = await resolveGitImpersonationForUser(fakeDb, undefined, {
+      execution: { unix_user_mode: mockIsUnixGroupRefreshNeeded() ? 'strict' : 'simple' },
+      daemon: { unix_user: mockGetDaemonUser() },
+    });
     expect(refreshNeeded).toBe('agorpg');
   });
 });
@@ -96,13 +111,19 @@ describe('resolveGitImpersonationForBranch', () => {
   // so the caller no longer needs to duplicate the check.
   it('returns undefined in open-access default — #1140 (clone) + #1143 (branch.remove)', async () => {
     mockIsUnixGroupRefreshNeeded.mockReturnValue(false);
-    const result = await resolveGitImpersonationForBranch(fakeDb, fakeBranch);
+    const result = await resolveGitImpersonationForBranch(fakeDb, fakeBranch, {
+      execution: { unix_user_mode: mockIsUnixGroupRefreshNeeded() ? 'strict' : 'simple' },
+      daemon: { unix_user: mockGetDaemonUser() },
+    });
     expect(result).toBeUndefined();
   });
 
   it('delegates to resolveGitImpersonationForUser using branch.created_by', async () => {
     mockIsUnixGroupRefreshNeeded.mockReturnValue(true);
-    const result = await resolveGitImpersonationForBranch(fakeDb, fakeBranch);
+    const result = await resolveGitImpersonationForBranch(fakeDb, fakeBranch, {
+      execution: { unix_user_mode: mockIsUnixGroupRefreshNeeded() ? 'strict' : 'simple' },
+      daemon: { unix_user: mockGetDaemonUser() },
+    });
     expect(result).toBe('agorpg');
   });
 });

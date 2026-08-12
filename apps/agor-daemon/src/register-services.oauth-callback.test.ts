@@ -74,6 +74,19 @@ describe('register-services OAuth callback URL regression', () => {
     expect(codeOnly).toMatch(/OAuth flow belongs to a different tenant/);
   });
 
+  it('keeps saved-server OAuth authoritative and DCR credentials request-local', () => {
+    const oauthStartBody = codeOnly.slice(
+      codeOnly.indexOf("app.use('/mcp-servers/oauth-start'"),
+      codeOnly.indexOf("app.service('mcp-servers/oauth-start').hooks")
+    );
+    expect(oauthStartBody).toMatch(
+      /runInOAuthTenantScope\s*\([\s\S]*loadMcpServerForCaller\s*\(\s*db,\s*savedServerId/
+    );
+    expect(oauthStartBody).toMatch(/effectiveMcpUrl\s*=\s*savedServer\?\.url\s*\?\?/);
+    expect(oauthStartBody).toMatch(/clientId:\s*savedServer\s*\?\s*clientIdFromConfig/);
+    expect(codeOnly).toMatch(/reuseDynamicClientRegistration:\s*false/);
+  });
+
   it('uses durable hashed state claims on PostgreSQL and never broadcasts raw flow state', () => {
     expect(codeOnly).toMatch(/durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/);
     expect(codeOnly).toMatch(/cacheToken:\s*false/);

@@ -46,6 +46,7 @@ function createRenderEnvHarness(opts: {
     },
   }));
   const app = {
+    get: () => ({}),
     sessionTokenService: {
       generateToken: vi.fn(async () => 'executor-token'),
     },
@@ -92,6 +93,7 @@ function createPatchHarness(opts: {
     find: vi.fn(async () => []),
   };
   const app = {
+    get: () => ({}),
     sessionTokenService: {
       generateToken: vi.fn(async () => 'executor-token'),
     },
@@ -169,6 +171,7 @@ function createServiceHarness() {
   const branchesService = { find: vi.fn(async () => []), emit: vi.fn() };
 
   const app = {
+    get: () => ({}),
     sessionTokenService: {
       generateToken: vi.fn(async () => 'executor-token'),
     },
@@ -211,6 +214,7 @@ function createFindHarness(opts: {
   branchIdsInZone: BranchID[];
 }) {
   const app = {
+    get: () => ({}),
     service(path: string) {
       throw new Error(`Unknown service: ${path}`);
     },
@@ -1013,6 +1017,7 @@ describe('BranchesService one-shot teammate creation wiring', () => {
   function createTeammateWiringHarness() {
     const boardsEmit = vi.fn();
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'boards') return { emit: boardsEmit };
         throw new Error(`Unknown service: ${path}`);
@@ -1736,6 +1741,7 @@ describe('BranchesService teammate home Knowledge namespace guard', () => {
     });
 
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'branches') return { find: vi.fn(async () => []) };
         throw new Error(`Unknown service: ${path}`);
@@ -1888,7 +1894,7 @@ describe('BranchesService.create permission defaults', () => {
         default_dangerously_allow_session_sharing: true,
       });
 
-      const app = { service: vi.fn() } as unknown as Application;
+      const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
       const service = new BranchesService(db, app);
       const branch = (await service.create({
         repo_id: repo.repo_id,
@@ -1932,7 +1938,7 @@ describe('BranchesService.create permission defaults', () => {
         default_others_fs_access: 'write',
       });
 
-      const app = { service: vi.fn() } as unknown as Application;
+      const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
       const service = new BranchesService(db, app);
       const branch = (await service.create({
         repo_id: repo.repo_id,
@@ -1979,6 +1985,7 @@ describe('BranchesService environment health recovery', () => {
       },
     };
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
         throw new Error(`Unknown service: ${path}`);

@@ -23,6 +23,7 @@ const schema = dialect === 'postgresql' ? postgresSchema : sqliteSchema;
 export const sessions = schema.sessions;
 export const tasks = schema.tasks;
 export const executorSessionTokenAuthorities = schema.executorSessionTokenAuthorities;
+export const githubInstallStates = schema.githubInstallStates;
 export const messages = schema.messages;
 export const boards = schema.boards;
 export const repos = schema.repos;

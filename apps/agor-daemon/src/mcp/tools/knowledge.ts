@@ -731,7 +731,7 @@ async function runBranchKnowledgeCommand(
     {
       logPrefix: `[Knowledge ${command}]`,
       asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-        resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+        resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
       ),
     }
   );

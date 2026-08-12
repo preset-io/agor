@@ -5,19 +5,22 @@
  * Used by agentic-tool runtime adapters to ensure consistent behavior.
  *
  * Scoping Rules:
- * - ALL global-scoped MCPs are included in every session (available to all users)
+ * - ALL shared global-scoped MCPs are included in every session
  * - PLUS any session-scoped MCPs that are explicitly assigned to this session
+ * - MINUS any server private to a user other than the session's creator
  *
  * Template Resolution:
  * MCP server env vars can contain Handlebars templates like {{ user.env.GITHUB_TOKEN }}.
  * Templates are resolved from an explicit caller environment when supplied, or
  * process.env by default for provider-side callers running inside the executor.
  *
- * Note: owner_user_id on MCP servers is NOT used for filtering. Global MCPs are
- * truly global and available to all sessions regardless of who created them.
+ * The repository layer filters global rows by the session creator when that
+ * identity is supplied, while session assignments are filtered by the session
+ * repository. This keeps private credentials out of executor configuration.
  */
 
 import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../types';
+import { isMCPServerUsableBy } from './ownership';
 import {
   buildMCPTemplateContextFromEnv,
   resolveMcpServerTemplates,
@@ -109,6 +112,12 @@ export interface MCPResolutionDeps {
    * indistinguishable from it being broken.
    */
   onServerWithheld?: (server: MCPServer, reason: string) => void;
+  /**
+   * Creator of the session being resolved. This is separate from forUserId:
+   * a collaborator may prompt a session, but cannot bring their private MCP
+   * definitions into the session owner's executor.
+   */
+  sessionOwnerId?: string;
 }
 
 /**
@@ -162,6 +171,15 @@ export async function getMcpServerAvailabilityForSession(
     const seenServerIds = new Set<string>();
 
     const addServer = (server: MCPServer, source: MCPServerWithSource['source']) => {
+      if (server.owner_user_id && !deps.sessionOwnerId) {
+        console.warn(
+          `   ⚠️  Skipping private MCP server because session owner identity is missing: ${server.name}`
+        );
+      }
+      if (!isMCPServerUsableBy(server, deps.sessionOwnerId)) {
+        mcpDebug(`   🔒 Skipping private MCP server not owned by session creator: ${server.name}`);
+        return;
+      }
       if (!seenServerIds.has(server.mcp_server_id)) {
         seenServerIds.add(server.mcp_server_id);
         servers.push({ server, source });
@@ -192,6 +210,7 @@ export async function getMcpServerAvailabilityForSession(
         {
           scope: 'global',
           enabled: true,
+          ...(deps.sessionOwnerId ? { usableByUserId: deps.sessionOwnerId } : {}),
         },
         deps.forUserId
       );

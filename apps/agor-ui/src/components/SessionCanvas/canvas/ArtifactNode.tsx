@@ -3,6 +3,7 @@ import type {
   ArtifactID,
   ArtifactPayload,
   BoardObject,
+  SandpackTemplate,
   SessionID,
 } from '@agor-live/client';
 import { artifactFullscreenPath, sessionPath, shortId } from '@agor-live/client';
@@ -22,6 +23,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import {
+  type SandpackPredefinedTemplate,
   SandpackPreview,
   SandpackProvider,
   type SandpackSetup,
@@ -179,7 +181,9 @@ export const ArtifactNode = ({
   const lastHashRef = useRef<string | null>(null);
   const sandpackConfig = payload?.sandpack_config;
   const sandpackOptions = sandpackConfig?.options;
-  const sandpackTemplate = (sandpackConfig?.template ?? payload?.template ?? 'react') as 'react';
+  const sandpackTemplate = (sandpackConfig?.template ??
+    payload?.template ??
+    'react') as SandpackTemplate;
   const sandpackInputs = useStableSandpackProviderInputs({
     template: sandpackTemplate,
     files: payload?.files ?? EMPTY_SANDPACK_FILES,
@@ -614,7 +618,9 @@ export const ArtifactNode = ({
           )}
           <SandpackProvider
             key={payload.content_hash}
-            template={sandpackInputs.template as 'react'}
+            // The shared artifact union includes legacy `vue3`; Sandpack's
+            // provider type is narrower than the persisted compatibility set.
+            template={sandpackInputs.template as SandpackPredefinedTemplate}
             files={sandpackInputs.files}
             customSetup={sandpackInputs.customSetup as SandpackSetup | undefined}
             theme={sandpackConfig?.theme as never}

@@ -30,7 +30,7 @@ describe('FileService executor failures', () => {
     const service = new FileService(
       { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
       null as never,
-      { settings: { authentication: { secret: 'test' } } } as never
+      { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
     );
 
     await expect(
@@ -79,7 +79,7 @@ describe('FileService executor failures', () => {
       const service = new FileService(
         { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
         null as never,
-        { settings: { authentication: { secret: 'test' } } } as never
+        { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
       );
       const params = {
         query: { branch_id: 'branch-1' },

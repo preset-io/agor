@@ -3,6 +3,12 @@
  */
 
 export {
+  filterMCPServersForSession,
+  isMCPServerUsableBy,
+  isMCPServerUsableInSession,
+  MCPServerNotUsableError,
+} from './ownership';
+export {
   AGOR_MCP_SERVER_NAME,
   getMcpServerAvailabilityForSession,
   getMcpServersForSession,

@@ -160,6 +160,11 @@ export class CopilotPromptService {
     const copilotMcpServers: Record<string, unknown> = {};
 
     // Fetch MCP servers for this session
+    const session = await this.sessionsRepo.findById(sessionId);
+    if (!session) {
+      console.warn(`⚠️  [Copilot MCP] Session ${sessionId} not found; skipping MCP servers`);
+      return copilotMcpServers;
+    }
     const reporter = collectWithheldMcpServers();
     const serversWithSource = await getMcpServersForSession(
       sessionId,
@@ -167,6 +172,7 @@ export class CopilotPromptService {
         sessionMCPRepo: this.sessionMCPServerRepo,
         mcpServerRepo: this.mcpServerRepo,
         mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+        sessionOwnerId: session.created_by,
         onServerWithheld: reporter.onServerWithheld,
       },
       // The per-server `tools` field below is an include-list, which cannot

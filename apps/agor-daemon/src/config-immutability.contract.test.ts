@@ -16,6 +16,27 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe('immutable config.yaml boundary', () => {
+  it('daemon runtime sources cannot reload persisted config after bootstrap', () => {
+    const allowed = new Set([resolve(sourceRoot, 'index.ts')]);
+    const offenders = sourceFiles(sourceRoot).filter(
+      (file) =>
+        !allowed.has(resolve(file)) &&
+        /\b(?:loadConfig|loadConfigSync|loadConfigFromFile|isBranchRbacEnabled|isUnixImpersonationEnabled|isUnixGroupRefreshNeeded|getDaemonUser)\b/.test(
+          readFileSync(file, 'utf8')
+        )
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('daemon production sources cannot import test-only config reset helpers', () => {
+    const offenders = sourceFiles(sourceRoot).filter(
+      (file) =>
+        !file.endsWith('build-resolved-config-slice.ts') &&
+        /\bresetResolvedConfigSliceForTests\b/.test(readFileSync(file, 'utf8'))
+    );
+    expect(offenders).toEqual([]);
+  });
+
   it('daemon production sources cannot import YAML persistence helpers', () => {
     const offenders = sourceFiles(sourceRoot).filter((file) =>
       /\b(createInitialConfig|rewriteConfigForTests|saveConfigForTests)\b/.test(

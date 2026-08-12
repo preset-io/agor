@@ -357,36 +357,42 @@ describe('request-scoped RBAC loading', () => {
     });
   });
 
-  it('resolves id-addressed message context from the stored record, not spoofed query', async () => {
-    const existingMessage = {
-      message_id: 'message-cache-1',
-      session_id: session.session_id,
-    };
-    const ctx = {
-      path: 'messages',
-      method: 'get',
-      id: existingMessage.message_id,
-      params: {
-        provider: 'rest',
-        query: { session_id: 'spoofed-session' },
-        user: { user_id: USER_ID, role: ROLES.MEMBER },
-      },
-      service: {
-        get: vi.fn(async () => existingMessage),
-      },
-    } as unknown as HookContext;
+  // Every id-addressed verb must resolve here. A verb missing from the branch
+  // falls through to the `session_id not found` throw, which surfaces as a 500
+  // and denies the request for the wrong reason.
+  it.each(['get', 'update', 'patch', 'remove'])(
+    'resolves id-addressed message %s context from the stored record, not spoofed query',
+    async (method) => {
+      const existingMessage = {
+        message_id: 'message-cache-1',
+        session_id: session.session_id,
+      };
+      const ctx = {
+        path: 'messages',
+        method,
+        id: existingMessage.message_id,
+        params: {
+          provider: 'rest',
+          query: { session_id: 'spoofed-session' },
+          user: { user_id: USER_ID, role: ROLES.MEMBER },
+        },
+        service: {
+          get: vi.fn(async () => existingMessage),
+        },
+      } as unknown as HookContext;
 
-    await resolveSessionContext()(ctx);
+      await resolveSessionContext()(ctx);
 
-    expect(ctx.params.sessionId).toBe(session.session_id);
-    expect(
-      (ctx.params as { _agorPrefetchedRecord?: { record: unknown } })._agorPrefetchedRecord
-    ).toMatchObject({
-      id: existingMessage.message_id,
-      idField: 'message_id',
-      record: existingMessage,
-    });
-  });
+      expect(ctx.params.sessionId).toBe(session.session_id);
+      expect(
+        (ctx.params as { _agorPrefetchedRecord?: { record: unknown } })._agorPrefetchedRecord
+      ).toMatchObject({
+        id: existingMessage.message_id,
+        idField: 'message_id',
+        record: existingMessage,
+      });
+    }
+  );
 });
 
 describe('paginateClientSide', () => {

@@ -740,6 +740,7 @@ export class GeminiPromptService {
             sessionMCPRepo: this.sessionMCPRepo,
             mcpServerRepo: this.mcpServerRepo,
             mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+            sessionOwnerId: session.created_by,
           },
           // Gemini can exclude individual tools but has no prompt channel here.
           { toolFiltering: 'exclude' }

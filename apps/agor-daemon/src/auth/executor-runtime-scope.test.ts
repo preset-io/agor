@@ -2,6 +2,7 @@ import type { HookContext } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   executorRuntimeScopeGuard,
+  isSessionScopedExecutorRequest,
   requireExecutorRuntimeToken,
   scopeExecutorRuntimeAuth,
 } from './executor-runtime-scope';
@@ -24,6 +25,13 @@ function ctx(overrides: Partial<HookContext>): HookContext {
 }
 
 describe('executorRuntimeScopeGuard', () => {
+  it('recognizes only the session named by executor scope', () => {
+    const context = ctx({});
+
+    expect(isSessionScopedExecutorRequest(context, 'session-1')).toBe(true);
+    expect(isSessionScopedExecutorRequest(context, 'session-2')).toBe(false);
+  });
+
   it.each([
     'connectExecutor',
     'reportTerminationComplete',
@@ -235,8 +243,65 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
   });
 
+  it('allows get only for the repo resolved from the token-scoped branch', async () => {
+    const context = ctx({
+      path: 'repos',
+      method: 'get',
+      id: 'repo-1',
+      app: {
+        service: (path: string) => {
+          expect(path).toBe('branches');
+          return {
+            get: async (branchId: string, params: HookContext['params']) => {
+              expect(branchId).toBe('branch-1');
+              expect(params.provider).toBeUndefined();
+              return { branch_id: branchId, repo_id: 'repo-1' };
+            },
+          };
+        },
+      } as HookContext['app'],
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it('preserves tenant context and rejects a repo outside the token branch', async () => {
+    const context = ctx({
+      path: 'repos',
+      method: 'get',
+      id: 'tenant-b-repo',
+      params: {
+        authentication: { payload },
+        query: {},
+        provider: 'socketio',
+        tenant: { tenant_id: 'tenant-a' },
+      },
+      app: {
+        service: () => ({
+          get: async (_branchId: string, params: HookContext['params']) => {
+            expect(params.tenant?.tenant_id).toBe('tenant-a');
+            return { branch_id: 'branch-1', repo_id: 'tenant-a-repo' };
+          },
+        }),
+      } as HookContext['app'],
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/repo scope/);
+  });
+
+  it.each(['find', 'create', 'patch', 'remove'])(
+    'rejects executor tokens for repos.%s',
+    async (method) => {
+      const context = ctx({ path: 'repos', method, id: method === 'find' ? undefined : 'repo-1' });
+
+      await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+        /not valid for this endpoint/
+      );
+    }
+  );
+
   it('rejects executor tokens on unrecognized endpoints', async () => {
-    const context = ctx({ path: 'repos', method: 'find' });
+    const context = ctx({ path: 'unknown', method: 'find' });
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
       /not valid for this endpoint/

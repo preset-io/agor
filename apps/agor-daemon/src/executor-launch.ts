@@ -269,6 +269,7 @@ export function createExecuteHandler(
         getMcpServerAvailabilityForSession(sessionId as SessionID, {
           sessionMCPRepo: new SessionMCPServerRepository(tenantDb),
           mcpServerRepo: new MCPServerRepository(tenantDb),
+          sessionOwnerId: session.created_by,
           templateEnv: executorEnv,
           mcpOAuthAuthHeadersRepo: {
             async getAuthHeaders(mcpServerIds) {
@@ -468,6 +469,9 @@ export function createExecuteHandler(
         }
 
         try {
+          // Launcher callbacks can outlive the tenant transaction that spawned
+          // them. Leave any inherited DB scope before revoking the task-scoped
+          // token outside that stale request transaction.
           await runWithoutTenantDatabaseScope(() =>
             appWithExecutor.sessionTokenService?.revokeToken(sessionToken)
           );

@@ -54,7 +54,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
-import type { PermissionMode, SessionID, TaskID } from '../../types.js';
+import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
@@ -648,8 +648,12 @@ export class CodexPromptService {
   private async buildMcpServersConfig(
     sessionId: SessionID,
     mcpToken: string | undefined,
-    requireMcpServers = false
+    context: {
+      sessionOwnerId: UserID;
+      requireMcpServers?: boolean;
+    }
   ): Promise<{ servers: CodexConfigObject; total: number }> {
+    const { sessionOwnerId, requireMcpServers = false } = context;
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
 
     const serversWithSource = await getMcpServersForSession(
@@ -658,6 +662,7 @@ export class CodexPromptService {
         sessionMCPRepo: this.sessionMCPServerRepo,
         mcpServerRepo: this.mcpServerRepo,
         mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+        sessionOwnerId,
       },
       // Codex can drop individual tools but has no way to prompt.
       { toolFiltering: 'exclude' }
@@ -1071,7 +1076,10 @@ export class CodexPromptService {
     const { servers: mcpServersConfig, total: mcpServerCount } = await this.buildMcpServersConfig(
       sessionId,
       mcpToken,
-      requireMcpServers
+      {
+        sessionOwnerId: session.created_by as UserID,
+        requireMcpServers,
+      }
     );
 
     const codexConfigPayload: CodexConfigObject = {

@@ -60,7 +60,8 @@ export type ResolvedDeploymentConfig =
       capabilities: {
         taskExecution: true;
         executorTokenAuthority: true;
-        interactivePermissions: false;
+        /** Live-executor delivery with retryable UI; not durable decision replay. */
+        agorManagedInteractivePermissions: true;
         scheduler: true;
         sessionQueue: true;
         taskRuntimeReconciliation: true;
@@ -69,6 +70,7 @@ export type ResolvedDeploymentConfig =
         completionCallbackDurableAdmission: true;
         completionCallbackPreAdmissionRecovery: false;
         widgetResolutionDurableClaim: true;
+        githubInstall: true;
         codexCredentialFiles: boolean;
         codexDeviceAuth: false;
         processAffineAuth: false;
@@ -452,7 +454,7 @@ export function resolveDeploymentConfig(
     capabilities: {
       taskExecution: true,
       executorTokenAuthority: true,
-      interactivePermissions: false,
+      agorManagedInteractivePermissions: true,
       scheduler: true,
       sessionQueue: true,
       taskRuntimeReconciliation: true,
@@ -461,6 +463,7 @@ export function resolveDeploymentConfig(
       completionCallbackDurableAdmission: true,
       completionCallbackPreAdmissionRecovery: false,
       widgetResolutionDurableClaim: true,
+      githubInstall: true,
       codexCredentialFiles:
         executorStorage.user_home !== 'replica-local' && tenantSafeCredentialHome,
       codexDeviceAuth: false,

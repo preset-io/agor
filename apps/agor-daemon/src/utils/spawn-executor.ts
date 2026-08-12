@@ -28,6 +28,10 @@ import { fileURLToPath } from 'node:url';
 import type { AgorExecutionSettings } from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
 import {
+  EXECUTOR_RESULT_PREFIX,
+  INTERACTIVE_EXECUTOR_EVENT_PREFIX,
+} from '@agor/core/executor-protocol';
+import {
   attachEnvFileCleanup,
   buildSpawnArgs,
   escapeShellArg,
@@ -557,8 +561,6 @@ function spawnExecutorWithTemplate(
   sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
 }
 
-const EXECUTOR_RESULT_PREFIX = 'AGOR_EXECUTOR_RESULT ';
-
 function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | null {
   const lines = stdout
     .split(/\r?\n/)
@@ -586,6 +588,49 @@ function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | 
   return null;
 }
 
+/**
+ * Settle once the executor's result is complete, not merely once it has exited.
+ *
+ * `exit` fires as soon as the process is reaped, while bytes it wrote can still
+ * be sitting unread in the pipe — parsing there loses up to a full pipe buffer
+ * of output, which is the daemon-side half of #2222. `close` fires only after
+ * every stdio stream has ended, so it is the final missing-result fence.
+ *
+ * Exiting with an already-parseable result is the common case and settles
+ * immediately, so a descendant that inherited stdio and outlives the executor
+ * cannot add latency. Only an incomplete result waits for `close`, backstopped
+ * by the caller's command timeout — better a late accurate answer than a prompt
+ * EXECUTOR_RESULT_MISSING for output that was still in flight.
+ */
+function settleOnExecutorResultComplete(
+  child: ChildProcess,
+  readStdout: () => string,
+  settle: (result: ExecutorCommandResult | null, code: number | null) => void
+): void {
+  let done = false;
+  let parsed: ExecutorCommandResult | null = null;
+
+  const finish = (code: number | null) => {
+    if (done) return;
+    done = true;
+    settle(parsed, code);
+  };
+
+  child.on('exit', (code) => {
+    // Already settled (spawn error, or a close that preceded exit) — skip the
+    // parse, which walks the whole accumulated stdout.
+    if (done) return;
+    parsed = parseExecutorResultFromStdout(readStdout());
+    if (parsed) finish(code);
+  });
+
+  child.on('close', (code) => {
+    if (done) return;
+    parsed ??= parseExecutorResultFromStdout(readStdout());
+    finish(code);
+  });
+}
+
 function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Buffer): void {
   const text = chunk.toString();
   for (const line of text.split(/\r?\n/)) {
@@ -600,8 +645,6 @@ function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Bu
     }
   }
 }
-
-const INTERACTIVE_EXECUTOR_EVENT_PREFIX = 'AGOR_EXECUTOR_INTERACTIVE_EVENT ';
 
 function resolveLocalExecutorLocation(options: Pick<SpawnExecutorOptions, 'cwd'> = {}) {
   const executorPath = findExecutorPath();
@@ -1151,12 +1194,11 @@ function runExecutorCommandLocal(
       });
     });
 
-    child.on('exit', (code) => {
+    const finish = (result: ExecutorCommandResult | null, code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
 
-      const result = parseExecutorResultFromStdout(stdout);
       if (result) {
         resolve(result);
         return;
@@ -1174,7 +1216,9 @@ function runExecutorCommandLocal(
           },
         },
       });
-    });
+    };
+
+    settleOnExecutorResultComplete(child, () => stdout, finish);
 
     child.stdin?.write(JSON.stringify(payload));
     child.stdin?.end();
@@ -1247,12 +1291,11 @@ function runExecutorCommandWithTemplate(
       });
     });
 
-    child.on('exit', (code) => {
+    const finish = (result: ExecutorCommandResult | null, code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
 
-      const result = parseExecutorResultFromStdout(stdout);
       if (result) {
         resolve(result);
         return;
@@ -1270,7 +1313,9 @@ function runExecutorCommandWithTemplate(
           },
         },
       });
-    });
+    };
+
+    settleOnExecutorResultComplete(child, () => stdout, finish);
 
     child.stdin?.write(JSON.stringify(payload));
     child.stdin?.end();

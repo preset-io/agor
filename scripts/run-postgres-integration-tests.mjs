@@ -11,6 +11,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const workspaces = ['packages/core', 'apps/agor-daemon'];
 const defaultConcurrency = 3;
 const maxConcurrency = 8;
+// Each isolated suite initializes the full schema. On shared CI runners, three
+// concurrent migration passes can legitimately exceed Vitest's 10s hook
+// default even though the database and migrations are healthy.
+const hookTimeoutMs = 30_000;
 const childTerminationGraceMs = 5_000;
 const activeChildren = new Set();
 const activeProcessTrees = new Set();
@@ -137,6 +141,7 @@ function runVitest({ workspaceRoot, relativeTest, reportFile, appUrl, adminUrl }
         vitestEntrypoint,
         'run',
         '--no-file-parallelism',
+        `--hookTimeout=${hookTimeoutMs}`,
         '--reporter=default',
         '--reporter=json',
         `--outputFile.json=${reportFile}`,

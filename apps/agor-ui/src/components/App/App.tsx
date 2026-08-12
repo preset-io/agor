@@ -1140,13 +1140,12 @@ export const App: React.FC<AppProps> = ({
           reason: allow ? 'Approved by user' : 'Denied by user',
           remember: scope !== PermissionScope.ONCE, // Only remember if not 'once'
           scope,
-          decidedBy: user?.user_id || 'unknown',
         });
       } catch (error) {
         console.error('❌ Failed to send permission decision:', error);
       }
     },
-    [client, user?.user_id]
+    [client]
   );
 
   // Narrow per-id subscriptions: only patches to the SELECTED session (and

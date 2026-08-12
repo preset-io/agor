@@ -409,7 +409,8 @@ async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
 
 const CANONICAL_TENANT_POLICY_EXPRESSION =
   "tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default')";
-
+const STRICT_TENANT_POLICY_EXPRESSION =
+  "tenant_id=nullif(current_setting('agor.tenant_id',true),'')";
 // The pending OAuth table also exposes two narrow transaction-local system
 // capabilities for an unauthenticated provider callback and bounded cleanup.
 // Its ordinary tenant policy must be disabled while either capability is
@@ -460,7 +461,9 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
   const expectedTenantPolicyExpression =
     relation.tableName === 'mcp_oauth_pending_flows'
       ? MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION
-      : CANONICAL_TENANT_POLICY_EXPRESSION;
+      : relation.tableName === 'github_install_states'
+        ? STRICT_TENANT_POLICY_EXPRESSION
+        : CANONICAL_TENANT_POLICY_EXPRESSION;
 
   const restrictive = relation.policies.filter((policy) => !policy.permissive);
   if (restrictive.length > 0) {
@@ -496,9 +499,11 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
       `Refusing tenant deletion: ${qualifiedName}.${expectedName} must apply only to PUBLIC`
     );
   }
+  const usingExpression = normalizePolicyExpression(isolation.usingExpression);
+  const checkExpression = normalizePolicyExpression(isolation.checkExpression);
   if (
-    normalizePolicyExpression(isolation.usingExpression) !== expectedTenantPolicyExpression ||
-    normalizePolicyExpression(isolation.checkExpression) !== expectedTenantPolicyExpression
+    usingExpression !== expectedTenantPolicyExpression ||
+    checkExpression !== expectedTenantPolicyExpression
   ) {
     throw new TenantDeletionCatalogError(
       `Refusing tenant deletion: ${qualifiedName}.${expectedName} must use the canonical tenant_id equality and approved table-specific capability guard for both USING and WITH CHECK`

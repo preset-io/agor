@@ -66,7 +66,7 @@ const catalog = {
 };
 
 function service() {
-  return createOpenCodeModelsService(db);
+  return createOpenCodeModelsService(db, loadConfigSync());
 }
 
 beforeEach(() => {

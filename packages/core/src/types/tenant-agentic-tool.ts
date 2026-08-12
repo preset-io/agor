@@ -72,6 +72,9 @@ export interface TenantAgenticToolFieldStatus {
 
 export interface TenantAgenticToolSettings {
   tool: TenantAgenticToolName;
+  /** Whether the deployment operator selected and installed this tool package. */
+  deployment_available: boolean;
+  /** Effective workspace availability: deployment_available and not tenant-disabled. */
   enabled: boolean;
   resolution_policy: ProviderResolutionPolicy;
   inline_configuration_allowed: boolean;
