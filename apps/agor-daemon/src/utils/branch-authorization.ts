@@ -29,7 +29,7 @@ import type {
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
-import { hasExecutorRuntimeScope } from '../auth/executor-runtime-scope.js';
+import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -1222,8 +1222,9 @@ export type SessionCreatorLoader = (
  * executor-startup guard, so both refuse on the same terms with the same
  * message.
  *
- * A session with no stamp is not covered: `simple`/`insulated` never stamp
- * one, and there is no identity to have drifted.
+ * A session with no stamp is not covered: there is no identity to have drifted,
+ * and `resolveUnixUserForImpersonation` already refuses a missing username in
+ * the modes that need one.
  */
 export async function assertSessionUnixIdentityUnchanged(
   session: { created_by: string; unix_username?: string | null },
@@ -1261,12 +1262,15 @@ export async function assertSessionUnixIdentityUnchanged(
  * - SDK session data would be inaccessible (stored in old home directory)
  * - Execution would happen as wrong Unix user
  *
- * Executor-scoped requests are exempt. An executor authenticates with a
- * session token minted for the prompting user, so it is not a service account
- * and would otherwise be held to this check on every transcript row it writes.
- * By then the process is already running as the stamped user: refusing its
- * writes only loses the transcript, and the launch that mattered was already
- * gated by `prepareSessionForExecutorStart`.
+ * The executor of this very session is exempt. It authenticates with a session
+ * token minted for the prompting user, so it is not a service account and would
+ * otherwise be held to this check on every transcript row it writes. By then the
+ * process is already running as the stamped user: refusing its writes only loses
+ * the transcript, and the launch that mattered was already gated by
+ * `prepareSessionForExecutorStart`. The exemption compares the token's own
+ * session claim rather than merely asking whether an executor token is present,
+ * so it cannot be widened by a caller registering this hook somewhere
+ * `executorRuntimeScopeGuard` has not already pinned the claims.
  *
  * @param userRepo - UserRepository instance
  */
@@ -1284,14 +1288,14 @@ export function validateSessionUnixUsername(
       return context;
     }
 
-    if (hasExecutorRuntimeScope(context)) {
-      return context;
-    }
-
     const session = context.params.session;
 
     if (!session) {
       throw new Error('loadSession hook must run before validateSessionUnixUsername');
+    }
+
+    if (executorRuntimeScopeSessionId(context) === session.session_id) {
+      return context;
     }
 
     await assertSessionUnixIdentityUnchanged(session, (userId) => userRepo.findById(userId));

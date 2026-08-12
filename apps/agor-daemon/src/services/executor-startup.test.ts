@@ -129,13 +129,12 @@ describe('prepareSessionForExecutorStart tenant scope', () => {
 
     const prepareWithCreator = (creator: { unix_username: string | null } | null) => {
       const loadCreator = vi.fn(async () => creator);
-      // The loader is handed the tenant-scoped handle this startup opened.
+      // The loader is handed the tenant-scoped handle this startup opened —
+      // asserted on the argument, not on the ambient scope, which was already
+      // active before that handle was threaded through.
       const guard = {
-        loadCreator: vi.fn(() => {
-          expect(getCurrentTenantDatabaseScope()).toMatchObject({
-            kind: 'tenant',
-            tenantId: 'tenant-x',
-          });
+        loadCreator: vi.fn((tenantDb: unknown) => {
+          expect(tenantDb).toBe(getCurrentTenantDatabaseScope()?.db);
           return loadCreator;
         }),
       };

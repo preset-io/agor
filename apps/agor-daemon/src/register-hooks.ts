@@ -1126,9 +1126,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
    *  - `branch_rbac` decides whether the caller may prompt in this branch.
    *  - `unix_user_mode` decides whether the session may execute as the
    *    identity it was stamped with. Only `delegated`/`strict` consume the
-   *    stamp — `register-services.ts` feeds `session.unix_username` to
-   *    `resolveUnixUserForImpersonation`, which ignores it in `simple` and
-   *    `insulated`. Once the creator's username changes, the stamp names an
+   *    stamp *as an execution identity* — `register-services.ts` feeds
+   *    `session.unix_username` to `resolveUnixUserForImpersonation`, which
+   *    ignores it in `simple` and `insulated`. (`insulated` reads the stamp
+   *    too, but for Unix group membership in `unix.sync-branch`, which no
+   *    prompt write triggers.) Once the creator's username changes, the
+   *    stamp names an
    *    identity the user no longer has and the SDK state lives in a home
    *    directory this instance cannot reach, so the prompt is refused. Branch
    *    permissions have no bearing on that: an open-access instance can be

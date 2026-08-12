@@ -109,17 +109,17 @@ const buildHarness = (options: {
  * session token minted for the prompting user, so it is an ordinary user
  * identity on the wire and only the token payload marks it as executor-scoped.
  */
-const EXECUTOR_AUTHENTICATION = {
+const executorAuthentication = (sessionId: string) => ({
   payload: {
     type: 'executor-session',
     purpose: 'executor-task',
-    session_id: SESSION_ID,
+    session_id: sessionId,
     task_id: '00000000-0000-7000-8000-000000000004',
   },
-};
+});
 
 /** An external prompt write, as the REST/socket transports deliver it. */
-const makeContext = (path: 'messages' | 'tasks', asExecutor = false): HookContext =>
+const makeContext = (path: 'messages' | 'tasks', asExecutor: false | string = false): HookContext =>
   ({
     path,
     method: 'create',
@@ -131,14 +131,14 @@ const makeContext = (path: 'messages' | 'tasks', asExecutor = false): HookContex
       provider: 'rest',
       user: { user_id: CREATOR_ID, role: 'member' },
       query: {},
-      ...(asExecutor ? { authentication: EXECUTOR_AUTHENTICATION } : {}),
+      ...(asExecutor ? { authentication: executorAuthentication(asExecutor) } : {}),
     },
   }) as unknown as HookContext;
 
 const runCreateChain = async (
   harness: Harness,
   path: 'messages' | 'tasks',
-  asExecutor = false
+  asExecutor: false | string = false
 ): Promise<void> => {
   const chain = harness.chains.get(`${path}.create`);
   if (!chain?.length) throw new Error(`no before.create hooks captured for ${path}`);
@@ -192,8 +192,25 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
         creatorUnixUsername: 'alice-renamed',
       });
 
-      await expect(runCreateChain(harness, path, true)).resolves.toBeUndefined();
+      await expect(runCreateChain(harness, path, SESSION_ID)).resolves.toBeUndefined();
       expect(harness.userReads).toBe(0);
+    });
+
+    /**
+     * The exemption is bound to the token's own session claim rather than to
+     * "an executor token is present", so it cannot be widened by registering
+     * this hook where `executorRuntimeScopeGuard` has not pinned the claims.
+     */
+    it('does not exempt an executor token scoped to another session', async () => {
+      const harness = buildHarness({
+        branchRbac: false,
+        unixUserMode,
+        creatorUnixUsername: 'alice-renamed',
+      });
+
+      await expect(
+        runCreateChain(harness, path, '00000000-0000-7000-8000-00000000000f')
+      ).rejects.toThrow(/Session security context has changed/);
     });
   });
 
@@ -212,9 +229,12 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
     });
 
     // The branch-permission half of the chain is deliberately not stubbed: this
-    // asserts which hooks are registered, not what they decide.
+    // asserts which hooks are registered, not what they decide. Pin the failure
+    // it does produce, so stubbing `branchRepository` later cannot turn the
+    // negative assertion below into a no-op against `undefined`.
     const failure = await runCreateChain(harness, path).catch((error: Error) => error);
 
+    expect(String(failure)).toMatch(/is not a function/);
     expect(String(failure)).not.toMatch(/Session security context has changed/);
     expect(harness.userReads).toBe(0);
     expect(harness.sessionReads).toBe(1);
