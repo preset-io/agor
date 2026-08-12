@@ -1105,7 +1105,7 @@ export function OnboardingWizard({
     return (
       <div>
         {renderStepBadge(goalsTitle)}
-        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
+        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 16 }}>
           Pick up to two — we'll shape your first session around them. Not sure yet? Skip and decide
           later.
         </Paragraph>
@@ -1114,7 +1114,7 @@ export function OnboardingWizard({
           style={{
             display: 'grid',
             gridTemplateColumns: '1fr 1fr',
-            gap: 12,
+            gap: 10,
           }}
         >
           {GOALS.map((goal) => {
@@ -1141,7 +1141,7 @@ export function OnboardingWizard({
                     backdropFilter: 'blur(20px)',
                     WebkitBackdropFilter: 'blur(20px)',
                     borderRadius: 12,
-                    padding: '16px',
+                    padding: '13px 16px',
                     cursor: isDisabled ? 'not-allowed' : 'pointer',
                     opacity: isDisabled ? 0.45 : 1,
                     textAlign: 'left',
@@ -1169,13 +1169,12 @@ export function OnboardingWizard({
                       <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 10 }} />
                     </div>
                   )}
-                  <div style={{ fontSize: 24, marginBottom: 8 }}>{goal.emoji}</div>
                   <div
                     style={{
                       color: TEXT_PRIMARY,
                       fontWeight: 600,
                       fontSize: 14,
-                      marginBottom: 6,
+                      marginBottom: 4,
                       paddingRight: 20,
                     }}
                   >
@@ -1905,6 +1904,10 @@ export function OnboardingWizard({
         keyboard={false}
         footer={null}
         width={600}
+        // Vertically center instead of antd's default fixed top:100 so the
+        // footer stays on-screen on shorter laptop viewports (the content
+        // region's vh cap keeps header + grid + footer within the viewport).
+        centered
         style={{
           background: MODAL_BG,
           borderRadius: 20,
@@ -1958,7 +1961,7 @@ export function OnboardingWizard({
           )}
 
           {/* Progress indicator */}
-          <div style={{ padding: '24px 32px 0', position: 'relative', zIndex: 1 }}>
+          <div style={{ padding: '18px 32px 0', position: 'relative', zIndex: 1 }}>
             {renderProgressDots()}
           </div>
 
@@ -1967,11 +1970,13 @@ export function OnboardingWizard({
             key={currentStep}
             className="onb-step"
             style={{
-              padding: '16px 32px 20px',
+              padding: '14px 32px 18px',
               // Fixed height keeps the modal from jumping between steps; the viewport
-              // cap + scroll keeps it usable on short/mobile viewports.
+              // cap + scroll keeps it usable on short/mobile viewports. The cap is
+              // high enough that the fixed height is honored on typical laptop
+              // viewports so the goals grid + footer are never clipped.
               height: 460,
-              maxHeight: '62vh',
+              maxHeight: '76vh',
               overflowY: 'auto',
               position: 'relative',
               zIndex: 1,

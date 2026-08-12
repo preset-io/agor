@@ -172,6 +172,27 @@ describe('OnboardingWizard', () => {
     });
   });
 
+  it('renders goal cards as title + description only, with no emoji icon', () => {
+    const { baseElement } = renderWizard({ initialStep: 'goals' });
+    // The six goal-card emoji that used to sit above each title are gone.
+    for (const emoji of ['🔍', '✍️', '🛠️', '👥', '🧱', '🔬']) {
+      expect(baseElement.textContent).not.toContain(emoji);
+    }
+    // Title + description still render.
+    expect(screen.getByText('Hand off the build')).toBeInTheDocument();
+    expect(
+      screen.getByText('A working app, dashboard, or prototype — live on your board, ready to use.')
+    ).toBeInTheDocument();
+  });
+
+  it('centers the modal so the footer stays on-screen on shorter viewports', () => {
+    renderWizard({ initialStep: 'goals' });
+    // antd flags a vertically-centered modal with ant-modal-centered on the wrap;
+    // this is the layout fix that keeps the Continue/Skip footer visible when the
+    // 6-card grid makes the modal tall.
+    expect(document.querySelector('.ant-modal-centered')).toBeInTheDocument();
+  });
+
   it('explains the multi-select interaction and why it matters, not just a mechanic label', () => {
     renderWizard({ initialStep: 'goals' });
     // What to do (pick up to two) AND why (it shapes the first session).

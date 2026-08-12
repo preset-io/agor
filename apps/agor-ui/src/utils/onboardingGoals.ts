@@ -19,7 +19,6 @@ export interface McpRecommendation {
 
 export interface OnboardingGoal {
   id: string;
-  emoji: string;
   title: string;
   description: string;
   /** Recommended MCP integration ids, in priority order (see MCP_RECOMMENDATIONS). */
@@ -115,7 +114,6 @@ export const DEFAULT_MCP_REC_IDS = ['slack', 'github', 'linear', 'notion'];
 export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'personal-teammate',
-    emoji: '🔍',
     title: 'Get my own personal teammate',
     description: "Reads your inbox, Slack, and news so you don't have to.",
     mcpRecs: ['slack'],
@@ -124,7 +122,6 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   },
   {
     id: 'status-updates',
-    emoji: '✍️',
     title: 'Never chase a status update again',
     description: 'Meeting notes, action items, and project updates — drafted for you.',
     mcpRecs: ['linear', 'shortcut', 'slack', 'calendar'],
@@ -133,7 +130,6 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   },
   {
     id: 'ship-without-busywork',
-    emoji: '🛠️',
     title: 'Ship without the busywork',
     description: 'PRs, bug triage, release notes — handled.',
     mcpRecs: ['github', 'sentry', 'datadog'],
@@ -142,7 +138,6 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   },
   {
     id: 'team-teammate',
-    emoji: '👥',
     title: 'Give my team an AI teammate',
     description: "One helper who knows everyone's Slack, docs, and boards — not just yours.",
     mcpRecs: ['slack', 'hubspot', 'linear', 'datadog'],
@@ -151,7 +146,6 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   },
   {
     id: 'hand-off-build',
-    emoji: '🧱',
     title: 'Hand off the build',
     description: 'A working app, dashboard, or prototype — live on your board, ready to use.',
     mcpRecs: ['github', 'figma'],
@@ -160,7 +154,6 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   },
   {
     id: 'dig-into-anything',
-    emoji: '🔬',
     title: 'Dig into anything',
     description: 'Ask a question, get real research back — competitors, markets, data.',
     mcpRecs: ['amplitude', 'hubspot'],
