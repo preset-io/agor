@@ -41,6 +41,7 @@ import {
   tenantChannelName,
   tenantUserChannelName,
 } from '../realtime/routing.js';
+import type { TerminalAttachmentIdentity } from '../services/terminals.js';
 import {
   executorTaskChannelName,
   joinExecutorTaskChannel,
@@ -530,8 +531,10 @@ export function createSocketIOConfig(
       if (!data.terminalId || !data.userId) return;
       const socketId = activeTerminalExecutorById.get(data.terminalId);
       if (socketId) {
-        io.local.to(socketId).emit('terminal:shutdown', data);
+        // Fence first: even if the executor emits synchronously while handling
+        // shutdown, it is no longer authoritative for this attachment.
         activeTerminalExecutorById.delete(data.terminalId);
+        io.local.to(socketId).emit('terminal:shutdown', data);
       }
     });
 
@@ -775,6 +778,28 @@ export function createSocketIOConfig(
         );
       };
 
+      const matchesLocalTerminalAttachment = (auth: SocketAuthState): boolean => {
+        if (
+          !auth.terminalId ||
+          !auth.tenant?.tenant_id ||
+          !auth.terminalUserId ||
+          !auth.terminalBranchId ||
+          !auth.terminalOwnerBootId
+        ) {
+          return false;
+        }
+        const terminals = app.service('terminals') as unknown as {
+          matchesOwnedAttachment(identity: TerminalAttachmentIdentity): boolean;
+        };
+        return terminals.matchesOwnedAttachment({
+          terminalId: auth.terminalId,
+          tenantId: auth.tenant.tenant_id,
+          userId: auth.terminalUserId,
+          branchId: auth.terminalBranchId,
+          ownerBootId: auth.terminalOwnerBootId,
+        });
+      };
+
       // Common preflight for browser-emitted terminal events. Returns the
       // authenticated user's id when the event should proceed, or null when
       // the event was rejected (and the caller must return).
@@ -878,6 +903,18 @@ export function createSocketIOConfig(
           rejectTerminal(event, 'missing trusted tenant context');
           return null;
         }
+        if (!auth.terminalBranchId) {
+          rejectTerminal(event, 'service token is not scoped to a terminal branch');
+          return null;
+        }
+        if (!matchesLocalTerminalAttachment(auth)) {
+          rejectTerminal(event, 'terminal attachment is no longer owned by this daemon');
+          return null;
+        }
+        if (activeTerminalExecutorById.get(payloadTerminalId) !== socket.id) {
+          rejectTerminal(event, 'executor socket is not active for this terminal attachment');
+          return null;
+        }
         return auth;
       };
 
@@ -913,12 +950,14 @@ export function createSocketIOConfig(
             auth.terminalUserId !== target.userId ||
             !auth.terminalId ||
             auth.terminalId !== target.terminalId ||
+            !auth.terminalBranchId ||
             !auth.terminalOwnerBootId ||
-            auth.terminalOwnerBootId !== options.workIdentity?.bootId
+            auth.terminalOwnerBootId !== options.workIdentity?.bootId ||
+            !matchesLocalTerminalAttachment(auth)
           ) {
             rejectTerminal(
               'join',
-              'terminal executor scope or owner boot fence does not match the requested channel'
+              'terminal executor scope or owner boot fence does not match the requested channel or live attachment'
             );
             return;
           }
@@ -1086,8 +1125,9 @@ export function createSocketIOConfig(
             data?.terminalId
           );
           if (!auth) return;
-          const channel = `tenant/${auth.tenant!.tenant_id}/user/${auth.terminalUserId}/terminal/${auth.terminalId}`;
-          io.local.to(channel).emit('terminal:exit', data);
+          // The TerminalsService owns attachment retirement and browser
+          // notification. This event synchronously retires the registry entry
+          // and emits terminal:shutdown-local, which fences this socket.
           app.emit('terminal:exit', data);
           activeTerminalExecutorById.delete(data.terminalId);
           console.log(

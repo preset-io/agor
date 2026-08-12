@@ -60,6 +60,22 @@ interface OwnedTerminal extends TerminalAttachment {
   startedAt: Date;
 }
 
+/**
+ * Trusted identity carried by a terminal executor capability.
+ *
+ * The Socket.IO boundary uses this to prove that a capability still names a
+ * live attachment owned by this daemon boot. It is deliberately narrower than
+ * {@link OwnedTerminal}: callers never need PTY-adjacent state to authorize an
+ * executor socket.
+ */
+export interface TerminalAttachmentIdentity {
+  terminalId: string;
+  tenantId: string;
+  userId: string;
+  branchId: string;
+  ownerBootId: string;
+}
+
 /** Stable Zellij shell identity. It is branch-scoped, unlike the old per-user session. */
 export function buildZellijSessionName(
   tenantId: string,
@@ -102,9 +118,14 @@ export class TerminalsService {
         }
       }
     );
-    events.on('terminal:exit', (data: { terminalId?: string; userId?: string }) => {
-      if (data.terminalId && data.userId) this.handleExecutorExit(data.terminalId, data.userId);
-    });
+    events.on(
+      'terminal:exit',
+      (data: { terminalId?: string; userId?: string; exitCode?: number; signal?: number }) => {
+        if (data.terminalId && data.userId) {
+          this.handleExecutorExit(data.terminalId, data.userId, data.exitCode, data.signal);
+        }
+      }
+    );
     events.on('terminal:close-branch', (data: { tenantId?: string; branchId?: string }) => {
       if (data.tenantId && data.branchId) this.closeBranch(data.tenantId, data.branchId);
     });
@@ -291,6 +312,24 @@ export class TerminalsService {
     return { closed: true };
   }
 
+  /**
+   * Synchronous process-local fence for executor joins and events.
+   *
+   * A signed capability proves what an executor was allowed to own when it
+   * was minted. This registry proves that attachment is still live now. Both
+   * are required: terminal capabilities intentionally outlive short executor
+   * reconnects, while removal/archive must revoke them immediately.
+   */
+  matchesOwnedAttachment(identity: TerminalAttachmentIdentity): boolean {
+    const terminal = this.terminals.get(identity.terminalId);
+    return (
+      terminal?.tenantId === identity.tenantId &&
+      terminal.userId === identity.userId &&
+      terminal.branchId === identity.branchId &&
+      terminal.ownerBootId === identity.ownerBootId
+    );
+  }
+
   cleanup(): void {
     for (const terminal of [...this.terminals.values()]) this.stopTerminal(terminal);
     this.starting.clear();
@@ -305,6 +344,16 @@ export class TerminalsService {
   }
 
   private stopTerminal(terminal: OwnedTerminal): void {
+    this.retireTerminal(terminal, 0);
+  }
+
+  private retireTerminal(terminal: OwnedTerminal, exitCode: number, signal?: number): void {
+    this.app.io?.local.to(terminal.channel).emit('terminal:exit', {
+      terminalId: terminal.terminalId,
+      userId: terminal.userId,
+      exitCode,
+      ...(signal === undefined ? {} : { signal }),
+    });
     this.app.emit('terminal:shutdown-local', {
       terminalId: terminal.terminalId,
       userId: terminal.userId,
@@ -326,10 +375,10 @@ export class TerminalsService {
     this.app.io?.local.to(terminal.channel).emit('terminal:error', { terminalId, userId, message });
   }
 
-  handleExecutorExit(terminalId: string, userId: string): void {
+  handleExecutorExit(terminalId: string, userId: string, exitCode = 0, signal?: number): void {
     const terminal = this.terminals.get(terminalId);
     if (!terminal || terminal.userId !== userId) return;
-    this.deleteTerminal(terminal);
+    this.retireTerminal(terminal, exitCode, signal);
     console.log(
       `[TerminalsService] terminal attachment exited user=${shortId(userId)} terminal=${shortId(terminalId)}`
     );

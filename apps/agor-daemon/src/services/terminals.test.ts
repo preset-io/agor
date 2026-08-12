@@ -299,12 +299,63 @@ describe('attachment lifecycle', () => {
       terminalId: terminal.terminalId,
       userId: 'user-1',
     });
+    expect(app.emit).toHaveBeenCalledWith('terminal:exit', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+      exitCode: 0,
+    });
     await expect(
       service.remove(terminal.terminalId, {
         ...params,
         user: { user_id: 'user-2', role: 'admin' },
       } as never)
     ).resolves.toEqual({ closed: false });
+  });
+
+  it('fences executor capabilities against the live local attachment registry', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    const identity = {
+      terminalId: terminal.terminalId,
+      tenantId: 'tenant-x',
+      userId: 'user-1',
+      branchId: 'branch-1',
+      ownerBootId: 'daemon-a-boot',
+    };
+    expect(service.matchesOwnedAttachment(identity)).toBe(true);
+    expect(service.matchesOwnedAttachment({ ...identity, tenantId: 'tenant-y' })).toBe(false);
+    expect(service.matchesOwnedAttachment({ ...identity, branchId: 'branch-2' })).toBe(false);
+
+    await service.remove(terminal.terminalId, params as never);
+    expect(service.matchesOwnedAttachment(identity)).toBe(false);
+  });
+
+  it('notifies browsers and fences the attachment when the executor process exits', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+
+    service.handleExecutorExit(terminal.terminalId, 'user-1', 17, 9);
+
+    expect(app.emit).toHaveBeenCalledWith('terminal:exit', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+      exitCode: 17,
+      signal: 9,
+    });
+    expect(app.emit).toHaveBeenCalledWith('terminal:shutdown-local', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+    });
+    expect(
+      service.matchesOwnedAttachment({
+        terminalId: terminal.terminalId,
+        tenantId: 'tenant-x',
+        userId: 'user-1',
+        branchId: 'branch-1',
+        ownerBootId: 'daemon-a-boot',
+      })
+    ).toBe(false);
   });
 
   it('branch lifecycle cleanup is tenant-qualified', async () => {

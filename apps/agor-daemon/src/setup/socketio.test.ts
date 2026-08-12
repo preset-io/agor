@@ -30,6 +30,7 @@ import {
   tenantChannelName,
   tenantUserChannelName,
 } from '../realtime/routing';
+import type { TerminalAttachmentIdentity } from '../services/terminals';
 import { executorTaskChannelName } from '../utils/realtime-publish';
 import {
   configureChannels,
@@ -195,29 +196,44 @@ function makeIO(): FakeIO {
   return io;
 }
 
-function makeApp(): Application {
+function makeApp() {
   // Minimal Application surface used by createSocketIOConfig: app.service('users').get,
   // app.on('login'), and app.emit for the terminal:ready/error relay.
   const eventHandlers = new Map<string, (...args: any[]) => void>();
+  const matchesOwnedAttachment = vi.fn(
+    (identity: TerminalAttachmentIdentity) =>
+      identity.terminalId === TERMINAL &&
+      identity.tenantId === 'default' &&
+      identity.userId === ALICE &&
+      identity.branchId === BRANCH &&
+      identity.ownerBootId === 'daemon-a-boot'
+  );
   return {
-    service: () => ({ get: async (userId: string) => ({ user_id: userId }) }),
+    service: (path: string) =>
+      path === 'terminals'
+        ? { matchesOwnedAttachment }
+        : { get: async (userId: string) => ({ user_id: userId }) },
     on: (event: string, handler: (...args: any[]) => void) => eventHandlers.set(event, handler),
     emit: vi.fn(),
     eventHandlers,
-  } as any;
+    matchesOwnedAttachment,
+  };
 }
 
 function buildHarness(opts: Partial<SocketIOOptions> = {}) {
   const app = makeApp();
   const io = makeIO();
-  const config = createSocketIOConfig(app, {
-    corsOrigin: '*',
-    jwtSecret: 'test-secret',
-    credentialsAllowed: false,
-    webTerminalEnabled: true,
-    workIdentity: { instanceId: 'daemon-a', bootId: 'daemon-a-boot' },
-    ...opts,
-  } as SocketIOOptions);
+  const config = createSocketIOConfig(
+    app as unknown as Application,
+    {
+      corsOrigin: '*',
+      jwtSecret: 'test-secret',
+      credentialsAllowed: false,
+      webTerminalEnabled: true,
+      workIdentity: { instanceId: 'daemon-a', bootId: 'daemon-a-boot' },
+      ...opts,
+    } as SocketIOOptions
+  );
   config.callback(io as any);
   openHarnesses.add(io);
   return { io, config, app };
@@ -248,6 +264,7 @@ function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
 const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111';
 const BOB = '22222222-bbbb-bbbb-bbbb-222222222222';
 const TERMINAL = '33333333-cccc-cccc-cccc-333333333333';
+const BRANCH = '44444444-dddd-dddd-dddd-444444444444';
 
 function terminalChannel(userId = ALICE, terminalId = TERMINAL, tenantId = 'default') {
   return `tenant/${tenantId}/user/${userId}/terminal/${terminalId}`;
@@ -294,6 +311,7 @@ function asServiceForUser(socket: FakeSocket, userId: string, terminalId = TERMI
       _isTerminalExecutor: true,
       terminal_user_id: userId,
       terminal_id: terminalId,
+      terminal_branch_id: BRANCH,
       terminal_owner_boot_id: 'daemon-a-boot',
     },
   };
@@ -308,11 +326,13 @@ function asServiceHandshakeForUser(socket: FakeSocket, userId: string, terminalI
       _isTerminalExecutor: true,
       terminal_user_id: userId,
       terminal_id: terminalId,
+      terminal_branch_id: BRANCH,
       terminal_owner_boot_id: 'daemon-a-boot',
     },
   };
   socket.data.terminalUserId = userId;
   socket.data.terminalId = terminalId;
+  socket.data.terminalBranchId = BRANCH;
   socket.data.terminalOwnerBootId = 'daemon-a-boot';
   socket.data.tenant = { tenant_id: 'default', source: 'static' };
 }
@@ -755,6 +775,7 @@ describe('getSocketAuthState', () => {
       tenant: { tenant_id: 'default', source: 'static' },
       terminalUserId: ALICE,
       terminalId: TERMINAL,
+      terminalBranchId: BRANCH,
       terminalOwnerBootId: 'daemon-a-boot',
     });
   });
@@ -1027,6 +1048,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock', io);
       asServiceForUser(s, ALICE);
       connect(io, s);
+      s.handlers.get('join')?.(terminalChannel());
       s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'hello' });
       expect(io.emitted).toEqual([
         {
@@ -1045,6 +1067,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock', io);
       asServiceForUser(s, ALICE);
       connect(io, s);
+      s.handlers.get('join')?.(terminalChannel());
       s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'hello' });
       expect(io.emitted).toEqual([
         {
@@ -1066,7 +1089,7 @@ describe('terminal:* handler authorization', () => {
       const exec = makeSocket('exec-sock', io);
       asServiceForUser(exec, ALICE);
       connect(io, exec);
-      exec.join(channel);
+      exec.handlers.get('join')?.(channel);
 
       const browserA = makeSocket('browser-a', io);
       asUser(browserA, ALICE);
@@ -1100,6 +1123,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock', io);
       asServiceHandshakeForUser(s, ALICE);
       connect(io, s);
+      s.handlers.get('join')?.(terminalChannel());
       s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'hi' });
       expect(io.emitted).toEqual([
         {
@@ -1146,6 +1170,43 @@ describe('terminal:* handler authorization', () => {
       s.handlers.get('terminal:tab')?.({ userId: ALICE, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
     });
+
+    it('rejects events from a stale duplicate after a replacement executor joins', () => {
+      const { io, app } = buildHarness();
+      const stale = makeSocket('stale-executor', io);
+      asServiceForUser(stale, ALICE);
+      connect(io, stale);
+      stale.handlers.get('join')?.(terminalChannel());
+
+      const replacement = makeSocket('replacement-executor', io);
+      asServiceForUser(replacement, ALICE);
+      connect(io, replacement);
+      replacement.handlers.get('join')?.(terminalChannel());
+      expect(io.emitted).toContainEqual({
+        channel: 'stale-executor',
+        event: 'terminal:shutdown',
+        data: { terminalId: TERMINAL, userId: ALICE },
+      });
+
+      io.emitted.length = 0;
+      app.emit.mockClear();
+      stale.handlers.get('terminal:exit')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        exitCode: 0,
+      });
+      expect(app.emit).not.toHaveBeenCalled();
+      expect(io.emitted).toEqual([]);
+
+      replacement.handlers.get('terminal:ready')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+      });
+      expect(app.emit).toHaveBeenCalledWith('terminal:ready', {
+        userId: ALICE,
+        terminalId: TERMINAL,
+      });
+    });
   });
 
   describe('terminal:ready / terminal:error (executor readiness acks)', () => {
@@ -1154,6 +1215,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
+      s.handlers.get('join')?.(terminalChannel());
       s.handlers.get('terminal:ready')?.({
         userId: ALICE,
         terminalId: TERMINAL,
@@ -1173,6 +1235,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
+      s.handlers.get('join')?.(terminalChannel());
       s.handlers.get('terminal:error')?.({ userId: ALICE, terminalId: TERMINAL, message: 'boom' });
       expect(app.emit).toHaveBeenCalledWith('terminal:error', {
         userId: ALICE,
@@ -1302,6 +1365,45 @@ describe('terminal:* handler authorization', () => {
       s.handlers.get('join')?.(terminalChannel());
       expect(s.joined.has(terminalChannel())).toBe(false);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('owner boot fence'));
+    });
+
+    it('rejects an executor capability for a different branch attachment', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('wrong-branch-executor');
+      asServiceForUser(s, ALICE);
+      s.feathers.user.terminal_branch_id = 'other-branch';
+      connect(io, s);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('live attachment'));
+    });
+
+    it('rejects executor reconnect after the local attachment is retired', () => {
+      const { io, app } = buildHarness();
+      const original = makeSocket('original-executor', io);
+      asServiceForUser(original, ALICE);
+      connect(io, original);
+      original.handlers.get('join')?.(terminalChannel());
+
+      app.matchesOwnedAttachment.mockReturnValue(false);
+      app.eventHandlers.get('terminal:shutdown-local')?.({
+        terminalId: TERMINAL,
+        userId: ALICE,
+      });
+
+      const reconnect = makeSocket('reconnecting-executor', io);
+      asServiceForUser(reconnect, ALICE);
+      connect(io, reconnect);
+      reconnect.handlers.get('join')?.(terminalChannel());
+      expect(reconnect.joined.has(terminalChannel())).toBe(false);
+
+      io.emitted.length = 0;
+      original.handlers.get('terminal:output')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        data: 'stale',
+      });
+      expect(io.emitted).toEqual([]);
     });
 
     it('rejects a join from an unscoped service token entirely', () => {
