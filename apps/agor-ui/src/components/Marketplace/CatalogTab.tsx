@@ -244,7 +244,17 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
           </Row>
         )
       ) : entries.length === 0 ? (
-        <Empty description="No servers match" />
+        // "No servers match" means the filters excluded everything. With
+        // nothing filtering there is nothing to have excluded, so an empty read
+        // is an empty catalog — which on a fresh daemon means seeding has not
+        // finished, several quiet minutes after `/health` starts answering.
+        isFilterActive(filters) ? (
+          <Empty description="No servers match" />
+        ) : (
+          <Empty description="No servers in the catalog yet">
+            <Button onClick={retry}>Check again</Button>
+          </Empty>
+        )
       ) : (
         <CatalogGrid entries={entries} onOpen={openEntry} />
       )}
