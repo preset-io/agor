@@ -518,9 +518,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       task.status === TaskStatus.RUNNING ||
       task.status === TaskStatus.STOPPING ||
       task.status === TaskStatus.QUEUED;
-    // Collapsed slim rows put meta inline with the prompt line — the chips
-    // no longer earn a second row.
-    const slimInlineMeta = isSlim && !isExpanded;
+    // Slim rows put meta inline at the right end of the prompt line —
+    // collapsed and expanded alike; the chips never earn a second row.
+    const slimInlineMeta = isSlim;
     const gutterTooltip = `${callbackFailed ? 'CHILD SESSION FAILED' : task.status.toUpperCase()}${
       !isTaskActive && task.duration_ms ? ` · ${formatDuration(task.duration_ms)}` : ''
     }`;
