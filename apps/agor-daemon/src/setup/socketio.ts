@@ -125,7 +125,11 @@ export interface SocketIOOptions {
    * simply skipped when omitted.
    */
   buildInfo?: BuildInfo;
-  /** Process identity is diagnostic only and never used for routing/fencing. */
+  /**
+   * Process identity is not authority by itself. Terminal capabilities use
+   * bootId only as a process-incarnation discriminator, alongside the
+   * authoritative process-local attachment registry.
+   */
   workIdentity?: { instanceId: string; bootId: string };
   /** Resolved app-level multi-tenancy configuration for socket tenant binding. */
   multiTenancy?: ResolvedMultiTenancyConfig;
@@ -973,6 +977,10 @@ export function createSocketIOConfig(
         if (auth.isService && auth.terminalId === target.terminalId) {
           const prev = activeTerminalExecutorById.get(target.terminalId);
           if (prev && prev !== socket.id) {
+            // Stop the replaced executor from observing any future frames even
+            // if it ignores shutdown. The socket-id room remains available for
+            // the direct control event after leaving the attachment room.
+            io.sockets.sockets.get(prev)?.leave(channel);
             io.local.to(prev).emit('terminal:shutdown', {
               terminalId: target.terminalId,
               userId: target.userId,

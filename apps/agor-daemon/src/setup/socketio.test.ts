@@ -1182,6 +1182,7 @@ describe('terminal:* handler authorization', () => {
       asServiceForUser(replacement, ALICE);
       connect(io, replacement);
       replacement.handlers.get('join')?.(terminalChannel());
+      expect(stale.joined.has(terminalChannel())).toBe(false);
       expect(io.emitted).toContainEqual({
         channel: 'stale-executor',
         event: 'terminal:shutdown',
