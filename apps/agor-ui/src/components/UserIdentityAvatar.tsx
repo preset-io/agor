@@ -1,6 +1,8 @@
 import type { User } from '@agor-live/client';
 import { Avatar, type AvatarProps, theme } from 'antd';
 import type { CSSProperties } from 'react';
+import { useUIMode } from '../contexts/UIModeContext';
+import { nameInitial } from '../utils/nameInitial';
 
 export interface UserIdentityAvatarProps extends Omit<AvatarProps, 'src' | 'style'> {
   user?: Pick<
@@ -28,6 +30,7 @@ export const UserIdentityAvatar: React.FC<UserIdentityAvatarProps> = ({
   ...props
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const prefersSlackAvatar = user?.preferences?.use_slack_avatar !== false;
   const rawAvatarUrl = getUserAvatarUrl(user);
   const avatarUrl =
@@ -43,13 +46,14 @@ export const UserIdentityAvatar: React.FC<UserIdentityAvatarProps> = ({
         borderRadius: slackAvatarRadius(size),
         backgroundColor: avatarUrl ? token.colorBgContainer : token.colorPrimaryBg,
         color: token.colorText,
-        fontSize: fontSize ?? `${Math.round(size * 0.6)}px`,
+        fontSize: fontSize ?? `${Math.round(size * (isSlim ? 0.45 : 0.6))}px`,
+        fontWeight: isSlim ? 600 : undefined,
         lineHeight: `${size}px`,
         overflow: 'hidden',
         ...style,
       }}
     >
-      {user?.emoji || '👤'}
+      {isSlim ? nameInitial(user?.name || user?.email) : user?.emoji || '👤'}
     </Avatar>
   );
 };

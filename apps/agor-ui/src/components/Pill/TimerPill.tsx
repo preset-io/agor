@@ -147,7 +147,7 @@ function parseTimestamp(value?: string | number | Date): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-function formatDuration(milliseconds: number): string {
+export function formatDuration(milliseconds: number): string {
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     return '00:00';
   }

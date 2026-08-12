@@ -37,6 +37,7 @@ import {
 } from '@ant-design/icons';
 import { Popover, Space, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -134,10 +135,41 @@ function getToolIcon(toolName: string): React.ReactElement {
   }
 }
 
+/**
+ * One-line preview for a thought row. Structured thoughts (JSON tool
+ * references / payload echoes) read as line noise in a collapsed row —
+ * summarize them; the full content stays available on expand.
+ */
+function thoughtPreview(thought: string): string {
+  const trimmed = thought.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      const items = (Array.isArray(parsed) ? parsed : [parsed]).filter(
+        (it): it is Record<string, unknown> => !!it && typeof it === 'object'
+      );
+      const toolNames = items
+        .map((it) => (typeof it.tool_name === 'string' ? it.tool_name : null))
+        .filter((name): name is string => !!name);
+      if (toolNames.length > 0) return `Considering ${toolNames.join(', ')}`;
+      const keys = Object.keys(items[0] ?? {});
+      return keys.length > 0
+        ? `Structured note (${keys.slice(0, 3).join(', ')})`
+        : 'Structured note';
+    } catch {
+      // Not valid JSON — fall through to the raw one-liner.
+    }
+  }
+  return trimmed.replace(/\s+/g, ' ');
+}
+
 export const AgentChain = React.memo<AgentChainProps>(
   ({ messages, isTaskRunning = false, isLatest }) => {
     const { token } = theme.useToken();
-    const [expanded, setExpanded] = useState(true);
+    const { isSlim } = useUIMode();
+    // Slim: chains start collapsed even inside an expanded task — expand the
+    // one you care about.
+    const [expanded, setExpanded] = useState(() => !isSlim);
 
     // Extract chain items (thoughts and tools) from messages
     const chainItems = useMemo(() => {
@@ -408,11 +440,54 @@ export const AgentChain = React.memo<AgentChainProps>(
       return -1;
     }, [chainItems]);
 
+    // Slim: fold thought payload-echoes into the tool row that follows them
+    // and coalesce consecutive calls of the same tool into one row. Trailing
+    // thoughts with no following tool keep their own rows.
+    type SlimUnit =
+      | {
+          kind: 'tools';
+          name: string;
+          entries: { item: ChainItem; index: number }[];
+          thoughts: string[];
+        }
+      | { kind: 'thought'; content: string; index: number };
+    const slimUnits = useMemo<SlimUnit[] | null>(() => {
+      if (!isSlim) return null;
+      const units: SlimUnit[] = [];
+      let pendingThoughts: string[] = [];
+      chainItems.forEach((item, index) => {
+        if (item.type === 'thought') {
+          pendingThoughts.push(item.content as string);
+          return;
+        }
+        const { toolUse } = item.content as { toolUse: ToolUseBlock };
+        const name = getToolDisplayName(toolUse.name, toolUse.input);
+        const last = units[units.length - 1];
+        if (pendingThoughts.length === 0 && last && last.kind === 'tools' && last.name === name) {
+          last.entries.push({ item, index });
+        } else {
+          units.push({
+            kind: 'tools',
+            name,
+            entries: [{ item, index }],
+            thoughts: pendingThoughts,
+          });
+          pendingThoughts = [];
+        }
+      });
+      pendingThoughts.forEach((content, i) => {
+        units.push({ kind: 'thought', content, index: chainItems.length + i });
+      });
+      return units;
+    }, [isSlim, chainItems]);
+
     // Build tool block items for rendering
     const renderChainItem = (item: ChainItem, index: number) => {
       if (item.type === 'thought') {
         const thoughtContent = item.content as string;
-        const oneLine = thoughtContent.replace(/\s+/g, ' ').trim();
+        const oneLine = isSlim
+          ? thoughtPreview(thoughtContent)
+          : thoughtContent.replace(/\s+/g, ' ').trim();
 
         return (
           <ToolBlock
@@ -494,6 +569,81 @@ export const AgentChain = React.memo<AgentChainProps>(
       );
     };
 
+    const renderSlimUnit = (unit: SlimUnit, unitIndex: number) => {
+      if (unit.kind === 'thought') {
+        return renderChainItem(
+          { type: 'thought', content: unit.content, message: messages[0] },
+          unit.index
+        );
+      }
+      const lastEntry = unit.entries[unit.entries.length - 1];
+      const { toolUse, toolResult } = lastEntry.item.content as {
+        toolUse: ToolUseBlock;
+        toolResult?: ToolResultBlock;
+      };
+      const hasImplicitResult = IMPLICIT_RESULT_TOOLS.has(toolUse.name);
+      const isPotentiallyRunning = lastEntry.index > lastResultToolIndex && isLatest !== false;
+      const status = deriveToolStatus({
+        hasResult: !!toolResult || hasImplicitResult,
+        isError: unit.entries.some(
+          (e) => (e.item.content as { toolResult?: ToolResultBlock }).toolResult?.is_error
+        ),
+        isPotentiallyRunning,
+        isTaskRunning,
+      });
+      const icon = renderToolStatusIcon(status);
+      const single = unit.entries.length === 1;
+      const description = single ? (getToolDescription(toolUse) ?? undefined) : undefined;
+
+      return (
+        <ToolBlock
+          key={`slim-tools-${unitIndex}-${toolUse.id}`}
+          icon={icon}
+          name={single ? unit.name : `${unit.name} × ${unit.entries.length}`}
+          description={description}
+          status={status}
+          expandedByDefault={single && shouldExpandToolByDefault(toolUse.name)}
+        >
+          {unit.thoughts.map((thought, i) =>
+            thought.trim() ? (
+              <CollapsibleText
+                // biome-ignore lint/suspicious/noArrayIndexKey: thoughts are static within a settled chain unit
+                key={`thought-${i}`}
+                maxLines={8}
+                preserveWhitespace
+                style={{
+                  fontSize: token.fontSizeSM,
+                  margin: `0 0 ${token.sizeUnit}px 0`,
+                  color: token.colorTextTertiary,
+                }}
+              >
+                {thought}
+              </CollapsibleText>
+            ) : null
+          )}
+          {unit.entries.map((entry, i) => {
+            const c = entry.item.content as { toolUse: ToolUseBlock; toolResult?: ToolResultBlock };
+            return (
+              <div
+                key={c.toolUse.id}
+                style={
+                  i > 0
+                    ? {
+                        borderTop: `1px solid ${token.colorBorderSecondary}`,
+                        marginTop: token.sizeUnit,
+                        paddingTop: token.sizeUnit,
+                      }
+                    : undefined
+                }
+              >
+                <ToolUseRenderer toolUse={c.toolUse} toolResult={c.toolResult} />
+              </div>
+            );
+          })}
+        </ToolBlock>
+      );
+    };
+
     // Summary section
     const summaryDescription = (
       <Space size={token.sizeUnit} wrap style={{ marginTop: token.sizeUnit / 2 }}>
@@ -505,17 +655,27 @@ export const AgentChain = React.memo<AgentChainProps>(
             </Tag>
           ))}
 
-        {/* Result stats */}
-        {stats.successCount > 0 && (
-          <Tag icon={<CheckCircleOutlined />} color="success" style={{ fontSize: 11, margin: 0 }}>
-            {stats.successCount} success
-          </Tag>
-        )}
-        {stats.errorCount > 0 && (
-          <Tag icon={<CloseCircleOutlined />} color="error" style={{ fontSize: 11, margin: 0 }}>
-            {stats.errorCount} error
-          </Tag>
-        )}
+        {/* Result stats — slim: bare glyph + count, no words, no box */}
+        {stats.successCount > 0 &&
+          (isSlim ? (
+            <span style={{ color: token.colorSuccess, fontSize: 11, whiteSpace: 'nowrap' }}>
+              <CheckCircleOutlined /> {stats.successCount}
+            </span>
+          ) : (
+            <Tag icon={<CheckCircleOutlined />} color="success" style={{ fontSize: 11, margin: 0 }}>
+              {stats.successCount} success
+            </Tag>
+          ))}
+        {stats.errorCount > 0 &&
+          (isSlim ? (
+            <span style={{ color: token.colorError, fontSize: 11, whiteSpace: 'nowrap' }}>
+              <CloseCircleOutlined /> {stats.errorCount}
+            </span>
+          ) : (
+            <Tag icon={<CloseCircleOutlined />} color="error" style={{ fontSize: 11, margin: 0 }}>
+              {stats.errorCount} error
+            </Tag>
+          ))}
 
         {/* Files affected */}
         {stats.filesAffected.length > 0 && (
@@ -583,53 +743,97 @@ export const AgentChain = React.memo<AgentChainProps>(
     }
 
     return (
-      <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
-        {/* Collapsed summary - clickable */}
-        <div
-          onClick={() => setExpanded(!expanded)}
-          style={{
-            padding: token.sizeUnit * 1.5,
-            borderRadius: token.borderRadius,
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorder}`,
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = token.colorPrimaryBorder;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = token.colorBorder;
-          }}
-        >
-          <div
-            style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit, flexWrap: 'wrap' }}
-          >
-            {/* Expand/collapse icon */}
-            {expanded ? (
-              <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            ) : (
-              <RightOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            )}
+      <div style={{ margin: isSlim ? `${token.sizeUnit}px 0` : `${token.sizeUnit * 1.5}px 0` }}>
+        {isSlim ? (
+          <>
+            {/* Collapsed summary — borderless hover row: one chevron carries the
+            affordance, the error icon appears only when something failed. */}
+            <div
+              onClick={() => setExpanded(!expanded)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: token.sizeUnit,
+                flexWrap: 'wrap',
+                padding: `${token.sizeUnit / 2}px ${token.sizeUnit}px`,
+                borderRadius: token.borderRadiusSM,
+                background: 'transparent',
+                cursor: 'pointer',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = token.colorFillQuaternary;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              {expanded ? (
+                <DownOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
+              ) : (
+                <RightOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
+              )}
+              {hasErrors && (
+                <CloseCircleOutlined style={{ color: token.colorError, fontSize: 14 }} />
+              )}
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
+                {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
+                {stats.toolCount > 0 && `${stats.toolCount} tools`}
+              </Typography.Text>
 
-            {/* Status icon */}
-            {hasErrors ? (
-              <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
-            ) : (
-              <CheckCircleOutlined style={{ color: token.colorTextSecondary, fontSize: 16 }} />
-            )}
-
-            {/* Summary text */}
-            <Typography.Text strong>
-              <BulbOutlined /> {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
-              {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
-              {stats.toolCount > 0 && `${stats.toolCount} tools`}
-            </Typography.Text>
-
-            {/* Only show details when collapsed */}
-            {!expanded && summaryDescription}
-          </div>
-        </div>
+              {/* Only show details when collapsed */}
+              {!expanded && summaryDescription}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Collapsed summary - clickable */}
+            <div
+              onClick={() => setExpanded(!expanded)}
+              style={{
+                padding: token.sizeUnit * 1.5,
+                borderRadius: token.borderRadius,
+                background: token.colorBgContainer,
+                border: `1px solid ${token.colorBorder}`,
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = token.colorPrimaryBorder;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = token.colorBorder;
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: token.sizeUnit,
+                  flexWrap: 'wrap',
+                }}
+              >
+                {expanded ? (
+                  <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+                ) : (
+                  <RightOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+                )}
+                {hasErrors ? (
+                  <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
+                ) : (
+                  <CheckCircleOutlined style={{ color: token.colorTextSecondary, fontSize: 16 }} />
+                )}
+                <Typography.Text strong>
+                  <BulbOutlined /> {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
+                  {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
+                  {stats.toolCount > 0 && `${stats.toolCount} tools`}
+                </Typography.Text>
+                {!expanded && summaryDescription}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Expanded chain */}
         {expanded && (
@@ -642,7 +846,7 @@ export const AgentChain = React.memo<AgentChainProps>(
               gap: 2,
             }}
           >
-            {chainItems.map(renderChainItem)}
+            {slimUnits ? slimUnits.map(renderSlimUnit) : chainItems.map(renderChainItem)}
           </div>
         )}
       </div>

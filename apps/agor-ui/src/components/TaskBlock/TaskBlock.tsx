@@ -23,6 +23,7 @@ import {
 } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
 import {
+  CloseCircleOutlined,
   DownOutlined,
   FileTextOutlined,
   GithubOutlined,
@@ -30,13 +31,15 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Alert, Button, Collapse, Flex, Spin, Typography, theme } from 'antd';
+import { Alert, Button, Collapse, Flex, Spin, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo, useRef, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
 import { CopyableContent } from '../CopyableContent';
+import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
@@ -47,6 +50,7 @@ import {
   TimerPill,
   TokenCountPill,
 } from '../Pill';
+import { formatDuration } from '../Pill/TimerPill';
 import { RateLimitBlock } from '../RateLimitBlock';
 import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
@@ -71,6 +75,8 @@ interface TaskBlockProps {
   task: Task;
   agentic_tool?: string;
   sessionModel?: string;
+  /** Model of the preceding task; suppresses the per-task model chip when unchanged. */
+  previousTaskModel?: string;
   userById?: Map<string, User>;
   currentUserId?: string;
   isExpanded: boolean;
@@ -423,6 +429,26 @@ export function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   return blocks;
 }
 
+/** Pure-text assistant message with no widgets/tools — safe to render as a
+ * quiet log line in slim instead of a full bubble. */
+function isPlainTextAssistantMessage(message: Message): boolean {
+  if (message.role !== MessageRole.ASSISTANT) return false;
+  if (message.type === 'permission_request') return false;
+  if (typeof message.content === 'string') return message.content.trim().length > 0;
+  if (Array.isArray(message.content)) {
+    return message.content.length > 0 && message.content.every((block) => block.type === 'text');
+  }
+  return false;
+}
+
+function plainTextOf(message: Message): string {
+  if (typeof message.content === 'string') return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+  }
+  return '';
+}
+
 /**
  * Identity key for reconciling a block across renders — mirrors the React
  * `key` each block type renders with.
@@ -462,6 +488,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     task,
     agentic_tool,
     sessionModel,
+    previousTaskModel,
     userById = EMPTY_USER_MAP,
     currentUserId,
     isExpanded,
@@ -482,6 +509,21 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     client = null,
   }) => {
     const { token } = theme.useToken();
+    const { isSlim } = useUIMode();
+    // Callback tasks complete successfully even when they announce a child
+    // FAILURE — surface the child's outcome, not the courier's.
+    const callbackFailed =
+      !!task.metadata?.is_agor_callback && /has failed/i.test(task.full_prompt || '');
+    const isTaskActive =
+      task.status === TaskStatus.RUNNING ||
+      task.status === TaskStatus.STOPPING ||
+      task.status === TaskStatus.QUEUED;
+    // Slim rows put meta inline at the right end of the prompt line —
+    // collapsed and expanded alike; the chips never earn a second row.
+    const slimInlineMeta = isSlim;
+    const gutterTooltip = `${callbackFailed ? 'CHILD SESSION FAILED' : task.status.toUpperCase()}${
+      !isTaskActive && task.duration_ms ? ` · ${formatDuration(task.duration_ms)}` : ''
+    }`;
 
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
@@ -568,23 +610,148 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         })
       : undefined;
 
+    const taskMetaChips = (
+      <Flex
+        wrap={!slimInlineMeta}
+        gap={token.sizeUnit}
+        align="center"
+        style={slimInlineMeta ? { flexShrink: 0 } : undefined}
+      >
+        {(!isSlim || isTaskActive) && (
+          <TimerPill
+            status={task.status}
+            startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
+            endedAt={
+              task.completed_at ||
+              (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
+                ? task.message_range?.end_timestamp
+                : undefined)
+            }
+            durationMs={task.duration_ms}
+            lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
+            latestExecutorPulse={task.latest_executor_pulse}
+          />
+        )}
+        {scheduledFromBranch && scheduledRunAt && (
+          <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
+        )}
+        {/* Noise budget: collapsed rows show only chips that carry signal
+                for THIS task (who else ran it, how long, context pressure,
+                commits made). Steady-state facts (own user, token counts,
+                unchanged model/SHA) appear when expanded or when they change. */}
+        {task.created_by && (!isSlim || task.created_by !== currentUserId) && (
+          <CreatedByTag
+            createdBy={task.created_by}
+            currentUserId={currentUserId}
+            userById={userById}
+            prefix="By"
+          />
+        )}
+        {normalized && !isSlim && (
+          <TokenCountPill
+            count={normalized.tokenUsage.totalTokens}
+            inputTokens={normalized.tokenUsage.inputTokens}
+            outputTokens={normalized.tokenUsage.outputTokens}
+            cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
+            cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
+          />
+        )}
+        {hasContextWindowUsage && (
+          <ContextWindowPill
+            used={contextWindowUsed}
+            limit={contextWindowLimit || 0}
+            taskMetadata={{
+              model: task.model,
+              duration_ms: task.duration_ms,
+              agentic_tool,
+              raw_sdk_response: task.raw_sdk_response,
+              normalized_sdk_response: normalized ?? undefined,
+            }}
+          />
+        )}
+        {task.model &&
+          task.model !== (isSlim ? (previousTaskModel ?? sessionModel) : sessionModel) && (
+            <ModelPill model={task.model} />
+          )}
+        {task.git_state.sha_at_start &&
+          task.git_state.sha_at_start !== 'unknown' &&
+          (!isSlim ||
+            isExpanded ||
+            (task.git_state.sha_at_end &&
+              task.git_state.sha_at_end !== 'unknown' &&
+              task.git_state.sha_at_end !== task.git_state.sha_at_start)) && (
+            <Flex gap={token.sizeUnit / 2} align="center">
+              <GitStatePill
+                branch={task.git_state.ref_at_start}
+                sha={task.git_state.sha_at_start}
+                branchName={branchName}
+                bare={isSlim}
+                style={{ fontSize: 11 }}
+              />
+              {task.git_state.sha_at_end &&
+                task.git_state.sha_at_end !== 'unknown' &&
+                task.git_state.sha_at_end !== task.git_state.sha_at_start && (
+                  <>
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                      →
+                    </Typography.Text>
+                    <GitStatePill
+                      branch={task.git_state.ref_at_end}
+                      sha={task.git_state.sha_at_end}
+                      branchName={branchName}
+                      showDirtyIndicator={true}
+                      bare={isSlim}
+                      style={{ fontSize: 11 }}
+                    />
+                  </>
+                )}
+            </Flex>
+          )}
+        {task.report && (
+          <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>
+            Report
+          </Tag>
+        )}
+      </Flex>
+    );
+
     // Task header shows when collapsed
     const taskHeader = (
       <Flex gap={token.sizeUnit * 2} style={{ width: '100%' }}>
-        {/* Left column: Icons stacked vertically */}
-        <Flex
-          vertical
-          align="center"
-          gap={token.sizeUnit / 2}
-          style={{ width: 'auto', paddingTop: token.sizeUnit }}
-        >
-          {isExpanded ? (
-            <UpOutlined style={{ color: token.colorPrimary }} />
-          ) : (
-            <DownOutlined style={{ color: token.colorPrimary }} />
-          )}
-          <TaskStatusIcon status={task.status} size={16} />
-        </Flex>
+        {/* Left column. Slim: one gutter icon — status when collapsed (the
+            row itself is the expand affordance), collapse chevron when
+            expanded. Classic: chevron + status stacked. */}
+        {isSlim ? (
+          <Flex vertical align="center" style={{ width: 'auto', paddingTop: token.sizeUnit }}>
+            {isExpanded ? (
+              <UpOutlined style={{ color: token.colorPrimary, fontSize: 14 }} />
+            ) : (
+              <Tooltip title={gutterTooltip} placement="left">
+                <span style={{ display: 'inline-flex', lineHeight: 0 }}>
+                  {callbackFailed ? (
+                    <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
+                  ) : (
+                    <TaskStatusIcon status={task.status} size={16} />
+                  )}
+                </span>
+              </Tooltip>
+            )}
+          </Flex>
+        ) : (
+          <Flex
+            vertical
+            align="center"
+            gap={token.sizeUnit / 2}
+            style={{ width: 'auto', paddingTop: token.sizeUnit }}
+          >
+            {isExpanded ? (
+              <UpOutlined style={{ color: token.colorPrimary }} />
+            ) : (
+              <DownOutlined style={{ color: token.colorPrimary }} />
+            )}
+            <TaskStatusIcon status={task.status} size={16} />
+          </Flex>
+        )}
 
         {/* Right column: Content */}
         <Flex vertical flex={1} style={{ minWidth: 0 }}>
@@ -592,106 +759,31 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               text stays in the DOM so users can recover it via the
               copy-overlay (matches MessageBlock's pattern) — no tooltip,
               which got in the way of normal hover behavior. */}
-          <CopyableContent
-            textContent={task.full_prompt || ''}
-            // Default offsets place the icon outside the wrapper, but the
-            // task header has rounded corners with overflow:hidden which
-            // clips it. Pull the icon inside the prompt row instead.
-            copyButtonOffset={{ top: 0, right: 0 }}
-          >
-            <Typography.Text
-              ellipsis
-              style={{
-                marginBottom: token.sizeUnit,
-                display: 'block',
-                paddingRight: token.sizeUnit * 3,
-              }}
-            >
-              {task.full_prompt || 'User Prompt'}
-            </Typography.Text>
-          </CopyableContent>
-
-          {/* Task metadata */}
-          <Flex wrap gap={token.sizeUnit}>
-            <TimerPill
-              status={task.status}
-              startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
-              endedAt={
-                task.completed_at ||
-                (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
-                  ? task.message_range?.end_timestamp
-                  : undefined)
-              }
-              durationMs={task.duration_ms}
-              lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
-              latestExecutorPulse={task.latest_executor_pulse}
-            />
-            {scheduledFromBranch && scheduledRunAt && (
-              <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
-            )}
-            {task.created_by && (
-              <CreatedByTag
-                createdBy={task.created_by}
-                currentUserId={currentUserId}
-                userById={userById}
-                prefix="By"
-              />
-            )}
-            {normalized && (
-              <TokenCountPill
-                count={normalized.tokenUsage.totalTokens}
-                inputTokens={normalized.tokenUsage.inputTokens}
-                outputTokens={normalized.tokenUsage.outputTokens}
-                cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
-                cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
-              />
-            )}
-            {hasContextWindowUsage && (
-              <ContextWindowPill
-                used={contextWindowUsed}
-                limit={contextWindowLimit || 0}
-                taskMetadata={{
-                  model: task.model,
-                  duration_ms: task.duration_ms,
-                  agentic_tool,
-                  raw_sdk_response: task.raw_sdk_response,
-                  normalized_sdk_response: normalized ?? undefined,
-                }}
-              />
-            )}
-            {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
-            {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
-              <Flex gap={token.sizeUnit / 2} align="center">
-                <GitStatePill
-                  branch={task.git_state.ref_at_start}
-                  sha={task.git_state.sha_at_start}
-                  branchName={branchName}
-                  style={{ fontSize: 11 }}
-                />
-                {task.git_state.sha_at_end &&
-                  task.git_state.sha_at_end !== 'unknown' &&
-                  task.git_state.sha_at_end !== task.git_state.sha_at_start && (
-                    <>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                        →
-                      </Typography.Text>
-                      <GitStatePill
-                        branch={task.git_state.ref_at_end}
-                        sha={task.git_state.sha_at_end}
-                        branchName={branchName}
-                        showDirtyIndicator={true}
-                        style={{ fontSize: 11 }}
-                      />
-                    </>
-                  )}
-              </Flex>
-            )}
-            {task.report && (
-              <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>
-                Report
-              </Tag>
-            )}
+          <Flex align="center" gap={token.sizeUnit} style={{ minWidth: 0 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <CopyableContent
+                textContent={task.full_prompt || ''}
+                // Default offsets place the icon outside the wrapper, but the
+                // task header has rounded corners with overflow:hidden which
+                // clips it. Pull the icon inside the prompt row instead.
+                copyButtonOffset={{ top: 0, right: 0 }}
+              >
+                <Typography.Text
+                  ellipsis
+                  style={{
+                    marginBottom: slimInlineMeta ? 0 : token.sizeUnit,
+                    display: 'block',
+                    paddingRight: token.sizeUnit * 3,
+                  }}
+                >
+                  {task.full_prompt || 'User Prompt'}
+                </Typography.Text>
+              </CopyableContent>
+            </div>
+            {slimInlineMeta && taskMetaChips}
           </Flex>
+
+          {!slimInlineMeta && taskMetaChips}
         </Flex>
       </Flex>
     );
@@ -781,6 +873,28 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           block.message.role === MessageRole.ASSISTANT &&
                           blockIndex === blocks.length - 1;
 
+                        // Slim: intermediate narration renders as a quiet log
+                        // line — only the task's final reply gets the bubble.
+                        if (
+                          isSlim &&
+                          !isLatestMessage &&
+                          isPlainTextAssistantMessage(block.message)
+                        ) {
+                          return (
+                            <div
+                              key={block.message.message_id}
+                              data-conversation-block={getBlockMarker(block)}
+                              style={{
+                                padding: `${token.sizeUnit / 2}px 0`,
+                                fontSize: token.fontSizeSM,
+                                color: token.colorTextSecondary,
+                              }}
+                            >
+                              <MarkdownRenderer content={plainTextOf(block.message)} />
+                            </div>
+                          );
+                        }
+
                         return (
                           <div
                             key={block.message.message_id}
@@ -845,7 +959,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         placement="start"
                         avatar={
                           teammateEmoji ? (
-                            <AgorAvatar>{teammateEmoji}</AgorAvatar>
+                            isSlim ? (
+                              <AgorAvatar
+                                icon={<RobotOutlined />}
+                                style={{ backgroundColor: token.colorSuccess }}
+                              />
+                            ) : (
+                              <AgorAvatar>{teammateEmoji}</AgorAvatar>
+                            )
                           ) : agentic_tool ? (
                             <ToolIcon tool={agentic_tool} size={32} />
                           ) : (

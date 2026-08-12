@@ -15,6 +15,7 @@
 import type { AgorClient, Branch } from '@agor-live/client';
 import { render, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { UIModeProvider } from '../../contexts/UIModeContext';
 import { Ansi } from '../AnsiText';
 import { EnvironmentLogsModal } from './EnvironmentLogsModal';
 
@@ -110,5 +111,35 @@ describe('EnvironmentLogsModal', () => {
     const alert = await findByRole('alert');
     expect(within(alert).getByText('Error fetching logs')).toBeInTheDocument();
     expect(within(alert).getByText(/No logs command configured/)).toBeInTheDocument();
+  });
+});
+
+describe('EnvironmentLogsModal — slim mode', () => {
+  it('renders as a drawer instead of a modal', async () => {
+    localStorage.setItem('agor:uiMode', 'slim');
+    try {
+      const client = makeClient({
+        logs: 'Server started on port 3000',
+        timestamp: new Date('2026-05-10T12:00:00Z').toISOString(),
+        truncated: false,
+      });
+
+      const { findByText } = render(
+        <UIModeProvider>
+          <EnvironmentLogsModal
+            open
+            onClose={() => {}}
+            branch={mockBranch as Branch}
+            client={client}
+          />
+        </UIModeProvider>
+      );
+
+      expect(await findByText(/Server started on port 3000/)).toBeInTheDocument();
+      expect(document.querySelector('.ant-drawer')).toBeInTheDocument();
+      expect(document.querySelector('.ant-modal')).toBeNull();
+    } finally {
+      localStorage.removeItem('agor:uiMode');
+    }
   });
 });

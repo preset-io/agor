@@ -1,19 +1,27 @@
 import type { Branch, Repo } from '@agor-live/client';
+import { isTeammate } from '@agor-live/client';
 import {
   ApartmentOutlined,
+  BookOutlined,
   BranchesOutlined,
   CalendarOutlined,
+  DownOutlined,
   EditOutlined,
   FileTextOutlined,
   FireOutlined,
   FolderOutlined,
   GlobalOutlined,
+  LinkOutlined,
   PlayCircleOutlined,
+  RobotOutlined,
   StopOutlined,
   TeamOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
-import { Button, Tooltip, theme } from 'antd';
-import { Link } from 'react-router-dom';
+import type { MenuProps } from 'antd';
+import { Button, Dropdown, Tooltip, theme } from 'antd';
+import { Link, useNavigate } from 'react-router-dom';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
@@ -71,7 +79,12 @@ const NARROW_ACTION_BUTTON_STYLE: React.CSSProperties = {
   padding: 0,
 };
 
-export function BranchHeaderPill({
+export function BranchHeaderPill(props: BranchHeaderPillProps) {
+  const { isSlim } = useUIMode();
+  return isSlim ? <SlimBranchHeaderPill {...props} /> : <ClassicBranchHeaderPill {...props} />;
+}
+
+function ClassicBranchHeaderPill({
   repo,
   branch,
   sessionCount,
@@ -527,6 +540,387 @@ export function BranchHeaderPill({
           />
         </Tooltip>
       </div>
+    </Tag>
+  );
+}
+
+function SlimBranchHeaderPill({
+  repo,
+  branch,
+  sessionCount,
+  onOpenBranch,
+  onStartEnvironment,
+  onStopEnvironment,
+  onNukeEnvironment,
+  onViewLogs,
+  canControlEnvironment,
+  connectionDisabled = false,
+  showEnvButtons = true,
+  showNukeEnvironment = true,
+  identityLink,
+  truncateToFit = false,
+  compact = false,
+}: BranchHeaderPillProps) {
+  const { token } = theme.useToken();
+  const navigate = useNavigate();
+  const confirmNuke = useConfirmNukeEnvironment();
+  const effectiveEnv = getEffectiveEnv(repo);
+  const hasConfig = effectiveEnv.hasConfig;
+  const env = branch.environment_instance;
+  const inferredState = getEnvironmentState(env);
+  const environmentUrl = branch.app_url;
+  // Surface the active environment variant name on the label instead of the
+  // generic "env" — only when the repo defines more than one variant to
+  // distinguish (single-variant / v1 repos stay quiet as "env"). Mirrors
+  // EnvironmentPill on the board card.
+  const variantCount = repo.environment ? Object.keys(repo.environment.variants ?? {}).length : 0;
+  const envLabel =
+    branch.environment_variant && variantCount > 1 ? branch.environment_variant : 'env';
+  const variantPrefix = envLabel !== 'env' ? `${envLabel} · ` : '';
+  // If a parent has loaded effective branch access (e.g. BranchModal), honor
+  // that explicit decision. Otherwise do not infer from direct ownership or
+  // `others_can`: group grants are not present on this branch payload, and the
+  // daemon is the source of truth for environment authorization.
+  const resolvedCanControlEnvironment = canControlEnvironment ?? true;
+
+  const status = env?.status || 'stopped';
+  const isRunning = status === 'running';
+  const isStarting = status === 'starting';
+  const isStopping = status === 'stopping';
+  const canStop = status === 'running' || status === 'starting';
+  const startDisabled =
+    connectionDisabled ||
+    !resolvedCanControlEnvironment ||
+    !hasConfig ||
+    !onStartEnvironment ||
+    isStarting ||
+    isStopping ||
+    isRunning;
+  const stopDisabled =
+    connectionDisabled ||
+    !resolvedCanControlEnvironment ||
+    !hasConfig ||
+    !onStopEnvironment ||
+    isStopping ||
+    !canStop;
+
+  const identityContent = (
+    <>
+      <BranchesOutlined style={{ fontSize: 12, flexShrink: 0 }} />
+      {!compact && (
+        <>
+          <span
+            style={{
+              fontFamily: token.fontFamilyCode,
+              fontSize: token.fontSizeSM,
+              ...(truncateToFit
+                ? {
+                    flex: '0 1 auto',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }
+                : {}),
+            }}
+          >
+            {repo.slug}
+          </span>
+          <ApartmentOutlined style={{ fontSize: 10, opacity: 0.6, flexShrink: 0 }} />
+        </>
+      )}
+      <span
+        style={{
+          fontFamily: token.fontFamilyCode,
+          fontSize: token.fontSizeSM,
+          ...(truncateToFit
+            ? { flex: '1 1 auto', minWidth: 0 }
+            : { maxWidth: compact ? 220 : 180 }),
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {branch.name}
+      </span>
+      {/* Menu affordance — signals the identity is a dropdown trigger */}
+      <DownOutlined style={{ fontSize: 9, opacity: 0.65, flexShrink: 0 }} />
+    </>
+  );
+
+  // --- Environment status helpers ---
+
+  const getEnvTooltip = () => {
+    if (!hasConfig) return 'Click to configure environment';
+    const healthCheck = env?.last_health_check;
+    const healthMessage = healthCheck?.message ? ` - ${healthCheck.message}` : '';
+    switch (inferredState) {
+      case 'healthy':
+        return environmentUrl
+          ? `Healthy - ${environmentUrl}${healthMessage}`
+          : `Healthy${healthMessage}`;
+      case 'unhealthy':
+        return environmentUrl
+          ? `Unhealthy - ${environmentUrl}${healthMessage}`
+          : `Unhealthy${healthMessage}`;
+      case 'running':
+        return environmentUrl ? `Running - ${environmentUrl}` : 'Running (no health check)';
+      case 'starting':
+        return 'Starting...';
+      case 'stopping':
+        return 'Stopping...';
+      case 'error':
+        return 'Failed to start';
+      default:
+        return 'Stopped';
+    }
+  };
+
+  const openTab = (tab?: BranchModalTab) => onOpenBranch?.(branch.branch_id, tab);
+
+  // --- Branch menu ---
+
+  const tabItems: MenuProps['items'] = [
+    ...(identityLink
+      ? [
+          { key: 'open-link', label: 'Open session', icon: <LinkOutlined /> },
+          { type: 'divider' as const },
+        ]
+      : []),
+    { key: 'tab:general', label: 'General', icon: <EditOutlined /> },
+    ...(isTeammate(branch)
+      ? [{ key: 'tab:teammate', label: 'Teammate', icon: <RobotOutlined /> }]
+      : []),
+    {
+      key: 'tab:sessions',
+      label: `Sessions${sessionCount != null ? ` (${sessionCount})` : ''}`,
+      icon: <UnorderedListOutlined />,
+    },
+    { key: 'tab:environment', label: 'Environment', icon: <GlobalOutlined /> },
+    { key: 'tab:files', label: 'Files', icon: <FolderOutlined /> },
+    { key: 'tab:schedule', label: 'Schedule', icon: <CalendarOutlined /> },
+    { key: 'tab:knowledge', label: 'Knowledge', icon: <BookOutlined /> },
+  ];
+
+  const envActionItems: MenuProps['items'] =
+    showEnvButtons && hasConfig
+      ? [
+          { type: 'divider' as const },
+          ...(onStartEnvironment
+            ? [
+                {
+                  key: 'env:start',
+                  label: 'Start environment',
+                  icon: <PlayCircleOutlined />,
+                  disabled: startDisabled,
+                },
+              ]
+            : []),
+          ...(onStopEnvironment
+            ? [
+                {
+                  key: 'env:stop',
+                  label: isStarting ? 'Cancel startup' : 'Stop environment',
+                  icon: <StopOutlined />,
+                  disabled: stopDisabled,
+                },
+              ]
+            : []),
+          ...(onViewLogs && effectiveEnv.logs
+            ? [
+                {
+                  key: 'env:logs',
+                  label: 'View logs',
+                  icon: <FileTextOutlined />,
+                  disabled: !resolvedCanControlEnvironment,
+                },
+              ]
+            : []),
+          ...(showNukeEnvironment && !compact && onNukeEnvironment && branch.nuke_command
+            ? [
+                {
+                  key: 'env:nuke',
+                  label: 'Nuke environment',
+                  icon: <FireOutlined />,
+                  danger: true,
+                  disabled: connectionDisabled || !resolvedCanControlEnvironment,
+                },
+              ]
+            : []),
+        ]
+      : [];
+
+  const handleMenuClick: MenuProps['onClick'] = ({ key, domEvent }) => {
+    domEvent.stopPropagation();
+    if (key === 'open-link' && identityLink) {
+      if (identityLink.startsWith('/')) {
+        navigate(identityLink);
+      } else {
+        window.location.assign(identityLink);
+      }
+      return;
+    }
+    if (key.startsWith('tab:')) {
+      const tab = key.slice('tab:'.length) as BranchModalTab;
+      openTab(tab === 'general' ? undefined : tab);
+      return;
+    }
+    switch (key) {
+      case 'env:start':
+        onStartEnvironment?.(branch.branch_id);
+        break;
+      case 'env:stop':
+        onStopEnvironment?.(branch.branch_id);
+        break;
+      case 'env:logs':
+        onViewLogs?.(branch.branch_id);
+        break;
+      case 'env:nuke':
+        confirmNuke(() => onNukeEnvironment?.(branch.branch_id));
+        break;
+    }
+  };
+
+  const identityLabel = `${repo.slug} / ${branch.name}`;
+
+  // --- Render ---
+
+  return (
+    <Tag
+      color={ENTITY_PILL_COLORS.branch}
+      style={{
+        userSelect: 'none',
+        padding: 0,
+        overflow: 'hidden',
+        lineHeight: `${PILL_HEIGHT}px`,
+        display: 'inline-flex',
+        alignItems: 'stretch',
+        cursor: 'default',
+        // Content-sized, but never wider than the row: the identity section
+        // truncates before the action sections are pushed out of view.
+        ...(truncateToFit ? { maxWidth: '100%', minWidth: 0 } : {}),
+      }}
+    >
+      {/* Section 1: Repo + Branch — click opens the branch menu */}
+      <Dropdown
+        menu={{ items: [...tabItems, ...envActionItems], onClick: handleMenuClick }}
+        trigger={['click']}
+      >
+        <button
+          type="button"
+          aria-label={identityLabel}
+          aria-haspopup="menu"
+          onClick={(e) => e.stopPropagation()}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = token.colorFillSecondary;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'none';
+          }}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: compact ? '0 6px' : '0 8px',
+            cursor: 'pointer',
+            height: PILL_HEIGHT,
+            background: 'none',
+            border: 'none',
+            color: 'inherit',
+            font: 'inherit',
+            transition: 'background 0.15s',
+            ...(truncateToFit ? { flex: '1 1 auto', minWidth: 0, overflow: 'hidden' } : {}),
+          }}
+        >
+          {identityContent}
+        </button>
+      </Dropdown>
+
+      {/* Section 2: Environment status chip */}
+      {showEnvButtons && (
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 2,
+            padding: '0 4px',
+            height: PILL_HEIGHT,
+            borderLeft: `1px solid ${token.colorBorderSecondary}`,
+            flexShrink: 0,
+          }}
+        >
+          {hasConfig && isRunning && environmentUrl ? (
+            <Tooltip title={`${variantPrefix}Open ${environmentUrl}`}>
+              <a
+                href={environmentUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  color: 'inherit',
+                  textDecoration: 'none',
+                  padding: '0 2px',
+                }}
+              >
+                <EnvironmentStatusIcon state={inferredState} size={11} />
+                <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>{envLabel}</span>
+              </a>
+            </Tooltip>
+          ) : hasConfig ? (
+            <Tooltip title={`${variantPrefix}${getEnvTooltip()}`}>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openTab('environment');
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  cursor: 'pointer',
+                  padding: '0 2px',
+                  background: 'none',
+                  border: 'none',
+                  color: 'inherit',
+                  font: 'inherit',
+                }}
+              >
+                <EnvironmentStatusIcon state={inferredState} size={11} />
+                <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>{envLabel}</span>
+              </button>
+            </Tooltip>
+          ) : (
+            <Tooltip title="Configure environment">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openTab('environment');
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  cursor: 'pointer',
+                  opacity: 0.5,
+                  padding: '0 2px',
+                  background: 'none',
+                  border: 'none',
+                  color: 'inherit',
+                  font: 'inherit',
+                }}
+              >
+                <GlobalOutlined style={{ fontSize: 11 }} />
+                <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
+              </button>
+            </Tooltip>
+          )}
+        </div>
+      )}
     </Tag>
   );
 }

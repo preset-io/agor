@@ -46,6 +46,7 @@ import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
+import { UIModeProvider } from './contexts/UIModeContext';
 import {
   useAgorClient,
   useAgorData,
@@ -2044,7 +2045,9 @@ function App() {
   return (
     <BrowserRouter basename={basename}>
       <ThemeProvider>
-        <AppWrapper />
+        <UIModeProvider>
+          <AppWrapper />
+        </UIModeProvider>
       </ThemeProvider>
     </BrowserRouter>
   );

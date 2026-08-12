@@ -9,9 +9,11 @@ import {
 import { Button, Empty, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { memo, useMemo, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectSessionsByBranch } from '../../store/selectors';
 import { getTimeMs } from '../../utils/entityTime';
+import { nameInitial } from '../../utils/nameInitial';
 import { formatRelativeTime } from '../../utils/time';
 import { glassSurfaceStyle, withAlpha } from './homeStyles';
 import type { HomePageProps } from './types';
@@ -92,6 +94,7 @@ const BoardHomeCard = memo(function BoardHomeCard({
   onBoardClick: (boardId: string) => void;
 }) {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
 
@@ -152,7 +155,7 @@ const BoardHomeCard = memo(function BoardHomeCard({
               flexShrink: 0,
             }}
           >
-            {board.icon || '📋'}
+            {isSlim ? nameInitial(board.name) : board.icon || '📋'}
           </div>
 
           {/* Name + meta — all aligned under each other, to the right of the icon */}

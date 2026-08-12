@@ -13,6 +13,7 @@
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { Alert, Button, Space } from 'antd';
 import { useEffect, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useAgorStore } from '../../store/agorStore';
 import {
   BannerDecision,
@@ -94,6 +95,7 @@ export function OnboardingBanners({
   onCheckAuth,
   credentialVersion,
 }: OnboardingBannersProps) {
+  const { isSlim } = useUIMode();
   const [probeState, setProbeState] = useState<ProbeState>(ProbeState.Unknown);
   const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
   const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
@@ -176,7 +178,7 @@ export function OnboardingBanners({
     case BannerDecision.NoAi:
       return (
         <AmberBanner
-          message="⚡ No AI connected - sessions will open but nothing will run."
+          message={`${isSlim ? '' : '⚡ '}No AI connected - sessions will open but nothing will run.`}
           buttonLabel="Connect AI"
           onClick={() =>
             credentialOwner === 'tenant' && canManageWorkspaceCredentials

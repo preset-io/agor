@@ -25,8 +25,9 @@ import {
   UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
+import { Badge, Collapse, Popover, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
@@ -426,6 +427,8 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   taskMetadata,
   style,
 }) => {
+  const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   // Prefer the executor-supplied snapshot — its totalTokens/maxTokens are
   // authoritative (agent-reported), and its `percentage` matches the agent's
   // own "Context XX% used" display (e.g. Codex applies a baseline subtraction
@@ -447,13 +450,72 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
     return 'red';
   };
 
-  const pill = (
+  const ringColor = !hasLimit
+    ? token.colorInfo
+    : percentage < 50
+      ? token.colorSuccess
+      : percentage < 80
+        ? token.colorWarning
+        : token.colorError;
+
+  // Slim: a small progress ring, details on click. Classic: the % tag with
+  // details on hover.
+  const RING_SIZE = 16;
+  const RING_STROKE = 2.5;
+  const radius = (RING_SIZE - RING_STROKE) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const fillFraction = hasLimit ? Math.min(percentage, 100) / 100 : 0.25;
+
+  const trigger = isSlim ? (
+    <button
+      type="button"
+      aria-label={hasLimit ? `Context ${percentage}% used` : 'Context usage unknown'}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        cursor: 'pointer',
+        lineHeight: 0,
+        background: 'none',
+        border: 'none',
+        padding: 0,
+        ...style,
+      }}
+    >
+      <svg
+        width={RING_SIZE}
+        height={RING_SIZE}
+        viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+        style={{ transform: 'rotate(-90deg)' }}
+        aria-hidden="true"
+      >
+        <circle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={radius}
+          fill="none"
+          stroke={token.colorFillSecondary}
+          strokeWidth={RING_STROKE}
+        />
+        <circle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={radius}
+          fill="none"
+          stroke={ringColor}
+          strokeWidth={RING_STROKE}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - fillFraction)}
+        />
+      </svg>
+    </button>
+  ) : (
     <Tag icon={<PercentageOutlined />} color={getColor()} style={style}>
       {hasLimit ? `${percentage}%` : '?'}
     </Tag>
   );
 
-  return (
+  const popover = (
     <Popover
       content={
         <ContextWindowPopoverContent
@@ -464,13 +526,28 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
         />
       }
       title={null}
-      trigger="hover"
+      trigger={isSlim ? 'click' : 'hover'}
       placement="top"
       mouseEnterDelay={0.3}
     >
-      {pill}
+      {trigger}
     </Popover>
   );
+
+  // Slim's click trigger sits inside the clickable task row — stop the click
+  // at this boundary so opening the popover doesn't also expand the card.
+  if (isSlim) {
+    return (
+      <span
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        style={{ display: 'inline-flex', lineHeight: 0 }}
+      >
+        {popover}
+      </span>
+    );
+  }
+  return popover;
 };
 
 interface ModelPillProps extends BasePillProps {
@@ -542,6 +619,8 @@ interface GitStatePillProps extends BasePillProps {
   sha: string;
   branchName?: string; // Hide branch name if it matches branch name
   showDirtyIndicator?: boolean;
+  /** Unboxed rendering for dense rows: plain text, no Tag chrome. */
+  bare?: boolean;
 }
 
 export const GitStatePill: React.FC<GitStatePillProps> = ({
@@ -549,6 +628,7 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
   sha,
   branchName,
   showDirtyIndicator = true,
+  bare = false,
   style,
 }) => {
   const { token } = theme.useToken();
@@ -567,6 +647,30 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
     e.stopPropagation();
     await copyToClipboard(cleanSha);
   };
+
+  if (bare) {
+    // Unboxed variant for dense chip rows: plain tertiary monospace text,
+    // same tooltip and click-to-copy.
+    return (
+      <Tooltip title={tooltip}>
+        <Typography.Text
+          onClick={handleClick}
+          style={{
+            fontFamily: token.fontFamilyCode,
+            fontSize: 11,
+            color: token.colorTextTertiary,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            ...style,
+          }}
+        >
+          {shouldShowBranch && `${branch} : `}
+          {displaySha}
+          {showDirty && <DirtyDot />}
+        </Typography.Text>
+      </Tooltip>
+    );
+  }
 
   return (
     <Tooltip title={tooltip}>
@@ -854,6 +958,9 @@ export const EntityPill: React.FC<EntityPillProps> = ({
   style,
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
+  // Slim mode ignores emoji overrides — entity pills always show their icon.
+  const effectiveEmoji = isSlim ? undefined : emoji;
   const hasLabel = label !== undefined && label !== null && label !== '';
   const interactive = Boolean(onClick);
   const resolvedAriaLabel = ariaLabelProp ?? ariaLabel;
@@ -866,7 +973,7 @@ export const EntityPill: React.FC<EntityPillProps> = ({
 
   return (
     <Tag
-      icon={emoji ? undefined : icon}
+      icon={effectiveEmoji ? undefined : icon}
       color={color}
       title={title}
       aria-label={resolvedAriaLabel}
@@ -886,7 +993,7 @@ export const EntityPill: React.FC<EntityPillProps> = ({
           style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: emoji ? 4 : undefined,
+            gap: effectiveEmoji ? 4 : undefined,
             maxWidth: compact ? maxWidth : undefined,
             overflow: compact ? 'hidden' : undefined,
             textOverflow: compact ? 'ellipsis' : undefined,
@@ -895,7 +1002,7 @@ export const EntityPill: React.FC<EntityPillProps> = ({
             fontFamily: code ? token.fontFamilyCode : token.fontFamily,
           }}
         >
-          {emoji && <span style={{ fontFamily: token.fontFamily }}>{emoji}</span>}
+          {effectiveEmoji && <span style={{ fontFamily: token.fontFamily }}>{effectiveEmoji}</span>}
           {label}
         </span>
       )}

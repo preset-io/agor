@@ -20,6 +20,7 @@ import type {
 import {
   BorderOutlined,
   CommentOutlined,
+  CompassOutlined,
   DeleteOutlined,
   FileMarkdownOutlined,
   MinusOutlined,
@@ -60,7 +61,9 @@ import {
   useRegisterRecenter,
 } from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { agorStore, useAgorStore } from '../../store/agorStore';
 import {
@@ -458,7 +461,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onCommentSelect,
       staticCursors,
       staticCursorScale,
-      height = '100vh',
+      // Fill the hosting panel, not the viewport: inside the app shell the
+      // canvas sits below the 64px header, so a 100vh default overflowed the
+      // fold by exactly the header height (bottom toolbar/minimap clipped).
+      // Surfaces needing viewport sizing pass an explicit height.
+      height = '100%',
     }: SessionCanvasProps,
     ref
   ) => {
@@ -525,10 +532,18 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
     const [cardModalOpen, setCardModalOpen] = useState(false);
 
+    const { isSlim } = useUIMode();
+    const controlTooltipPlacement = isSlim ? ('top' as const) : ('right' as const);
+
     // Tool state for canvas annotations
     const [activeTool, setActiveTool] = useState<
       'select' | 'zone' | 'comment' | 'eraser' | 'markdown'
     >('select');
+
+    const [miniMapVisible, setMiniMapVisible] = useLocalStorage<boolean>(
+      'agor:board-minimap-visible',
+      true
+    );
 
     // Zone drawing state (drag-to-draw)
     const [drawingZone, setDrawingZone] = useState<{
@@ -2698,7 +2713,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         {scopedCustomCss && <style>{scopedCustomCss}</style>}
         <div
           ref={reactFlowWrapperRef}
-          className={boardCssClass || undefined}
+          className={
+            [boardCssClass, isSlim ? 'canvas-slim' : ''].filter(Boolean).join(' ') || undefined
+          }
           style={{
             width: '100%',
             height: '100%',
@@ -2751,13 +2768,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           >
             {!canvasBackground && <Background />}
             <Controls
-              position="top-left"
+              position={isSlim ? 'bottom-center' : 'top-left'}
               showZoom={false}
               showFitView={false}
               showInteractive={false}
             >
               {/* Zoom controls */}
-              <Tooltip title="Zoom In" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip title="Zoom In" placement={controlTooltipPlacement} mouseEnterDelay={0.3}>
                 <span>
                   <ControlButton
                     onClick={(e) => {
@@ -2769,7 +2786,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   </ControlButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Zoom Out" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip title="Zoom Out" placement={controlTooltipPlacement} mouseEnterDelay={0.3}>
                 <span>
                   <ControlButton
                     onClick={(e) => {
@@ -2781,7 +2798,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   </ControlButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Fit View" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip title="Fit View" placement={controlTooltipPlacement} mouseEnterDelay={0.3}>
                 <span>
                   <ControlButton
                     onClick={(e) => {
@@ -2794,7 +2811,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 </span>
               </Tooltip>
               {/* Custom toolbox buttons */}
-              <Tooltip title="Select" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip title="Select" placement={controlTooltipPlacement} mouseEnterDelay={0.3}>
                 <span>
                   <ControlButton
                     onClick={(e) => {
@@ -2802,10 +2819,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('select');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'select'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
+                      ...(activeTool === 'select'
+                        ? isSlim
+                          ? { background: token.colorFillSecondary }
+                          : {
+                              borderLeft: `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`,
+                            }
+                        : {}),
                     }}
                   >
                     <SelectOutlined style={{ fontSize: '16px' }} />
@@ -2814,7 +2834,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               </Tooltip>
               <Tooltip
                 title={mutationGate.canMutate ? 'Add Zone' : (mutationGate.message ?? 'Add Zone')}
-                placement="right"
+                placement={controlTooltipPlacement}
                 mouseEnterDelay={0.3}
               >
                 <span>
@@ -2825,10 +2845,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('zone');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'zone'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
+                      ...(activeTool === 'zone'
+                        ? isSlim
+                          ? { background: token.colorFillSecondary }
+                          : {
+                              borderLeft: `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`,
+                            }
+                        : {}),
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2841,7 +2864,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 title={
                   mutationGate.canMutate ? 'Add Comment' : (mutationGate.message ?? 'Add Comment')
                 }
-                placement="right"
+                placement={controlTooltipPlacement}
                 mouseEnterDelay={0.3}
               >
                 <span>
@@ -2852,10 +2875,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('comment');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'comment'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
+                      ...(activeTool === 'comment'
+                        ? isSlim
+                          ? { background: token.colorFillSecondary }
+                          : {
+                              borderLeft: `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`,
+                            }
+                        : {}),
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2870,7 +2896,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     ? 'Add Markdown Note — click canvas to place'
                     : (mutationGate.message ?? 'Add Markdown Note — click canvas to place')
                 }
-                placement="right"
+                placement={controlTooltipPlacement}
                 mouseEnterDelay={0.3}
               >
                 <span>
@@ -2882,10 +2908,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('markdown');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'markdown'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
+                      ...(activeTool === 'markdown'
+                        ? isSlim
+                          ? { background: token.colorFillSecondary }
+                          : {
+                              borderLeft: `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`,
+                            }
+                        : {}),
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2900,7 +2929,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     ? 'Eraser - Click to toggle'
                     : (mutationGate.message ?? 'Eraser')
                 }
-                placement="right"
+                placement={controlTooltipPlacement}
                 mouseEnterDelay={0.3}
               >
                 <span>
@@ -2911,8 +2940,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
                     }}
                     style={{
-                      borderLeft:
-                        activeTool === 'eraser' ? `3px solid ${token.colorError}` : 'none',
+                      ...(activeTool === 'eraser' && !isSlim
+                        ? { borderLeft: `3px solid ${token.colorError}` }
+                        : {}),
                       color: activeTool === 'eraser' ? token.colorError : 'inherit',
                       backgroundColor:
                         activeTool === 'eraser' ? `${token.colorError}15` : 'transparent',
@@ -2924,20 +2954,42 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   </ControlButton>
                 </span>
               </Tooltip>
+              <Tooltip
+                title={miniMapVisible ? 'Hide Minimap' : 'Show Minimap'}
+                placement="right"
+                mouseEnterDelay={0.3}
+              >
+                <span>
+                  <ControlButton
+                    aria-label={miniMapVisible ? 'Hide Minimap' : 'Show Minimap'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMiniMapVisible(!miniMapVisible);
+                    }}
+                    style={{
+                      background: miniMapVisible ? token.colorFillSecondary : 'transparent',
+                    }}
+                  >
+                    <CompassOutlined style={{ fontSize: '16px' }} />
+                  </ControlButton>
+                </span>
+              </Tooltip>
             </Controls>
-            <MiniMap
-              nodeColor={miniMapNodeColor}
-              onClick={handleMiniMapClick}
-              pannable
-              zoomable
-              style={{
-                backgroundColor: token.colorBgElevated,
-                border: `1px solid ${token.colorBorder}`,
-              }}
-              maskColor="rgba(0, 0, 0, 0.5)"
-              maskStrokeColor={token.colorPrimary}
-              maskStrokeWidth={2}
-            />
+            {miniMapVisible && (
+              <MiniMap
+                nodeColor={miniMapNodeColor}
+                onClick={handleMiniMapClick}
+                pannable
+                zoomable
+                style={{
+                  backgroundColor: token.colorBgElevated,
+                  border: `1px solid ${token.colorBorder}`,
+                }}
+                maskColor="rgba(0, 0, 0, 0.5)"
+                maskStrokeColor={token.colorPrimary}
+                maskStrokeWidth={2}
+              />
+            )}
             <RemoteCursorLayer
               client={client}
               boardId={(board?.board_id as BoardID | null) ?? null}

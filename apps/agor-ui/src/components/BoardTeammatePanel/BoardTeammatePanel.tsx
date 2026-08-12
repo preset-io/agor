@@ -1,6 +1,6 @@
 import type { AgorClient, Board, Branch, Repo, SpawnConfig, User } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
+import { LeftOutlined, RightOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
   App as AntApp,
@@ -18,6 +18,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectBranchById,
@@ -137,6 +138,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   client,
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
   const { message } = AntApp.useApp();
   // Subscribe to entity maps by slice from the store: each selector only wakes
   // this panel when its own slice changes.
@@ -379,7 +381,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               >
                 {isCreating ? (
                   <Spin />
-                ) : teammateConfig?.emoji ? (
+                ) : teammateConfig?.emoji && !isSlim ? (
                   <span style={{ fontSize: 30 }}>{teammateConfig.emoji}</span>
                 ) : (
                   <RobotOutlined style={{ fontSize: 30, color: token.colorInfo }} />
@@ -515,6 +517,121 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       </div>
     );
   })();
+
+  const sectionTitles: Record<BoardTeammatePanelTab, string> = {
+    teammate: 'Teammate',
+    'all-sessions': 'Sessions',
+    'all-branches': 'Branches',
+    comments: 'Comments',
+  };
+
+  const noBoard = <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No board selected" />;
+
+  const sectionContent = (() => {
+    switch (activeTab) {
+      case 'teammate':
+        return <div style={{ height: '100%', overflow: 'auto' }}>{teammateContent}</div>;
+      case 'all-sessions':
+        return board ? (
+          <div style={{ height: '100%', overflow: 'auto' }}>
+            {sessionDetailsHydrated ? (
+              <BoardSessionList
+                board={board}
+                currentBoardId={board.board_id}
+                branchById={branchById}
+                repoById={repoById}
+                sessionsByBranch={sessionsByBranch}
+                onSessionClick={onSessionClick}
+              />
+            ) : (
+              <div style={{ padding: 16 }}>
+                <Skeleton active paragraph={{ rows: 4 }} title={false} />
+              </div>
+            )}
+          </div>
+        ) : (
+          noBoard
+        );
+      case 'all-branches':
+        return board ? (
+          <div style={{ height: '100%', overflow: 'auto' }}>
+            {sessionDetailsHydrated ? (
+              <BoardBranchList board={board} repoById={repoById} client={client} />
+            ) : (
+              <div style={{ padding: 16 }}>
+                <Skeleton active paragraph={{ rows: 4 }} title={false} />
+              </div>
+            )}
+          </div>
+        ) : (
+          noBoard
+        );
+      case 'comments':
+        return board ? (
+          <div style={{ height: '100%' }}>
+            <CommentsPanel
+              client={client}
+              boardId={board.board_id}
+              comments={comments}
+              userById={userById}
+              currentUserId={currentUserId || 'unknown'}
+              boardObjects={boardObjects}
+              branchById={branchById}
+              onSendComment={(content) => onSendComment?.(content)}
+              onReplyComment={onReplyComment}
+              onResolveComment={onResolveComment}
+              onToggleReaction={onToggleReaction}
+              onDeleteComment={onDeleteComment}
+              hoveredCommentId={hoveredCommentId}
+              selectedCommentId={selectedCommentId}
+            />
+          </div>
+        ) : (
+          noBoard
+        );
+    }
+  })();
+
+  // No tab bar: the persistent icon rail (TeammatePanelRail, rendered by App
+  // beside this panel) owns section switching. The panel is content plus a
+  // slim title header.
+  if (isSlim) {
+    return (
+      <div
+        style={{
+          height: '100%',
+          background: token.colorBgContainer,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 12px',
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
+            flexShrink: 0,
+          }}
+        >
+          <Typography.Text strong>{sectionTitles[activeTab]}</Typography.Text>
+          {onCollapse && (
+            <Tooltip title="Collapse panel" placement="bottom">
+              <Button
+                type="text"
+                size="small"
+                icon={<RightOutlined style={{ fontSize: 11 }} />}
+                onClick={onCollapse}
+              />
+            </Tooltip>
+          )}
+        </div>
+        <div style={{ flex: 1, minHeight: 0 }}>{sectionContent}</div>
+      </div>
+    );
+  }
 
   return (
     <div

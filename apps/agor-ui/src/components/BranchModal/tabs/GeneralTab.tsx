@@ -3,6 +3,7 @@ import { isTeammate } from '@agor-live/client';
 import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
+import { useUIMode } from '../../../contexts/UIModeContext';
 import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
 import { MCPServerSelect } from '../../MCPServerSelect';
@@ -44,6 +45,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   setField,
   onArchiveOrDelete,
 }) => {
+  const { isSlim } = useUIMode();
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
 
   const handleArchiveOrDelete = (options: {
@@ -126,7 +128,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                   .sort((a, b) => a.name.localeCompare(b.name))
                   .map((board) => ({
                     value: board.board_id,
-                    label: `${board.icon || '📋'} ${board.name}`,
+                    label: isSlim ? board.name : `${board.icon || '📋'} ${board.name}`,
                   }))}
               />
             </Form.Item>

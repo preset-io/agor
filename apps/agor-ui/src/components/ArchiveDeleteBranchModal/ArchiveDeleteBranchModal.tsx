@@ -1,6 +1,7 @@
 import type { Branch } from '@agor-live/client';
 import { Alert, Modal, Radio, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { useUIMode } from '../../contexts/UIModeContext';
 
 const { Text } = Typography;
 
@@ -28,6 +29,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   onCancel,
   afterClose,
 }) => {
+  const { isSlim } = useUIMode();
   const [filesystemAction, setFilesystemAction] = useState<'preserved' | 'cleaned' | 'deleted'>(
     'cleaned'
   );
@@ -157,7 +159,8 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                 <Text>• Links to issues/PRs will be removed forever</Text>
                 <Text>• This action cannot be undone</Text>
                 <Text strong style={{ marginTop: 8, display: 'block' }}>
-                  💡 Consider archiving instead - keeps data for history but hides from board
+                  {isSlim ? '' : '💡 '}Consider archiving instead - keeps data for history but hides
+                  from board
                 </Text>
               </Space>
             }

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { theme } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { TeammatePanelRail } from './TeammatePanelRail';
 
@@ -48,5 +49,13 @@ describe('TeammatePanelRail', () => {
     render(<TeammatePanelRail onSelectTab={vi.fn()} unreadCommentsCount={3} />);
 
     expect(screen.getByText('3')).toBeInTheDocument();
+  });
+
+  it('uses mention emphasis for unread comments that mention the current user', () => {
+    render(<TeammatePanelRail onSelectTab={vi.fn()} unreadCommentsCount={1} hasUserMentions />);
+
+    expect(screen.getByText('1').closest('.ant-badge-count')).toHaveStyle({
+      backgroundColor: theme.getDesignToken().colorError,
+    });
   });
 });

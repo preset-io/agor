@@ -31,7 +31,7 @@ import {
 } from '@agor-live/client';
 import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
-import { Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
+import { Button, Collapse, Divider, Form, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectSessionMcpServerIds } from '../../store/selectors';
@@ -48,6 +48,7 @@ import { CallbackConfigForm } from '../CallbackConfigForm';
 import { CallbackTargetDisplay } from '../CallbackToggleButton';
 import { CodexSettingsForm } from '../CodexSettingsForm';
 import { ErrorBoundary } from '../ErrorBoundary';
+import { ModalOrDrawer } from '../ModalOrDrawer';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionIdsList } from '../SessionIds';
 import { SessionMetadataForm } from '../SessionMetadataForm';
@@ -411,26 +412,45 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
 
   if (!activeAgenticTool) {
     return (
-      <Modal title="Historical Session" open={open} onCancel={onClose} footer={null} width={600}>
+      <ModalOrDrawer
+        title="Historical Session"
+        open={open}
+        onClose={onClose}
+        modal={{ footer: null, width: 600 }}
+        drawer={{ placement: 'right', size: 600, mask: false }}
+      >
         <Typography.Paragraph>
           This session used the removed experimental Claude Code CLI integration. Its stored
           metadata and conversation remain readable, but its runtime settings cannot be changed and
           the session cannot be resumed.
         </Typography.Paragraph>
         <SessionIdsList session={session} />
-      </Modal>
+      </ModalOrDrawer>
     );
   }
 
+  // Classic: centered modal with built-in Save/Cancel. Slim: right-hand
+  // drawer beside the session panel (no mask), with an explicit footer.
   return (
-    <Modal
+    <ModalOrDrawer
       title="Session Settings"
       open={open}
-      onOk={handleOk}
-      onCancel={handleCancel}
-      okText="Save"
-      cancelText="Cancel"
-      width={600}
+      onClose={handleCancel}
+      modal={{ onOk: handleOk, okText: 'Save', cancelText: 'Cancel', width: 600 }}
+      drawer={{
+        placement: 'right',
+        size: 600,
+        mask: false,
+        footer: (
+          <Space>
+            <Button onClick={handleCancel}>Cancel</Button>
+            <Button type="primary" onClick={handleOk}>
+              Save
+            </Button>
+          </Space>
+        ),
+        styles: { footer: { textAlign: 'right' } },
+      }}
     >
       <Form
         form={form}
@@ -473,6 +493,6 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           items={secondaryItems}
         />
       </Form>
-    </Modal>
+    </ModalOrDrawer>
   );
 };

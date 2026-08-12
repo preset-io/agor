@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import { App, Button, Card, Collapse, Space, Typography } from 'antd';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { parseGitStateSha } from '../../utils/gitState';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
@@ -57,6 +58,7 @@ const SessionCard = ({
   zoneColor,
   defaultExpanded = true,
 }: SessionCardProps) => {
+  const { isSlim } = useUIMode();
   const { modal } = App.useApp();
   const connectionDisabled = useConnectionDisabled();
 
@@ -279,7 +281,8 @@ const SessionCard = ({
           <div style={{ marginBottom: 8 }}>
             <Space size={4}>
               <Typography.Text type="secondary">
-                📍 {latestRef} @ {cleanSha.substring(0, 7)}
+                {isSlim ? '' : '📍 '}
+                {latestRef} @ {cleanSha.substring(0, 7)}
               </Typography.Text>
               {isDirty && (
                 <Tag icon={<EditOutlined />} color="orange" style={{ fontSize: 11 }}>
@@ -294,7 +297,7 @@ const SessionCard = ({
         {/* {session.contextFiles && session.contextFiles.length > 0 && (
           <div style={{ marginBottom: 12 }}>
             <Space size={4} wrap>
-              <Typography.Text type="secondary">📦</Typography.Text>
+              {!isSlim && <Typography.Text type="secondary">📦</Typography.Text>}
               {session.contextFiles.map((file) => (
                 <Tag key={file} color="geekblue">
                   {file}

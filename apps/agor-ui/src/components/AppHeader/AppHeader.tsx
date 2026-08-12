@@ -1,5 +1,5 @@
 import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
-import { BulbOutlined } from '@ant-design/icons';
+import { BulbOutlined, CheckOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { memo, useMemo } from 'react';
@@ -7,6 +7,7 @@ import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
@@ -94,6 +95,9 @@ const RecentBoardPills: React.FC<{
   );
 };
 
+const uiModeCheckIcon = <CheckOutlined />;
+const uiModeBlankIcon = <span style={{ width: 14, display: 'inline-block' }} />;
+
 const AppHeaderInner: React.FC<AppHeaderProps> = ({
   user,
   presenceClient = null,
@@ -121,6 +125,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
   const { themeMode, setThemeMode } = useTheme();
+  const { uiMode, setUIMode, isSlim } = useUIMode();
 
   // Entity state via narrow store subscriptions rather than props. Each
   // whole-map selector is a stable module-level reference, so the header
@@ -167,6 +172,24 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
       key: 'theme',
       label: 'Theme',
       children: buildThemeMenuItems(themeMode, setThemeMode, onThemeEditorClick),
+    },
+    {
+      key: 'ui-mode',
+      label: 'Appearance',
+      children: [
+        {
+          key: 'ui-mode-classic',
+          label: 'Classic',
+          icon: uiMode === 'classic' ? uiModeCheckIcon : uiModeBlankIcon,
+          onClick: () => setUIMode('classic'),
+        },
+        {
+          key: 'ui-mode-slim',
+          label: 'Slim',
+          icon: uiMode === 'slim' ? uiModeCheckIcon : uiModeBlankIcon,
+          onClick: () => setUIMode('slim'),
+        },
+      ],
     },
     { type: 'divider' as const },
     {
@@ -248,7 +271,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             onUpdateBoard={onUpdateBoard}
           />
         </div>
-        {boards.length > 0 && (
+        {boards.length > 0 && !isSlim && (
           <RecentBoardPills
             recentBoards={recentBoards}
             onBoardChange={onBoardChange || (() => {})}

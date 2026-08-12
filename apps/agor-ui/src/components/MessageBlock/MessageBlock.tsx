@@ -28,6 +28,7 @@ import { Button, Tooltip, theme } from 'antd';
 
 import React, { useState } from 'react';
 import { BRAND, brandBadgeHref } from '../../branding/brand';
+import { useUIMode } from '../../contexts/UIModeContext';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -211,11 +212,13 @@ function getAgentAvatar({
   teammateEmoji,
   agentic_tool,
   isCallback,
+  isSlim,
   token,
 }: {
   teammateEmoji?: string;
   agentic_tool?: string;
   isCallback?: boolean;
+  isSlim?: boolean;
   token: ReturnType<typeof theme.useToken>['token'];
 }): React.ReactNode {
   if (isCallback) {
@@ -230,6 +233,12 @@ function getAgentAvatar({
     );
   }
   if (teammateEmoji) {
+    // Slim mode replaces the teammate emoji with the neutral robot avatar.
+    if (isSlim) {
+      return (
+        <AgorAvatar icon={<RobotOutlined />} style={{ backgroundColor: token.colorBgContainer }} />
+      );
+    }
     return <AgorAvatar>{teammateEmoji}</AgorAvatar>;
   }
   if (agentic_tool) {
@@ -338,6 +347,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   onOpenAgenticToolSettings,
 }) => {
   const { token } = theme.useToken();
+  const { isSlim } = useUIMode();
 
   // Handle permission request messages specially
   if (message.type === 'permission_request') {
@@ -618,7 +628,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           // Task tools: render as text message (spinner is shown in the tool chain)
           const subagentType = toolUse.input.subagent_type || 'Task';
           const description = toolUse.input.description || '';
-          const taskText = `🔧 **Task (${subagentType}):** ${description}`;
+          const taskText = isSlim
+            ? `**Task (${subagentType}):** ${description}`
+            : `🔧 **Task (${subagentType}):** ${description}`;
 
           textBeforeTools.push(taskText);
         } else {
@@ -674,7 +686,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           const avatar = isUser ? (
             <UserIdentityAvatar user={currentUser} />
           ) : (
-            getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token })
+            getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, isSlim, token })
           );
 
           return (
@@ -710,15 +722,18 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                       }}
                     >
                       {textBeforeTools.map((text) => {
-                        // Use CollapsibleMarkdown for long text blocks (15+ lines)
-                        const shouldTruncate = text.split('\n').length > 15;
+                        // Callback prompt echoes (child-session notifications)
+                        // duplicate what the collapsed summary already says —
+                        // cap them hard. Regular text truncates at 15+ lines.
+                        const truncateAt = isSlim && isCallback ? 4 : 15;
+                        const shouldTruncate = text.split('\n').length > truncateAt;
 
                         return (
                           <div key={`text-${text.length}-${text.substring(0, 32)}`}>
                             {shouldTruncate ? (
                               <CollapsibleMarkdown
-                                maxLines={10}
-                                defaultExpanded={isLatestMessage}
+                                maxLines={isSlim && isCallback ? 3 : 10}
+                                defaultExpanded={isLatestMessage && !(isSlim && isCallback)}
                                 isStreaming={isStreaming}
                               >
                                 {text}
@@ -819,7 +834,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {/* Response text after tools */}
       {hasTextAfter &&
         (() => {
-          const avatar = getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token });
+          const avatar = getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, isSlim, token });
 
           return (
             <div style={{ margin: `${token.sizeUnit}px 0` }}>
@@ -848,12 +863,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                     <div style={{ wordWrap: 'break-word' }}>
                       {(() => {
                         const combinedText = textAfterTools.join('\n\n');
-                        const shouldTruncate = combinedText.split('\n').length > 15;
+                        const truncateAt = isSlim && isCallback ? 4 : 15;
+                        const shouldTruncate = combinedText.split('\n').length > truncateAt;
 
                         return shouldTruncate ? (
                           <CollapsibleMarkdown
-                            maxLines={10}
-                            defaultExpanded={isLatestMessage}
+                            maxLines={isSlim && isCallback ? 3 : 10}
+                            defaultExpanded={isLatestMessage && !(isSlim && isCallback)}
                             isStreaming={isStreaming}
                           >
                             {combinedText}
