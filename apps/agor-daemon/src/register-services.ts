@@ -597,7 +597,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Config, context, file, files, terminals
   // ============================================================================
 
-  const configService = createConfigService(db);
+  const configService = createConfigService(db, config);
   configService.app = app;
   // Host ACL/user/group operations exist only on a self-hosted daemon host. Hosted
   // registration is intentionally absent rather than forwarding privileged
@@ -626,7 +626,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
   });
 
-  app.use('/check-auth', createCheckAuthService(db));
+  app.use('/check-auth', createCheckAuthService(db, config));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
 
   registerOpenCodeServices(ctx);

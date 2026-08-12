@@ -10,9 +10,14 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { __resetConfigCacheForTests } from '@agor/core/config';
+import { __resetConfigCacheForTests, loadConfigSync } from '@agor/core/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildResolvedConfigSlice, withResolvedConfig } from './build-resolved-config-slice';
+import {
+  buildResolvedConfigSlice,
+  configureResolvedConfigSlice,
+  resetResolvedConfigSliceForTests,
+  withResolvedConfig,
+} from './build-resolved-config-slice';
 
 describe('buildResolvedConfigSlice', () => {
   let tempDir: string;
@@ -21,12 +26,19 @@ describe('buildResolvedConfigSlice', () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-rcs-'));
     vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
     __resetConfigCacheForTests();
+    configureResolvedConfigSlice(loadConfigSync());
   });
 
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
     __resetConfigCacheForTests();
+    resetResolvedConfigSliceForTests();
+  });
+
+  it('fails closed before initialization from the effective daemon config', () => {
+    resetResolvedConfigSliceForTests();
+    expect(() => withResolvedConfig({ command: 'prompt' })).toThrow(/not initialized/);
   });
 
   /**
@@ -42,7 +54,7 @@ describe('buildResolvedConfigSlice', () => {
 
   it('surfaces permission_timeout_ms from execution.*', async () => {
     await writeConfigYaml('execution:\n  permission_timeout_ms: 1234\n');
-    const slice = buildResolvedConfigSlice();
+    const slice = buildResolvedConfigSlice(loadConfigSync());
     expect(slice).toMatchObject({
       execution: { permission_timeout_ms: 1234 },
     });
@@ -61,7 +73,7 @@ describe('buildResolvedConfigSlice', () => {
         '',
       ].join('\n')
     );
-    const slice = buildResolvedConfigSlice();
+    const slice = buildResolvedConfigSlice(loadConfigSync());
     expect(slice.execution?.executor_heartbeat).toEqual({ enabled: false, interval_ms: 2500 });
     expect(slice.execution?.executor_heartbeat).not.toHaveProperty('stale_after_ms');
     expect(slice.execution?.executor_heartbeat).not.toHaveProperty('callback');
@@ -69,14 +81,14 @@ describe('buildResolvedConfigSlice', () => {
 
   it('surfaces daemon.host_ip_address', async () => {
     await writeConfigYaml('daemon:\n  host_ip_address: 10.0.0.5\n');
-    const slice = buildResolvedConfigSlice();
+    const slice = buildResolvedConfigSlice(loadConfigSync());
     expect(slice).toMatchObject({
       daemon: { host_ip_address: '10.0.0.5' },
     });
   });
 
   it('freezes heartbeat and observe-only watchdog defaults into the payload', () => {
-    const slice = buildResolvedConfigSlice();
+    const slice = buildResolvedConfigSlice(loadConfigSync());
     expect(slice).toEqual({
       execution: {
         executor_heartbeat: { enabled: true, interval_ms: 10_000 },
@@ -100,7 +112,7 @@ describe('buildResolvedConfigSlice', () => {
         '',
       ].join('\n')
     );
-    const slice = buildResolvedConfigSlice();
+    const slice = buildResolvedConfigSlice(loadConfigSync());
     // The slice is shipped to the executor as JSON via stdin; this asserts
     // the in-memory shape and the wire shape are identical so tests on
     // either side stay honest.
@@ -126,7 +138,10 @@ describe('buildResolvedConfigSlice', () => {
         '',
       ].join('\n')
     );
-    const slice = buildResolvedConfigSlice() as Record<string, Record<string, unknown>>;
+    const slice = buildResolvedConfigSlice(loadConfigSync()) as Record<
+      string,
+      Record<string, unknown>
+    >;
     // Allowed fields surface.
     expect(slice.execution?.permission_timeout_ms).toBe(60_000);
     expect(slice.execution?.executor_heartbeat).toEqual({ enabled: true, interval_ms: 10_000 });
@@ -151,7 +166,7 @@ describe('buildResolvedConfigSlice', () => {
         '',
       ].join('\n')
     );
-    const slice = buildResolvedConfigSlice();
+    const slice = buildResolvedConfigSlice(loadConfigSync());
     const parsed = ResolvedConfigSliceSchema.parse(slice);
     expect(parsed).toEqual(slice);
   });
@@ -183,12 +198,14 @@ describe('withResolvedConfig', () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-with-rc-'));
     vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
     __resetConfigCacheForTests();
+    configureResolvedConfigSlice(loadConfigSync());
   });
 
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
     __resetConfigCacheForTests();
+    resetResolvedConfigSliceForTests();
   });
 
   it('injects a daemon-resolved slice when the payload has no resolvedConfig', () => {

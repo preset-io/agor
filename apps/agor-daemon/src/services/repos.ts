@@ -19,7 +19,6 @@ import {
   getReposDir,
   isValidGitUrl,
   isValidSlug,
-  loadConfigSync,
   normalizeRepoUrl,
   PAGINATION,
   resolveBranchStorageConfig,
@@ -136,7 +135,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   ): Promise<Repo | Repo[]> {
     const rows = Array.isArray(data) ? data : [data];
     if (
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth' &&
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth' &&
       rows.some((row) => row.repo_type === 'local')
     ) {
       throw new BadRequest(
@@ -153,7 +152,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   ): Promise<Repo | Repo[]> {
     if (
       data.repo_type === 'local' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       if (!id) {
         throw new BadRequest(
@@ -268,7 +267,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // lifecycle identity; the post-clone group initialization grants the
     // creator access. Requesting-user impersonation cannot create the first
     // slug directory in strict mode.
-    const asUser = await resolveGitImpersonationForUser(this.db, userId);
+    const asUser = await resolveGitImpersonationForUser(this.db, userId, this.app.get('config'));
 
     // Pre-create the repo row with `clone_status: 'cloning'` so failures stay
     // queryable via `agor_repos_get(repoId)`. Pre-#1126 the row was only
@@ -329,7 +328,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           createDbRecord: true,
           userId: userId as string | undefined,
           initUnixGroup,
-          ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
+          ...(initUnixGroup ? { daemonUser: this.app.get('config').daemon?.unix_user } : {}),
         },
       },
       {
@@ -486,7 +485,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     if (
       effectiveType === 'local' &&
       current.repo_type !== 'local' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         'Local repository registration is unavailable in hosted multi-tenant mode.'
@@ -510,7 +509,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { path: string; slug?: string },
     params?: RepoParams
   ): Promise<Repo> {
-    if (resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth') {
+    if (resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth') {
       throw new BadRequest(
         'Local repository registration is unavailable in hosted multi-tenant mode.'
       );
@@ -525,7 +524,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    const asUser = await resolveExecutorReadAsUser(this.db, userId);
+    const asUser = await resolveExecutorReadAsUser(this.db, userId, this.app.get('config'));
     const inspection = await runExecutorCommand(
       {
         command: 'git.repo.inspect',
@@ -658,7 +657,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     ensureBranchStorageModeAllowed(storageMode);
     if (
       storageMode === 'worktree' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
@@ -924,7 +923,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       // branch through its group/ACL, but cannot create a child beneath the
       // daemon-owned worktree root or mutate the base repo's .git/worktrees.
       // Keep resolveExecutorReadAsUser for read/probe commands only.
-      const asUser = await resolveGitImpersonationForUser(this.db, userId);
+      const asUser = await resolveGitImpersonationForUser(this.db, userId, this.app.get('config'));
 
       spawnExecutorFireAndForget(
         {
@@ -937,10 +936,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             userId: userId as string | undefined,
             // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
-            ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
+            ...(initUnixGroup ? { daemonUser: this.app.get('config').daemon?.unix_user } : {}),
             fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
             useReference:
-              storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
+              storageMode === 'clone' &&
+              !!repo.local_path &&
+              shouldUseCloneReferencePath(this.app.get('config')),
           },
         },
         {
@@ -997,7 +998,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       this.db,
       (serviceParams as Partial<AuthenticatedParams> | undefined)?.user?.user_id as
         | UserID
-        | undefined
+        | undefined,
+      this.app.get('config')
     );
 
     return runExecutorCommand(

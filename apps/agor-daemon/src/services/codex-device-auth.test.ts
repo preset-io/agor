@@ -53,7 +53,7 @@ function makeApp() {
     get: vi.fn(async () => ({ agentic_auth_methods: {} })),
     patch: vi.fn(async () => ({})),
   };
-  return { app: { service: () => usersService }, usersService };
+  return { app: { get: () => loadConfigSyncMock(), service: () => usersService }, usersService };
 }
 
 const AUTH_PARAMS = {

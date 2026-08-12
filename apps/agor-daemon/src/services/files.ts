@@ -126,7 +126,11 @@ export class FilesService {
           // In strict mode, autocomplete runs as the requesting Unix user.
           // In simple/insulated mode this stays undefined so default installs
           // do not require sudo and configured executor defaults can apply.
-          asUser: await resolveExecutorReadAsUser(this.db, currentUser ?? currentUserId),
+          asUser: await resolveExecutorReadAsUser(
+            this.db,
+            currentUser ?? currentUserId,
+            this.app.get('config')
+          ),
         }
       );
 

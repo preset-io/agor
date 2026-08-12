@@ -10,8 +10,6 @@ import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type AgorConfig,
-  isUnixImpersonationEnabled,
-  loadConfig,
   type ResolvedDeploymentConfig,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
@@ -67,6 +65,7 @@ import type {
   BoardID,
   Branch,
   BranchID,
+  DeepReadonly,
   GroupID,
   HookContext,
   MCPServer,
@@ -210,14 +209,13 @@ export function shouldValidateRepoEnvironmentPayload(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-async function getManagedEnvExecutionMode() {
-  const config = await loadConfig();
+function getManagedEnvExecutionMode(config: DeepReadonly<AgorConfig>) {
   return config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
 }
 
-function validateRepoEnvPolicyHook() {
+function validateRepoEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
   return async (context: HookContext) => {
-    const mode = await getManagedEnvExecutionMode();
+    const mode = getManagedEnvExecutionMode(config);
     const items = Array.isArray(context.data) ? context.data : [context.data];
 
     for (const item of items as Array<Record<string, unknown>>) {
@@ -261,7 +259,7 @@ function branchEnvFieldsFromItem(item: Partial<Branch>) {
   };
 }
 
-function validateBranchEnvPolicyHook() {
+function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
   return async (context: HookContext) => {
     const items = Array.isArray(context.data) ? context.data : [context.data];
     const shouldValidate = (items as Array<Record<string, unknown>>).some((item) =>
@@ -269,7 +267,7 @@ function validateBranchEnvPolicyHook() {
     );
     if (!shouldValidate) return context;
 
-    const mode = await getManagedEnvExecutionMode();
+    const mode = getManagedEnvExecutionMode(config);
     for (const raw of items as Array<Partial<Branch>>) {
       let item = raw;
       if (context.method === 'patch' && context.id !== null && context.id !== undefined) {
@@ -1434,17 +1432,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
         requireAdminForEnvConfig(),
-        validateRepoEnvPolicyHook(),
+        validateRepoEnvPolicyHook(config),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
         requireAdminForEnvConfig(),
-        validateRepoEnvPolicyHook(),
+        validateRepoEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
         requireAdminForEnvConfig(),
-        validateRepoEnvPolicyHook(),
+        validateRepoEnvPolicyHook(config),
       ],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete repositories')],
     },
@@ -1477,17 +1475,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create branches'),
         requireAdminForEnvConfig(),
-        validateBranchEnvPolicyHook(),
+        validateBranchEnvPolicyHook(config),
         injectCreatedBy(),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
         requireAdminForEnvConfig(),
-        validateBranchEnvPolicyHook(),
+        validateBranchEnvPolicyHook(config),
       ],
       patch: [
         requireAdminForEnvConfig(),
-        validateBranchEnvPolicyHook(),
+        validateBranchEnvPolicyHook(config),
         ...(branchRbacEnabled
           ? [
               loadBranch(branchRepository),
@@ -2442,7 +2440,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               params: {
                 userId: user.user_id,
                 password: data?.password, // Pass through for password sync
-                configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
+                configureGitSafeDirectory:
+                  resolveExecutionSecurityMode(config).unixImpersonationEnabled, // Configure git when impersonating
               },
             },
             { logPrefix: '[Executor/user.create]' }
@@ -2512,7 +2511,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               params: {
                 userId: user.user_id,
                 password: data?.password, // Pass through for password sync
-                configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
+                configureGitSafeDirectory:
+                  resolveExecutionSecurityMode(config).unixImpersonationEnabled, // Configure git when impersonating
               },
             },
             { logPrefix: '[Executor/user.patch]' }

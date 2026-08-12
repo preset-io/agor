@@ -59,7 +59,11 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
       const parsed = parseCodexAuthJson(data?.authJson);
       if (!parsed.ok) throw new BadRequest(parsed.error);
 
-      const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+      const identity = await resolveCodexUnixIdentity(
+        userId,
+        withTenantDatabase,
+        app.get('config')
+      );
       if (!identity.ok) {
         throw new BadRequest(
           `Cannot determine which Unix account should hold this Codex login: ${identity.message}`

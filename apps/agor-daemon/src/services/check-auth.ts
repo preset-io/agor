@@ -18,7 +18,7 @@
 
 import { getAgenticToolIntegration, TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
-import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
+import { type AgorConfig, isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -30,6 +30,7 @@ import type {
   AuthCheckResult,
   AuthCheckStatus,
   AuthenticatedParams,
+  DeepReadonly,
   UserID,
 } from '@agor/core/types';
 import { isAgenticToolName } from '@agor/core/types';
@@ -245,9 +246,10 @@ function resultFromKeyStatus(status: AuthCheckStatus, rejectedHint: string): Aut
  */
 async function probeCodexAuthFile(
   userId: UserID | undefined,
-  withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>
+  withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>,
+  config: DeepReadonly<AgorConfig>
 ): Promise<AuthCheckResult> {
-  const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+  const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase, config);
   if (!identity.ok) {
     // A missing unix_username is a real configuration gap (no credential can
     // exist for this user yet). An unsupported mode means the daemon cannot
@@ -309,7 +311,10 @@ async function probeCodexAuthFile(
   );
 }
 
-export function createCheckAuthService(db: TenantScopeAwareDatabase) {
+export function createCheckAuthService(
+  db: TenantScopeAwareDatabase,
+  config: DeepReadonly<AgorConfig>
+) {
   return {
     async create(
       data: { tool: string; apiKey?: string; validateNative?: boolean },
@@ -391,7 +396,7 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
         // Filesystem validation can require an ephemeral Cloud executor, so it
         // is reserved for an explicit user action.
         return data.validateNative
-          ? probeCodexAuthFile(userId, withTenantDatabase)
+          ? probeCodexAuthFile(userId, withTenantDatabase, config)
           : unknown('ChatGPT login is configured but has not been validated.');
       }
 

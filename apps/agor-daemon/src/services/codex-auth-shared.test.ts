@@ -5,7 +5,7 @@
  * home guarantee. Delegated WITHOUT a template keeps the simple-mode local
  * process behavior but still requires a unix_username.
  */
-import { loadConfigSync } from '@agor/core/config';
+import { loadConfigSync, resolveEffectiveConfig } from '@agor/core/config';
 import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
 import type { UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +15,7 @@ vi.mock('@agor/core/config', async (importOriginal) => {
   return {
     ...actual,
     loadConfigSync: vi.fn(),
+    resolveEffectiveConfig: vi.fn((config) => config),
   };
 });
 
@@ -29,6 +30,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
 import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
 
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
+const resolveEffectiveConfigMock = vi.mocked(resolveEffectiveConfig);
 const usersRepositoryMock = vi.mocked(UsersRepository);
 
 const USER_ID = 'user-1' as UserID;
@@ -39,10 +41,26 @@ const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resolveEffectiveConfigMock.mockImplementation((config) => config);
   // Regular function (not arrow) so `new UsersRepository(...)` works: a
   // constructor returning an object yields that object.
   usersRepositoryMock.mockImplementation(function mockRepo() {
     return { findById } as never;
+  });
+});
+
+it('routes credentials using deployment environment overrides from the effective config', async () => {
+  loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
+  resolveEffectiveConfigMock.mockReturnValue({ execution: { unix_user_mode: 'strict' } } as never);
+  findById.mockResolvedValue({ user_id: USER_ID, unix_username: 'root' });
+
+  await expect(
+    resolveCodexUnixIdentity(USER_ID, withTenantDatabase, resolveEffectiveConfig(loadConfigSync()))
+  ).resolves.toEqual({
+    ok: true,
+    unixUser: 'root',
+    reportedUnixUser: 'root',
+    userId: USER_ID,
   });
 });
 
@@ -56,7 +74,13 @@ describe('resolveCodexUnixIdentity — delegated mode', () => {
       },
     } as never);
 
-    await expect(resolveCodexUnixIdentity(USER_ID, withTenantDatabase)).resolves.toEqual({
+    await expect(
+      resolveCodexUnixIdentity(
+        USER_ID,
+        withTenantDatabase,
+        resolveEffectiveConfig(loadConfigSync())
+      )
+    ).resolves.toEqual({
       ok: false,
       reason: 'unsupported-mode',
       message: expect.stringContaining('persistent-per-user'),
@@ -72,7 +96,11 @@ describe('resolveCodexUnixIdentity — delegated mode', () => {
       },
     } as never);
 
-    const result = await resolveCodexUnixIdentity(USER_ID, withTenantDatabase);
+    const result = await resolveCodexUnixIdentity(
+      USER_ID,
+      withTenantDatabase,
+      resolveEffectiveConfig(loadConfigSync())
+    );
 
     expect(result).toEqual({
       ok: false,
@@ -90,7 +118,11 @@ describe('resolveCodexUnixIdentity — delegated mode', () => {
     } as never);
     findById.mockResolvedValue({ user_id: USER_ID, unix_username: 'alice' });
 
-    const result = await resolveCodexUnixIdentity(USER_ID, withTenantDatabase);
+    const result = await resolveCodexUnixIdentity(
+      USER_ID,
+      withTenantDatabase,
+      resolveEffectiveConfig(loadConfigSync())
+    );
 
     // No impersonation in delegated mode — auth.json lives in the daemon
     // user's home, exactly like simple mode.
@@ -108,7 +140,11 @@ describe('resolveCodexUnixIdentity — delegated mode', () => {
     } as never);
     findById.mockResolvedValue({ user_id: USER_ID, unix_username: null });
 
-    const result = await resolveCodexUnixIdentity(USER_ID, withTenantDatabase);
+    const result = await resolveCodexUnixIdentity(
+      USER_ID,
+      withTenantDatabase,
+      resolveEffectiveConfig(loadConfigSync())
+    );
 
     expect(result).toEqual({
       ok: false,
@@ -125,7 +161,11 @@ describe('resolveCodexUnixIdentity — delegated mode', () => {
       },
     } as never);
 
-    const result = await resolveCodexUnixIdentity(USER_ID, withTenantDatabase);
+    const result = await resolveCodexUnixIdentity(
+      USER_ID,
+      withTenantDatabase,
+      resolveEffectiveConfig(loadConfigSync())
+    );
 
     expect(result).toEqual({
       ok: true,
@@ -150,7 +190,13 @@ describe('resolveCodexUnixIdentity — delegated mode', () => {
     } as never);
     findById.mockResolvedValue({ user_id: USER_ID, unix_username: 'alice' });
 
-    await expect(resolveCodexUnixIdentity(USER_ID, withTenantDatabase)).resolves.toEqual({
+    await expect(
+      resolveCodexUnixIdentity(
+        USER_ID,
+        withTenantDatabase,
+        resolveEffectiveConfig(loadConfigSync())
+      )
+    ).resolves.toEqual({
       ok: true,
       unixUser: null,
       reportedUnixUser: 'alice',

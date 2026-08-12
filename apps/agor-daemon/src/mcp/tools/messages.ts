@@ -1,4 +1,3 @@
-import { isBranchRbacEnabled } from '@agor/core/config';
 import {
   and,
   asc,
@@ -180,7 +179,7 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       // every matching row into daemon memory.
       const fetchLimit = Math.min(limit + 100, 200);
       const allRows = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
-        if (isBranchRbacEnabled()) {
+        if (ctx.app.get('config').execution?.branch_rbac === true) {
           const userRole = ctx.authenticatedUser?.role as string | undefined;
           if (!isSuperAdmin(userRole)) {
             conditions.push(

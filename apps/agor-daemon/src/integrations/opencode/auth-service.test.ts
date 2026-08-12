@@ -84,7 +84,7 @@ const discovery = {
 };
 
 function service() {
-  return createOpenCodeAuthService(db);
+  return createOpenCodeAuthService(db, loadConfigSync());
 }
 
 beforeEach(() => {

@@ -14,12 +14,7 @@
 
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
-import {
-  getDaemonBaseUrl,
-  loadConfig,
-  PAGINATION,
-  resolveUserEnvironment,
-} from '@agor/core/config';
+import { getDaemonBaseUrl, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
 import {
   ArtifactRepository,
   ArtifactTrustGrantRepository,
@@ -508,7 +503,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
       {
         logPrefix: `[ArtifactsService.publish ${branch.branch_id}]`,
-        asUser: await resolveExecutorReadAsUser(this.dbRef, params.user?.user_id),
+        asUser: await resolveExecutorReadAsUser(
+          this.dbRef,
+          params.user?.user_id,
+          this.app.get('config')
+        ),
       }
     );
     if (!result.success) {
@@ -944,7 +943,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
       {
         logPrefix: `[ArtifactsService.land ${branchId}]`,
-        asUser: await resolveExecutorReadAsUser(this.dbRef, params.user?.user_id),
+        asUser: await resolveExecutorReadAsUser(
+          this.dbRef,
+          params.user?.user_id,
+          this.app.get('config')
+        ),
       }
     );
     if (!result.success) {
@@ -1330,7 +1333,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // Instance-wide trust is meaningful only on single-user instances. On
       // multi-user setups it would mean "trust any artifact published by any
       // user on this server with my secrets" — too broad. Reject.
-      const config = await loadConfig();
+      const config = this.app.get('config');
       const unixMode = config.execution?.unix_user_mode ?? 'simple';
       if (unixMode !== 'simple') {
         throw new Error(
@@ -1643,7 +1646,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
       {
         logPrefix: `[ArtifactsService.validate ${branch.branch_id}]`,
-        asUser: await resolveExecutorReadAsUser(this.dbRef, params.user?.user_id),
+        asUser: await resolveExecutorReadAsUser(
+          this.dbRef,
+          params.user?.user_id,
+          this.app.get('config')
+        ),
       }
     );
     if (!result.success) {

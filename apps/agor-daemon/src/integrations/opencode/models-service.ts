@@ -1,8 +1,8 @@
 import { resolvePackagedOpenCodeBinary } from '@agor/agentic-tool-opencode/runtime/binary';
-import { loadConfigSync } from '@agor/core/config';
+import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type { AuthenticatedParams, OpenCodeModelCatalog } from '@agor/core/types';
+import type { AuthenticatedParams, DeepReadonly, OpenCodeModelCatalog } from '@agor/core/types';
 import type { ExecutorCommandResult } from '../../utils/spawn-executor.js';
 import { resolveAuthenticatedOpenCodeSubjectContext } from './credential-namespace.js';
 import { startOpenCodeExecutorInvocation } from './executor-command.js';
@@ -12,10 +12,10 @@ const MODEL_CATALOG_FAILURE = 'OpenCode model catalog could not be loaded. Try a
 
 async function readModelCatalog(
   db: TenantScopeAwareDatabase,
+  config: DeepReadonly<AgorConfig>,
   params?: AuthenticatedParams
 ): Promise<OpenCodeModelCatalog> {
-  const config = loadConfigSync();
-  const context = await resolveAuthenticatedOpenCodeSubjectContext(db, params, config);
+  const context = await resolveAuthenticatedOpenCodeSubjectContext(db, config, params);
   let result: ExecutorCommandResult;
   try {
     await resolvePackagedOpenCodeBinary();
@@ -43,16 +43,22 @@ async function readModelCatalog(
 }
 
 export class OpenCodeModelsService {
-  constructor(private readonly db: TenantScopeAwareDatabase) {}
+  constructor(
+    private readonly db: TenantScopeAwareDatabase,
+    private readonly config: DeepReadonly<AgorConfig>
+  ) {}
 
   async find(params?: AuthenticatedParams): Promise<OpenCodeModelCatalog> {
     if (Object.keys(params?.query ?? {}).length > 0) {
       throw new BadRequest('OpenCode model catalog does not accept query parameters.');
     }
-    return readModelCatalog(this.db, params);
+    return readModelCatalog(this.db, this.config, params);
   }
 }
 
-export function createOpenCodeModelsService(db: TenantScopeAwareDatabase) {
-  return new OpenCodeModelsService(db);
+export function createOpenCodeModelsService(
+  db: TenantScopeAwareDatabase,
+  config: DeepReadonly<AgorConfig>
+) {
+  return new OpenCodeModelsService(db, config);
 }

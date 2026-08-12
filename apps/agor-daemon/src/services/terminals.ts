@@ -19,7 +19,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createUserProcessEnvironment, loadConfig } from '@agor/core/config';
+import { createUserProcessEnvironment } from '@agor/core/config';
 import {
   BranchRepository,
   getCurrentTenantId,
@@ -182,7 +182,7 @@ export class TerminalsService {
     // This prevents members from opening a terminal tab in a branch they
     // cannot see or prompt in.
     if (data.branchId && params?.provider) {
-      const config = await loadConfig();
+      const config = this.app.get('config');
       const rbacEnabled = config.execution?.branch_rbac === true;
       if (rbacEnabled) {
         const userId = params?.user?.user_id as UserID | undefined;
@@ -435,7 +435,7 @@ export class TerminalsService {
         if (branch) {
           const branchTabName = buildBranchShellTabName(branch);
           const channel = `user/${userId}/terminal`;
-          const unixUserMode = (await loadConfig()).execution?.unix_user_mode ?? 'simple';
+          const unixUserMode = this.app.get('config').execution?.unix_user_mode ?? 'simple';
 
           // Gate ALL executor-directed choreography on readiness. For a normal
           // warm reuse (the executor acked ready this daemon session) this
@@ -526,7 +526,7 @@ export class TerminalsService {
 
     try {
       // Resolve Unix user for impersonation
-      const config = await loadConfig();
+      const config = this.app.get('config');
       const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
       const executorUser = config.execution?.executor_unix_user;
 
