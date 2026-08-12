@@ -167,7 +167,9 @@ export const AgentChain = React.memo<AgentChainProps>(
   ({ messages, isTaskRunning = false, isLatest }) => {
     const { token } = theme.useToken();
     const { isSlim } = useUIMode();
-    const [expanded, setExpanded] = useState(true);
+    // Slim: chains start collapsed even inside an expanded task — expand the
+    // one you care about.
+    const [expanded, setExpanded] = useState(() => !isSlim);
 
     // Extract chain items (thoughts and tools) from messages
     const chainItems = useMemo(() => {
@@ -438,6 +440,47 @@ export const AgentChain = React.memo<AgentChainProps>(
       return -1;
     }, [chainItems]);
 
+    // Slim: fold thought payload-echoes into the tool row that follows them
+    // and coalesce consecutive calls of the same tool into one row. Trailing
+    // thoughts with no following tool keep their own rows.
+    type SlimUnit =
+      | {
+          kind: 'tools';
+          name: string;
+          entries: { item: ChainItem; index: number }[];
+          thoughts: string[];
+        }
+      | { kind: 'thought'; content: string; index: number };
+    const slimUnits = useMemo<SlimUnit[] | null>(() => {
+      if (!isSlim) return null;
+      const units: SlimUnit[] = [];
+      let pendingThoughts: string[] = [];
+      chainItems.forEach((item, index) => {
+        if (item.type === 'thought') {
+          pendingThoughts.push(item.content as string);
+          return;
+        }
+        const { toolUse } = item.content as { toolUse: ToolUseBlock };
+        const name = getToolDisplayName(toolUse.name, toolUse.input);
+        const last = units[units.length - 1];
+        if (pendingThoughts.length === 0 && last && last.kind === 'tools' && last.name === name) {
+          last.entries.push({ item, index });
+        } else {
+          units.push({
+            kind: 'tools',
+            name,
+            entries: [{ item, index }],
+            thoughts: pendingThoughts,
+          });
+          pendingThoughts = [];
+        }
+      });
+      pendingThoughts.forEach((content, i) => {
+        units.push({ kind: 'thought', content, index: chainItems.length + i });
+      });
+      return units;
+    }, [isSlim, chainItems]);
+
     // Build tool block items for rendering
     const renderChainItem = (item: ChainItem, index: number) => {
       if (item.type === 'thought') {
@@ -522,6 +565,81 @@ export const AgentChain = React.memo<AgentChainProps>(
           expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
         >
           <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
+        </ToolBlock>
+      );
+    };
+
+    const renderSlimUnit = (unit: SlimUnit, unitIndex: number) => {
+      if (unit.kind === 'thought') {
+        return renderChainItem(
+          { type: 'thought', content: unit.content, message: messages[0] },
+          unit.index
+        );
+      }
+      const lastEntry = unit.entries[unit.entries.length - 1];
+      const { toolUse, toolResult } = lastEntry.item.content as {
+        toolUse: ToolUseBlock;
+        toolResult?: ToolResultBlock;
+      };
+      const hasImplicitResult = IMPLICIT_RESULT_TOOLS.has(toolUse.name);
+      const isPotentiallyRunning = lastEntry.index > lastResultToolIndex && isLatest !== false;
+      const status = deriveToolStatus({
+        hasResult: !!toolResult || hasImplicitResult,
+        isError: unit.entries.some(
+          (e) => (e.item.content as { toolResult?: ToolResultBlock }).toolResult?.is_error
+        ),
+        isPotentiallyRunning,
+        isTaskRunning,
+      });
+      const icon = renderToolStatusIcon(status);
+      const single = unit.entries.length === 1;
+      const description = single ? (getToolDescription(toolUse) ?? undefined) : undefined;
+
+      return (
+        <ToolBlock
+          key={`slim-tools-${unitIndex}-${toolUse.id}`}
+          icon={icon}
+          name={single ? unit.name : `${unit.name} × ${unit.entries.length}`}
+          description={description}
+          status={status}
+          expandedByDefault={single && shouldExpandToolByDefault(toolUse.name)}
+        >
+          {unit.thoughts.map((thought, i) =>
+            thought.trim() ? (
+              <CollapsibleText
+                // biome-ignore lint/suspicious/noArrayIndexKey: thoughts are static within a settled chain unit
+                key={`thought-${i}`}
+                maxLines={8}
+                preserveWhitespace
+                style={{
+                  fontSize: token.fontSizeSM,
+                  margin: `0 0 ${token.sizeUnit}px 0`,
+                  color: token.colorTextTertiary,
+                }}
+              >
+                {thought}
+              </CollapsibleText>
+            ) : null
+          )}
+          {unit.entries.map((entry, i) => {
+            const c = entry.item.content as { toolUse: ToolUseBlock; toolResult?: ToolResultBlock };
+            return (
+              <div
+                key={c.toolUse.id}
+                style={
+                  i > 0
+                    ? {
+                        borderTop: `1px solid ${token.colorBorderSecondary}`,
+                        marginTop: token.sizeUnit,
+                        paddingTop: token.sizeUnit,
+                      }
+                    : undefined
+                }
+              >
+                <ToolUseRenderer toolUse={c.toolUse} toolResult={c.toolResult} />
+              </div>
+            );
+          })}
         </ToolBlock>
       );
     };
@@ -718,7 +836,7 @@ export const AgentChain = React.memo<AgentChainProps>(
               gap: 2,
             }}
           >
-            {chainItems.map(renderChainItem)}
+            {slimUnits ? slimUnits.map(renderSlimUnit) : chainItems.map(renderChainItem)}
           </div>
         )}
       </div>

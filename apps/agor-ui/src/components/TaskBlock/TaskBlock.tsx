@@ -39,6 +39,7 @@ import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
 import { CopyableContent } from '../CopyableContent';
+import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
@@ -428,6 +429,26 @@ export function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   return blocks;
 }
 
+/** Pure-text assistant message with no widgets/tools — safe to render as a
+ * quiet log line in slim instead of a full bubble. */
+function isPlainTextAssistantMessage(message: Message): boolean {
+  if (message.role !== MessageRole.ASSISTANT) return false;
+  if (message.type === 'permission_request') return false;
+  if (typeof message.content === 'string') return message.content.trim().length > 0;
+  if (Array.isArray(message.content)) {
+    return message.content.length > 0 && message.content.every((block) => block.type === 'text');
+  }
+  return false;
+}
+
+function plainTextOf(message: Message): string {
+  if (typeof message.content === 'string') return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+  }
+  return '';
+}
+
 /**
  * Identity key for reconciling a block across renders — mirrors the React
  * `key` each block type renders with.
@@ -791,7 +812,20 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 },
               },
               children: (
-                <div style={{ paddingTop: token.sizeUnit }}>
+                <div
+                  style={{
+                    paddingTop: token.sizeUnit,
+                    // Slim: one continuous timeline down the task instead of
+                    // per-bubble gutters.
+                    ...(isSlim
+                      ? {
+                          borderLeft: `2px solid ${token.colorBorderSecondary}`,
+                          paddingLeft: token.sizeUnit * 2,
+                          marginLeft: token.sizeUnit,
+                        }
+                      : {}),
+                  }}
+                >
                   {isVerifiedRuntimeInterruption(task, isLatestTask) && (
                     <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
                   )}
@@ -851,6 +885,28 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         const isLatestMessage =
                           block.message.role === MessageRole.ASSISTANT &&
                           blockIndex === blocks.length - 1;
+
+                        // Slim: intermediate narration renders as a quiet log
+                        // line — only the task's final reply gets the bubble.
+                        if (
+                          isSlim &&
+                          !isLatestMessage &&
+                          isPlainTextAssistantMessage(block.message)
+                        ) {
+                          return (
+                            <div
+                              key={block.message.message_id}
+                              data-conversation-block={getBlockMarker(block)}
+                              style={{
+                                padding: `${token.sizeUnit / 2}px 0`,
+                                fontSize: token.fontSizeSM,
+                                color: token.colorTextSecondary,
+                              }}
+                            >
+                              <MarkdownRenderer content={plainTextOf(block.message)} />
+                            </div>
+                          );
+                        }
 
                         return (
                           <div
