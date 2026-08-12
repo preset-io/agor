@@ -23,7 +23,7 @@ import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
-import { getBoardEmoji } from '../BoardTile';
+import { boardSelectFilter, boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
@@ -112,16 +112,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     });
   };
 
-  const boardOptions = mapToArray(boardById)
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((board) => {
-      const emoji = getBoardEmoji(board, branchById);
-      return {
-        value: board.board_id,
-        label: emoji ? `${emoji} ${board.name}` : board.name,
-      };
-    });
+  const boardOptions = boardSelectOptions(mapToArray(boardById), branchById);
 
   const columns = [
     {
@@ -373,9 +364,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
                 showSearch
                 placeholder="Select board..."
                 options={boardOptions}
-                filterOption={(input, option) =>
-                  (option?.label?.toString() ?? '').toLowerCase().includes(input.toLowerCase())
-                }
+                filterOption={boardSelectFilter}
               />
             </Form.Item>
           </Form>

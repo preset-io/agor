@@ -29,7 +29,7 @@ import {
   resolveUiBranchStorageConfig,
 } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
-import { getBoardEmoji } from '../BoardTile';
+import { boardSelectFilter, boardSelectOptions } from '../BoardTile';
 
 /**
  * Default depth pre-filled into the "Depth" input when the user selects
@@ -164,20 +164,8 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
             placeholder="Select board..."
             allowClear={!requireBoard}
             showSearch
-            filterOption={(input, option) =>
-              String(option?.label ?? '')
-                .toLowerCase()
-                .includes(input.toLowerCase())
-            }
-            options={mapToArray(boardById)
-              .sort((a: Board, b: Board) => a.name.localeCompare(b.name))
-              .map((board: Board) => {
-                const emoji = getBoardEmoji(board, branchById);
-                return {
-                  value: board.board_id,
-                  label: emoji ? `${emoji} ${board.name}` : board.name,
-                };
-              })}
+            filterOption={boardSelectFilter}
+            options={boardSelectOptions(mapToArray(boardById), branchById)}
             onChange={onFormChange}
           />
         </Form.Item>

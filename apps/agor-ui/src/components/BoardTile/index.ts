@@ -1,1 +1,7 @@
-export { BoardTile, getBoardEmoji } from './BoardTile';
+export {
+  type BoardSelectOption,
+  BoardTile,
+  boardSelectFilter,
+  boardSelectOptions,
+  getBoardEmoji,
+} from './BoardTile';

@@ -7,7 +7,7 @@ import { useAgorStore } from '../../../store/agorStore';
 import { selectBranchById } from '../../../store/selectors';
 import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
-import { getBoardEmoji } from '../../BoardTile';
+import { boardSelectOptions } from '../../BoardTile';
 import { MCPServerSelect } from '../../MCPServerSelect';
 import { Tag } from '../../Tag';
 import type { GeneralFormState } from '../useBranchModalForm';
@@ -126,15 +126,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 placeholder="Select board (optional)..."
                 allowClear
                 disabled={!canEdit}
-                options={boards
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((board) => {
-                    const emoji = getBoardEmoji(board, branchById);
-                    return {
-                      value: board.board_id,
-                      label: emoji ? `${emoji} ${board.name}` : board.name,
-                    };
-                  })}
+                options={boardSelectOptions(boards, branchById)}
               />
             </Form.Item>
 

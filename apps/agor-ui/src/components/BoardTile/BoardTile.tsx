@@ -59,3 +59,40 @@ export const BoardTile: React.FC<BoardTileProps> = ({ emoji, size = 36, style })
     </div>
   );
 };
+
+export interface BoardSelectOption {
+  value: string;
+  label: React.ReactNode;
+  /** Plain board name — searchable Selects filter against this, not the node. */
+  name: string;
+}
+
+/**
+ * Options for an AntD board `Select` where every board wears its face — the
+ * primary-assistant emoji or the neutral {@link BoardTile} — so an
+ * assistant-less board never shows as a bare name. Pair with
+ * `filterOption={boardSelectFilter}` to keep text search working against `name`.
+ */
+export function boardSelectOptions(
+  boards: Board[],
+  branchById?: Map<string, Branch> | null
+): BoardSelectOption[] {
+  return boards
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((board) => ({
+      value: board.board_id,
+      label: (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <BoardTile emoji={getBoardEmoji(board, branchById)} size={18} />
+          {board.name}
+        </span>
+      ),
+      name: board.name,
+    }));
+}
+
+/** `filterOption` for a searchable board Select built from {@link boardSelectOptions}. */
+export function boardSelectFilter(input: string, option?: BoardSelectOption): boolean {
+  return (option?.name ?? '').toLowerCase().includes(input.toLowerCase());
+}
