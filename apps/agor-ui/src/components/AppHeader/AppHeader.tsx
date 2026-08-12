@@ -1,4 +1,4 @@
-import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
+import type { ActiveUser, AgorClient, Board, BoardID, Branch, User } from '@agor-live/client';
 import { BulbOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
@@ -11,6 +11,7 @@ import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
 import { BoardSwitcher } from '../BoardSwitcher';
+import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { BrandLogo } from '../BrandLogo';
 import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
@@ -58,9 +59,10 @@ export interface AppHeaderProps {
 
 const RecentBoardPills: React.FC<{
   recentBoards: Board[];
+  branchById: Map<string, Branch>;
   onBoardChange: (boardId: string) => void;
   token: ReturnType<typeof theme.useToken>['token'];
-}> = ({ recentBoards, onBoardChange, token }) => {
+}> = ({ recentBoards, branchById, onBoardChange, token }) => {
   if (recentBoards.length === 0) return null;
 
   return (
@@ -77,16 +79,19 @@ const RecentBoardPills: React.FC<{
               height: 30,
               minWidth: 30,
               padding: 0,
-              borderRadius: '50%',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: 16,
-              border: `1px solid ${token.colorBorderSecondary}`,
-              background: token.colorBgElevated,
             }}
           >
-            {board.icon || '📋'}
+            <BoardTile
+              emoji={getBoardEmoji(board, branchById)}
+              size={30}
+              style={{
+                background: token.colorBgElevated,
+                border: `1px solid ${token.colorBorderSecondary}`,
+              }}
+            />
           </Button>
         </Tooltip>
       ))}
@@ -251,6 +256,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
         {boards.length > 0 && (
           <RecentBoardPills
             recentBoards={recentBoards}
+            branchById={branchById}
             onBoardChange={onBoardChange || (() => {})}
             token={token}
           />

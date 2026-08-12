@@ -58,7 +58,6 @@ export const Facepile: React.FC<FacepileProps> = ({
       {visibleUsers.map(({ user, cursor, boardId }) => {
         const board = boardId && boardById ? boardById.get(boardId) : null;
         const boardName = board?.name || 'Unknown Board';
-        const boardIcon = board?.icon || '📋';
         const canClick = onUserClick && boardId;
 
         return (
@@ -69,7 +68,7 @@ export const Facepile: React.FC<FacepileProps> = ({
                 <div>{user.name || user.email}</div>
                 {boardId && (
                   <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '4px' }}>
-                    {boardIcon} {boardName}
+                    {boardName}
                   </div>
                 )}
                 {canClick && (
