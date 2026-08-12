@@ -215,10 +215,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // the menu entries here avoids showing members a tab where every action
   // would 403.
   //
-  // MCP Servers is not one of them: what a member may do there is the tenant's
-  // `mcp_member_policy`, which members may read precisely so a refusal is
-  // legible to the person it refuses. The tab shows them that policy and the
-  // servers they can already use.
+  // The MCP Servers tab is offered to everyone. What a member may do there is
+  // the tenant's `mcp_member_policy`, which members may read precisely so a
+  // refusal is legible to the person it refuses; the tab shows them that
+  // policy and the servers they can already use.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Menu items for left sidebar navigation
