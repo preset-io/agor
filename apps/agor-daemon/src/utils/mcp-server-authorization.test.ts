@@ -95,7 +95,7 @@ describe('authorizeMcpServerWrite', () => {
     expect(resolveMcpMemberPolicy).not.toHaveBeenCalled();
   });
 
-  it('stamps the creator as owner under allow_private_only', async () => {
+  it('stamps the creator as owner and the session reach under allow_private_only', async () => {
     resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
 
     await expect(
@@ -103,7 +103,7 @@ describe('authorizeMcpServerWrite', () => {
         method: 'create',
         data: remoteCreate,
       })
-    ).resolves.toEqual({ owner_user_id: ALICE });
+    ).resolves.toEqual({ owner_user_id: ALICE, scope: 'session' });
   });
 
   it('refuses to create a server owned by someone else', async () => {
@@ -262,7 +262,11 @@ describe('authorizeMcpServerWrite', () => {
 
     await expect(
       authorizeMcpServerWrite(db, installParams, { method: 'create', data: remoteCreate })
-    ).resolves.toEqual({ owner_user_id: ALICE, catalog_entry_name: 'com.linear/linear' });
+    ).resolves.toEqual({
+      owner_user_id: ALICE,
+      scope: 'session',
+      catalog_entry_name: 'com.linear/linear',
+    });
   });
 
   it.each([
