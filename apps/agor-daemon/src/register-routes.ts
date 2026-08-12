@@ -125,6 +125,7 @@ import {
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
@@ -4311,7 +4312,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Server-side gate in register-hooks.ts is the source of truth; this
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
-          webTerminal: config.execution?.allow_web_terminal !== false,
+          webTerminal: resolveWebTerminalCapability(config).enabled,
+          webTerminalCapability: resolveWebTerminalCapability(config),
           // How managed environment lifecycle fields execute. In
           // webhook-only mode the UI/MCP may still show env controls, but
           // non-URL rendered commands are rejected server-side.

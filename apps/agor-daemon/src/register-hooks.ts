@@ -120,6 +120,7 @@ import {
   markRemoteRelationshipsEnrichedResult,
 } from './services/sessions.js';
 import { isAuthenticationUserLookup, isLocalAuthenticationLookup } from './services/users.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
   ensureMinimumRole,
@@ -2221,7 +2222,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   //   still applies inside the service (see services/terminals.ts).
   // - Setting the flag to false disables the terminal for everyone (including
   //   admins). The modal is hidden from the UI in that case.
-  const webTerminalEnabled = config.execution?.allow_web_terminal !== false;
+  const webTerminalCapability = resolveWebTerminalCapability(config);
+  const webTerminalEnabled = webTerminalCapability.enabled;
   safeService('terminals')?.hooks({
     before: {
       all: [
@@ -2229,7 +2231,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           if (!webTerminalEnabled) {
             throw new Forbidden(
-              'Web terminal is disabled on this instance. Ask an administrator to unset or enable execution.allow_web_terminal in the daemon config.'
+              `Web terminal is unavailable on this instance (${webTerminalCapability.reason ?? 'disabled'}).`
             );
           }
           return context;

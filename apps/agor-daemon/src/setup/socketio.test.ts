@@ -215,6 +215,7 @@ function buildHarness(opts: Partial<SocketIOOptions> = {}) {
     jwtSecret: 'test-secret',
     credentialsAllowed: false,
     webTerminalEnabled: true,
+    workIdentity: { instanceId: 'daemon-a', bootId: 'daemon-a-boot' },
     ...opts,
   } as SocketIOOptions);
   config.callback(io as any);
@@ -234,9 +235,23 @@ function connect(io: FakeIO, socket: FakeSocket) {
   io.connectionHandler?.(socket);
 }
 
+function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
+  browser.handlers.get('join')?.(terminalChannel());
+  const executor = makeSocket('exec-sock', io);
+  asServiceForUser(executor, ALICE);
+  connect(io, executor);
+  executor.handlers.get('join')?.(terminalChannel());
+  return executor;
+}
+
 // Identity helpers — keep all strings UUID-shaped enough for log slicing.
 const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111';
 const BOB = '22222222-bbbb-bbbb-bbbb-222222222222';
+const TERMINAL = '33333333-cccc-cccc-cccc-333333333333';
+
+function terminalChannel(userId = ALICE, terminalId = TERMINAL, tenantId = 'default') {
+  return `tenant/${tenantId}/user/${userId}/terminal/${terminalId}`;
+}
 
 function asUser(socket: FakeSocket, userId: string) {
   socket.feathers = { user: { user_id: userId } };
@@ -271,27 +286,35 @@ function asServicePostConnect(socket: FakeSocket) {
  * `_isServiceAccount`) — that's the whole point of the terminal-scoped token.
  * Mirrors what ServiceJWTStrategy mints for a token carrying terminal_user_id.
  */
-function asServiceForUser(socket: FakeSocket, userId: string) {
+function asServiceForUser(socket: FakeSocket, userId: string, terminalId = TERMINAL) {
   socket.feathers = {
     user: {
       user_id: 'executor-service',
       role: 'terminal-executor',
       _isTerminalExecutor: true,
       terminal_user_id: userId,
+      terminal_id: terminalId,
+      terminal_owner_boot_id: 'daemon-a-boot',
     },
   };
+  socket.data.tenant = { tenant_id: 'default', source: 'static' };
 }
 /** Handshake-token variant of a user-scoped terminal executor socket. */
-function asServiceHandshakeForUser(socket: FakeSocket, userId: string) {
+function asServiceHandshakeForUser(socket: FakeSocket, userId: string, terminalId = TERMINAL) {
   socket.feathers = {
     user: {
       user_id: 'executor-service',
       role: 'terminal-executor',
       _isTerminalExecutor: true,
       terminal_user_id: userId,
+      terminal_id: terminalId,
+      terminal_owner_boot_id: 'daemon-a-boot',
     },
   };
   socket.data.terminalUserId = userId;
+  socket.data.terminalId = terminalId;
+  socket.data.terminalOwnerBootId = 'daemon-a-boot';
+  socket.data.tenant = { tenant_id: 'default', source: 'static' };
 }
 
 // ---------------------------------------------------------------------------
@@ -299,8 +322,12 @@ function asServiceHandshakeForUser(socket: FakeSocket, userId: string) {
 // ---------------------------------------------------------------------------
 
 describe('parseTerminalChannel', () => {
-  it('extracts user id from a well-formed channel', () => {
-    expect(parseTerminalChannel(`user/${ALICE}/terminal`)).toBe(ALICE);
+  it('extracts tenant, user, and terminal ids from a well-formed channel', () => {
+    expect(parseTerminalChannel(terminalChannel())).toEqual({
+      tenantId: 'default',
+      userId: ALICE,
+      terminalId: TERMINAL,
+    });
   });
   it('rejects non-terminal channels', () => {
     expect(parseTerminalChannel('user/abc/other')).toBeNull();
@@ -308,8 +335,8 @@ describe('parseTerminalChannel', () => {
     expect(parseTerminalChannel('')).toBeNull();
   });
   it('rejects empty or nested userIds', () => {
-    expect(parseTerminalChannel('user//terminal')).toBeNull();
-    expect(parseTerminalChannel('user/a/b/terminal')).toBeNull();
+    expect(parseTerminalChannel('tenant//user/a/terminal/b')).toBeNull();
+    expect(parseTerminalChannel('tenant/t/user/a/terminal/')).toBeNull();
   });
 });
 
@@ -543,6 +570,7 @@ describe('Socket.IO lifecycle logging', () => {
     socket.joined.add(tenantChannelName('tenant-a'));
     socket.joined.add(tenantUserChannelName('tenant-a', ALICE));
     socket.joined.add(boardPresenceRoomName('tenant-a', 'board-1'));
+    socket.joined.add(terminalChannel(ALICE, TERMINAL, 'tenant-a'));
     connect(io, socket);
 
     (app as any).eventHandlers.get('login')?.(
@@ -551,9 +579,23 @@ describe('Socket.IO lifecycle logging', () => {
     );
 
     expect([...socket.joined].filter((room) => room.startsWith('tenant:'))).toEqual([]);
+    expect(socket.joined.has(terminalChannel(ALICE, TERMINAL, 'tenant-a'))).toBe(false);
     expect(socket.data.authorizedBoardIds).toEqual(new Set());
     expect(socket.data.currentBoardId).toBeUndefined();
     expect(socket.data.tenant).toBeUndefined();
+  });
+
+  it('revokes terminal output room membership on logout', () => {
+    const { app, io } = buildHarness();
+    const socket = makeSocket('logout-sock');
+    asUser(socket, ALICE);
+    const connection = socket.feathers;
+    socket.joined.add(terminalChannel());
+    connect(io, socket);
+
+    (app as any).eventHandlers.get('logout')?.({}, { connection });
+
+    expect(socket.joined.has(terminalChannel())).toBe(false);
   });
 
   it('emits an unconditional five-minute gauge and stops it when Engine.IO closes', () => {
@@ -710,7 +752,10 @@ describe('getSocketAuthState', () => {
     expect(getSocketAuthState(s as any)).toEqual({
       userId: null,
       isService: true,
+      tenant: { tenant_id: 'default', source: 'static' },
       terminalUserId: ALICE,
+      terminalId: TERMINAL,
+      terminalOwnerBootId: 'daemon-a-boot',
     });
   });
   it('a terminal-scoped identity carries no _isServiceAccount (no REST RBAC bypass)', () => {
@@ -845,7 +890,11 @@ describe('terminal:* handler authorization', () => {
       const { io } = buildHarness();
       const s = makeSocket('anon');
       connect(io, s);
-      s.handlers.get('terminal:input')?.({ userId: ALICE, input: 'rm -rf ~\r' });
+      s.handlers.get('terminal:input')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        input: 'rm -rf ~\r',
+      });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('terminal:input rejected'));
     });
@@ -856,7 +905,7 @@ describe('terminal:* handler authorization', () => {
       asUser(s, ALICE);
       connect(io, s);
       // Alice forges Bob's userId — must be rejected.
-      s.handlers.get('terminal:input')?.({ userId: BOB, input: ': pwn\r' });
+      s.handlers.get('terminal:input')?.({ userId: BOB, terminalId: TERMINAL, input: ': pwn\r' });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('does not match'));
     });
@@ -866,14 +915,19 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:input')?.({ userId: ALICE, input: 'echo hi\r' });
+      attachTerminal(io, s);
+      s.handlers.get('terminal:input')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        input: 'echo hi\r',
+      });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: 'exec-sock',
           event: 'terminal:input',
           // The handler must re-emit with the trusted userId (not whatever
           // the client sent), so executors never see attacker-controlled ids.
-          data: { userId: ALICE, input: 'echo hi\r' },
+          data: { userId: ALICE, terminalId: TERMINAL, input: 'echo hi\r' },
         },
       ]);
     });
@@ -883,7 +937,12 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:input')?.({ userId: ALICE, input: 'echo hi\r' });
+      attachTerminal(io, s);
+      s.handlers.get('terminal:input')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        input: 'echo hi\r',
+      });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('web terminal disabled'));
     });
@@ -893,11 +952,12 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
+      attachTerminal(io, s);
       // Burst = 1000 tokens. Fire 1500 events back-to-back; expect ~1000
       // through, the rest dropped. Use ≤1000 / ≥500 bounds to allow tiny
       // wall-clock refill during the loop without making the test flaky.
       for (let i = 0; i < 1500; i++) {
-        s.handlers.get('terminal:input')?.({ userId: ALICE, input: 'x' });
+        s.handlers.get('terminal:input')?.({ userId: ALICE, terminalId: TERMINAL, input: 'x' });
       }
       expect(io.emitted.length).toBeLessThanOrEqual(1100);
       expect(io.emitted.length).toBeGreaterThanOrEqual(900);
@@ -911,7 +971,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:resize')?.({ userId: BOB, cols: 1, rows: 1 });
+      s.handlers.get('terminal:resize')?.({ userId: BOB, terminalId: TERMINAL, cols: 1, rows: 1 });
       expect(io.emitted).toEqual([]);
     });
 
@@ -920,12 +980,18 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:resize')?.({ userId: ALICE, cols: 80, rows: 24 });
+      attachTerminal(io, s);
+      s.handlers.get('terminal:resize')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        cols: 80,
+        rows: 24,
+      });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: 'exec-sock',
           event: 'terminal:resize',
-          data: { userId: ALICE, cols: 80, rows: 24 },
+          data: { userId: ALICE, terminalId: TERMINAL, cols: 80, rows: 24 },
         },
       ]);
     });
@@ -961,12 +1027,12 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock', io);
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'hello' });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: terminalChannel(),
           event: 'terminal:output',
-          data: { userId: ALICE, data: 'hello' },
+          data: { userId: ALICE, terminalId: TERMINAL, data: 'hello' },
         },
       ]);
     });
@@ -979,12 +1045,12 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock', io);
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'hello' });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: terminalChannel(),
           event: 'terminal:output',
-          data: { userId: ALICE, data: 'hello' },
+          data: { userId: ALICE, terminalId: TERMINAL, data: 'hello' },
         },
       ]);
       expect(io.excludedSenders).toEqual(['exec-sock']);
@@ -995,7 +1061,7 @@ describe('terminal:* handler authorization', () => {
       // joined to `user/<id>/terminal`. The relay must reach both browsers
       // while excluding the executor that produced the output.
       const { io } = buildHarness();
-      const channel = `user/${ALICE}/terminal`;
+      const channel = terminalChannel();
 
       const exec = makeSocket('exec-sock', io);
       asServiceForUser(exec, ALICE);
@@ -1012,9 +1078,16 @@ describe('terminal:* handler authorization', () => {
       connect(io, browserB);
       browserB.join(channel);
 
-      exec.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
+      exec.handlers.get('terminal:output')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        data: 'hello',
+      });
 
-      const frame = { event: 'terminal:output', data: { userId: ALICE, data: 'hello' } };
+      const frame = {
+        event: 'terminal:output',
+        data: { userId: ALICE, terminalId: TERMINAL, data: 'hello' },
+      };
       expect(browserA.received).toEqual([frame]);
       expect(browserB.received).toEqual([frame]);
       // The executor is a member of the room but must NOT receive its own output.
@@ -1027,12 +1100,12 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock', io);
       asServiceHandshakeForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hi' });
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'hi' });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: terminalChannel(),
           event: 'terminal:output',
-          data: { userId: ALICE, data: 'hi' },
+          data: { userId: ALICE, terminalId: TERMINAL, data: 'hi' },
         },
       ]);
     });
@@ -1042,7 +1115,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: BOB, data: 'x' });
+      s.handlers.get('terminal:output')?.({ userId: BOB, terminalId: TERMINAL, data: 'x' });
       s.handlers.get('terminal:tab')?.({ userId: BOB, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
     });
@@ -1054,8 +1127,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServicePostConnect(s); // service, but no terminal scope
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'x' });
-      s.handlers.get('terminal:exit')?.({ userId: ALICE, exitCode: 0 });
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'x' });
+      s.handlers.get('terminal:exit')?.({ userId: ALICE, terminalId: TERMINAL, exitCode: 0 });
       s.handlers.get('terminal:tab')?.({ userId: ALICE, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(
@@ -1068,8 +1141,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServicePostConnect(s);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'x' });
-      s.handlers.get('terminal:exit')?.({ userId: ALICE, exitCode: 0 });
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'x' });
+      s.handlers.get('terminal:exit')?.({ userId: ALICE, terminalId: TERMINAL, exitCode: 0 });
       s.handlers.get('terminal:tab')?.({ userId: ALICE, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
     });
@@ -1081,9 +1154,15 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: ALICE, sessionName: 'agor-x', tabName: 't' });
+      s.handlers.get('terminal:ready')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        sessionName: 'agor-x',
+        tabName: 't',
+      });
       expect(app.emit).toHaveBeenCalledWith('terminal:ready', {
         userId: ALICE,
+        terminalId: TERMINAL,
         sessionName: 'agor-x',
         tabName: 't',
       });
@@ -1094,8 +1173,12 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:error')?.({ userId: ALICE, message: 'boom' });
-      expect(app.emit).toHaveBeenCalledWith('terminal:error', { userId: ALICE, message: 'boom' });
+      s.handlers.get('terminal:error')?.({ userId: ALICE, terminalId: TERMINAL, message: 'boom' });
+      expect(app.emit).toHaveBeenCalledWith('terminal:error', {
+        userId: ALICE,
+        terminalId: TERMINAL,
+        message: 'boom',
+      });
     });
 
     it("rejects an executor scoped to ALICE flipping BOB's readiness (cross-user forgery)", () => {
@@ -1103,8 +1186,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: BOB });
-      s.handlers.get('terminal:error')?.({ userId: BOB, message: 'spoof' });
+      s.handlers.get('terminal:ready')?.({ userId: BOB, terminalId: TERMINAL });
+      s.handlers.get('terminal:error')?.({ userId: BOB, terminalId: TERMINAL, message: 'spoof' });
       expect(app.emit).not.toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('may not act for'));
     });
@@ -1116,8 +1199,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServicePostConnect(s);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: ALICE });
-      s.handlers.get('terminal:error')?.({ userId: ALICE });
+      s.handlers.get('terminal:ready')?.({ userId: ALICE, terminalId: TERMINAL });
+      s.handlers.get('terminal:error')?.({ userId: ALICE, terminalId: TERMINAL });
       expect(app.emit).not.toHaveBeenCalled();
     });
 
@@ -1126,8 +1209,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: ALICE });
-      s.handlers.get('terminal:error')?.({ userId: ALICE, message: 'spoof' });
+      s.handlers.get('terminal:ready')?.({ userId: ALICE, terminalId: TERMINAL });
+      s.handlers.get('terminal:error')?.({ userId: ALICE, terminalId: TERMINAL, message: 'spoof' });
       expect(app.emit).not.toHaveBeenCalled();
     });
 
@@ -1136,8 +1219,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: ALICE });
-      s.handlers.get('terminal:error')?.({ userId: ALICE });
+      s.handlers.get('terminal:ready')?.({ userId: ALICE, terminalId: TERMINAL });
+      s.handlers.get('terminal:error')?.({ userId: ALICE, terminalId: TERMINAL });
       expect(app.emit).not.toHaveBeenCalled();
     });
   });
@@ -1147,7 +1230,7 @@ describe('terminal:* handler authorization', () => {
       const { io } = buildHarness();
       const s = makeSocket('anon');
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
+      s.handlers.get('join')?.(terminalChannel());
       expect(s.joined.size).toBe(0);
     });
 
@@ -1171,8 +1254,8 @@ describe('terminal:* handler authorization', () => {
       // Authed users are auto-joined to `user:<id>` presence room on
       // connect — assert specifically that the terminal channel is NOT
       // joined rather than `joined.size === 0`.
-      s.handlers.get('join')?.(`user/${BOB}/terminal`);
-      expect(s.joined.has(`user/${BOB}/terminal`)).toBe(false);
+      s.handlers.get('join')?.(terminalChannel(BOB));
+      expect(s.joined.has(terminalChannel(BOB))).toBe(false);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('join rejected'));
     });
 
@@ -1181,8 +1264,19 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
-      expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(true);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(true);
+    });
+
+    it('rejects the same user and terminal id in another tenant', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('alice-sock');
+      asUser(s, ALICE);
+      connect(io, s);
+      const otherTenant = terminalChannel(ALICE, TERMINAL, 'tenant-b');
+      s.handlers.get('join')?.(otherTenant);
+      expect(s.joined.has(otherTenant)).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('tenant does not match'));
     });
 
     it('allows a user-scoped executor to join ONLY its own user terminal channel', () => {
@@ -1190,13 +1284,24 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
-      s.handlers.get('join')?.(`user/${BOB}/terminal`);
-      expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(true);
+      s.handlers.get('join')?.(terminalChannel());
+      s.handlers.get('join')?.(terminalChannel(BOB));
+      expect(s.joined.has(terminalChannel())).toBe(true);
       // Scoped to ALICE — must NOT be able to join BOB's channel and harvest
       // his terminal traffic.
-      expect(s.joined.has(`user/${BOB}/terminal`)).toBe(false);
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('may not join'));
+      expect(s.joined.has(terminalChannel(BOB))).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('scope or owner boot fence'));
+    });
+
+    it('rejects an executor capability minted by a previous daemon boot', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('stale-executor');
+      asServiceForUser(s, ALICE);
+      s.feathers.user.terminal_owner_boot_id = 'old-boot';
+      connect(io, s);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('owner boot fence'));
     });
 
     it('rejects a join from an unscoped service token entirely', () => {
@@ -1204,8 +1309,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServicePostConnect(s); // service, no terminal scope
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
-      expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(false);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(false);
     });
 
     it('rejects join when allow_web_terminal is false', () => {
@@ -1213,8 +1318,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
-      expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(false);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(false);
     });
 
     it("rejects a user leaving another user's terminal channel", () => {
@@ -1222,7 +1327,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('leave')?.(`user/${BOB}/terminal`);
+      s.handlers.get('leave')?.(terminalChannel(BOB));
       expect(s.left.size).toBe(0);
     });
 

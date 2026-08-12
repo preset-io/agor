@@ -76,6 +76,7 @@ import { loadDaemonVersion } from './setup/version.js';
 import { startup } from './startup.js';
 import { configureResolvedConfigSlice } from './utils/build-resolved-config-slice.js';
 import { deepFreezeClone } from './utils/deep-freeze.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
@@ -611,7 +612,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     // `allow_web_terminal: false` kill-switch is enforced on the WebSocket
     // transport too. Without this the terminal:* relay events would still
     // accept traffic when the HTTP modal is disabled.
-    webTerminalEnabled: effectiveConfig.execution?.allow_web_terminal !== false,
+    webTerminalEnabled: resolveWebTerminalCapability(effectiveConfig).enabled,
     // Build info for the version-sync banner. Emitted as the `server-info`
     // welcome event on every connect (and reconnect), so UI tabs can detect
     // FE/BE drift after a deploy without waiting for the next /health poll.

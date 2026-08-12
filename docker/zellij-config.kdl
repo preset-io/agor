@@ -22,9 +22,18 @@ simplified_ui false
 // "compact" requires the compact-bar plugin which may not be available
 default_layout "default"
 
-// Session serialization enables terminal persistence across daemon restarts
-// Set to false if you don't want session persistence (tabs won't survive restarts)
+// Serialize branch-shell state into the effective user's home cache. Agor's
+// browser/PTY attachment remains ephemeral; this only makes an exited Zellij
+// session resurrectable when a new attachment opens the same user + branch.
 session_serialization true
+
+// Preserve a bounded, useful amount of terminal history during resurrection.
+// Snapshot every second so abrupt runtime loss does not depend on a
+// version-specific longer Zellij default. This does not restore live PIDs,
+// shell variables, or running process state.
+pane_viewport_serialization true
+scrollback_lines_to_serialize 1000
+serialization_interval 1
 
 // Auto-layout on creation
 auto_layout true

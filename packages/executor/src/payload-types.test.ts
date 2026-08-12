@@ -394,6 +394,9 @@ describe('ZellijAttachPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         userId: '550e8400-e29b-41d4-a716-446655440000',
+        terminalId: '550e8400-e29b-41d4-a716-446655440001',
+        channel:
+          'tenant/default/user/550e8400-e29b-41d4-a716-446655440000/terminal/550e8400-e29b-41d4-a716-446655440001',
         sessionName: 'agor-session-123',
         cwd: '/data/agor/worktrees/user/repo/feature-x',
       },
@@ -411,6 +414,9 @@ describe('ZellijAttachPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         userId: '550e8400-e29b-41d4-a716-446655440000',
+        terminalId: '550e8400-e29b-41d4-a716-446655440001',
+        channel:
+          'tenant/default/user/550e8400-e29b-41d4-a716-446655440000/terminal/550e8400-e29b-41d4-a716-446655440001',
         sessionName: 'agor-session-123',
         cwd: '/data/agor/worktrees/user/repo/feature-x',
         tabName: 'feature-x',

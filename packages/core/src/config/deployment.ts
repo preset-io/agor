@@ -351,8 +351,10 @@ export function resolveDeploymentConfig(
       'Config error: HA requires deployment.ha.ingress_affinity: true for Engine.IO polling'
     );
   }
-  if (config.execution?.allow_web_terminal !== false) {
-    throw new Error('Config error: HA currently requires execution.allow_web_terminal: false');
+  if (config.execution?.allow_web_terminal !== false && executionTopology !== 'shared-local') {
+    throw new Error(
+      'Config error: HA web terminals require execution_topology shared-local; external terminal runtimes do not yet have owner-affine routing'
+    );
   }
   if (config.execution?.managed_envs_execution_mode !== 'webhook-only') {
     throw new Error(

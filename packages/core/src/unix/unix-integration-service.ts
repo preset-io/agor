@@ -39,22 +39,43 @@ import {
 } from './user-manager.js';
 
 /**
- * Minimal Zellij configuration for Agor users
+ * Default Zellij configuration for Agor users.
  *
- * Only suppresses startup banners for cleaner UX.
- * Users can customize further by editing ~/.config/zellij/config.kdl
+ * Session resurrection is stored beneath the effective user's home. The
+ * stable session name is tenant/user/branch-scoped, while the live Agor PTY
+ * attachment remains owner-local and ephemeral. Users can customize further
+ * by editing ~/.config/zellij/config.kdl.
  */
 export const AGOR_ZELLIJ_CONFIG = `// Agor Zellij Config
 // Customize as needed
 
-// Hide startup banners for cleaner embedded terminal UX
+// Embedded terminal UX
 show_startup_tips false
 show_release_notes false
+pane_frames false
+simplified_ui false
+default_layout "default"
+auto_layout true
+default_shell "bash"
 
 // Clipboard configuration for web terminal (xterm.js)
 // Disable Zellij clipboard handling to allow native browser copy/paste
 mouse_mode false
 copy_on_select false
+
+// Keep the in-memory scroll buffer useful while the runtime is alive.
+scroll_buffer_size 10000
+
+// Closing an Agor attachment exits the live Zellij server instead of leaving
+// an unbounded background process. The next attachment can resurrect its
+// serialized state from the effective user's home cache.
+on_force_close "quit"
+session_serialization true
+pane_viewport_serialization true
+scrollback_lines_to_serialize 1000
+// Pin the interval across Zellij versions so owner loss has at most a small
+// serialization window.
+serialization_interval 1
 `;
 
 /**

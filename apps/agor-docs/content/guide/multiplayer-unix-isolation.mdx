@@ -279,8 +279,8 @@ execution:
 Default behavior (flag unset or `true`):
 
 - Any authenticated user with role `member` or higher can open a terminal.
-- Branch-level permissions still apply. Opening a terminal tab against a
-  branch requires at least `session` permission on that branch (when
+- Branch-level permissions still apply. Opening a branch-scoped terminal
+  requires at least `session` permission on that branch (when
   `branch_rbac` is on).
 
 When set to `false`:
@@ -303,6 +303,18 @@ When set to `false`:
 > For any deployment where you do not trust all members with daemon-level
 > access, either run in `insulated`/`strict` mode or set
 > `allow_web_terminal: false`.
+
+The terminal cwd and effective Unix identity are always derived server-side
+from the authorized branch and authenticated user. Each branch has a separate
+terminal runtime attachment; opening another branch never asks one shell to
+switch across daemon-visible worktrees. Daemon/runtime loss is shown as a
+disconnect and requires explicit reconnect. Zellij persistence, when available
+on the same runtime, is separate from Agor transport persistence. Agor stores
+bounded Zellij resurrection state in the effective Unix user's home, scoped by
+tenant, user, and branch. `simple` and `insulated` modes intentionally share
+that Unix home; `strict` mode and delegated per-user runtimes provide separate
+homes. Resurrection can restore layout, cwd, viewport, and bounded scrollback,
+but not live process identity or in-memory shell state.
 
 ### 5. Observability Setup
 

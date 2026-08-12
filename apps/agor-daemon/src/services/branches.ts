@@ -1481,6 +1481,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         });
     }
 
+    // Retire branch-scoped terminal attachments before archive/delete. The
+    // local event handles this replica; serverSideEmit carries only trusted
+    // tenant/branch lifecycle metadata (never terminal contents) to peer
+    // replicas when the HA adapter is available.
+    const terminalTenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    if (!terminalTenantId) throw new Error('Missing tenant context for branch terminal cleanup');
+    const terminalClose = {
+      tenantId: String(terminalTenantId),
+      branchId: branch.branch_id,
+    };
+    this.app.emit?.('terminal:close-branch', terminalClose);
+    this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
+
     // Metadata action: archive or delete
     if (metadataAction === 'archive') {
       // Archive: Soft delete branch and cascade to sessions
