@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/claude",
-  "version": "0.24.4",
+  "version": "0.24.5",
   "description": "Version-aligned claude agentic tool integration for Agor",
   "type": "module",
   "main": "./dist/index.js",
