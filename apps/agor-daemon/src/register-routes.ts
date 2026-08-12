@@ -58,7 +58,6 @@ import type {
   Message,
   MessageID,
   MessageSource,
-  MessageStreamLifecycleEvent,
   Params,
   ScheduleID,
   Session,
@@ -72,8 +71,8 @@ import type {
 } from '@agor/core/types';
 import {
   hasMinimumRole,
+  isMessageStreamLifecycleEvent,
   isTaskPendingDispatch,
-  MESSAGE_STREAM_LIFECYCLE_EVENTS,
   MessageRole,
   ROLES,
   SessionStatus,
@@ -757,10 +756,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) {
         app.service('messages').emit(data.event, data.data);
         if (isServiceAccountRoute(params)) {
-          const gatewayStreamingEvent = (
-            MESSAGE_STREAM_LIFECYCLE_EVENTS as readonly StreamingEventType[]
-          ).includes(data.event)
-            ? (data.event as MessageStreamLifecycleEvent)
+          const gatewayStreamingEvent = isMessageStreamLifecycleEvent(data.event)
+            ? data.event
             : null;
 
           if (gatewayStreamingEvent) {

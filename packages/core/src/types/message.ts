@@ -343,8 +343,7 @@ export type MessageStreamLifecycleEvent = (typeof MESSAGE_STREAM_LIFECYCLE_EVENT
  * Do NOT re-list these literals at a call site (a service `events:` array, a
  * union type, a `Set`, an equality chain). Import this constant — or the
  * derived `StreamingEventType` / `MESSAGE_STREAM_LIFECYCLE_EVENTS` — instead.
- * See `context/guidelines/constants.md`; enforced by
- * `scripts/check-magic-string-drift.mjs`.
+ * See `context/guidelines/constants.md`.
  */
 export const STREAMING_EVENT_TYPES = [
   ...MESSAGE_STREAM_LIFECYCLE_EVENTS,
@@ -354,3 +353,9 @@ export const STREAMING_EVENT_TYPES = [
 ] as const;
 
 export type StreamingEventType = (typeof STREAMING_EVENT_TYPES)[number];
+
+export function isMessageStreamLifecycleEvent(
+  event: StreamingEventType
+): event is MessageStreamLifecycleEvent {
+  return (MESSAGE_STREAM_LIFECYCLE_EVENTS as readonly StreamingEventType[]).includes(event);
+}

@@ -114,7 +114,7 @@ Terms you'll see across the codebase, UI, and docs:
 | Frontend UI / design system      | [`context/guidelines/frontend.md`](context/guidelines/frontend.md)                                                                                                                                                                                      |
 | Operational logging              | [`context/guidelines/logging.md`](context/guidelines/logging.md)                                                                                                                                                                                        |
 | Testing                          | [`context/guidelines/testing.md`](context/guidelines/testing.md)                                                                                                                                                                                        |
-| Constants / magic strings        | [`context/guidelines/constants.md`](context/guidelines/constants.md)                                                                                                                                                                                    |
+| Shared runtime identifiers       | [`context/guidelines/constants.md`](context/guidelines/constants.md)                                                                                                                                                                                    |
 | IDs / short IDs / branded types  | [`context/concepts/id-management.md`](context/concepts/id-management.md)                                                                                                                                                                                |
 | Web-layer security (CSP/CORS)    | [`context/concepts/security.md`](context/concepts/security.md)                                                                                                                                                                                          |
 | Executor isolation               | [`context/explorations/executor-isolation.md`](context/explorations/executor-isolation.md)                                                                                                                                                              |
@@ -129,10 +129,11 @@ Terms you'll see across the codebase, UI, and docs:
 
 1. **Type-driven** - Use branded types for IDs, strict TypeScript
 2. **Centralize types** - ALWAYS import from `packages/core/src/types/` (never redefine)
-3. **Read before edit** - Always read files before modifying
-4. **Prefer Edit over Write** - Modify existing files when possible
-5. **Git operations** - ALWAYS use `simple-git` (NEVER subprocess `execSync`, `spawn`, etc.)
-6. **Error handling** - Clean user-facing errors, no stacktraces in CLI
+3. **Centralize shared runtime identifiers** - Import the domain-owned value or family instead of retyping protocol strings; see [`context/guidelines/constants.md`](context/guidelines/constants.md)
+4. **Read before edit** - Always read files before modifying
+5. **Prefer Edit over Write** - Modify existing files when possible
+6. **Git operations** - ALWAYS use `simple-git` (NEVER subprocess `execSync`, `spawn`, etc.)
+7. **Error handling** - Clean user-facing errors, no stacktraces in CLI
 
 ### Important Rules
 
