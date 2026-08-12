@@ -700,6 +700,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
 
   const resolveLocalDelivery = async (data: unknown, context: HookContext) => {
     const authenticated = app.channel('authenticated');
+    if (context.path && isKnowledgeRealtimeSuppressedEvent(context.path, context.event)) {
+      return { delivery: authenticated.filter(() => false), tenantId: undefined };
+    }
+
     let tenantScoped = authenticated;
     let tenantId: string | undefined;
     if (multiTenancy) {

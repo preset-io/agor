@@ -200,7 +200,7 @@ describe('Knowledge realtime ACL resolution', () => {
     }
   );
 
-  dbTest('requires graph readers to pass both document endpoints', async ({ db }) => {
+  dbTest('resolves graph endpoints once and requires readers to pass both', async ({ db }) => {
     const owner = await seedUser(db, 'owner');
     const firstOnly = await seedUser(db, 'first-only');
     const both = await seedUser(db, 'both');
@@ -227,9 +227,22 @@ describe('Knowledge realtime ACL resolution', () => {
       created_by: owner.user_id,
     });
 
+    const findDocument = vi.spyOn(KnowledgeDocumentRepository.prototype, 'findById');
+    try {
+      expect(
+        await resolve({ db, data: edge, path: 'kb/graph', users: [firstOnly, both, admin] })
+      ).toEqual(new Set([both.user_id, admin.user_id]));
+      expect(findDocument).toHaveBeenCalledTimes(2);
+    } finally {
+      findDocument.mockRestore();
+    }
+
+    await new KnowledgeDocumentRepository(db).update(second.document.document_id, {
+      archived: true,
+    });
     expect(
       await resolve({ db, data: edge, path: 'kb/graph', users: [firstOnly, both, admin] })
-    ).toEqual(new Set([both.user_id, admin.user_id]));
+    ).toEqual(new Set());
   });
 
   dbTest(

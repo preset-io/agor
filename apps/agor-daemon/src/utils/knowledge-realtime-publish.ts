@@ -10,9 +10,10 @@ import type { HookContext, KnowledgeDocument, KnowledgeGraphNode, User } from '@
 import { ROLES } from '@agor/core/types';
 import {
   canReadKnowledgeDocument,
-  canReadKnowledgeGraphNode,
   hasKnowledgeNamespacePermission,
   isKnowledgeAdmin,
+  isKnowledgeDocumentGraphNode,
+  resolveKnowledgeGraphNodeDocument,
   resolveKnowledgeNamespacePermission,
 } from '../services/knowledge-access.js';
 
@@ -214,17 +215,18 @@ export async function resolveKnowledgeRealtimeUserIds(options: {
     );
     if (!nodes.every((node): node is KnowledgeGraphNode => node !== null)) return new Set();
 
-    const authorized = new Set<string>();
-    for (const user of users) {
-      if (
-        await everyAsync(nodes, (node) =>
-          canReadKnowledgeGraphNode(documents, namespaces, node, user)
-        )
-      ) {
-        authorized.add(user.user_id);
+    const resolvedDocuments = await Promise.all(
+      nodes.map((node) => resolveKnowledgeGraphNodeDocument(documents, namespaces, node))
+    );
+    const documentsById = new Map<string, KnowledgeDocument>();
+    for (const [index, document] of resolvedDocuments.entries()) {
+      if (!document) {
+        if (isKnowledgeDocumentGraphNode(nodes[index])) return new Set();
+        continue;
       }
+      documentsById.set(document.document_id, document);
     }
-    return authorized;
+    return readableDocumentUserIds(namespaces, [...documentsById.values()], users);
   }
 
   // Unknown or future Knowledge payloads must declare a parent mapping before

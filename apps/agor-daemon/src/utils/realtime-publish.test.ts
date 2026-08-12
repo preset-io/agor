@@ -409,6 +409,8 @@ describe('HA Feathers publication relay', () => {
         const tenantConnection = {
           user: await seedRealtimeUser(db, `event-${path.replaceAll('/', '-')}`),
         };
+        const serviceConnection = { user: { _isServiceAccount: true, role: 'service' } };
+        const connections = [tenantConnection, serviceConnection];
         let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
         const relay = {
           relay: vi.fn(),
@@ -416,7 +418,7 @@ describe('HA Feathers publication relay', () => {
             remoteHandler = handler;
           }),
         };
-        const app = makeApp([tenantConnection], {}, { 'tenant:tenant-a': [tenantConnection] });
+        const app = makeApp(connections, {}, { 'tenant:tenant-a': connections });
         configureRealtimePublish({
           app,
           db,
@@ -462,13 +464,13 @@ describe('HA Feathers publication relay', () => {
           method: patchedEnvelope.method,
           params: {},
         });
-        expect(patchedChannel.connections).toEqual([tenantConnection]);
+        expect(patchedChannel.connections).toEqual(connections);
         expect(relay.relay).toHaveBeenCalledWith(patchedEnvelope);
 
         await remoteHandler?.(patchedEnvelope);
         expect(app.emit).toHaveBeenCalledOnce();
         const receivedChannel = app.emit.mock.calls[0]?.[2] as FakeChannel;
-        expect(receivedChannel.connections).toEqual([tenantConnection]);
+        expect(receivedChannel.connections).toEqual(connections);
       }
     );
   }
