@@ -136,9 +136,17 @@ export type MCPTransport = 'stdio' | 'http' | 'sse';
 export type MCPScope = 'global' | 'session';
 
 /**
- * MCP server source types
+ * Where a server's configuration came from.
+ *
+ * - `user`: somebody typed it, through the UI or `POST /mcp-servers`
+ * - `imported`: read out of a file on disk; `import_path` records which
+ * - `agor`: Agor's own built-in server
+ * - `catalog`: installed from the marketplace; `catalog_entry_name` records
+ *   which entry, the way `import_path` records which file
+ *
+ * This is provenance, not authorization — nothing reads it to decide access.
  */
-export type MCPSource = 'user' | 'imported' | 'agor';
+export type MCPSource = 'user' | 'imported' | 'agor' | 'catalog';
 
 /**
  * MCP server authentication configuration

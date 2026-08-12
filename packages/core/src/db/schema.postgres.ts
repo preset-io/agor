@@ -1395,7 +1395,7 @@ export const mcpServers = pgTable(
 
     // Source tracking (materialized for queries)
     source: text('source', {
-      enum: ['user', 'imported', 'agor'],
+      enum: ['user', 'imported', 'agor', 'catalog'],
     }).notNull(),
 
     // JSON blob for configuration and capabilities

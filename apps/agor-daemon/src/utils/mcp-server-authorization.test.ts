@@ -117,15 +117,106 @@ describe('authorizeMcpServerWrite', () => {
     ).rejects.toThrow(/owned by yourself/);
   });
 
-  it('lets allow_crud members create a shared server', async () => {
+  // The permissive policy must not produce the less private row. Saying
+  // nothing about ownership is the overwhelmingly common create — the MCP tool
+  // does not expose the field at all — so if silence meant "shared", the
+  // ordinary path on a branch about private servers would publish to the whole
+  // tenant, credentials included.
+  it.each(['allow_private_only', 'allow_crud'] as const)(
+    'gives a member their own server when they say nothing about ownership, under %s',
+    async (policy) => {
+      resolveMcpMemberPolicy.mockResolvedValue(policy);
+
+      await expect(
+        authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+          method: 'create',
+          data: remoteCreate,
+        })
+      ).resolves.toEqual({ owner_user_id: ALICE });
+    }
+  );
+
+  it('lets an allow_crud member publish by naming owner_user_id: null', async () => {
     resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
+
+    await expect(
+      authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+        method: 'create',
+        data: { ...remoteCreate, owner_user_id: null },
+      })
+    ).resolves.toEqual({});
+  });
+
+  // An explicit null and an absent field are different requests, and only the
+  // first is a decision to share. Collapsing them is what made sharing the
+  // default and left "I meant this one to be shared" unexpressible.
+  it('does not read an absent owner as a request to share', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
+
+    const absent = await authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+      method: 'create',
+      data: remoteCreate,
+    });
+    const explicitNull = await authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+      method: 'create',
+      data: { ...remoteCreate, owner_user_id: null },
+    });
+
+    expect(absent).not.toEqual(explicitNull);
+  });
+
+  // Refused, not quietly turned into a private server. The caller asked to
+  // publish; answering "created" while creating something else reports one
+  // thing and does another, and the client has no way to notice. It also
+  // matches how this policy already treats the shared case on patch, and how
+  // this module already treats a payload it will not honour — a caller-supplied
+  // catalog stamp is refused rather than dropped, for the same reason.
+  it('refuses to publish under allow_private_only rather than silently privatising', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
+
+    await expect(
+      authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+        method: 'create',
+        data: { ...remoteCreate, owner_user_id: null },
+      })
+    ).rejects.toThrow(/cannot be shared with the workspace/);
+  });
+
+  it('still gives that member their own server when they never mention ownership', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
 
     await expect(
       authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
         method: 'create',
         data: remoteCreate,
       })
-    ).resolves.toEqual({});
+    ).resolves.toEqual({ owner_user_id: ALICE });
+  });
+
+  // The marketplace refusal is answered about installing an entry, not about
+  // configuring servers. A user who clicked Connect never asked for the wider
+  // capability, and being refused it reads as the feature being broken.
+  it('tells a marketplace install what was actually refused', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('use_existing_only');
+    const installParams = {
+      ...paramsFor(ALICE, 'member'),
+      mcpCatalogInstall: { entry_name: 'com.deepwiki/mcp' },
+    } as unknown as AuthenticatedParams;
+
+    await expect(
+      authorizeMcpServerWrite(db, installParams, { method: 'create', data: remoteCreate })
+    ).rejects.toThrow(/this entry cannot be installed/);
+  });
+
+  it('keeps the direct-configuration wording for an ordinary create', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('use_existing_only');
+
+    await expect(
+      authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+        method: 'create',
+        data: remoteCreate,
+      })
+    ).rejects.toThrow(/does not allow members to configure MCP servers/);
   });
 
   it.each(['allow_private_only', 'allow_crud'] as const)(
