@@ -5,7 +5,12 @@
 
 import type { AuthenticatedParams, MCPMemberPolicy, MCPServer, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { authorizeMcpServerWrite, loadMcpServerForCaller } from './mcp-server-authorization.js';
+import {
+  authorizeMcpServerWrite,
+  isMcpServerUsableByCaller,
+  isSessionMcpServerLinkVisibleToCaller,
+  loadMcpServerForCaller,
+} from './mcp-server-authorization.js';
 
 const { resolveMcpMemberPolicy, findById } = vi.hoisted(() => ({
   resolveMcpMemberPolicy: vi.fn<() => Promise<MCPMemberPolicy>>(),
@@ -304,6 +309,110 @@ describe('authorizeMcpServerWrite', () => {
   });
 });
 
+/**
+ * Below member is not "a member whose policy happens to be permissive".
+ *
+ * The four `mcp-servers` write verbs used to be gated on ADMIN by a role hook.
+ * Routing them through this authorizer instead replaced that gate with a policy
+ * gate, and a policy gate only knows admin-from-everyone-else — so every role
+ * beneath member fell into the member path and inherited whatever the tenant's
+ * `mcp_member_policy` grants. `viewer` is a real role ("Read-only access"), so
+ * a read-only account could configure a server, and under `allow_crud` an
+ * unowned one that every session in the tenant can then reach.
+ *
+ * This is currently unreachable over HTTP for an unrelated reason — a viewer
+ * cannot authenticate at all, because the local strategy reads the user back
+ * through a `users.get` gated at member. That is a separate bug, and one that
+ * will be fixed; it is not a gate this rule may lean on. So the check lives
+ * here, where the decision is actually made, and the tests synthesize the
+ * identity rather than logging in.
+ */
+describe('authorizeMcpServerWrite refuses below-member roles', () => {
+  beforeEach(() => {
+    resolveMcpMemberPolicy.mockReset();
+  });
+
+  const WRITES = [
+    { method: 'create' as const, data: remoteCreate },
+    { method: 'update' as const, data: remoteCreate, existing: serverOwnedBy(ALICE) },
+    { method: 'patch' as const, data: remoteCreate, existing: serverOwnedBy(ALICE) },
+    { method: 'remove' as const, existing: serverOwnedBy(ALICE) },
+  ];
+
+  // Both permissive values: `use_existing_only` refuses everyone below admin
+  // anyway, so it would pass with or without the fix and proves nothing.
+  for (const policy of ['allow_private_only', 'allow_crud'] as const) {
+    for (const write of WRITES) {
+      it(`refuses a viewer ${write.method} under ${policy}`, async () => {
+        resolveMcpMemberPolicy.mockResolvedValue(policy);
+
+        await expect(
+          authorizeMcpServerWrite(db, paramsFor(ALICE, 'viewer'), write)
+        ).rejects.toThrow(/member access/i);
+      });
+    }
+
+    it(`still lets a member create under ${policy}`, async () => {
+      resolveMcpMemberPolicy.mockResolvedValue(policy);
+
+      await expect(
+        authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+          method: 'create',
+          data: remoteCreate,
+        })
+      ).resolves.toBeDefined();
+    });
+  }
+
+  // `normalizeRole` answers MEMBER for an absent role, so a check written as
+  // `hasMinimumRole(user.role, MEMBER)` alone would admit a params object that
+  // carries no role at all. Fail closed on the raw value instead.
+  it('refuses a caller carrying no role rather than reading it as a member', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
+    const roleless = {
+      provider: 'rest',
+      user: { user_id: ALICE },
+    } as unknown as AuthenticatedParams;
+
+    await expect(
+      authorizeMcpServerWrite(db, roleless, { method: 'create', data: remoteCreate })
+    ).rejects.toThrow(/member access/i);
+  });
+
+  it('refuses an unrecognised role rather than ranking it as a member', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
+
+    await expect(
+      authorizeMcpServerWrite(db, paramsFor(ALICE, 'guest'), {
+        method: 'create',
+        data: remoteCreate,
+      })
+    ).rejects.toThrow(/member access/i);
+  });
+
+  it('decides before the policy is read, so the refusal does not depend on it', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
+
+    await expect(
+      authorizeMcpServerWrite(db, paramsFor(ALICE, 'viewer'), {
+        method: 'create',
+        data: remoteCreate,
+      })
+    ).rejects.toThrow(/member access/i);
+    expect(resolveMcpMemberPolicy).not.toHaveBeenCalled();
+  });
+
+  it('leaves the legacy owner alias above the bar', async () => {
+    await expect(
+      authorizeMcpServerWrite(db, paramsFor(ALICE, 'owner'), {
+        method: 'create',
+        data: { transport: 'stdio' },
+      })
+    ).resolves.toEqual({});
+    expect(resolveMcpMemberPolicy).not.toHaveBeenCalled();
+  });
+});
+
 describe('loadMcpServerForCaller', () => {
   beforeEach(() => {
     findById.mockReset();
@@ -343,5 +452,74 @@ describe('loadMcpServerForCaller', () => {
     await expect(
       loadMcpServerForCaller(db, 'server-1', paramsFor(ALICE, 'admin'))
     ).rejects.toMatchObject({ code: 404 });
+  });
+});
+
+const server = (owner_user_id?: string) =>
+  ({ mcp_server_id: 'server-id', owner_user_id }) as unknown as MCPServer;
+
+describe('isMcpServerUsableByCaller', () => {
+  it('allows shared servers and the owner, but not another member', () => {
+    expect(
+      isMcpServerUsableByCaller(server(), {
+        provider: 'rest',
+        user: { user_id: 'user-a' },
+      } as never)
+    ).toBe(true);
+    expect(
+      isMcpServerUsableByCaller(server('user-a'), {
+        provider: 'rest',
+        user: { user_id: 'user-a' },
+      } as never)
+    ).toBe(true);
+    expect(
+      isMcpServerUsableByCaller(server('user-a'), {
+        provider: 'rest',
+        user: { user_id: 'user-b' },
+      } as never)
+    ).toBe(false);
+  });
+
+  it('allows admins and trusted internal callers', () => {
+    expect(
+      isMcpServerUsableByCaller(server('user-a'), {
+        provider: 'rest',
+        user: { user_id: 'user-b', role: 'admin' },
+      } as never)
+    ).toBe(true);
+    expect(isMcpServerUsableByCaller(server('user-a'), undefined)).toBe(true);
+  });
+});
+
+describe('isSessionMcpServerLinkVisibleToCaller', () => {
+  const member = (user_id: string) => ({ provider: 'rest', user: { user_id } }) as never;
+
+  it('hides a session creator private attachment from a collaborator', () => {
+    const row = { owner_user_id: 'creator', session_created_by: 'creator' };
+    expect(isSessionMcpServerLinkVisibleToCaller(row, member('collaborator'))).toBe(false);
+    expect(isSessionMcpServerLinkVisibleToCaller(row, member('creator'))).toBe(true);
+    expect(
+      isSessionMcpServerLinkVisibleToCaller(
+        { owner_user_id: 'foreign', session_created_by: 'creator' },
+        member('creator')
+      )
+    ).toBe(false);
+  });
+
+  it('keeps shared links visible and allows admin/control-plane callers', () => {
+    const row = { owner_user_id: null, session_created_by: 'creator' };
+    expect(isSessionMcpServerLinkVisibleToCaller(row, member('collaborator'))).toBe(true);
+    expect(
+      isSessionMcpServerLinkVisibleToCaller(
+        { owner_user_id: 'creator', session_created_by: 'creator' },
+        { provider: 'rest', user: { user_id: 'admin', role: 'admin' } } as never
+      )
+    ).toBe(true);
+    expect(
+      isSessionMcpServerLinkVisibleToCaller(
+        { owner_user_id: 'creator', session_created_by: 'creator' },
+        undefined
+      )
+    ).toBe(true);
   });
 });

@@ -14,13 +14,13 @@
  * Templates are resolved using process.env, which contains the user's decrypted
  * environment variables (populated by createUserProcessEnvironment when spawning).
  *
- * Ownership is resolved by the daemon, which knows the session's creator: the
- * `/sessions/:id/mcp-servers` route both narrows its global query and filters
- * the merged result. Nothing here re-derives it — the executor is given a set
- * that has already had another user's private servers removed.
+ * The repository layer filters global rows by the session creator when that
+ * identity is supplied, while session assignments are filtered by the session
+ * repository. This keeps private credentials out of executor configuration.
  */
 
 import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../types';
+import { isMCPServerUsableBy } from './ownership';
 import {
   buildMCPTemplateContextFromEnv,
   resolveMcpServerTemplates,
@@ -95,6 +95,12 @@ export interface MCPResolutionDeps {
    * indistinguishable from it being broken.
    */
   onServerWithheld?: (server: MCPServer, reason: string) => void;
+  /**
+   * Creator of the session being resolved. This is separate from forUserId:
+   * a collaborator may prompt a session, but cannot bring their private MCP
+   * definitions into the session owner's executor.
+   */
+  sessionOwnerId?: string;
 }
 
 /**
@@ -146,6 +152,15 @@ export async function getMcpServersForSession(
     const seenServerIds = new Set<string>();
 
     const addServer = (server: MCPServer, source: MCPServerWithSource['source']) => {
+      if (server.owner_user_id && !deps.sessionOwnerId) {
+        console.warn(
+          `   ⚠️  Skipping private MCP server because session owner identity is missing: ${server.name}`
+        );
+      }
+      if (!isMCPServerUsableBy(server, deps.sessionOwnerId)) {
+        mcpDebug(`   🔒 Skipping private MCP server not owned by session creator: ${server.name}`);
+        return;
+      }
       if (!seenServerIds.has(server.mcp_server_id)) {
         seenServerIds.add(server.mcp_server_id);
         servers.push({ server, source });
@@ -176,9 +191,7 @@ export async function getMcpServersForSession(
         {
           scope: 'global',
           enabled: true,
-          // The route above resolves ownership from the session; this branch
-          // has only the acting user, so it asks for that user's set.
-          ...(deps.forUserId ? { usableByUserId: deps.forUserId } : {}),
+          ...(deps.sessionOwnerId ? { usableByUserId: deps.sessionOwnerId } : {}),
         },
         deps.forUserId
       );

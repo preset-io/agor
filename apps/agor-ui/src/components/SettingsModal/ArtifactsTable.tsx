@@ -38,6 +38,7 @@ interface ArtifactsTableProps {
 }
 
 const templateColors: Record<string, string> = {
+  static: 'default',
   react: 'cyan',
   'react-ts': 'blue',
   vanilla: 'green',

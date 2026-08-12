@@ -16,18 +16,29 @@ describe('register-hooks MCP server secret redaction', () => {
     expect(source).toMatch(/find:\s*\[injectPerUserOAuthTokens,\s*redactMCPServerSecretFields\]/);
     // Ownership hooks may run ahead of these; redaction must still be last.
     expect(source).toMatch(
-      /get:\s*\[[^\]]*injectPerUserOAuthTokens,\s*redactMCPServerSecretFields\]/
+      /get:\s*\[[\s\S]*?injectPerUserOAuthTokens,\s*redactMCPServerSecretFields[\s\S]*?\]/
     );
+  });
+
+  it('keeps full MCP server replacements behind the write gate', () => {
+    // PUT replaces the whole row, so it must clear the same gate as the other
+    // writes rather than the `all` chain alone. That gate is no longer a role
+    // check: `authorizeMcpServerWriteHook` decides on `mcp_member_policy` plus
+    // ownership, which is what lets a member hold a server of their own at all.
+    expect(source).toMatch(/update:\s*\[authorizeMcpServerWriteHook\]/);
   });
 
   it('redacts session MCP server route responses that bypass service hooks', () => {
     expect(routesSource).toContain("'/sessions/:id/mcp-servers'");
     expect(routesSource).toContain('redactMCPServerSecrets');
     expect(routesSource).toContain('servers.map(redactMCPServerSecrets)');
-    expect(routesSource).toContain('await requireSessionScopedConfigOwnerOrAdmin(id, params)');
+    expect(routesSource).toContain('authorizeAndLoadSessionForMcpConfig(id, params)');
+    expect(routesSource).toContain('isMCPServerUsableInSession');
     expect(routesSource).toContain('includeGlobal');
     expect(routesSource).toContain("scope: 'global'");
     expect(routesSource).toContain('forUserId');
+    expect(routesSource).toContain('sessionMCPServersService.setServers');
+    expect(routesSource).toContain('update: { role: ROLES.MEMBER');
   });
 
   it('does not expose raw secrets to global session-token service reads', () => {

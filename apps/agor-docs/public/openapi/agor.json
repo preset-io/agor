@@ -630,6 +630,21 @@
         "additionalProperties": true,
         "description": "Schema for logsList. See @agor-live/client for the authoritative TypeScript type."
       },
+      "mcp-member-policy": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Schema for mcp-member-policy. See @agor-live/client for the authoritative TypeScript type."
+      },
+      "mcp-member-policyList": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Schema for mcp-member-policyList. See @agor-live/client for the authoritative TypeScript type."
+      },
+      "connect": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Schema for connect. See @agor-live/client for the authoritative TypeScript type."
+      },
       "health": {
         "type": "object",
         "additionalProperties": true,
@@ -11510,6 +11525,63 @@
       }
     },
     "/sessions/{id}/mcp-servers/{id_2}": {
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "id parameter"
+          },
+          {
+            "in": "path",
+            "name": "id_2",
+            "description": "ID of :id to update",
+            "schema": {
+              "type": "integer"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_id"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "404": {
+            "description": "not found"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
+        "tags": ["sessions"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_id"
+              }
+            }
+          }
+        }
+      },
       "patch": {
         "parameters": [
           {
@@ -11613,6 +11685,156 @@
         "summary": "Removes the resource with id",
         "tags": ["sessions"],
         "security": []
+      }
+    },
+    "/mcp-member-policy": {
+      "get": {
+        "parameters": [
+          {
+            "description": "Number of results to return",
+            "in": "query",
+            "name": "$limit",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of results to skip",
+            "in": "query",
+            "name": "$skip",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Property to sort results",
+            "in": "query",
+            "name": "$sort",
+            "style": "deepObject",
+            "schema": {
+              "type": "object"
+            }
+          },
+          {
+            "description": "Query parameters to filter",
+            "in": "query",
+            "name": "filter",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "$ref": "#/components/schemas/mcp-member-policy"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/mcp-member-policyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
+        "tags": ["mcp-member-policy"],
+        "security": []
+      }
+    },
+    "/mcp-member-policy/{id}": {
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID of mcp-member-policy to update",
+            "schema": {
+              "type": "integer"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/mcp-member-policy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "404": {
+            "description": "not found"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
+        "tags": ["mcp-member-policy"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/mcp-member-policy"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp-catalog/connect": {
+      "post": {
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
+        "tags": ["mcp-catalog"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/connect"
+              }
+            }
+          }
+        }
       }
     },
     "/sessions/{id}/env-selections": {
@@ -12083,6 +12305,10 @@
     {
       "name": "api",
       "description": "A api service"
+    },
+    {
+      "name": "mcp-member-policy",
+      "description": "A mcp-member-policy service"
     },
     {
       "name": "health",

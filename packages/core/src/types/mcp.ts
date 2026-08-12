@@ -326,12 +326,10 @@ export interface MCPServerFilters {
   transport?: MCPTransport;
   enabled?: boolean;
   source?: MCPSource;
-  /**
-   * Keep shared servers plus the private servers owned by this user, and drop
-   * everyone else's. Independent of `scope`, because a private server can be
-   * either global or session-scoped.
-   */
+  /** Shared servers plus private servers owned by this user. */
   usableByUserId?: string;
+  /** Restrict to system-owned rows, used for the official catalog. */
+  ownerless?: boolean;
 }
 
 /**

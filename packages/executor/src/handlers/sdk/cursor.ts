@@ -29,6 +29,7 @@ import type { McpServerConfig, Run, SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
+import { resolveContextUserId } from '../../sdk-handlers/base/context-user.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import {
   collectWithheldMcpServers,
@@ -198,6 +199,7 @@ async function buildCursorMcpServers(args: {
   mcpToken?: string;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
   forUserId?: string;
+  sessionOwnerId?: string;
 }): Promise<Record<string, McpServerConfig> | undefined> {
   const claimed = new Set<string>();
   const mcpServers: Record<string, McpServerConfig> = {};
@@ -222,6 +224,7 @@ async function buildCursorMcpServers(args: {
       mcpServerRepo: args.repos.mcpServers,
       mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
       forUserId: args.forUserId,
+      sessionOwnerId: args.sessionOwnerId,
       onServerWithheld: reporter.onServerWithheld,
     },
     // Cursor's MCP config carries no per-tool filter, so a server with gated
@@ -471,12 +474,18 @@ export async function executeCursorTask(params: {
     // configuredModel for recording, `model` (id form) for the SDK.
     const configuredModel = session.model_config?.model;
     const model = toCursorModel(configuredModel);
+    const contextUserId = await resolveContextUserId({
+      session,
+      taskId,
+      tasksService: repos.tasksService,
+    });
     const mcpServers = await buildCursorMcpServers({
       sessionId,
       taskId,
       mcpToken: session.mcp_token,
       repos,
-      forUserId: session.created_by,
+      forUserId: contextUserId,
+      sessionOwnerId: session.created_by,
     });
 
     const agent = session.sdk_session_id

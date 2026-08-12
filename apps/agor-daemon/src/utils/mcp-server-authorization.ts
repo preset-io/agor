@@ -10,6 +10,11 @@
  * Using a server is a separate question with a separate answer: see
  * `isMCPServerUsableInSession` in `@agor/core/mcp`, enforced where a server is
  * attached to a session and where a starting session's set is resolved.
+ *
+ * The caller-side reads of that same rule live at the bottom of this file —
+ * whether a caller may be shown a row, an attachment link, or load one by id.
+ * They decide visibility, not policy, so they stay beside the write authorizer
+ * rather than folding into it.
  */
 
 import {
@@ -141,6 +146,52 @@ function assertRemoteTransport(transport: MCPTransport | undefined): void {
   }
 }
 
+/**
+ * The floor the member policy sits on top of.
+ *
+ * These four verbs used to carry a role gate — `requireMinimumRole(ADMIN)` on
+ * each of create/update/patch/remove — in front of any policy reasoning.
+ * Routing them through this authorizer replaced that gate rather than adding
+ * to it, and a policy gate only distinguishes admin from everyone else. `viewer`
+ * is a real role beneath member ("Read-only access"), so without this it fell
+ * into the member path and inherited whatever the tenant's policy grants:
+ * configuring servers under `allow_private_only`, and under `allow_crud` an
+ * unowned one that every session in the tenant can then reach.
+ *
+ * Decided on the raw role rather than a normalized one. `normalizeRole` answers
+ * MEMBER for an absent or empty value, so `hasMinimumRole(user.role, MEMBER)`
+ * on its own would admit precisely the caller with no role to speak of. An
+ * unrecognized role ranks 0 and is refused for the same reason: a role this
+ * code does not know is not one it may assume is privileged.
+ */
+function isAtLeastMember(role: unknown): boolean {
+  const named = typeof role === 'string' && role.length > 0;
+  return named && hasMinimumRole(role, ROLES.MEMBER);
+}
+
+function assertAtLeastMember(role: unknown): void {
+  if (!isAtLeastMember(role)) {
+    throw new Forbidden('You need member access to configure MCP servers');
+  }
+}
+
+/**
+ * Whether this role and policy together permit configuring a server at all.
+ *
+ * The same decision {@link authorizeMcpServerWrite} makes, minus the per-request
+ * detail, so a client can grey out a control instead of discovering the refusal
+ * by being refused. It is exported so callers read the rule rather than
+ * reconstructing it from `isAdmin` and a policy value — reducing role to a
+ * boolean is what let the role floor go missing here in the first place.
+ *
+ * Advisory only. Nothing is authorized by this function; the write path decides.
+ */
+export function canConfigureMcpServers(role: unknown, policy: MCPMemberPolicy): boolean {
+  if (typeof role === 'string' && hasMinimumRole(role, ROLES.ADMIN)) return true;
+  if (!isAtLeastMember(role)) return false;
+  return policy !== 'use_existing_only';
+}
+
 function assertPolicyAllowsWrite(policy: MCPMemberPolicy): void {
   if (policy === 'use_existing_only') {
     throw new Forbidden(
@@ -206,6 +257,8 @@ async function decidePolicyAndOwnership(
   // Admins administer every server, including private ones. They still cannot
   // use one they do not own — that is the session-side rule, not this one.
   if (hasMinimumRole(user.role, ROLES.ADMIN)) return {};
+
+  assertAtLeastMember(user.role);
 
   const policy = await resolveMcpMemberPolicy(db, userId, params.tenant?.tenant_id);
   assertPolicyAllowsWrite(policy);
@@ -301,19 +354,44 @@ export async function loadMcpServerForWrite(
   return (await new MCPServerRepository(db).findById(id)) ?? undefined;
 }
 
+export interface SessionMcpServerVisibilityRow {
+  owner_user_id?: string | null;
+  session_created_by: string;
+}
+
 /**
- * Load a server named by a caller-supplied id, for the endpoints that act on
- * one directly: OAuth start / refresh / disconnect and capability discovery.
- *
- * These sit outside the session path, so the session-creator rule has nothing
- * to key on — the question here is whether *this caller* may touch this row at
- * all. A private server is answered as not-found rather than forbidden: to
- * everyone but its owner and an admin it does not exist.
- *
- * They need this because each one reads or writes something that belongs to
- * the server's owner — its OAuth client configuration, its shared token, its
- * discovered capability list — none of which the ordinary CRUD authorizer
- * covers.
+ * A visible session is not enough to disclose every attached server ID. A
+ * collaborator may read a session while its creator's private MCP definition
+ * remains out of scope. Internal/service callers and admins retain the
+ * existing control-plane visibility.
+ */
+export function isSessionMcpServerLinkVisibleToCaller(
+  row: SessionMcpServerVisibilityRow,
+  params: AuthenticatedParams | undefined
+): boolean {
+  if (!params?.provider) return true;
+  const user = params.user;
+  if (!user) return false;
+  if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return true;
+  if (hasMinimumRole(user.role, ROLES.ADMIN)) return true;
+  return isMCPServerUsableBy(row, row.session_created_by) && isMCPServerUsableBy(row, user.user_id);
+}
+
+export function isMcpServerUsableByCaller(
+  server: MCPServer,
+  params: AuthenticatedParams | undefined
+): boolean {
+  if (!params?.provider) return true;
+  const user = params.user;
+  if (!user) return false;
+  if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return true;
+  return hasMinimumRole(user.role, ROLES.ADMIN) || isMCPServerUsableBy(server, user.user_id);
+}
+
+/**
+ * Load a server named by a caller-supplied ID and enforce the direct-use
+ * boundary. OAuth and discovery endpoints act on the saved configuration or
+ * shared credential, so they cannot rely on session attachment checks.
  */
 export async function loadMcpServerForCaller(
   db: TenantScopeAwareDatabase,
@@ -323,14 +401,10 @@ export async function loadMcpServerForCaller(
   const server = await new MCPServerRepository(db).findById(serverId);
   if (!server) throw new NotFound(`MCP server not found: ${serverId}`);
 
-  // Internal and service-account callers are already trusted by their route.
   if (!params?.provider) return server;
-  const user = params.user;
-  if (!user) throw new NotAuthenticated('Authentication required');
-  if ((user as { _isServiceAccount?: boolean })._isServiceAccount === true) return server;
+  if (!params.user) throw new NotAuthenticated('Authentication required');
+  if (isMcpServerUsableByCaller(server, params)) return server;
 
-  if (hasMinimumRole(user.role, ROLES.ADMIN)) return server;
-  if (isMCPServerUsableBy(server, user.user_id)) return server;
-
+  // Avoid an existence oracle for private server definitions.
   throw new NotFound(`MCP server not found: ${serverId}`);
 }

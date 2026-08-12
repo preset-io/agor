@@ -252,6 +252,71 @@ describe('ArtifactsService source session provenance', () => {
 });
 
 describe('ArtifactsService.updateMetadata', () => {
+  dbTest('does not normalize render metadata during a metadata-only update', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const artifact = await seedArtifact(db, board.board_id, { userId: 'user-owner' });
+    const files = {
+      '/index.js': '// generated entry intentionally left empty',
+      '/index.html': '<main>HTML-first</main>',
+    };
+    await artifactRepo.update(artifact.artifact_id, {
+      template: 'vanilla',
+      files,
+      sandpack_config: { customSetup: { entry: '/index.js', environment: 'parcel' } },
+    });
+
+    await service.updateMetadata(artifact.artifact_id, { name: 'Renamed' }, 'user-owner');
+
+    const refreshed = await artifactRepo.findById(artifact.artifact_id);
+    expect(refreshed?.name).toBe('Renamed');
+    expect(refreshed?.template).toBe('vanilla');
+    expect(refreshed?.entry).toBeUndefined();
+    expect(refreshed?.sandpack_config).toEqual({
+      customSetup: { entry: '/index.js', environment: 'parcel' },
+    });
+  });
+
+  dbTest('rolls back render metadata when board placement fails', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const artifact = await seedArtifact(db, board.board_id, { userId: 'user-owner' });
+    const files = {
+      '/index.js': '// generated entry intentionally left empty',
+      '/index.html': '<main>HTML-first</main>',
+    };
+    const originalConfig = {
+      customSetup: { entry: '/index.js', environment: 'parcel' },
+    };
+    await artifactRepo.update(artifact.artifact_id, {
+      template: 'vanilla',
+      files,
+      sandpack_config: originalConfig,
+    });
+
+    const upsert = vi
+      .spyOn(BoardRepository.prototype, 'upsertBoardObject')
+      .mockRejectedValueOnce(new Error('placement unavailable'));
+    try {
+      await expect(
+        service.updateMetadata(
+          artifact.artifact_id,
+          { sandpack_config: originalConfig, x: 10 },
+          'user-owner'
+        )
+      ).rejects.toThrow('placement unavailable');
+    } finally {
+      upsert.mockRestore();
+    }
+
+    const refreshed = await artifactRepo.findById(artifact.artifact_id);
+    expect(refreshed?.template).toBe('vanilla');
+    expect(refreshed?.entry).toBeUndefined();
+    expect(refreshed?.sandpack_config).toEqual(originalConfig);
+  });
+
   dbTest('moves artifact to a new board and preserves placement', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const boardRepo = new BoardRepository(db);
@@ -413,6 +478,45 @@ describe('ArtifactsService.updateMetadata', () => {
     const placed = refreshed?.objects?.[`artifact-${artifact.artifact_id}`];
     expect(placed && placed.type === 'artifact' && placed.x).toBe(111);
     expect(placed && placed.type === 'artifact' && placed.width).toBe(333);
+  });
+
+  dbTest('persists HTML-first normalization when Sandpack config is updated', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'HTML-first update',
+      template: 'vanilla',
+      entry: '/index.js',
+      files: {
+        '/index.js': '// generated entry intentionally left empty\n',
+        '/index.html': '<main>Updated HTML-first artifact</main>',
+      },
+      sandpack_config: {
+        customSetup: { entry: '/index.js', environment: 'parcel' },
+      },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const updated = await service.updateMetadata(
+      created.artifact_id,
+      {
+        sandpack_config: {
+          customSetup: { entry: '/index.js', environment: 'parcel' },
+        },
+      },
+      'user-owner'
+    );
+
+    expect(updated.template).toBe('static');
+    expect(updated.entry).toBe('/index.html');
+    expect(updated.sandpack_config).toEqual({
+      template: 'static',
+      customSetup: { entry: '/index.html' },
+    });
   });
 });
 
@@ -596,6 +700,70 @@ describe('ArtifactsService.getPayload trust + .env synthesis', () => {
 
     const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
     expect(payload.files['/.env']).toBeUndefined();
+  });
+
+  dbTest(
+    'HTML-first vanilla artifacts render through Sandpack static semantics',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifactRepo = new ArtifactRepository(db);
+      const html = `<!doctype html>
+<html>
+  <head><style>body { font-family: Inter, sans-serif; }</style></head>
+  <body><main class="hero">Styled artifact</main></body>
+</html>`;
+      const created = await artifactRepo.create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: 'html-first-vanilla',
+        template: 'vanilla',
+        files: {
+          '/index.js': '// generated entry intentionally left empty\n',
+          '/index.html': html,
+        },
+        required_env_vars: ['SOMETHING'],
+        public: true,
+        created_by: 'user-owner',
+      });
+
+      const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+
+      expect(payload.template).toBe('static');
+      expect(payload.sandpack_config).toMatchObject({
+        template: 'static',
+        customSetup: { entry: '/index.html' },
+      });
+      expect(payload.files['/index.html']).toBe(html);
+      expect(payload.files['/index.js']).toContain('intentionally left empty');
+      expect(payload.files['/.env']).toBeUndefined();
+    }
+  );
+
+  dbTest('non-static payloads retain their persisted top-level entry', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'react-custom-entry',
+      template: 'react',
+      entry: '/src/index.js',
+      files: {
+        '/src/index.js': 'console.log("persisted entry")',
+        '/src/alternate.js': 'console.log("custom setup entry")',
+      },
+      sandpack_config: { customSetup: { entry: '/src/alternate.js' } },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+
+    expect(payload.template).toBe('react');
+    expect(payload.entry).toBe('/src/index.js');
+    expect(payload.sandpack_config?.customSetup?.entry).toBe('/src/alternate.js');
   });
 });
 
@@ -1247,6 +1415,66 @@ describe('ArtifactsService.getPayload agor-runtime injection', () => {
         ).toBe(true);
       } else {
         expect(persistedResources).toBeUndefined();
+      }
+    }
+  );
+});
+
+describe('ArtifactsService.exportToCodeSandbox', () => {
+  dbTest(
+    'exports repaired HTML-first artifacts with index.html as package main',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifactRepo = new ArtifactRepository(db);
+      const created = await artifactRepo.create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: 'HTML-first export',
+        template: 'vanilla',
+        entry: '/index.js',
+        files: {
+          '/index.js': '// generated entry intentionally left empty\n',
+          '/index.html': '<main>Exported HTML</main>',
+          '/styles.css': '.hero { color: rebeccapurple; }',
+          '/package.json': JSON.stringify({ main: 'index.js', dependencies: {} }),
+        },
+        public: true,
+        created_by: 'user-owner',
+      });
+
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: () => 'application/json' },
+        json: async () => ({ sandbox_id: 'sandbox-html-first' }),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        const result = await service.exportToCodeSandbox(
+          created.artifact_id,
+          'user-owner' as never
+        );
+
+        expect(result.sandboxId).toBe('sandbox-html-first');
+        const request = fetchMock.mock.calls[0]?.[0];
+        expect(request).toBe('https://codesandbox.io/api/v1/sandboxes/define?json=1');
+        const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        const body = JSON.parse(String(requestInit.body)) as {
+          files: Record<string, { content: string }>;
+        };
+        const exportedPackage = JSON.parse(body.files['package.json'].content) as {
+          main: string;
+        };
+
+        expect(exportedPackage.main).toBe('index.html');
+        expect(body.files['index.html'].content).toBe('<main>Exported HTML</main>');
+        expect(body.files['styles.css'].content).toBe('.hero { color: rebeccapurple; }');
+        expect(body.files['.env']).toBeUndefined();
+      } finally {
+        globalThis.fetch = originalFetch;
       }
     }
   );

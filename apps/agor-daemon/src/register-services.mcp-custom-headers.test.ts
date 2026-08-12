@@ -55,6 +55,7 @@ describe('register-services /mcp-servers/oauth-auth-headers authorization', () =
     expect(authHeadersBlock).toContain('shouldExposeMCPServerSecretsForSessionToken');
     expect(authHeadersBlock).toContain('SessionMCPServerRepository');
     expect(authHeadersBlock).toContain("scope: 'global'");
+    expect(authHeadersBlock).toContain('usableByUserId: executorSession.created_by');
     expect(authHeadersBlock).toContain('allowedServerIds');
     expect(authHeadersBlock).toContain('server_not_in_session_scope');
   });
@@ -95,5 +96,22 @@ describe('register-services OAuth endpoints authorize the server they are given'
     expect(block).toContain('denyDiscoverOfAnotherUsersServer');
     expect(block).not.toContain("server.scope === 'global'");
     expect(block).not.toContain("server.scope === 'session'");
+  });
+});
+
+describe('register-services /session-mcp-servers visibility', () => {
+  const source = readFileSync(new URL('./register-services.ts', import.meta.url), 'utf8');
+  const attachmentStart = source.indexOf("app.use('/session-mcp-servers'");
+  const attachmentEnd = source.indexOf('// Users service', attachmentStart);
+  const attachmentBlock =
+    attachmentStart === -1
+      ? ''
+      : source.slice(attachmentStart, attachmentEnd === -1 ? undefined : attachmentEnd);
+
+  it('joins saved ownership before returning attachment IDs', () => {
+    expect(attachmentBlock).toContain('let query = select(db, {');
+    expect(attachmentBlock).toContain('.innerJoin(mcpServers');
+    expect(attachmentBlock).toContain('.innerJoin(sessions');
+    expect(attachmentBlock).toContain('isSessionMcpServerLinkVisibleToCaller');
   });
 });
