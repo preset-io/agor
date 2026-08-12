@@ -4,6 +4,8 @@ import {
   Activity,
   BookOpen,
   Boxes,
+  ChevronLeft,
+  ChevronRight,
   Cloud,
   Eye,
   GitBranch,
@@ -22,6 +24,7 @@ import { useEffect, useRef, useState } from 'react';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL, PRESET_URL, presetUtm } from '../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import styles from './AgorCloudLanding.module.css';
+import Aurora from './Aurora/Aurora';
 import { HubSpotFormModal } from './HubSpotFormModal';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 
@@ -60,7 +63,41 @@ const opsBurden: Array<{ icon: LucideIcon; title: string; body: string }> = [
 // What Agor Cloud manages. Every claim maps to shipped capability in the
 // agor-cloud control plane (EKS + Karpenter, per-team workspaces & roles,
 // WorkOS social sign-on, BYOK, CI session genealogy).
-const capabilities: Array<{ icon: LucideIcon; title: string; body: ReactNode }> = [
+//
+// Split into two tiers: capabilityHighlights get the screenshot-carousel
+// treatment below (only claims with a real, accurately-representative
+// screenshot on hand — verified by actually looking at each image, not
+// just its filename); capabilitySupport stays as a smaller supporting
+// card row for claims that are genuinely backend/infra properties with
+// nothing meaningful to screenshot (autoscaling, workspace tenancy,
+// health checks).
+const capabilityHighlights: Array<{
+  icon: LucideIcon;
+  title: string;
+  body: string;
+  image: string;
+}> = [
+  {
+    icon: KeyRound,
+    title: 'Bring your own keys',
+    body: 'Claude, Codex, Gemini: your keys, billed by your provider. We don’t proxy your tokens, mark them up, or take a cut, so there’s no incentive to burn more of them.',
+    image: '/screenshots/per-user-api-keys.png',
+  },
+  {
+    icon: SlidersHorizontal,
+    title: 'Sign-in that fits',
+    body: 'Social sign-on today through a SOC 2 Type II identity provider, with enterprise SSO on the roadmap. Team roles decide who can see and do what.',
+    image: '/screenshots/edit_user.png',
+  },
+  {
+    icon: GitBranch,
+    title: 'CI-ready agents',
+    body: 'CI-triggered sessions appear on your board in real time, keep the context that built the branch, and stay live to resume once the job ends.',
+    image: '/screenshots/subsession-codex-running.png',
+  },
+];
+
+const capabilitySupport: Array<{ icon: LucideIcon; title: string; body: ReactNode }> = [
   {
     icon: Cloud,
     title: 'Fully managed, always current',
@@ -70,21 +107,6 @@ const capabilities: Array<{ icon: LucideIcon; title: string; body: ReactNode }> 
     icon: Users,
     title: 'Segment into isolated workspaces',
     body: 'Run multiple Agor workspaces under one account and segment them by team, project, or sensitivity. Each workspace is its own tenant, with a separate database and strict boundaries between them, so you can dial isolation up exactly where it matters.',
-  },
-  {
-    icon: KeyRound,
-    title: 'Bring your own keys',
-    body: 'Claude, Codex, Gemini: your keys, billed by your provider. We don’t proxy your tokens, mark them up, or take a cut, so there’s no incentive to burn more of them.',
-  },
-  {
-    icon: SlidersHorizontal,
-    title: 'Sign-in that fits',
-    body: 'Social sign-on today through a SOC 2 Type II identity provider, with enterprise SSO on the roadmap. Team roles decide who can see and do what.',
-  },
-  {
-    icon: GitBranch,
-    title: 'CI-ready agents',
-    body: 'CI-triggered sessions appear on your board in real time, keep the context that built the branch, and stay live to resume once the job ends.',
   },
   {
     icon: Activity,
@@ -184,6 +206,8 @@ export function AgorCloudLanding() {
     setIsFormOpen(true);
   };
 
+  const [activeCapability, setActiveCapability] = useState(0);
+
   // Reveal-on-scroll with a safety net. The entrance animation is a
   // progressive enhancement; content must NEVER be stranded invisible. The
   // reveal fires as sections scroll in (like LandingPage), but a timeout
@@ -243,6 +267,24 @@ export function AgorCloudLanding() {
     <main ref={shellRef} id="nextra-skip-nav" className={styles.landingShell}>
       {/* --- Hero --- */}
       <section className={styles.hero}>
+        {/* Same looping product-demo backdrop as the homepage hero, dimmed
+            further behind the glass card so the copy stays the loudest
+            thing on screen. Falls back to the poster frame under
+            prefers-reduced-motion (CSS hides the video element). */}
+        <div className={styles.heroVideo} aria-hidden="true">
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            poster="/videos/agor-hero-poster.jpg"
+          >
+            <source src="/videos/agor-hero-540.mp4" type="video/mp4" media="(max-width: 720px)" />
+            <source src="/videos/agor-hero-720.mp4" type="video/mp4" media="(max-width: 1280px)" />
+            <source src="/videos/agor-hero.mp4" type="video/mp4" />
+          </video>
+        </div>
         <div className={styles.heroGlow} aria-hidden="true" />
         <div className={styles.heroInner} data-reveal>
           <p className={styles.heroBadge}>
@@ -284,6 +326,17 @@ export function AgorCloudLanding() {
 
       {/* --- Why teams graduate from self-hosting --- */}
       <section className={styles.section} data-reveal>
+        {/* Same mint Aurora shader used as the homepage's showcase-section
+            divider — a bit of motion and texture at the seam instead of a
+            hard cut between the hero and the next flat section. */}
+        <div className={styles.sectionDivider} aria-hidden="true">
+          <Aurora
+            colorStops={['#2e9a92', '#34e6c4', '#7ad9ff']}
+            amplitude={0.9}
+            blend={1}
+            speed={0.6}
+          />
+        </div>
         <div className={styles.sectionHead}>
           <span className={styles.eyebrow}>Open source, minus the ops</span>
           <h2>
@@ -326,8 +379,92 @@ export function AgorCloudLanding() {
             brings to Preset Cloud.
           </p>
         </div>
-        <div className={`${styles.grid} ${styles.grid3}`}>
-          {capabilities.map((item) => (
+        {/* Screenshot carousel for the three capabilities with something
+            real to show (same tab-pill + frame grammar as the homepage's
+            surface explorer); tap the shot or use the arrows to advance. */}
+        <div className={styles.capabilityTabs}>
+          {capabilityHighlights.map((item, index) => (
+            <button
+              type="button"
+              key={item.title}
+              className={
+                index === activeCapability
+                  ? `${styles.capabilityTab} ${styles.capabilityTabActive}`
+                  : styles.capabilityTab
+              }
+              aria-pressed={index === activeCapability}
+              onClick={() => setActiveCapability(index)}
+            >
+              <item.icon size={16} aria-hidden="true" />
+              {item.title}
+            </button>
+          ))}
+        </div>
+        <div className={styles.capabilityFrame}>
+          <div className={styles.capabilityViewport}>
+            <div
+              className={styles.capabilityTrack}
+              style={{
+                width: `${capabilityHighlights.length * 100}%`,
+                transform: `translateX(-${activeCapability * (100 / capabilityHighlights.length)}%)`,
+              }}
+            >
+              {capabilityHighlights.map((item, index) => (
+                <div
+                  className={styles.capabilitySlide}
+                  key={item.title}
+                  style={{ width: `${100 / capabilityHighlights.length}%` }}
+                >
+                  <button
+                    type="button"
+                    className={styles.capabilityShotButton}
+                    aria-label="Next capability"
+                    onClick={() => setActiveCapability((index + 1) % capabilityHighlights.length)}
+                  >
+                    {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+                    <img
+                      className={styles.capabilityShot}
+                      src={item.image}
+                      alt={`Screenshot of ${item.title} in Agor`}
+                      loading={index === 0 ? 'eager' : 'lazy'}
+                    />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Previous capability"
+            className={`${styles.capabilityArrow} ${styles.capabilityArrowLeft}`}
+            onClick={() =>
+              setActiveCapability(
+                (activeCapability + capabilityHighlights.length - 1) % capabilityHighlights.length
+              )
+            }
+          >
+            <ChevronLeft size={20} aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label="Next capability"
+            className={`${styles.capabilityArrow} ${styles.capabilityArrowRight}`}
+            onClick={() =>
+              setActiveCapability((activeCapability + 1) % capabilityHighlights.length)
+            }
+          >
+            <ChevronRight size={20} aria-hidden />
+          </button>
+        </div>
+        <div className={styles.capabilityInfo}>
+          <h3>{capabilityHighlights[activeCapability].title}</h3>
+          <p>{capabilityHighlights[activeCapability].body}</p>
+        </div>
+        {/* The rest — genuinely backend/infra properties with nothing real
+            to screenshot (autoscaling, workspace tenancy, health checks) —
+            stay as a smaller supporting row underneath. */}
+        <div className={`${styles.grid} ${styles.grid3} ${styles.supportGrid}`}>
+          {capabilitySupport.map((item) => (
             <article className={styles.card} key={item.title}>
               <span className={styles.cardIcon}>
                 <item.icon size={20} aria-hidden="true" />
@@ -404,30 +541,44 @@ export function AgorCloudLanding() {
       <div className={styles.band}>
         <section className={styles.section} data-reveal>
           <div className={styles.trustLayout}>
-            <div className={styles.sectionHead}>
-              <span className={styles.eyebrow}>Security</span>
-              <h2>
-                Hardened for the <span className={styles.headingStrong}>public internet</span>
-              </h2>
-              <p className={styles.lead}>
-                Some of Agor’s capabilities are great inside a trusted network and risky on the open
-                internet. Cloud is built the other way around, so your team can use it from
-                anywhere, mobile included, with no VPN gymnastics.
-              </p>
+            <div className={styles.trustText}>
+              <div className={styles.sectionHead}>
+                <span className={styles.eyebrow}>Security</span>
+                <h2>
+                  Hardened for the <span className={styles.headingStrong}>public internet</span>
+                </h2>
+                <p className={styles.lead}>
+                  Some of Agor’s capabilities are great inside a trusted network and risky on the
+                  open internet. Cloud is built the other way around, so your team can use it from
+                  anywhere, mobile included, with no VPN gymnastics.
+                </p>
+              </div>
+              <ul className={styles.trustList}>
+                {security.map((item) => (
+                  <li className={styles.trustItem} key={item.title}>
+                    <span className={styles.trustCheck} aria-hidden="true">
+                      <ShieldCheck size={15} />
+                    </span>
+                    <span>
+                      <strong>{item.title}</strong>
+                      <span>{item.body}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
-            <ul className={styles.trustList}>
-              {security.map((item) => (
-                <li className={styles.trustItem} key={item.title}>
-                  <span className={styles.trustCheck} aria-hidden="true">
-                    <ShieldCheck size={15} />
-                  </span>
-                  <span>
-                    <strong>{item.title}</strong>
-                    <span>{item.body}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
+            {/* A real security-review branch: sub-sessions fanned out across
+                the exact domains claimed on the left (RBAC, secrets, Unix
+                isolation, supply chain, ...), not a stock illustration. */}
+            <div className={styles.trustShotFrame}>
+              {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+              <img
+                className={styles.trustShot}
+                src="/screenshots/security-review-fanout.png"
+                alt="A security-review branch in Agor, with sub-sessions fanned out across RBAC, secrets management, Unix isolation, dependency supply chain, and more"
+                loading="lazy"
+              />
+            </div>
           </div>
         </section>
       </div>
@@ -478,6 +629,14 @@ export function AgorCloudLanding() {
 
       {/* --- Final CTA --- */}
       <section className={`${styles.section} ${styles.finalCta}`} data-reveal>
+        <div className={styles.sectionDivider} aria-hidden="true">
+          <Aurora
+            colorStops={['#2e9a92', '#34e6c4', '#7ad9ff']}
+            amplitude={0.9}
+            blend={1}
+            speed={0.6}
+          />
+        </div>
         <div className={styles.ctaCard}>
           <h2>
             Bring your team to <span className={styles.headingAccent}>Agor Cloud</span>
