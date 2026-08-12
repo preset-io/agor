@@ -187,6 +187,42 @@ describe('catalog browsing', () => {
     expect(screen.queryByText('Could not load the catalog')).not.toBeInTheDocument();
   });
 
+  it('does not blame filters for an empty catalog', async () => {
+    // A fresh daemon answers /health for a minute or two before curation
+    // finishes seeding. "No servers match" reads as "your filters excluded
+    // everything" when nothing is filtering, which sends people hunting for a
+    // frontend bug that isn't there.
+    catalogRows = [];
+    renderTab();
+
+    expect(await screen.findByText('No servers in the catalog yet')).toBeVisible();
+    expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+  });
+
+  it('still blames the filters when the filters are to blame', async () => {
+    renderTab();
+    await screen.findByRole('button', { name: 'Open DeepWiki' });
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
+      target: { value: 'nothing-matches-this' },
+    });
+
+    expect(await screen.findByText('No servers match')).toBeVisible();
+    expect(screen.queryByText('No servers in the catalog yet')).not.toBeInTheDocument();
+  });
+
+  it('picks the catalog back up once seeding finishes', async () => {
+    catalogRows = [];
+    renderTab();
+    await screen.findByText('No servers in the catalog yet');
+
+    catalogRows = [DEEPWIKI, LINEAR];
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+
+    expect(await screen.findByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+  });
+
   it('pushes filters and page bounds to the server rather than filtering in the browser', async () => {
     renderTab();
     await screen.findByRole('button', { name: 'Open DeepWiki' });
