@@ -1218,6 +1218,11 @@ export type SessionCreatorLoader = (
  * longer the caller's, and the SDK state the session resumes from lives in a
  * home directory this instance cannot read.
  *
+ * That is the stamp's role as an *execution* identity, and the only one this
+ * refusal covers. `unix.sync-branch` also reads it, to grant Unix group
+ * membership under `insulated`/`strict`, on a path no caller of this function
+ * sits on — see the `agor_wt_*` reconciliation gap noted in #2287.
+ *
  * Shared by the transport guard ({@link validateSessionUnixUsername}) and the
  * executor-startup guard, so both refuse on the same terms with the same
  * message.
