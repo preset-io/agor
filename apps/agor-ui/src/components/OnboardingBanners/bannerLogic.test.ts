@@ -201,6 +201,17 @@ describe('resolveProbeState — multi-tool fallback', () => {
     expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Unauthenticated);
   });
 
+  it('clears the No-AI banner for a native subscription login with no stored key', async () => {
+    // Regression: the in-app Claude OAuth sign-in deletes the pasted token (so
+    // hasLlm is false) and check-auth reports the native login authenticated.
+    // The probe must resolve Authenticated so the amber "No AI connected" banner
+    // is not shown for a freshly-connected subscription user.
+    const { checkStatus } = collect({ 'claude-code': 'authenticated' });
+    const probeState = await resolveProbeState(checkStatus, 'claude-code', false);
+    expect(probeState).toBe(ProbeState.Authenticated);
+    expect(decideBanner({ ...baseInput, hasLlm: false, probeState })).not.toBe(BannerDecision.NoAi);
+  });
+
   it('fails safe to Unknown if any fallback probe is unknown', async () => {
     const { checkStatus } = collect({ gemini: 'unauthenticated', 'claude-code': 'unknown' });
     expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Unknown);

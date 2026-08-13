@@ -125,6 +125,32 @@ describe('check-auth Claude subscription tokens', () => {
     });
   });
 
+  it('reports the in-app OAuth subscription login (native, no stored token) as authenticated', async () => {
+    // The OAuth sign-in wrote ~/.claude/.credentials.json and cleared the pasted
+    // token, so the resolver returns useNativeAuth with an empty connection.
+    // Without the native branch this fell through to `unauthenticated`, leaving
+    // the "No AI connected" banner and the per-tool badge stuck.
+    resolveApiKeyMock.mockResolvedValueOnce({
+      apiKey: undefined,
+      source: 'user',
+      useNativeAuth: true,
+    });
+
+    const result = await service().create({ tool: 'claude-code' }, {
+      user: { user_id: 'user-1' },
+    } as never);
+
+    expect(result).toMatchObject({ authenticated: true, method: 'oauth' });
+    // Native login needs no SDK probe and no stored-token lookup.
+    expect(claudeQueryMock).not.toHaveBeenCalled();
+    expect(resolveApiKeyMock).toHaveBeenCalledTimes(1);
+    expect(resolveApiKeyMock).toHaveBeenNthCalledWith(1, 'ANTHROPIC_API_KEY', {
+      userId: 'user-1',
+      db: TEST_DB,
+      tool: 'claude-code',
+    });
+  });
+
   it('treats missing subscription account metadata as unknown, not rejected', async () => {
     resolveApiKeyMock
       .mockResolvedValueOnce({ apiKey: undefined, source: 'none', useNativeAuth: false })

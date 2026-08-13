@@ -400,6 +400,16 @@ export function createCheckAuthService(
           : unknown('ChatGPT login is configured but has not been validated.');
       }
 
+      // The in-app Claude subscription sign-in writes a managed
+      // ~/.claude/.credentials.json and clears any pasted token, so the resolver
+      // routes this user to native auth with no stored key to probe. Treat the
+      // persisted subscription login as connected (the SDK reads and refreshes
+      // the file itself) — otherwise the app-shell "No AI connected" banner and
+      // the per-tool badge would wrongly report an OAuth user as unauthenticated.
+      if (tool === 'claude-code' && useNativeAuth) {
+        return authed('oauth', 'Claude subscription login is configured.');
+      }
+
       if (tool === 'claude-code') {
         const subscriptionResolution = await withTenantDatabase((tenantDb) =>
           resolveApiKey('CLAUDE_CODE_OAUTH_TOKEN', {
