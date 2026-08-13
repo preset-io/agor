@@ -446,6 +446,7 @@ export async function forceFailUnverifiedTask(input: {
     {
       taskId: current.task_id,
       outcome: 'forced_unverified',
+      expectedTerminationRequestedAt: input.terminationRequestedAt,
       errorMessage: 'Force-failed by an authorized user; executor termination remains unverified.',
     },
     { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params

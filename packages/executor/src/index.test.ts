@@ -60,6 +60,7 @@ describe('AgorExecutor watchdog handoff', () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    runtime.execute.mockResolvedValue(undefined);
   });
 
   it('starts SDK observation before invoking the tool', async () => {
@@ -148,6 +149,51 @@ describe('AgorExecutor watchdog handoff', () => {
       task_id: 'task-1',
       requested_at: '2026-07-23T12:00:00.000Z',
     });
+  });
+
+  it('warns once when provider cleanup remains active after Stop', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    let settleProvider!: () => void;
+    runtime.execute.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settleProvider = resolve))
+    );
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: object;
+      executeTask(): Promise<void>;
+      handleTaskLifecycleUpdate(task: unknown): void;
+    };
+    executor.client = {};
+    const execution = executor.executeTask();
+    await vi.advanceTimersByTimeAsync(0);
+    executor.handleTaskLifecycleUpdate({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(
+      warn.mock.calls.filter(([message]) => String(message).includes('provider_cleanup_slow'))
+    ).toHaveLength(1);
+
+    settleProvider();
+    await execution;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(
+      warn.mock.calls.filter(([message]) => String(message).includes('provider_cleanup_slow'))
+    ).toHaveLength(1);
   });
 
   it('handles the private task-scoped termination socket event', () => {

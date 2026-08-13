@@ -121,15 +121,17 @@ describe('force-fail route authorization and request fencing', () => {
       task_id: 'task-b',
       termination_request: { requested_at: '2026-01-01T00:01:00.000Z' },
     } as Task;
+    const isBranchOwner = vi.fn().mockResolvedValue(false);
     await expect(
       authorizeForceFailRoute({
         session: { branch_id: 'branch-a' as never },
         params: { user: { user_id: 'admin-a', role: 'admin' } } as never,
         body,
         findActiveTasks: async () => [later],
-        isBranchOwner: async () => false,
+        isBranchOwner,
       })
     ).rejects.toThrow('termination state changed');
+    expect(isBranchOwner).not.toHaveBeenCalled();
   });
 });
 

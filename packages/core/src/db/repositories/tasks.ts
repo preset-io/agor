@@ -144,7 +144,13 @@ export type TerminationSettlementInput =
       coordinationToken: string;
     })
   | (TerminationSettlementInputBase & {
-      outcome: 'forced_unverified' | 'restart_unverified';
+      outcome: 'forced_unverified';
+      /** Exact termination request confirmed by the authorized operator. */
+      expectedTerminationRequestedAt: string;
+      coordinationToken?: never;
+    })
+  | (TerminationSettlementInputBase & {
+      outcome: 'restart_unverified';
       coordinationToken?: never;
     });
 
@@ -1264,7 +1270,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
       if (
         input.outcome === 'forced_unverified' &&
-        current.sdk_failure?.termination !== 'unverified'
+        (current.sdk_failure?.termination !== 'unverified' ||
+          current.termination_request?.requested_at !== input.expectedTerminationRequestedAt)
       ) {
         return { outcome: 'condition_changed', task: current };
       }

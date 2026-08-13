@@ -397,7 +397,8 @@ export async function authorizeForceFailRoute(input: {
 }): Promise<{ task: Task; confirmation: string; terminationRequestedAt: string }> {
   const userId = input.params.user?.user_id;
   const isAdmin = hasMinimumRole(input.params.user?.role, ROLES.ADMIN);
-  const isOwner = !!userId && (await input.isBranchOwner(input.session.branch_id, userId as UUID));
+  const isOwner =
+    !isAdmin && !!userId && (await input.isBranchOwner(input.session.branch_id, userId as UUID));
   if (!isAdmin && !isOwner) {
     throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
   }

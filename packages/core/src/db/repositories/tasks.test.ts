@@ -1733,7 +1733,7 @@ describe('TaskRepository.update', () => {
     const task = await tasks.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
     );
-    await tasks.claimTermination({
+    const termination = await tasks.claimTermination({
       taskId: task.task_id,
       cause: 'heartbeat_lost',
       errorMessage: 'Heartbeat lost',
@@ -1767,9 +1767,20 @@ describe('TaskRepository.update', () => {
       ready_for_prompt: false,
     });
 
+    const staleForce = await tasks.settleTermination({
+      taskId: task.task_id,
+      outcome: 'forced_unverified',
+      expectedTerminationRequestedAt: '2026-08-06T11:59:59.000Z',
+      errorMessage: 'Force-failed by an authorized user',
+    });
+    expect(staleForce).toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.STOPPING },
+    });
     const forced = await tasks.settleTermination({
       taskId: task.task_id,
       outcome: 'forced_unverified',
+      expectedTerminationRequestedAt: termination.task.termination_request!.requested_at,
       errorMessage: 'Force-failed by an authorized user',
     });
     expect(forced).toMatchObject({

@@ -33,12 +33,15 @@ import { formatExecutorFailure } from './safe-executor-error.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
+import { reportExecutorQuiescence } from './termination-report.js';
 import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
 patchConsole();
 
 const DEBUG_EXECUTOR =
   process.env.AGOR_DEBUG_EXECUTOR === '1' || process.env.DEBUG?.includes('executor');
+
+const PROVIDER_CLEANUP_SLOW_MS = 15_000;
 
 function executorDebug(...args: unknown[]): void {
   if (DEBUG_EXECUTOR) {
@@ -79,6 +82,7 @@ export class AgorExecutor {
   private terminationRequest: Task['termination_request'];
   private terminationReport: Promise<void> | null = null;
   private terminationObservedAtMs: number | null = null;
+  private providerCleanupSlowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -140,7 +144,7 @@ export class AgorExecutor {
       );
       process.exit(0);
     } catch (error) {
-      if (await this.recoverTerminationBeforeStart()) {
+      if (!this.terminationRequest && (await this.recoverTerminationBeforeStart())) {
         console.log(
           `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
             'code=0 reason=termination_recovered'
@@ -236,6 +240,17 @@ export class AgorExecutor {
     console.log(
       `[executor.stop] event=provider_abort_requested task_id=${shortId(this.config.taskId)}`
     );
+    if (this.isRunning && !this.providerCleanupSlowTimer) {
+      this.providerCleanupSlowTimer = setTimeout(() => {
+        this.providerCleanupSlowTimer = null;
+        if (!this.isRunning || !this.terminationRequest) return;
+        console.warn(
+          `[executor.stop] event=provider_cleanup_slow task_id=${shortId(this.config.taskId)} ` +
+            `elapsed_ms=${PROVIDER_CLEANUP_SLOW_MS}`
+        );
+      }, PROVIDER_CLEANUP_SLOW_MS);
+      this.providerCleanupSlowTimer.unref?.();
+    }
   }
 
   private async refreshTerminationState(source: TerminationObservationSource): Promise<void> {
@@ -247,27 +262,18 @@ export class AgorExecutor {
   private async reportTerminationComplete(): Promise<void> {
     if (!this.client || !this.terminationRequest) return;
     if (!this.terminationReport) {
-      console.log(
-        `[executor.stop] event=quiescence_report_started task_id=${shortId(this.config.taskId)}`
-      );
-      const report = this.client
-        .service('tasks')
-        .reportTerminationComplete({
-          task_id: this.config.taskId,
-          requested_at: this.terminationRequest.requested_at,
-        })
-        .then(() => {
-          console.log(
-            `[executor.stop] event=quiescence_report_accepted task_id=${shortId(this.config.taskId)}`
-          );
-        })
-        .catch((error) => {
-          console.warn(
-            `[executor.stop] event=quiescence_report_failed task_id=${shortId(this.config.taskId)} ` +
-              `error_type=${error instanceof Error ? 'error' : 'non_error'} retryable=true`
-          );
-          throw error;
-        });
+      const client = this.client;
+      const requestedAt = this.terminationRequest.requested_at;
+      const report = reportExecutorQuiescence({
+        taskId: this.config.taskId,
+        requestedAt,
+        report: () =>
+          client.service('tasks').reportTerminationComplete({
+            task_id: this.config.taskId,
+            requested_at: requestedAt,
+          }),
+        readTask: () => client.service('tasks').get(this.config.taskId) as Promise<Task>,
+      });
       this.terminationReport = report;
       void report.catch(() => {
         if (this.terminationReport === report) this.terminationReport = null;
@@ -345,6 +351,10 @@ export class AgorExecutor {
         onPulse: (kind, detail) => this.recordPulse(kind, detail),
       });
     } finally {
+      if (this.providerCleanupSlowTimer) {
+        clearTimeout(this.providerCleanupSlowTimer);
+        this.providerCleanupSlowTimer = null;
+      }
       if (this.terminationRequest) {
         const elapsedMs = Math.max(0, Date.now() - (this.terminationObservedAtMs ?? Date.now()));
         console.log(

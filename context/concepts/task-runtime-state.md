@@ -236,6 +236,14 @@ explicit later `absent` result verifies termination. Persistent uncertainty
 still fails closed. Templated/remote executors get a 15 second cooperative
 window because the daemon has no local signal fallback.
 
+After provider cleanup returns, the executor makes bounded, idempotent retries
+to report its exact Task/request-fenced quiescence fact. A failed write is
+followed by a bounded durable Task read so a lost response after commit does
+not strand an already-quiesced runtime. The executor logs the first outage and
+one final exhaustion event rather than every retry. Provider cleanup that is
+still running after 15 seconds emits one warning but is not falsely reported as
+quiescent.
+
 Verified user Stop settles as `stopped`; verified health/startup/heartbeat
 containment settles as `failed`. If absence cannot be verified, the task stays
 `stopping`, the session stays non-promptable, and an authorized owner/admin must
