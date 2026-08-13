@@ -103,7 +103,7 @@ const STEP_META: Record<WizardStep, { number: number; label: string; skippable: 
   persona: { number: 1, label: 'You', skippable: true },
   llm: { number: 2, label: 'AI', skippable: true },
   workspace: { number: 3, label: 'Workspace', skippable: false },
-  integrations: { number: 4, label: 'Tools', skippable: true },
+  integrations: { number: 4, label: 'Tools', skippable: false },
   done: { number: 5, label: "You're ready", skippable: false },
 };
 
@@ -1688,7 +1688,7 @@ export function OnboardingWizard({
     const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
     return (
       <div>
-        {renderStepBadge('Connect your tools via MCP')}
+        {renderStepBadge('Recommended tools')}
 
         {/* General MCP intro — plain helper text, not a card */}
         <div

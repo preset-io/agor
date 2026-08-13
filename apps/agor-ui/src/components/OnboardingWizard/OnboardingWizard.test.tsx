@@ -353,7 +353,7 @@ describe('OnboardingWizard', () => {
         })
       );
     });
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
   });
 
   it('workspace step renders the concept tags below the teammate-name field', () => {
@@ -391,7 +391,7 @@ describe('OnboardingWizard', () => {
 
     expect(boardsService.create).not.toHaveBeenCalled();
     expect(boardsService.patch).not.toHaveBeenCalled();
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
   });
 
   it('reuses existing board via server fetch when boardById store is empty (restart onboarding)', async () => {
@@ -422,7 +422,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue →/i);
     expect(boardsService.create).not.toHaveBeenCalled();
     expect(boardsService.patch).not.toHaveBeenCalled();
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
   });
 
   it('creates a new board when mainBoardId points to a deleted board', async () => {
@@ -465,7 +465,7 @@ describe('OnboardingWizard', () => {
     await waitFor(() =>
       expect(boardsService.create).toHaveBeenCalledWith({ name: 'Rusty', icon: '🤖' })
     );
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
 
     // Back to the workspace step — the name field is still editable (not replaced
     // by a read-only card).
@@ -480,7 +480,7 @@ describe('OnboardingWizard', () => {
       expect(boardsService.patch).toHaveBeenCalledWith('board-1', { name: 'Ada', icon: '🤖' })
     );
     expect(boardsService.create).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
   });
 
   it('integrations step shows persona-tailored MCP recommendations', async () => {
@@ -512,7 +512,7 @@ describe('OnboardingWizard', () => {
     // workspace — name the teammate, which creates their board
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i);
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
 
     // integrations
     clickButton(/^continue →/i);
@@ -543,7 +543,7 @@ describe('OnboardingWizard', () => {
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
-  it('requires the workspace step but lets the other steps skip, always yielding a board', async () => {
+  it('requires the workspace + tools steps but lets persona/llm skip, always yielding a board', async () => {
     const onComplete = vi.fn();
     const { boardsService } = renderWizard({ onComplete });
 
@@ -566,8 +566,11 @@ describe('OnboardingWizard', () => {
       expect(boardsService.create).toHaveBeenCalledWith({ name: 'Scout', icon: '🤖' })
     );
 
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
-    clickButton(/skip for now/i);
+    // Tools is purely informational recommendations — also non-skippable; the
+    // enabled "Continue →" is the only way forward.
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
+    expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
+    clickButton(/^continue →/i);
 
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
     // Final step is not skippable.
