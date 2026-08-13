@@ -318,3 +318,37 @@ export interface CodexDeviceAuthStatus {
   planType?: string;
   hint?: string;
 }
+
+/**
+ * Lifecycle of a Claude subscription OAuth sign-in driven by the daemon's
+ * `/claude-auth/oauth` endpoint.
+ *
+ * Unlike Codex, Anthropic exposes no device-authorization endpoint, so the
+ * daemon cannot poll for approval: the user approves in the browser and copies
+ * a `CODE#STATE` string back to Agor. The code travels user→Agor (the reverse
+ * of Codex), which is why there is an `awaiting_code` phase and no poll loop.
+ * See `context/explorations/claude-code-oauth-signin.md`.
+ *
+ * - `idle`: no attempt exists for this user.
+ * - `awaiting_code`: an authorize URL was issued; the daemon is waiting for the
+ *   user to approve and paste the `CODE#STATE` back.
+ * - `success`: the code was exchanged and `~/.claude/.credentials.json` written.
+ * - `expired`: the daemon-side PKCE/state freshness window elapsed unused.
+ * - `error`: the attempt failed for another reason; start a fresh one.
+ */
+export type ClaudeOAuthPhase = 'idle' | 'awaiting_code' | 'success' | 'expired' | 'error';
+
+/**
+ * Non-secret status of a Claude OAuth sign-in attempt. The authorize URL is
+ * meant to be displayed; tokens and the PKCE verifier never appear here.
+ */
+export interface ClaudeOAuthStatus {
+  phase: ClaudeOAuthPhase;
+  /** Authorize page the user opens to approve (awaiting_code only). */
+  verificationUrl?: string;
+  /** ISO timestamp when the daemon-side attempt stops accepting a code. */
+  expiresAt?: string;
+  /** Subscription type parsed from the token response after success, when present. */
+  subscriptionType?: string;
+  hint?: string;
+}

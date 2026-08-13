@@ -114,6 +114,7 @@ import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeModelsService } from './services/claude-models.js';
+import { createClaudeOAuthService } from './services/claude-oauth.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
@@ -695,6 +696,17 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // grant, so other machines stay signed in.
   app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db));
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // Claude subscription OAuth sign-in (SPIKE). Anthropic has no device endpoint,
+  // so this is authorization-code + PKCE with a paste-back code: create({})
+  // returns the authorize URL; create({code}) exchanges the pasted CODE#STATE and
+  // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find
+  // reports status. Tokens stay daemon-side end to end.
+  // See context/explorations/claude-code-oauth-signin.md.
+  app.use('/claude-auth/oauth', createClaudeOAuthService(app, db));
+  app
+    .service('/claude-auth/oauth')
+    .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)
