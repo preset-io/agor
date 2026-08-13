@@ -1,15 +1,11 @@
-import { Alert, Button, Space, Typography } from 'antd';
+import { Alert, Space, Typography } from 'antd';
 import type { MCPServerOAuthFailure } from './useMCPServerOAuthStart';
 
 interface MCPOAuthRecoveryAlertProps {
   failure: MCPServerOAuthFailure;
-  onOpenSettings: () => void;
 }
 
-export const MCPOAuthRecoveryAlert: React.FC<MCPOAuthRecoveryAlertProps> = ({
-  failure,
-  onOpenSettings,
-}) => {
+export const MCPOAuthRecoveryAlert: React.FC<MCPOAuthRecoveryAlertProps> = ({ failure }) => {
   const isDcrFailure = failure.diagnostic !== undefined;
 
   return (
@@ -36,13 +32,6 @@ export const MCPOAuthRecoveryAlert: React.FC<MCPOAuthRecoveryAlertProps> = ({
             </Typography.Text>
           )}
         </Space>
-      }
-      action={
-        isDcrFailure ? (
-          <Button size="small" onClick={onOpenSettings}>
-            Open OAuth settings
-          </Button>
-        ) : undefined
       }
       showIcon
       style={{ marginBottom: 16 }}

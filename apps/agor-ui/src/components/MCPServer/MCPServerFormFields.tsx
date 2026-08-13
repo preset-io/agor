@@ -631,12 +631,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         />
       )}
 
-      {oauthFailure && (
-        <MCPOAuthRecoveryAlert
-          failure={oauthFailure}
-          onOpenSettings={() => setOauthAdvancedOpen(true)}
-        />
-      )}
+      {oauthFailure && <MCPOAuthRecoveryAlert failure={oauthFailure} />}
 
       {/* Advanced — long tail of OAuth endpoints that are normally
           auto-discovered. Collapsed by default; a dot on the header
