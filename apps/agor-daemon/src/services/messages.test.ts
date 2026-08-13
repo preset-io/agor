@@ -1,6 +1,15 @@
+import type { Server } from 'node:http';
 import { PAGINATION } from '@agor/core/config';
+import {
+  AuthenticationService,
+  authenticate,
+  feathers,
+  feathersExpress,
+  rest,
+} from '@agor/core/feathers';
 import type { Message, SessionID, TaskID, UUID } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, ROLES } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { describe, expect, vi } from 'vitest';
 import { BranchRepository } from '../../../../packages/core/src/db/repositories/branches';
 import { MessagesRepository } from '../../../../packages/core/src/db/repositories/messages';
@@ -9,9 +18,17 @@ import { SessionRepository } from '../../../../packages/core/src/db/repositories
 import { TaskRepository } from '../../../../packages/core/src/db/repositories/tasks';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
-import { createMessagesService } from './messages';
+import { ServiceJWTStrategy } from '../auth/service-jwt-strategy';
+import { scopeFindToAccessibleSessionsSql } from '../utils/branch-authorization';
+import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './messages';
+import { createUsersService } from './users';
 
-async function createTestSession(db: Parameters<typeof dbTest>[0]['db']): Promise<SessionID> {
+const JWT_SECRET = 'messages-rest-test-secret';
+
+async function createTestSession(
+  db: Parameters<typeof dbTest>[0]['db'],
+  options: { createdBy?: UUID; othersCan?: 'none' | 'view' } = {}
+): Promise<SessionID> {
   const repo = await new RepoRepository(db).create({
     slug: `messages-service-${generateId()}`,
     name: 'Messages service test repo',
@@ -26,12 +43,13 @@ async function createTestSession(db: Parameters<typeof dbTest>[0]['db']): Promis
     path: `/tmp/messages-service-branch-${generateId()}`,
     ref: 'main',
     branch_unique_id: Math.floor(Math.random() * 1_000_000),
-    created_by: generateId() as UUID,
+    created_by: options.createdBy ?? (generateId() as UUID),
+    others_can: options.othersCan,
   });
   const session = await new SessionRepository(db).create({
     branch_id: branch.branch_id,
     title: 'Messages service test session',
-    created_by: generateId() as UUID,
+    created_by: options.createdBy ?? (generateId() as UUID),
   });
   return session.session_id as SessionID;
 }
@@ -151,3 +169,113 @@ describe('MessagesService.find pagination', () => {
     });
   });
 });
+
+dbTest(
+  'parses authenticated REST role filters and scopes inaccessible sessions',
+  async ({ db }) => {
+    const usersService = createUsersService(db);
+    const bearer = await usersService.create({
+      email: 'messages-rest-bearer@example.test',
+      password: 'password-123',
+      role: ROLES.MEMBER,
+    });
+    const ownerId = generateId() as UUID;
+    const accessibleSessionId = await createTestSession(db, {
+      createdBy: ownerId,
+      othersCan: 'view',
+    });
+    const inaccessibleSessionId = await createTestSession(db, {
+      createdBy: ownerId,
+      othersCan: 'none',
+    });
+    const repository = new MessagesRepository(db);
+
+    await repository.createMany([
+      message(accessibleSessionId, 0, { role: MessageRole.USER, type: 'user' }),
+      message(accessibleSessionId, 1),
+      message(accessibleSessionId, 2),
+      message(accessibleSessionId, 3, { role: MessageRole.USER, type: 'user' }),
+      message(inaccessibleSessionId, 0),
+    ]);
+
+    const app = feathersExpress(feathers());
+    app.configure(rest());
+    app.set('authentication', {
+      secret: JWT_SECRET,
+      entity: 'user',
+      entityId: 'user_id',
+      service: 'users',
+      authStrategies: ['jwt'],
+      jwtOptions: {
+        header: { typ: 'access' },
+        audience: 'https://agor.dev',
+        issuer: 'agor',
+        algorithm: 'HS256',
+        expiresIn: '15m',
+      },
+    });
+    app.use('/users', usersService);
+    const authentication = new AuthenticationService(app);
+    authentication.register('jwt', new ServiceJWTStrategy());
+    app.use('/authentication', authentication);
+    app.use('/messages', createMessagesService(db), {
+      methods: [...MESSAGES_SERVICE_TRANSPORT_METHODS],
+    });
+
+    app.service('messages').hooks({
+      before: {
+        all: [authenticate({ strategies: ['jwt'] })],
+        find: [scopeFindToAccessibleSessionsSql({ allowSuperadmin: false })],
+      },
+    });
+
+    const server = (await app.listen(0)) as Server;
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
+    const accessToken = jwt.sign({ sub: bearer.user_id, type: 'access' }, JWT_SECRET, {
+      issuer: 'agor',
+      audience: 'https://agor.dev',
+      expiresIn: '15m',
+    });
+    const headers = { authorization: `Bearer ${accessToken}` };
+
+    try {
+      const accessibleResponse = await fetch(
+        `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&role=assistant&$limit=1`,
+        { headers }
+      );
+      expect(accessibleResponse.status).toBe(200);
+      const accessiblePage = (await accessibleResponse.json()) as {
+        total: number;
+        limit: number;
+        skip: number;
+        data: Message[];
+      };
+      expect(accessiblePage).toMatchObject({ total: 2, limit: 1, skip: 0 });
+      expect(typeof accessiblePage.total).toBe('number');
+      expect(typeof accessiblePage.limit).toBe('number');
+      expect(typeof accessiblePage.skip).toBe('number');
+      expect(Array.isArray(accessiblePage.data)).toBe(true);
+      expect(accessiblePage.data).toHaveLength(1);
+      expect(accessiblePage.data.every((item) => item.role === MessageRole.ASSISTANT)).toBe(true);
+      expect(accessiblePage.data[0]?.session_id).toBe(accessibleSessionId);
+
+      const inaccessibleResponse = await fetch(
+        `http://127.0.0.1:${address.port}/messages?session_id=${inaccessibleSessionId}&role=assistant&$limit=1`,
+        { headers }
+      );
+      expect(inaccessibleResponse.status).toBe(200);
+      const inaccessiblePage = (await inaccessibleResponse.json()) as {
+        total: number;
+        limit: number;
+        skip: number;
+        data: Message[];
+      };
+      expect(inaccessiblePage).toMatchObject({ total: 0, limit: 1, skip: 0, data: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  }
+);
