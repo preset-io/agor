@@ -667,6 +667,95 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
   });
 });
 
+describe('registered file service RBAC database preload', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+
+  it.each(['file', 'files'])(
+    'runs the actual %s RBAC preload registration inside tenant database scope',
+    async (path) => {
+      const captured = new Map<string, RegisteredHook[]>();
+      const assertTenantScope = () => {
+        expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+      };
+      const branch = { branch_id: 'branch-1', path: '/branch-1', others_can: 'view' };
+      const branchRepository = {
+        findById: vi.fn(async () => {
+          assertTenantScope();
+          return branch;
+        }),
+        isOwner: vi.fn(async () => {
+          assertTenantScope();
+          return true;
+        }),
+        resolveUserPermission: vi.fn(async () => {
+          assertTenantScope();
+          return 'all';
+        }),
+      };
+      const sessionsService = {
+        get: vi.fn(async () => {
+          assertTenantScope();
+          return { session_id: 'session-1', branch_id: 'branch-1' };
+        }),
+      };
+      const app = {
+        service(servicePath: string) {
+          return {
+            hooks(hooks: { before?: { all?: RegisteredHook[] } }) {
+              const normalizedPath = servicePath.replace(/^\//, '');
+              if (hooks.before?.all) captured.set(normalizedPath, hooks.before.all);
+            },
+          };
+        },
+        use() {},
+        publish() {},
+      };
+
+      registerHooks({
+        db: { run: vi.fn() } as RegisterHooksContext['db'],
+        app: app as RegisterHooksContext['app'],
+        config: {
+          database: { dialect: 'postgresql' },
+          multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-a' },
+        } as RegisterHooksContext['config'],
+        jwtSecret: 'registration-test-secret',
+        branchRbacEnabled: true,
+        requireAuth: async (context) => context,
+        superadminOpts: { allowSuperadmin: true },
+        sessionsService: sessionsService as RegisterHooksContext['sessionsService'],
+        messagesService: {} as RegisterHooksContext['messagesService'],
+        boardsService: undefined,
+        branchRepository: branchRepository as RegisterHooksContext['branchRepository'],
+        usersRepository: {} as RegisterHooksContext['usersRepository'],
+        sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+        deployment: { mode: 'standalone' },
+      });
+
+      const context = {
+        path,
+        method: 'find',
+        params: {
+          provider: 'rest',
+          query:
+            path === 'file'
+              ? { branch_id: 'branch-1' }
+              : { sessionId: 'session-1', search: 'readme' },
+          user: { user_id: 'user-1', role: 'superadmin' },
+        },
+      } as HookContext;
+
+      await runWithTenantContext('tenant-a', async () => {
+        for (const hook of captured.get(path) ?? []) await hook(context);
+      });
+
+      expect(context.params.branch?.branch_id).toBe('branch-1');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      if (path === 'files') expect(sessionsService.get).toHaveBeenCalledOnce();
+      else expect(branchRepository.findById).toHaveBeenCalledOnce();
+    }
+  );
+});
+
 describe('file service RBAC database preload', () => {
   it.each(['file', 'files'])(
     'scopes guarded reads for %s and closes scope afterward',
