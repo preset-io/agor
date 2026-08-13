@@ -67,8 +67,8 @@ const AUTH_METHOD_OPTIONS: Partial<
   Record<AgenticToolName, { label: string; value: AuthMethod }[]>
 > = {
   'claude-code': [
-    { label: 'API key', value: 'api-key' },
-    { label: 'Subscription token', value: 'claude-subscription-token' },
+    { label: 'Quick Start · Claude subscription', value: 'claude-subscription-token' },
+    { label: 'Advanced Setup · API key', value: 'api-key' },
   ],
   codex: [
     { label: 'API key', value: 'api-key' },
@@ -532,7 +532,7 @@ export function OnboardingWizard({
   // ── Step 2: LLM ─────────────────────────────────────────────────────────
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
   const [apiKey, setApiKey] = useState('');
-  const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
+  const [authMethod, setAuthMethod] = useState<AuthMethod>('claude-subscription-token');
   const [llmSaving, setLlmSaving] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
   const [llmAuthChecking, setLlmAuthChecking] = useState<AgenticToolName | null>(null);
@@ -569,7 +569,7 @@ export function OnboardingWizard({
     setSelectedPersona(null);
     setSelectedAgent(null);
     setApiKey('');
-    setAuthMethod('api-key');
+    setAuthMethod('claude-subscription-token');
     setLlmError(null);
     setLlmSaving(false);
     setLlmAuthChecking(null);
@@ -1271,7 +1271,9 @@ export function OnboardingWizard({
                   onClick={() => {
                     setSelectedAgent(option.agent);
                     setApiKey('');
-                    setAuthMethod('api-key');
+                    setAuthMethod(
+                      option.agent === 'claude-code' ? 'claude-subscription-token' : 'api-key'
+                    );
                     setLlmError(null);
                   }}
                   style={{
@@ -1508,12 +1510,23 @@ export function OnboardingWizard({
                         <Alert
                           type="info"
                           showIcon
-                          style={{ marginBottom: 10, fontSize: 12 }}
+                          style={{ marginBottom: 12, fontSize: 12 }}
                           message={
-                            <span>
-                              For claude.ai Pro or Max subscribers. In any terminal with Claude Code
-                              installed, run <code>claude setup-token</code>, then paste the printed
-                              token below. Need Claude Code?{' '}
+                            <div>
+                              <Text strong>Connect your Claude subscription in three steps</Text>
+                              <ol style={{ margin: '8px 0 6px', paddingLeft: 20 }}>
+                                <li>
+                                  In a terminal with Claude Code installed, run{' '}
+                                  <code>claude setup-token</code>.
+                                </li>
+                                <li>
+                                  Authorize in the browser. When Anthropic finishes, return to the
+                                  terminal—the token is printed there, not on the web page.
+                                </li>
+                                <li>Copy the entire token and paste it below.</li>
+                              </ol>
+                              Agor stores this token so it can start Claude Code for you. Need
+                              Claude Code?{' '}
                               <Typography.Link
                                 href="https://docs.claude.com/en/docs/claude-code/setup"
                                 target="_blank"
@@ -1522,24 +1535,45 @@ export function OnboardingWizard({
                                 Install docs
                               </Typography.Link>
                               .
-                            </span>
+                            </div>
                           }
                         />
                         <Input.Password
                           aria-label="Claude subscription token"
-                          placeholder="Paste token from claude setup-token…"
+                          size="large"
+                          placeholder="Paste the token printed in your terminal"
                           value={apiKey}
                           onChange={(e) => {
                             setApiKey(e.target.value);
                             setLlmError(null);
                           }}
+                          onPaste={(e) => {
+                            e.preventDefault();
+                            setApiKey(e.clipboardData.getData('text').trim());
+                            setLlmError(null);
+                          }}
                           style={{
+                            width: '100%',
                             background: 'rgba(0,0,0,0.3)',
                             borderColor: 'rgba(255,255,255,0.12)',
                             fontFamily: 'monospace',
                             fontSize: 13,
                           }}
                         />
+                        <Text
+                          style={{
+                            fontSize: 11,
+                            color: TEXT_MUTED,
+                            marginTop: 8,
+                            display: 'block',
+                          }}
+                        >
+                          Browser or terminal stuck? Return to the terminal, press{' '}
+                          <code>Ctrl+C</code>, then run <code>claude setup-token</code> again. You
+                          do not need to restart the terminal. Agor cannot detect the external CLI
+                          or Anthropic browser redirect, so keep this modal open while you
+                          authorize.
+                        </Text>
                       </>
                     ) : (
                       <Input.Password
@@ -1550,6 +1584,13 @@ export function OnboardingWizard({
                           setApiKey(e.target.value);
                           if (selectedAgent)
                             setLlmError(validateLlmKeyPattern(selectedAgent, e.target.value));
+                        }}
+                        onPaste={(e) => {
+                          e.preventDefault();
+                          const value = e.clipboardData.getData('text').trim();
+                          setApiKey(value);
+                          if (selectedAgent)
+                            setLlmError(validateLlmKeyPattern(selectedAgent, value));
                         }}
                         style={{
                           background: 'rgba(0,0,0,0.3)',
@@ -1973,7 +2014,7 @@ export function OnboardingWizard({
         mask={true}
         keyboard={false}
         footer={null}
-        width={600}
+        width={720}
         style={{
           background: MODAL_BG,
           borderRadius: 20,

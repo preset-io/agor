@@ -209,6 +209,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'llm' });
 
     clickButton('Claude');
+    clickButton(/Advanced Setup · API key/);
     const input = screen.getByLabelText('Anthropic API key');
     fireEvent.change(input, { target: { value: 'not-a-real-key' } });
 
@@ -224,6 +225,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
 
     clickButton('Claude');
+    clickButton(/Advanced Setup · API key/);
     const validKey = `sk-ant-api03-${'x'.repeat(40)}`;
     fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: validKey },
@@ -248,6 +250,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
 
     clickButton('Claude');
+    clickButton(/Advanced Setup · API key/);
     const validKey = `sk-ant-api03-${'x'.repeat(40)}`;
     fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: validKey } });
     clickButton(/^connect →/i);
@@ -274,6 +277,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
 
     clickButton('Claude');
+    clickButton(/Advanced Setup · API key/);
     fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: `sk-ant-api03-${'x'.repeat(40)}` },
     });
@@ -283,17 +287,20 @@ describe('OnboardingWizard', () => {
     expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
-  it('can save a Claude subscription token instead of an API key', async () => {
+  it('defaults Claude to Quick Start, explains the return path, and trims a pasted token', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ initialStep: 'llm', onUpdateUser });
 
     clickButton('Claude');
-    clickButton('Subscription token');
-    expect(screen.getByText(/claude setup-token/)).toBeInTheDocument();
+    expect(screen.getByText(/Quick Start · Claude subscription/)).toBeInTheDocument();
+    expect(screen.getAllByText(/claude setup-token/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/return to the terminal/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/you do not need to restart the terminal/i)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Claude subscription token'), {
-      target: { value: 'token-from-cli' },
+    fireEvent.paste(screen.getByLabelText('Claude subscription token'), {
+      clipboardData: { getData: () => '  token-from-cli\n' },
     });
+    expect(screen.getByLabelText('Claude subscription token')).toHaveValue('token-from-cli');
     clickButton(/^connect →/i);
 
     await waitFor(() => {
@@ -462,6 +469,7 @@ describe('OnboardingWizard', () => {
 
     // llm
     await findAndClickButton('Claude');
+    clickButton(/Advanced Setup · API key/);
     const validKey = `sk-ant-api03-${'x'.repeat(40)}`;
     fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: validKey },

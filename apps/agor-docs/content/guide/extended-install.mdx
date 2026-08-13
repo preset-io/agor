@@ -284,6 +284,14 @@ claude setup-token
 
 Copy the printed token.
 
+The browser authorization is owned by Anthropic and currently does not redirect back into Agor.
+After selecting **Authorize**, return to the terminal where you ran the command; the token is
+printed there. Keep the Agor setup modal open, then paste the token into it.
+
+If the command or browser flow appears stuck, return to the terminal, press **Ctrl+C**, and run
+`claude setup-token` again. You should not need to restart the terminal. Because the CLI and
+authorization page run outside Agor, Agor cannot detect or reset a stalled attempt itself.
+
 **3. Paste it into Agor:** open **User Settings → Agentic Tools → Claude Code** and paste the token into **Claude Subscription Token**. Agor stores it as `CLAUDE_CODE_OAUTH_TOKEN` for your user.
 
 ### Per-user API keys (recommended for teams)

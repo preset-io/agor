@@ -260,6 +260,13 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
                 placeholder={placeholder}
                 value={inputValues[field] || ''}
                 onChange={(e) => setInputValues((prev) => ({ ...prev, [field]: e.target.value }))}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  setInputValues((prev) => ({
+                    ...prev,
+                    [field]: e.clipboardData.getData('text').trim(),
+                  }));
+                }}
                 onPressEnter={() => handleSave(field)}
                 style={{ flex: 1 }}
                 disabled={disabled}
