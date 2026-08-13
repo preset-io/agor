@@ -16,7 +16,7 @@ function classifiedMessage(): Message {
 }
 
 function captureMessageHooks(existing: Message) {
-  const captured: Partial<Record<'all' | 'patch' | 'update', RegisteredHook[]>> = {};
+  const captured: Partial<Record<'all' | 'create' | 'patch' | 'update', RegisteredHook[]>> = {};
   const findByIdForScopeCheck = vi.fn().mockResolvedValue(existing);
   const app = {
     service(path: string) {
@@ -24,7 +24,12 @@ function captureMessageHooks(existing: Message) {
         hooks(hooks: { before?: Record<string, RegisteredHook[]> }) {
           if (path !== 'messages') return;
           for (const [method, chain] of Object.entries(hooks.before ?? {})) {
-            if (method === 'all' || method === 'patch' || method === 'update') {
+            if (
+              method === 'all' ||
+              method === 'create' ||
+              method === 'patch' ||
+              method === 'update'
+            ) {
               captured[method] = [...(captured[method] ?? []), ...(chain ?? [])];
             }
           }
@@ -62,7 +67,7 @@ function captureMessageHooks(existing: Message) {
 
 async function runRegisteredMessageHooks(
   hooks: RegisteredHook[],
-  method: 'patch' | 'update',
+  method: 'create' | 'patch' | 'update',
   data: Record<string, unknown>
 ): Promise<HookContext> {
   const context = {
@@ -82,6 +87,16 @@ async function runRegisteredMessageHooks(
 }
 
 describe('registered provider failure message boundary', () => {
+  it('rejects forged recovery metadata through the registered create hooks', async () => {
+    const { captured } = captureMessageHooks(classifiedMessage());
+
+    await expect(
+      runRegisteredMessageHooks([...(captured.all ?? []), ...(captured.create ?? [])], 'create', {
+        metadata: { error_kind: 'provider_credit_exhausted', tool: 'claude-code' },
+      })
+    ).rejects.toMatchObject({ name: 'Forbidden' });
+  });
+
   it.each([
     ['clearing metadata', { metadata: {} }],
     ['changing the classified tool', { metadata: { tool: 'codex' } }],
