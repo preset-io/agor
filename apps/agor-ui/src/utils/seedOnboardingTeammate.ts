@@ -24,7 +24,51 @@ export interface SeedOnboardingTeammateInput {
   onUpdateBranch: TeammateCreationDeps['onUpdateBranch'];
   onCreateSession: (config: unknown, boardId: string) => Promise<string | null>;
   /** Non-fatal warning surface — teammate creation must never block completion. */
-  onWarn: (message: string) => void;
+  onWarn: (warning: OnboardingTeammateWarning) => void;
+}
+
+export interface OnboardingTeammateWarning {
+  message: string;
+  action?: { label: string; href: string };
+}
+
+const BILLING_LINKS: Partial<Record<AgenticToolName, { provider: string; href: string }>> = {
+  'claude-code': {
+    provider: 'Anthropic',
+    href: 'https://console.anthropic.com/settings/billing',
+  },
+  codex: {
+    provider: 'OpenAI',
+    href: 'https://platform.openai.com/settings/organization/billing/overview',
+  },
+  gemini: {
+    provider: 'Google AI Studio',
+    href: 'https://aistudio.google.com/app/billing',
+  },
+};
+
+const LOW_CREDIT_ERROR =
+  /credit balance.{0,20}(?:too low|depleted|exhausted)|insufficient[_\s-]*quota|billing.{0,30}(?:limit|credit)|payment required|purchase (?:more )?credits?/i;
+
+export function onboardingTeammateWarning(
+  error: unknown,
+  agent: AgenticToolName | null | undefined
+): OnboardingTeammateWarning {
+  const detail = error instanceof Error ? error.message : String(error);
+  const billing = agent ? BILLING_LINKS[agent] : undefined;
+  if (billing && LOW_CREDIT_ERROR.test(detail)) {
+    return {
+      message: `Your board is ready, but your ${billing.provider} account needs more credit before your AI teammate can start. Add credit, then start the teammate from your board.`,
+      action: { label: `Open ${billing.provider} billing`, href: billing.href },
+    };
+  }
+
+  // Provider/SDK errors can be terse, technical, or contain request metadata.
+  // Keep the raw value in the console for diagnostics, never in first-run copy.
+  return {
+    message:
+      "Your board is ready, but we couldn't start your AI teammate. You can try again from the board anytime.",
+  };
 }
 
 /**
@@ -45,9 +89,10 @@ export async function seedOnboardingTeammate(
   if (!teammateName || !input.boardId) return {};
 
   if (!input.frameworkRepo) {
-    input.onWarn(
-      "Your board is ready, but your AI teammate's workspace is still finishing setup. You can add a teammate from the board in a moment."
-    );
+    input.onWarn({
+      message:
+        "Your board is ready, but your AI teammate's workspace is still finishing setup. You can add a teammate from the board in a moment.",
+    });
     return {};
   }
 
@@ -69,9 +114,10 @@ export async function seedOnboardingTeammate(
     );
 
     if (!branch) {
-      input.onWarn(
-        "Your board is ready, but we couldn't set up your AI teammate's workspace. You can add a teammate from the board anytime."
-      );
+      input.onWarn({
+        message:
+          "Your board is ready, but we couldn't set up your AI teammate's workspace. You can add a teammate from the board anytime.",
+      });
       return {};
     }
 
@@ -100,11 +146,8 @@ export async function seedOnboardingTeammate(
 
     return { sessionId };
   } catch (error) {
-    input.onWarn(
-      `Your board is ready, but we couldn't start your AI teammate: ${
-        error instanceof Error ? error.message : String(error)
-      }. You can create one from the board anytime.`
-    );
+    console.error('Onboarding AI teammate bootstrap failed:', error);
+    input.onWarn(onboardingTeammateWarning(error, input.agent));
     return {};
   }
 }

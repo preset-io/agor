@@ -783,7 +783,21 @@ function AppContent() {
       onUpdateBranch: (branchId, updates) =>
         handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
       onCreateSession: handleCreateSession,
-      onWarn: (message) => showWarning(message, { key: 'onboarding-teammate', duration: 8 }),
+      onWarn: (warning) =>
+        showWarning(
+          <>
+            {warning.message}
+            {warning.action ? (
+              <>
+                {' '}
+                <a href={warning.action.href} target="_blank" rel="noreferrer">
+                  {warning.action.label}
+                </a>
+              </>
+            ) : null}
+          </>,
+          { key: 'onboarding-teammate', duration: warning.action ? 12 : 8 }
+        ),
     });
     if (seeded.sessionId) sessionId = seeded.sessionId;
 

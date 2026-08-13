@@ -1,7 +1,11 @@
 import type { Branch, Repo } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../hooks/useFrameworkRepo';
-import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
+import {
+  onboardingTeammateWarning,
+  type SeedOnboardingTeammateInput,
+  seedOnboardingTeammate,
+} from './seedOnboardingTeammate';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import { createTeammateBranch } from './teammateCreation';
 
@@ -110,7 +114,7 @@ describe('seedOnboardingTeammate', () => {
       expect(createTeammateBranchMock).not.toHaveBeenCalled();
       expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
       expect(onWarn).toHaveBeenCalledTimes(1);
-      expect(onWarn.mock.calls[0][0]).toMatch(/still finishing setup/i);
+      expect(onWarn.mock.calls[0][0].message).toMatch(/still finishing setup/i);
       expect(result).toEqual({});
     });
   }
@@ -146,7 +150,8 @@ describe('seedOnboardingTeammate', () => {
 
     expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
     expect(onWarn).toHaveBeenCalledTimes(1);
-    expect(onWarn.mock.calls[0][0]).toMatch(/couldn't start your AI teammate/i);
+    expect(onWarn.mock.calls[0][0].message).toMatch(/couldn't start your AI teammate/i);
+    expect(onWarn.mock.calls[0][0].message).not.toContain('boom');
     expect(result).toEqual({});
   });
 
@@ -157,5 +162,34 @@ describe('seedOnboardingTeammate', () => {
     expect(createTeammateBranchMock).not.toHaveBeenCalled();
     expect(onWarn).not.toHaveBeenCalled();
     expect(result).toEqual({});
+  });
+});
+
+describe('onboardingTeammateWarning', () => {
+  it('turns a raw low-credit provider error into actionable, non-blocking copy', () => {
+    const warning = onboardingTeammateWarning(
+      new Error('400: credit balance too low; request_id=req_secret'),
+      'claude-code'
+    );
+
+    expect(warning.message).toMatch(/board is ready/i);
+    expect(warning.message).toMatch(/needs more credit/i);
+    expect(warning.message).not.toContain('credit balance too low');
+    expect(warning.message).not.toContain('req_secret');
+    expect(warning.action).toEqual({
+      label: 'Open Anthropic billing',
+      href: 'https://console.anthropic.com/settings/billing',
+    });
+  });
+
+  it('does not expose an unknown provider error in onboarding copy', () => {
+    const warning = onboardingTeammateWarning(
+      new Error('SDK exploded with internal request metadata'),
+      'codex'
+    );
+
+    expect(warning.message).toMatch(/try again from the board/i);
+    expect(warning.message).not.toContain('SDK exploded');
+    expect(warning.action).toBeUndefined();
   });
 });
