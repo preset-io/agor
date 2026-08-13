@@ -119,7 +119,7 @@ import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
 } from './services/sessions.js';
-import { isLocalAuthenticationLookup } from './services/users.js';
+import { isAuthenticationUserLookup, isLocalAuthenticationLookup } from './services/users.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
   ensureMinimumRole,
@@ -594,6 +594,17 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
     throw new Forbidden('Task patch contains fields that are not executor-managed');
   }
 
+  return context;
+}
+
+export function authorizeUsersGet(context: HookContext): HookContext {
+  const params = context.params as AuthenticatedParams;
+
+  if (isAuthenticationUserLookup(params)) {
+    return context;
+  }
+
+  ensureMinimumRole(params, ROLES.MEMBER, 'view users');
   return context;
 }
 
@@ -2344,12 +2355,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           throw new NotAuthenticated('Authentication required');
         },
       ],
-      get: [
-        (context) => {
-          ensureMinimumRole(context.params as AuthenticatedParams, ROLES.MEMBER, 'view users');
-          return context;
-        },
-      ],
+      get: [authorizeUsersGet],
       create: [
         async (context: HookContext<Board>) => {
           const params = context.params as AuthenticatedParams;
