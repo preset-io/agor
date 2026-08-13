@@ -318,35 +318,11 @@ describe('connect', () => {
     await waitFor(() => expect(connect).toBeEnabled());
   });
 
-  it("does not carry one server's acknowledgement to the next one opened", async () => {
-    const deepwiki = await openDrawer();
-    fireEvent.click(deepwiki.getByRole('checkbox'));
-    await waitFor(() => expect(deepwiki.getByRole('button', { name: /Connect/ })).toBeEnabled());
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Open Linear' }));
-
-    const linear = within(await screen.findByRole('dialog'));
-    expect(linear.getByRole('checkbox')).not.toBeChecked();
-    expect(linear.getByRole('button', { name: /Connect/ })).toBeDisabled();
-  });
-
-  it('withdraws consent when the disclosure it was given for is rewritten', async () => {
-    const drawer = await openDrawer();
-    fireEvent.click(drawer.getByRole('checkbox'));
-    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeEnabled());
-
-    // A reseed rewrites what this server discloses while the drawer is open.
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    catalogRows = [{ ...DEEPWIKI, permission_disclosure: 'Now also writes to your repositories.' }];
-    fireEvent.click(screen.getByRole('switch', { name: /Reviewed by Preset/i }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Open DeepWiki' }));
-
-    const reopened = within(await screen.findByRole('dialog'));
-    expect(reopened.getByText('Now also writes to your repositories.')).toBeVisible();
-    expect(reopened.getByRole('checkbox')).not.toBeChecked();
-    expect(reopened.getByRole('button', { name: /Connect/ })).toBeDisabled();
-  });
+  // Consent's two withdrawal rules — a different entry, and the same entry
+  // with rewritten wording — are asserted in `CatalogDetailDrawer.test.tsx`.
+  // Reaching them from here meant closing and reopening the drawer, mounting
+  // the AntD Form and its Selects twice; the drawer takes the entry as a prop
+  // and states the same invariant in one mount.
 
   it('offers no connect control for an entry that discloses nothing', async () => {
     catalogRows = [{ ...DEEPWIKI, permission_disclosure: '' }];
