@@ -43,6 +43,19 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
     [sessionMcpServerIds, mcpServerById]
   );
 
+  const unauthedServers = React.useMemo(
+    () =>
+      attachedServers.filter((server) => mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)),
+    [attachedServers, userAuthenticatedMcpServerIds]
+  );
+
+  const badgeTitle =
+    unauthedServers.length === 1
+      ? `${unauthedServers[0].display_name || unauthedServers[0].name} isn’t connected. Click to authorize — its tools won’t work until you do.`
+      : unauthedServers.length > 1
+        ? `${unauthedServers.length} MCP servers aren’t connected. Click to authorize them.`
+        : `${summary.tooltip}. Click to add or change MCP servers.`;
+
   const handleChange = async (nextIds: string[]) => {
     if (!client) return;
     setSaving(true);
@@ -105,7 +118,7 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
       <Tag
         icon={<ApiOutlined />}
         color="default"
-        title={`${summary.tooltip}. Click to add or change MCP servers.`}
+        title={badgeTitle}
         style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
       >
         <span>MCP</span>

@@ -67,7 +67,7 @@ function formatRefreshError(error?: string): string {
 /**
  * Clickable MCP server pill.
  *
- *   - Unauthenticated: orange + login icon, click starts OAuth.
+ *   - Unauthenticated: error/red + login icon, click starts OAuth.
  *   - Authenticated:   purple + API icon, tooltip shows human-readable expiry,
  *                      click force-refreshes the token (even before it's due)
  *                      so operators can probe per-provider refresh policy.
@@ -183,11 +183,13 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
     );
   }
 
+  const needsAuthTooltip = `${server.display_name || server.name} isn’t connected. Click to authorize — its tools won’t work until you do.`;
+
   return (
     <>
-      <Tooltip title={needsAuth ? 'Click to authenticate' : authedTooltip}>
+      <Tooltip title={needsAuth ? needsAuthTooltip : authedTooltip}>
         <Tag
-          color={needsAuth ? 'orange' : ENTITY_PILL_COLORS.mcp}
+          color={needsAuth ? 'error' : ENTITY_PILL_COLORS.mcp}
           icon={
             needsAuth ? <LoginOutlined /> : refreshing ? <ReloadOutlined spin /> : <ApiOutlined />
           }
