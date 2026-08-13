@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import type { TenantContext } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
+import { createUploadAuthMiddleware } from './register-routes.js';
 
 describe('browser upload route boundary ordering', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
@@ -25,18 +27,55 @@ describe('browser upload route boundary ordering', () => {
     expect(handler).toContain('ref: staged.ref');
   });
 
+  it('propagates the tenant verified by authentication on the same params object', async () => {
+    const verifiedTenant = { tenant_id: 'verified-tenant', source: 'explicit' } as TenantContext;
+    let suppliedParams: unknown;
+    const authentication = {
+      create: vi.fn(async (_data, params) => {
+        suppliedParams = params;
+        params.tenant = verifiedTenant;
+        return {
+          user: { user_id: 'user-1' },
+          authentication: { payload: { tenant_id: 'payload-tenant' } },
+        };
+      }),
+    };
+    const middleware = createUploadAuthMiddleware({
+      authentication,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'static-tenant',
+        auth_claim: 'tenant_id',
+        trusted_header: 'x-tenant-id',
+      },
+    });
+    const req = {
+      headers: { authorization: 'Bearer token', 'x-tenant-id': 'header-tenant' },
+      feathers: undefined as { tenant?: TenantContext } | undefined,
+    };
+    const res = {};
+    const next = vi.fn();
+
+    await middleware(req, res, next);
+
+    const passedParams = authentication.create.mock.calls[0]?.[1];
+    expect(suppliedParams).toBe(passedParams);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.feathers.tenant).toBe(verifiedTenant);
+  });
+
   it('carries authentication params so the JWT user lookup receives tenant scope', () => {
-    const start = source.indexOf('const uploadAuthMiddleware');
+    const start = source.indexOf('export function createUploadAuthMiddleware');
     const middleware = source.slice(
       start,
-      source.indexOf("(app as any).post(\n    '/sessions/:sessionId/upload'", start)
+      source.indexOf('/**\n * Register authentication', start)
     );
 
     expect(start).toBeGreaterThan(0);
     expect(middleware).toContain(
       'const authParams: AuthenticatedParams = { headers: req.headers }'
     );
-    expect(middleware).toMatch(/authService\.create\([\s\S]*authParams\s*\)/);
+    expect(middleware).toMatch(/authentication\.create\([\s\S]*authParams\s*\)/);
     expect(middleware).toContain('authParams.tenant ??');
   });
 });

@@ -325,6 +325,56 @@ export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase)
   };
 }
 
+export function createUploadAuthMiddleware(input: {
+  authentication: {
+    create(
+      data: { strategy: 'jwt'; accessToken: string },
+      params: AuthenticatedParams
+    ): Promise<{ user?: User; authentication?: { payload?: unknown } }>;
+  };
+  multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
+}) {
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 middleware request augmentation
+  return async (req: any, res: any, next: NextFunction) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+      if (!token) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      const authParams: AuthenticatedParams = { headers: req.headers };
+      const result = await input.authentication.create(
+        { strategy: 'jwt', accessToken: token },
+        authParams
+      );
+      const authenticatedParams = {
+        user: result.user,
+        provider: 'rest',
+        authentication: result.authentication,
+        headers: req.headers,
+      };
+      req.feathers = {
+        ...authenticatedParams,
+        tenant:
+          authParams.tenant ??
+          resolveTenantContext(input.multiTenancy, {
+            params: {
+              authentication: result.authentication,
+              headers: req.headers,
+            },
+            authPayload: result.authentication?.payload,
+            headers: req.headers,
+          }),
+      };
+      next();
+    } catch (error) {
+      console.error('❌ [Upload Auth] Authentication failed:', error);
+      res.status(401).json({ error: 'Authentication required' });
+    }
+  };
+}
+
 /**
  * Register authentication configuration and custom REST routes.
  */
@@ -2311,64 +2361,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     next();
   };
 
-  // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-  const uploadAuthMiddleware: any = async (req: any, res: any, next: any) => {
-    try {
-      if (DEBUG_UPLOAD) console.log('🔐 [Upload Auth] Attempting authentication');
-
-      let token = null;
-
-      // Bearer-only. We previously fell back to feathers-jwt / agor-access-token
-      // / jwt cookies, which made the upload endpoint vulnerable to CSRF (a
-      // forged form-post would inherit the user's cookie). All in-tree callers
-      // (UI FileUpload component) already send `Authorization: Bearer …`.
-      const authHeader = req.headers.authorization;
-      if (authHeader?.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
-        if (DEBUG_UPLOAD) console.log('   Found token in Authorization header');
-      }
-
-      if (!token) {
-        if (DEBUG_UPLOAD) console.log('⚠️  [Upload Auth] No JWT token found, rejecting');
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-
-      if (DEBUG_UPLOAD) console.log('🔑 [Upload Auth] JWT token found, verifying...');
-
-      const authService = app.service('authentication');
-      // Reuse one mutable params object so authentication can propagate the
-      // verified tenant context before loading the authenticated user.
-      const authParams: AuthenticatedParams = { headers: req.headers };
-      const result = await authService.create({ strategy: 'jwt', accessToken: token }, authParams);
-
-      if (DEBUG_UPLOAD) {
-        console.log('✅ [Upload Auth] Authentication successful');
-        console.log('   User:', result.user?.user_id ? shortId(result.user.user_id) : 'unknown');
-      }
-
-      const authenticatedParams = {
-        user: result.user,
-        provider: 'rest',
-        authentication: result.authentication,
-        headers: req.headers,
-      };
-      req.feathers = {
-        ...authenticatedParams,
-        tenant:
-          authParams.tenant ??
-          resolveTenantContext(multiTenancy, {
-            params: authenticatedParams,
-            authPayload: result.authentication?.payload,
-            headers: req.headers,
-          }),
-      };
-
-      next();
-    } catch (error) {
-      console.error('❌ [Upload Auth] Authentication failed:', error);
-      res.status(401).json({ error: 'Authentication required' });
-    }
-  };
+  const uploadAuthMiddleware = createUploadAuthMiddleware({
+    authentication: app.service('authentication'),
+    multiTenancy,
+  });
 
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
   (app as any).post(
