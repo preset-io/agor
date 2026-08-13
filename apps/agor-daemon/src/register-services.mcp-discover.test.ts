@@ -46,6 +46,28 @@ describe('register-services /mcp-servers/discover wiring', () => {
     expect(discoverBlock).toContain('loadMcpServerForCaller');
   });
 
+  it('opens a tenant unit of work around every database touch', () => {
+    // Discover is a tenant-identity-only service (see
+    // TENANT_IDENTITY_ONLY_SERVICE_PATHS): it performs network I/O, so it
+    // never inherits a request-long tenant transaction and each database
+    // touch must open its own short scope. An unscoped one throws against a
+    // scope-requiring handle, which this endpoint's try/catch would report as
+    // a discovery failure — after the outbound probe already ran.
+    const loads = discoverBlock.match(/\bloadMcpServerForCaller\s*\(/g) ?? [];
+    const scopedLoads =
+      discoverBlock.match(
+        /runInOAuthTenantScope\(\s*db,\s*tenantId,\s*\(\)\s*=>\s*loadMcpServerForCaller\s*\(/g
+      ) ?? [];
+    expect(loads.length).toBeGreaterThan(0);
+    expect(scopedLoads).toHaveLength(loads.length);
+
+    // The capability write is scoped by `persistDiscoveredMCPCapabilities`,
+    // which is also where the reason it bypasses `mcp-servers` configuration
+    // CRUD is documented. Reaching the repository from here would skip both.
+    expect(discoverBlock).toContain('persistDiscoveredMCPCapabilities(db, tenantId,');
+    expect(discoverBlock).not.toMatch(/\bMCPServerRepository\s*\(/);
+  });
+
   it('calls resolveProbeServerTemplates before resolveMCPAuthHeaders', () => {
     const probeIdx = discoverBlock.search(/\bresolveProbeServerTemplates\s*\(/);
     const headersIdx = discoverBlock.search(/\bresolveMCPAuthHeaders\s*\(/);
