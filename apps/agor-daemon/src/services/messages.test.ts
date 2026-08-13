@@ -3,6 +3,7 @@ import { PAGINATION } from '@agor/core/config';
 import {
   AuthenticationService,
   authenticate,
+  errorHandler,
   feathers,
   feathersExpress,
   rest,
@@ -198,6 +199,15 @@ dbTest(
       message(inaccessibleSessionId, 0),
     ]);
 
+    const createdAtSortSessionId = await createTestSession(db, {
+      createdBy: ownerId,
+      othersCan: 'view',
+    });
+    const createdAtSortMessages = [3, 2, 1, 0].map((index) =>
+      message(createdAtSortSessionId, index)
+    );
+    await repository.createMany(createdAtSortMessages);
+
     const app = feathersExpress(feathers());
     app.configure(rest());
     app.set('authentication', {
@@ -228,6 +238,7 @@ dbTest(
         find: [scopeFindToAccessibleSessionsSql({ allowSuperadmin: false })],
       },
     });
+    app.use(errorHandler());
 
     const server = (await app.listen(0)) as Server;
     const address = server.address();
@@ -259,6 +270,76 @@ dbTest(
       expect(accessiblePage.data).toHaveLength(1);
       expect(accessiblePage.data.every((item) => item.role === MessageRole.ASSISTANT)).toBe(true);
       expect(accessiblePage.data[0]?.session_id).toBe(accessibleSessionId);
+
+      const descendingResponse = await fetch(
+        `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&role=assistant&$sort[index]=-1&$limit=1&$skip=1`,
+        { headers }
+      );
+      expect(descendingResponse.status).toBe(200);
+      const descendingPage = (await descendingResponse.json()) as {
+        total: number;
+        limit: number;
+        skip: number;
+        data: Message[];
+      };
+      expect(descendingPage).toMatchObject({ total: 2, limit: 1, skip: 1 });
+      expect(descendingPage.data.map((item) => item.index)).toEqual([1]);
+      expect(typeof descendingPage.limit).toBe('number');
+      expect(typeof descendingPage.skip).toBe('number');
+
+      const zeroLimitResponse = await fetch(
+        `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&role=assistant&$limit=0`,
+        { headers }
+      );
+      expect(zeroLimitResponse.status).toBe(200);
+      await expect(zeroLimitResponse.json()).resolves.toMatchObject({
+        total: 2,
+        limit: 0,
+        skip: 0,
+        data: [],
+      });
+
+      const overMaxResponse = await fetch(
+        `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&role=assistant&$limit=${PAGINATION.MAX_LIMIT + 1}`,
+        { headers }
+      );
+      expect(overMaxResponse.status).toBe(200);
+      await expect(overMaxResponse.json()).resolves.toMatchObject({
+        total: 2,
+        limit: PAGINATION.MAX_LIMIT,
+      });
+
+      for (const parameter of ['$limit=-1', '$skip=-1', '$limit=1.5', '$skip=not-a-number']) {
+        const invalidResponse = await fetch(
+          `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&${parameter}`,
+          { headers }
+        );
+        expect(invalidResponse.status, `${parameter}: ${await invalidResponse.text()}`).toBe(400);
+      }
+
+      const invalidSortResponse = await fetch(
+        `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&$sort[index]=0`,
+        { headers }
+      );
+      expect(invalidSortResponse.status).toBe(400);
+
+      const createdAtResponse = await fetch(
+        `http://127.0.0.1:${address.port}/messages?session_id=${createdAtSortSessionId}&$sort[created_at]=-1&$limit=2`,
+        { headers }
+      );
+      expect(createdAtResponse.status).toBe(200);
+      const createdAtPage = (await createdAtResponse.json()) as {
+        total: number;
+        limit: number;
+        data: Message[];
+      };
+      expect(createdAtPage).toMatchObject({ total: 4, limit: 2 });
+      expect(createdAtPage.data.map((item) => item.message_id)).toEqual(
+        [...createdAtSortMessages]
+          .sort((left, right) => left.message_id.localeCompare(right.message_id))
+          .slice(0, 2)
+          .map((item) => item.message_id)
+      );
 
       const inaccessibleResponse = await fetch(
         `http://127.0.0.1:${address.port}/messages?session_id=${inaccessibleSessionId}&role=assistant&$limit=1`,

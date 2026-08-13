@@ -273,6 +273,7 @@ export class MessagesRepository {
       role: messages.role,
       index: messages.index,
       timestamp: messages.timestamp,
+      created_at: messages.created_at,
       content_preview: messages.content_preview,
       parent_tool_use_id: messages.parent_tool_use_id,
     } as const;
@@ -282,7 +283,9 @@ export class MessagesRepository {
         return column ? (direction === -1 ? desc(column) : asc(column)) : undefined;
       })
       .filter((expression): expression is SQL => expression !== undefined);
-    dataQuery = dataQuery.orderBy(...(orderBy.length > 0 ? orderBy : [asc(messages.index)]));
+    if (orderBy.length === 0) orderBy.push(asc(messages.index));
+    if (!Object.hasOwn(opts.sort ?? {}, 'message_id')) orderBy.push(asc(messages.message_id));
+    dataQuery = dataQuery.orderBy(...orderBy);
     if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
     if (opts.skip) dataQuery = dataQuery.offset(opts.skip);
 

@@ -7,6 +7,7 @@
 
 import { PAGINATION } from '@agor/core/config';
 import { MessagesRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import { BadRequest } from '@agor/core/feathers';
 import type {
   Message,
   MessageID,
@@ -46,6 +47,50 @@ export type MessageParams = QueryParams<{
   _agorSqlSessionAccessUserId?: UUID;
 };
 
+function parseNonNegativeInteger(value: unknown, field: '$limit' | '$skip'): number {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim() !== ''
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new BadRequest(`${field} must be a finite non-negative integer`);
+  }
+  return parsed;
+}
+
+function normalizeSort(value: unknown): Record<string, 1 | -1> | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new BadRequest('$sort must be an object');
+  }
+
+  const normalized: Record<string, 1 | -1> = {};
+  for (const [field, rawDirection] of Object.entries(value)) {
+    if (rawDirection === 1 || rawDirection === '1') {
+      normalized[field] = 1;
+    } else if (rawDirection === -1 || rawDirection === '-1') {
+      normalized[field] = -1;
+    } else {
+      throw new BadRequest(`$sort direction for ${field} must be 1 or -1`);
+    }
+  }
+  return normalized;
+}
+
+function normalizeQuery(rawQuery: Record<string, unknown>): Query {
+  const query = { ...rawQuery } as Query;
+  if ('$limit' in rawQuery && rawQuery.$limit !== undefined) {
+    query.$limit = parseNonNegativeInteger(rawQuery.$limit, '$limit');
+  }
+  if ('$skip' in rawQuery && rawQuery.$skip !== undefined) {
+    query.$skip = parseNonNegativeInteger(rawQuery.$skip, '$skip');
+  }
+  if ('$sort' in rawQuery) query.$sort = normalizeSort(rawQuery.$sort);
+  return query;
+}
+
 /**
  * Extended messages service with custom methods
  */
@@ -72,7 +117,7 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
    * methods below intentionally keep their existing unpaginated semantics.
    */
   async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
-    const query = (params?.query ?? {}) as Query;
+    const query = normalizeQuery((params?.query ?? {}) as Record<string, unknown>);
     const limit = query.$limit ?? this.paginate?.default ?? 100;
     const actualLimit = Math.min(limit, this.paginate?.max ?? 1000);
     const skip = query.$skip ?? 0;

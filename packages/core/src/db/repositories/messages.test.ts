@@ -7,9 +7,12 @@
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
+import { update } from '../database-wrapper';
+import { messages as messagesTable } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
@@ -426,6 +429,64 @@ describe('MessagesRepository.findPage', () => {
         .map(([query]) => JSON.stringify(query))
         .some((query) => /limit/i.test(query))
     ).toBe(true);
+  });
+
+  dbTest('appends message_id to preserve stable ordering across tied pages', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const tiedMessages = [
+      createMessageData({
+        message_id: '00000000-0000-0000-0000-000000000003' as MessageID,
+        session_id: sessionId,
+        index: 1,
+        timestamp: '2026-01-01T00:00:00.000Z',
+      }),
+      createMessageData({
+        message_id: '00000000-0000-0000-0000-000000000001' as MessageID,
+        session_id: sessionId,
+        index: 1,
+        timestamp: '2026-01-01T00:00:00.000Z',
+      }),
+      createMessageData({
+        message_id: '00000000-0000-0000-0000-000000000002' as MessageID,
+        session_id: sessionId,
+        index: 1,
+        timestamp: '2026-01-01T00:00:00.000Z',
+      }),
+    ];
+    await messages.createMany(tiedMessages);
+    for (const tiedMessage of tiedMessages) {
+      await update(db, messagesTable)
+        .set({ created_at: new Date('2026-01-01T00:00:00.000Z') })
+        .where(eq(messagesTable.message_id, tiedMessage.message_id))
+        .run();
+    }
+
+    const firstPage = await messages.findPage({
+      sessionId,
+      sort: { created_at: -1 },
+      limit: 2,
+      skip: 0,
+    });
+    const secondPage = await messages.findPage({
+      sessionId,
+      sort: { created_at: -1 },
+      limit: 2,
+      skip: 2,
+    });
+
+    expect(firstPage.data.map((message) => message.message_id)).toEqual([
+      tiedMessages[1].message_id,
+      tiedMessages[2].message_id,
+    ]);
+    expect(secondPage.data.map((message) => message.message_id)).toEqual([
+      tiedMessages[0].message_id,
+    ]);
+    expect([...firstPage.data, ...secondPage.data].map((message) => message.message_id)).toEqual(
+      [...tiedMessages]
+        .sort((left, right) => left.message_id.localeCompare(right.message_id))
+        .map((message) => message.message_id)
+    );
   });
 });
 
