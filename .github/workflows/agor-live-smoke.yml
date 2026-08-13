@@ -43,8 +43,12 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: '24.19.0'
           cache: 'pnpm'
+
+      # npm pack owns the release tarball bytes. Pin it independently of the
+      # runner image so a tag retry rebuilds the same artifacts.
+      - run: npm install -g --ignore-scripts npm@11.16.0
 
       - run: pnpm install --frozen-lockfile
 
@@ -129,7 +133,10 @@ jobs:
           RELEASE="$RUNNER_TEMP/release"
           echo "LIVE=$(ls "$RELEASE"/agor-live-[0-9]*.tgz)" >> "$GITHUB_ENV"
           echo "CLIENT=$(ls "$RELEASE"/agor-live-client-*.tgz)" >> "$GITHUB_ENV"
+          echo "CLAUDE=$(ls "$RELEASE"/agor-live-claude-*.tgz)" >> "$GITHUB_ENV"
           echo "CODEX=$(ls "$RELEASE"/agor-live-codex-*.tgz)" >> "$GITHUB_ENV"
+          echo "COPILOT=$(ls "$RELEASE"/agor-live-copilot-*.tgz)" >> "$GITHUB_ENV"
+          echo "CURSOR=$(ls "$RELEASE"/agor-live-cursor-*.tgz)" >> "$GITHUB_ENV"
           echo "GEMINI=$(ls "$RELEASE"/agor-live-gemini-*.tgz)" >> "$GITHUB_ENV"
           echo "OPENCODE=$(ls "$RELEASE"/agor-live-opencode-*.tgz)" >> "$GITHUB_ENV"
 
@@ -347,10 +354,14 @@ jobs:
           node --input-type=module - "$ROOT" "$PACKAGE_ROOT" <<'NODE'
           import { existsSync } from 'node:fs';
           import { mkdir, writeFile } from 'node:fs/promises';
+          import { createRequire } from 'node:module';
           import { pathToFileURL } from 'node:url';
           const [root, packageRoot] = process.argv.slice(2);
           const { cloneRepo } = await import(pathToFileURL(`${packageRoot}/node_modules/@agor/git/index.js`).href);
-          const { simpleGit } = await import(pathToFileURL(`${packageRoot}/node_modules/simple-git/dist/esm/index.js`).href);
+          // Resolve from the package's consumer context: npm may hoist this
+          // dependency to the project root or keep it nested.
+          const require = createRequire(`${packageRoot}/package.json`);
+          const { simpleGit } = require('simple-git');
           const source = `${root}/clone-source`;
           await mkdir(source, { recursive: true });
           const git = simpleGit(source);
@@ -362,4 +373,76 @@ jobs:
           await git.commit('fixture');
           const result = await cloneRepo({ url: source, targetDir: `${root}/clone-target`, env: {} });
           if (!existsSync(`${result.path}/.git`)) throw new Error('Packaged clone did not create .git');
+          NODE
+
+  all-integrations-smoke:
+    name: All packaged agent integrations
+    if: github.event_name != 'pull_request'
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: agor-live-release
+          path: ${{ runner.temp }}/release
+
+      - name: Install all exact integration artifacts with scripts disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/all-integrations"
+          RELEASE="$RUNNER_TEMP/release"
+          REAL_NPM=$(command -v npm)
+          LIVE=$(ls "$RELEASE"/agor-live-[0-9]*.tgz)
+          CLIENT=$(ls "$RELEASE"/agor-live-client-*.tgz)
+          mkdir -p "$ROOT/home" "$ROOT/npm-shim"
+          npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit --ignore-scripts "$CLIENT" "$LIVE"
+
+          cat > "$ROOT/npm-shim/npm" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          args=()
+          for arg in "$@"; do
+            case "$arg" in
+              @agor-live/claude@*) artifact="$AGOR_SMOKE_CLAUDE" ;;
+              @agor-live/codex@*) artifact="$AGOR_SMOKE_CODEX" ;;
+              @agor-live/copilot@*) artifact="$AGOR_SMOKE_COPILOT" ;;
+              @agor-live/cursor@*) artifact="$AGOR_SMOKE_CURSOR" ;;
+              @agor-live/gemini@*) artifact="$AGOR_SMOKE_GEMINI" ;;
+              @agor-live/opencode@*) artifact="$AGOR_SMOKE_OPENCODE" ;;
+              *) artifact="$arg" ;;
+            esac
+            args+=("$artifact")
+          done
+          exec "$AGOR_SMOKE_REAL_NPM" "${args[@]}"
+          SH
+          chmod +x "$ROOT/npm-shim/npm"
+
+          export HOME="$ROOT/home"
+          export AGOR_AGENTIC_TOOLS_DIR="$HOME/.agor/agentic-tools"
+          export PATH="$ROOT/npm-shim:$PATH"
+          export AGOR_SMOKE_REAL_NPM="$REAL_NPM"
+          for id in claude codex copilot cursor gemini opencode; do
+            upper=${id^^}
+            artifact=$(ls "$RELEASE"/agor-live-"$id"-*.tgz)
+            export "AGOR_SMOKE_$upper=$artifact"
+          done
+
+          AGOR_TELEMETRY=0 "$ROOT/prefix/bin/agor" init --non-interactive \
+            --agentic-tools claude,codex,copilot,cursor,gemini,opencode
+          AGOR_TELEMETRY=0 "$ROOT/prefix/bin/agor" doctor --json > "$ROOT/doctor.json"
+          node - "$ROOT/doctor.json" <<'NODE'
+          const report = require(process.argv[2]);
+          const expected = ['claude-code', 'codex', 'copilot', 'cursor', 'gemini', 'opencode'];
+          for (const id of expected) {
+            const tool = report.agenticTools?.find((item) => item.id === id);
+            if (tool?.status !== 'ready') throw new Error(`${id} not ready: ${JSON.stringify(tool)}`);
+          }
           NODE

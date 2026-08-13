@@ -46,7 +46,7 @@ npm install -g agor-live@latest
 agor init
 ```
 
-The original npm installation never downloads optional runtimes. Interactive `agor init` shows all
+The original npm installation never downloads agentic-tool runtimes. Interactive `agor init` shows all
 six supported tools in a multi-select and requires you to select at least one. Use the arrow keys to
 move, Space to select, and Enter to continue. Press Ctrl+C to cancel instead of creating a deployment
 accidentally. Init records the final selection in the newly created immutable `config.yaml` and
@@ -387,14 +387,14 @@ mcp_catalog:
   # registry_url: https://registry.internal  # advanced override
 ```
 
-| Setting | Default | Notes |
-| --- | --- | --- |
-| `registry_sync_enabled` | `false` | Mirror the public registry in addition to the curated entries. |
-| `sync_interval_hours` | `6` | Held between one minute and roughly 24 days; values outside that range are clamped. |
-| `probe_budget` | `40` | Entries auth-probed per sync. `0` disables probing while leaving the mirror on. |
-| `registry_url` | official registry | Point at a private mirror. |
+| Setting                 | Default           | Notes                                                                               |
+| ----------------------- | ----------------- | ----------------------------------------------------------------------------------- |
+| `registry_sync_enabled` | `false`           | Mirror the public registry in addition to the curated entries.                      |
+| `sync_interval_hours`   | `6`               | Held between one minute and roughly 24 days; values outside that range are clamped. |
+| `probe_budget`          | `40`              | Entries auth-probed per sync. `0` disables probing while leaving the mirror on.     |
+| `registry_url`          | official registry | Point at a private mirror.                                                          |
 
-Because the seed *reconciles* rather than merely applies, the catalog's contents
+Because the seed _reconciles_ rather than merely applies, the catalog's contents
 are a function of the deployed binary: rolling back to an older release
 withdraws curation added since, until you roll forward again. That is intended,
 but it is not something to discover during an incident.

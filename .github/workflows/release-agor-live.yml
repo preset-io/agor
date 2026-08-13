@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: '24.19.0'
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 

@@ -1,9 +1,8 @@
 # Fast PR + main checks.
 #
 # Everything in this workflow is expected to pass on every PR push.
-# The slow / cross-Node-version / publish-path stuff lives in
-# `heavy-checks.yml` and runs on a nightly cron (and on-demand via
-# workflow_dispatch), not on every push.
+# The slow / cross-Node-version / publish-path stuff runs through the release
+# workflow and on demand via `heavy-checks.yml`, not on every push.
 #
 # Shape: one job, `ci` — one install, then all checks via turbo's
 # internal task graph. The five-jobs-after-an-install fanout we used to
@@ -11,8 +10,8 @@
 # ~4 redundant installs per CI run.
 #
 # `pnpm audit` lives in its own workflow (`audit.yml`) — path-filtered to
-# dependency-manifest changes only, and also invoked by `heavy-checks.yml`
-# nightly to catch ambient CVEs.
+# dependency-manifest changes and on its own nightly schedule to catch ambient
+# CVEs. It is also included in the on-demand `heavy-checks.yml` aggregate.
 name: CI
 
 on:
