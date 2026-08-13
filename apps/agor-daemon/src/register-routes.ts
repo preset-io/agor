@@ -4312,8 +4312,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Server-side gate in register-hooks.ts is the source of truth; this
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
-          webTerminal: resolveWebTerminalCapability(config).enabled,
-          webTerminalCapability: resolveWebTerminalCapability(config),
+          webTerminal: resolveWebTerminalCapability({ config, deployment }).enabled,
+          webTerminalCapability: resolveWebTerminalCapability({ config, deployment }),
           // How managed environment lifecycle fields execute. In
           // webhook-only mode the UI/MCP may still show env controls, but
           // non-URL rendered commands are rejected server-side.

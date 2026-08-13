@@ -612,7 +612,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     // `allow_web_terminal: false` kill-switch is enforced on the WebSocket
     // transport too. Without this the terminal:* relay events would still
     // accept traffic when the HTTP modal is disabled.
-    webTerminalEnabled: resolveWebTerminalCapability(effectiveConfig).enabled,
+    webTerminalEnabled: resolveWebTerminalCapability({
+      config: effectiveConfig,
+      deployment,
+    }).enabled,
     // Build info for the version-sync banner. Emitted as the `server-info`
     // welcome event on every connect (and reconnect), so UI tabs can detect
     // FE/BE drift after a deploy without waiting for the next /health poll.

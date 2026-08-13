@@ -2222,7 +2222,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   //   still applies inside the service (see services/terminals.ts).
   // - Setting the flag to false disables the terminal for everyone (including
   //   admins). The modal is hidden from the UI in that case.
-  const webTerminalCapability = resolveWebTerminalCapability(config);
+  const webTerminalCapability = resolveWebTerminalCapability({ config, deployment });
   const webTerminalEnabled = webTerminalCapability.enabled;
   safeService('terminals')?.hooks({
     before: {

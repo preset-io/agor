@@ -1,4 +1,4 @@
-import type { AgorConfig } from '@agor/core/config';
+import type { AgorConfig, ResolvedDeploymentConfig } from '@agor/core/config';
 
 export type WebTerminalCapability = {
   enabled: boolean;
@@ -11,7 +11,11 @@ export type WebTerminalCapability = {
  * create request and the PTY bridge. External executor callbacks currently go
  * through shared ingress and therefore do not have an owner-affine contract.
  */
-export function resolveWebTerminalCapability(config: AgorConfig): WebTerminalCapability {
+export function resolveWebTerminalCapability(input: {
+  config: AgorConfig;
+  deployment: ResolvedDeploymentConfig;
+}): WebTerminalCapability {
+  const { config, deployment } = input;
   if (config.execution?.allow_web_terminal === false) {
     return { enabled: false, mode: 'disabled', reason: 'operator-disabled' };
   }
@@ -19,10 +23,10 @@ export function resolveWebTerminalCapability(config: AgorConfig): WebTerminalCap
     return { enabled: false, mode: 'disabled', reason: 'external-runtime-unowned' };
   }
   if (
-    config.deployment?.mode === 'ha' &&
-    (config.deployment.ha?.execution_topology !== 'shared-local' ||
-      config.deployment.ha?.shared_filesystem !== true ||
-      config.deployment.ha?.ingress_affinity !== true)
+    deployment.mode === 'ha' &&
+    (deployment.topology.execution !== 'shared-local' ||
+      deployment.topology.sharedFilesystem !== true ||
+      deployment.topology.ingressAffinity !== true)
   ) {
     return { enabled: false, mode: 'disabled', reason: 'unsupported-ha-topology' };
   }
