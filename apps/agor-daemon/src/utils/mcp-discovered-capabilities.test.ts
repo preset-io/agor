@@ -78,7 +78,7 @@ describe('persistDiscoveredMCPCapabilities', () => {
     const db = guardedDatabase();
 
     // The guard is real: the same access from the endpoint's own call frame,
-    // which is where the write used to happen, is refused.
+    // outside any scope of its own, is refused.
     expect(() => (db as unknown as { probe(): string }).probe()).toThrow(
       MissingTenantDatabaseScopeError
     );
