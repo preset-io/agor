@@ -18,11 +18,17 @@
  * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
+import {
+  createTenantScopedDatabaseProxy,
+  getCurrentTenantDatabaseScope,
+  runWithTenantContext,
+} from '@agor/core/db';
 import { type HookContext, TaskStatus } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
+  createTenantScopedBeforeHookChain,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
@@ -625,6 +631,11 @@ describe('canReceiveMcpTokenForSession', () => {
 });
 
 describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
+  it.each(['file', 'files'])('%s is identity-only and never request-transaction owned', (path) => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
+  });
+
   // Regression: the codex-auth endpoints do network/process work after a short
   // tenant DB read, then call getCurrentTenantId() to open their own units of
   // work — so they must carry ambient tenant identity via the identity-only
@@ -654,4 +665,45 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
     expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
     expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
   });
+});
+
+describe('file service RBAC database preload', () => {
+  it.each(['file', 'files'])(
+    'scopes guarded reads for %s and closes scope afterward',
+    async (path) => {
+      const guarded = createTenantScopedDatabaseProxy({ run: () => 'ok' } as never, {
+        requireScope: true,
+        label: `${path} hook test`,
+      });
+      const read = async (context: HookContext) => {
+        expect(guarded.run).toBeTypeOf('function');
+        expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+        context.params.branch = { branch_id: 'branch-1' } as never;
+        return context;
+      };
+      const hook = createTenantScopedBeforeHookChain(guarded, read);
+      const context = { path, params: {} } as HookContext;
+
+      await runWithTenantContext('tenant-a', () => hook(context));
+
+      expect(context.params.branch?.branch_id).toBe('branch-1');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      expect(() => guarded.run).toThrow(
+        `Missing tenant database scope for ${path} hook test access`
+      );
+    }
+  );
+
+  it.each(['file', 'files'])(
+    'fails before opening %s RBAC work without tenant identity',
+    async (path) => {
+      const read = vi.fn();
+      const hook = createTenantScopedBeforeHookChain({ run: vi.fn() } as never, read);
+
+      await expect(hook({ path, params: {} } as HookContext)).rejects.toThrow(
+        `Missing active tenant context for ${path} authorization`
+      );
+      expect(read).not.toHaveBeenCalled();
+    }
+  );
 });

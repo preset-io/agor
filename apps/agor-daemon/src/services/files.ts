@@ -8,14 +8,14 @@
 
 import {
   BranchRepository,
-  getCurrentTenantId,
+  requireCurrentTenantId,
   runWithTenantDatabaseScope,
   SessionRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { AuthenticatedParams, SessionID, UserID } from '@agor/core/types';
+import type { AuthenticatedParams, RBACParams, SessionID, UserID } from '@agor/core/types';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import {
   generateScopedServiceToken,
@@ -92,27 +92,39 @@ export class FilesService {
       return [];
     }
 
+    // Keep repository and identity reads inside a short tenant transaction.
+    // The executor call below is deliberately outside this scope. Resolve the
+    // identity before opening the unit of work and never turn boundary failures
+    // into an empty autocomplete response.
+    const tenantId = requireCurrentTenantId(
+      'Missing active tenant context for files database access'
+    );
+    const resolved = await runWithTenantDatabaseScope(this.db, tenantId, async () => {
+      const cached = params as Partial<RBACParams>;
+      const session =
+        cached.session?.session_id === sessionId
+          ? cached.session
+          : await this.sessionRepo.findById(sessionId);
+      if (!session) return null;
+
+      const branch =
+        cached.branch?.branch_id === session.branch_id
+          ? cached.branch
+          : await this.branchRepo.findById(session.branch_id);
+      if (!branch?.path) return null;
+
+      const currentUserId = params.user?.user_id as UserID | undefined;
+      const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
+      const asUser = await resolveExecutorReadAsUser(
+        this.db,
+        currentUser ?? currentUserId,
+        this.app.get('config')
+      );
+      return { branchId: branch.branch_id, asUser };
+    });
+    if (!resolved) return [];
+
     try {
-      // Keep repository and identity reads inside a short tenant transaction.
-      // The executor call below is deliberately outside this scope.
-      const resolved = await runWithTenantDatabaseScope(this.db, getCurrentTenantId(), async () => {
-        const session = await this.sessionRepo.findById(sessionId);
-        if (!session) return null;
-
-        const branch = await this.branchRepo.findById(session.branch_id);
-        if (!branch?.path) return null;
-
-        const currentUserId = params.user?.user_id as UserID | undefined;
-        const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
-        const asUser = await resolveExecutorReadAsUser(
-          this.db,
-          currentUser ?? currentUserId,
-          this.app.get('config')
-        );
-        return { branchId: branch.branch_id, asUser };
-      });
-      if (!resolved) return [];
-
       const sessionToken = generateScopedServiceToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );

@@ -28,6 +28,7 @@ import {
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   isPostgresDatabaseHandle,
+  requireCurrentTenantId,
   runWithTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
@@ -600,6 +601,23 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   }
 
   return context;
+}
+
+/** Run an identity-only service's database-reading before hooks in one short unit of work. */
+export function createTenantScopedBeforeHookChain(
+  db: TenantScopeAwareDatabase,
+  ...hooks: Array<(context: HookContext) => HookContext | Promise<HookContext>>
+) {
+  return async (context: HookContext): Promise<HookContext> => {
+    const tenantId = requireCurrentTenantId(
+      `Missing active tenant context for ${context.path} authorization`
+    );
+    return runWithTenantDatabaseScope(db, tenantId, async () => {
+      let current = context;
+      for (const hook of hooks) current = await hook(current);
+      return current;
+    });
+  };
 }
 
 export function registerHooks(ctx: RegisterHooksContext): void {
@@ -2159,7 +2177,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // case rather than throwing.
         ...(branchRbacEnabled
           ? [
-              async (context: HookContext) => {
+              createTenantScopedBeforeHookChain(db, async (context: HookContext) => {
                 if (!context.params.provider) return context;
                 if (context.params.user?._isServiceAccount) return context;
                 const query = context.params.query as { sessionId?: string } | undefined;
@@ -2171,7 +2189,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 await loadBranchFromSession(branchRepository)(context);
                 await ensureCanView(superadminOpts)(context);
                 return context;
-              },
+              }),
             ]
           : []),
       ],
@@ -2186,7 +2204,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'read files'),
         ...(branchRbacEnabled
-          ? [loadBranch(branchRepository, 'branch_id'), ensureCanView(superadminOpts)]
+          ? [
+              createTenantScopedBeforeHookChain(
+                db,
+                loadBranch(branchRepository, 'branch_id'),
+                ensureCanView(superadminOpts)
+              ),
+            ]
           : []),
       ],
     },

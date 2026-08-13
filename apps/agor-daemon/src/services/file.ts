@@ -3,7 +3,7 @@
  */
 import {
   type BranchRepository,
-  getCurrentTenantId,
+  requireCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -14,6 +14,7 @@ import type {
   FileListItem,
   Id,
   QueryParams,
+  RBACParams,
   ServiceMethods,
 } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
@@ -104,8 +105,15 @@ export class FileService
   }
 
   private async resolveBranchRead(branchId: string, params?: FileParams) {
-    return runWithTenantDatabaseScope(this.db, getCurrentTenantId(), async () => {
-      const branch = await this.branchRepo.findById(branchId);
+    const tenantId = requireCurrentTenantId(
+      'Missing active tenant context for file database access'
+    );
+    return runWithTenantDatabaseScope(this.db, tenantId, async () => {
+      const cachedBranch = (params as Partial<RBACParams> | undefined)?.branch;
+      const branch =
+        cachedBranch?.branch_id === branchId
+          ? cachedBranch
+          : await this.branchRepo.findById(branchId);
       if (!branch) throw new Error(`Branch not found: ${branchId}`);
       const asUser = await resolveExecutorReadAsUser(
         this.db,
