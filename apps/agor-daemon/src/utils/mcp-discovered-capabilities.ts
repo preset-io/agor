@@ -13,16 +13,21 @@ export interface DiscoveredMCPCapabilities {
  * Persist the capability lists a discovery probe read off an MCP server.
  *
  * This does not go through `app.service('mcp-servers')`, the entry point for
- * configuration CRUD that the tenant's write authorization is wired to. There
- * is no version of that route which both works and enforces something:
+ * configuration CRUD that `authorizeMcpServerWrite` is wired to. That is the
+ * decision #2240 documents at `denyDiscoverOfAnotherUsersServer`, and the
+ * reason it holds is that the authorizer gates *who* may configure a server,
+ * while a refresh configures nothing: the payload is the server's own report
+ * of itself, not anything the caller submitted.
  *
- * - Called with the caller's params, the service's role gate rejects the
- *   request. Discovery deliberately admits the server's owner and not just an
- *   admin, so every owner's refresh would fail at the persist step, after the
- *   outbound probe already ran.
- * - Called internally, `ensureMinimumRole` returns early on a missing
- *   `provider` and no authorization runs at all — a boundary that reads like
- *   one in review and enforces nothing.
+ * Routing through it would not be inert, which is the part worth being precise
+ * about. Called internally it still enforces nothing — `decidePolicyAndOwnership`
+ * returns early on a missing `provider`. Called with the caller's params it
+ * would work, and would add two refusals: a `viewer` who still owns a server
+ * from before a demotion, and any member under `use_existing_only`. The second
+ * is why this stays out. A private server keeps resolving into its owner's
+ * sessions no matter what the policy later says (`isMCPServerUsableBy`), so
+ * revoking refresh does not stop it being used — it freezes the tool list the
+ * agent actually sees. Tightening the policy would make live servers rot.
  *
  * The endpoint's own owner/admin rule is therefore the authorization, and it
  * has already run by the time this is reached. Two structural facts keep that
