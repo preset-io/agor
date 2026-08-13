@@ -8,6 +8,8 @@
 
 import {
   BranchRepository,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
   SessionRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
@@ -91,24 +93,29 @@ export class FilesService {
     }
 
     try {
-      // Fetch session to get branch_id
-      const session = await this.sessionRepo.findById(sessionId);
-      if (!session) {
-        return [];
-      }
+      // Keep repository and identity reads inside a short tenant transaction.
+      // The executor call below is deliberately outside this scope.
+      const resolved = await runWithTenantDatabaseScope(this.db, getCurrentTenantId(), async () => {
+        const session = await this.sessionRepo.findById(sessionId);
+        if (!session) return null;
 
-      // Fetch branch to validate it still exists before crossing the executor boundary.
-      const branch = await this.branchRepo.findById(session.branch_id);
-      if (!branch?.path) {
-        return [];
-      }
+        const branch = await this.branchRepo.findById(session.branch_id);
+        if (!branch?.path) return null;
+
+        const currentUserId = params.user?.user_id as UserID | undefined;
+        const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
+        const asUser = await resolveExecutorReadAsUser(
+          this.db,
+          currentUser ?? currentUserId,
+          this.app.get('config')
+        );
+        return { branchId: branch.branch_id, asUser };
+      });
+      if (!resolved) return [];
 
       const sessionToken = generateScopedServiceToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
-
-      const currentUserId = params.user?.user_id as UserID | undefined;
-      const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
 
       const result = await runExecutorCommand(
         {
@@ -116,7 +123,7 @@ export class FilesService {
           sessionToken,
           daemonUrl: getDaemonUrl(),
           params: {
-            branchId: branch.branch_id,
+            branchId: resolved.branchId,
             search,
             limit: MAX_FILE_RESULTS,
           },
@@ -126,11 +133,7 @@ export class FilesService {
           // In strict mode, autocomplete runs as the requesting Unix user.
           // In simple/insulated mode this stays undefined so default installs
           // do not require sudo and configured executor defaults can apply.
-          asUser: await resolveExecutorReadAsUser(
-            this.db,
-            currentUser ?? currentUserId,
-            this.app.get('config')
-          ),
+          asUser: resolved.asUser,
         }
       );
 

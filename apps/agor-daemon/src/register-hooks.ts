@@ -479,6 +479,11 @@ export const TENANT_OWNED_SERVICE_PATHS = [
 // units of work at the call site instead of holding an HTTP-long transaction.
 export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'check-auth',
+  // File browsing delegates to the executor after bounded repository reads.
+  // Keep request-wide tenant identity while each service opens only a short
+  // database unit of work before crossing the executor boundary.
+  'file',
+  'files',
   // Global catalog: no tenant column to scope, no writes to stamp.
   'mcp-catalog',
   'codex-auth/device',
