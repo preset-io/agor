@@ -231,6 +231,11 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     }
   };
 
+  const prepareOAuthStart = async (): Promise<string | null> => {
+    if (!(await saveFormValues())) return null;
+    return server?.mcp_server_id ?? null;
+  };
+
   return (
     <Modal
       title="Edit MCP Server"
@@ -261,7 +266,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
           onTestConnection={handleTestConnection}
           testing={testing}
           testResult={testResult}
-          onSaveBeforeOAuthRetry={saveFormValues}
+          onPrepareOAuthStart={prepareOAuthStart}
         />
       </Form>
     </Modal>

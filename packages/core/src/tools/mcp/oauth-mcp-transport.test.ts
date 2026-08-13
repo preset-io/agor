@@ -1027,6 +1027,7 @@ describe('strict current MCP OAuth profile', () => {
       s256?: boolean;
       responseIssuer?: boolean;
       registrationEndpoint?: boolean;
+      registrationStatus?: number;
     } = {}
   ) {
     return vi.fn().mockImplementation(async (input: string | URL, init?: RequestInit) => {
@@ -1058,12 +1059,17 @@ describe('strict current MCP OAuth profile', () => {
       }
       if (url === `${issuer}/register` && init?.method === 'POST') {
         return new Response(
-          JSON.stringify({
-            client_id: 'dcr-client',
-            redirect_uris: ['https://agor.example.com/mcp-servers/oauth-callback'],
-            token_endpoint_auth_method: 'none',
-          }),
-          { status: 201, headers: { 'content-type': 'application/json' } }
+          overrides.registrationStatus === 404
+            ? JSON.stringify({ error: 'not_found' })
+            : JSON.stringify({
+                client_id: 'dcr-client',
+                redirect_uris: ['https://agor.example.com/mcp-servers/oauth-callback'],
+                token_endpoint_auth_method: 'none',
+              }),
+          {
+            status: overrides.registrationStatus ?? 201,
+            headers: { 'content-type': 'application/json' },
+          }
         );
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -1227,7 +1233,12 @@ describe('strict current MCP OAuth profile', () => {
     });
 
     await expect(result).rejects.toMatchObject({
-      diagnostic: { stage: 'dcr_registration', http_status: 404, error: 'not_found' },
+      diagnostic: {
+        stage: 'dcr_registration',
+        http_status: 404,
+        error: 'not_found',
+        registration_endpoint_source: 'metadata',
+      },
     });
     await expect(result).rejects.toThrow(/advertised registration endpoint.*HTTP 404/i);
     await expect(result).rejects.not.toThrow(/figma/i);
@@ -1339,6 +1350,26 @@ describe('strict current MCP OAuth profile', () => {
       `${issuer}/register`,
       expect.objectContaining({ method: 'POST' })
     );
+  });
+
+  it('identifies a failed legacy /register guess without calling it advertised', async () => {
+    globalThis.fetch = strictFetch({ registrationStatus: 404 });
+    const result = startMCPOAuthFlow(
+      `Bearer resource_metadata="${metadataUri}"`,
+      undefined,
+      'https://agor.example.com/mcp-servers/oauth-callback',
+      { resourceUri, compatibilityMode: 'legacy', dcrMode: 'fallback' }
+    );
+
+    await expect(result).rejects.toMatchObject({
+      diagnostic: {
+        stage: 'dcr_registration',
+        http_status: 404,
+        registration_endpoint_source: 'legacy_fallback',
+      },
+    });
+    await expect(result).rejects.toThrow(/legacy guessed \/register endpoint.*HTTP 404/i);
+    await expect(result).rejects.not.toThrow(/advertised registration endpoint/i);
   });
 
   it('does not relax outbound endpoint safety', async () => {

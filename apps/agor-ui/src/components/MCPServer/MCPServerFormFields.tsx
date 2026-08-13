@@ -1,4 +1,3 @@
-import type { MCPOAuthDCRDiagnostic } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { ApiOutlined, DownOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
@@ -19,14 +18,11 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useEffect, useRef, useState } from 'react';
-import {
-  oauthAttemptFailureMessage,
-  refetchMCPOAuthDurableState,
-  waitForMCPOAuthAttempt,
-} from '@/utils/mcpOAuthAttempt';
+import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
+import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
+import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
 const { TextArea } = Input;
 
@@ -55,10 +51,8 @@ export interface MCPServerFormFieldsProps {
     resources?: Array<{ name: string; uri: string; mimeType?: string }>;
     prompts?: Array<{ name: string; description: string }>;
   } | null;
-  /** Callback to save server first before OAuth flow (for new servers) */
-  onSaveFirst?: () => Promise<string | null>;
-  /** Persist edited OAuth settings before retrying an existing server's flow. */
-  onSaveBeforeOAuthRetry?: () => Promise<boolean>;
+  /** Persist current settings and return the authoritative server ID before every OAuth start. */
+  onPrepareOAuthStart: () => Promise<string | null>;
 }
 
 /**
@@ -85,29 +79,33 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   onTestConnection,
   testing = false,
   testResult,
-  onSaveFirst,
-  onSaveBeforeOAuthRetry,
+  onPrepareOAuthStart,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testingAuth, setTestingAuth] = useState(false);
   const [oauthBrowserFlowAvailable, setOauthBrowserFlowAvailable] = useState(false);
-  const [startingOAuthFlow, setStartingOAuthFlow] = useState(false);
-  const [oauthFailure, setOauthFailure] = useState<{
-    message: string;
-    diagnostic?: MCPOAuthDCRDiagnostic;
-  } | null>(null);
   const [oauthAdvancedOpen, setOauthAdvancedOpen] = useState(false);
 
-  // OAuth flow state
-  const [oauthCallbackModalVisible, setOauthCallbackModalVisible] = useState(false);
   const [disconnectingOAuth, setDisconnectingOAuth] = useState(false);
-  const oauthCompletedCleanupRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
-    return () => {
-      oauthCompletedCleanupRef.current?.();
-    };
-  }, []);
+  const {
+    cancelOAuthWait,
+    clearOAuthFailure,
+    handleStartOAuthFlow,
+    oauthCallbackModalVisible,
+    oauthFailure,
+    oauthRedirectUri,
+    oauthRedirectUriError,
+    startingOAuthFlow,
+  } = useMCPServerOAuthStart({
+    client,
+    enabled: authType === 'oauth' && isRemoteTransportValue(transport),
+    onPrepareOAuthStart,
+    onOAuthSucceeded: () => setOauthBrowserFlowAvailable(false),
+    showError,
+    showInfo,
+    showSuccess,
+  });
 
   useEffect(() => {
     if (!client) return;
@@ -123,12 +121,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       client.io.off('oauth:open_browser', openBrowserForBlockingFlow);
     };
   }, [client]);
-
-  // Track effective server ID (may differ from prop after onSaveFirst creates a new server)
-  const [effectiveServerId, setEffectiveServerId] = useState<string | undefined>(serverId);
-  useEffect(() => {
-    setEffectiveServerId(serverId);
-  }, [serverId]);
 
   // Watch advanced OAuth field values so we can show a "customized" dot on
   // the Advanced collapse header when any of them has a non-default value.
@@ -159,117 +151,12 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     watchedCompatibilityMode === 'legacy' ||
     (typeof watchedDcrMode === 'string' && watchedDcrMode !== 'advertised');
 
-  const handleStartOAuthFlow = async () => {
-    if (!client) {
-      showError('Client not available');
-      return;
-    }
-
-    let targetServerId = effectiveServerId;
-    if (!targetServerId && onSaveFirst) {
-      showInfo('Saving MCP server before testing...');
-      const newServerId = await onSaveFirst();
-      if (!newServerId) {
-        showError('Failed to save MCP server');
-        return;
-      }
-      targetServerId = newServerId;
-      setEffectiveServerId(newServerId);
-    }
-
-    const isOAuthRetry = oauthFailure !== null;
-    if (isOAuthRetry && targetServerId && onSaveBeforeOAuthRetry) {
-      showInfo('Saving OAuth settings before retrying...');
-      const saved = await onSaveBeforeOAuthRetry();
-      if (!saved) return;
-    }
-
-    const values = form.getFieldsValue(true);
-    const requestData = extractOAuthConfigForTesting(values);
-    if (!requestData) {
-      showError('MCP URL is required');
-      return;
-    }
-
-    setStartingOAuthFlow(true);
-    setOauthFailure(null);
-
-    try {
-      showInfo('Starting OAuth authentication flow...');
-
-      const data = (await client.service('mcp-servers/oauth-start').create({
-        mcp_url: requestData.mcp_url,
-        mcp_server_id: targetServerId,
-        client_id: requestData.client_id,
-      })) as {
-        success: boolean;
-        error?: string;
-        message?: string;
-        authorizationUrl?: string;
-        attempt_id?: string;
-        state?: string;
-        diagnostic?: MCPOAuthDCRDiagnostic;
-      };
-
-      if (data.success && data.authorizationUrl && data.attempt_id) {
-        window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
-        setOauthCallbackModalVisible(true);
-        showInfo('Authenticating... complete sign-in in the new tab.');
-
-        const controller = new AbortController();
-        const cleanup = () => {
-          controller.abort();
-          oauthCompletedCleanupRef.current = null;
-        };
-        oauthCompletedCleanupRef.current?.();
-        oauthCompletedCleanupRef.current = cleanup;
-        void waitForMCPOAuthAttempt(client, data.attempt_id, { signal: controller.signal })
-          .then(async (attempt) => {
-            if (attempt.status === 'succeeded') {
-              if (targetServerId) {
-                try {
-                  await refetchMCPOAuthDurableState(client, targetServerId);
-                } catch {
-                  console.warn('[OAuth] Durable completion refetch failed');
-                }
-              }
-              showSuccess('OAuth authentication successful!');
-              setOauthCallbackModalVisible(false);
-              setOauthBrowserFlowAvailable(false);
-              setOauthFailure(null);
-            } else {
-              showError(oauthAttemptFailureMessage(attempt.status));
-              setOauthCallbackModalVisible(false);
-            }
-          })
-          .catch((error) => {
-            if (error instanceof DOMException && error.name === 'AbortError') return;
-            showError('Could not confirm OAuth status. Check the connection and try again.');
-          })
-          .finally(() => {
-            if (!controller.signal.aborted) cleanup();
-          });
-      } else {
-        setOauthFailure({
-          message: data.error || 'Failed to start OAuth flow',
-          diagnostic: data.diagnostic,
-        });
-      }
-    } catch (error) {
-      setOauthFailure({
-        message: `OAuth flow error: ${error instanceof Error ? error.message : String(error)}`,
-      });
-    } finally {
-      setStartingOAuthFlow(false);
-    }
-  };
-
   const handleDisconnectOAuth = async () => {
     if (!client) {
       showError('Client not available');
       return;
     }
-    if (!effectiveServerId) {
+    if (!serverId) {
       showError('Cannot disconnect: MCP server must be saved first');
       return;
     }
@@ -277,7 +164,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     setDisconnectingOAuth(true);
     try {
       const data = (await client.service('mcp-servers/oauth-disconnect').create({
-        mcp_server_id: effectiveServerId,
+        mcp_server_id: serverId,
       })) as { success: boolean; message?: string; error?: string };
 
       if (data.success) {
@@ -301,7 +188,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
     const values = form.getFieldsValue(true);
     const currentAuthType = values.auth_type || authType;
-    if (currentAuthType === 'oauth') setOauthFailure(null);
+    if (currentAuthType === 'oauth') clearOAuthFailure();
 
     setTestingAuth(true);
     try {
@@ -553,7 +440,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     oauth_scope: undefined,
                   });
                 }
-                setOauthFailure(null);
+                clearOAuthFailure();
                 onAuthTypeChange?.(value as 'none' | 'bearer' | 'jwt' | 'oauth');
               }}
             >
@@ -618,12 +505,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             )}
             {authType === 'oauth' && oauthBrowserFlowAvailable && (
               <Button type="primary" loading={startingOAuthFlow} onClick={handleStartOAuthFlow}>
-                {oauthFailure && mode === 'edit'
+                {oauthFailure?.kind === 'dcr'
                   ? 'Save OAuth settings & retry'
-                  : 'Start OAuth Flow'}
+                  : oauthFailure
+                    ? 'Retry OAuth Flow'
+                    : 'Start OAuth Flow'}
               </Button>
             )}
-            {authType === 'oauth' && effectiveServerId && !oauthBrowserFlowAvailable && (
+            {authType === 'oauth' && serverId && !oauthBrowserFlowAvailable && (
               <Button
                 type="default"
                 danger
@@ -746,29 +635,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       )}
 
       {oauthFailure && (
-        <Alert
-          type="error"
-          title="OAuth setup needs attention"
-          description={
-            <Space orientation="vertical" size={4}>
-              <Typography.Text>{oauthFailure.message}</Typography.Text>
-              {oauthFailure.diagnostic && (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Stage: {oauthFailure.diagnostic.stage.replaceAll('_', ' ')}
-                  {oauthFailure.diagnostic.http_status !== undefined
-                    ? ` · HTTP ${oauthFailure.diagnostic.http_status}`
-                    : ''}
-                </Typography.Text>
-              )}
-            </Space>
-          }
-          action={
-            <Button size="small" onClick={() => setOauthAdvancedOpen(true)}>
-              Open OAuth settings
-            </Button>
-          }
-          showIcon
-          style={{ marginBottom: 16 }}
+        <MCPOAuthRecoveryAlert
+          failure={oauthFailure}
+          redirectUri={oauthRedirectUri}
+          onOpenSettings={() => setOauthAdvancedOpen(true)}
         />
       )}
 
@@ -834,6 +704,20 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     showIcon
                     style={{ marginBottom: 16 }}
                   />
+                  <Form.Item
+                    label="OAuth Redirect URL"
+                    tooltip="Register this exact callback URL in a pre-registered OAuth provider application."
+                  >
+                    {oauthRedirectUri ? (
+                      <Typography.Text code copyable>
+                        {oauthRedirectUri}
+                      </Typography.Text>
+                    ) : (
+                      <Typography.Text type={oauthRedirectUriError ? 'danger' : 'secondary'}>
+                        {oauthRedirectUriError || 'Loading redirect URL...'}
+                      </Typography.Text>
+                    )}
+                  </Form.Item>
                   <Form.Item
                     label="Client ID"
                     name="oauth_client_id"
@@ -1016,18 +900,9 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       <Modal
         title="OAuth Authentication"
         open={oauthCallbackModalVisible}
-        onCancel={() => {
-          setOauthCallbackModalVisible(false);
-          oauthCompletedCleanupRef.current?.();
-        }}
+        onCancel={cancelOAuthWait}
         footer={[
-          <Button
-            key="cancel"
-            onClick={() => {
-              setOauthCallbackModalVisible(false);
-              oauthCompletedCleanupRef.current?.();
-            }}
-          >
+          <Button key="cancel" onClick={cancelOAuthWait}>
             Cancel
           </Button>,
         ]}

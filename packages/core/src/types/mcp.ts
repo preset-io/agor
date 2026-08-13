@@ -63,11 +63,23 @@ export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
  * OAuth protocol secrets.
  */
 export type MCPOAuthDCRDiagnosticStage = 'dcr_endpoint_discovery' | 'dcr_registration';
+export type MCPOAuthDCRRegistrationEndpointSource = 'metadata' | 'legacy_fallback';
 export interface MCPOAuthDCRDiagnostic {
   stage: MCPOAuthDCRDiagnosticStage;
   http_status?: number;
   error?: string;
   error_description?: string;
+  registration_endpoint_source?: MCPOAuthDCRRegistrationEndpointSource;
+}
+
+export type MCPOAuthStartFailureKind = 'dcr' | 'configuration' | 'oauth';
+
+export interface MCPOAuthStartFailure {
+  success: false;
+  kind: MCPOAuthStartFailureKind;
+  error: string;
+  diagnostic?: MCPOAuthDCRDiagnostic;
+  redirect_uri?: string;
 }
 
 export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2] as const;

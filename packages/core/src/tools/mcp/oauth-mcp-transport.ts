@@ -8,7 +8,11 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
-import type { MCPOAuthDCRDiagnostic, MCPOAuthDCRMode } from '../../types/mcp.js';
+import type {
+  MCPOAuthDCRDiagnostic,
+  MCPOAuthDCRMode,
+  MCPOAuthDCRRegistrationEndpointSource,
+} from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
@@ -475,11 +479,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function registrationDiagnostic(
   httpStatus: number,
-  providerResponse: Record<string, unknown> | null
+  providerResponse: Record<string, unknown> | null,
+  registrationEndpointSource: MCPOAuthDCRRegistrationEndpointSource
 ): MCPOAuthDCRDiagnostic {
   const diagnostic: MCPOAuthDCRDiagnostic = {
     stage: 'dcr_registration',
     http_status: httpStatus,
+    registration_endpoint_source: registrationEndpointSource,
   };
   const error = sanitizeProviderDetail(providerResponse?.error);
   const errorDescription = sanitizeProviderDetail(providerResponse?.error_description);
@@ -548,7 +554,13 @@ function dcrRecoveryGuidance(diagnostic: MCPOAuthDCRDiagnostic): string {
     return `The provider rejected the configured OAuth redirect URI. Approve that callback URL in the provider application, or ${manualClient}`;
   }
   if (diagnostic.http_status === 404) {
-    return `The advertised registration endpoint returned HTTP 404 and is unavailable or stale. Verify the provider OAuth metadata, or ${manualClient}`;
+    if (diagnostic.registration_endpoint_source === 'metadata') {
+      return `The advertised registration endpoint returned HTTP 404 and is unavailable or stale. Verify the provider OAuth metadata, or ${manualClient}`;
+    }
+    if (diagnostic.registration_endpoint_source === 'legacy_fallback') {
+      return `The legacy guessed /register endpoint returned HTTP 404. Disable the legacy fallback, or ${manualClient}`;
+    }
+    return `The registration endpoint used for this attempt returned HTTP 404, or ${manualClient}`;
   }
   return `The provider rejected Dynamic Client Registration. Review its client-registration requirements, or ${manualClient}`;
 }
@@ -606,7 +618,8 @@ async function registerDynamicClient(
   clientName: string = 'Agor MCP Client',
   scope?: string,
   reuseLocalCache = true,
-  allowLocalhostHttp = false
+  allowLocalhostHttp = false,
+  registrationEndpointSource: MCPOAuthDCRRegistrationEndpointSource = 'metadata'
 ): Promise<DynamicClientRegistrationResponse> {
   // Check cache first
   const cacheKey = registrationEndpoint;
@@ -648,14 +661,22 @@ async function registerDynamicClient(
 
   if (!response.ok) {
     throw registrationFailure(
-      registrationDiagnostic(response.status, await readDcrResponseJson(response))
+      registrationDiagnostic(
+        response.status,
+        await readDcrResponseJson(response),
+        registrationEndpointSource
+      )
     );
   }
 
   const responseBody = await readDcrResponseJson(response);
   if (!responseBody) {
     throw registrationFailure(
-      { stage: 'dcr_registration', http_status: response.status },
+      {
+        stage: 'dcr_registration',
+        http_status: response.status,
+        registration_endpoint_source: registrationEndpointSource,
+      },
       'Dynamic Client Registration returned an invalid response'
     );
   }
@@ -664,7 +685,11 @@ async function registerDynamicClient(
   if (!result) {
     const invalidClientId = responseBody.client_id;
     throw registrationFailure(
-      { stage: 'dcr_registration', http_status: response.status },
+      {
+        stage: 'dcr_registration',
+        http_status: response.status,
+        registration_endpoint_source: registrationEndpointSource,
+      },
       typeof invalidClientId !== 'string' || !invalidClientId.trim()
         ? 'Dynamic Client Registration returned an invalid client ID'
         : 'Dynamic Client Registration returned an invalid response'
@@ -673,44 +698,72 @@ async function registerDynamicClient(
 
   if (typeof result.client_id !== 'string' || !result.client_id.trim()) {
     throw registrationFailure(
-      { stage: 'dcr_registration', http_status: response.status },
+      {
+        stage: 'dcr_registration',
+        http_status: response.status,
+        registration_endpoint_source: registrationEndpointSource,
+      },
       'Dynamic Client Registration returned an invalid client ID'
     );
   }
   if (!result.redirect_uris?.includes(redirectUri)) {
     throw registrationFailure(
-      { stage: 'dcr_registration', http_status: response.status },
+      {
+        stage: 'dcr_registration',
+        http_status: response.status,
+        registration_endpoint_source: registrationEndpointSource,
+      },
       'Dynamic Client Registration did not bind the required redirect URI'
     );
   }
   const authMethod = result.token_endpoint_auth_method ?? 'none';
   if (!['none', 'client_secret_basic'].includes(authMethod)) {
     throw registrationFailure(
-      { stage: 'dcr_registration', http_status: response.status },
+      {
+        stage: 'dcr_registration',
+        http_status: response.status,
+        registration_endpoint_source: registrationEndpointSource,
+      },
       'Dynamic Client Registration returned an unsupported token auth method'
     );
   }
   if (authMethod === 'client_secret_basic' && !result.client_secret) {
     throw registrationFailure(
-      { stage: 'dcr_registration', http_status: response.status },
+      {
+        stage: 'dcr_registration',
+        http_status: response.status,
+        registration_endpoint_source: registrationEndpointSource,
+      },
       'Dynamic Client Registration omitted the required client secret'
     );
   }
   if (authMethod === 'none' && result.client_secret) {
     throw registrationFailure(
-      { stage: 'dcr_registration', http_status: response.status },
+      {
+        stage: 'dcr_registration',
+        http_status: response.status,
+        registration_endpoint_source: registrationEndpointSource,
+      },
       'Dynamic Client Registration returned incompatible public-client credentials'
     );
   }
   if (result.grant_types && !result.grant_types.includes('authorization_code')) {
     throw registrationFailure(
-      { stage: 'dcr_registration', http_status: response.status },
+      {
+        stage: 'dcr_registration',
+        http_status: response.status,
+        registration_endpoint_source: registrationEndpointSource,
+      },
       'Dynamic Client Registration did not enable the authorization-code grant'
     );
   }
   if (result.response_types && !result.response_types.includes('code')) {
     throw registrationFailure(
-      { stage: 'dcr_registration', http_status: response.status },
+      {
+        stage: 'dcr_registration',
+        http_status: response.status,
+        registration_endpoint_source: registrationEndpointSource,
+      },
       'Dynamic Client Registration did not enable the code response type'
     );
   }
@@ -1540,6 +1593,8 @@ async function startMCPOAuthFlowWithAS(opts: {
       (dcrMode === 'fallback' ? fallbackRegistrationEndpoint : undefined);
     if (registrationEndpoint) {
       console.log('[MCP OAuth] Using Dynamic Client Registration');
+      const registrationEndpointSource: MCPOAuthDCRRegistrationEndpointSource =
+        authServerMetadata?.registration_endpoint ? 'metadata' : 'legacy_fallback';
       try {
         const registration = await registerDynamicClient(
           registrationEndpoint,
@@ -1547,13 +1602,17 @@ async function startMCPOAuthFlowWithAS(opts: {
           'Agor MCP Client',
           scopeString,
           opts.reuseDynamicClientRegistration !== false,
-          allowLocalhostHttp
+          allowLocalhostHttp,
+          registrationEndpointSource
         );
         actualClientId = registration.client_id;
         resolvedClientSecret = registration.client_secret;
       } catch (error) {
         if (error instanceof OAuthDCRFailure) throw error;
-        throw registrationFailure({ stage: 'dcr_registration' });
+        throw registrationFailure({
+          stage: 'dcr_registration',
+          registration_endpoint_source: registrationEndpointSource,
+        });
       }
     } else if (hasFullOverrides) {
       throw new Error(

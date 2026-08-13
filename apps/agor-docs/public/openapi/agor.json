@@ -315,6 +315,16 @@
         "additionalProperties": true,
         "description": "Schema for test-oauth. See @agor-live/client for the authoritative TypeScript type."
       },
+      "oauth-configuration": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Schema for oauth-configuration. See @agor-live/client for the authoritative TypeScript type."
+      },
+      "oauth-configurationList": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Schema for oauth-configurationList. See @agor-live/client for the authoritative TypeScript type."
+      },
       "oauth-start": {
         "type": "object",
         "additionalProperties": true,
@@ -5925,6 +5935,69 @@
             }
           }
         }
+      }
+    },
+    "/mcp-servers/oauth-configuration": {
+      "get": {
+        "parameters": [
+          {
+            "description": "Number of results to return",
+            "in": "query",
+            "name": "$limit",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of results to skip",
+            "in": "query",
+            "name": "$skip",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Property to sort results",
+            "in": "query",
+            "name": "$sort",
+            "style": "deepObject",
+            "schema": {
+              "type": "object"
+            }
+          },
+          {
+            "description": "Query parameters to filter",
+            "in": "query",
+            "name": "filter",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "$ref": "#/components/schemas/oauth-configuration"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/oauth-configurationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
+        "tags": ["mcp-servers"],
+        "security": []
       }
     },
     "/mcp-servers/oauth-start": {

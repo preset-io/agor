@@ -60,6 +60,9 @@ describe('register-services OAuth callback URL regression', () => {
     // to localhost in dev).
     expect(codeOnly).toMatch(/requirePublicBaseUrl\s*\(/);
     expect(codeOnly).toMatch(/['"]\/mcp-servers\/oauth-callback['"]/);
+    expect(codeOnly).toMatch(
+      /app\.use\(['"]\/mcp-servers\/oauth-configuration['"][\s\S]*resolveMCPOAuthRedirectUri\s*\(/
+    );
   });
 
   it('preserves tenant scope across unauthenticated OAuth callbacks', () => {

@@ -59,6 +59,7 @@ import type {
   MCPOAuthDCRDiagnostic,
   MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
+  MCPOAuthStartFailure,
   MCPServerID,
   MessageSource,
   Params,
@@ -1453,6 +1454,11 @@ async function registerMCPServices(
     return error instanceof OAuthDCRFailure ? error.diagnostic : undefined;
   }
 
+  async function resolveMCPOAuthRedirectUri(): Promise<string> {
+    const baseUrl = await requirePublicBaseUrl();
+    return new URL('/mcp-servers/oauth-callback', baseUrl).toString();
+  }
+
   type StartTwoPhaseOAuthOptions = {
     mcpUrl: string;
     wwwAuthenticate: string;
@@ -1516,8 +1522,7 @@ async function registerMCPServices(
     const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
-    const baseUrl = await requirePublicBaseUrl();
-    const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
+    const redirectUri = await resolveMCPOAuthRedirectUri();
 
     const hasRfc9728 = !!opts.resourceMetadataUrl;
     const hasAsDirect = !!opts.prefetchedAuthServerMetadata;
@@ -2625,10 +2630,34 @@ async function registerMCPServices(
 
   app.service('mcp-servers/test-oauth').hooks({ before: { create: [ctx.requireAuth] } });
 
+  // Read-only browser callback configuration for pre-registering provider apps.
+  // This intentionally shares the exact resolver used when the flow starts.
+  app.use('/mcp-servers/oauth-configuration', {
+    async find() {
+      try {
+        return { success: true, redirect_uri: await resolveMCPOAuthRedirectUri() };
+      } catch (error) {
+        if (!(error instanceof PublicBaseUrlNotConfiguredError)) {
+          console.error(
+            `[OAuth Configuration] Failed category=${error instanceof Error ? error.name : 'unknown'}`
+          );
+        }
+        return {
+          success: false,
+          error:
+            error instanceof PublicBaseUrlNotConfiguredError
+              ? error.message
+              : 'OAuth redirect URL could not be resolved.',
+        };
+      }
+    },
+  });
+  app.service('mcp-servers/oauth-configuration').hooks({ before: { find: [ctx.requireAuth] } });
+
   // OAuth start endpoint
   app.use('/mcp-servers/oauth-start', {
     async create(
-      data: { mcp_url: string; mcp_server_id?: string; client_id?: string },
+      data: { mcp_url?: string; mcp_server_id?: string; client_id?: string },
       params?: AuthenticatedParams
     ) {
       try {
@@ -2657,15 +2686,23 @@ async function registerMCPServices(
         ) {
           return {
             success: false,
+            kind: 'configuration',
             error:
               'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
-          };
+          } satisfies MCPOAuthStartFailure;
         }
 
         // Once an ID is supplied, its tenant-scoped row is authoritative for
         // the provider URL and client configuration. The duplicate payload
         // fields remain accepted only for older callers.
         const effectiveMcpUrl = savedServer?.url ?? data.mcp_url;
+        if (!effectiveMcpUrl) {
+          return {
+            success: false,
+            kind: 'configuration',
+            error: 'OAuth requires a saved MCP server URL. Save changes, then restart OAuth.',
+          } satisfies MCPOAuthStartFailure;
+        }
 
         // PostgreSQL is the shared authority, so reject transient or stale
         // server input before the first outbound probe. Doing this only in the
@@ -2679,9 +2716,10 @@ async function registerMCPServices(
         ) {
           return {
             success: false,
+            kind: 'configuration',
             error:
               'PostgreSQL OAuth requires an enabled, saved MCP server matching this request. Save changes, then restart OAuth.',
-          };
+          } satisfies MCPOAuthStartFailure;
         }
 
         if (savedServer?.auth?.type === 'oauth') {
@@ -2727,8 +2765,9 @@ async function registerMCPServices(
         if (probeResponse.status !== 401) {
           return {
             success: false,
+            kind: 'oauth',
             error: 'Server did not return 401 — OAuth 2.1 authentication may not be required',
-          };
+          } satisfies MCPOAuthStartFailure;
         }
 
         const wwwAuthenticate = probeResponse.headers.get('www-authenticate') || '';
@@ -2742,8 +2781,9 @@ async function registerMCPServices(
         if (!discovery) {
           return {
             success: false,
+            kind: 'oauth',
             error: `Server returned 401 but does not advertise OAuth metadata. ${DISCOVERY_CASCADE_TRIED} None succeeded.`,
-          };
+          } satisfies MCPOAuthStartFailure;
         }
 
         const connection = params?.connection as { id?: string } | undefined;
@@ -2774,7 +2814,11 @@ async function registerMCPServices(
         } catch (err) {
           if (err instanceof PublicBaseUrlNotConfiguredError) {
             console.error('[OAuth Start]', err.message);
-            return { success: false, error: err.message };
+            return {
+              success: false,
+              kind: 'configuration',
+              error: err.message,
+            } satisfies MCPOAuthStartFailure;
           }
           throw err;
         }
@@ -2792,11 +2836,16 @@ async function registerMCPServices(
           `[OAuth Start] Failed category=${error instanceof Error ? error.name : 'unknown'}`
         );
         const diagnostic = oauthDcrDiagnostic(error);
+        const redirectUri = diagnostic
+          ? await resolveMCPOAuthRedirectUri().catch(() => null)
+          : null;
         return {
           success: false,
+          kind: diagnostic ? 'dcr' : 'oauth',
           error: error instanceof Error ? error.message : String(error),
           ...(diagnostic ? { diagnostic } : {}),
-        };
+          ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+        } satisfies MCPOAuthStartFailure;
       }
     },
   });

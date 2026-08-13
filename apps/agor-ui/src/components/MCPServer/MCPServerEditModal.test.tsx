@@ -6,7 +6,7 @@ const showSuccess = vi.fn();
 const showError = vi.fn();
 
 type FormFieldsMockProps = {
-  onSaveBeforeOAuthRetry?: () => Promise<boolean>;
+  onPrepareOAuthStart: () => Promise<string | null>;
 };
 
 vi.mock('@/utils/message', () => ({
@@ -21,7 +21,7 @@ vi.mock('@/utils/message', () => ({
 vi.mock('./MCPServerFormFields', async () => {
   const { Button, Form, Input } = await import('antd');
   return {
-    MCPServerFormFields: ({ onSaveBeforeOAuthRetry }: FormFieldsMockProps) => (
+    MCPServerFormFields: ({ onPrepareOAuthStart }: FormFieldsMockProps) => (
       <>
         <Form.Item label="Description" name="description">
           <Input />
@@ -32,9 +32,7 @@ vi.mock('./MCPServerFormFields', async () => {
         <Form.Item label="Client Secret" name="oauth_client_secret">
           <Input />
         </Form.Item>
-        <Button onClick={() => void onSaveBeforeOAuthRetry?.()}>
-          Save OAuth settings &amp; retry
-        </Button>
+        <Button onClick={() => void onPrepareOAuthStart()}>Start OAuth Flow</Button>
       </>
     ),
   };
@@ -77,7 +75,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     expect(showError).not.toHaveBeenCalled();
   });
 
-  it('persists edited OAuth client credentials without closing before a retry', async () => {
+  it('persists edited OAuth client credentials before the first OAuth start', async () => {
     const patch = vi.fn().mockResolvedValue({});
     const onClose = vi.fn();
     const client = {
@@ -108,7 +106,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     fireEvent.change(screen.getByLabelText('Client Secret'), {
       target: { value: 'fresh-client-secret' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save OAuth settings & retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start OAuth Flow' }));
 
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
     const updates = patch.mock.calls[0]?.[1] as { auth?: Record<string, unknown> };

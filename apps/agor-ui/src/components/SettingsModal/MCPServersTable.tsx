@@ -1,4 +1,9 @@
-import { type CreateMCPServerInput, type MCPServer, shortId } from '@agor-live/client';
+import {
+  type CreateMCPServerInput,
+  type MCPServer,
+  shortId,
+  type UpdateMCPServerInput,
+} from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Badge,
@@ -56,7 +61,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
-  const [alreadyCreatedInOAuthFlow, setAlreadyCreatedInOAuthFlow] = useState(false);
+  const [createdServerId, setCreatedServerId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -100,16 +105,28 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     return data;
   };
 
-  // Save server first for OAuth flow in create mode (returns new server ID)
-  const handleSaveFirstForCreate = async (): Promise<string | null> => {
+  // Persist the current form before every OAuth start. The saved row is the
+  // daemon's tenant-scoped authority for provider URL and client credentials.
+  const prepareOAuthStartForCreate = async (): Promise<string | null> => {
     if (!client) return null;
     try {
       await createForm.validateFields();
       const data = buildCreateData(createForm.getFieldsValue(true));
-      const result = await client.service('mcp-servers').create(data);
-      setAlreadyCreatedInOAuthFlow(true);
-      return (result as MCPServer).mcp_server_id || null;
-    } catch {
+
+      if (!createdServerId) {
+        const result = await client.service('mcp-servers').create(data);
+        const newServerId = (result as MCPServer).mcp_server_id || null;
+        setCreatedServerId(newServerId);
+        return newServerId;
+      }
+
+      const { name: _name, source: _source, ...updates } = data;
+      await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
+      return createdServerId;
+    } catch (error) {
+      if (!(error && typeof error === 'object' && 'errorFields' in error)) {
+        showError(error instanceof Error ? error.message : 'Failed to save MCP server');
+      }
       return null;
     }
   };
@@ -120,11 +137,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     setTransport('stdio');
     setAuthType('none');
     setTestResult(null);
-    setAlreadyCreatedInOAuthFlow(false);
+    setCreatedServerId(null);
   };
 
   const handleCreate = () => {
-    if (alreadyCreatedInOAuthFlow) {
+    if (createdServerId) {
       resetCreateModal();
       return;
     }
@@ -430,8 +447,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         open={createModalOpen}
         onOk={handleCreate}
         onCancel={resetCreateModal}
-        okText={alreadyCreatedInOAuthFlow ? 'Done' : 'Create'}
+        okText={createdServerId ? 'Done' : 'Create'}
         width={600}
+        destroyOnHidden
       >
         <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}>
           <MCPServerFormFields
@@ -442,10 +460,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             onAuthTypeChange={setAuthType}
             form={createForm}
             client={client}
+            serverId={createdServerId ?? undefined}
             onTestConnection={handleCreateTestConnection}
             testing={testing}
             testResult={testResult}
-            onSaveFirst={handleSaveFirstForCreate}
+            onPrepareOAuthStart={prepareOAuthStartForCreate}
           />
         </Form>
       </Modal>
