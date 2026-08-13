@@ -349,7 +349,23 @@ jobs:
             sleep 1
           done
           curl -fsS http://localhost:3030/health >/dev/null
-          curl -fsS http://localhost:3030/ui/ | grep -qi '<!doctype html>'
+          curl -fsS http://localhost:3030/ui/ > "$ROOT/index.html"
+          grep -qi '<!doctype html>' "$ROOT/index.html"
+          ENTRY_ASSET=$(node - "$ROOT/index.html" <<'NODE'
+          const html = require('node:fs').readFileSync(process.argv[2], 'utf8');
+          const entry = html.match(/<script[^>]+src=["']([^"']+\.js)["']/i)?.[1];
+          if (!entry) throw new Error('Packaged UI has no JavaScript entry asset');
+          process.stdout.write(entry);
+          NODE
+          )
+          case "$ENTRY_ASSET" in
+            /ui/*) ;;
+            *) echo "::error::Unexpected packaged UI entry path: $ENTRY_ASSET"; exit 1 ;;
+          esac
+          curl -fsS -D "$ROOT/asset.headers" -o "$ROOT/entry.js" \
+            "http://localhost:3030${ENTRY_ASSET}"
+          grep -Eqi '^content-type:.*(javascript|ecmascript)' "$ROOT/asset.headers"
+          test "$(wc -c < "$ROOT/entry.js")" -gt 1000
 
           node --input-type=module - "$ROOT" "$PACKAGE_ROOT" <<'NODE'
           import { existsSync } from 'node:fs';
