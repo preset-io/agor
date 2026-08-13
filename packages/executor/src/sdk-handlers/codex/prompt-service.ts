@@ -755,9 +755,9 @@ export class CodexPromptService {
       // Resolve the Authorization header via the shared MCP auth helper —
       // covers bearer / JWT (with token-mint) / OAuth (with cached & DB
       // tokens). Codex passes the bearer through `bearer_token_env_var`,
-      // not a header map, so we extract the bearer token and route it via
-      // an env var. Non-bearer schemes log a warning since Codex's CLI
-      // only supports bearer auth.
+      // while custom headers use `env_http_headers`, so secret values stay
+      // out of the SDK's generated `--config` arguments. Non-bearer schemes
+      // log a warning since Codex's CLI only supports bearer auth.
       try {
         const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
@@ -766,7 +766,15 @@ export class CodexPromptService {
         const customHeaders = headers ? { ...headers } : undefined;
         if (customHeaders) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
-          serverConfig.headers = customHeaders;
+          const envHttpHeaders: Record<string, string> = {};
+          for (const [index, [headerName, headerValue]] of Object.entries(
+            customHeaders
+          ).entries()) {
+            const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}_HEADER_${index + 1}`;
+            process.env[envVarName] = headerValue;
+            envHttpHeaders[headerName] = envVarName;
+          }
+          serverConfig.env_http_headers = envHttpHeaders;
           codexDebug(`      custom headers: ${Object.keys(customHeaders).length} header(s)`);
         }
         if (authHeader) {
