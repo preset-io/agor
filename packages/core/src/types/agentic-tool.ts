@@ -332,11 +332,19 @@ export interface CodexDeviceAuthStatus {
  * - `idle`: no attempt exists for this user.
  * - `awaiting_code`: an authorize URL was issued; the daemon is waiting for the
  *   user to approve and paste the `CODE#STATE` back.
+ * - `exchanging`: a pasted code was accepted and reserved the attempt; the
+ *   daemon is exchanging it and writing credentials. Blocks a concurrent submit.
  * - `success`: the code was exchanged and `~/.claude/.credentials.json` written.
  * - `expired`: the daemon-side PKCE/state freshness window elapsed unused.
  * - `error`: the attempt failed for another reason; start a fresh one.
  */
-export type ClaudeOAuthPhase = 'idle' | 'awaiting_code' | 'success' | 'expired' | 'error';
+export type ClaudeOAuthPhase =
+  | 'idle'
+  | 'awaiting_code'
+  | 'exchanging'
+  | 'success'
+  | 'expired'
+  | 'error';
 
 /**
  * Non-secret status of a Claude OAuth sign-in attempt. The authorize URL is

@@ -33,7 +33,7 @@
  * Design + verified-vs-assumed constants: context/explorations/claude-code-oauth-signin.md
  */
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
@@ -110,13 +110,13 @@ interface PkcePair {
 }
 
 /** RFC 7636 S256: challenge = base64url(sha256(verifier)). */
-function generatePkce(): PkcePair {
+export function generatePkce(): PkcePair {
   const verifier = base64url(randomBytes(32));
   const challenge = base64url(createHash('sha256').update(verifier).digest());
   return { verifier, challenge };
 }
 
-function buildAuthorizeUrl(challenge: string, state: string): string {
+export function buildAuthorizeUrl(challenge: string, state: string): string {
   const url = new URL(CLAUDE_AUTHORIZE_URL);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', CLAUDE_CLIENT_ID);
@@ -140,13 +140,35 @@ interface ExchangedTokens {
   subscriptionType?: string;
 }
 
-/** Split the pasted `CODE#STATE`; the state half is optional on some pages. */
-function splitPastedCode(pasted: string): { code: string; state?: string } {
-  const [code, state] = pasted.trim().split('#', 2);
-  return { code, state: state || undefined };
+/**
+ * Parse the pasted `CODE#STATE`. State is REQUIRED and bound to the attempt: a
+ * bare code (no state, or empty state) is rejected rather than exchanged against
+ * the stored state, so an attacker who only has a victim's code cannot complete
+ * a sign-in the victim's browser started. Throws `BadRequest` on any deviation
+ * (missing/empty halves, more than one `#`).
+ */
+export function parsePastedCode(pasted: string): { code: string; state: string } {
+  const parts = pasted.trim().split('#');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new BadRequest(
+      'Paste the whole code shown after approval (it looks like `CODE#STATE`) — start over to get a fresh one.'
+    );
+  }
+  return { code: parts[0], state: parts[1] };
 }
 
-async function exchangeCodeForTokens(
+/** Constant-time string equality (avoids leaking the state via compare timing). */
+export function constantTimeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+/** Generous upper bound on a plausible token lifetime (> the 1-year setup-token). */
+const MAX_EXPIRES_IN_SEC = 400 * 24 * 60 * 60;
+
+export async function exchangeCodeForTokens(
   code: string,
   verifier: string,
   state: string
@@ -172,13 +194,29 @@ async function exchangeCodeForTokens(
 
   const body = (await res.json()) as Record<string, unknown>;
   const { access_token, refresh_token, expires_in, scope } = body;
-  if (typeof access_token !== 'string' || typeof refresh_token !== 'string') {
+  // A 2xx with a malformed body is a provider-contract break, not a user error:
+  // surface a sanitized failure rather than fabricating an expiry that would
+  // strand the session on a token we cannot actually refresh.
+  if (
+    typeof access_token !== 'string' ||
+    !access_token.trim() ||
+    typeof refresh_token !== 'string' ||
+    !refresh_token.trim()
+  ) {
     throw new BadRequest('Claude sign-in response was missing tokens — try again.');
+  }
+  if (
+    typeof expires_in !== 'number' ||
+    !Number.isFinite(expires_in) ||
+    expires_in <= 0 ||
+    expires_in > MAX_EXPIRES_IN_SEC
+  ) {
+    throw new BadRequest('Claude sign-in response had an invalid expiry — try again.');
   }
   return {
     accessToken: access_token,
     refreshToken: refresh_token,
-    expiresInSec: typeof expires_in === 'number' ? expires_in : 8 * 60 * 60,
+    expiresInSec: expires_in,
     scopes: typeof scope === 'string' && scope ? scope.split(' ') : CLAUDE_SCOPES,
     subscriptionType:
       typeof body.subscription_type === 'string' ? body.subscription_type : undefined,
@@ -219,6 +257,8 @@ interface OAuthAttempt {
   subscriptionType?: string;
   hint?: string;
   finishedAtMs?: number;
+  /** Set when a newer attempt replaces this one, so an in-flight submit bails. */
+  cancelled: boolean;
 }
 
 /** Minimal users-service surface — mirrors codex-auth-shared's structural typing. */
@@ -226,7 +266,12 @@ interface UsersServiceLike {
   get(id: UserID, params?: unknown): Promise<User>;
   patch(
     id: UserID,
-    data: { agentic_auth_methods: AgenticAuthMethods },
+    data: {
+      agentic_auth_methods?: AgenticAuthMethods;
+      // `null` deletes a stored credential field (applyAgenticToolsPatch), used
+      // to drop a previously pasted CLAUDE_CODE_OAUTH_TOKEN on OAuth success.
+      agentic_tools?: Partial<Record<'claude-code', Record<string, string | null>>>;
+    },
     params?: unknown
   ): Promise<unknown>;
 }
@@ -246,14 +291,38 @@ function statusOf(attempt: OAuthAttempt | undefined): ClaudeOAuthStatus {
 export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatabase) {
   const attempts = new Map<string, OAuthAttempt>();
 
+  /** True while `attempt` is still the live attempt for its user. */
+  function isCurrent(attempt: OAuthAttempt): boolean {
+    return !attempt.cancelled && attempts.get(attempt.key) === attempt;
+  }
+
   /**
-   * Abandoned flows would otherwise grow the map forever on long-running
-   * daemons — one entry per user who started and never finished a sign-in.
+   * Move an attempt to a terminal phase and drop its secrets promptly — the
+   * verifier and state are useless after the attempt ends and should not linger
+   * in memory until the TTL sweep evicts the record.
    */
-  function pruneFinishedAttempts(): void {
-    const cutoff = Date.now() - TERMINAL_ATTEMPT_TTL_MS;
+  function finish(attempt: OAuthAttempt, phase: ClaudeOAuthStatus['phase'], hint?: string): void {
+    attempt.phase = phase;
+    attempt.finishedAtMs = Date.now();
+    attempt.verifier = '';
+    attempt.state = '';
+    if (hint) attempt.hint = hint;
+  }
+
+  /**
+   * Expire overdue awaiting-code attempts, then evict long-finished ones.
+   * Without the expiry step an abandoned link would report `awaiting_code`
+   * forever and never be pruned. `exchanging` attempts are left alone — an
+   * in-flight exchange is bounded by the fetch timeout, not this clock.
+   */
+  function expireAndPrune(): void {
+    const now = Date.now();
+    const cutoff = now - TERMINAL_ATTEMPT_TTL_MS;
     for (const [key, attempt] of attempts) {
-      const terminal = attempt.phase !== 'awaiting_code';
+      if (attempt.phase === 'awaiting_code' && now >= attempt.expiresAtMs) {
+        finish(attempt, 'expired', 'The sign-in link expired — start over to get a fresh one.');
+      }
+      const terminal = attempt.phase !== 'awaiting_code' && attempt.phase !== 'exchanging';
       if (terminal && (attempt.finishedAtMs ?? 0) < cutoff) attempts.delete(key);
     }
   }
@@ -276,6 +345,10 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
 
   async function persist(attempt: OAuthAttempt, tokens: ExchangedTokens): Promise<void> {
     await runWithTenantDatabaseScope(db, attempt.tenantId, async () => {
+      // Final ownership gate immediately before the write: a replacement
+      // attempt registered during the exchange must not have its freshly written
+      // credential clobbered by this older one.
+      if (!isCurrent(attempt)) return;
       try {
         await writeClaudeAuthViaExecutor(
           buildClaudeCredentialsJson(tokens),
@@ -300,11 +373,11 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
         user: attempt.authUser,
         authenticated: true,
       });
-      // Flipping to `subscription` with no stored token is what routes this user
-      // to native on-disk auth in resolveTenantAgenticTool (no env injection).
-      // TODO: also clear any previously pasted agentic_tools['claude-code']
-      // .CLAUDE_CODE_OAUTH_TOKEN so a leftover paste can't out-rank the managed
-      // credentials file — the one case the resolver guard cannot cover.
+      // Flip to `subscription` AND drop any previously pasted
+      // CLAUDE_CODE_OAUTH_TOKEN: with the field gone, resolveTenantAgenticTool
+      // routes this user to native on-disk auth (no env injection), so the
+      // higher-precedence env var can't shadow the managed, refreshing file.
+      // `null` deletes just that field and leaves other Claude settings intact.
       await usersService.patch(
         attempt.userId,
         {
@@ -312,10 +385,67 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
             ...current.agentic_auth_methods,
             'claude-code': 'subscription',
           },
+          agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
         },
         { user: attempt.authUser, authenticated: true }
       );
     });
+  }
+
+  async function submit(key: string, pasted: string): Promise<ClaudeOAuthStatus> {
+    const attempt = attempts.get(key);
+    if (attempt?.phase !== 'awaiting_code') {
+      throw new BadRequest('No sign-in is in progress — start over to get a fresh link.');
+    }
+    if (Date.now() >= attempt.expiresAtMs) {
+      finish(attempt, 'expired', 'The sign-in link expired — start over to get a fresh one.');
+      throw new BadRequest('The sign-in link expired — start over to get a fresh one.');
+    }
+    // Validate the paste BEFORE reserving the attempt, so a malformed/wrong-state
+    // paste leaves the attempt in `awaiting_code` for a legitimate retry.
+    const { code, state } = parsePastedCode(pasted);
+    if (!constantTimeEqual(state, attempt.state)) {
+      throw new BadRequest('The pasted code did not match this sign-in — start over.');
+    }
+
+    // Reserve the attempt before the network round-trip: a concurrent submit now
+    // sees `exchanging` (not `awaiting_code`) and is rejected instead of racing a
+    // second exchange of the same code.
+    const { verifier, state: attemptState } = attempt;
+    attempt.phase = 'exchanging';
+
+    let tokens: ExchangedTokens;
+    try {
+      tokens = await exchangeCodeForTokens(code, verifier, attemptState);
+    } catch (err) {
+      // Let a still-current attempt be retried; a replaced one stays terminal.
+      if (isCurrent(attempt)) attempt.phase = 'awaiting_code';
+      throw err;
+    }
+
+    // Ownership gate after the exchange (persist re-checks again right before the
+    // write): a replacement `create({})` during the exchange wins.
+    if (!isCurrent(attempt)) return statusOf(attempts.get(key));
+
+    try {
+      await persist(attempt, tokens);
+    } catch (err) {
+      if (isCurrent(attempt)) {
+        finish(attempt, 'error', 'Signing in succeeded but saving the login failed — try again.');
+      }
+      throw err;
+    }
+
+    if (!isCurrent(attempt)) return statusOf(attempts.get(key));
+    finish(
+      attempt,
+      'success',
+      tokens.subscriptionType
+        ? `Signed in with Claude (${tokens.subscriptionType}).`
+        : 'Signed in with Claude.'
+    );
+    attempt.subscriptionType = tokens.subscriptionType;
+    return statusOf(attempt);
   }
 
   return {
@@ -324,7 +454,7 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
       params?: AuthenticatedParams
     ): Promise<ClaudeOAuthStatus> {
       const { authUser, userId, tenantId, key } = await requireContext(params);
-      pruneFinishedAttempts();
+      expireAndPrune();
 
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
@@ -338,33 +468,15 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
 
       // ── Submit step: a code was pasted back. Finish the existing attempt. ──
       if (data?.code?.trim()) {
-        const attempt = attempts.get(key);
-        if (attempt?.phase !== 'awaiting_code') {
-          throw new BadRequest('No sign-in is in progress — start over to get a fresh link.');
-        }
-        if (Date.now() >= attempt.expiresAtMs) {
-          attempt.phase = 'expired';
-          attempt.finishedAtMs = Date.now();
-          throw new BadRequest('The sign-in link expired — start over to get a fresh one.');
-        }
-        const { code, state } = splitPastedCode(data.code);
-        // The pasted state must match ours (CSRF / mix-up defense). Fall back to
-        // our own state when the page omitted it, per the paste-back contract.
-        if (state && state !== attempt.state) {
-          throw new BadRequest('The pasted code did not match this sign-in — start over.');
-        }
-        const tokens = await exchangeCodeForTokens(code, attempt.verifier, attempt.state);
-        await persist(attempt, tokens);
-        attempt.phase = 'success';
-        attempt.subscriptionType = tokens.subscriptionType;
-        attempt.finishedAtMs = Date.now();
-        attempt.hint = tokens.subscriptionType
-          ? `Signed in with Claude (${tokens.subscriptionType}).`
-          : 'Signed in with Claude.';
-        return statusOf(attempt);
+        return submit(key, data.code);
       }
 
       // ── Start step: issue a fresh authorize URL, replacing any prior attempt. ──
+      // Invalidate the prior attempt up front so an in-flight submit of the old
+      // code cannot clobber this fresh one when it lands.
+      const prior = attempts.get(key);
+      if (prior) prior.cancelled = true;
+
       // Resolve the destination identity up front so a strict-mode user with no
       // unix_username fails fast instead of after approving in the browser.
       const identity = await resolveCodexUnixIdentity(
@@ -392,6 +504,7 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
         state,
         verificationUrl: buildAuthorizeUrl(pkce.challenge, state),
         expiresAtMs: Date.now() + ATTEMPT_LIFETIME_MS,
+        cancelled: false,
       };
       attempts.set(key, attempt);
       return statusOf(attempt);
@@ -399,7 +512,7 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
 
     async find(params?: AuthenticatedParams): Promise<ClaudeOAuthStatus> {
       const { key } = await requireContext(params);
-      pruneFinishedAttempts();
+      expireAndPrune();
       return statusOf(attempts.get(key));
     },
   };
