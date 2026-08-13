@@ -27,7 +27,19 @@ import {
   TeamOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Input, List, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import {
+  Alert,
+  Button,
+  Divider,
+  Input,
+  List,
+  Modal,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
@@ -1643,30 +1655,28 @@ export function OnboardingWizard({
         </div>
       </div>
 
-      {/* Concept pills */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 }}>
+      {/* Glossary — reference text, not interactive */}
+      <Divider titlePlacement="start" plain style={{ margin: '24px 0 12px' }}>
+        <Text
+          style={{
+            color: TEXT_MUTED,
+            fontSize: 11,
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
+          }}
+        >
+          Quick reference
+        </Text>
+      </Divider>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {[
           { term: 'Branch', def: 'isolated workspace per task' },
           { term: 'Session', def: 'conversation with your AI' },
           { term: 'Board', def: 'kanban view of all branches' },
         ].map(({ term, def }) => (
-          <div
-            key={term}
-            style={{
-              background:
-                'linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 100%)',
-              border: '1px solid rgba(255,255,255,0.13)',
-              backdropFilter: 'blur(12px)',
-              WebkitBackdropFilter: 'blur(12px)',
-              borderRadius: 20,
-              padding: '4px 12px',
-              fontSize: 12,
-              color: TEXT_SECONDARY,
-              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09)',
-            }}
-          >
-            <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> - {def}
-          </div>
+          <Text key={term} style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
+            <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> — {def}
+          </Text>
         ))}
       </div>
 
