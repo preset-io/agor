@@ -1,8 +1,7 @@
-import { randomBytes } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import type { ClaudeAuthFilePayload, ExecutorResult } from '../payload-types.js';
 import { resolveClaudeCredentialsPath } from '../user-runtime-paths.js';
+import { writeCredentialFileAtomically } from './credential-file-io.js';
 import type { CommandOptions } from './index.js';
 
 /**
@@ -30,19 +29,7 @@ export async function handleClaudeAuthFile(
     return { success: true, data: { status: 'deleted' } };
   }
 
-  const dir = join(target, '..');
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  await chmod(dir, 0o700);
-  const temporary = join(dir, `.credentials.json.${randomBytes(6).toString('hex')}`);
-  try {
-    await writeFile(temporary, payload.params.content, { mode: 0o600, flag: 'wx' });
-    await chmod(temporary, 0o600);
-    await rename(temporary, target);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-
-  const readBack = await readFile(target, 'utf8');
+  const readBack = await writeCredentialFileAtomically(target, payload.params.content);
   if (readBack !== payload.params.content) {
     return {
       success: false,
