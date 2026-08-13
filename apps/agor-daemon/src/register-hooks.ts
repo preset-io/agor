@@ -996,6 +996,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const protectWidgetMessageWrites = protectExternalWidgetMessageWrites((messageId) =>
     messagesService.findByIdForScopeCheck(messageId as MessageID)
   );
+  const protectProviderFailureMetadata = protectExternalProviderFailureMetadata((messageId) =>
+    messagesService.findByIdForScopeCheck(messageId as MessageID)
+  );
   const protectPermissionMessageWrites = protectExternalPermissionMessageWrites((messageId) =>
     messagesService.findByIdForScopeCheck(messageId as MessageID)
   );
@@ -1021,7 +1024,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create messages'),
-        protectExternalProviderFailureMetadata,
+        protectProviderFailureMetadata,
         protectWidgetMessageWrites,
         protectPermissionMessageWrites,
         ...(branchRbacEnabled
@@ -1043,13 +1046,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ),
       ],
       update: [
-        protectExternalProviderFailureMetadata,
+        protectProviderFailureMetadata,
         protectWidgetMessageWrites,
         protectPermissionMessageWrites,
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),
-        protectExternalProviderFailureMetadata,
+        protectProviderFailureMetadata,
         ...(branchRbacEnabled
           ? [
               resolveSessionContext(),

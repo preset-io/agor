@@ -8,7 +8,14 @@ import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { resolveApiKey } from '@agor/core/config';
 import type { SessionRepository, TaskRepository, TenantScopeAwareDatabase } from '@agor/core/db';
 import { Forbidden } from '@agor/core/feathers';
-import type { AgenticToolName, HookContext, Message, TaskID, UserID } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  HookContext,
+  Message,
+  MessageID,
+  TaskID,
+  UserID,
+} from '@agor/core/types';
 import {
   canonicalTenantAgenticTool,
   isAgenticToolName,
@@ -29,6 +36,8 @@ function providerCreditContent(toolDisplayName: string): string {
 
 type ProviderFailureKind = 'missing_credential' | 'provider_credit_exhausted';
 
+export type ProviderFailureMessageLoader = (messageId: MessageID) => Promise<Message | null>;
+
 function declaresProviderFailure(data: unknown): boolean {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
   const metadata = (data as { metadata?: unknown }).metadata;
@@ -48,11 +57,34 @@ export function assertExternalProviderFailureMetadataAllowed(data: unknown): voi
   }
 }
 
-/** Keep the recovery-panel discriminator owned by daemon classification. */
-export function protectExternalProviderFailureMetadata(context: HookContext): HookContext {
-  if (!context.params.provider) return context;
-  assertExternalProviderFailureMetadataAllowed(context.data);
-  return context;
+function changesProviderFailureOwnedFields(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const record = data as Record<string, unknown>;
+  return 'metadata' in record || 'type' in record || 'role' in record;
+}
+
+/**
+ * Keep the recovery-panel discriminator and its render gate owned by daemon
+ * classification. Public patching uses a shallow repository merge, so an
+ * otherwise harmless-looking metadata/type/role patch could erase or hide a
+ * trusted classification unless the existing record is checked first.
+ */
+export function protectExternalProviderFailureMetadata(loadMessage: ProviderFailureMessageLoader) {
+  return async (context: HookContext): Promise<HookContext> => {
+    if (!context.params.provider) return context;
+    assertExternalProviderFailureMetadataAllowed(context.data);
+
+    if (context.method !== 'patch' || context.id === null || context.id === undefined) {
+      return context;
+    }
+    if (!changesProviderFailureOwnedFields(context.data)) return context;
+
+    const existing = await loadMessage(String(context.id) as MessageID);
+    if (existing && declaresProviderFailure(existing)) {
+      throw new Forbidden('Provider failure classification is daemon-owned');
+    }
+    return context;
+  };
 }
 
 function classifyProviderFailure(
@@ -86,6 +118,8 @@ const PROVIDER_CREDIT_SIGNALS = [
   'billing_hard_limit_reached',
   'payment_required',
 ] as const;
+const PROVIDER_CREDIT_SIGNAL_PATTERN = new RegExp(`\\b(?:${PROVIDER_CREDIT_SIGNALS.join('|')})\\b`);
+const PROVIDER_ERROR_SEARCH_WINDOW = 500;
 
 function textContent(content: Message['content'] | undefined): string {
   if (typeof content === 'string') return content;
@@ -101,16 +135,19 @@ function isProviderCreditFailure(
   tool: AgenticToolName,
   content: Message['content'] | undefined
 ): boolean {
-  const text = textContent(content).trim().toLowerCase();
-  if (!text || text.length > 500) return false;
+  const text = textContent(content).toLowerCase();
+  if (!text) return false;
 
-  const isAnthropicCreditFailure =
-    tool === 'claude-code' && /\bcredit balance is too low\b/.test(text);
-  const hasStableCreditSignal = new RegExp(`\\b(?:${PROVIDER_CREDIT_SIGNALS.join('|')})\\b`).test(
-    text
-  );
-
-  return isAnthropicCreditFailure || hasStableCreditSignal;
+  // Claude's SDK joins its error array with newlines. Bound each error's
+  // search window instead of rejecting the whole joined response when one
+  // error is long; this still avoids classifying arbitrary distant prose.
+  return text.split(/\r?\n/).some((error) => {
+    const searchWindow = error.slice(0, PROVIDER_ERROR_SEARCH_WINDOW);
+    const isAnthropicCreditFailure =
+      tool === 'claude-code' && /\bcredit balance is too low\b/.test(searchWindow);
+    const hasStableCreditSignal = PROVIDER_CREDIT_SIGNAL_PATTERN.test(searchWindow);
+    return isAnthropicCreditFailure || hasStableCreditSignal;
+  });
 }
 
 function hasResolvedCredential(

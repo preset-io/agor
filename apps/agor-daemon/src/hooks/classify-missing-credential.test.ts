@@ -220,6 +220,68 @@ describe('classifyMissingCredentialFailure', () => {
     expect((ctx.data as Message).metadata?.error_kind).toBe('provider_credit_exhausted');
   });
 
+  it('classifies a billing signal within the bounded search window of a long error', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(
+      makeContext({
+        ...zeroTurnResult,
+        content: [{ type: 'text', text: `${'x'.repeat(480)} payment_required ${'x'.repeat(40)}` }],
+      })
+    );
+
+    expect((ctx.data as Message).metadata?.error_kind).toBe('provider_credit_exhausted');
+  });
+
+  it('does not classify a billing signal beyond the bounded search window', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(
+      makeContext({
+        ...zeroTurnResult,
+        content: [{ type: 'text', text: `${'x'.repeat(500)} payment_required` }],
+      })
+    );
+
+    expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+    expect((ctx.data as Message).content).toEqual([
+      { type: 'text', text: `${'x'.repeat(500)} payment_required` },
+    ]);
+  });
+
+  it('checks each joined SDK error within its own bounded search window', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(
+      makeContext({
+        ...sdkErrorBillingResult,
+        content: [
+          {
+            type: 'text',
+            text: `${'x'.repeat(600)}\ncredit balance is too low`,
+          },
+        ],
+      })
+    );
+
+    expect((ctx.data as Message).metadata?.error_kind).toBe('provider_credit_exhausted');
+  });
+
   it('does not classify ordinary rate-limit text or arbitrary quota prose', async () => {
     vi.mocked(resolveApiKey).mockResolvedValue({
       apiKey: 'sk-ant-user-key',
@@ -388,25 +450,61 @@ describe('classifyMissingCredentialFailure', () => {
 });
 
 describe('protectExternalProviderFailureMetadata', () => {
-  it('rejects externally supplied recovery-panel metadata', () => {
+  const protect = protectExternalProviderFailureMetadata(async () => null);
+
+  it('rejects externally supplied recovery-panel metadata', async () => {
     const context = makeContext({
       metadata: { error_kind: 'provider_credit_exhausted', tool: 'claude-code' },
     });
 
-    expect(() => protectExternalProviderFailureMetadata(context)).toThrow(
+    await expect(protect(context)).rejects.toThrow(
       'Provider failure metadata can only be classified by the daemon'
     );
   });
 
-  it('allows executor markers before daemon classification and internal projections', () => {
+  it('allows executor markers before daemon classification and internal projections', async () => {
     const externalContext = makeContext({ metadata: { is_zero_turn_result: true } });
-    expect(protectExternalProviderFailureMetadata(externalContext)).toBe(externalContext);
+    await expect(protect(externalContext)).resolves.toBe(externalContext);
 
     const internalContext = makeContext({
       metadata: { error_kind: 'missing_credential', tool: 'claude-code' },
     });
     internalContext.params.provider = undefined;
-    expect(protectExternalProviderFailureMetadata(internalContext)).toBe(internalContext);
+    await expect(protect(internalContext)).resolves.toBe(internalContext);
+  });
+
+  it.each([
+    ['clearing metadata', { metadata: {} }],
+    ['changing the classified tool', { metadata: { tool: 'codex' } }],
+    ['changing the message type', { type: 'assistant' }],
+    ['changing the message role', { role: MessageRole.ASSISTANT }],
+  ])('rejects external patch attempts at %s', async (_label, data) => {
+    const context = makeContext(data);
+    context.method = 'patch';
+    context.id = 'message-1';
+
+    const patchProtect = protectExternalProviderFailureMetadata(
+      async () =>
+        ({
+          metadata: { error_kind: 'provider_credit_exhausted', tool: 'claude-code' },
+        }) as Message
+    );
+
+    await expect(patchProtect(context)).rejects.toThrow(
+      'Provider failure classification is daemon-owned'
+    );
+  });
+
+  it('allows external content patches to ordinary messages', async () => {
+    const context = makeContext({ content: 'edited' });
+    context.method = 'patch';
+    context.id = 'message-1';
+
+    const loadMessage = vi.fn().mockResolvedValue({ metadata: {} } as Message);
+    const patchProtect = protectExternalProviderFailureMetadata(loadMessage);
+
+    await expect(patchProtect(context)).resolves.toBe(context);
+    expect(loadMessage).not.toHaveBeenCalled();
   });
 
   it('rejects forged recovery metadata in bulk payloads', () => {

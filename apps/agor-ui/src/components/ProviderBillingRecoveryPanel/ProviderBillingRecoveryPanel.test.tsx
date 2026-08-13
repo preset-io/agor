@@ -18,7 +18,7 @@ describe('ProviderBillingRecoveryPanel', () => {
     expect(onOpenSettings).toHaveBeenCalledWith('claude-code');
 
     const consoleLink = screen.getByRole('link', { name: /Open Claude Code's console/i });
-    expect(consoleLink).toHaveAttribute('href', 'https://platform.claude.com/settings/keys');
+    expect(consoleLink).toHaveAttribute('href', 'https://platform.claude.com/settings/billing');
     expect(screen.queryByText(/credit balance is too low/i)).not.toBeInTheDocument();
   });
 });

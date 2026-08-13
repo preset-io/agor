@@ -1,4 +1,4 @@
-import { AGENTIC_TOOL_DISPLAY_NAMES, AGENTIC_TOOL_KEY_CREATION_URL } from '@agor/agentic-tools';
+import { AGENTIC_TOOL_BILLING_URL, AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import type { AgenticToolName } from '@agor-live/client';
 import { Button, Space, Typography, theme } from 'antd';
 import type React from 'react';
@@ -18,7 +18,7 @@ export const ProviderBillingRecoveryPanel: React.FC<ProviderBillingRecoveryPanel
 }) => {
   const { token } = theme.useToken();
   const displayName = AGENTIC_TOOL_DISPLAY_NAMES[tool] ?? tool;
-  const accountUrl = AGENTIC_TOOL_KEY_CREATION_URL[tool];
+  const accountUrl = AGENTIC_TOOL_BILLING_URL[tool];
 
   return (
     <SystemMessage
