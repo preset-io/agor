@@ -66,6 +66,7 @@ import {
   modelLabelForTool,
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
+import { ClaudeOAuthSignIn } from '../ClaudeAuth';
 import { CodexAuthSettings } from '../CodexAuth';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
@@ -1852,6 +1853,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   <Radio.Button value="subscription">Claude subscription</Radio.Button>
                   <Radio.Button value="api_key">API key</Radio.Button>
                 </Radio.Group>
+              </FieldRow>
+            )}
+            {tool === 'claude-code' && authMethod === 'subscription' && isSelf && (
+              <FieldRow
+                label="Sign in with Claude"
+                tooltip="Opens Claude's sign-in page; paste the code it shows back here. Agor stores the login on the server — no token to copy."
+              >
+                {/* onVerified is a no-op: the daemon patches the user on success,
+                    and the realtime update refreshes this surface. */}
+                <ClaudeOAuthSignIn client={client} onVerified={() => {}} autoStart={false} />
               </FieldRow>
             )}
             <ApiKeyFields
