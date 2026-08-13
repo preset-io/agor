@@ -200,8 +200,11 @@ export class AgorExecutor {
       `[executor] Received ${task.termination_request.cause} termination request; stopping SDK`
     );
     markCoordinatorTerminationAbort(this.abortController);
-    this.heartbeat?.stop();
-    this.heartbeat = null;
+    // Keep task-scoped heartbeat/pulse reporting alive until ToolRegistry.execute
+    // and provider cleanup actually return. STOPPING is still live work; hiding
+    // its liveness here makes a slow or ignored cancellation indistinguishable
+    // from a dead executor. executeTask's finally stops telemetry immediately
+    // before the quiescence acknowledgement.
     this.watchdog?.stop();
     this.watchdog = null;
     this.abortController.abort();

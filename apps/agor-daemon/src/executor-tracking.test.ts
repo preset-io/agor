@@ -43,6 +43,42 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
       }
     });
 
+    it('waits through transient strict-mode EPERM after cooperative quiescence', async () => {
+      const owner = {};
+      const inspectGroupForTest = vi
+        .fn<
+          (
+            pgid: number,
+            signal?: 0 | NodeJS.Signals,
+            asUser?: string
+          ) => 'present' | 'absent' | 'unverified'
+        >()
+        .mockReturnValueOnce('unverified')
+        .mockReturnValue('absent');
+      trackExecutorProcess(
+        {
+          sessionId: 'session-strict-wrapper',
+          taskId: 'task-strict-wrapper',
+          pid: process.pid,
+          asUser: 'alice',
+        },
+        owner
+      );
+      try {
+        await expect(
+          containExecutorProcess(
+            'session-strict-wrapper',
+            'task-strict-wrapper',
+            { preSignalGraceMs: 25, pollMs: 1, inspectGroupForTest },
+            owner
+          )
+        ).resolves.toEqual({ status: 'verified_absent' });
+        expect(inspectGroupForTest).toHaveBeenCalledTimes(2);
+      } finally {
+        untrackExecutorProcess('session-strict-wrapper', 'task-strict-wrapper', owner);
+      }
+    });
+
     it('kills a process group whose leader and descendant ignore SIGTERM', async () => {
       const script = `
         const { spawn } = require('node:child_process');

@@ -11,7 +11,12 @@
 import type { Message, Task } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 
-import { type Block, groupMessagesIntoBlocks, isVerifiedRuntimeInterruption } from './TaskBlock';
+import {
+  type Block,
+  groupMessagesIntoBlocks,
+  isTaskRuntimeLive,
+  isVerifiedRuntimeInterruption,
+} from './TaskBlock';
 
 function userMessage(index: number, id: string): Message {
   return {
@@ -178,5 +183,15 @@ describe('verified runtime interruption projection', () => {
         true
       )
     ).toBe(false);
+  });
+});
+
+describe('live runtime projection', () => {
+  it.each(['running', 'stopping'])('keeps progress visible while the Task is %s', (status) => {
+    expect(isTaskRuntimeLive({ status } as Task)).toBe(true);
+  });
+
+  it.each(['stopped', 'completed', 'failed'])('settles progress after the Task is %s', (status) => {
+    expect(isTaskRuntimeLive({ status } as Task)).toBe(false);
   });
 });

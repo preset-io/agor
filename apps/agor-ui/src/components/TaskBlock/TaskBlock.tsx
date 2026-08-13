@@ -125,6 +125,11 @@ export function isVerifiedRuntimeInterruption(task: Task, isLatestTask = false):
   );
 }
 
+/** STOPPING is still live until executor quiescence/containment is authoritative. */
+export function isTaskRuntimeLive(task: Task): boolean {
+  return task.status === TaskStatus.RUNNING || task.status === TaskStatus.STOPPING;
+}
+
 function RuntimeInterruptionNotice({
   task,
   sessionId,
@@ -482,6 +487,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     client = null,
   }) => {
     const { token } = theme.useToken();
+    const runtimeLive = isTaskRuntimeLive(task);
 
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
@@ -791,7 +797,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               agentic_tool={agentic_tool}
                               userById={userById}
                               currentUserId={task.created_by}
-                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              isTaskRunning={runtimeLive}
                               sessionId={sessionId}
                               onPermissionDecision={onPermissionDecision}
                               isFirstPendingPermission={isFirstPending}
@@ -811,7 +817,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                             <AgentChain
                               messages={block.messages}
-                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              isTaskRunning={runtimeLive}
                               isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
                             />
                           </div>
@@ -835,11 +841,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   {/* Keep latest TODO visible even after completion (Claude parity). */}
                   <StickyTodoRenderer messages={messages} taskStatus={task.status} />
 
-                  {/* Show typing indicator whenever task is actively running.
+                  {/* Show typing indicator whenever the executor may still be live.
                       Marked as a conversation block so its unmount at stream
                       end gives search one final structural re-scan that picks
                       up the finished message text. */}
-                  {task.status === TaskStatus.RUNNING && (
+                  {runtimeLive && (
                     <div data-conversation-block style={{ margin: `${token.sizeUnit}px 0` }}>
                       <Bubble
                         placement="start"

@@ -2655,7 +2655,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
             }
             if (typeof body.confirmation !== 'string') {
-              throw new BadRequest(`Type ${shortId(taskId)} to confirm force-fail.`);
+              throw new BadRequest('Type STOP to confirm force-fail.');
             }
             const failedTask = await forceFailUnverifiedTask({
               app,

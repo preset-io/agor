@@ -204,14 +204,15 @@ async function waitForAbsence(
   pgid: number,
   timeoutMs: number,
   pollMs: number,
-  asUser?: string
+  asUser?: string,
+  inspect: typeof inspectGroup = inspectGroup
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (inspectGroup(pgid, 0, asUser) === 'absent') return true;
+    if (inspect(pgid, 0, asUser) === 'absent') return true;
     await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
   }
-  return inspectGroup(pgid, 0, asUser) === 'absent';
+  return inspect(pgid, 0, asUser) === 'absent';
 }
 
 export function trackExecutorProcess(
@@ -260,6 +261,12 @@ async function containExecutorIdentity(
     pollMs?: number;
     /** A recovered identity cannot safely signal a group after its leader exited. */
     recovered?: boolean;
+    /** Deterministic test seam for transient cross-UID inspection results. */
+    inspectGroupForTest?: (
+      pgid: number,
+      signal?: 0 | NodeJS.Signals,
+      asUser?: string
+    ) => 'present' | 'absent' | 'unverified';
   } = {}
 ): Promise<ContainmentResult> {
   if (process.platform !== 'linux' && process.platform !== 'darwin') {
@@ -276,9 +283,31 @@ async function containExecutorIdentity(
   ) {
     return { status: 'verified_absent' };
   }
-  const initial = inspectGroup(tracked.pgid, 0, tracked.asUser);
-  if (initial === 'absent') return { status: 'verified_absent' };
-  if (initial === 'unverified') {
+  const inspect = options.inspectGroupForTest ?? inspectGroup;
+  let inspection = inspect(tracked.pgid, 0, tracked.asUser);
+  if (inspection === 'absent') return { status: 'verified_absent' };
+
+  // A strict-mode executor runs below a root-owned sudo wrapper in the same
+  // process group. After the scoped executor acknowledges quiescence, its
+  // user may temporarily get EPERM while that wrapper unwinds. Honor the
+  // cooperative grace before treating this transient inspection as durable
+  // uncertainty; absence must still be observed explicitly.
+  if (options.preSignalGraceMs) {
+    if (
+      await waitForAbsence(
+        tracked.pgid,
+        options.preSignalGraceMs,
+        options.pollMs ?? 50,
+        tracked.asUser,
+        inspect
+      )
+    ) {
+      return { status: 'verified_absent' };
+    }
+    inspection = inspect(tracked.pgid, 0, tracked.asUser);
+  }
+
+  if (inspection === 'unverified') {
     return {
       status: 'unverified',
       reason: tracked.asUser
@@ -308,20 +337,8 @@ async function containExecutorIdentity(
     }
   }
 
-  if (
-    options.preSignalGraceMs &&
-    (await waitForAbsence(
-      tracked.pgid,
-      options.preSignalGraceMs,
-      options.pollMs ?? 50,
-      tracked.asUser
-    ))
-  ) {
-    return { status: 'verified_absent' };
-  }
-
   const signal = (value: NodeJS.Signals): ContainmentResult | undefined => {
-    const result = inspectGroup(tracked.pgid, value, tracked.asUser);
+    const result = inspect(tracked.pgid, value, tracked.asUser);
     if (result === 'present') return undefined;
     if (result === 'absent') return { status: 'verified_absent' };
     return { status: 'unverified', reason: `${value} process-group signal was not authorized.` };
@@ -337,7 +354,8 @@ async function containExecutorIdentity(
       tracked.pgid,
       options.termGraceMs ?? DEFAULT_EXECUTOR_TERM_GRACE_MS,
       options.pollMs ?? 50,
-      tracked.asUser
+      tracked.asUser,
+      inspect
     )
   ) {
     return { status: 'verified_absent' };
@@ -351,7 +369,8 @@ async function containExecutorIdentity(
       tracked.pgid,
       options.killGraceMs ?? DEFAULT_EXECUTOR_KILL_GRACE_MS,
       options.pollMs ?? 50,
-      tracked.asUser
+      tracked.asUser,
+      inspect
     )
   ) {
     return { status: 'verified_absent' };
@@ -368,6 +387,12 @@ export async function containExecutorProcess(
     termGraceMs?: number;
     killGraceMs?: number;
     pollMs?: number;
+    /** Deterministic test seam for transient cross-UID inspection results. */
+    inspectGroupForTest?: (
+      pgid: number,
+      signal?: 0 | NodeJS.Signals,
+      asUser?: string
+    ) => 'present' | 'absent' | 'unverified';
   } = {},
   owner?: object
 ): Promise<ContainmentResult> {

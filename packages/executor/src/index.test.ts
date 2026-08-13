@@ -110,7 +110,7 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(exit).toHaveBeenCalledWith(70);
   });
 
-  it('aborts immediately on the durable stopping patch and reports quiescence', async () => {
+  it('aborts immediately but retains liveness until it can report quiescence', async () => {
     const reportTerminationComplete = vi.fn().mockResolvedValue({});
     const heartbeatStop = vi.fn();
     const executor = new AgorExecutor({
@@ -142,7 +142,7 @@ describe('AgorExecutor watchdog handoff', () => {
     });
 
     expect(executor.abortController.signal.aborted).toBe(true);
-    expect(heartbeatStop).toHaveBeenCalledOnce();
+    expect(heartbeatStop).not.toHaveBeenCalled();
     await executor.reportTerminationComplete();
     expect(reportTerminationComplete).toHaveBeenCalledWith({
       task_id: 'task-1',
@@ -200,7 +200,7 @@ describe('AgorExecutor watchdog handoff', () => {
     });
 
     expect(executor.abortController.signal.aborted).toBe(true);
-    expect(heartbeatStop).toHaveBeenCalledOnce();
+    expect(heartbeatStop).not.toHaveBeenCalled();
   });
 
   it('forwards only this Task permission decision to the live permission waiter', () => {

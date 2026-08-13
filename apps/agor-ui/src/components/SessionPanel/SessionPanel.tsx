@@ -18,7 +18,6 @@ import {
   isAgenticToolName,
   mapToCodexPermissionConfig,
   SessionStatus,
-  shortId,
   TaskStatus,
 } from '@agor-live/client';
 import {
@@ -473,6 +472,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
+  const [forceFailTaskId, setForceFailTaskId] = React.useState<string | null>(null);
+  const [forceFailConfirmation, setForceFailConfirmation] = React.useState('');
+  const forceFailInputRef = React.useRef<InputRef | null>(null);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
@@ -480,6 +482,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   });
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
+  React.useEffect(() => {
+    if (
+      forceFailTaskId &&
+      !tasks.some(
+        (task) =>
+          task.task_id === forceFailTaskId &&
+          task.status === TaskStatus.STOPPING &&
+          task.sdk_failure?.termination === 'unverified'
+      )
+    ) {
+      setForceFailTaskId(null);
+      setForceFailConfirmation('');
+    }
+  }, [forceFailTaskId, tasks]);
   const attachmentInputRef = React.useRef<HTMLInputElement>(null);
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
   // Search observes only the conversation region, not the whole body: the
@@ -1100,27 +1116,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
       );
     if (unverifiedTask) {
-      const expected = shortId(unverifiedTask.task_id);
-      const confirmation = window.prompt(
-        `Agor could not verify that this executor stopped. It may still be running and writing to the branch. Type ${expected} to force-fail the Task anyway.`
-      );
-      if (confirmation === null) return;
-      if (confirmation !== expected) {
-        showError(`Type ${expected} to confirm force-fail.`);
-        return;
-      }
-      setStopRequestInFlight(true);
-      try {
-        await client.service(`sessions/${session.session_id}/stop`).create({
-          force_unverified: true,
-          confirmation,
-        });
-      } catch (error) {
-        console.error('Failed to force-fail execution:', error);
-        showError('Failed to force-fail execution. You can try again.');
-      } finally {
-        setStopRequestInFlight(false);
-      }
+      setForceFailConfirmation('');
+      setForceFailTaskId(unverifiedTask.task_id);
       return;
     }
 
@@ -1135,6 +1132,32 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     } catch (error) {
       console.error('Failed to stop execution:', error);
       showError('Failed to stop execution. You can try again.');
+    } finally {
+      setStopRequestInFlight(false);
+    }
+  };
+
+  const handleForceFail = async () => {
+    if (
+      !session ||
+      !client ||
+      !forceFailTaskId ||
+      forceFailConfirmation !== 'STOP' ||
+      stopRequestInFlight
+    ) {
+      return;
+    }
+    setStopRequestInFlight(true);
+    try {
+      await client.service(`sessions/${session.session_id}/stop`).create({
+        force_unverified: true,
+        confirmation: 'STOP',
+      });
+      setForceFailTaskId(null);
+      setForceFailConfirmation('');
+    } catch (error) {
+      console.error('Failed to force-fail execution:', error);
+      showError('Failed to force-fail execution. You can try again.');
     } finally {
       setStopRequestInFlight(false);
     }
@@ -1671,6 +1694,52 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
         {/* Footer is unavailable for historical sessions whose runtime was removed. */}
         {sessionFooter}
+
+        <Modal
+          title="Force-fail task?"
+          open={forceFailTaskId !== null}
+          okText="Force fail"
+          cancelText="Cancel"
+          keyboard
+          mask={{ closable: false }}
+          confirmLoading={stopRequestInFlight}
+          okButtonProps={{
+            danger: true,
+            disabled: forceFailConfirmation !== 'STOP',
+          }}
+          cancelButtonProps={{ disabled: stopRequestInFlight }}
+          onOk={handleForceFail}
+          onCancel={() => {
+            if (stopRequestInFlight) return;
+            setForceFailTaskId(null);
+            setForceFailConfirmation('');
+          }}
+          afterOpenChange={(modalOpen) => {
+            if (modalOpen) forceFailInputRef.current?.focus();
+          }}
+        >
+          <Alert
+            type="warning"
+            showIcon
+            title="Executor termination is unverified"
+            description="The executor may still be running and writing to this branch. Force-fail changes Agor's durable Task status to failed and makes the Session available again. It cannot prove or guarantee process termination."
+            style={{ marginBottom: token.marginMD }}
+          />
+          <Typography.Paragraph>
+            Type <Typography.Text code>STOP</Typography.Text> to continue.
+          </Typography.Paragraph>
+          <Input
+            ref={forceFailInputRef}
+            aria-label="Type STOP to confirm force-fail"
+            value={forceFailConfirmation}
+            onChange={(event) => setForceFailConfirmation(event.target.value)}
+            onPressEnter={() => {
+              if (forceFailConfirmation === 'STOP') void handleForceFail();
+            }}
+            disabled={stopRequestInFlight}
+            autoComplete="off"
+          />
+        </Modal>
 
         {/* Advanced upload modal preserves the existing file upload flow for
             non-image files and notify-agent options. */}

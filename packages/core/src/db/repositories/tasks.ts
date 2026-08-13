@@ -58,6 +58,14 @@ function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>
   );
 }
 
+function executorMayReportTelemetry(
+  row: Pick<TaskRow, 'status' | 'executor_connected_at'>
+): boolean {
+  return (
+    executorOwnsTask(row) || (!!row.executor_connected_at && row.status === TaskStatus.STOPPING)
+  );
+}
+
 function isExecutorResultStatus(status: Task['status']): boolean {
   return (
     status === TaskStatus.RUNNING ||
@@ -940,7 +948,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     observedAt?: Date
   ): Promise<Task | null> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
-      if (!executorOwnsTask(row)) return null;
+      // STOPPING remains executor-owned until the scoped executor reports
+      // quiescence (or containment proves absence). Retain its heartbeat and
+      // pulse evidence while cancellation is still in progress.
+      if (!executorMayReportTelemetry(row)) return null;
 
       const heartbeatAt = await this.mutationNow(txDb, fullId, observedAt);
 
@@ -983,15 +994,48 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const quiescedAt = await this.mutationNow(txDb, fullId, observedAt);
 
       const { coordination: _coordination, ...storedRequest } = request;
+      // An unverified marker guards against an old coordinator terminalizing
+      // without proof. A new, correctly task/request-fenced executor report is
+      // new evidence, so make the same request recoverable again. If renewed
+      // containment is still unverified it writes a fresh guard after this
+      // quiescence timestamp; duplicate reports cannot clear that newer guard.
+      const recoveringUnverified =
+        !!row.termination_unverified_at || current.sdk_failure?.termination === 'unverified';
+      const sdkFailure = recoveringUnverified
+        ? current.sdk_failure?.reason === 'termination_unverified'
+          ? undefined
+          : current.sdk_failure
+            ? { ...current.sdk_failure, termination: 'requested' as const }
+            : undefined
+        : current.sdk_failure;
       const data = {
         ...row.data,
+        ...(sdkFailure ? { sdk_failure: sdkFailure } : {}),
         termination_request: {
           ...storedRequest,
           executor_quiesced_at: quiescedAt.toISOString(),
         },
       };
-      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
-      return this.rowToTask({ ...row, data });
+      if (recoveringUnverified) {
+        // The guard wrote this diagnostic while absence was unknown. New
+        // evidence supersedes it; do not leave a successfully stopped Task
+        // carrying the obsolete "may still be running" error. Preserve only
+        // a real preceding SDK-health diagnosis, not the synthetic guard.
+        delete data.error_message;
+        if (!sdkFailure) delete data.sdk_failure;
+      }
+      await update(txDb, tasks)
+        .set({
+          data,
+          ...(recoveringUnverified ? { termination_unverified_at: null } : {}),
+        })
+        .where(eq(tasks.task_id, fullId))
+        .run();
+      return this.rowToTask({
+        ...row,
+        data,
+        ...(recoveringUnverified ? { termination_unverified_at: null } : {}),
+      });
     });
   }
 

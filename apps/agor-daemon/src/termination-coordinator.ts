@@ -61,19 +61,32 @@ interface LocalTerminationOperation {
 }
 
 const operationsByApp = new WeakMap<object, Map<string, LocalTerminationOperation>>();
-const DEFAULT_COOPERATIVE_GRACE_MS = 1000;
+const DEFAULT_LOCAL_COOPERATIVE_GRACE_MS = 1_000;
+// A remote/templated executor has no daemon-side PGID fallback. Give normal
+// provider cleanup enough time to acknowledge before exposing force-fail;
+// late fenced acknowledgements remain recoverable after this bounded window.
+const DEFAULT_REMOTE_COOPERATIVE_GRACE_MS = 15_000;
 const COOPERATIVE_POLL_MS = 25;
 const LOCAL_WRAPPER_EXIT_GRACE_MS = 250;
 const COORDINATION_LEASE_MARGIN_MS = 5_000;
 const DEFAULT_COORDINATION_LEASE_MS = 30_000;
 
-function coordinationLeaseMs(input: TerminationInput): number {
+function cooperativeGraceMs(input: TerminationInput, task: Task): number {
+  return (
+    input.signalDelayMs ??
+    input.cooperativeGraceMs ??
+    (task.executor_mode === 'templated'
+      ? DEFAULT_REMOTE_COOPERATIVE_GRACE_MS
+      : DEFAULT_LOCAL_COOPERATIVE_GRACE_MS)
+  );
+}
+
+function coordinationLeaseMs(input: TerminationInput, task: Task): number {
   if (input.coordinationLeaseMs !== undefined) return input.coordinationLeaseMs;
-  const cooperativeGraceMs =
-    input.signalDelayMs ?? input.cooperativeGraceMs ?? DEFAULT_COOPERATIVE_GRACE_MS;
+  const graceMs = cooperativeGraceMs(input, task);
   return Math.max(
     DEFAULT_COORDINATION_LEASE_MS,
-    cooperativeGraceMs +
+    graceMs +
       LOCAL_WRAPPER_EXIT_GRACE_MS +
       DEFAULT_EXECUTOR_TERM_GRACE_MS +
       DEFAULT_EXECUTOR_KILL_GRACE_MS +
@@ -144,7 +157,7 @@ async function waitForExecutorQuiescence(input: TerminationInput, requested: Tas
     return requested;
   }
 
-  const graceMs = input.signalDelayMs ?? input.cooperativeGraceMs ?? DEFAULT_COOPERATIVE_GRACE_MS;
+  const graceMs = cooperativeGraceMs(input, requested);
   if (graceMs <= 0) return requested;
 
   const tasks = input.app.service('tasks');
@@ -308,7 +321,7 @@ async function claimContainmentCoordination(
       {
         taskId: task.task_id,
         claimToken: token,
-        leaseDurationMs: coordinationLeaseMs(input),
+        leaseDurationMs: coordinationLeaseMs(input, task),
         instanceId: identity.instanceId,
         bootId: identity.bootId,
         ...(localMode && !ownsLocalHandle && input.unownedLocalOwnerGraceMs !== undefined
@@ -412,8 +425,8 @@ export async function forceFailUnverifiedTask(input: {
   ) {
     throw new Conflict('Only a Task with unverified termination may be force-failed.');
   }
-  if (input.confirmation !== shortId(current.task_id)) {
-    throw new BadRequest(`Type ${shortId(current.task_id)} to confirm force-fail.`);
+  if (input.confirmation !== 'STOP') {
+    throw new BadRequest('Type STOP to confirm force-fail.');
   }
   console.warn(
     `[SECURITY] Force-failing Task ${shortId(current.task_id)} without verified executor termination`
