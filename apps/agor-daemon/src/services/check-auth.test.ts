@@ -1,6 +1,7 @@
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { inspectClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCheckAuthService } from './check-auth';
 import { resolveCodexCredentialRoute } from './codex-auth-shared.js';
@@ -36,6 +37,16 @@ vi.mock('../utils/executor-codex-auth.js', async () => {
   };
 });
 
+vi.mock('../utils/executor-claude-auth.js', async () => {
+  const actual = await vi.importActual<typeof import('../utils/executor-claude-auth.js')>(
+    '../utils/executor-claude-auth.js'
+  );
+  return {
+    ...actual,
+    inspectClaudeAuthViaExecutor: vi.fn(),
+  };
+});
+
 vi.mock('./codex-auth-shared.js', () => ({
   resolveCodexCredentialRoute: vi.fn(),
 }));
@@ -44,6 +55,7 @@ const resolveApiKeyMock = vi.mocked(resolveApiKey);
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const inspectCodexAuthViaExecutorMock = vi.mocked(inspectCodexAuthViaExecutor);
 const resolveCodexCredentialRouteMock = vi.mocked(resolveCodexCredentialRoute);
+const inspectClaudeAuthViaExecutorMock = vi.mocked(inspectClaudeAuthViaExecutor);
 const TEST_DB = { run: vi.fn() } as never;
 
 function mockClaudeAccount(account: Record<string, unknown> | null) {
@@ -125,11 +137,11 @@ describe('check-auth Claude subscription tokens', () => {
     });
   });
 
-  it('reports the in-app OAuth subscription login (native, no stored token) as authenticated', async () => {
+  it('native subscription without validateNative is unknown (cheap default, no file probe)', async () => {
     // The OAuth sign-in wrote ~/.claude/.credentials.json and cleared the pasted
-    // token, so the resolver returns useNativeAuth with an empty connection.
-    // Without the native branch this fell through to `unauthenticated`, leaving
-    // the "No AI connected" banner and the per-tool badge stuck.
+    // token, so the resolver returns useNativeAuth with an empty connection. The
+    // cheap app-shell probe must not claim authenticated without confirming the
+    // file — it returns `unknown` (which hides, never shows, the No-AI banner).
     resolveApiKeyMock.mockResolvedValueOnce({
       apiKey: undefined,
       source: 'user',
@@ -140,15 +152,51 @@ describe('check-auth Claude subscription tokens', () => {
       user: { user_id: 'user-1' },
     } as never);
 
-    expect(result).toMatchObject({ authenticated: true, method: 'oauth' });
-    // Native login needs no SDK probe and no stored-token lookup.
+    expect(result.status).toBe('unknown');
     expect(claudeQueryMock).not.toHaveBeenCalled();
+    expect(inspectClaudeAuthViaExecutorMock).not.toHaveBeenCalled();
     expect(resolveApiKeyMock).toHaveBeenCalledTimes(1);
-    expect(resolveApiKeyMock).toHaveBeenNthCalledWith(1, 'ANTHROPIC_API_KEY', {
-      userId: 'user-1',
-      db: TEST_DB,
-      tool: 'claude-code',
+  });
+
+  it('validateNative confirms the credentials file exists → authenticated', async () => {
+    resolveApiKeyMock.mockResolvedValueOnce({
+      apiKey: undefined,
+      source: 'user',
+      useNativeAuth: true,
     });
+    resolveCodexCredentialRouteMock.mockResolvedValue({
+      ok: true,
+      delegatedHomeKey: null,
+      userId: 'user-1',
+    } as never);
+    inspectClaudeAuthViaExecutorMock.mockResolvedValue({ ok: true });
+
+    const result = await service().create({ tool: 'claude-code', validateNative: true }, {
+      user: { user_id: 'user-1' },
+    } as never);
+
+    expect(result).toMatchObject({ authenticated: true, method: 'oauth' });
+    expect(inspectClaudeAuthViaExecutorMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('validateNative with an ABSENT credentials file → unauthenticated (banner returns)', async () => {
+    resolveApiKeyMock.mockResolvedValueOnce({
+      apiKey: undefined,
+      source: 'user',
+      useNativeAuth: true,
+    });
+    resolveCodexCredentialRouteMock.mockResolvedValue({
+      ok: true,
+      delegatedHomeKey: null,
+      userId: 'user-1',
+    } as never);
+    inspectClaudeAuthViaExecutorMock.mockResolvedValue({ ok: false, reason: 'not-found' });
+
+    const result = await service().create({ tool: 'claude-code', validateNative: true }, {
+      user: { user_id: 'user-1' },
+    } as never);
+
+    expect(result.status).toBe('unauthenticated');
   });
 
   it('treats missing subscription account metadata as unknown, not rejected', async () => {

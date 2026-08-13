@@ -42,7 +42,6 @@ import {
   Menu,
   Modal,
   Popconfirm,
-  Radio,
   Select,
   Space,
   Switch,
@@ -66,7 +65,7 @@ import {
   modelLabelForTool,
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
-import { ClaudeDisconnectButton, ClaudeOAuthSignIn } from '../ClaudeAuth';
+import { ClaudeAuthSettings } from '../ClaudeAuth';
 import { CodexAuthSettings } from '../CodexAuth';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
@@ -909,7 +908,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       const tenantSettings = tenantToolSettings.get(tool as TenantAgenticToolName);
       const resolutionPolicy = tenantSettings?.resolution_policy ?? 'user_preferred';
       const personalConfigured =
-        (tool === 'codex' && authMethod === 'subscription') ||
+        ((tool === 'codex' || tool === 'claude-code') && authMethod === 'subscription') ||
         toolFields.some(({ field }) => fieldStatus[field] && !String(field).endsWith('_BASE_URL'));
       const workspaceConfigured = Object.entries(tenantSettings?.connection ?? {}).some(
         ([field, status]) => status?.configured && !field.endsWith('_BASE_URL')
@@ -1835,39 +1834,29 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 | undefined
             }
           />
+        ) : tool === 'claude-code' ? (
+          <ClaudeAuthSettings
+            client={client}
+            authMethod={authMethod ?? 'api_key'}
+            allowSubscriptionLogin={isSelf}
+            apiKeyFields={allToolFields}
+            fieldStatus={fieldStatus}
+            onSaveField={(field, value) => handleToolFieldSave(tool, field, value)}
+            onClearField={(field) => handleToolFieldClear(tool, field)}
+            savingFields={Object.fromEntries(
+              allToolFields.map((c) => [c.field, !!savingToolField[`${tool}.${c.field}`]])
+            )}
+            publicValues={
+              user?.agentic_tools_public_values?.[tool] as
+                | Partial<Record<AgenticToolConfigField, string>>
+                | undefined
+            }
+          />
         ) : (
           <Form component={false} layout="vertical">
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               Personal credentials are encrypted at rest and injected only into the agent runtime.
             </Typography.Paragraph>
-            {tool === 'claude-code' && (
-              <FieldRow
-                label="Sign-in method"
-                tooltip="Choose one — Agor uses whichever is selected, the other is ignored."
-              >
-                <Radio.Group
-                  buttonStyle="solid"
-                  value={authMethod}
-                  onChange={(event) => void handleAuthMethodChange(tool, event.target.value)}
-                >
-                  <Radio.Button value="subscription">Claude subscription</Radio.Button>
-                  <Radio.Button value="api_key">API key</Radio.Button>
-                </Radio.Group>
-              </FieldRow>
-            )}
-            {tool === 'claude-code' && authMethod === 'subscription' && isSelf && (
-              <FieldRow
-                label="Sign in with Claude"
-                tooltip="Opens Claude's sign-in page; paste the code it shows back here. Agor stores the login on the server — no token to copy."
-              >
-                {/* onVerified is a no-op: the daemon patches the user on success,
-                    and the realtime update refreshes this surface. */}
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  <ClaudeOAuthSignIn client={client} onVerified={() => {}} autoStart={false} />
-                  <ClaudeDisconnectButton client={client} />
-                </Space>
-              </FieldRow>
-            )}
             <ApiKeyFields
               tool={tool}
               fields={toolFields}

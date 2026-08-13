@@ -1,19 +1,18 @@
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import type { ClaudeAuthFilePayload, ExecutorResult } from '../payload-types.js';
 import { resolveClaudeCredentialsPath } from '../user-runtime-paths.js';
 import { writeCredentialFileAtomically } from './credential-file-io.js';
 import type { CommandOptions } from './index.js';
 
 /**
- * Write/delete the Claude Code subscription login file
+ * Inspect/write/delete the Claude Code subscription login file
  * (`~/.claude/.credentials.json`) for the effective Unix user. Runs AS the target
  * identity (the daemon selects it via `asUser`), so ownership and 0600 hold in
  * insulated/strict modes. Mirrors `codex.auth-file`; see
  * `context/explorations/claude-code-oauth-signin.md`.
  *
  * The content is the daemon-built `{ claudeAiOauth: {...} }` document. This
- * handler does not parse or echo token material — it writes bytes, verifies the
- * read-back, and returns only a non-secret status.
+ * handler does not echo token material — it returns only a non-secret status.
  */
 export async function handleClaudeAuthFile(
   payload: ClaudeAuthFilePayload,
@@ -23,6 +22,34 @@ export async function handleClaudeAuthFile(
   if (options.dryRun) return { success: true, data: { operation, dryRun: true } };
 
   const target = resolveClaudeCredentialsPath();
+
+  if (operation === 'inspect') {
+    let raw: string;
+    try {
+      raw = await readFile(target, 'utf8');
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT'
+        ? { success: true, data: { status: 'not-found' } }
+        : {
+            success: false,
+            error: {
+              code: 'AUTH_FILE_UNREADABLE',
+              message: 'Claude credentials file could not be read',
+            },
+          };
+    }
+    // A present-but-malformed file is not a usable login. Confirm the shape the
+    // SDK reads (`claudeAiOauth.accessToken`) without returning any token bytes.
+    try {
+      const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
+      return typeof parsed.claudeAiOauth?.accessToken === 'string' &&
+        parsed.claudeAiOauth.accessToken
+        ? { success: true, data: { status: 'found' } }
+        : { success: true, data: { status: 'malformed' } };
+    } catch {
+      return { success: true, data: { status: 'malformed' } };
+    }
+  }
 
   if (operation === 'delete') {
     await rm(target, { force: true });

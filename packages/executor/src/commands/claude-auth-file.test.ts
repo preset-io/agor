@@ -44,6 +44,32 @@ describe('claude.auth-file executor boundary', () => {
     expect(await readdir(process.env.CLAUDE_CONFIG_DIR)).toEqual([]);
   });
 
+  it('inspect reports found / not-found / malformed without echoing token bytes', async () => {
+    process.env.CLAUDE_CONFIG_DIR = await mkdtemp(join(tmpdir(), 'agor-claude-auth-'));
+
+    expect(await handleClaudeAuthFile({ ...base, params: { operation: 'inspect' } }, {})).toEqual({
+      success: true,
+      data: { status: 'not-found' },
+    });
+
+    await handleClaudeAuthFile(
+      { ...base, params: { operation: 'write', content: credentials } },
+      {}
+    );
+    const found = await handleClaudeAuthFile({ ...base, params: { operation: 'inspect' } }, {});
+    expect(found).toEqual({ success: true, data: { status: 'found' } });
+    expect(JSON.stringify(found)).not.toContain('secret');
+
+    await handleClaudeAuthFile(
+      { ...base, params: { operation: 'write', content: '{"claudeAiOauth":{}}\n' } },
+      {}
+    );
+    expect(await handleClaudeAuthFile({ ...base, params: { operation: 'inspect' } }, {})).toEqual({
+      success: true,
+      data: { status: 'malformed' },
+    });
+  });
+
   it('does not spawn or write in dryRun mode', async () => {
     process.env.CLAUDE_CONFIG_DIR = await mkdtemp(join(tmpdir(), 'agor-claude-auth-'));
     const result = await handleClaudeAuthFile(

@@ -811,6 +811,7 @@ export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
 export const ClaudeAuthFilePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('claude.auth-file'),
   params: z.discriminatedUnion('operation', [
+    z.object({ operation: z.literal('inspect') }),
     z.object({ operation: z.literal('write'), content: z.string().max(64 * 1024) }),
     z.object({ operation: z.literal('delete') }),
   ]),
