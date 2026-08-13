@@ -114,20 +114,19 @@ makes AI work a team activity.
 Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)) and **Git** on `PATH`. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access.
 
 ```bash
-npm install -g agor-live
-
-agor init           # creates config/database and installs the tools you select
-agor daemon start   # runs the daemon in the background
-agor open           # opens the web UI
+curl -fsSL https://agor.live/install.sh | bash
 ```
+
+That installs Agor, initializes it, starts the daemon, and opens the UI. [View the script](https://github.com/preset-io/agor/blob/main/apps/agor-docs/public/install.sh) before piping it into `bash`, as you should for any `curl | bash` installer.
 
 Use `agor install` later to change or repair the selected agentic tools; it does not initialize or recreate Agor.
 
 That's it. The onboarding wizard creates your first board and helps you
 [raise your first AI teammate](https://agor.live/guide/first-teammate), which takes it from there.
 
-The [Getting Started guide](https://agor.live/guide/getting-started) walks through the wizard and
-includes a Docker Compose path if you would rather not install Node. For source builds, Postgres,
+The [Getting Started guide](https://agor.live/guide/getting-started) covers the npm
+path if you would rather run each step yourself, walks through the wizard, and includes a Docker
+Compose path if you would rather not install Node. For source builds, Postgres,
 and team setups, see [Extended Installation](https://agor.live/guide/extended-install). For
 managed hosting, see [Agor Cloud Open Beta](https://agor.live/cloud).
 
