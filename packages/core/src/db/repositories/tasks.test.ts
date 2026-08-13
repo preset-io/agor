@@ -1282,6 +1282,79 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     }
   );
 
+  dbTest('rejects late telemetry after executor quiescence', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+    await taskRepo.connectExecutor(task.task_id);
+    const claim = await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+      now: new Date('2026-01-01T00:00:02.000Z'),
+    });
+    await taskRepo.recordExecutorQuiescence(
+      {
+        task_id: task.task_id,
+        requested_at: claim.task.termination_request!.requested_at,
+      },
+      new Date('2026-01-01T00:00:03.000Z')
+    );
+
+    await expect(taskRepo.reportRuntimeTelemetry(task.task_id)).resolves.toBeNull();
+  });
+
+  dbTest(
+    'retains late telemetry when containment is unverified but the executor is live',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+      );
+      await taskRepo.connectExecutor(task.task_id);
+      await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Heartbeat lost',
+      });
+      await taskRepo.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'telemetry-claim',
+        leaseDurationMs: 30_000,
+        instanceId: 'daemon-a',
+        bootId: 'boot-a',
+      });
+      await taskRepo.settleTermination({
+        taskId: task.task_id,
+        outcome: 'unverified',
+        coordinationToken: 'telemetry-claim',
+        errorMessage: 'Containment remains unverified.',
+        sdkFailure: {
+          reason: 'termination_unverified',
+          detected_at: '2026-01-01T00:00:03.000Z',
+          tool: 'codex',
+          termination: 'unverified',
+        },
+      });
+
+      await expect(
+        taskRepo.reportRuntimeTelemetry(
+          task.task_id,
+          { sequence: 4, kind: 'progress', detail: 'provider.cancel.still_pending' },
+          new Date('2026-01-01T00:00:04.000Z')
+        )
+      ).resolves.toMatchObject({
+        status: TaskStatus.STOPPING,
+        sdk_failure: { termination: 'unverified' },
+        last_executor_heartbeat_at: '2026-01-01T00:00:04.000Z',
+        latest_executor_pulse: { sequence: 4, detail: 'provider.cancel.still_pending' },
+      });
+    }
+  );
+
   dbTest('rejects telemetry before connect and after terminality', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);

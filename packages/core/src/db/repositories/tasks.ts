@@ -59,11 +59,13 @@ function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>
 }
 
 function executorMayReportTelemetry(
-  row: Pick<TaskRow, 'status' | 'executor_connected_at'>
+  row: Pick<TaskRow, 'status' | 'executor_connected_at' | 'data'>
 ): boolean {
-  return (
-    executorOwnsTask(row) || (!!row.executor_connected_at && row.status === TaskStatus.STOPPING)
-  );
+  if (executorOwnsTask(row)) return true;
+  if (!row.executor_connected_at || row.status !== TaskStatus.STOPPING) {
+    return false;
+  }
+  return !!row.data.termination_request && !row.data.termination_request.executor_quiesced_at;
 }
 
 function isExecutorResultStatus(status: Task['status']): boolean {
@@ -949,8 +951,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   ): Promise<Task | null> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
       // STOPPING remains executor-owned until the scoped executor reports
-      // quiescence (or containment proves absence). Retain its heartbeat and
-      // pulse evidence while cancellation is still in progress.
+      // quiescence. An unverified containment guard is not proof of absence,
+      // so a still-live executor may continue publishing useful evidence and
+      // eventually recover the request with a late task/request-fenced ack.
       if (!executorMayReportTelemetry(row)) return null;
 
       const heartbeatAt = await this.mutationNow(txDb, fullId, observedAt);

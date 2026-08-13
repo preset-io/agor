@@ -316,9 +316,16 @@ export async function authorizeTaskTerminalRoute(input: {
   return internalParams;
 }
 
-export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | undefined {
+export function findMatchingUnverifiedTerminationTask(
+  tasks: readonly Task[],
+  expected: { taskId: string; terminationRequestedAt: string }
+): Task | undefined {
   return tasks.find(
-    (task) => task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
+    (task) =>
+      task.task_id === expected.taskId &&
+      task.status === TaskStatus.STOPPING &&
+      task.sdk_failure?.termination === 'unverified' &&
+      task.termination_request?.requested_at === expected.terminationRequestedAt
   );
 }
 
@@ -378,6 +385,44 @@ export function createUploadAuthMiddleware(input: {
       console.error('❌ [Upload Auth] Authentication failed:', error);
       res.status(401).json({ error: 'Authentication required' });
     }
+  };
+}
+
+export async function authorizeForceFailRoute(input: {
+  session: Pick<Session, 'branch_id'>;
+  params: RouteParams;
+  body: Record<string, unknown>;
+  findActiveTasks: () => Promise<readonly Task[]>;
+  isBranchOwner: (branchId: Session['branch_id'], userId: UUID) => Promise<boolean>;
+}): Promise<{ task: Task; confirmation: string; terminationRequestedAt: string }> {
+  const userId = input.params.user?.user_id;
+  const isAdmin = hasMinimumRole(input.params.user?.role, ROLES.ADMIN);
+  const isOwner = !!userId && (await input.isBranchOwner(input.session.branch_id, userId as UUID));
+  if (!isAdmin && !isOwner) {
+    throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
+  }
+  if (typeof input.body.confirmation !== 'string') {
+    throw new BadRequest('Type STOP to confirm force-fail.');
+  }
+  if (
+    typeof input.body.task_id !== 'string' ||
+    typeof input.body.termination_requested_at !== 'string'
+  ) {
+    throw new BadRequest('Force-fail requires the exact Task termination request.');
+  }
+  const task = findMatchingUnverifiedTerminationTask(await input.findActiveTasks(), {
+    taskId: input.body.task_id,
+    terminationRequestedAt: input.body.termination_requested_at,
+  });
+  if (!task) {
+    throw new Conflict(
+      'The Task termination state changed. Review the current Task before force-failing.'
+    );
+  }
+  return {
+    task,
+    confirmation: input.body.confirmation,
+    terminationRequestedAt: input.body.termination_requested_at,
   };
 }
 
@@ -2638,29 +2683,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         };
         if (body.force_unverified === true) {
           const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
-            const { session, activeTasks } = await inCurrentTenantDatabaseScope(async () => {
+            const target = await inCurrentTenantDatabaseScope(async () => {
               const session = await app.service('sessions').get(id, params);
-              const activeTasks = await findActiveTasksForSession(app, session.session_id, params);
-              return { session, activeTasks };
+              return authorizeForceFailRoute({
+                session,
+                params,
+                body,
+                findActiveTasks: () => findActiveTasksForSession(app, session.session_id, params),
+                isBranchOwner: (branchId, userId) =>
+                  stopRouteRepositories.branchRepo.isOwner(branchId, userId),
+              });
             });
-            const task = findUnverifiedTerminationTask(activeTasks);
-            if (!task) throw new BadRequest('Session has no unverified Task to force-fail.');
-            const taskId = task.task_id;
-            const userId = params.user?.user_id;
-            const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
-            const isOwner =
-              !!userId &&
-              (await stopRouteRepositories.branchRepo.isOwner(session.branch_id, userId as UUID));
-            if (!isAdmin && !isOwner) {
-              throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
-            }
-            if (typeof body.confirmation !== 'string') {
-              throw new BadRequest('Type STOP to confirm force-fail.');
-            }
             const failedTask = await forceFailUnverifiedTask({
               app,
-              taskId,
-              confirmation: body.confirmation,
+              taskId: target.task.task_id,
+              terminationRequestedAt: target.terminationRequestedAt,
+              confirmation: target.confirmation,
               params,
             });
             return {

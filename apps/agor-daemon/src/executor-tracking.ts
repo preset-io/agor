@@ -176,6 +176,11 @@ function readBootIdentity(): string | undefined {
 }
 
 type GroupInspection = 'present' | 'absent' | 'unverified';
+type GroupInspector = (
+  pgid: number,
+  signal?: 0 | NodeJS.Signals,
+  asUser?: string
+) => GroupInspection;
 
 function inspectGroup(
   pgid: number,
@@ -205,7 +210,7 @@ async function waitForAbsence(
   timeoutMs: number,
   pollMs: number,
   asUser?: string,
-  inspect: typeof inspectGroup = inspectGroup
+  inspect: GroupInspector = inspectGroup
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -262,11 +267,7 @@ async function containExecutorIdentity(
     /** A recovered identity cannot safely signal a group after its leader exited. */
     recovered?: boolean;
     /** Deterministic test seam for transient cross-UID inspection results. */
-    inspectGroupForTest?: (
-      pgid: number,
-      signal?: 0 | NodeJS.Signals,
-      asUser?: string
-    ) => 'present' | 'absent' | 'unverified';
+    inspectGroupForTest?: GroupInspector;
   } = {}
 ): Promise<ContainmentResult> {
   if (process.platform !== 'linux' && process.platform !== 'darwin') {
@@ -388,11 +389,7 @@ export async function containExecutorProcess(
     killGraceMs?: number;
     pollMs?: number;
     /** Deterministic test seam for transient cross-UID inspection results. */
-    inspectGroupForTest?: (
-      pgid: number,
-      signal?: 0 | NodeJS.Signals,
-      asUser?: string
-    ) => 'present' | 'absent' | 'unverified';
+    inspectGroupForTest?: GroupInspector;
   } = {},
   owner?: object
 ): Promise<ContainmentResult> {

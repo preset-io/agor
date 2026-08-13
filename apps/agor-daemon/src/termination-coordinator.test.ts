@@ -210,6 +210,44 @@ describe('termination coordinator', () => {
     }
   });
 
+  it('reports the remote acknowledgement timeout without claiming local PID containment', async () => {
+    vi.useFakeTimers();
+    try {
+      const state = appDouble();
+      const remoteStopping = {
+        ...stopping('user_stop'),
+        executor_mode: 'templated',
+        executor_connected_at: '2026-01-01T00:00:00.000Z',
+      };
+      state.claim(remoteStopping);
+      state.settle(
+        task(TaskStatus.STOPPING, {
+          ...remoteStopping,
+          sdk_failure: { termination: 'unverified' },
+        }),
+        'unverified'
+      );
+
+      const result = request(state.app, 'user_stop');
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(result).resolves.toMatchObject({
+        status: 'unverified',
+        reason: expect.stringContaining('did not acknowledge quiescence'),
+      });
+      expect(containExecutorProcess).not.toHaveBeenCalled();
+      expect(state.settleTermination).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'unverified',
+          errorMessage: expect.stringContaining('did not acknowledge quiescence'),
+        }),
+        expect.anything()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('still verifies local process absence after executor quiescence', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
     const state = appDouble();
@@ -480,12 +518,26 @@ describe('termination coordinator', () => {
     await request(state.app, 'heartbeat_lost');
 
     await expect(
-      forceFailUnverifiedTask({ app: state.app, taskId, confirmation: 'bad' })
+      forceFailUnverifiedTask({
+        app: state.app,
+        taskId,
+        terminationRequestedAt: '2026-01-01T00:00:01.000Z',
+        confirmation: 'bad',
+      })
     ).rejects.toThrow('Type STOP');
+    await expect(
+      forceFailUnverifiedTask({
+        app: state.app,
+        taskId,
+        terminationRequestedAt: '2026-01-01T00:00:00.000Z',
+        confirmation: 'STOP',
+      })
+    ).rejects.toThrow('termination state changed');
     state.settle(task(TaskStatus.FAILED));
     await forceFailUnverifiedTask({
       app: state.app,
       taskId,
+      terminationRequestedAt: '2026-01-01T00:00:01.000Z',
       confirmation: 'STOP',
     });
     expect(state.settleTermination).toHaveBeenCalledTimes(2);

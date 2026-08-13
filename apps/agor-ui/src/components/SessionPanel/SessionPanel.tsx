@@ -472,7 +472,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
-  const [forceFailTaskId, setForceFailTaskId] = React.useState<string | null>(null);
+  const [forceFailTarget, setForceFailTarget] = React.useState<{
+    taskId: string;
+    terminationRequestedAt: string;
+  } | null>(null);
   const [forceFailConfirmation, setForceFailConfirmation] = React.useState('');
   const forceFailInputRef = React.useRef<InputRef | null>(null);
   const reactiveSessionId = session?.session_id ?? null;
@@ -484,18 +487,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
   React.useEffect(() => {
     if (
-      forceFailTaskId &&
+      forceFailTarget &&
       !tasks.some(
         (task) =>
-          task.task_id === forceFailTaskId &&
+          task.task_id === forceFailTarget.taskId &&
           task.status === TaskStatus.STOPPING &&
-          task.sdk_failure?.termination === 'unverified'
+          task.sdk_failure?.termination === 'unverified' &&
+          task.termination_request?.requested_at === forceFailTarget.terminationRequestedAt
       )
     ) {
-      setForceFailTaskId(null);
+      setForceFailTarget(null);
       setForceFailConfirmation('');
     }
-  }, [forceFailTaskId, tasks]);
+  }, [forceFailTarget, tasks]);
   const attachmentInputRef = React.useRef<HTMLInputElement>(null);
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
   // Search observes only the conversation region, not the whole body: the
@@ -1115,9 +1119,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         (task) =>
           task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
       );
-    if (unverifiedTask) {
+    if (unverifiedTask?.termination_request) {
       setForceFailConfirmation('');
-      setForceFailTaskId(unverifiedTask.task_id);
+      setForceFailTarget({
+        taskId: unverifiedTask.task_id,
+        terminationRequestedAt: unverifiedTask.termination_request.requested_at,
+      });
       return;
     }
 
@@ -1141,7 +1148,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (
       !session ||
       !client ||
-      !forceFailTaskId ||
+      !forceFailTarget ||
       forceFailConfirmation !== 'STOP' ||
       stopRequestInFlight
     ) {
@@ -1152,8 +1159,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       await client.service(`sessions/${session.session_id}/stop`).create({
         force_unverified: true,
         confirmation: 'STOP',
+        task_id: forceFailTarget.taskId,
+        termination_requested_at: forceFailTarget.terminationRequestedAt,
       });
-      setForceFailTaskId(null);
+      setForceFailTarget(null);
       setForceFailConfirmation('');
     } catch (error) {
       console.error('Failed to force-fail execution:', error);
@@ -1697,7 +1706,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
         <Modal
           title="Force-fail task?"
-          open={forceFailTaskId !== null}
+          open={forceFailTarget !== null}
           okText="Force fail"
           cancelText="Cancel"
           keyboard
@@ -1711,7 +1720,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onOk={handleForceFail}
           onCancel={() => {
             if (stopRequestInFlight) return;
-            setForceFailTaskId(null);
+            setForceFailTarget(null);
             setForceFailConfirmation('');
           }}
           afterOpenChange={(modalOpen) => {

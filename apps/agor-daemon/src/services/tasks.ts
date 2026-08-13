@@ -411,6 +411,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     await this.runAfterTenantDatabaseCommit('publish termination claim', async () => {
       if (claimed) {
+        console.log(
+          `[task.termination] event=request_committed task_id=${shortId(result.task.task_id)} ` +
+            `cause=${result.task.termination_request?.cause ?? 'unknown'} ` +
+            `mode=${result.task.executor_mode ?? 'local'}`
+        );
         emitServiceEvent(this.app, {
           path: 'tasks',
           event: 'patched',
@@ -474,6 +479,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (result.outcome !== 'transitioned' && result.outcome !== 'unverified') return result;
 
     await this.runAfterTenantDatabaseCommit('publish termination settlement', async () => {
+      if (result.outcome === 'unverified') {
+        console.warn(
+          `[task.termination] event=settled task_id=${shortId(result.task.task_id)} ` +
+            `outcome=unverified mode=${result.task.executor_mode ?? 'local'}`
+        );
+      } else {
+        console.log(
+          `[task.termination] event=settled task_id=${shortId(result.task.task_id)} ` +
+            `outcome=${result.task.status} mode=${result.task.executor_mode ?? 'local'}`
+        );
+      }
       emitServiceEvent(this.app, {
         path: 'tasks',
         event: 'patched',
@@ -1347,14 +1363,19 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const coordinatorParams = { ...(params ?? {}), provider: undefined };
     deferWithTenantContext(
       params,
-      () =>
-        requestExecutorTermination({
+      () => {
+        console.log(
+          `[task.termination] event=executor_quiescence_committed ` +
+            `task_id=${shortId(task.task_id)} mode=${task.executor_mode ?? 'local'}`
+        );
+        return requestExecutorTermination({
           app: this.app,
           taskId: task.task_id,
           cause: terminationRequest.cause,
           errorMessage: terminationRequest.error_message ?? 'Executor stopped cooperatively.',
           params: coordinatorParams,
-        }).then(() => undefined),
+        }).then(() => undefined);
+      },
       (error) =>
         console.error(
           `[termination] Failed to settle executor report for Task ${shortId(task.task_id)}:`,

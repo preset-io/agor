@@ -153,6 +153,10 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
         task_id: '018f0000-0000-7000-8000-000000000001',
         status: 'stopping',
         sdk_failure: { termination: 'unverified' },
+        termination_request: {
+          cause: 'user_stop',
+          requested_at: '2026-06-24T00:00:01.000Z',
+        },
       } as Task,
     ];
     const create = vi.fn().mockRejectedValue(new Error('denied'));
@@ -192,7 +196,12 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     fireEvent.keyDown(reopenedConfirmation, { key: 'Enter', code: 'Enter' });
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    expect(create).toHaveBeenCalledWith({ force_unverified: true, confirmation: 'STOP' });
+    expect(create).toHaveBeenCalledWith({
+      force_unverified: true,
+      confirmation: 'STOP',
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      termination_requested_at: '2026-06-24T00:00:01.000Z',
+    });
     expect(nativePrompt).not.toHaveBeenCalled();
     expect(
       await screen.findByText('Failed to force-fail execution. You can try again.')

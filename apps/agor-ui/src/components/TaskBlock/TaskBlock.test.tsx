@@ -14,8 +14,8 @@ import { describe, expect, it } from 'vitest';
 import {
   type Block,
   groupMessagesIntoBlocks,
-  isTaskRuntimeLive,
   isVerifiedRuntimeInterruption,
+  shouldRenderLiveTaskProgress,
 } from './TaskBlock';
 
 function userMessage(index: number, id: string): Message {
@@ -188,10 +188,10 @@ describe('verified runtime interruption projection', () => {
 
 describe('live runtime projection', () => {
   it.each(['running', 'stopping'])('keeps progress visible while the Task is %s', (status) => {
-    expect(isTaskRuntimeLive({ status } as Task)).toBe(true);
+    expect(shouldRenderLiveTaskProgress({ status } as Task)).toBe(true);
   });
 
   it.each(['stopped', 'completed', 'failed'])('settles progress after the Task is %s', (status) => {
-    expect(isTaskRuntimeLive({ status } as Task)).toBe(false);
+    expect(shouldRenderLiveTaskProgress({ status } as Task)).toBe(false);
   });
 });

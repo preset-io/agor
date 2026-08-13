@@ -212,11 +212,18 @@ async function runContainment(
   const executorQuiesced = !!current.termination_request?.executor_quiesced_at;
   // A scoped remote executor is the only component able to authoritatively
   // quiesce its SDK runtime. Local mode additionally verifies PGID absence.
-  const remoteCooperativeContainment = current.executor_mode === 'templated' && executorQuiesced;
+  const remoteMode = current.executor_mode === 'templated';
   const containment = input.absenceVerified
     ? ({ status: 'verified_absent' } as const)
-    : remoteCooperativeContainment
-      ? ({ status: 'verified_absent' } as const)
+    : remoteMode
+      ? executorQuiesced
+        ? ({ status: 'verified_absent' } as const)
+        : ({
+            status: 'unverified',
+            reason:
+              `Remote executor did not acknowledge quiescence for this termination request ` +
+              `within ${cooperativeGraceMs(input, current)}ms.`,
+          } as const)
       : executorQuiesced
         ? await containExecutorProcess(
             current.session_id,
@@ -413,20 +420,24 @@ export async function beginExecutorTermination(input: TerminationInput): Promise
 export async function forceFailUnverifiedTask(input: {
   app: Application;
   taskId: TaskID | string;
+  terminationRequestedAt: string;
   confirmation: string;
   params?: Params;
 }): Promise<Task> {
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
   const current = await tasks.get(input.taskId, input.params);
+  if (input.confirmation !== 'STOP') {
+    throw new BadRequest('Type STOP to confirm force-fail.');
+  }
   if (
     current.status !== TaskStatus.STOPPING ||
     !current.termination_request ||
+    current.termination_request.requested_at !== input.terminationRequestedAt ||
     current.sdk_failure?.termination !== 'unverified'
   ) {
-    throw new Conflict('Only a Task with unverified termination may be force-failed.');
-  }
-  if (input.confirmation !== 'STOP') {
-    throw new BadRequest('Type STOP to confirm force-fail.');
+    throw new Conflict(
+      'The Task termination state changed. Review the current Task before force-failing.'
+    );
   }
   console.warn(
     `[SECURITY] Force-failing Task ${shortId(current.task_id)} without verified executor termination`

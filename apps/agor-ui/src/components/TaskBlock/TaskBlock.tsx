@@ -125,8 +125,8 @@ export function isVerifiedRuntimeInterruption(task: Task, isLatestTask = false):
   );
 }
 
-/** STOPPING is still live until executor quiescence/containment is authoritative. */
-export function isTaskRuntimeLive(task: Task): boolean {
+/** Presentation policy: keep STOPPING output visible until a durable terminal projection arrives. */
+export function shouldRenderLiveTaskProgress(task: Task): boolean {
   return task.status === TaskStatus.RUNNING || task.status === TaskStatus.STOPPING;
 }
 
@@ -487,7 +487,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     client = null,
   }) => {
     const { token } = theme.useToken();
-    const runtimeLive = isTaskRuntimeLive(task);
+    const runtimeLive = shouldRenderLiveTaskProgress(task);
 
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
