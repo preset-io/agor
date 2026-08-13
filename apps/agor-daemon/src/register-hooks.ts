@@ -490,6 +490,11 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'codex-auth/device',
   'codex-auth/import',
   'codex-auth/logout',
+  // Same shape as codex-auth/device: it exchanges a pasted code against
+  // Anthropic and opens short tenant units of work at the call site, then reads
+  // getCurrentTenantId(); without ambient tenant identity its create/find throw
+  // "Missing active tenant context for Claude OAuth".
+  'claude-auth/oauth',
   'opencode-auth',
   'opencode-models',
   'claude-models',
