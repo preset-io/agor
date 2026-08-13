@@ -1,5 +1,5 @@
 import type { ActiveUser, AgorClient, Board, BoardID, Branch, User } from '@agor-live/client';
-import { BulbOutlined, ShopOutlined } from '@ant-design/icons';
+import { BulbOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { memo, useMemo } from 'react';
@@ -135,7 +135,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
-  const marketplaceHref = useHref('/marketplace');
   const { themeMode, setThemeMode } = useTheme();
 
   // Entity state via narrow store subscriptions rather than props. Each
@@ -296,26 +295,9 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           boardById={boardById}
           onSettingsClick={onSettingsClick}
         />
-        {/* Labelled, where the rest of this row is icon-only: a marketplace is a
-            surface people are meant to come back to, and an icon alone is a
-            weaker invitation than the word. No tooltip — it would only repeat
-            what is already on screen. */}
-        <Button
-          type="text"
-          // Decorative beside the visible word — without this the icon's own
-          // label joins the accessible name ("shop Marketplace").
-          icon={<ShopOutlined aria-hidden style={{ fontSize: token.fontSizeLG }} />}
-          href={marketplaceHref}
-          onClick={(event) => {
-            if (isPlainLeftClick(event)) {
-              event.preventDefault();
-              navigate('/marketplace');
-            }
-          }}
-          style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}
-        >
-          Marketplace
-        </Button>
+        {/* No Marketplace entry: the surface exists and answers at
+            /marketplace, but is not advertised while the feature is
+            incomplete. */}
         <Tooltip title="Knowledge Base">
           <Button
             type="text"
