@@ -280,11 +280,7 @@ export function ClaudeAuthSettings({
         )}
 
         {allowSubscriptionLogin && (
-          <FieldRow
-            label="Sign-in method"
-            help="Switching here only changes which option is shown. Your active method updates when you save an API key or finish a Claude sign-in or save a subscription token."
-            style={{ marginBottom: 0 }}
-          >
+          <FieldRow label="Sign-in method" style={{ marginBottom: 0 }}>
             <Radio.Group
               buttonStyle="solid"
               value={view}
