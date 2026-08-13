@@ -8,7 +8,7 @@
 import { PAGINATION } from '@agor/core/config';
 import {
   type CreateKnowledgeDocumentInput,
-  isPostgresDatabase,
+  isPostgresDatabaseHandle,
   type KnowledgeDocumentFilters,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
@@ -281,7 +281,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
    */
 
   private async isEmbeddingConfigured(): Promise<boolean> {
-    if (!isPostgresDatabase(this.db)) return false;
+    if (!isPostgresDatabaseHandle(this.db)) return false;
     const settings = await this.semanticSettings.find();
     return (
       isUsableOpenAIEmbeddingConfig(settings, settings.api_key_configured) &&

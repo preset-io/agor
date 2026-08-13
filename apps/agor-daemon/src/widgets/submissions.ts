@@ -56,6 +56,12 @@ export interface WidgetResolverApp {
 
 export interface WidgetResolverDeps {
   app: WidgetResolverApp;
+  /** Short database unit used by long-running route adapters for initial reads. */
+  loadWidgetContext?(widgetId: string): Promise<{
+    message: Message;
+    session: Session;
+    branch: Branch;
+  }>;
   /** Durable, short-transaction state machine shared by every daemon. */
   resolutionStore: WidgetResolutionStore;
   /** Tenant-scoped custom-event publisher; production must not emit globally. */
@@ -153,10 +159,18 @@ async function doResolveWidget(
   caller: AuthenticatedCaller,
   deps: WidgetResolverDeps
 ): Promise<WidgetResolutionResult> {
-  // 1. Load the widget message.
+  // 1. Load the widget and authorization context in one short database unit.
   let message: Message;
+  let session: Session;
+  let branch: Branch;
   try {
-    message = (await deps.app.service('messages').get(widgetId)) as Message;
+    if (deps.loadWidgetContext) {
+      ({ message, session, branch } = await deps.loadWidgetContext(widgetId));
+    } else {
+      message = (await deps.app.service('messages').get(widgetId)) as Message;
+      session = (await deps.app.service('sessions').get(message.session_id)) as Session;
+      branch = (await deps.app.service('branches').get(session.branch_id)) as Branch;
+    }
   } catch {
     throw new NotFound(`Widget ${widgetId} not found`);
   }
@@ -170,9 +184,7 @@ async function doResolveWidget(
     throw new NotFound(`Widget ${widgetId} has no widget metadata`);
   }
 
-  // 2. Load the session + branch for authz.
-  const session = (await deps.app.service('sessions').get(message.session_id)) as Session;
-  const branch = (await deps.app.service('branches').get(session.branch_id)) as Branch;
+  // 2. Authorize using the context loaded above.
   const isOwner = await deps.isBranchOwner(branch.branch_id, caller.user_id);
   const effectivePermission = await deps.resolveBranchPermission?.(branch, caller.user_id);
 

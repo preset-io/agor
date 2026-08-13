@@ -19,6 +19,7 @@ export interface StopSessionDeps {
   app: Application;
   taskRepo: Pick<TaskRepository, 'findQueued'>;
   sessionsService: Pick<SessionsServiceImpl, 'get' | 'patch'>;
+  findActiveTasks?: typeof findActiveTasksForSession;
   requestTermination?: typeof requestExecutorTermination;
 }
 
@@ -74,7 +75,11 @@ export async function stopSessionPreserveQueue(
     };
   }
 
-  const targetTasksArray = await findActiveTasksForSession(deps.app, sessionId, params);
+  const targetTasksArray = await (deps.findActiveTasks ?? findActiveTasksForSession)(
+    deps.app,
+    sessionId,
+    params
+  );
   const queuedTasks = await deps.taskRepo.findQueued(sessionId);
 
   if (targetTasksArray.length === 0) {

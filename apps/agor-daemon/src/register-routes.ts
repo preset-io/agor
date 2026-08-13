@@ -54,6 +54,7 @@ import {
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
+  Branch,
   HookContext,
   Message,
   MessageID,
@@ -365,6 +366,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         hook(context)
       ) as Promise<Awaited<T>>;
     };
+  const inCurrentTenantDatabaseScope = <T>(work: () => Promise<T>): Promise<T> => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for database operation');
+    return runWithTenantDatabaseScope(db, tenantId, work);
+  };
 
   /** Schedule orchestration after commit with tenant identity but no open transaction. */
   function deferInFreshTenantScope(params: RouteParams, fn: () => Promise<void>): void {
@@ -1000,14 +1006,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       `🧹 [PromptState] Repairing stuck session ${shortId(session.session_id)} ` +
         `(status=${session.status}, ready_for_prompt=${session.ready_for_prompt})`
     );
-    return (await app.service('sessions').patch(
-      session.session_id,
-      {
-        status: SessionStatus.IDLE,
-        ready_for_prompt: true,
-      },
-      params
-    )) as Session;
+    return inCurrentTenantDatabaseScope(
+      async () =>
+        (await app.service('sessions').patch(
+          session.session_id,
+          {
+            status: SessionStatus.IDLE,
+            ready_for_prompt: true,
+          },
+          params
+        )) as Session
+    );
   }
 
   /**
@@ -1200,7 +1209,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (!agenticToolEnabled) {
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
-    const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
+    const session = await runWithTenantDatabaseScope(db, tenantId, () =>
+      sessionsService.materializeAgenticToolPreset(loadedSession, params)
+    );
     const startTimestamp = new Date().toISOString();
 
     // The daemon persists launch intent and writes required sentinel git fields
@@ -1305,14 +1316,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // explicit patch, `session.status` stays IDLE while a task is RUNNING,
     // causing the queue gate in the prompt route to wave subsequent prompts
     // through instead of queuing them.
-    await app.service('sessions').patch(
-      task.session_id,
-      {
-        status: SessionStatus.RUNNING,
-        ready_for_prompt: false,
-        tasks: [...session.tasks, task.task_id],
-      },
-      params
+    await runWithTenantDatabaseScope(db, tenantId, () =>
+      app.service('sessions').patch(
+        task.session_id,
+        {
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          tasks: [...session.tasks, task.task_id],
+        },
+        params
+      )
     );
 
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
@@ -1482,7 +1495,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
-        let session = await sessionsService.get(id, params);
+        const requestedSessionId = id;
+        let session = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+          sessionsService.get(requestedSessionId, params)
+        );
         id = session.session_id;
         const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
 
@@ -1518,7 +1534,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (!(await isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool))) {
             throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
           }
-          session = await sessionsService.materializeAgenticToolPreset(session, params);
+          session = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.materializeAgenticToolPreset(session, params)
+          );
           if (
             session.agentic_tool_preset_id &&
             data.permissionMode !== undefined &&
@@ -1540,10 +1558,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.log(
             `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
           );
-          session = (await sessionsService.patch(
-            id,
-            { archived: false, archived_reason: undefined },
-            params
+          session = (await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.patch(id, { archived: false, archived_reason: undefined }, params)
           )) as typeof session;
         }
 
@@ -1565,7 +1581,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionTurnLocks,
           id as SessionID,
           async () => {
-            let lockedSession = await sessionsService.get(id, params);
+            let lockedSession = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+              sessionsService.get(id, params)
+            );
             if (lockedSession.status === SessionStatus.STOPPING) {
               // The earlier STOPPING check was against pre-lock state — re-check
               // here so a session that entered STOPPING while we waited for our
@@ -1602,7 +1620,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               status: TaskStatus.QUEUED,
               metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
             });
-            await tasksService.autoTitleSession(task, params);
+            await runWithTenantDatabaseScope(db, promptTenantId, () =>
+              tasksService.autoTitleSession(task, params)
+            );
 
             if (!prior) {
               // Repository admission bypasses TasksService.create. Publish the
@@ -2612,10 +2632,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         };
         if (body.force_unverified === true) {
           const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
-            const session = await app.service('sessions').get(id, params);
-            const task = findUnverifiedTerminationTask(
-              await findActiveTasksForSession(app, session.session_id, params)
-            );
+            const { session, activeTasks } = await inCurrentTenantDatabaseScope(async () => {
+              const session = await app.service('sessions').get(id, params);
+              const activeTasks = await findActiveTasksForSession(app, session.session_id, params);
+              return { session, activeTasks };
+            });
+            const task = findUnverifiedTerminationTask(activeTasks);
             if (!task) throw new BadRequest('Session has no unverified Task to force-fail.');
             const taskId = task.task_id;
             const userId = params.user?.user_id;
@@ -2651,7 +2673,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             {
               app,
               taskRepo: stopRouteRepositories.taskRepo,
-              sessionsService: sessionsServiceWithHooks,
+              sessionsService: {
+                get: (...args) =>
+                  inCurrentTenantDatabaseScope(() => sessionsServiceWithHooks.get(...args)),
+                patch: (...args) =>
+                  inCurrentTenantDatabaseScope(() => sessionsServiceWithHooks.patch(...args)),
+              },
+              findActiveTasks: (stopApp, sessionId, stopParams) =>
+                inCurrentTenantDatabaseScope(() =>
+                  findActiveTasksForSession(stopApp, sessionId, stopParams)
+                ),
             },
             id as SessionID,
             params,
@@ -2951,6 +2982,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
+    loadWidgetContext: (widgetId: string) =>
+      inCurrentTenantDatabaseScope(async () => {
+        const message = (await app.service('messages').get(widgetId)) as Message;
+        const session = (await app.service('sessions').get(message.session_id)) as Session;
+        const branch = (await app.service('branches').get(session.branch_id)) as Branch;
+        return { message, session, branch };
+      }),
     resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
       emitServiceEvent(app, {
         path: 'messages',
