@@ -6,7 +6,7 @@
  */
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
 import type { Database } from '../client';
 import {
@@ -23,6 +23,18 @@ import { visibleSessionReferenceAccessExists } from './branch-access';
 
 export const MESSAGE_CONTENT_OMITTED =
   '[Message content omitted: payload could not be safely persisted]';
+
+export type MessageFindPageOptions = {
+  sessionId?: SessionID;
+  sessionIds?: SessionID[];
+  taskId?: TaskID;
+  type?: Message['type'];
+  role?: Message['role'];
+  visibleToUserId?: UUID;
+  sort?: Record<string, 1 | -1>;
+  limit?: number;
+  skip?: number;
+};
 
 function omittedMessageData(reason: JsonSanitizationError['category']): MessageInsert['data'] {
   return {
@@ -222,6 +234,60 @@ export class MessagesRepository {
     if (conditions.length > 0) query = query.where(and(...conditions));
     const rows = await query.orderBy(messages.index).all();
     return rows.map((r: MessageRow) => this.rowToMessage(r));
+  }
+
+  /**
+   * Find one exact SQL page. The same predicate is applied to the count and
+   * data queries so Feathers pagination never counts rows that the page cannot
+   * return, and only the requested page's JSON rows are hydrated.
+   */
+  async findPage(opts: MessageFindPageOptions = {}): Promise<{ data: Message[]; total: number }> {
+    if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
+
+    const conditions: SQL[] = [];
+    if (opts.sessionId) conditions.push(eq(messages.session_id, opts.sessionId));
+    if (opts.sessionIds) conditions.push(inArray(messages.session_id, opts.sessionIds));
+    if (opts.taskId) conditions.push(eq(messages.task_id, opts.taskId));
+    if (opts.type) conditions.push(eq(messages.type, opts.type));
+    if (opts.role) conditions.push(eq(messages.role, opts.role));
+    if (opts.visibleToUserId) {
+      conditions.push(
+        visibleSessionReferenceAccessExists(this.db, opts.visibleToUserId, messages.session_id)
+      );
+    }
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    let countQuery = select(this.db, { count: sql<number>`count(*)` }).from(messages);
+    if (whereClause) countQuery = countQuery.where(whereClause);
+    const countRow = await countQuery.one();
+    const total = Number(countRow?.count ?? 0);
+
+    let dataQuery = select(this.db).from(messages);
+    if (whereClause) dataQuery = dataQuery.where(whereClause);
+
+    const sortColumns = {
+      message_id: messages.message_id,
+      session_id: messages.session_id,
+      task_id: messages.task_id,
+      type: messages.type,
+      role: messages.role,
+      index: messages.index,
+      timestamp: messages.timestamp,
+      content_preview: messages.content_preview,
+      parent_tool_use_id: messages.parent_tool_use_id,
+    } as const;
+    const orderBy = Object.entries(opts.sort ?? {})
+      .map(([field, direction]) => {
+        const column = sortColumns[field as keyof typeof sortColumns];
+        return column ? (direction === -1 ? desc(column) : asc(column)) : undefined;
+      })
+      .filter((expression): expression is SQL => expression !== undefined);
+    dataQuery = dataQuery.orderBy(...(orderBy.length > 0 ? orderBy : [asc(messages.index)]));
+    if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
+    if (opts.skip) dataQuery = dataQuery.offset(opts.skip);
+
+    const rows = await dataQuery.all();
+    return { data: rows.map((row: MessageRow) => this.rowToMessage(row)), total };
   }
 
   /**

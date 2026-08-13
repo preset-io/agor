@@ -67,97 +67,46 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     this.messagesRepo = messagesRepo;
   }
 
-  protected async fetchData(query: Query, params?: MessageParams): Promise<Message[]> {
+  /**
+   * Find the exact SQL page for standard Feathers queries. Custom full-history
+   * methods below intentionally keep their existing unpaginated semantics.
+   */
+  async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
+    const query = (params?.query ?? {}) as Query;
+    const limit = query.$limit ?? this.paginate?.default ?? 100;
+    const actualLimit = Math.min(limit, this.paginate?.max ?? 1000);
+    const skip = query.$skip ?? 0;
     const sessionId = query.session_id;
-    const filter: Parameters<MessagesRepository['findAll']>[0] = {};
+    const pageOptions: Parameters<MessagesRepository['findPage']>[0] = {
+      limit: actualLimit,
+      skip,
+      sort: query.$sort,
+    };
 
     if (typeof sessionId === 'string') {
-      filter.sessionId = sessionId as SessionID;
+      pageOptions.sessionId = sessionId as SessionID;
     } else if (
       sessionId &&
       typeof sessionId === 'object' &&
       Array.isArray(sessionId.$in) &&
-      sessionId.$in.every((el: unknown) => typeof el === 'string')
+      sessionId.$in.every((value: unknown) => typeof value === 'string')
     ) {
-      filter.sessionIds = sessionId.$in as SessionID[];
+      pageOptions.sessionIds = sessionId.$in as SessionID[];
     }
-    if (typeof query.task_id === 'string') filter.taskId = query.task_id as TaskID;
-    if (typeof query.type === 'string') filter.type = query.type as Message['type'];
-    if (typeof query.role === 'string') filter.role = query.role as Message['role'];
+    if (typeof query.task_id === 'string') pageOptions.taskId = query.task_id as TaskID;
+    if (typeof query.type === 'string') pageOptions.type = query.type as Message['type'];
+    if (typeof query.role === 'string') pageOptions.role = query.role as Message['role'];
     if (params?._agorSqlSessionAccessUserId) {
-      filter.visibleToUserId = params._agorSqlSessionAccessUserId;
+      pageOptions.visibleToUserId = params._agorSqlSessionAccessUserId;
     }
 
-    return this.messagesRepo.findAll(filter);
-  }
-
-  /**
-   * Override find to support task-based and session-based filtering
-   */
-  async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
-    if (params?._agorSqlSessionAccessUserId) {
-      return super.find(params);
-    }
-
-    // If filtering by task_id (scalar string), use repository method.
-    // The RBAC scoping hook may also inject `session_id` (scalar or `$in`)
-    // alongside a user-supplied `task_id`; without intersecting here, callers
-    // with only `task_id` would bypass branch scoping. Filter the task_id
-    // rows by the accessible session_id set before returning.
-    if (typeof params?.query?.task_id === 'string') {
-      let messages = await this.messagesRepo.findByTaskId(params.query.task_id);
-
-      const sid = params.query.session_id;
-      if (typeof sid === 'string') {
-        messages = messages.filter((m) => m.session_id === sid);
-      } else if (sid && typeof sid === 'object' && Array.isArray((sid as { $in?: unknown }).$in)) {
-        const allowed = new Set((sid as { $in: string[] }).$in);
-        messages = messages.filter((m) => allowed.has(m.session_id as string));
-      }
-
-      // Apply pagination if enabled
-      if (this.paginate) {
-        const limit = params.query.$limit ?? this.paginate.default ?? 100;
-        const skip = params.query.$skip ?? 0;
-
-        return {
-          total: messages.length,
-          limit,
-          skip,
-          data: messages.slice(skip, skip + limit),
-        };
-      }
-
-      return messages;
-    }
-
-    // If filtering by session_id as a scalar string, use repository shortcut.
-    // A `$in` object (from the RBAC scoping hook) falls through to `super.find`
-    // where the adapter's `filterData` handles $in natively.
-    if (typeof params?.query?.session_id === 'string') {
-      // Use type-filtered query when type is specified (e.g., 'permission_request')
-      const messages = params.query.type
-        ? await this.messagesRepo.findBySessionIdAndType(params.query.session_id, params.query.type)
-        : await this.messagesRepo.findBySessionId(params.query.session_id);
-
-      // Apply pagination if enabled
-      if (this.paginate) {
-        const limit = params.query.$limit ?? this.paginate.default ?? 100;
-        const skip = params.query.$skip ?? 0;
-
-        return {
-          total: messages.length,
-          limit,
-          skip,
-          data: messages.slice(skip, skip + limit),
-        };
-      }
-
-      return messages;
-    }
-
-    // Otherwise use default find
-    return super.find(params);
+    const page = await this.messagesRepo.findPage(pageOptions);
+    return {
+      total: page.total,
+      limit: actualLimit,
+      skip,
+      data: this.selectFields(page.data, query.$select) as Message[],
+    };
   }
 
   /**

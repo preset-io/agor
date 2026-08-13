@@ -1157,8 +1157,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             },
           });
 
-          // MessagesService.find() ignores role/sort/limit when task_id is present
-          // So we need to filter and sort manually
+          // Keep the assistant selection here because the standard task page
+          // returns the transcript in index order and this callback needs the
+          // last assistant response.
           const allMessages = messages.data || messages;
           const assistantMessages = (Array.isArray(allMessages) ? allMessages : [])
             // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format

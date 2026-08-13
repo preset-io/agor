@@ -7,7 +7,7 @@
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
 import { dbTest } from '../test-helpers';
@@ -380,6 +380,52 @@ describe('MessagesRepository.findAll', () => {
 
     const visible = await messages.findAll({ visibleToUserId: viewerId });
     expect(visible.map((m) => m.message_id)).toEqual([visibleMessage.message_id]);
+
+    const visiblePage = await messages.findPage({ visibleToUserId: viewerId, limit: 1, skip: 0 });
+    expect(visiblePage.total).toBe(1);
+    expect(visiblePage.data.map((m) => m.message_id)).toEqual([visibleMessage.message_id]);
+  });
+});
+
+describe('MessagesRepository.findPage', () => {
+  dbTest('counts exact matches and hydrates only the ordered page', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    await messages.createMany(
+      Array.from({ length: 32 }, (_, index) =>
+        createMessageData({
+          session_id: sessionId,
+          index,
+          role: MessageRole.ASSISTANT,
+          content: {
+            index,
+            payload: new Array(100).fill(`message-${index}`),
+          } as unknown as Message['content'],
+        })
+      )
+    );
+
+    const client = (
+      db as unknown as {
+        $client: { execute: (...args: unknown[]) => Promise<unknown> };
+      }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const page = await messages.findPage({
+      sessionId,
+      role: MessageRole.ASSISTANT,
+      sort: { index: 1 },
+      limit: 2,
+      skip: 7,
+    });
+
+    expect(page.total).toBe(32);
+    expect(page.data.map((message) => message.index)).toEqual([7, 8]);
+    expect(
+      execute.mock.calls
+        .map(([query]) => JSON.stringify(query))
+        .some((query) => /limit/i.test(query))
+    ).toBe(true);
   });
 });
 

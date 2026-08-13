@@ -12,6 +12,7 @@ import { BranchRepository } from './branches';
 import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
+import { UsersRepository } from './users';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const describePostgres =
@@ -126,6 +127,89 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
       expect(omitted.content).toBe(MESSAGE_CONTENT_OMITTED);
       expect(omitted.content_preview).toBe(MESSAGE_CONTENT_OMITTED);
       expect(omitted.metadata).toEqual({ persistence_omission: { reason: 'size' } });
+    });
+  });
+
+  it('keeps page count and RBAC visibility inside the active tenant scope', async () => {
+    const viewerId = generateId() as UUID;
+    const tenantA = `messages-page-a-${generateId()}`;
+    const tenantB = `messages-page-b-${generateId()}`;
+    let visibleSessionId: Message['session_id'] | undefined;
+
+    await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+      await new UsersRepository(scoped).create({
+        user_id: viewerId,
+        email: `${tenantA}@example.invalid`,
+        name: 'Messages page viewer',
+      });
+      const repo = await new RepoRepository(scoped).create({
+        slug: `messages-page-${generateId()}`,
+        name: 'Messages page',
+        repo_type: 'remote',
+        remote_url: 'https://example.invalid/messages-page.git',
+        local_path: `/tmp/messages-page-${generateId()}`,
+        default_branch: 'main',
+      });
+      const branches = new BranchRepository(scoped);
+      const visibleBranch = await branches.create({
+        repo_id: repo.repo_id,
+        name: 'visible',
+        path: `/tmp/messages-page-visible-${generateId()}`,
+        ref: 'main',
+        branch_unique_id: Math.floor(Math.random() * 1_000_000),
+        created_by: generateId() as UUID,
+        permission_source: 'override',
+        others_can: 'none',
+      });
+      const hiddenBranch = await branches.create({
+        repo_id: repo.repo_id,
+        name: 'hidden',
+        path: `/tmp/messages-page-hidden-${generateId()}`,
+        ref: 'main',
+        branch_unique_id: Math.floor(Math.random() * 1_000_000),
+        created_by: generateId() as UUID,
+        permission_source: 'override',
+        others_can: 'none',
+      });
+      await branches.addOwner(visibleBranch.branch_id, viewerId);
+      const sessions = new SessionRepository(scoped);
+      const visibleSession = await sessions.create({
+        branch_id: visibleBranch.branch_id,
+        title: 'visible',
+        created_by: generateId() as UUID,
+      });
+      const hiddenSession = await sessions.create({
+        branch_id: hiddenBranch.branch_id,
+        title: 'hidden',
+        created_by: generateId() as UUID,
+      });
+      const messages = new MessagesRepository(scoped);
+      const createMessage = (sessionId: Message['session_id'], index: number): Message => ({
+        message_id: generateId(),
+        session_id: sessionId,
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        index,
+        timestamp: new Date().toISOString(),
+        content_preview: 'tenant-scoped message',
+        content: 'tenant-scoped message',
+      });
+      await messages.create(createMessage(visibleSession.session_id, 0));
+      await messages.create(createMessage(hiddenSession.session_id, 1));
+
+      const page = await messages.findPage({ visibleToUserId: viewerId, limit: 10, skip: 0 });
+      expect(page.total).toBe(1);
+      expect(page.data.map((message) => message.session_id)).toEqual([visibleSession.session_id]);
+      visibleSessionId = visibleSession.session_id;
+    });
+
+    await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      const page = await new MessagesRepository(scoped).findPage({
+        sessionId: visibleSessionId!,
+        limit: 10,
+        skip: 0,
+      });
+      expect(page).toMatchObject({ total: 0, data: [] });
     });
   });
 });
