@@ -283,6 +283,17 @@ export interface CodexAuthLogoutResult {
 }
 
 /**
+ * Result of removing a Claude subscription login via the daemon's
+ * `/claude-auth/logout` endpoint. Delete-only and Agor-scoped: it removes the
+ * managed `~/.claude/.credentials.json` from THIS server and clears the stored
+ * token + auth method; it does NOT revoke the OAuth tokens, so the account stays
+ * signed in elsewhere.
+ */
+export interface ClaudeAuthLogoutResult {
+  status: 'removed';
+}
+
+/**
  * Lifecycle of a ChatGPT device-code sign-in attempt driven by the daemon's
  * `/codex-auth/device` endpoints.
  * - `idle`: no attempt exists for this user.

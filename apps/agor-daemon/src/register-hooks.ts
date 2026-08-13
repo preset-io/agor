@@ -495,6 +495,9 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   // getCurrentTenantId(); without ambient tenant identity its create/find throw
   // "Missing active tenant context for Claude OAuth".
   'claude-auth/oauth',
+  // Delete-only logout — reads getCurrentTenantId() to resolve the target home
+  // and clear the stored method; needs the same ambient identity.
+  'claude-auth/logout',
   'opencode-auth',
   'opencode-models',
   'claude-models',

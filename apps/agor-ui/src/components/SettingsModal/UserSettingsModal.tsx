@@ -66,7 +66,7 @@ import {
   modelLabelForTool,
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
-import { ClaudeOAuthSignIn } from '../ClaudeAuth';
+import { ClaudeDisconnectButton, ClaudeOAuthSignIn } from '../ClaudeAuth';
 import { CodexAuthSettings } from '../CodexAuth';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
@@ -1862,7 +1862,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               >
                 {/* onVerified is a no-op: the daemon patches the user on success,
                     and the realtime update refreshes this surface. */}
-                <ClaudeOAuthSignIn client={client} onVerified={() => {}} autoStart={false} />
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  <ClaudeOAuthSignIn client={client} onVerified={() => {}} autoStart={false} />
+                  <ClaudeDisconnectButton client={client} />
+                </Space>
               </FieldRow>
             )}
             <ApiKeyFields

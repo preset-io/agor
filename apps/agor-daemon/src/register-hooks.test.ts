@@ -720,10 +720,13 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
   // codex-auth/device worked. Exercise the REAL registration path (no manual
   // runWithTenantContext) so the gap is catchable, unlike the service unit tests
   // that establish tenant context by hand.
-  it('is grouped with the other identity-only auth endpoints', () => {
-    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain('claude-auth/oauth');
-    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain('claude-auth/oauth');
-  });
+  it.each(['claude-auth/oauth', 'claude-auth/logout'])(
+    'grants ambient tenant identity to %s',
+    (path) => {
+      expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+      expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
+    }
+  );
 
   it('populates getCurrentTenantId() for a claude-auth/oauth call via the registered hook', async () => {
     type AroundHook = (context: HookContext, next: () => Promise<void>) => Promise<void>;

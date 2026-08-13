@@ -113,6 +113,7 @@ import { createBranchesService } from './services/branches.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
+import { createClaudeAuthLogoutService } from './services/claude-auth-logout.js';
 import { createClaudeModelsService } from './services/claude-models.js';
 import { createClaudeOAuthService } from './services/claude-oauth.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
@@ -707,6 +708,13 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app
     .service('/claude-auth/oauth')
     .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
+
+  // Removes the caller's Claude subscription login — deletes their
+  // ~/.claude/.credentials.json as the right Unix identity and clears the stored
+  // token + claude auth method (emitting `patched` so the UI re-probes to
+  // disconnected). Server-local only; does not revoke the OAuth grant.
+  app.use('/claude-auth/logout', createClaudeAuthLogoutService(app, db));
+  app.service('/claude-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)
