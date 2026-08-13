@@ -173,8 +173,6 @@ interface McpRecommendation {
   featured?: boolean;
 }
 
-const MCP_DOCS_URL = 'https://agor.live/docs/mcp';
-
 const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
   developer: [
     {
@@ -1700,15 +1698,7 @@ export function OnboardingWizard({
           }}
         >
           These are the tools we recommend for your work. You can connect any of them via MCP — just
-          ask your AI teammate to help set them up.{' '}
-          <Typography.Link
-            href={MCP_DOCS_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 12 }}
-          >
-            What's MCP?
-          </Typography.Link>
+          ask your AI teammate to help set them up.
         </div>
 
         {/* Persona-curated MCP recommendations — informational list, no selection */}
