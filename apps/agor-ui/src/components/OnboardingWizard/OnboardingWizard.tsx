@@ -27,7 +27,7 @@ import {
   TeamOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Input, List, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
@@ -1609,8 +1609,8 @@ export function OnboardingWizard({
     <div>
       {renderStepBadge('Name your AI teammate')}
       <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-        Give your AI teammate a name and an avatar. They get their own board to work on - you can
-        change everything anytime.
+        An AI teammate is your assistant for getting work done. Each board is recommended to have
+        one primary teammate — give yours a name and an avatar. You can change everything anytime.
       </Paragraph>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1641,22 +1641,6 @@ export function OnboardingWizard({
             </Text>
           )}
         </div>
-        {(() => {
-          const chosenOption = LLM_OPTIONS.find((o) => o.agent === selectedAgent);
-          return (
-            <div>
-              <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
-                Board's AI tool
-              </Text>
-              <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
-                Each board runs on one AI tool for every session created here.
-                {chosenOption
-                  ? ` Currently: ${chosenOption.title}. Change anytime in Settings.`
-                  : ' Connect your AI in the previous step.'}
-              </div>
-            </div>
-          );
-        })()}
       </div>
 
       {/* Concept pills */}
@@ -1705,8 +1689,8 @@ export function OnboardingWizard({
             lineHeight: 1.6,
           }}
         >
-          These are the tools we recommend for your work — nothing to connect on this screen. Once
-          you're in, just ask your AI teammate to connect any of them for you.{' '}
+          These are the tools we recommend for your work. You can connect any of them via MCP — just
+          ask your AI teammate to help set them up.{' '}
           <Typography.Link
             href={MCP_DOCS_URL}
             target="_blank"
@@ -1717,53 +1701,33 @@ export function OnboardingWizard({
           </Typography.Link>
         </div>
 
-        {/* Persona-curated MCP recommendations — informational, no selection */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {recs.map((rec) => (
-            <div
-              key={rec.id}
-              style={{
-                background: GLASS_CARD_BG,
-                border: GLASS_CARD_BORDER,
-                backdropFilter: 'blur(20px)',
-                WebkitBackdropFilter: 'blur(20px)',
-                borderRadius: 10,
-                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09)',
-                cursor: 'default',
-                overflow: 'hidden',
-              }}
-            >
-              <div
-                style={{
-                  padding: '12px 16px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                }}
-              >
-                <McpLogo id={rec.id} name={rec.name} size={20} color={TEXT_PRIMARY} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
-                      {rec.name}
-                    </span>
-                    {rec.featured && (
-                      <Tag
-                        color="processing"
-                        style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px', margin: 0 }}
-                      >
-                        Recommended
-                      </Tag>
-                    )}
-                  </div>
-                  <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 1 }}>
-                    {rec.description}
-                  </div>
+        {/* Persona-curated MCP recommendations — informational list, no selection */}
+        <List
+          dataSource={recs}
+          renderItem={(rec) => (
+            <List.Item style={{ padding: '10px 4px', gap: 12 }}>
+              <McpLogo id={rec.id} name={rec.name} size={20} color={TEXT_PRIMARY} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
+                    {rec.name}
+                  </span>
+                  {rec.featured && (
+                    <Tag
+                      color="processing"
+                      style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px', margin: 0 }}
+                    >
+                      Recommended
+                    </Tag>
+                  )}
+                </div>
+                <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 1 }}>
+                  {rec.description}
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            </List.Item>
+          )}
+        />
       </div>
     );
   };

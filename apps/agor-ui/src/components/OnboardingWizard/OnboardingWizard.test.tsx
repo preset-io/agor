@@ -356,17 +356,18 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
   });
 
-  it("workspace step renders the concept tags at the bottom, below the Board's AI tool helper", () => {
+  it('workspace step renders the concept tags below the teammate-name field', () => {
     renderWizard({ initialStep: 'workspace' });
 
-    const aiTool = screen.getByText("Board's AI tool");
+    const nameLabel = screen.getByText('Teammate name');
     const branchTag = screen.getByText('Branch');
     const sessionTag = screen.getByText('Session');
     expect(branchTag).toBeInTheDocument();
     expect(sessionTag).toBeInTheDocument();
-    // Tags moved below the name field + AI-tool helper (Fix 2).
+    // The "Board's AI tool" helper was removed — the tool is chosen in the prior step.
+    expect(screen.queryByText("Board's AI tool")).not.toBeInTheDocument();
     expect(
-      aiTool.compareDocumentPosition(branchTag) & Node.DOCUMENT_POSITION_FOLLOWING
+      nameLabel.compareDocumentPosition(branchTag) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 
@@ -489,7 +490,7 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Slack')).toBeInTheDocument();
     expect(screen.getByText('Notion')).toBeInTheDocument();
     // Recommendations only: nothing is connected here; the AI teammate does it later.
-    expect(screen.getByText(/ask your AI teammate to connect/i)).toBeInTheDocument();
+    expect(screen.getByText(/ask your AI teammate to help set them up/i)).toBeInTheDocument();
   });
 
   it('completes the full flow and calls onComplete with the created board', async () => {
