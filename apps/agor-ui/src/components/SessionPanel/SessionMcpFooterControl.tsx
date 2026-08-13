@@ -126,9 +126,14 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
           style={{
             marginInlineStart: token.sizeUnit,
             marginInlineEnd: 0,
+            // Round notification counter: a 16px circle at one digit
+            // (minWidth === height), growing into a pill for 2+ digits. The
+            // large radius fully rounds the ends (clamped to height/2) in both.
+            boxSizing: 'border-box',
             minWidth: 16,
-            height: 14,
+            height: 16,
             paddingInline: 4,
+            borderRadius: 999,
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -138,7 +143,7 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
             fontVariantNumeric: 'tabular-nums',
             verticalAlign: 'middle',
             // Recolor the count red via semantic tokens only — the neutral chip's
-            // geometry (size, radius, border) is untouched, so the unauthorized
+            // geometry (size, radius, shape) is untouched, so the unauthorized
             // state differs from the healthy state purely in color, theme-aware
             // in light and dark. Avoids AntD's `color="error"` preset, whose own
             // fill/border/radius would shift the box vs. the neutral chip.
