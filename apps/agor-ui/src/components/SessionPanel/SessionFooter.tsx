@@ -1508,8 +1508,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             showIcon
             message={
               unauthedMcpServers.length === 1
-                ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} needs authorization before its tools will work. Click the MCP badge to connect.`
-                : `${unauthedMcpServers.length} MCP servers need authorization before their tools will work. Click the MCP badge to connect.`
+                ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Click the MCP badge to connect it.`
+                : `${unauthedMcpServers.length} MCP servers aren’t connected. Click the MCP badge to connect them.`
             }
             style={{ marginBottom: token.sizeUnit * 2, borderRadius: token.borderRadius }}
           />

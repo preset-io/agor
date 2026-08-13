@@ -51,9 +51,9 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
 
   const badgeTitle =
     unauthedServers.length === 1
-      ? `${unauthedServers[0].display_name || unauthedServers[0].name} isn’t connected. Click to authorize — its tools won’t work until you do.`
+      ? `${unauthedServers[0].display_name || unauthedServers[0].name} isn’t connected. Open to connect.`
       : unauthedServers.length > 1
-        ? `${unauthedServers.length} MCP servers aren’t connected. Click to authorize them.`
+        ? `${unauthedServers.length} MCP servers aren’t connected. Open to connect.`
         : `${summary.tooltip}. Click to add or change MCP servers.`;
 
   const handleChange = async (nextIds: string[]) => {

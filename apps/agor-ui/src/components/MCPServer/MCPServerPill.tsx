@@ -183,7 +183,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
     );
   }
 
-  const needsAuthTooltip = `${server.display_name || server.name} isn’t connected. Click to authorize — its tools won’t work until you do.`;
+  const needsAuthTooltip = `${server.display_name || server.name} isn’t connected. Click to connect.`;
 
   return (
     <>
