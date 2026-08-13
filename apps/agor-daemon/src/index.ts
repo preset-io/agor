@@ -74,9 +74,9 @@ import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { startup } from './startup.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { configureResolvedConfigSlice } from './utils/build-resolved-config-slice.js';
 import { deepFreezeClone } from './utils/deep-freeze.js';
-import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';

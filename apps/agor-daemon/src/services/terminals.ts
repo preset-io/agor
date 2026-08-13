@@ -9,7 +9,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { createUserProcessEnvironment, type AgorConfig } from '@agor/core/config';
+import { type AgorConfig, createUserProcessEnvironment } from '@agor/core/config';
 import {
   BranchRepository,
   getCurrentTenantId,

@@ -24,17 +24,16 @@ const mocks = vi.hoisted(() => {
       reportedUnixUser: null,
     })),
     createUserProcessEnvironment: vi.fn(async () => ({})),
-    loadConfig: vi.fn(async () => ({
+    config: {
       daemon: { port: 3030 },
       execution: { branch_rbac: false, unix_user_mode: 'simple' },
-    })),
+    },
     canOpen: true,
   };
 });
 
 vi.mock('@agor/core/config', () => ({
   createUserProcessEnvironment: mocks.createUserProcessEnvironment,
-  loadConfig: mocks.loadConfig,
 }));
 
 vi.mock('@agor/core/db', () => ({
@@ -91,14 +90,17 @@ import { buildZellijSessionName, TerminalsService } from './terminals';
 function makeApp() {
   const emit = vi.fn();
   return {
-    get: () => ({ execution: { branch_rbac: false, unix_user_mode: 'simple' } }),
     emit,
     on: vi.fn(),
-    get: vi.fn((key: string) =>
-      key === 'distributedWorkIdentity'
-        ? { instanceId: 'daemon-a', bootId: 'daemon-a-boot' }
-        : undefined
-    ),
+    get: vi.fn((key: string) => {
+      if (key === 'config') {
+        return mocks.config;
+      }
+      if (key === 'distributedWorkIdentity') {
+        return { instanceId: 'daemon-a', bootId: 'daemon-a-boot' };
+      }
+      return undefined;
+    }),
     io: {
       local: { to: vi.fn(() => ({ emit })) },
     },
@@ -122,10 +124,10 @@ beforeEach(() => {
     reportedUnixUser: null,
   });
   mocks.createUserProcessEnvironment.mockResolvedValue({});
-  mocks.loadConfig.mockResolvedValue({
+  mocks.config = {
     daemon: { port: 3030 },
     execution: { branch_rbac: false, unix_user_mode: 'simple' },
-  });
+  };
 });
 
 describe('branch-scoped terminal identity', () => {
@@ -239,10 +241,10 @@ describe('process-affine attachment creation', () => {
   });
 
   it('keeps strict/impersonated terminals in the branch cwd', async () => {
-    mocks.loadConfig.mockResolvedValue({
+    mocks.config = {
       daemon: { port: 3030 },
       execution: { branch_rbac: false, unix_user_mode: 'strict' },
-    });
+    };
     mocks.resolveUnixUserForImpersonation.mockReturnValue({
       unixUser: 'alice',
       reportedUnixUser: 'alice',
@@ -257,10 +259,10 @@ describe('process-affine attachment creation', () => {
 
   it('enforces branch session permission', async () => {
     mocks.canOpen = false;
-    mocks.loadConfig.mockResolvedValue({
+    mocks.config = {
       daemon: { port: 3030 },
       execution: { branch_rbac: true, unix_user_mode: 'simple' },
-    });
+    };
     const service = new TerminalsService(makeApp() as never, {} as never);
     await expect(
       service.create({ branchId: 'branch-1' as BranchID }, params as never)
