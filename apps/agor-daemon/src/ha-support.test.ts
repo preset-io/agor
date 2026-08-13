@@ -119,23 +119,28 @@ describe('constrained HA support profile', () => {
       'mcpOAuth',
       'codexAuth',
       'codexDeviceAuth',
+      'claudeAuth',
+      'claudeOAuth',
       'openCodeAuth',
       'artifactRuntime',
     ]);
   });
 
-  it('admits Codex auth-file operations only with a consistent executor home', () => {
-    expect(isHaFeatureUnavailable(ha, 'codexAuth')).toBe(false);
-    expect(
-      isHaFeatureUnavailable(
-        {
-          ...ha,
-          capabilities: { ...ha.capabilities, codexCredentialFiles: false },
-        },
-        'codexAuth'
-      )
-    ).toBe(true);
+  it('admits Codex/Claude auth-file operations only with a consistent executor home', () => {
+    for (const feature of ['codexAuth', 'claudeAuth'] as const) {
+      expect(isHaFeatureUnavailable(ha, feature)).toBe(false);
+      expect(
+        isHaFeatureUnavailable(
+          { ...ha, capabilities: { ...ha.capabilities, codexCredentialFiles: false } },
+          feature
+        )
+      ).toBe(true);
+    }
+  });
+
+  it('always gates the in-memory device / OAuth attempt flows in constrained HA', () => {
     expect(isHaFeatureUnavailable(ha, 'codexDeviceAuth')).toBe(true);
+    expect(isHaFeatureUnavailable(ha, 'claudeOAuth')).toBe(true);
   });
 
   it('does not change standalone behavior', () => {

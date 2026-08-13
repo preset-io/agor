@@ -11,6 +11,8 @@ export const HA_UNSUPPORTED_FEATURES = {
   mcpOAuth: 'MCP OAuth flows',
   codexAuth: 'Codex credential-file import/logout without a consistent executor user home',
   codexDeviceAuth: 'Codex device authentication polling without durable attempt ownership',
+  claudeAuth: 'Claude credential-file logout without a consistent executor user home',
+  claudeOAuth: 'Claude subscription OAuth sign-in without durable attempt ownership',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',
   artifactRuntime: 'synchronous artifact runtime introspection',
 } as const;
@@ -35,7 +37,8 @@ export function isHaFeatureUnavailable(
   feature: HaUnsupportedFeature
 ): boolean {
   if (!isConstrainedHa(deployment)) return false;
-  if (feature === 'codexAuth') return !deployment.capabilities.codexCredentialFiles;
+  if (feature === 'codexAuth' || feature === 'claudeAuth')
+    return !deployment.capabilities.codexCredentialFiles;
   return true;
 }
 
