@@ -151,6 +151,39 @@ describe('AgorExecutor watchdog handoff', () => {
     });
   });
 
+  it('acknowledges Stop when an aborted provider rejects', async () => {
+    const reportTerminationComplete = vi.fn().mockResolvedValue({});
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service: () => { reportTerminationComplete: typeof reportTerminationComplete };
+      };
+      handleTaskLifecycleUpdate(task: unknown): void;
+      recoverTerminationAfterExecutionError(): Promise<boolean>;
+    };
+    executor.client = { service: () => ({ reportTerminationComplete }) };
+    executor.handleTaskLifecycleUpdate({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
+
+    await expect(executor.recoverTerminationAfterExecutionError()).resolves.toBe(true);
+    expect(reportTerminationComplete).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      requested_at: '2026-07-23T12:00:00.000Z',
+    });
+  });
+
   it('warns once when provider cleanup remains active after Stop', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

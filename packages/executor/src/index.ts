@@ -144,7 +144,8 @@ export class AgorExecutor {
       );
       process.exit(0);
     } catch (error) {
-      if (!this.terminationRequest && (await this.recoverTerminationBeforeStart())) {
+      const terminationRecovered = await this.recoverTerminationAfterExecutionError();
+      if (terminationRecovered) {
         console.log(
           `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
             'code=0 reason=termination_recovered'
@@ -152,7 +153,9 @@ export class AgorExecutor {
         process.exit(0);
         return;
       }
-      console.error('[executor] fatal error category=task_startup');
+      console.error(
+        `[executor] fatal error category=${this.terminationRequest ? 'termination_report' : 'task_startup'}`
+      );
       await this.tryMarkTaskTerminal(TaskStatus.FAILED, formatExecutorFailure(error));
       process.exit(1);
     }
@@ -275,11 +278,24 @@ export class AgorExecutor {
         readTask: () => client.service('tasks').get(this.config.taskId) as Promise<Task>,
       });
       this.terminationReport = report;
-      void report.catch(() => {
-        if (this.terminationReport === report) this.terminationReport = null;
-      });
     }
     await this.terminationReport;
+  }
+
+  /**
+   * A provider commonly rejects when its AbortSignal fires. Treat that as a
+   * successful cooperative Stop only after the exact request is durably
+   * acknowledged. The startup refresh covers the connect/Stop race where the
+   * socket event arrived before this process claimed the Task.
+   */
+  private async recoverTerminationAfterExecutionError(): Promise<boolean> {
+    if (!this.terminationRequest) return this.recoverTerminationBeforeStart();
+    try {
+      await this.reportTerminationComplete();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Handle Stop that atomically beat connectExecutor() without starting SDK work. */
