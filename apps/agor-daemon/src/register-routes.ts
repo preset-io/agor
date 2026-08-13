@@ -2336,29 +2336,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       if (DEBUG_UPLOAD) console.log('🔑 [Upload Auth] JWT token found, verifying...');
 
       const authService = app.service('authentication');
-      const result = await authService.create({
-        strategy: 'jwt',
-        accessToken: token,
-      });
+      // Reuse one mutable params object so authentication can propagate the
+      // verified tenant context before loading the authenticated user.
+      const authParams: AuthenticatedParams = { headers: req.headers };
+      const result = await authService.create({ strategy: 'jwt', accessToken: token }, authParams);
 
       if (DEBUG_UPLOAD) {
         console.log('✅ [Upload Auth] Authentication successful');
         console.log('   User:', result.user?.user_id ? shortId(result.user.user_id) : 'unknown');
       }
 
-      const authParams = {
+      const authenticatedParams = {
         user: result.user,
         provider: 'rest',
         authentication: result.authentication,
         headers: req.headers,
       };
       req.feathers = {
-        ...authParams,
-        tenant: resolveTenantContext(multiTenancy, {
-          params: authParams,
-          authPayload: result.authentication?.payload,
-          headers: req.headers,
-        }),
+        ...authenticatedParams,
+        tenant:
+          authParams.tenant ??
+          resolveTenantContext(multiTenancy, {
+            params: authenticatedParams,
+            authPayload: result.authentication?.payload,
+            headers: req.headers,
+          }),
       };
 
       next();

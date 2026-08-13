@@ -92,6 +92,15 @@ const checks = [
   },
 
   {
+    name: 'parameterless custom authentication calls',
+    roots: ['apps/agor-daemon/src'],
+    excludeTests: true,
+    patterns: [/\bauthService\.create\(\s*\{[^)]*\}\s*\)/gs],
+    // Custom HTTP middleware must pass a mutable params object so verified
+    // tenant context is available to authentication hooks and user loading.
+    baseline: {},
+  },
+  {
     name: 'raw tenant database scope imports',
     roots: ['apps/agor-daemon/src'],
     excludeTests: true,
