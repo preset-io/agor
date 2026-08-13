@@ -3,6 +3,13 @@ import type { SessionsServiceImpl } from '../declarations.js';
 
 import { markStoppedSessionPromptableNoDrain, stopSessionPreserveQueue } from './session-stop.js';
 
+const findActiveTasks = async (app: any, sessionId: string, params: unknown) => {
+  const result = await app
+    .service('tasks')
+    .find({ ...((params as object) ?? {}), query: { session_id: sessionId } });
+  return Array.isArray(result) ? result : result.data;
+};
+
 describe('markStoppedSessionPromptableNoDrain', () => {
   it('marks the session promptable without triggering queue processing', async () => {
     const calls: string[] = [];
@@ -66,6 +73,7 @@ describe('stopSessionPreserveQueue', () => {
             service: () => ({ find: vi.fn().mockResolvedValue({ data: [task] }) }),
           } as never,
           taskRepo: { findQueued: vi.fn().mockResolvedValue([]) } as never,
+          findActiveTasks: findActiveTasks as never,
           sessionsService: { get: vi.fn().mockResolvedValue(session), patch: vi.fn() } as never,
           requestTermination: requestTermination as never,
         } as never,
@@ -122,6 +130,7 @@ describe('stopSessionPreserveQueue', () => {
       {
         app: app as never,
         taskRepo: taskRepo as never,
+        findActiveTasks: findActiveTasks as never,
         sessionsService: sessionsService as never,
         requestTermination: requestTermination as never,
       },
@@ -182,6 +191,7 @@ describe('stopSessionPreserveQueue', () => {
       {
         app: app as never,
         taskRepo: taskRepo as never,
+        findActiveTasks: findActiveTasks as never,
         sessionsService: sessionsService as never,
         requestTermination: requestTermination as never,
       },
@@ -244,6 +254,7 @@ describe('stopSessionPreserveQueue', () => {
         {
           app: app as never,
           taskRepo: taskRepo as never,
+          findActiveTasks: findActiveTasks as never,
           sessionsService: sessionsService as never,
           requestTermination: requestTermination as never,
         },

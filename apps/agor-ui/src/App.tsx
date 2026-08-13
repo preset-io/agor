@@ -66,6 +66,7 @@ import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
+  MARKETPLACE_ROUTE_PATHS,
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
@@ -165,6 +166,11 @@ const loadKnowledgePage = cacheRouteLoader(
   () => import('./pages/KnowledgePage'),
   (module) => ({ default: module.KnowledgePage })
 );
+const loadMarketplacePage = cacheRouteLoader(
+  'marketplace',
+  () => import('./pages/MarketplacePage'),
+  (module) => ({ default: module.MarketplacePage })
+);
 const loadArtifactFullscreenPage = cacheRouteLoader(
   'artifact-fullscreen',
   () => import('./pages/ArtifactFullscreenPage'),
@@ -193,6 +199,7 @@ const MarketingVideoPage = lazy(() =>
 
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
+const MarketplacePage = lazy(loadMarketplacePage);
 const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
 const MobileApp = lazy(loadMobileApp);
 const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
@@ -200,6 +207,7 @@ const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
 const routeModuleLoaders = {
   workspace: loadAgorApp,
   knowledge: loadKnowledgePage,
+  marketplace: loadMarketplacePage,
   'artifact-fullscreen': loadArtifactFullscreenPage,
   demo: loadStreamdownDemoPage,
   mobile: loadMobileApp,
@@ -1788,6 +1796,16 @@ function AppContent() {
     />
   );
 
+  const marketplacePageElement = (
+    <MarketplacePage
+      client={client}
+      connected={connected}
+      currentUser={currentUser}
+      onUserSettingsClick={() => setOpenUserSettings(true)}
+      onLogout={logout}
+    />
+  );
+
   const artifactFullscreenElement = (
     <ArtifactFullscreenPage
       client={client}
@@ -1944,6 +1962,13 @@ function AppContent() {
           {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
           {KNOWLEDGE_ROUTE_PATHS.map((path) => (
             <Route key={path} path={path} element={knowledgePageElement} />
+          ))}
+
+          {/* MCP marketplace: browse the catalog and connect a server. Its own
+                surface because it reads the global catalog table, not the
+                tenant's board/session store. */}
+          {MARKETPLACE_ROUTE_PATHS.map((path) => (
+            <Route key={path} path={path} element={marketplacePageElement} />
           ))}
 
           {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,

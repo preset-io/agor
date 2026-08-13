@@ -524,8 +524,17 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
             added_at: new Date(),
           },
         });
-      } catch {
-        console.warn(`Skipped MCP server ${serverId} during ${label}`);
+      } catch (error) {
+        // Dropping one server rather than failing the whole session is the
+        // established behaviour here, and the right one for inherited and
+        // default selections. Say why, though: "skipped" alone cannot tell an
+        // ownership refusal from a deleted row or a database fault, and the
+        // first of those is the only one a user can act on.
+        console.warn(
+          `Skipped MCP server ${serverId} during ${label}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
     }
   }

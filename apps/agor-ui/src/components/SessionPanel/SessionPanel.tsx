@@ -66,6 +66,7 @@ import {
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
+import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -407,33 +408,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       .map((server) => server!);
   }, [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]);
 
-  // Per-session draft storage (localStorage-backed to survive unmounts)
-  const DRAFT_KEY_PREFIX = 'agor-draft-';
-  const getDraft = React.useCallback((sessionId: string): string => {
-    try {
-      return localStorage.getItem(`${DRAFT_KEY_PREFIX}${sessionId}`) || '';
-    } catch {
-      return '';
-    }
-  }, []);
-  const saveDraft = React.useCallback((sessionId: string, value: string) => {
-    try {
-      if (value.trim()) {
-        localStorage.setItem(`${DRAFT_KEY_PREFIX}${sessionId}`, value);
-      } else {
-        localStorage.removeItem(`${DRAFT_KEY_PREFIX}${sessionId}`);
-      }
-    } catch {
-      // localStorage full or unavailable
-    }
-  }, []);
-  const deleteDraft = React.useCallback((sessionId: string) => {
-    try {
-      localStorage.removeItem(`${DRAFT_KEY_PREFIX}${sessionId}`);
-    } catch {
-      // ignore
-    }
-  }, []);
+  // Per-session draft storage (localStorage-backed to survive unmounts).
+  // Aliased as stable callbacks because they're threaded through props and
+  // effect deps below.
+  const getDraft = React.useCallback(getPromptDraft, []);
+  const saveDraft = React.useCallback(savePromptDraft, []);
+  const deleteDraft = React.useCallback(deletePromptDraft, []);
 
   // Input value lives entirely inside PromptInput (local state).
   // The parent reads it imperatively via promptRef / inputValueRef — no

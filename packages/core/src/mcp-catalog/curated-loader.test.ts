@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { catalogServerSlug } from '../types/mcp-catalog';
 import { load as loadYaml } from '../yaml';
 import {
   CuratedCatalogError,
@@ -223,6 +224,29 @@ describe('loadCuratedCatalog', () => {
       expect(entry.starter_prompt.length).toBeGreaterThan(0);
       expect(entry.permission_disclosure.length).toBeGreaterThan(0);
     }
+  });
+
+  it('gives every curated entry a distinct server name', async () => {
+    const entries = await loadCuratedCatalog();
+
+    // `catalogServerSlug` is the `<name>` in every `mcp__<name>__<tool>`, and
+    // the executor builds its config as an object keyed on it
+    // (`query-builder.ts`, `mcpConfig[server.name] = …`) with no unique index
+    // behind it. Two curated entries sharing a slug means the second install in
+    // a session silently replaces the first and one server never loads.
+    //
+    // Uniqueness is a property of the whole file, not of the derivation: a
+    // second entry under a publisher already present — `com.atlassian/jira`
+    // beside `com.atlassian/atlassian-mcp-server` — reintroduces it without
+    // touching a line of code.
+    const bySlug = new Map<string, string[]>();
+    for (const entry of entries) {
+      const slug = catalogServerSlug(entry.name);
+      bySlug.set(slug, [...(bySlug.get(slug) ?? []), entry.name]);
+    }
+    const collisions = [...bySlug.entries()].filter(([, names]) => names.length > 1);
+
+    expect(collisions).toEqual([]);
   });
 
   it('pairs every curated remote with a transport so the connect flow need not guess', async () => {

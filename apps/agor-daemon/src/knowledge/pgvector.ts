@@ -1,6 +1,7 @@
 import {
   executeRaw,
-  isPostgresDatabase,
+  isPostgresDatabaseHandle,
+  MissingTenantDatabaseScopeError,
   sql,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -64,7 +65,7 @@ async function ensureEmbeddingTenantIsolation(db: KnowledgeTenantDatabase): Prom
 }
 
 async function readCapability(db: KnowledgeTenantDatabase): Promise<KnowledgePgvectorStorageState> {
-  if (!isPostgresDatabase(db)) {
+  if (!isPostgresDatabaseHandle(db)) {
     return {
       available: false,
       extensionInstalled: false,
@@ -114,6 +115,7 @@ async function readCapability(db: KnowledgeTenantDatabase): Promise<KnowledgePgv
       setupHint: reason ? SETUP_HINT : null,
     };
   } catch (error) {
+    if (error instanceof MissingTenantDatabaseScopeError) throw error;
     return {
       available: false,
       extensionInstalled: false,
@@ -137,7 +139,7 @@ export async function getKnowledgePgvectorCapability(
 export async function ensureKnowledgePgvectorStorage(
   db: KnowledgeTenantDatabase
 ): Promise<KnowledgePgvectorCapability> {
-  if (!isPostgresDatabase(db)) return readCapability(db);
+  if (!isPostgresDatabaseHandle(db)) return readCapability(db);
 
   let capability = await readCapability(db);
   if (!capability.extensionInstalled) {

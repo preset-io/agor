@@ -92,6 +92,22 @@ const checks = [
   },
 
   {
+    name: 'parameterless authentication service calls',
+    roots: ['apps/agor-daemon/src'],
+    excludeTests: true,
+    patterns: [
+      /\bauthService\.create\(\s*\{[^)]*\}\s*\)/gs,
+      /\bapp\.service\(\s*['"]authentication['"]\s*\)\.create\(\s*\{[\s\S]*?\}\s*\);/g,
+    ],
+    // Custom HTTP middleware must pass a mutable params object so verified
+    // tenant context is available to authentication hooks and user loading.
+    baseline: {
+      // These executor-facing routes authenticate narrow service tokens and
+      // consume claims directly; they do not perform an authenticated user lookup.
+      'apps/agor-daemon/src/register-routes.ts': 2,
+    },
+  },
+  {
     name: 'raw tenant database scope imports',
     roots: ['apps/agor-daemon/src'],
     excludeTests: true,

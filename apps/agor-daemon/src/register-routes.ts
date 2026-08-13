@@ -25,10 +25,12 @@ import {
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
+  resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  setMcpMemberPolicy,
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
@@ -55,6 +57,7 @@ import {
 import type {
   AuthenticatedParams,
   HookContext,
+  MCPMemberPolicy,
   Message,
   MessageID,
   MessageSource,
@@ -72,6 +75,7 @@ import type {
 import {
   hasMinimumRole,
   isTaskPendingDispatch,
+  MCP_MEMBER_POLICIES,
   MessageRole,
   ROLES,
   SessionStatus,
@@ -112,6 +116,7 @@ import {
 } from './permissions/deliver-permission-decision.js';
 import { assertExternalPermissionMessageCreateAllowed } from './permissions/permission-message-boundary.js';
 import type { GatewayService } from './services/gateway.js';
+import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -146,6 +151,7 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
+import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import {
   buildPromptTaskMetadata,
   type InternalPromptTaskMetadataInput,
@@ -316,6 +322,65 @@ export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | un
   );
 }
 
+/** Build the required short database unit used by authenticated long-route dependencies. */
+export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase) {
+  return <T>(work: () => Promise<T>): Promise<T> => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for database operation');
+    return runWithTenantDatabaseScope(db, tenantId, work);
+  };
+}
+
+export function createUploadAuthMiddleware(input: {
+  authentication: {
+    create(
+      data: { strategy: 'jwt'; accessToken: string },
+      params: AuthenticatedParams
+    ): Promise<{ user?: User; authentication?: { payload?: unknown } }>;
+  };
+  multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
+}) {
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 middleware request augmentation
+  return async (req: any, res: any, next: NextFunction) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+      if (!token) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      const authParams: AuthenticatedParams = { headers: req.headers };
+      const result = await input.authentication.create(
+        { strategy: 'jwt', accessToken: token },
+        authParams
+      );
+      const authenticatedParams = {
+        user: result.user,
+        provider: 'rest',
+        authentication: result.authentication,
+        headers: req.headers,
+      };
+      req.feathers = {
+        ...authenticatedParams,
+        tenant:
+          authParams.tenant ??
+          resolveTenantContext(input.multiTenancy, {
+            params: {
+              authentication: result.authentication,
+              headers: req.headers,
+            },
+            authPayload: result.authentication?.payload,
+            headers: req.headers,
+          }),
+      };
+      next();
+    } catch (error) {
+      console.error('❌ [Upload Auth] Authentication failed:', error);
+      res.status(401).json({ error: 'Authentication required' });
+    }
+  };
+}
+
 /**
  * Register authentication configuration and custom REST routes.
  */
@@ -365,6 +430,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         hook(context)
       ) as Promise<Awaited<T>>;
     };
+  const inCurrentTenantDatabaseScope = createRequiredTenantDatabaseRunner(db);
 
   /** Schedule orchestration after commit with tenant identity but no open transaction. */
   function deferInFreshTenantScope(params: RouteParams, fn: () => Promise<void>): void {
@@ -1000,14 +1066,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       `🧹 [PromptState] Repairing stuck session ${shortId(session.session_id)} ` +
         `(status=${session.status}, ready_for_prompt=${session.ready_for_prompt})`
     );
-    return (await app.service('sessions').patch(
-      session.session_id,
-      {
-        status: SessionStatus.IDLE,
-        ready_for_prompt: true,
-      },
-      params
-    )) as Session;
+    return inCurrentTenantDatabaseScope(
+      async () =>
+        (await app.service('sessions').patch(
+          session.session_id,
+          {
+            status: SessionStatus.IDLE,
+            ready_for_prompt: true,
+          },
+          params
+        )) as Session
+    );
   }
 
   /**
@@ -1200,7 +1269,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (!agenticToolEnabled) {
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
-    const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
+    const session = await runWithTenantDatabaseScope(db, tenantId, () =>
+      sessionsService.materializeAgenticToolPreset(loadedSession, params)
+    );
     const startTimestamp = new Date().toISOString();
 
     // The daemon persists launch intent and writes required sentinel git fields
@@ -1305,14 +1376,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // explicit patch, `session.status` stays IDLE while a task is RUNNING,
     // causing the queue gate in the prompt route to wave subsequent prompts
     // through instead of queuing them.
-    await app.service('sessions').patch(
-      task.session_id,
-      {
-        status: SessionStatus.RUNNING,
-        ready_for_prompt: false,
-        tasks: [...session.tasks, task.task_id],
-      },
-      params
+    await runWithTenantDatabaseScope(db, tenantId, () =>
+      app.service('sessions').patch(
+        task.session_id,
+        {
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          tasks: [...session.tasks, task.task_id],
+        },
+        params
+      )
     );
 
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
@@ -1482,7 +1555,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
-        let session = await sessionsService.get(id, params);
+        const requestedSessionId = id;
+        let session = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+          sessionsService.get(requestedSessionId, params)
+        );
         id = session.session_id;
         const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
 
@@ -1518,7 +1594,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (!(await isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool))) {
             throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
           }
-          session = await sessionsService.materializeAgenticToolPreset(session, params);
+          session = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.materializeAgenticToolPreset(session, params)
+          );
           if (
             session.agentic_tool_preset_id &&
             data.permissionMode !== undefined &&
@@ -1540,10 +1618,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.log(
             `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
           );
-          session = (await sessionsService.patch(
-            id,
-            { archived: false, archived_reason: undefined },
-            params
+          session = (await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.patch(id, { archived: false, archived_reason: undefined }, params)
           )) as typeof session;
         }
 
@@ -1565,7 +1641,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionTurnLocks,
           id as SessionID,
           async () => {
-            let lockedSession = await sessionsService.get(id, params);
+            let lockedSession = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+              sessionsService.get(id, params)
+            );
             if (lockedSession.status === SessionStatus.STOPPING) {
               // The earlier STOPPING check was against pre-lock state — re-check
               // here so a session that entered STOPPING while we waited for our
@@ -2289,62 +2367,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     next();
   };
 
-  // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-  const uploadAuthMiddleware: any = async (req: any, res: any, next: any) => {
-    try {
-      if (DEBUG_UPLOAD) console.log('🔐 [Upload Auth] Attempting authentication');
-
-      let token = null;
-
-      // Bearer-only. We previously fell back to feathers-jwt / agor-access-token
-      // / jwt cookies, which made the upload endpoint vulnerable to CSRF (a
-      // forged form-post would inherit the user's cookie). All in-tree callers
-      // (UI FileUpload component) already send `Authorization: Bearer …`.
-      const authHeader = req.headers.authorization;
-      if (authHeader?.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
-        if (DEBUG_UPLOAD) console.log('   Found token in Authorization header');
-      }
-
-      if (!token) {
-        if (DEBUG_UPLOAD) console.log('⚠️  [Upload Auth] No JWT token found, rejecting');
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-
-      if (DEBUG_UPLOAD) console.log('🔑 [Upload Auth] JWT token found, verifying...');
-
-      const authService = app.service('authentication');
-      const result = await authService.create({
-        strategy: 'jwt',
-        accessToken: token,
-      });
-
-      if (DEBUG_UPLOAD) {
-        console.log('✅ [Upload Auth] Authentication successful');
-        console.log('   User:', result.user?.user_id ? shortId(result.user.user_id) : 'unknown');
-      }
-
-      const authParams = {
-        user: result.user,
-        provider: 'rest',
-        authentication: result.authentication,
-        headers: req.headers,
-      };
-      req.feathers = {
-        ...authParams,
-        tenant: resolveTenantContext(multiTenancy, {
-          params: authParams,
-          authPayload: result.authentication?.payload,
-          headers: req.headers,
-        }),
-      };
-
-      next();
-    } catch (error) {
-      console.error('❌ [Upload Auth] Authentication failed:', error);
-      res.status(401).json({ error: 'Authentication required' });
-    }
-  };
+  const uploadAuthMiddleware = createUploadAuthMiddleware({
+    authentication: app.service('authentication'),
+    multiTenancy,
+  });
 
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
   (app as any).post(
@@ -2612,10 +2638,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         };
         if (body.force_unverified === true) {
           const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
-            const session = await app.service('sessions').get(id, params);
-            const task = findUnverifiedTerminationTask(
-              await findActiveTasksForSession(app, session.session_id, params)
-            );
+            const { session, activeTasks } = await inCurrentTenantDatabaseScope(async () => {
+              const session = await app.service('sessions').get(id, params);
+              const activeTasks = await findActiveTasksForSession(app, session.session_id, params);
+              return { session, activeTasks };
+            });
+            const task = findUnverifiedTerminationTask(activeTasks);
             if (!task) throw new BadRequest('Session has no unverified Task to force-fail.');
             const taskId = task.task_id;
             const userId = params.user?.user_id;
@@ -2652,6 +2680,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               app,
               taskRepo: stopRouteRepositories.taskRepo,
               sessionsService: sessionsServiceWithHooks,
+              findActiveTasks: (stopApp, sessionId, stopParams) =>
+                inCurrentTenantDatabaseScope(() =>
+                  findActiveTasksForSession(stopApp, sessionId, stopParams)
+                ),
             },
             id as SessionID,
             params,
@@ -2951,6 +2983,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
+    runInTenantDatabaseScope: inCurrentTenantDatabaseScope,
     resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
       emitServiceEvent(app, {
         path: 'messages',
@@ -3798,6 +3831,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     checkSessionOwnerOrAdmin(user, session, superadminOpts);
   };
 
+  // Same authorization, but returns the session. MCP routes need its
+  // `created_by`: that identity, not the caller's, decides which private
+  // servers the session may see, so it has to be loaded for service-account
+  // callers too rather than short-circuited.
   const authorizeAndLoadSessionForMcpConfig = async (
     sessionId: string,
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
@@ -3913,6 +3950,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           scope: 'global',
           ...(enabledOnly ? { enabled: true } : {}),
           ...(userId ? { forUserId: userId } : {}),
+          // Global scope means "every session of everyone who may use it", not
+          // "every session in the tenant": a private server belongs to its
+          // owner's sessions only. Keyed on the session's creator rather than
+          // the caller or the query's `forUserId`, neither of which is the
+          // identity the session runs as.
           usableByUserId: session.created_by,
           $limit: 1000,
         };
@@ -4066,6 +4108,61 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       remove: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
       patch: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
     },
+    requireAuth
+  );
+
+  // ============================================================================
+  // MCP member policy
+  //
+  // Routes:
+  //   GET   /mcp-member-policy   — the policy in force for the caller
+  //   PATCH /mcp-member-policy   — set the tenant-wide value (admin)
+  // ============================================================================
+
+  registerAuthenticatedRoute(
+    app,
+    '/mcp-member-policy',
+    {
+      async find(params: RouteParams) {
+        const policy = await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId());
+        // The policy alone does not answer "may I add one?" — the role floor
+        // beneath it does too. Answering here keeps a client from rebuilding
+        // the rule out of `isAdmin` and a policy value, which is the shape that
+        // loses the floor. Advisory: the write path still decides.
+        return {
+          policy,
+          can_configure: canConfigureMcpServers(params.user?.role, policy),
+        };
+      },
+      async patch(_id: unknown, data: { policy: MCPMemberPolicy }, params: RouteParams) {
+        if (!MCP_MEMBER_POLICIES.includes(data?.policy)) {
+          throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
+        }
+        await setMcpMemberPolicy(db, data.policy, getCurrentTenantId(), params.user?.user_id);
+        return { policy: data.policy };
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      find: { role: ROLES.MEMBER, action: 'read the MCP member policy' },
+      patch: { role: ROLES.ADMIN, action: 'change the MCP member policy' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
+  // MCP marketplace connect
+  // ============================================================================
+
+  // A "long" route: it probes a remote endpoint before writing anything, so it
+  // carries tenant identity without holding a transaction open across the
+  // network call. Every write it makes goes through a service that opens its
+  // own unit of work.
+  registerLongAuthenticatedRoute(
+    app,
+    '/mcp-catalog/connect',
+    createMCPCatalogConnectService(app),
+    { create: { role: ROLES.MEMBER, action: 'connect MCP catalog entries' } },
     requireAuth
   );
 

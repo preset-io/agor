@@ -4,6 +4,7 @@ import type { MenuProps } from 'antd';
 import { Button, Dropdown, Space, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
+import { UserIdentityAvatar } from './UserIdentityAvatar';
 
 export interface GlobalUserMenuProps {
   user?: User | null;
@@ -28,7 +29,6 @@ export const GlobalUserMenu: React.FC<GlobalUserMenuProps> = ({
 }) => {
   const { token } = theme.useToken();
   const [open, setOpen] = useState(false);
-  const userEmoji = user?.emoji || '👤';
   const audioEnabled = user?.preferences?.audio?.enabled ?? false;
 
   const items: MenuProps['items'] = [
@@ -36,7 +36,7 @@ export const GlobalUserMenu: React.FC<GlobalUserMenuProps> = ({
       key: 'user-info',
       label: (
         <div style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 20 }}>{userEmoji}</span>
+          <UserIdentityAvatar user={user} size={32} />
           <div>
             <div style={{ fontWeight: 500 }}>{user?.name || 'User'}</div>
             <div style={{ fontSize: 12, color: token.colorTextDescription }}>{user?.email}</div>

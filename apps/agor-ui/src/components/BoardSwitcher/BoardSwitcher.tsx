@@ -17,6 +17,7 @@ import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { BoardEditModal } from '../BoardEditModal';
+import { BoardTile, getBoardEmoji } from '../BoardTile';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -141,7 +142,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
             }}
           >
             <Space size={8}>
-              <span style={{ fontSize: 18 }}>{board.icon || '📋'}</span>
+              <BoardTile emoji={getBoardEmoji(board, branchById)} size={24} />
               <Text strong={isActive}>{board.name}</Text>
             </Space>
             <Badge
@@ -154,7 +155,16 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
         onClick: () => handleBoardClick(board.board_id),
       };
     });
-  }, [boards, currentBoardId, branchCountByBoard, handleBoardClick, token, filterText, showFilter]);
+  }, [
+    boards,
+    currentBoardId,
+    branchCountByBoard,
+    branchById,
+    handleBoardClick,
+    token,
+    filterText,
+    showFilter,
+  ]);
 
   const homeRow = (
     <Button
@@ -172,10 +182,9 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       }}
     >
       <Space size={8}>
-        <span style={{ fontSize: 18 }}>🏠</span>
+        <HomeOutlined style={{ fontSize: 18 }} />
         <Text strong={!currentBoardId}>Home</Text>
       </Space>
-      <HomeOutlined style={{ color: token.colorTextTertiary }} />
     </Button>
   );
 
@@ -273,9 +282,11 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
             }}
           >
             <Space size={8} style={{ minWidth: 0, overflow: 'hidden' }}>
-              <span style={{ fontSize: 18 }}>
-                {currentBoard ? currentBoard.icon || '📋' : '🏠'}
-              </span>
+              {currentBoard ? (
+                <BoardTile emoji={getBoardEmoji(currentBoard, branchById)} size={24} />
+              ) : (
+                <HomeOutlined style={{ fontSize: 18 }} />
+              )}
               <Text strong ellipsis style={{ minWidth: 0 }}>
                 {currentBoard?.name || 'Home'}
               </Text>

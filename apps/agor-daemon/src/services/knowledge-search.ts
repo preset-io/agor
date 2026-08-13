@@ -5,7 +5,7 @@
 import { getBaseUrl } from '@agor/core/config';
 import {
   executeRaw,
-  isPostgresDatabase,
+  isPostgresDatabaseHandle,
   KnowledgeDocumentRepository,
   KnowledgeNamespaceRepository,
   type KnowledgeSearchQuery,
@@ -72,7 +72,7 @@ export class KnowledgeSearchService {
 
   private assertSupportedMode(query?: KnowledgeSearchQuery): void {
     const mode = query?.mode ?? 'text';
-    if (mode !== 'text' && !isPostgresDatabase(this.db)) {
+    if (mode !== 'text' && !isPostgresDatabaseHandle(this.db)) {
       throw new BadRequest(
         semanticUnavailableMessage('the configured database is not PostgreSQL'),
         { code: 'semantic_unavailable' }
@@ -138,7 +138,7 @@ export class KnowledgeSearchService {
     rawQuery: KnowledgeSearchQuery,
     user?: User
   ): Promise<KnowledgeSearchResult[]> {
-    if (!isPostgresDatabase(this.db)) {
+    if (!isPostgresDatabaseHandle(this.db)) {
       throw new BadRequest(
         semanticUnavailableMessage('the configured database is not PostgreSQL'),
         { code: 'semantic_unavailable' }

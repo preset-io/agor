@@ -33,12 +33,12 @@ import {
 } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutationGate } from '../../contexts/ConnectionContext';
-import { AgorAvatar } from '../AgorAvatar';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { AgorEmojiPicker } from '../EmojiPickerInput';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MetaRow } from '../MetaRow';
 import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
+import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
 const { Text, Title } = Typography;
 
@@ -189,7 +189,7 @@ const ReplyItem: React.FC<{
         onMouseLeave={() => setReplyHovered(false)}
       >
         <MetaRow
-          avatar={<AgorAvatar>{replyUser?.emoji || '👤'}</AgorAvatar>}
+          avatar={<UserIdentityAvatar user={replyUser} size={40} />}
           title={
             <Space size={4}>
               <Text strong style={{ fontSize: token.fontSizeSM }}>
@@ -317,7 +317,7 @@ const CommentThread: React.FC<{
       >
         {/* Thread Root */}
         <MetaRow
-          avatar={<AgorAvatar>{user?.emoji || '👤'}</AgorAvatar>}
+          avatar={<UserIdentityAvatar user={user} size={40} />}
           title={
             <Space size={4}>
               <Text strong style={{ fontSize: token.fontSizeSM }}>

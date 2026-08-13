@@ -10,7 +10,10 @@
 // registry or from a file checked into this repository — so the table is
 // deliberately global. See `packages/core/src/db/tenant-deletion-manifest.ts`.
 
+import type { AgenticToolName } from './agentic-tool';
 import type { UUID } from './id';
+import type { MCPServer } from './mcp';
+import type { Session } from './session';
 
 /**
  * MCP catalog entry ID (branded UUID).
@@ -250,6 +253,89 @@ export interface MCPCatalogEntry {
   probed_auth_scheme?: string;
 }
 
+/**
+ * Reverse-DNS labels that name the protocol rather than the publisher.
+ *
+ * Vendors routinely register the server under one — `com.figma.mcp/mcp` — so
+ * the trailing label of either half is frequently the word "mcp" rather than
+ * anything identifying.
+ */
+const GENERIC_CATALOG_NAME_LABELS = new Set(['mcp', 'mcp-server', 'server', 'api', 'www']);
+
+/**
+ * The identifying half of a reverse-DNS catalog name, lowercased.
+ *
+ * `com.deepwiki/mcp` → `deepwiki`, `io.github.github/github-mcp-server` →
+ * `github`, `io.sanity.www/mcp` → `sanity`. Undefined when every label is
+ * generic, which callers resolve their own way rather than guessing here.
+ *
+ * Shared because both sides of the wire need this and disagreed: the catalog
+ * UI derived the publisher while connect took the last path segment, so the
+ * server name the agent saw was the word "mcp" for 38 of 50 curated entries.
+ * One rule, two formattings — never two rules.
+ *
+ * The publisher is the identity only while what is connectable is curated.
+ * `io.github.<user>/<repo>` inverts it — every server one GitHub user
+ * publishes shares a publisher and differs only in the path — so the day
+ * uncurated registry entries become installable, this needs a disambiguating
+ * suffix rather than a special case. `curated-loader.test.ts` holds the
+ * uniqueness invariant that would otherwise notice too late.
+ */
+function catalogPublisherSegment(name: string): string | undefined {
+  const [domain = ''] = name.split('/');
+  return domain
+    .split('.')
+    .filter((label) => label && !GENERIC_CATALOG_NAME_LABELS.has(label.toLowerCase()))
+    .pop()
+    ?.toLowerCase();
+}
+
+/**
+ * What to call a catalog entry on screen.
+ *
+ * A curated title wins. Otherwise the publisher stands in, because `title` is
+ * the registry mirror's column and registry sync is off by default — rendering
+ * `name` would label the whole catalog with reverse-DNS strings.
+ *
+ * It cannot recover casing: `com.deepwiki` reads "Deepwiki", not "DeepWiki".
+ * Curated titles are the fix for that, not more derivation.
+ */
+export function catalogDisplayName(entry: Pick<MCPCatalogEntry, 'name' | 'title'>): string {
+  const title = entry.title?.trim();
+  if (title) return title;
+  const publisher = catalogPublisherSegment(entry.name);
+  if (!publisher) return entry.name;
+  return publisher.charAt(0).toUpperCase() + publisher.slice(1);
+}
+
+/**
+ * The name an installed server carries into the agent's tool namespace.
+ *
+ * This is the `<name>` in every `mcp__<name>__<tool>` the model reads, so it
+ * has to identify the server: two installs sharing one produce tool names
+ * nothing can tell apart. The path segment is the wrong half of the identity —
+ * it is usually the protocol's own name — so the publisher supplies it, and the
+ * path segment is only a fallback for a name with no publisher left in it.
+ */
+export function catalogServerSlug(name: string): string {
+  const slugify = (value: string): string =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+  const fromPublisher = slugify(catalogPublisherSegment(name) ?? '');
+  if (fromPublisher) return fromPublisher;
+
+  // The path segment only helps when it is not the same generic word, or the
+  // fallback would reintroduce exactly the collision this exists to avoid.
+  const segment = name.split('/').pop() ?? '';
+  const fromSegment = GENERIC_CATALOG_NAME_LABELS.has(segment.toLowerCase())
+    ? ''
+    : slugify(segment);
+  return fromSegment || 'mcp-server';
+}
+
 /** Sort keys the catalog service accepts. */
 export type MCPCatalogSort = 'popularity' | 'name' | 'recently_updated' | 'relevance';
 
@@ -278,6 +364,14 @@ export interface MCPCatalogFilters {
    * drop withdrawn servers without naming every state that is still live.
    */
   exclude_registry_status?: string;
+  /**
+   * Match any one of several probe verdicts.
+   *
+   * "Not known to need an account" spans two verdicts — probed open, and never
+   * probed — and a single-value filter cannot say that. Callers that mean a set
+   * pass one; the singular field stays for callers that mean exactly one.
+   */
+  probed_auth_types?: MCPCatalogProbedAuthType[];
   names?: string[];
   sort?: MCPCatalogSort;
   limit?: number;
@@ -319,6 +413,44 @@ export interface MCPCatalogCurationUpsert {
   /** Used when the registry has not (yet) published the server. */
   remote_url?: string;
   transport?: MCPCatalogTransport;
+}
+
+/**
+ * Request body of `POST /mcp-catalog/connect`.
+ *
+ * A catalog key and where the session should live, and nothing else. URL,
+ * transport, and auth come from the catalog row server-side, so this cannot be
+ * used to register an arbitrary server.
+ */
+export interface MCPCatalogConnectData {
+  /** Catalog entry UUID or its reverse-DNS registry name. */
+  catalog_key: string;
+  branch_id: string;
+  agentic_tool: AgenticToolName;
+  /**
+   * The `permission_disclosure` the user was shown and accepted.
+   *
+   * Connecting a server puts its tools, and their descriptions, inside every
+   * prompt of the session it is attached to, so the disclosure is the last
+   * thing between a user and that decision. A client-side checkbox cannot be
+   * the only place that rule lives: the endpoint would accept a connect from
+   * any caller that never rendered it. Sending back the text — rather than a
+   * bare `true` — means a client cannot satisfy the check without having had
+   * the disclosure in hand, and a stale one no longer matches the row.
+   *
+   * It does not prove a human read the words. It proves the protocol ran.
+   */
+  acknowledged_disclosure: string;
+}
+
+/** What a successful connect hands back to the caller. */
+export interface MCPCatalogConnectResult {
+  mcp_server: MCPServer;
+  session: Session;
+  /** The entry's curated demonstration prompt, for the new session's composer. */
+  starter_prompt?: string;
+  /** True when an existing install was reused rather than a second row created. */
+  reused_existing_server: boolean;
 }
 
 /** Result of probing one entry, written back onto the row. */

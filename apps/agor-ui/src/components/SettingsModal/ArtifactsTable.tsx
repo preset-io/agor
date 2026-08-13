@@ -23,6 +23,7 @@ import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { boardSelectFilter, boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
@@ -111,13 +112,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     });
   };
 
-  const boardOptions = mapToArray(boardById)
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((board) => ({
-      value: board.board_id,
-      label: `${board.icon || '📋'} ${board.name}`,
-    }));
+  const boardOptions = boardSelectOptions(mapToArray(boardById), branchById);
 
   const columns = [
     {
@@ -184,8 +179,9 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         const branch = artifact.branch_id ? branchById.get(artifact.branch_id) : undefined;
         const branchText = artifact.branch_id ? branch?.name || shortId(artifact.branch_id) : '—';
         const board = boardById.get(artifact.board_id);
+        const boardEmoji = board ? getBoardEmoji(board, branchById) : undefined;
         const boardText = board
-          ? `${board.icon || ''} ${board.name}`.trim()
+          ? `${boardEmoji ? `${boardEmoji} ` : ''}${board.name}`
           : shortId(artifact.board_id);
         return (
           <Space orientation="vertical" size={0} style={{ width: '100%' }}>
@@ -368,9 +364,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
                 showSearch
                 placeholder="Select board..."
                 options={boardOptions}
-                filterOption={(input, option) =>
-                  (option?.label?.toString() ?? '').toLowerCase().includes(input.toLowerCase())
-                }
+                filterOption={boardSelectFilter}
               />
             </Form.Item>
           </Form>

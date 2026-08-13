@@ -86,6 +86,38 @@ describe('AppHeader Knowledge Base button', () => {
   });
 });
 
+describe('AppHeader navigation entries', () => {
+  beforeEach(() => {
+    mockNavigate.mockClear();
+  });
+
+  it('advertises exactly these surfaces', () => {
+    renderHeader();
+
+    // The whole set, so adding or removing an entry has to be a deliberate
+    // edit here rather than something that slips in. Marketplace is absent on
+    // purpose: the surface answers at /marketplace but is not advertised while
+    // the feature is incomplete, so re-adding the link should fail this and
+    // make whoever does it confirm that decision has been reversed.
+    const linkNames = screen
+      .getAllByRole('link')
+      .map((link) => link.getAttribute('aria-label') ?? link.textContent?.trim());
+
+    expect(linkNames).toEqual(['Knowledge Base']);
+  });
+
+  it('does not link to the marketplace from anywhere in the header', () => {
+    renderHeader();
+
+    const marketplaceLinks = screen
+      .getAllByRole('link')
+      .filter((link) => (link.getAttribute('href') ?? '').includes('marketplace'));
+
+    expect(marketplaceLinks).toEqual([]);
+    expect(screen.queryByText('Marketplace')).not.toBeInTheDocument();
+  });
+});
+
 describe('AppHeader settings dropdown', () => {
   beforeEach(() => {
     mockNavigate.mockClear();

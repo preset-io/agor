@@ -334,6 +334,10 @@ export class MCPCatalogRepository {
         sql`(${mcpCatalogEntries.registry_status} IS NULL OR ${mcpCatalogEntries.registry_status} <> ${filters.exclude_registry_status})`
       );
     }
+    if (filters.probed_auth_types) {
+      if (filters.probed_auth_types.length === 0) return [sql`1 = 0`];
+      conditions.push(inArray(mcpCatalogEntries.probed_auth_type, filters.probed_auth_types));
+    }
     if (filters.names) {
       // An empty allowlist means "nothing matches", which `inArray` cannot express.
       if (filters.names.length === 0) return [sql`1 = 0`];

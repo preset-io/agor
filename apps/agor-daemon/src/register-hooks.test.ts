@@ -18,11 +18,17 @@
  * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
+import {
+  createTenantScopedDatabaseProxy,
+  getCurrentTenantDatabaseScope,
+  runWithTenantContext,
+} from '@agor/core/db';
 import { type HookContext, TaskStatus } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
+  createTenantScopedBeforeHookChain,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
@@ -625,6 +631,11 @@ describe('canReceiveMcpTokenForSession', () => {
 });
 
 describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
+  it.each(['file', 'files'])('%s is identity-only and never request-transaction owned', (path) => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
+  });
+
   // Regression: the codex-auth endpoints do network/process work after a short
   // tenant DB read, then call getCurrentTenantId() to open their own units of
   // work — so they must carry ambient tenant identity via the identity-only
@@ -654,4 +665,134 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
     expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
     expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
   });
+});
+
+describe('registered file service RBAC database preload', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+
+  it.each(['file', 'files'])(
+    'runs the actual %s RBAC preload registration inside tenant database scope',
+    async (path) => {
+      const captured = new Map<string, RegisteredHook[]>();
+      const assertTenantScope = () => {
+        expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+      };
+      const branch = { branch_id: 'branch-1', path: '/branch-1', others_can: 'view' };
+      const branchRepository = {
+        findById: vi.fn(async () => {
+          assertTenantScope();
+          return branch;
+        }),
+        isOwner: vi.fn(async () => {
+          assertTenantScope();
+          return true;
+        }),
+        resolveUserPermission: vi.fn(async () => {
+          assertTenantScope();
+          return 'all';
+        }),
+      };
+      const sessionsService = {
+        get: vi.fn(async () => {
+          assertTenantScope();
+          return { session_id: 'session-1', branch_id: 'branch-1' };
+        }),
+      };
+      const app = {
+        service(servicePath: string) {
+          return {
+            hooks(hooks: { before?: { all?: RegisteredHook[] } }) {
+              const normalizedPath = servicePath.replace(/^\//, '');
+              if (hooks.before?.all) captured.set(normalizedPath, hooks.before.all);
+            },
+          };
+        },
+        use() {},
+        publish() {},
+      };
+
+      registerHooks({
+        db: { run: vi.fn() } as RegisterHooksContext['db'],
+        app: app as RegisterHooksContext['app'],
+        config: {
+          database: { dialect: 'postgresql' },
+          multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-a' },
+        } as RegisterHooksContext['config'],
+        jwtSecret: 'registration-test-secret',
+        branchRbacEnabled: true,
+        requireAuth: async (context) => context,
+        superadminOpts: { allowSuperadmin: true },
+        sessionsService: sessionsService as RegisterHooksContext['sessionsService'],
+        messagesService: {} as RegisterHooksContext['messagesService'],
+        boardsService: undefined,
+        branchRepository: branchRepository as RegisterHooksContext['branchRepository'],
+        usersRepository: {} as RegisterHooksContext['usersRepository'],
+        sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+        deployment: { mode: 'standalone' },
+      });
+
+      const context = {
+        path,
+        method: 'find',
+        params: {
+          provider: 'rest',
+          query:
+            path === 'file'
+              ? { branch_id: 'branch-1' }
+              : { sessionId: 'session-1', search: 'readme' },
+          user: { user_id: 'user-1', role: 'superadmin' },
+        },
+      } as HookContext;
+
+      await runWithTenantContext('tenant-a', async () => {
+        for (const hook of captured.get(path) ?? []) await hook(context);
+      });
+
+      expect(context.params.branch?.branch_id).toBe('branch-1');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      if (path === 'files') expect(sessionsService.get).toHaveBeenCalledOnce();
+      else expect(branchRepository.findById).toHaveBeenCalledOnce();
+    }
+  );
+});
+
+describe('file service RBAC database preload', () => {
+  it.each(['file', 'files'])(
+    'scopes guarded reads for %s and closes scope afterward',
+    async (path) => {
+      const guarded = createTenantScopedDatabaseProxy({ run: () => 'ok' } as never, {
+        requireScope: true,
+        label: `${path} hook test`,
+      });
+      const read = async (context: HookContext) => {
+        expect(guarded.run).toBeTypeOf('function');
+        expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+        context.params.branch = { branch_id: 'branch-1' } as never;
+        return context;
+      };
+      const hook = createTenantScopedBeforeHookChain(guarded, read);
+      const context = { path, params: {} } as HookContext;
+
+      await runWithTenantContext('tenant-a', () => hook(context));
+
+      expect(context.params.branch?.branch_id).toBe('branch-1');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      expect(() => guarded.run).toThrow(
+        `Missing tenant database scope for ${path} hook test access`
+      );
+    }
+  );
+
+  it.each(['file', 'files'])(
+    'fails before opening %s RBAC work without tenant identity',
+    async (path) => {
+      const read = vi.fn();
+      const hook = createTenantScopedBeforeHookChain({ run: vi.fn() } as never, read);
+
+      await expect(hook({ path, params: {} } as HookContext)).rejects.toThrow(
+        `Missing active tenant context for ${path} authorization`
+      );
+      expect(read).not.toHaveBeenCalled();
+    }
+  );
 });

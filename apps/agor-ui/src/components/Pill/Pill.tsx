@@ -30,6 +30,7 @@ import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
+import { NeutralBoardIcon } from '../BoardTile/BoardTile';
 import { type SessionForIds, SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 import { getModelDisplayName } from './modelDisplay';
@@ -935,8 +936,10 @@ export const BranchPill: React.FC<BranchPillProps> = ({
 interface BoardPillProps extends BasePillProps {
   board: {
     name: string;
-    icon?: string | null;
   };
+  /** Pre-resolved primary-assistant emoji (see `getBoardEmoji`); falls back to
+   * the neutral board glyph when absent — never a stored board icon. */
+  emoji?: string | null;
   compact?: boolean;
   title?: string;
   onClick?: (e: EntityPillInteractionEvent) => void;
@@ -944,16 +947,17 @@ interface BoardPillProps extends BasePillProps {
 
 export const BoardPill: React.FC<BoardPillProps> = ({
   board,
+  emoji,
   compact = false,
   title,
   onClick,
   style,
 }) => (
   <EntityPill
-    icon={<ApartmentOutlined />}
+    icon={<NeutralBoardIcon />}
     color={ENTITY_PILL_COLORS.board}
     label={board.name}
-    emoji={board.icon}
+    emoji={emoji}
     compact={compact}
     title={title ?? board.name}
     onClick={onClick}
@@ -965,7 +969,6 @@ interface UserPillProps extends BasePillProps {
   user: {
     name?: string | null;
     email?: string | null;
-    emoji?: string | null;
   };
   compact?: boolean;
   title?: string;
@@ -986,7 +989,6 @@ export const UserPill: React.FC<UserPillProps> = ({
       icon={<UserOutlined />}
       color={ENTITY_PILL_COLORS.user}
       label={label}
-      emoji={user.emoji}
       compact={compact}
       title={title ?? label}
       onClick={onClick}

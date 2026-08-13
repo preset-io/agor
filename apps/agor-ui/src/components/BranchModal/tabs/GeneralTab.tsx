@@ -3,8 +3,11 @@ import { isTeammate } from '@agor-live/client';
 import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
+import { useAgorStore } from '../../../store/agorStore';
+import { selectBranchById } from '../../../store/selectors';
 import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
+import { boardSelectOptions } from '../../BoardTile';
 import { MCPServerSelect } from '../../MCPServerSelect';
 import { Tag } from '../../Tag';
 import type { GeneralFormState } from '../useBranchModalForm';
@@ -45,6 +48,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   onArchiveOrDelete,
 }) => {
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const branchById = useAgorStore(selectBranchById);
 
   const handleArchiveOrDelete = (options: {
     metadataAction: 'archive' | 'delete';
@@ -122,12 +126,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 placeholder="Select board (optional)..."
                 allowClear
                 disabled={!canEdit}
-                options={boards
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((board) => ({
-                    value: board.board_id,
-                    label: `${board.icon || '📋'} ${board.name}`,
-                  }))}
+                options={boardSelectOptions(boards, branchById)}
               />
             </Form.Item>
 

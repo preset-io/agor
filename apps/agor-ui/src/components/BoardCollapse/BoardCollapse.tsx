@@ -2,12 +2,15 @@ import type { Board } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Collapse, Typography, theme } from 'antd';
 import type { ReactNode } from 'react';
+import { BoardTile } from '../BoardTile';
 
 const { Text } = Typography;
 
 export interface BoardCollapseItem {
   key: string;
   board: Board;
+  /** Pre-resolved primary-assistant emoji (see {@link getBoardEmoji}). */
+  emoji?: string;
   badge?: ReactNode;
   children: ReactNode;
 }
@@ -33,11 +36,11 @@ export const BoardCollapse: React.FC<BoardCollapseProps> = ({ items, defaultActi
         backgroundColor: 'transparent',
         width: '100%',
       }}
-      items={items.map(({ key, board, badge, children }) => ({
+      items={items.map(({ key, board, emoji, badge, children }) => ({
         key,
         label: (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {board.icon && <span style={{ fontSize: 16 }}>{board.icon}</span>}
+            <BoardTile emoji={emoji} size={20} />
             <Text strong style={{ fontSize: 14 }}>
               {board.name}
             </Text>

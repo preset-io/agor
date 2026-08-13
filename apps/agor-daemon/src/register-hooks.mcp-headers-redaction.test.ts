@@ -14,15 +14,18 @@ describe('register-hooks MCP server secret redaction', () => {
     expect(source).toContain('redactMCPServerSecrets');
     expect(utilSource).toContain('redactMCPAuthSecrets(server.auth)');
     expect(source).toMatch(/find:\s*\[injectPerUserOAuthTokens,\s*redactMCPServerSecretFields\]/);
+    // Ownership hooks may run ahead of these; redaction must still be last.
     expect(source).toMatch(
       /get:\s*\[[\s\S]*?injectPerUserOAuthTokens,\s*redactMCPServerSecretFields[\s\S]*?\]/
     );
   });
 
-  it('keeps full MCP server replacements behind the admin write gate', () => {
-    expect(source).toMatch(
-      /update:\s*\[requireMinimumRole\(ROLES\.ADMIN, ['"]update MCP servers['"]\)\]/
-    );
+  it('keeps full MCP server replacements behind the write gate', () => {
+    // PUT replaces the whole row, so it must clear the same gate as the other
+    // writes rather than the `all` chain alone. That gate is no longer a role
+    // check: `authorizeMcpServerWriteHook` decides on `mcp_member_policy` plus
+    // ownership, which is what lets a member hold a server of their own at all.
+    expect(source).toMatch(/update:\s*\[authorizeMcpServerWriteHook\]/);
   });
 
   it('redacts session MCP server route responses that bypass service hooks', () => {

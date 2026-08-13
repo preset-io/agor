@@ -47,6 +47,7 @@ Step-by-step implementation guides referenced from code.
 - [`logging.md`](guidelines/logging.md) — Safe, bounded operational logging and its boundary with analytics, telemetry, and usage accounting.
 - [`testing.md`](guidelines/testing.md) — Vitest patterns and conventions.
 - [`toasts.md`](guidelines/toasts.md) — Toast/message pattern. Always `useThemedMessage()` — never static `message.x()`.
+- [`onboarding-design.md`](guidelines/onboarding-design.md) — Onboarding wizard: goal-over-role framing, the locked goal cards, and composable-block recs.
 
 ### `explorations/` — active design docs
 

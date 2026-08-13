@@ -8,7 +8,7 @@ import {
   enqueueAfterTenantDatabaseCommit,
   generateId,
   getCurrentTenantId,
-  isPostgresDatabase,
+  isPostgresDatabaseHandle,
   type KnowledgeEmbeddingRoutingCursor,
   type KnowledgeEmbeddingRoutingPage,
   type KnowledgeEmbeddingRoutingRef,
@@ -389,7 +389,7 @@ export class KnowledgeEmbeddingIndexer {
   /** One bounded, tenant-fair scan exposed for deterministic HA tests. */
   async checkOnce(): Promise<KnowledgeEmbeddingIndexerStats> {
     if (this.shutdownRequested) return emptyStats();
-    if (!isPostgresDatabase(this.db)) return emptyStats();
+    if (!isPostgresDatabaseHandle(this.db)) return emptyStats();
     const page = await this.discoverRoutingPage();
     if (page.nextCursor) {
       this.routingCursor = page.nextCursor;
@@ -449,7 +449,7 @@ export class KnowledgeEmbeddingIndexer {
 
   /** Static/ambient-tenant compatibility seam used by focused probes. */
   async indexBatch(): Promise<number> {
-    if (!isPostgresDatabase(this.db)) return 0;
+    if (!isPostgresDatabaseHandle(this.db)) return 0;
     const tenantId = this.options.tenantId ?? getCurrentTenantId();
     if (!tenantId) throw new Error('Knowledge embedding indexBatch requires a tenant context');
     return runWithTenantContext(tenantId, async () => {

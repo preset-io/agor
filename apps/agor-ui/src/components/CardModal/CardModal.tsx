@@ -20,8 +20,11 @@ import {
 } from '@ant-design/icons';
 import { Button, Collapse, Input, Modal, Space, Tag, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import { selectBranchById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { ArchiveActionButton } from '../ArchiveButton';
+import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
 function isSafeUrl(url: string): boolean {
@@ -62,6 +65,8 @@ const CardModalComponent = ({
 }: CardModalProps) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
+  const branchById = useAgorStore(selectBranchById);
+  const boardEmoji = board ? getBoardEmoji(board, branchById) : undefined;
 
   // Edit state
   const [editingNote, setEditingNote] = useState(false);
@@ -228,7 +233,7 @@ const CardModalComponent = ({
         )}
         {board && (
           <Tag>
-            {board.icon ? `${board.icon} ` : ''}
+            {boardEmoji ? `${boardEmoji} ` : ''}
             {board.name}
           </Tag>
         )}
