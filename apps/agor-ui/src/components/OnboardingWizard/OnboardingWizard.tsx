@@ -81,10 +81,16 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 const STEPS: WizardStep[] = ['persona', 'llm', 'workspace', 'integrations', 'done'];
 
+// Prefilled so the required workspace step never blocks on an empty field; the
+// user can rename it. Named the teammate and the board the wizard creates.
+const DEFAULT_TEAMMATE_NAME = 'Scout';
+
+// The workspace step creates the user's board + first teammate, so it is NOT
+// skippable — completing the wizard must always yield a board to land on.
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
   persona: { number: 1, label: 'You', skippable: true },
   llm: { number: 2, label: 'AI', skippable: true },
-  workspace: { number: 3, label: 'Workspace', skippable: true },
+  workspace: { number: 3, label: 'Workspace', skippable: false },
   integrations: { number: 4, label: 'Tools', skippable: true },
   done: { number: 5, label: "You're ready", skippable: false },
 };
@@ -543,7 +549,7 @@ export function OnboardingWizard({
   // ── Step 3: workspace — name the user's first AI teammate ─────────────────
   // The teammate's name/emoji also names the board the wizard creates for them,
   // which the teammate is later seeded onto (see App.handleOnboardingComplete).
-  const [teammateName, setTeammateName] = useState('');
+  const [teammateName, setTeammateName] = useState(DEFAULT_TEAMMATE_NAME);
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const [boardCreating, setBoardCreating] = useState(false);
@@ -574,7 +580,7 @@ export function OnboardingWizard({
     setLlmSaving(false);
     setLlmAuthChecking(null);
     setLlmAuthVerified({});
-    setTeammateName('');
+    setTeammateName(DEFAULT_TEAMMATE_NAME);
     setTeammateEmoji('🤖');
     setCreatedBoardId(null);
     setBoardError(null);
@@ -624,7 +630,7 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
-    setTeammateName('');
+    setTeammateName(DEFAULT_TEAMMATE_NAME);
     setCreatedBoardId(null);
   }, [open, user]);
 
@@ -778,7 +784,7 @@ export function OnboardingWizard({
       }
       case 'workspace':
         if (boardVerifying) return false;
-        return hasExistingBoard || teammateName.trim().length > 0;
+        return teammateName.trim().length > 0;
       case 'integrations':
         return true;
       case 'done':
@@ -794,7 +800,6 @@ export function OnboardingWizard({
     apiKey,
     authMethod,
     boardVerifying,
-    hasExistingBoard,
     teammateName,
   ]);
 
@@ -823,7 +828,6 @@ export function OnboardingWizard({
       }
       case 'workspace':
         if (boardVerifying) return null;
-        if (hasExistingBoard) return null;
         return teammateName.trim().length === 0 ? 'Name your AI teammate to continue' : null;
       default:
         return null;
@@ -838,7 +842,6 @@ export function OnboardingWizard({
     apiKey,
     authMethod,
     boardVerifying,
-    hasExistingBoard,
     teammateName,
     llmSaving,
     boardCreating,
@@ -847,7 +850,7 @@ export function OnboardingWizard({
   const primaryLabel = useMemo(() => {
     switch (currentStep) {
       case 'persona':
-        return selectedPersona ? 'This is me →' : 'Continue →';
+        return 'Continue →';
       case 'llm': {
         if (
           selectedAgent &&
@@ -859,17 +862,15 @@ export function OnboardingWizard({
         return 'Connect →';
       }
       case 'workspace':
-        return hasExistingBoard ? 'Keep going →' : 'Continue →';
+        return 'Continue →';
       case 'integrations':
-        return 'Connect when done →';
+        return 'Continue →';
       case 'done':
         return completing ? 'Setting up your AI teammate…' : 'Open my board →';
     }
   }, [
     currentStep,
     completing,
-    hasExistingBoard,
-    selectedPersona,
     selectedAgent,
     agentHasKey,
     llmAuthVerified,
@@ -1005,11 +1006,33 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        if (hasExistingBoard) {
+        if (!teammateName.trim()) return;
+        // Board created earlier this pass (Back → edit → forward): rename the
+        // same board instead of creating a duplicate.
+        if (createdBoardId) {
+          if (!client) return;
+          setBoardCreating(true);
+          setBoardError(null);
+          try {
+            await client
+              .service('boards')
+              .patch(createdBoardId, { name: teammateName.trim(), icon: teammateEmoji });
+            if (user) saveOnboardingProgress({ boardId: createdBoardId });
+            goToStep('integrations');
+          } catch (err) {
+            setBoardError(err instanceof Error ? err.message : 'Failed to rename board');
+          } finally {
+            setBoardCreating(false);
+          }
+          return;
+        }
+        // A board the user already had before onboarding is theirs — carry the
+        // teammate name forward without renaming their board.
+        if (verifiedBoard) {
           goToStep('integrations');
           return;
         }
-        if (!client || !teammateName.trim()) return;
+        if (!client) return;
         setBoardCreating(true);
         setBoardError(null);
         try {
@@ -1076,7 +1099,6 @@ export function OnboardingWizard({
     authMethod,
     onCheckAuth,
     onUpdateUser,
-    hasExistingBoard,
     client,
     teammateName,
     teammateEmoji,
@@ -1683,18 +1705,16 @@ export function OnboardingWizard({
             lineHeight: 1.6,
           }}
         >
-          Agor connects your AI to external tools using{' '}
+          These are the tools we recommend for your work — nothing to connect on this screen. Once
+          you're in, just ask your AI teammate to connect any of them for you.{' '}
           <Typography.Link
             href={MCP_DOCS_URL}
             target="_blank"
             rel="noopener noreferrer"
             style={{ fontSize: 12 }}
           >
-            MCP (Model Context Protocol)
+            What's MCP?
           </Typography.Link>
-          . You set each one up yourself in{' '}
-          <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>Settings - MCP</span>. Here are the
-          ones that work well for you.
         </div>
 
         {/* Persona-curated MCP recommendations — informational, no selection */}
@@ -1707,8 +1727,9 @@ export function OnboardingWizard({
                 border: GLASS_CARD_BORDER,
                 backdropFilter: 'blur(20px)',
                 WebkitBackdropFilter: 'blur(20px)',
-                borderRadius: 12,
-                boxShadow: GLASS_CARD_SHADOW,
+                borderRadius: 10,
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09)',
+                cursor: 'default',
                 overflow: 'hidden',
               }}
             >
@@ -1749,7 +1770,7 @@ export function OnboardingWizard({
 
   const renderDone = () => {
     const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
-    const workspaceReady = hasExistingBoard;
+    const teammateReady = hasExistingBoard;
 
     return (
       <div style={{ textAlign: 'center', padding: '8px 0' }}>
@@ -1851,9 +1872,9 @@ export function OnboardingWizard({
               hint: 'Add in Settings - AI & Agents',
             },
             {
-              label: 'Workspace ready',
-              done: workspaceReady,
-              hint: 'Create a board in Settings',
+              label: 'Teammate ready',
+              done: teammateReady,
+              hint: 'Add more teammates anytime in Settings',
             },
             {
               label: 'MCP tools',
