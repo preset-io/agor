@@ -56,7 +56,6 @@ import type {
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
-  MCPOAuthDCRDiagnostic,
   MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
   MCPOAuthStartFailure,
@@ -1450,10 +1449,6 @@ async function registerMCPServices(
     '(3) /.well-known/oauth-authorization-server at MCP origin (RFC 8414), ' +
     '(4) /.well-known/openid-configuration at MCP origin (OIDC).';
 
-  function oauthDcrDiagnostic(error: unknown): MCPOAuthDCRDiagnostic | undefined {
-    return error instanceof OAuthDCRFailure ? error.diagnostic : undefined;
-  }
-
   async function resolveMCPOAuthRedirectUri(): Promise<string> {
     const baseUrl = await requirePublicBaseUrl();
     return new URL('/mcp-servers/oauth-callback', baseUrl).toString();
@@ -2411,12 +2406,10 @@ async function registerMCPServices(
                   flowError instanceof Error ? flowError.name : 'unknown'
                 }`
               );
-              const diagnostic = oauthDcrDiagnostic(flowError);
               return {
                 success: false,
                 error: `OAuth 2.1 browser flow failed: ${flowError instanceof Error ? flowError.message : String(flowError)}`,
                 oauthType: 'oauth2.1',
-                ...(diagnostic ? { diagnostic } : {}),
               };
             }
           }
@@ -2630,30 +2623,6 @@ async function registerMCPServices(
 
   app.service('mcp-servers/test-oauth').hooks({ before: { create: [ctx.requireAuth] } });
 
-  // Read-only browser callback configuration for pre-registering provider apps.
-  // This intentionally shares the exact resolver used when the flow starts.
-  app.use('/mcp-servers/oauth-configuration', {
-    async find() {
-      try {
-        return { success: true, redirect_uri: await resolveMCPOAuthRedirectUri() };
-      } catch (error) {
-        if (!(error instanceof PublicBaseUrlNotConfiguredError)) {
-          console.error(
-            `[OAuth Configuration] Failed category=${error instanceof Error ? error.name : 'unknown'}`
-          );
-        }
-        return {
-          success: false,
-          error:
-            error instanceof PublicBaseUrlNotConfiguredError
-              ? error.message
-              : 'OAuth redirect URL could not be resolved.',
-        };
-      }
-    },
-  });
-  app.service('mcp-servers/oauth-configuration').hooks({ before: { find: [ctx.requireAuth] } });
-
   // OAuth start endpoint
   app.use('/mcp-servers/oauth-start', {
     async create(
@@ -2686,7 +2655,6 @@ async function registerMCPServices(
         ) {
           return {
             success: false,
-            kind: 'configuration',
             error:
               'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
           } satisfies MCPOAuthStartFailure;
@@ -2699,7 +2667,6 @@ async function registerMCPServices(
         if (!effectiveMcpUrl) {
           return {
             success: false,
-            kind: 'configuration',
             error: 'OAuth requires a saved MCP server URL. Save changes, then restart OAuth.',
           } satisfies MCPOAuthStartFailure;
         }
@@ -2716,7 +2683,6 @@ async function registerMCPServices(
         ) {
           return {
             success: false,
-            kind: 'configuration',
             error:
               'PostgreSQL OAuth requires an enabled, saved MCP server matching this request. Save changes, then restart OAuth.',
           } satisfies MCPOAuthStartFailure;
@@ -2765,7 +2731,6 @@ async function registerMCPServices(
         if (probeResponse.status !== 401) {
           return {
             success: false,
-            kind: 'oauth',
             error: 'Server did not return 401 — OAuth 2.1 authentication may not be required',
           } satisfies MCPOAuthStartFailure;
         }
@@ -2781,7 +2746,6 @@ async function registerMCPServices(
         if (!discovery) {
           return {
             success: false,
-            kind: 'oauth',
             error: `Server returned 401 but does not advertise OAuth metadata. ${DISCOVERY_CASCADE_TRIED} None succeeded.`,
           } satisfies MCPOAuthStartFailure;
         }
@@ -2816,7 +2780,6 @@ async function registerMCPServices(
             console.error('[OAuth Start]', err.message);
             return {
               success: false,
-              kind: 'configuration',
               error: err.message,
             } satisfies MCPOAuthStartFailure;
           }
@@ -2835,13 +2798,12 @@ async function registerMCPServices(
         console.error(
           `[OAuth Start] Failed category=${error instanceof Error ? error.name : 'unknown'}`
         );
-        const diagnostic = oauthDcrDiagnostic(error);
+        const diagnostic = error instanceof OAuthDCRFailure ? error.diagnostic : undefined;
         const redirectUri = diagnostic
           ? await resolveMCPOAuthRedirectUri().catch(() => null)
           : null;
         return {
           success: false,
-          kind: diagnostic ? 'dcr' : 'oauth',
           error: error instanceof Error ? error.message : String(error),
           ...(diagnostic ? { diagnostic } : {}),
           ...(redirectUri ? { redirect_uri: redirectUri } : {}),

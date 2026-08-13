@@ -3,16 +3,14 @@ import type { MCPServerOAuthFailure } from './useMCPServerOAuthStart';
 
 interface MCPOAuthRecoveryAlertProps {
   failure: MCPServerOAuthFailure;
-  redirectUri: string | null;
   onOpenSettings: () => void;
 }
 
 export const MCPOAuthRecoveryAlert: React.FC<MCPOAuthRecoveryAlertProps> = ({
   failure,
-  redirectUri,
   onOpenSettings,
 }) => {
-  const isDcrFailure = failure.kind === 'dcr';
+  const isDcrFailure = failure.diagnostic !== undefined;
 
   return (
     <Alert
@@ -29,11 +27,11 @@ export const MCPOAuthRecoveryAlert: React.FC<MCPOAuthRecoveryAlertProps> = ({
                 : ''}
             </Typography.Text>
           )}
-          {isDcrFailure && redirectUri && (
+          {isDcrFailure && failure.redirectUri && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               Register this redirect URL with the provider:{' '}
               <Typography.Text code copyable>
-                {redirectUri}
+                {failure.redirectUri}
               </Typography.Text>
             </Typography.Text>
           )}

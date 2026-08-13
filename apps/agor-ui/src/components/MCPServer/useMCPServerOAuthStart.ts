@@ -1,8 +1,4 @@
-import type {
-  MCPOAuthDCRDiagnostic,
-  MCPOAuthStartFailure,
-  MCPOAuthStartFailureKind,
-} from '@agor/core/types';
+import type { MCPOAuthDCRDiagnostic, MCPOAuthStartFailure } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -12,27 +8,19 @@ import {
 } from '@/utils/mcpOAuthAttempt';
 
 export interface MCPServerOAuthFailure {
-  kind: MCPOAuthStartFailureKind;
   message: string;
   diagnostic?: MCPOAuthDCRDiagnostic;
+  redirectUri?: string;
 }
 
 interface OAuthStartSuccess {
   success: true;
   authorizationUrl: string;
   attempt_id: string;
-  state?: string;
-}
-
-interface OAuthConfigurationResult {
-  success: boolean;
-  redirect_uri?: string;
-  error?: string;
 }
 
 interface UseMCPServerOAuthStartOptions {
   client: AgorClient | null;
-  enabled: boolean;
   onPrepareOAuthStart: () => Promise<string | null>;
   onOAuthSucceeded?: () => void;
   showError: (message: string) => void;
@@ -42,7 +30,6 @@ interface UseMCPServerOAuthStartOptions {
 
 export function useMCPServerOAuthStart({
   client,
-  enabled,
   onPrepareOAuthStart,
   onOAuthSucceeded,
   showError,
@@ -52,8 +39,6 @@ export function useMCPServerOAuthStart({
   const [startingOAuthFlow, setStartingOAuthFlow] = useState(false);
   const [oauthFailure, setOauthFailure] = useState<MCPServerOAuthFailure | null>(null);
   const [oauthCallbackModalVisible, setOauthCallbackModalVisible] = useState(false);
-  const [oauthRedirectUri, setOauthRedirectUri] = useState<string | null>(null);
-  const [oauthRedirectUriError, setOauthRedirectUriError] = useState<string | null>(null);
   const oauthStartInFlightRef = useRef(false);
   const oauthCompletedCleanupRef = useRef<(() => void) | null>(null);
 
@@ -62,38 +47,6 @@ export function useMCPServerOAuthStart({
       oauthCompletedCleanupRef.current?.();
     };
   }, []);
-
-  useEffect(() => {
-    if (!client || !enabled) {
-      setOauthRedirectUri(null);
-      setOauthRedirectUriError(null);
-      return;
-    }
-
-    let active = true;
-    void client
-      .service('mcp-servers/oauth-configuration')
-      .find()
-      .then((result) => {
-        if (!active) return;
-        const configuration = result as unknown as OAuthConfigurationResult;
-        setOauthRedirectUri(configuration.redirect_uri ?? null);
-        setOauthRedirectUriError(
-          configuration.success ? null : configuration.error || 'OAuth redirect URL is unavailable.'
-        );
-      })
-      .catch((error) => {
-        if (!active) return;
-        setOauthRedirectUri(null);
-        setOauthRedirectUriError(
-          error instanceof Error ? error.message : 'OAuth redirect URL is unavailable.'
-        );
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [client, enabled]);
 
   const clearOAuthFailure = useCallback(() => setOauthFailure(null), []);
 
@@ -160,20 +113,15 @@ export function useMCPServerOAuthStart({
           });
       } else if (!data.success) {
         setOauthFailure({
-          kind: data.kind ?? (data.diagnostic ? 'dcr' : 'oauth'),
           message: data.error || 'Failed to start OAuth flow',
           diagnostic: data.diagnostic,
+          redirectUri: data.redirect_uri,
         });
-        if (data.redirect_uri) {
-          setOauthRedirectUri(data.redirect_uri);
-          setOauthRedirectUriError(null);
-        }
       } else {
-        setOauthFailure({ kind: 'oauth', message: 'Failed to start OAuth flow' });
+        setOauthFailure({ message: 'Failed to start OAuth flow' });
       }
     } catch (error) {
       setOauthFailure({
-        kind: 'oauth',
         message: `OAuth flow error: ${error instanceof Error ? error.message : String(error)}`,
       });
     } finally {
@@ -188,8 +136,6 @@ export function useMCPServerOAuthStart({
     handleStartOAuthFlow,
     oauthCallbackModalVisible,
     oauthFailure,
-    oauthRedirectUri,
-    oauthRedirectUriError,
     startingOAuthFlow,
   };
 }

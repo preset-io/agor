@@ -8,16 +8,13 @@ describe('MCPOAuthRecoveryAlert', () => {
     render(
       <MCPOAuthRecoveryAlert
         failure={{
-          kind: 'dcr',
           message: 'Dynamic Client Registration failed',
           diagnostic: {
             stage: 'dcr_registration',
             http_status: 400,
-            error: 'invalid_client_metadata',
-            error_description: 'redirect URI is not approved',
           },
+          redirectUri: 'https://agor.example.com/mcp-servers/oauth-callback',
         }}
-        redirectUri="https://agor.example.com/mcp-servers/oauth-callback"
         onOpenSettings={onOpenSettings}
       />
     );
@@ -32,8 +29,7 @@ describe('MCPOAuthRecoveryAlert', () => {
   it('does not recommend manual client settings for unrelated failures', () => {
     render(
       <MCPOAuthRecoveryAlert
-        failure={{ kind: 'oauth', message: 'The MCP server did not return 401' }}
-        redirectUri="https://agor.example.com/mcp-servers/oauth-callback"
+        failure={{ message: 'The MCP server did not return 401' }}
         onOpenSettings={vi.fn()}
       />
     );

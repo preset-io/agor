@@ -8,6 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MCPOAuthDCRDiagnostic } from '../../types/mcp.js';
 
 vi.mock('../../utils/safe-outbound-fetch', () => ({
   assertSafeOAuthUrl: (input: string, options: { allowLocalhostHttp?: boolean } = {}) => {
@@ -838,6 +839,20 @@ describe('resolveMCPOAuthDiscovery', () => {
 
 describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
   const originalFetch = globalThis.fetch;
+  const redirectUri = 'http://127.0.0.1:9999/oauth/callback';
+  const prefetchedOptions = {
+    prefetchedAuthServerMetadata: {
+      issuer: 'https://auth.reo.dev',
+      authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+      token_endpoint: 'https://auth.reo.dev/oauth/token',
+      registration_endpoint: 'https://auth.reo.dev/oauth/register',
+    },
+    cacheKey: 'https://mcp.reo.dev/mcp',
+    resourceUri: 'https://mcp.reo.dev/mcp',
+    compatibilityMode: 'legacy' as const,
+    dcrMode: 'fallback' as const,
+    allowLocalhostHttp: true,
+  };
 
   beforeEach(() => {
     clearAuthCodeTokenCache();
@@ -868,19 +883,7 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
       throw new Error(`unexpected fetch: ${url}`);
     }) as unknown as typeof fetch;
 
-    const ctx = await startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
-      prefetchedAuthServerMetadata: {
-        issuer: 'https://auth.reo.dev',
-        authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
-        token_endpoint: 'https://auth.reo.dev/oauth/token',
-        registration_endpoint: 'https://auth.reo.dev/oauth/register',
-      },
-      cacheKey: 'https://mcp.reo.dev/mcp',
-      resourceUri: 'https://mcp.reo.dev/mcp',
-      compatibilityMode: 'legacy',
-      dcrMode: 'fallback',
-      allowLocalhostHttp: true,
-    });
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, prefetchedOptions);
 
     // No well-known probing happened — only the DCR POST.
     expect(fetchCalls).toEqual(['https://auth.reo.dev/oauth/register']);
@@ -900,15 +903,8 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
 
     await expect(
       startMCPOAuthFlow('', undefined, undefined, {
-        prefetchedAuthServerMetadata: {
-          issuer: 'https://auth.reo.dev',
-          authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
-          token_endpoint: 'https://auth.reo.dev/oauth/token',
-          registration_endpoint: 'https://auth.reo.dev/oauth/register',
-        },
-        resourceUri: 'https://mcp.reo.dev/mcp',
-        compatibilityMode: 'legacy',
-        // cacheKey omitted on purpose
+        ...prefetchedOptions,
+        cacheKey: undefined,
       })
     ).rejects.toThrow(/cacheKey is required/);
 
@@ -919,17 +915,7 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     globalThis.fetch = vi.fn() as unknown as typeof fetch;
     await expect(
       startMCPOAuthFlow('', undefined, 'http://agor.example.com/oauth/callback', {
-        prefetchedAuthServerMetadata: {
-          issuer: 'https://auth.reo.dev',
-          authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
-          token_endpoint: 'https://auth.reo.dev/oauth/token',
-          registration_endpoint: 'https://auth.reo.dev/oauth/register',
-        },
-        cacheKey: 'https://mcp.reo.dev/mcp',
-        resourceUri: 'https://mcp.reo.dev/mcp',
-        compatibilityMode: 'legacy',
-        dcrMode: 'fallback',
-        allowLocalhostHttp: true,
+        ...prefetchedOptions,
       })
     ).rejects.toThrow('HTTPS');
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -937,9 +923,9 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
 
   it.each([
     [
-      'empty client ID',
+      'blank client ID',
       {
-        client_id: '',
+        client_id: '   ',
         redirect_uris: ['http://127.0.0.1:9999/oauth/callback'],
         token_endpoint_auth_method: 'none',
       },
@@ -986,21 +972,9 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
       })
     ) as unknown as typeof fetch;
 
-    await expect(
-      startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
-        prefetchedAuthServerMetadata: {
-          issuer: 'https://auth.reo.dev',
-          authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
-          token_endpoint: 'https://auth.reo.dev/oauth/token',
-          registration_endpoint: 'https://auth.reo.dev/oauth/register',
-        },
-        cacheKey: 'https://mcp.reo.dev/mcp',
-        resourceUri: 'https://mcp.reo.dev/mcp',
-        compatibilityMode: 'legacy',
-        dcrMode: 'fallback',
-        allowLocalhostHttp: true,
-      })
-    ).rejects.toThrow('Dynamic Client Registration failed');
+    await expect(startMCPOAuthFlow('', undefined, redirectUri, prefetchedOptions)).rejects.toThrow(
+      'Dynamic Client Registration failed'
+    );
   });
 });
 
@@ -1236,7 +1210,6 @@ describe('strict current MCP OAuth profile', () => {
       diagnostic: {
         stage: 'dcr_registration',
         http_status: 404,
-        error: 'not_found',
         registration_endpoint_source: 'metadata',
       },
     });
@@ -1244,7 +1217,7 @@ describe('strict current MCP OAuth profile', () => {
     await expect(result).rejects.not.toThrow(/figma/i);
   });
 
-  it('turns approved-redirect-URI rejection details into manual-client guidance', async () => {
+  it('turns provider metadata rejection into manual-client guidance without leaking details', async () => {
     const clientSecret = 'CLIENT_SECRET_SHOULD_NOT_APPEAR';
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(
@@ -1270,25 +1243,19 @@ describe('strict current MCP OAuth profile', () => {
       allowLocalhostHttp: true,
     });
 
-    const error = await rejectedError<
-      Error & {
-        diagnostic: { error?: string; error_description?: string; http_status?: number };
-      }
-    >(result);
+    const error = await rejectedError<Error & { diagnostic: MCPOAuthDCRDiagnostic }>(result);
     expect(error).toMatchObject({
       diagnostic: {
         stage: 'dcr_registration',
         http_status: 400,
-        error: 'invalid_client_metadata',
       },
     });
-    expect(error.diagnostic.error_description).toMatch(/redirect URI/i);
-    expect(error.message).toMatch(/rejected the configured OAuth redirect URI/i);
+    expect(error.message).toMatch(/rejected Dynamic Client Registration/i);
     expect(error.message).toMatch(/Client ID and Client Secret/i);
     expect(error.message).not.toContain(clientSecret);
   });
 
-  it('bounds and sanitizes provider error descriptions', async () => {
+  it('does not propagate provider error descriptions', async () => {
     const accessToken = 'ACCESS_TOKEN_SHOULD_NOT_APPEAR';
     const longDescription = `Provider detail access_token=${accessToken} ${'x'.repeat(2_000)}`;
     globalThis.fetch = vi
@@ -1300,7 +1267,7 @@ describe('strict current MCP OAuth profile', () => {
         )
       ) as unknown as typeof fetch;
 
-    const error = await rejectedError<Error & { diagnostic: { error_description?: string } }>(
+    const error = await rejectedError<Error & { diagnostic: MCPOAuthDCRDiagnostic }>(
       startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
         prefetchedAuthServerMetadata: {
           issuer: 'https://auth.reo.dev',
@@ -1316,8 +1283,8 @@ describe('strict current MCP OAuth profile', () => {
       })
     );
 
-    expect(error.diagnostic.error_description).toMatch(/access_token=\[redacted\]/i);
-    expect(error.diagnostic.error_description?.length).toBeLessThanOrEqual(280);
+    expect(error.diagnostic).not.toHaveProperty('error_description');
+    expect(error.diagnostic).not.toHaveProperty('error');
     expect(error.message).not.toContain(accessToken);
     expect(error.message.length).toBeLessThan(1_200);
   });

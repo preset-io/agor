@@ -94,12 +94,9 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     handleStartOAuthFlow,
     oauthCallbackModalVisible,
     oauthFailure,
-    oauthRedirectUri,
-    oauthRedirectUriError,
     startingOAuthFlow,
   } = useMCPServerOAuthStart({
     client,
-    enabled: authType === 'oauth' && isRemoteTransportValue(transport),
     onPrepareOAuthStart,
     onOAuthSucceeded: () => setOauthBrowserFlowAvailable(false),
     showError,
@@ -505,7 +502,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             )}
             {authType === 'oauth' && oauthBrowserFlowAvailable && (
               <Button type="primary" loading={startingOAuthFlow} onClick={handleStartOAuthFlow}>
-                {oauthFailure?.kind === 'dcr'
+                {oauthFailure?.diagnostic
                   ? 'Save OAuth settings & retry'
                   : oauthFailure
                     ? 'Retry OAuth Flow'
@@ -637,7 +634,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       {oauthFailure && (
         <MCPOAuthRecoveryAlert
           failure={oauthFailure}
-          redirectUri={oauthRedirectUri}
           onOpenSettings={() => setOauthAdvancedOpen(true)}
         />
       )}
@@ -704,20 +700,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     showIcon
                     style={{ marginBottom: 16 }}
                   />
-                  <Form.Item
-                    label="OAuth Redirect URL"
-                    tooltip="Register this exact callback URL in a pre-registered OAuth provider application."
-                  >
-                    {oauthRedirectUri ? (
-                      <Typography.Text code copyable>
-                        {oauthRedirectUri}
-                      </Typography.Text>
-                    ) : (
-                      <Typography.Text type={oauthRedirectUriError ? 'danger' : 'secondary'}>
-                        {oauthRedirectUriError || 'Loading redirect URL...'}
-                      </Typography.Text>
-                    )}
-                  </Form.Item>
                   <Form.Item
                     label="Client ID"
                     name="oauth_client_id"

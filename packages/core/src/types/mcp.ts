@@ -58,25 +58,17 @@ export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
 /**
  * Safe diagnostics for a failed OAuth Dynamic Client Registration attempt.
  *
- * These fields are deliberately limited to provider error identifiers and
- * descriptions. They must never contain the response body, credentials, or
- * OAuth protocol secrets.
+ * This closed shape classifies recovery without carrying provider response
+ * text, credentials, or OAuth protocol secrets across the process boundary.
  */
-export type MCPOAuthDCRDiagnosticStage = 'dcr_endpoint_discovery' | 'dcr_registration';
-export type MCPOAuthDCRRegistrationEndpointSource = 'metadata' | 'legacy_fallback';
 export interface MCPOAuthDCRDiagnostic {
-  stage: MCPOAuthDCRDiagnosticStage;
+  stage: 'dcr_endpoint_discovery' | 'dcr_registration';
   http_status?: number;
-  error?: string;
-  error_description?: string;
-  registration_endpoint_source?: MCPOAuthDCRRegistrationEndpointSource;
+  registration_endpoint_source?: 'metadata' | 'legacy_fallback';
 }
-
-export type MCPOAuthStartFailureKind = 'dcr' | 'configuration' | 'oauth';
 
 export interface MCPOAuthStartFailure {
   success: false;
-  kind: MCPOAuthStartFailureKind;
   error: string;
   diagnostic?: MCPOAuthDCRDiagnostic;
   redirect_uri?: string;
