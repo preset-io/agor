@@ -70,11 +70,15 @@ jobs:
       # Test runs against a narrower filter set than build/typecheck —
       # only the packages with real test suites worth gating on. Kept as
       # a separate turbo invocation to preserve that filter.
-      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core --filter=@agor/executor
+      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core --filter=@agor/executor --filter=agor-live
 
-  # The Node-version matrix (`npm install agor-live` compat across 22/24/25)
-  # used to live here. It now runs nightly + workflow_dispatch in
-  # `heavy-checks.yml`. PR pushes rely on the agor-live publish smoke
-  # test (which itself does `npm install` of the packed tarball on Node 22)
+      # CLI init tests spawn real child processes and pseudo-terminals. Keep
+      # them required, but outside Turbo's CPU-heavy parallel test fanout.
+      - run: pnpm --filter @agor/cli test
+
+  # The Node-version matrix (`npm install agor-live` compat across 22/24/26)
+  # used to live here. It now runs for releases and on-demand via
+  # `heavy-checks.yml`. PR pushes rely on the agor-live packaged smoke
+  # test (which itself does `npm install` of the packed tarball on Node 24)
   # to catch publish-path regressions when publish-relevant paths change.
   # The `audit` job moved to `audit.yml` (path-filtered to dep changes).

@@ -30,8 +30,8 @@
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@types/proper-lockfile": "4.1.4",
+    "@lydell/node-pty": "1.2.0-beta.15",
     "glob": "^11.1.0",
-    "node-pty": "1.2.0-beta.12",
     "oclif": "^4.23.30",
     "tsup": "^8.5.1",
     "tsx": "4.23.11",

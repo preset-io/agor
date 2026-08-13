@@ -1,8 +1,9 @@
 import {
+  assertManagedAgenticToolInstallReady,
+  getAgenticToolInstallDir,
   type InstallableAgenticTool,
   InvalidAgenticToolSelectionManifestError,
   resolveAgenticToolSelectionPolicy,
-  resolveManagedAgenticToolIntegration,
   resolveManagedAgenticToolVersion,
 } from '@agor/core/agentic-integrations';
 import type { AgorConfig } from '@agor/core/config';
@@ -24,7 +25,8 @@ import {
 } from '../lib/agentic-tool-integrations.js';
 
 export default class Install extends Command {
-  static description = 'Configure or reconcile version-aligned agentic tool packages';
+  static description =
+    'After init, select or reconcile agentic tool packages without recreating Agor';
   static examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --sync',
@@ -56,6 +58,7 @@ export default class Install extends Command {
       );
     }
     if (policy.mode === 'local-managed' && !sync) {
+      this.log(chalk.dim('Use ↑/↓ to move, Space to select, and Enter to continue.'));
       const previouslySelected = new Set<InstallableAgenticTool>(
         policy.selected as readonly InstallableAgenticTool[]
       );
@@ -122,8 +125,12 @@ export default class Install extends Command {
     const manifest = await readManagedIntegrationManifest(tool, version);
     if (!manifest) return false;
     try {
-      const integration = await resolveManagedAgenticToolIntegration(tool, version);
-      return integration.AGOR_INTEGRATION_VERSION === version && Boolean(integration.sdk);
+      await assertManagedAgenticToolInstallReady(
+        tool,
+        version,
+        getAgenticToolInstallDir(tool, version)
+      );
+      return true;
     } catch {
       return false;
     }

@@ -19,6 +19,7 @@
  * **Single source of truth:** packages/core/src/db/schema.ts
  */
 
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
@@ -177,17 +178,21 @@ async function _bootstrapMigrations(db: Database): Promise<void> {
 function getMigrationsFolder(db: Database): string {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
-  const isProduction = __dirname.includes('/dist/');
   const dialect = isSQLiteDatabase(db) ? 'sqlite' : 'postgres';
 
-  // Detect if running from bundled structure (agor-live package)
-  // In bundled package: dist/core/db/index.js → go up 1 level to dist/core/
-  // In monorepo dev: src/db/migrate.ts → go up 2 levels to packages/core/
-  // In monorepo prod: dist/db/migrate.js → go up 2 levels to packages/core/
-  const isBundled = __dirname.includes('/dist/core/');
-  const levelsUp = isProduction && isBundled ? '..' : '../..';
-
-  return join(__dirname, levelsUp, 'drizzle', dialect);
+  // tsup can place this module at an entry root or under db/, while source
+  // execution places it under src/db/. Resolve by the shipped data instead of
+  // inferring a topology from directory names; this also supports @agor/core
+  // as a normal bundled dependency rather than a postinstall-created symlink.
+  const candidates = [
+    join(__dirname, 'drizzle', dialect),
+    join(__dirname, '..', 'drizzle', dialect),
+    join(__dirname, '../..', 'drizzle', dialect),
+  ];
+  return (
+    candidates.find((candidate) => existsSync(join(candidate, 'meta', '_journal.json'))) ??
+    candidates[0]
+  );
 }
 
 /**

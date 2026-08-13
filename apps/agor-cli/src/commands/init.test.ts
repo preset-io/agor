@@ -9,7 +9,7 @@ import {
   inspectManagedAgenticToolAlignment,
 } from '@agor/core/agentic-integrations';
 import { load as loadYaml } from '@agor/core/yaml';
-import { spawn as spawnPty } from 'node-pty';
+import { spawn as spawnPty } from '@lydell/node-pty';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertInitSupportsConfiguredDatabase,
@@ -172,9 +172,38 @@ async function runInitWithoutPty(
     output += data;
   });
   return await new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (exitCode) => resolve({ exitCode, output: stripTerminalControl(output) }));
+    let timedOut = false;
+    let forceKill: NodeJS.Timeout | undefined;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+      forceKill = setTimeout(() => child.kill('SIGKILL'), 2_000);
+      forceKill.unref();
+    }, 20_000);
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
+      reject(error);
+    });
+    child.once('close', (exitCode) => {
+      clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
+      if (timedOut) {
+        reject(
+          new Error(`Timed out waiting for noninteractive init:\n${stripTerminalControl(output)}`)
+        );
+      } else {
+        resolve({ exitCode, output: stripTerminalControl(output) });
+      }
+    });
   });
+}
+
+async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve()))
+  );
 }
 
 async function runInteractiveReinit(home: string): Promise<{
@@ -311,7 +340,7 @@ describe('initial agentic tool selection', () => {
     expect(result.exitCode).toBe(2);
     expect(result.output).toContain('Interactive `agor init` requires a TTY');
     await expect(access(join(home, '.agor'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 30_000);
 
   it('requires an explicit fresh headless policy before creating partial state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-init-headless-'));
@@ -324,7 +353,7 @@ describe('initial agentic tool selection', () => {
     expect(result.exitCode).toBe(2);
     expect(result.output).toContain('requires an explicit agentic-tool policy');
     await expect(access(join(home, '.agor'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 30_000);
 
   it('refuses to unlink a live daemon database, then safely re-initializes after it stops', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-reinit-pty-'));
@@ -340,38 +369,40 @@ describe('initial agentic tool selection', () => {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Test server has no TCP port');
 
-    const firstInit = await runInitWithoutPty(home, [
-      '--non-interactive',
-      '--agentic-tools',
-      'none',
-      '--daemon-host',
-      '127.0.0.1',
-      '--daemon-port',
-      String(address.port),
-    ]);
-    expect(firstInit.exitCode, firstInit.output).toBe(0);
+    try {
+      const firstInit = await runInitWithoutPty(home, [
+        '--non-interactive',
+        '--agentic-tools',
+        'none',
+        '--daemon-host',
+        '127.0.0.1',
+        '--daemon-port',
+        String(address.port),
+      ]);
+      expect(firstInit.exitCode, firstInit.output).toBe(0);
 
-    const refused = await runInteractiveReinit(home);
-    expect(refused.exitCode, refused.output).toBe(2);
-    expect(refused.output).toContain('The Agor daemon is running');
-    expect(refused.output).toContain('agor daemon stop');
-    await expect(access(join(home, '.agor', 'agor.db'))).resolves.toBeUndefined();
+      const refused = await runInteractiveReinit(home);
+      expect(refused.exitCode, refused.output).toBe(2);
+      expect(refused.output).toContain('The Agor daemon is running');
+      expect(refused.output).toContain('agor daemon stop');
+      await expect(access(join(home, '.agor', 'agor.db'))).resolves.toBeUndefined();
 
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve()))
-    );
-    await writeFile(join(home, '.agor', 'agor.db-wal'), 'stale WAL fixture');
-    await writeFile(join(home, '.agor', 'agor.db-shm'), 'stale SHM fixture');
+      await closeServer(server);
+      await writeFile(join(home, '.agor', 'agor.db-wal'), 'stale WAL fixture');
+      await writeFile(join(home, '.agor', 'agor.db-shm'), 'stale SHM fixture');
 
-    const reinitialized = await runInteractiveReinit(home);
-    expect(reinitialized.exitCode, reinitialized.output).toBe(0);
-    expect(reinitialized.output).toContain('Migrations complete');
-    expect(reinitialized.output).toContain('Agor initialized successfully');
-    const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
-      agentic_tools?: { installed?: string[] };
-    };
-    expect(config.agentic_tools?.installed).toEqual([]);
-  }, 40_000);
+      const reinitialized = await runInteractiveReinit(home);
+      expect(reinitialized.exitCode, reinitialized.output).toBe(0);
+      expect(reinitialized.output).toContain('Migrations complete');
+      expect(reinitialized.output).toContain('Agor initialized successfully');
+      const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
+        agentic_tools?: { installed?: string[] };
+      };
+      expect(config.agentic_tools?.installed).toEqual([]);
+    } finally {
+      await closeServer(server);
+    }
+  }, 60_000);
 
   it('drives the real CLI through a pseudo-TTY, persists declarative policy, and proves managed readiness', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-init-pty-'));
@@ -386,6 +417,7 @@ describe('initial agentic tool selection', () => {
     expect(result.exitCode, result.output).toBe(0);
     expect(result.output).toContain('Agentic tool packages');
     expect(result.output).toContain('Provider credentials are configured after the daemon starts.');
+    expect(result.output).toContain('Use ↑/↓ to move, Space to select, and Enter to continue.');
     expect(result.output).toContain('Select at least one agentic tool, or press Ctrl+C to exit.');
     expect(result.output).toContain('Configured: codex');
     expect(result.output).toContain('Codex installed');

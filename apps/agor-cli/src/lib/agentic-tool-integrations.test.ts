@@ -143,6 +143,54 @@ describe('listInstalledAgenticTools', () => {
 
 describe('managed integration cleanup', () => {
   it.runIf(process.platform !== 'win32')(
+    'disables lifecycle scripts before accepting an install',
+    async () => {
+      const root = await createRoot();
+      const bin = join(root, 'fixture-bin');
+      const capturedArguments = join(root, 'npm-arguments.json');
+      await mkdir(bin);
+      const npm = join(bin, 'npm');
+      await writeFile(
+        npm,
+        `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const prefix = args[args.indexOf('--prefix') + 1];
+const project = JSON.parse(fs.readFileSync(path.join(prefix, 'package.json'), 'utf8'));
+if (project.private !== true || project.allowScripts !== undefined || project.dependencies['@agor-live/codex'] !== '0.24.0') process.exit(65);
+const writePackage = (name, source) => {
+  const directory = path.join(prefix, 'node_modules', ...name.split('/'));
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ name, type: 'module', exports: './index.js', version: '0.24.0' }));
+  fs.writeFileSync(path.join(directory, 'index.js'), source);
+};
+writePackage('@agor-live/codex', "export const AGOR_INTEGRATION_VERSION = '0.24.0'; export const sdk = {};");
+writePackage('@openai/codex-sdk', 'export const fixture = true;');
+fs.writeFileSync(${JSON.stringify(capturedArguments)}, JSON.stringify(args));
+`
+      );
+      await chmod(npm, 0o755);
+      process.env.PATH = `${bin}${delimiter}${originalPath ?? ''}`;
+
+      await expect(installManagedIntegration('codex', '0.24.0')).resolves.toMatchObject({
+        packageName: '@agor-live/codex',
+        packageVersion: '0.24.0',
+      });
+      const args = JSON.parse(await readFile(capturedArguments, 'utf8')) as string[];
+      expect(args).toContain('--ignore-scripts');
+      expect(args).toContain('--include=optional');
+      expect(args).toContain('--no-audit');
+      expect(
+        args.some(
+          (argument) =>
+            argument.startsWith('--allow-scripts') || argument.startsWith('--strict-allow-scripts')
+        )
+      ).toBe(false);
+    }
+  );
+
+  it.runIf(process.platform !== 'win32')(
     'preserves the previous package and cleans staging when npm fails',
     async () => {
       const root = await createRoot();

@@ -20,7 +20,7 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import { shortId } from '@agor/core/db';
-import type { IPty } from 'node-pty';
+import type { IPty } from '@lydell/node-pty';
 import type { ExecutorResult, ZellijAttachPayload, ZellijTabPayload } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
@@ -410,9 +410,17 @@ export async function handleZellijAttach(
       graceController?.onDisconnect();
     });
 
-    // Import node-pty dynamically (native module)
-    // Using upstream microsoft/node-pty (no engines cap, supports Node 24/25)
-    const nodePty: typeof import('node-pty') = await import('node-pty');
+    // PTY support is optional so an unsupported platform cannot block Agor's
+    // base installation or non-terminal workflows.
+    let nodePty: typeof import('@lydell/node-pty');
+    try {
+      nodePty = await import('@lydell/node-pty');
+    } catch (error) {
+      throw new Error(
+        'Web terminal PTY support is unavailable. Run `agor doctor` or see https://agor.live/guide/extended-install#optional-web-terminal-runtime',
+        { cause: error }
+      );
+    }
 
     // Build clean environment for Zellij
     // CRITICAL: Strip existing Zellij env vars to prevent "attach to current session" error

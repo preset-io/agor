@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/codex",
-  "version": "0.24.5",
+  "version": "0.24.6",
   "description": "Version-aligned codex agentic tool integration for Agor",
   "type": "module",
   "main": "./dist/index.js",
@@ -31,6 +31,11 @@
   },
   "engines": {
     "node": ">=22.12.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/preset-io/agor.git",
+    "directory": "packages/agor-codex"
   },
   "publishConfig": {
     "access": "public"

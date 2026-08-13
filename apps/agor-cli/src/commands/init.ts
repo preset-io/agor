@@ -107,7 +107,8 @@ export default class Init extends Command {
   private initialConfig: AgorConfig = getDefaultConfig();
   private requestedAgenticTools: InstallableAgenticTool[] | undefined;
   private nonInteractive = false;
-  static description = 'Initialize Agor environment (creates ~/.agor/ and database)';
+  static description =
+    'Create the Agor config/database and install the agentic tools selected for first use';
 
   static examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -704,6 +705,7 @@ export default class Init extends Command {
       )
     );
     this.log(chalk.dim('Unchecked tools will not be available to workspaces on this deployment.'));
+    this.log(chalk.dim('Use ↑/↓ to move, Space to select, and Enter to continue.'));
     const { selectedTools } = await inquirer.prompt<{ selectedTools: InstallableAgenticTool[] }>([
       {
         type: 'checkbox',

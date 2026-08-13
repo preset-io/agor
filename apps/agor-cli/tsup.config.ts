@@ -22,5 +22,13 @@ export default defineConfig({
   clean: true,
   splitting: false,
   outDir: 'dist',
-  external: [/^@agor\/core/, /^@agor\/daemon/, /^@agor-live\/client/],
+  external: [
+    /^@agor\/core/,
+    /^@agor\/daemon/,
+    /^@agor-live\/client/,
+    // Keep the optional platform package on Node's normal resolution path.
+    // Bundling this CommonJS loader prevents its dynamic require from finding
+    // the prebuilt package installed alongside agor-live.
+    /^@lydell\/node-pty/,
+  ],
 });

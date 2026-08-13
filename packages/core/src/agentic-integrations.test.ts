@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createManagedAgenticToolInstallManifest,
   getAgenticToolInstallDir,
   getAgenticToolSelectionManifestPath,
   InvalidAgenticToolSelectionManifestError,
@@ -65,6 +66,15 @@ async function createFakeManagedClaude(version: string): Promise<string> {
 }
 
 describe('managed agentic tool loading', () => {
+  it('creates a minimal exact integration manifest with no lifecycle policy', () => {
+    expect(createManagedAgenticToolInstallManifest('opencode', '1.2.3')).toEqual({
+      name: 'agor-managed-opencode',
+      version: '0.0.0',
+      private: true,
+      dependencies: { '@agor-live/opencode': '1.2.3' },
+    });
+  });
+
   it('loads only the version-aligned package from the managed directory', async () => {
     const packageDirectory = await createFakeManagedClaude('1.2.3');
     await writeFile(

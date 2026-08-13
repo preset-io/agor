@@ -1,0 +1,161 @@
+# Release contract:
+#   1. A version-bump PR updates every aligned package.
+#   2. After merge, push v<package-version> on that main commit.
+#   3. This workflow builds once, runs the full packaged-install matrix, and
+#      publishes those exact tarballs with npm trusted publishing (OIDC).
+#
+# workflow_dispatch is useful for a non-publishing preflight on any ref and for
+# retrying a failed publish from an existing v* tag. It may not publish a branch.
+name: Release agor-live
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish after validation (requires selecting an existing v* tag)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Validate release ref
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      should_publish: ${{ steps.release.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: release
+        name: Validate tag and package alignment
+        env:
+          REQUESTED_PUBLISH: ${{ inputs.publish || false }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./packages/agor-live/package.json').version")
+          SHOULD_PUBLISH=false
+          if [[ "$GITHUB_EVENT_NAME" == push || "$REQUESTED_PUBLISH" == true ]]; then
+            if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+              echo "::error::Publishing is allowed only from an existing v* tag"
+              exit 1
+            fi
+            TAG_VERSION=${GITHUB_REF_NAME#v}
+            if [[ "$TAG_VERSION" != "$VERSION" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match agor-live $VERSION"
+              exit 1
+            fi
+            git fetch origin main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::Release tag must point to a commit contained in origin/main"
+              exit 1
+            fi
+            SHOULD_PUBLISH=true
+          fi
+          node scripts/check-agentic-tool-packages.mjs
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+
+  validate:
+    name: Build once and run release matrix
+    needs: metadata
+    uses: ./.github/workflows/agor-live-smoke.yml
+
+  publish:
+    name: Publish exact validated tarballs
+    needs: [metadata, validate]
+    if: needs.metadata.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      # Trusted publishing requires npm >=11.5.1. Pin the release client rather
+      # than inheriting whichever npm happens to ship with the runner image.
+      - run: npm install -g --ignore-scripts npm@11.16.0
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: agor-live-release
+          path: ${{ runner.temp }}/release
+
+      - name: Verify artifact set
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          RELEASE="$RUNNER_TEMP/release"
+          expected=(
+            "agor-live-claude-$VERSION.tgz"
+            "agor-live-codex-$VERSION.tgz"
+            "agor-live-copilot-$VERSION.tgz"
+            "agor-live-gemini-$VERSION.tgz"
+            "agor-live-opencode-$VERSION.tgz"
+            "agor-live-cursor-$VERSION.tgz"
+            "agor-live-client-$VERSION.tgz"
+            "agor-live-$VERSION.tgz"
+          )
+          test "$(find "$RELEASE" -maxdepth 1 -name '*.tgz' | wc -l)" -eq "${#expected[@]}"
+          for artifact in "${expected[@]}"; do test -f "$RELEASE/$artifact"; done
+          (cd "$RELEASE" && sha256sum "${expected[@]}")
+
+      - name: Publish integrations, client, then agor-live
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          RELEASE="$RUNNER_TEMP/release"
+
+          publish_exact() {
+            local artifact=$1
+            local manifest name version spec local_sha remote_sha
+            manifest=$(tar -xOf "$artifact" package/package.json)
+            name=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.name)' "$manifest")
+            version=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.version)' "$manifest")
+            spec="$name@$version"
+            local_sha=$(sha1sum "$artifact" | awk '{print $1}')
+            remote_sha=$(npm view "$spec" dist.shasum --json 2>/dev/null | tr -d '"[:space:]' || true)
+            if [[ -n "$remote_sha" ]]; then
+              if [[ "$remote_sha" != "$local_sha" ]]; then
+                echo "::error::$spec already exists with different tarball bytes"
+                exit 1
+              fi
+              echo "✓ $spec already contains the validated artifact; skipping"
+              return
+            fi
+            npm publish "$artifact" --access public
+          }
+
+          # agor-live is the user-visible release marker and is always last, so
+          # a partial failure cannot expose a base package whose selected tool
+          # wrappers are not yet available.
+          for id in claude codex copilot gemini opencode cursor; do
+            publish_exact "$RELEASE/agor-live-$id-$VERSION.tgz"
+          done
+          publish_exact "$RELEASE/agor-live-client-$VERSION.tgz"
+          publish_exact "$RELEASE/agor-live-$VERSION.tgz"
+
+      - name: Verify registry release
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          for package in \
+            @agor-live/claude @agor-live/codex @agor-live/copilot \
+            @agor-live/gemini @agor-live/opencode @agor-live/cursor \
+            @agor-live/client agor-live; do
+            test "$(npm view "$package@$VERSION" version)" = "$VERSION"
+          done

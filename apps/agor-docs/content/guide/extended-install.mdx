@@ -7,7 +7,7 @@ import InstallTabs from '../../components/InstallTabs.mdx';
 
 # Extended Installation
 
-The [Getting Started](/guide/getting-started) guide covers the recommended user path: `npm install -g agor-live`. This page covers everything else for **users and teams** running Agor, including Homebrew, optional companions, deployment alternatives, authentication options, and edge-case configurations.
+The [Getting Started](/guide/getting-started) guide covers the recommended npm installation. This page covers everything else for **users and teams** running Agor, including Homebrew, optional companions, deployment alternatives, authentication options, and edge-case configurations.
 
 > Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development). It covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
 
@@ -16,6 +16,10 @@ The [Getting Started](/guide/getting-started) guide covers the recommended user 
 - **Node.js ≥ 22.12** (see [nodejs.org](https://nodejs.org) for installation).
 - **Git** available on `PATH` (verify with `git --version`).
 - A working system CA trust store for HTTPS remotes. Minimal Linux images may need the `ca-certificates` package. SSH remotes additionally require an SSH client, keys or agent access, and host-key configuration.
+
+Agor supports Node releases that are Current, Active LTS, or Maintenance LTS upstream, subject to
+the Node ≥ 22.12 minimum. The packaged release gate currently runs Node 22, 24, and 26 end to end.
+Upstream EOL releases such as Node 25 are not supported production runtimes.
 
 The Homebrew formula installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
 
@@ -43,9 +47,10 @@ agor init
 ```
 
 The original npm installation never downloads optional runtimes. Interactive `agor init` shows all
-six supported tools in a multi-select and requires you to select at least one. Press Ctrl+C to cancel
-instead of creating a deployment accidentally. Init records the final selection in the newly created
-immutable `config.yaml` and reconciles the packages before it reports success.
+six supported tools in a multi-select and requires you to select at least one. Use the arrow keys to
+move, Space to select, and Enter to continue. Press Ctrl+C to cancel instead of creating a deployment
+accidentally. Init records the final selection in the newly created immutable `config.yaml` and
+reconciles the packages before it reports success.
 
 The generated deployment policy has this shape:
 
@@ -56,9 +61,11 @@ agentic_tools:
     - codex
 ```
 
-After initialization, edit this list explicitly and run `agor install --sync` to change or repair the
-package set. It installs missing packages and removes unselected or stale versions without rewriting
-the file. If an init-time npm operation fails, the config and any completed atomic package installs
+`agor init` is the first-run command: it creates the config and database, records the initial tool
+selection, and installs those packages. After initialization, edit the list explicitly and run
+`agor install --sync` to change or repair only the package set; it does not initialize or recreate
+Agor. It installs missing packages and removes unselected or stale versions without rewriting the
+file. If an init-time npm operation fails, the config and any completed atomic package installs
 remain in place; fix npm registry/proxy/permission issues and run exactly `agor install --sync`.
 
 Stop the daemon before accepting destructive re-initialization. `agor init` refuses to remove a live
@@ -175,7 +182,26 @@ If the error persists, collect `node -v`, `npm -v`, `ulimit -Sn`, `ulimit -Hn`, 
 
 ---
 
-## Optional: Zellij (for the web terminal)
+## Optional web terminal runtime
+
+Agor's CLI, daemon, sessions, boards, and agentic tools do not require a pseudo-terminal runtime.
+The npm package declares the prebuilt `@lydell/node-pty` runtime as optional so an unsupported
+platform artifact cannot block first run. `agor doctor` reports whether the capability is ready.
+
+The prebuilt runtime supports macOS, Linux, and Windows on x64 and arm64. If it is unavailable,
+opening the web terminal shows this documentation link rather than failing Agor startup. First retry
+the normal install without omitting optional dependencies:
+
+```bash
+npm install -g agor-live@latest
+agor doctor
+```
+
+If npm still cannot install the optional runtime for your OS/architecture, use Agor normally without
+the web terminal and include `node --version`, `npm --version`, OS/architecture, and the sanitized npm
+error when reporting the missing platform.
+
+### Optional: Zellij
 
 Agor has an optional branch-scoped web terminal. It uses
 [Zellij](https://zellij.dev/) when the selected terminal runtime provides it.

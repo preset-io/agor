@@ -129,10 +129,11 @@ To test the **packaged artifact** end-to-end (the way users actually install Ago
 ```bash
 cd packages/agor-live
 ./build.sh
-npm i -g .            # or: npm i -g ./agor-live-<version>.tgz
+TARBALL=$(ls "$PWD"/release/agor-live-[0-9]*.tgz)
+npm i -g "$TARBALL"
 ```
 
-`build.sh` produces a single self-contained package: the UI is built as static assets and bundled into `agor-live` so the daemon serves it directly. After `npm i -g .`, the global `agor` and `agor-live` commands run your local build instead of the published version.
+`build.sh` produces immutable release tarballs in `packages/agor-live/release/`: the UI is built as static assets and bundled into `agor-live` so the daemon serves it directly, internal packages are materialized in the tarball, and workspace dependencies are rewritten to exact release versions. The package has no required install lifecycle script, so the local artifact uses the same plain npm command as a registry release. After installation, the global `agor` and `agor-live` commands run your local build instead of the published version.
 
 Useful when you want to:
 

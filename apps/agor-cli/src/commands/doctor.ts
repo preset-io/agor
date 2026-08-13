@@ -9,6 +9,7 @@ import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
 import { listManagedAgorVersions } from '../lib/agentic-tool-integrations.js';
+import { diagnoseWebTerminalRuntime } from '../lib/optional-capabilities.js';
 
 export default class Doctor extends Command {
   static description = 'Check this Agor installation and its agentic tools';
@@ -20,6 +21,7 @@ export default class Doctor extends Command {
     const { flags } = await this.parse(Doctor);
     const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
     const git = await diagnoseGit();
+    const webTerminal = await diagnoseWebTerminalRuntime();
     const agenticTools = await diagnoseAgenticTools(agorVersion);
     const staleVersions = (await listManagedAgorVersions()).filter(
       (version) => version !== agorVersion
@@ -28,7 +30,14 @@ export default class Doctor extends Command {
     if (flags.json) {
       this.log(
         JSON.stringify(
-          { ok: git.status === 'ready', git, policy, staleVersions, agenticTools },
+          {
+            ok: git.status === 'ready',
+            git,
+            optionalCapabilities: { webTerminal },
+            policy,
+            staleVersions,
+            agenticTools,
+          },
           null,
           2
         )
@@ -42,6 +51,15 @@ export default class Doctor extends Command {
       this.log(`${chalk.green('✓')} Git ${git.version} is executable (${git.binary})`);
     } else {
       this.log(`${chalk.red('✗')} ${git.detail}`);
+    }
+    this.log('');
+    this.log(chalk.bold('Optional capabilities'));
+    if (webTerminal.status === 'ready') {
+      this.log(`  ${chalk.green('✓')} Web terminal runtime: ready`);
+    } else {
+      this.log(`  ${chalk.yellow('○')} Web terminal runtime: unavailable (optional)`);
+      if (webTerminal.detail) this.log(chalk.dim(`      ${webTerminal.detail}`));
+      this.log(chalk.dim(`      ${webTerminal.docs}`));
     }
     this.log('');
     this.log(chalk.bold('Agentic tools'));

@@ -2,6 +2,10 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  assertManagedAgenticToolInstallReady,
+  createManagedAgenticToolInstallManifest,
+} from '@agor/core/agentic-integrations';
 import { lock as acquireFileLock } from 'proper-lockfile';
 
 export {
@@ -236,14 +240,21 @@ export async function removeManagedInstallDebris(version: string): Promise<strin
   return debris;
 }
 
-function runNpmInstall(prefix: string, packageSpec: string): Promise<void> {
+async function runNpmInstall(prefix: string, packageSpec: string): Promise<void> {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const args = [
+    'install',
+    '--prefix',
+    prefix,
+    '--save-exact',
+    '--no-fund',
+    '--no-audit',
+    '--ignore-scripts',
+    '--include=optional',
+  ];
+  args.push(packageSpec);
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      npm,
-      ['install', '--prefix', prefix, '--save-exact', '--no-fund', packageSpec],
-      { stdio: 'inherit', env: process.env }
-    );
+    const child = spawn(npm, args, { stdio: 'inherit', env: process.env });
     child.once('error', reject);
     child.once('close', (code, signal) => {
       if (code === 0) resolve();
@@ -266,8 +277,14 @@ export async function installManagedIntegration(
   const backup = join(parent, `.${tool}.previous-${randomUUID()}`);
   await mkdir(parent, { recursive: true });
   await rm(staging, { recursive: true, force: true });
+  await mkdir(staging, { recursive: true, mode: 0o700 });
 
   try {
+    await writeFile(
+      join(staging, 'package.json'),
+      `${JSON.stringify(createManagedAgenticToolInstallManifest(tool, agorVersion), null, 2)}\n`,
+      'utf8'
+    );
     await runNpmInstall(staging, `${definition.packageName}@${agorVersion}`);
     const installedPackage = JSON.parse(
       await readFile(
@@ -283,6 +300,7 @@ export async function installManagedIntegration(
         `Installed ${installedPackage.name ?? 'unknown package'}@${installedPackage.version ?? 'unknown'}; expected ${definition.packageName}@${agorVersion}`
       );
     }
+    await assertManagedAgenticToolInstallReady(tool, agorVersion, staging);
     const manifest: ManagedIntegrationManifest = {
       agorVersion,
       packageName: definition.packageName,

@@ -86,10 +86,12 @@ Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)) and **Git** on `P
 ```bash
 npm install -g agor-live
 
-agor init           # creates ~/.agor/ and the database
+agor init           # creates config/database and installs the tools you select
 agor daemon start   # runs the daemon in the background
 agor open           # opens the web UI
 ```
+
+Use `agor install` later to change or repair the selected agentic tools; it does not initialize or recreate Agor.
 
 That's it — add a repo and create your first session from the onboarding wizard.
 
