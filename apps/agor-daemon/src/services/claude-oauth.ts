@@ -53,20 +53,36 @@ import type {
 import { writeClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { type AppLike, resolveCodexUnixIdentity } from './codex-auth-shared.js';
 
-// VERIFIED against @anthropic-ai/claude-agent-sdk@0.1.55's bundled cli.js (the
-// build Agor loads) and cross-checked with the installed claude CLI v2.1.211.
-/** Single fixed public OAuth client id shared by every Claude Code install. */
+// Constants are the PROD OAuth config (`yol`) read out of the native `claude`
+// binary bundled by the pinned SDK: package.json pins
+// @anthropic-ai/claude-agent-sdk@0.3.197, whose manifest.json bundles claude
+// CLI v2.1.197 (commit c8fd8048). The prod config is identical in the installed
+// CLI v2.1.211, which was byte-inspected: config object at file offset
+// ~237512852 (`yol={...}`), login authorize builder at ~101457400, token
+// exchange at ~101464300. The `-local-oauth` config (client id
+// 22422756-…, localhost:8205) is dev-only and deliberately not used here.
+/** PROD OAuth client id (`yol.CLIENT_ID`). Fixed and public across installs. */
 const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
-const CLAUDE_AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
-// TODO(verify): SDK 0.1.55 uses console.anthropic.com; CLI v2.1.211 uses
-// platform.claude.com (console→platform rename in flight). Confirm which host
-// the client id's redirect_uri is currently registered against — a mismatch is
-// the most likely first failure. Both must agree with CLAUDE_REDIRECT_URI.
-const CLAUDE_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
-const CLAUDE_REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback';
-// TODO(verify): extract the exact scope set for the pinned SDK rather than
-// hardcoding. Too narrow silently disables features; too broad may be rejected.
-const CLAUDE_SCOPES = ['user:inference', 'user:profile', 'user:sessions:claude_code'];
+// Subscription (Claude Pro/Max) authorize endpoint = `yol.CLAUDE_AI_AUTHORIZE_URL`.
+// Console/API-billing login uses `yol.CONSOLE_AUTHORIZE_URL`
+// (https://platform.claude.com/oauth/authorize); the subscription path is ours.
+const CLAUDE_AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize';
+// `yol.TOKEN_URL`. The old console.anthropic.com host belonged to pre-rename
+// SDKs; prod issues and exchanges against platform.claude.com.
+const CLAUDE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
+// `yol.MANUAL_REDIRECT_URL` — the paste-back redirect. The CLI's own browser
+// flow can instead use a loopback http://localhost:{port}/callback; the daemon
+// runs no loopback server, so it uses the manual redirect, and the token is
+// issued for exactly this redirect + client id, so both must match byte-for-byte.
+const CLAUDE_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
+// Scope string the CLI's claude.ai login sends (login builder at offset
+// ~101458000: "user:profile user:inference user:sessions:claude_code user:mcp_servers").
+const CLAUDE_SCOPES = [
+  'user:profile',
+  'user:inference',
+  'user:sessions:claude_code',
+  'user:mcp_servers',
+];
 
 const FETCH_TIMEOUT_MS = 15_000;
 /** How long a daemon-side attempt keeps its verifier/state before it must restart. */
@@ -109,9 +125,9 @@ function buildAuthorizeUrl(challenge: string, state: string): string {
   url.searchParams.set('code_challenge', challenge);
   url.searchParams.set('code_challenge_method', 'S256');
   url.searchParams.set('state', state);
-  // TODO(verify): community reimplementations append `code=true` to force the
-  // code-display page instead of a silent localhost redirect. Confirm whether
-  // the pinned SDK requires it.
+  // `code=true` selects the code-display (paste-back) page instead of a silent
+  // loopback redirect — the CLI sets it for its manual flow (authorize builder
+  // offset ~101457400). Required here since the daemon has no loopback server.
   url.searchParams.set('code', 'true');
   return url.toString();
 }
@@ -135,8 +151,8 @@ async function exchangeCodeForTokens(
   verifier: string,
   state: string
 ): Promise<ExchangedTokens> {
-  // TODO(verify): confirm content-type (application/json vs form-encoded) and
-  // exact field names against the pinned SDK. JSON body is the community form.
+  // The CLI posts the exchange as JSON (no oauth beta header on this call);
+  // token exchange at binary offset ~101464300 uses application/json.
   const res = await fetchWithTimeout(CLAUDE_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -284,6 +300,11 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
         user: attempt.authUser,
         authenticated: true,
       });
+      // Flipping to `subscription` with no stored token is what routes this user
+      // to native on-disk auth in resolveTenantAgenticTool (no env injection).
+      // TODO: also clear any previously pasted agentic_tools['claude-code']
+      // .CLAUDE_CODE_OAUTH_TOKEN so a leftover paste can't out-rank the managed
+      // credentials file — the one case the resolver guard cannot cover.
       await usersService.patch(
         attempt.userId,
         {

@@ -26,36 +26,58 @@ an assumption a reviewer/implementer must confirm before shipping.
 
 ### VERIFIED
 
-Sources: the OAuth constants and the credential shape were read directly out of
-the **bundled Claude Agent SDK `cli.js` that Agor actually loads**
-(`@anthropic-ai/claude-agent-sdk@0.1.55`, via
-`loadManagedAgenticToolSdk('claude-code')`) and cross-checked against the
-locally installed `claude` CLI (v2.1.211) and Anthropic's official docs
-(<https://code.claude.com/docs/en/authentication>).
+Sources: the pinned SDK is **`@anthropic-ai/claude-agent-sdk@0.3.197`** (in
+every workspace `package.json`; loaded via `loadManagedAgenticToolSdk`). That
+SDK no longer ships a `cli.js` — its `manifest.json` bundles the **native
+`claude` CLI v2.1.197** (commit `c8fd8048`) which it extracts and spawns. The
+OAuth constants below were read by **byte-inspecting the native binary** (the
+installed v2.1.211, whose prod OAuth config is identical to 2.1.197's) at the
+file offsets cited, and cross-checked against Anthropic's official docs
+(<https://code.claude.com/docs/en/authentication>). The earlier `0.1.55 cli.js`
+figures in the first spike revision were from a stale worktree and are
+superseded here.
 
 1. **There is NO device-authorization (RFC 8628) endpoint for Claude Code.**
    The claim "no device endpoint" was treated as something to disprove, not
-   assume. No `device_code` / `deviceauth` / device-grant strings exist in the
-   bundled SDK `cli.js`; the official authentication doc describes only a browser
-   authorization flow with a paste-back code; a detailed binary-analysis writeup
-   describes the same. This is the **one structural difference from Codex** — see
+   assume. The native binary's login flow uses only a loopback-or-manual
+   authorization-code redirect (login builder ~101457400); its Anthropic OAuth
+   config exposes no device-grant endpoint, and the official auth doc describes
+   only the browser + paste-back flow. The one `device_code` string in the binary
+   lives in the bundled `@azure/msal-common` generic OAuth param enum (the
+   Console/Foundry path), not the Anthropic login flow — a false positive, not a
+   device endpoint. This is the **one structural difference from Codex** — see
    below.
 2. **Claude Code uses OAuth 2.0 authorization-code + PKCE (S256) with a
-   paste-back code.** Verified constants from the bundled SDK:
-   - authorize URL: `https://claude.ai/oauth/authorize`
-   - token URL: `https://console.anthropic.com/v1/oauth/token`
-     (installed CLI v2.1.211 uses `https://platform.claude.com/v1/oauth/token`
-     — console→platform rename is in flight; see open questions)
-   - redirect_uri: `https://console.anthropic.com/oauth/code/callback`
-     (v2.1.211: `https://platform.claude.com/oauth/code/callback`)
-   - client_id: `9d1c250a-e61b-44d9-88ed-5944d1962f5e` — a single fixed public
-     client id shared by every Claude Code install
-   - PKCE: `code_challenge_method=S256`, plus an OAuth `state` param
-   - grant types present: `authorization_code` (initial) and `refresh_token`
-     (renewal)
+   paste-back code.** These are the PROD OAuth config object (`yol`) at binary
+   offset ~237512852, plus the login authorize builder (~101457400) and token
+   exchange (~101464300). **All `TODO(verify)` placeholders in the scaffold are
+   now resolved to these values:**
+   - authorize URL (subscription / Claude Pro-Max):
+     **`https://claude.com/cai/oauth/authorize`** (`yol.CLAUDE_AI_AUTHORIZE_URL`).
+     The Console/API-billing login instead uses `yol.CONSOLE_AUTHORIZE_URL` =
+     `https://platform.claude.com/oauth/authorize`. Note this is **not** the
+     historical `claude.ai/oauth/authorize`.
+   - token URL: **`https://platform.claude.com/v1/oauth/token`** (`yol.TOKEN_URL`).
+     `console.anthropic.com` was the pre-rename host and is gone in prod.
+   - redirect_uri (paste-back): **`https://platform.claude.com/oauth/code/callback`**
+     (`yol.MANUAL_REDIRECT_URL`). The CLI's own browser flow can instead use a
+     loopback `http://localhost:{port}/callback`; the daemon has no loopback
+     server so it uses the manual redirect.
+   - client_id: **`9d1c250a-e61b-44d9-88ed-5944d1962f5e`** (`yol.CLIENT_ID`) — a
+     single fixed public id. (The other id in the binary,
+     `22422756-60c9-4084-8eb7-27705fd5cf9a`, is the **local-dev** config
+     `-local-oauth`/`localhost:8205`, not prod.)
+   - authorize query params (login builder ~101457400): `code=true`, `client_id`,
+     `response_type=code`, `redirect_uri`, `scope`, `code_challenge`,
+     `code_challenge_method=S256`, `state`. `code=true` selects the code-display
+     (paste-back) page — required since we have no loopback server.
+   - scope string: **`user:profile user:inference user:sessions:claude_code user:mcp_servers`**.
+   - token exchange (~101464300): **`POST` with `Content-Type: application/json`**,
+     `grant_type=authorization_code`; **no** `oauth-2025-04-20` beta header on the
+     exchange call. `refresh_token` grant also present (renewal).
    - the authorize page returns the code as **`CODE#STATE`** which the user
-     copies back (this is exactly the `Paste code here if prompted` path the docs
-     describe for WSL2/SSH/containers).
+     copies back (the `Paste code here if prompted` path the docs describe for
+     WSL2/SSH/containers).
 3. **On-disk credential format read by the SDK/CLI on Linux:**
    `~/.claude/.credentials.json`, mode `0600` (macOS uses the Keychain; if
    `CLAUDE_CONFIG_DIR` is set the file lives under that dir instead). Shape
@@ -77,38 +99,44 @@ locally installed `claude` CLI (v2.1.211) and Anthropic's official docs
    `expires_in` (seconds, e.g. `28800` = 8h), `access_token` (`sk-ant-oat01-`),
    `refresh_token` (`sk-ant-ort01-`), and `account`/`organization` objects.
 
-### ASSUMED — confirm before shipping
+### STILL UNVERIFIED
 
-- **Token endpoint content-type / body encoding.** The scaffold posts a JSON
-  body; some community reimplementations use JSON, and the SDK's exact
-  content-type was not extracted. Confirm `application/json` vs
-  `application/x-www-form-urlencoded` and the exact field names.
-- **Exact scope list to request.** The bundled SDK contains `user:inference`,
-  `user:profile`, `user:sessions:claude_code`, and `org:create_api_key`; the
-  installed CLI additionally has `user:mcp_servers`. `setup-token` and `/login`
-  request different subsets. Pull the exact set for the pinned SDK at
-  implementation time rather than hardcoding a guess. Requesting too narrow a
-  scope silently disables features (e.g. MCP-from-claude.ai); too broad may be
-  rejected.
-- **Whether an extra authorize param (e.g. `&code=true`) is required** to force
-  the code-display page rather than a silent localhost redirect. Community
-  scripts append it; not confirmed against the pinned SDK.
-- **console.anthropic.com vs platform.claude.com** — which host the fixed client
-  id's redirect_uri is currently registered against. A redirect_uri mismatch is
-  the most likely first failure.
+- **`subscriptionType` field name in the token response.** The scaffold reads
+  `subscription_type` opportunistically for a display hint; the response's exact
+  field for plan tier wasn't isolated in the binary. It only affects a success
+  hint, never auth. `expiresAt` in the written file is computed from
+  `expires_in`, so this gap is cosmetic.
+- **claude.com/cai vs a redirect chain.** `CLAUDE_AI_AUTHORIZE_URL` is
+  `https://claude.com/cai/oauth/authorize` in prod; whether that 3xx-redirects
+  to a claude.ai origin mid-flow doesn't change what we send, but confirm the
+  first live run lands on the code-display page.
 
-### CORRECTION to the orchestrator's brief
+### RESOLVED: env-var vs `.credentials.json` precedence (was the open contradiction)
 
-The brief stated "the SDK PREFERS the credentials.json file [over the env var]".
-The **official precedence table currently says the opposite**: env
-`CLAUDE_CODE_OAUTH_TOKEN` (rank 5) is chosen **above** the subscription
-`/login` credential in `.credentials.json` (rank 7)
-(<https://code.claude.com/docs/en/authentication#authentication-precedence>).
+**Definitive answer: the env var `CLAUDE_CODE_OAUTH_TOKEN` out-ranks the
+`.credentials.json` (`/login`) credential.** Two independent sources agree:
 
-This does **not** weaken the design — writing `.credentials.json` is still the
-right target, for reasons independent of precedence (below). But the "the file
-always wins" premise should not be relied on; the real motivations are refresh
-and coherence. See "Why write the file" and open questions.
+- Anthropic's documented precedence: env `CLAUDE_CODE_OAUTH_TOKEN` is rank 5,
+  the subscription `/login` credential is rank 7
+  (<https://code.claude.com/docs/en/authentication#authentication-precedence>).
+- The CLI binary's own credential-source enum (offset ~101603500) lists the
+  sources in that same relative order — `CLAUDE_CODE_OAUTH_TOKEN` above
+  `profile` above `claude.ai` (the `.credentials.json` login) — corroborating
+  env-over-file. (The exact tie-break is a compiled branch that could not be
+  disassembled from strings alone, but both the docs and the enum ordering point
+  the same way, so this is treated as settled.)
+
+The 2026-07-15/16 field observation (a stale `.credentials.json` + a fresh
+pasted env token still 401'd) is therefore **not** "the file wins". It is more
+consistent with the fresh env token not actually reaching the SDK subprocess in
+that run, or that token itself being stale/expired — env-over-file rules out
+"the file shadowed a good env token". Crucially, **this does not gate Task 2**:
+whichever wins, the fix is to guarantee exactly one credential source per user.
+
+**So the Task 2 guard IS necessary.** Because env out-ranks the file, injecting a
+`CLAUDE_CODE_OAUTH_TOKEN` for an OAuth-flow user would shadow the managed,
+refreshing `.credentials.json` — stranding the session on a non-renewable token
+(and 401'ing outright if that env token is stale). See "Task 2" below.
 
 ---
 
@@ -195,11 +223,52 @@ real `.credentials.json` is still worth doing:
    `~/.claude/.credentials.json` from a prior interactive login. Injecting an
    env token _and_ leaving a conflicting on-disk file is the kind of split-brain
    that produces confusing 401s. Writing (and owning) the file gives one
-   coherent, refreshable credential source. NOTE: because the documented
-   precedence currently ranks the env var above the file, the executor should
-   **not also inject `CLAUDE_CODE_OAUTH_TOKEN`** for a user authenticated this
-   way — otherwise a stale env token would mask the fresh file. This coupling is
-   an open question flagged below.
+   coherent, refreshable credential source — provided we don't also inject a
+   competing env token, which we don't (see Task 2).
+
+---
+
+## Task 2: non-breaking credential handling (env token vs managed file)
+
+Constraint: existing accounts that authenticate via a pasted
+`CLAUDE_CODE_OAUTH_TOKEN` must keep working exactly as today; the new OAuth flow
+writes a managed `.credentials.json`. Because env out-ranks the file (resolved
+above), the two must not coexist for one user.
+
+**The guard lives in the credential resolver, not in `spawn-executor.ts`.**
+`resolveTenantAgenticTool` (`packages/core/src/config/tenant-agentic-tool-resolver.ts`)
+already models this for Codex: subscription → `{ connection: {}, useNativeAuth: true }`,
+i.e. inject nothing and let the SDK read the on-disk login. Claude now gets the
+same branch, keyed on "OAuth-flow onboarding" = subscription method **and no
+stored pasted token**:
+
+```ts
+if (tool === 'claude-code' && method === 'subscription' && !stored?.CLAUDE_CODE_OAUTH_TOKEN) {
+  return { connection: {}, useNativeAuth: true };
+}
+```
+
+Why this is correct and non-breaking:
+
+- **OAuth-flow user** (managed `.credentials.json`, no pasted token): matches the
+  guard → `useNativeAuth`, empty connection → `spawn-executor.ts:693` forwards no
+  `CLAUDE_CODE_OAUTH_TOKEN` → the SDK reads the refreshing file. `spawn-executor`
+  is **untouched** — it only ever forwards a value the resolver decided to set.
+- **Pasted-token user** (`stored.CLAUDE_CODE_OAUTH_TOKEN` present): fails the
+  guard → falls through to the existing env-injection path, byte-for-byte
+  unchanged. No regression.
+- The claude executor tool already accepts a `useNativeAuth` flag with "no
+  special handling needed" (`packages/executor/src/sdk-handlers/claude/claude-tool.ts`),
+  so native auth just means "read the file". In hosted `required_from_auth`
+  multitenancy, `config.ts` already rejects native subscription auth — the new
+  branch inherits that guard for free.
+
+**Residual gap (the one case the resolver can't see):** a user who _both_ pasted
+a token earlier _and_ runs the new OAuth flow has `stored.CLAUDE_CODE_OAUTH_TOKEN`
+present, so the resolver would still inject it and shadow the fresh file. The fix
+is a one-source invariant: on OAuth success, clear the stored pasted token. This
+is marked as a `TODO` in `claude-oauth.ts#persist` rather than implemented in the
+spike (it requires mutating the encrypted `agentic_tools` blob).
 
 ---
 
@@ -276,26 +345,27 @@ freshness countdown on our own `expiresAt`).
 
 ## Open questions
 
-1. **Redirect_uri host + token host**: `console.anthropic.com` (bundled SDK)
-   vs `platform.claude.com` (installed CLI). Which is registered for the fixed
-   client id today? A mismatch fails the exchange. Track the pinned SDK.
-2. **Exact scopes + token-endpoint content-type** (see ASSUMED). Extract from
-   the pinned SDK rather than guessing.
-3. **Env-var coupling**: since the docs rank `CLAUDE_CODE_OAUTH_TOKEN` above the
-   file, must the executor _stop_ injecting that env var for file-authenticated
-   users, and does `check-auth.ts` need to prefer the on-disk file? Decide the
-   single source of truth to avoid split-brain 401s.
-4. **`check-auth` / logout parity**: add a `claude.auth-file` `inspect` op and a
+_Redirect/token hosts, scopes, content-type, and env-var precedence are now
+RESOLVED (see the VERIFIED and RESOLVED sections above)._
+
+1. **One-source invariant on re-onboarding**: clear a previously pasted
+   `CLAUDE_CODE_OAUTH_TOKEN` when the OAuth flow writes a managed file (the
+   `persist` `TODO`), so a leftover paste can't out-rank the fresh file.
+2. **`check-auth` / logout parity**: add a `claude.auth-file` `inspect` op and a
    `/claude-auth/logout` mirroring Codex, so the connection banner and
    disconnect work. Out of scope for this spike.
-5. **`resolveCodexUnixIdentity` rename**: it is now used by a non-Codex flow.
+3. **`resolveCodexUnixIdentity` rename**: it is now used by a non-Codex flow.
    Rename to `resolveAgenticUnixIdentity` (and generalize its Codex-specific
    error strings) in a follow-up; kept as-is here to avoid churn during review.
-6. **ToS / acceptable use** (see below).
+4. **`subscriptionType` response field** (cosmetic; see STILL UNVERIFIED).
+5. **ToS / acceptable use** (see below).
 
 ---
 
-## ToS / acceptable-use considerations (flagged, not resolved)
+## ToS / acceptable-use considerations (NOT cleared)
+
+**Status: proceeding on the same basis as the already-shipped Codex OAuth flow;
+this needs a human/legal skim before GA — it is not cleared here.**
 
 - The flow drives the **fixed public Claude Code client id** programmatically.
   The user authenticates with **their own** browser + credentials, and tokens
@@ -314,7 +384,3 @@ freshness countdown on our own `expiresAt`).
   Claude Code terms) that daemon-driven `/login`-equivalent sign-in on the
   user's behalf is acceptable, and keep API-key and pasted-token paths as
   first-class alternatives.
-
-```
-
-```

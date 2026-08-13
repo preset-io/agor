@@ -98,6 +98,17 @@ async function resolveUserConnection(
   if (tool === 'codex' && method === 'subscription') {
     return { connection: {}, useNativeAuth: true };
   }
+  // Claude subscription onboarded through the in-app OAuth sign-in stores no
+  // token — it writes a daemon-managed ~/.claude/.credentials.json that the SDK
+  // reads and refreshes itself. Signal native auth so no CLAUDE_CODE_OAUTH_TOKEN
+  // env is injected: that env var outranks the credentials file (Anthropic's
+  // documented precedence; corroborated by the CLI's own credential-source
+  // ordering), so injecting one would shadow the managed, refreshing file and
+  // strand the session on a non-renewable token. A pasted CLAUDE_CODE_OAUTH_TOKEN
+  // (present in `stored`) still takes the env path below, unchanged.
+  if (tool === 'claude-code' && method === 'subscription' && !stored?.CLAUDE_CODE_OAUTH_TOKEN) {
+    return { connection: {}, useNativeAuth: true };
+  }
   if (!stored || Object.keys(stored).length === 0) return null;
 
   const connection: Record<string, string> = {};
