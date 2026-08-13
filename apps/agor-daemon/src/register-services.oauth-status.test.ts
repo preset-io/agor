@@ -12,15 +12,14 @@ describe('register-services durable OAuth status authority', () => {
   const refreshBlock =
     refreshStart < 0 || refreshEnd < 0 ? '' : source.slice(refreshStart, refreshEnd);
 
-  it('never advertises a refresh-ambiguous grant as authenticated', () => {
-    expect(statusBlock).toContain("token.refresh_status === 'ambiguous'");
-    expect(statusBlock.indexOf("token.refresh_status === 'ambiguous'")).toBeLessThan(
-      statusBlock.indexOf('authenticatedServerIds.add')
-    );
-  });
-
-  it('revalidates PostgreSQL grant configuration before advertising it', () => {
-    expect(statusBlock).toContain('isMCPOAuthGrantBoundToServer');
+  // What the endpoint may advertise — expiry, refresh-ambiguity, grant
+  // binding, and which servers it will name to which caller — is decided by
+  // `resolveAuthenticatedServerIds` and tested against its behaviour in
+  // `services/mcp-oauth-status.test.ts`. All this file still owes is that the
+  // route asks it rather than deciding for itself.
+  it('resolves durable status through the one place that decides it', () => {
+    expect(statusBlock).toContain('resolveAuthenticatedServerIds');
+    expect(statusBlock).toContain('requireGrantBinding: isPostgresDatabaseHandle(db)');
   });
 
   it('gives the refresh owner and observer the same retryable known-failure response', () => {

@@ -772,7 +772,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_create',
     {
       description:
-        'Register a new MCP server definition. Permissions are service-enforced: only admins can create MCP configs. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set; `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Prefer `{{ user.env.SECRET_NAME }}` templates; raw secrets are visible in the MCP transcript though never returned.',
+        'Register a new MCP server definition. Permissions are service-enforced: admins always may, members only when the workspace `mcp_member_policy` allows it, and members are limited to remote transports and to servers owned by themselves. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set; `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Prefer `{{ user.env.SECRET_NAME }}` templates; raw secrets are visible in the MCP transcript though never returned.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: mcpServerCreateSchema,
     },
@@ -842,7 +842,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_update',
     {
       description:
-        'Update an existing MCP server definition. Permissions are service-enforced: only admins can update MCP configs. Updating config does not create a session-specific link: enabled `global` servers are already effective for all sessions, while `session` scoped servers need `agor_sessions_add_mcp_server`. Provide only fields to change. Validation rejects incompatible combinations (e.g. stdio+url/auth/headers, remote+command/args, wrong auth fields). OAuth tip: keep only `auth:{type:"oauth"}` unless discovery fails or a provider requires endpoint/client overrides. Use `auth:{type:"none"}` to clear auth.',
+        'Update an existing MCP server definition. Permissions are service-enforced: admins always may, members only under the workspace `mcp_member_policy`, and nobody but an admin or the owner may touch a private server. Updating config does not create a session-specific link: enabled `global` servers are already effective for all sessions, while `session` scoped servers need `agor_sessions_add_mcp_server`. Provide only fields to change. Validation rejects incompatible combinations (e.g. stdio+url/auth/headers, remote+command/args, wrong auth fields). OAuth tip: keep only `auth:{type:"oauth"}` unless discovery fails or a provider requires endpoint/client overrides. Use `auth:{type:"none"}` to clear auth.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: mcpServerUpdateSchema,
     },
@@ -898,7 +898,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_sessions_add_mcp_server',
     {
       description:
-        'Attach a registered MCP server to a session. Defaults to current session when `sessionId` is omitted. Permissions are service-enforced via the same session-scoped route as the UI: caller must be allowed to edit that session config. Verify with `agor_sessions_get_current`/`agor_sessions_get`; the agent may need a restart/re-prompt before its MCP client sees new tools.',
+        'Attach a registered MCP server to a session. Defaults to current session when `sessionId` is omitted. Permissions are service-enforced via the same session-scoped route as the UI: the caller must be allowed to edit that session config, and a server private to another user cannot be attached to it. Verify with `agor_sessions_get_current`/`agor_sessions_get`; the agent may need a restart/re-prompt before its MCP client sees new tools.',
       annotations: { destructiveHint: false, idempotentHint: true },
       inputSchema: z.strictObject({
         mcpServerId: mcpRequiredId(

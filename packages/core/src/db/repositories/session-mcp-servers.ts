@@ -26,6 +26,19 @@ export class SessionMCPServerRepository {
     this.mcpServerRepo = new MCPServerRepository(db);
   }
 
+  /**
+   * Resolve a session/server pair, refusing one the session may not use.
+   *
+   * Every path that *links* a server to a session — route, session service,
+   * scheduler, gateway, zone trigger, fork/spawn copy — ends up here, so the
+   * ownership rule is enforced once rather than in each of them. It answers on
+   * the session's creator, not the caller, because the caller is not always
+   * the identity the session will run as.
+   *
+   * This is not the only seam ownership needs. Global-scope resolution never
+   * touches the junction table, and OAuth credential issuance works from
+   * server ids directly; both carry their own check.
+   */
   private async resolveUsablePair(
     sessionId: SessionID,
     serverId: MCPServerID

@@ -259,13 +259,21 @@ export const mcpServerQuerySchema = createQuerySchema(
     ),
     enabled: Type.Optional(Type.Boolean()),
     source: Type.Optional(
-      Type.Union([Type.Literal('user'), Type.Literal('imported'), Type.Literal('agor')])
+      Type.Union([
+        Type.Literal('user'),
+        Type.Literal('imported'),
+        Type.Literal('agor'),
+        Type.Literal('catalog'),
+      ])
     ),
-    usableByUserId: Type.Optional(CommonSchemas.uuid),
     ownerless: Type.Optional(CommonSchemas.boolean),
     // Executor/session-token callers pass this so hooks can inject the
     // task creator's per-user OAuth token instead of the session owner's.
     forUserId: Type.Optional(CommonSchemas.uuid),
+    // Narrows a listing to shared servers plus one user's private ones.
+    // Trusted callers set it; on an external member request the service hooks
+    // overwrite whatever arrived with the caller's own id.
+    usableByUserId: Type.Optional(CommonSchemas.uuid),
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );

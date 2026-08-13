@@ -120,7 +120,7 @@ import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
 } from './services/sessions.js';
-import { isLocalAuthenticationLookup } from './services/users.js';
+import { isAuthenticationUserLookup, isLocalAuthenticationLookup } from './services/users.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
   ensureMinimumRole,
@@ -157,6 +157,7 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
+import { createMcpServerWriteAuthorizationHook } from './utils/mcp-server-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
   type RealtimeAccessBranchRepository,
@@ -618,6 +619,17 @@ export function createTenantScopedBeforeHookChain(
       return current;
     });
   };
+}
+
+export function authorizeUsersGet(context: HookContext): HookContext {
+  const params = context.params as AuthenticatedParams;
+
+  if (isAuthenticationUserLookup(params)) {
+    return context;
+  }
+
+  ensureMinimumRole(params, ROLES.MEMBER, 'view users');
+  return context;
 }
 
 export function registerHooks(ctx: RegisterHooksContext): void {
@@ -1460,11 +1472,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('repos').hooks({
     before: {
-      all: [
-        typedValidateQuery(repoQueryValidator),
-        requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'access repositories'),
-      ],
+      all: [typedValidateQuery(repoQueryValidator), requireAuth],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
         requireAdminForEnvConfig(),
@@ -1489,12 +1497,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('branches').hooks({
     before: {
-      all: [
-        typedValidateQuery(branchQueryValidator),
-        requireAuth,
-        executorRuntimeScopeGuard(),
-        requireMinimumRole(ROLES.MEMBER, 'access branches'),
-      ],
+      all: [typedValidateQuery(branchQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: mark external regular-user finds for BranchesService to compose
         // the shared branch visibility predicate directly into its SQL read.
@@ -1520,6 +1523,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         validateBranchEnvPolicyHook(config),
       ],
       patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update branches'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         ...(branchRbacEnabled
@@ -1548,6 +1552,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete branches'),
         ...(branchRbacEnabled
           ? [
               loadBranch(branchRepository),
@@ -1652,6 +1657,23 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               },
             ]
           : []),
+      ],
+    },
+  });
+
+  type BranchCustomHookRegistrar = {
+    hooks(options: {
+      before: Record<
+        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace',
+        Array<(context: HookContext) => HookContext>
+      >;
+    }): void;
+  };
+  (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
+    before: {
+      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
+      ensureTeammateKnowledgeNamespace: [
+        requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
       ],
     },
   });
@@ -1845,6 +1867,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  // Writes are decided by `mcp_member_policy` plus ownership, not by role
+  // alone — see `authorizeMcpServerWrite`. Reads are narrowed to the servers
+  // the caller may use, because a private server is another user's
+  // configuration and credential, not shared tenant configuration.
+  const authorizeMcpServerWriteHook = createMcpServerWriteAuthorizationHook(db) as unknown as (
+    context: HookContext
+  ) => Promise<HookContext>;
+
   const scopeMcpServerFindToUsable = async (context: HookContext): Promise<HookContext> => {
     if (!context.params.provider) return context;
     const user = context.params.user;
@@ -1882,10 +1912,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
       find: [scopeMcpServerFindToUsable],
-      create: [requireMinimumRole(ROLES.ADMIN, 'create MCP servers')],
-      update: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
-      patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
-      remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
+      create: [authorizeMcpServerWriteHook],
+      update: [authorizeMcpServerWriteHook],
+      patch: [authorizeMcpServerWriteHook],
+      remove: [authorizeMcpServerWriteHook],
     },
     after: {
       find: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
@@ -1915,7 +1945,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       find: [
-        requireMinimumRole(ROLES.MEMBER, 'list session MCP servers'),
         // RBAC: Scope to sessions the caller can access.
         ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
@@ -1928,14 +1957,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Top-level `/session-env-selections` exists mainly to surface WebSocket
   // events emitted by the `/sessions/:id/env-selections` route handlers. Its
   // `find()` must still be gated — without these hooks any authenticated
-  // member could read selection metadata for sessions they can't access,
+  // user could read selection metadata for sessions they can't access,
   // bypassing the creator/admin gate on the nested route. Mirror the
   // `/session-mcp-servers` pattern exactly so the two stay consistent.
   safeService('session-env-selections')?.hooks({
     before: {
       all: [requireAuth],
       find: [
-        requireMinimumRole(ROLES.MEMBER, 'list session env selections'),
         // This top-level service is event-only and always returns []; do not
         // run RBAC preloads for an intentionally empty result set.
       ],
@@ -2373,12 +2401,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           throw new NotAuthenticated('Authentication required');
         },
       ],
-      get: [
-        (context) => {
-          ensureMinimumRole(context.params as AuthenticatedParams, ROLES.MEMBER, 'view users');
-          return context;
-        },
-      ],
+      get: [authorizeUsersGet],
       create: [
         async (context: HookContext<Board>) => {
           const params = context.params as AuthenticatedParams;

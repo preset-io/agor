@@ -97,21 +97,56 @@ export interface MCPOAuthPendingFlowSealedMaterial {
 }
 
 /**
+ * What a non-admin member may do with MCP server configuration, tenant-wide.
+ *
+ * - `use_existing_only` — members attach servers an admin already configured;
+ *   they create nothing. The default, and the only behaviour that existed
+ *   before private servers.
+ * - `allow_private_only` — members create servers owned by themselves. A
+ *   private server is usable only in its owner's sessions.
+ * - `allow_crud` — members additionally create, update, and delete shared
+ *   (unowned) servers, the way an admin does. Another member's private server
+ *   stays out of reach under every value.
+ *
+ * Under both permissive values members are restricted to remote transports:
+ * a `stdio` server is a command line the executor runs on its host, which is a
+ * different grant from "may point Agor at an HTTP endpoint".
+ */
+export const MCP_MEMBER_POLICIES = [
+  'use_existing_only',
+  'allow_private_only',
+  'allow_crud',
+] as const;
+
+export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
+
+export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
+
+/**
  * MCP transport types
  */
 export type MCPTransport = 'stdio' | 'http' | 'sse';
 
 /**
- * MCP server scope levels
- * - global: User's personal MCP servers (available to all sessions)
- * - session: MCP servers assigned to specific sessions via junction table
+ * MCP server scope levels. Orthogonal to ownership: `scope` says how a server
+ * reaches a session, `owner_user_id` says whose sessions it may reach.
+ * - global: in every session's effective set without being attached
+ * - session: only in the sessions it is attached to, via the junction table
  */
 export type MCPScope = 'global' | 'session';
 
 /**
- * MCP server source types
+ * Where a server's configuration came from.
+ *
+ * - `user`: somebody typed it, through the UI or `POST /mcp-servers`
+ * - `imported`: read out of a file on disk; `import_path` records which
+ * - `agor`: Agor's own built-in server
+ * - `catalog`: installed from the marketplace; `catalog_entry_name` records
+ *   which entry, the way `import_path` records which file
+ *
+ * This is provenance, not authorization — nothing reads it to decide access.
  */
-export type MCPSource = 'user' | 'imported' | 'agor';
+export type MCPSource = 'user' | 'imported' | 'agor' | 'catalog';
 
 /**
  * MCP server authentication configuration
@@ -241,11 +276,29 @@ export interface MCPServer {
 
   // Scope
   scope: MCPScope;
-  owner_user_id?: UserID; // For 'global' scope (which user owns this server)
+  /**
+   * Owner of a private server, or undefined for a shared one.
+   *
+   * A private server is reachable only from sessions its owner created — see
+   * `isMCPServerUsableInSession`. Immutable after creation: transferring one
+   * would move a configured credential to another identity.
+   */
+  owner_user_id?: UserID;
 
   // Metadata
   source: MCPSource;
   import_path?: string; // e.g., "/Users/me/project/.mcp.json"
+  /**
+   * The catalog entry this server was installed from, if any.
+   *
+   * Stamped as the entry's reverse-DNS registry name, which is the catalog's
+   * unique join key and the only identifier that outlives a row. A registry
+   * withdrawal followed by a republication deletes the entry and re-creates it
+   * under a fresh `catalog_entry_id`, so an id would dangle on the one event
+   * ingestion performs routinely, while the name still resolves to the entry
+   * for the same server.
+   */
+  catalog_entry_name?: string;
   enabled: boolean;
 
   // Capabilities (discovered from server)
@@ -302,9 +355,10 @@ export interface CreateMCPServerInput {
   env?: Record<string, string>;
   auth?: MCPAuth;
   scope: MCPScope;
-  owner_user_id?: UserID; // For 'global' scope (which user owns this server)
+  owner_user_id?: UserID; // Private to this user; omit for a shared server
   source?: MCPSource;
   import_path?: string;
+  catalog_entry_name?: string;
   enabled?: boolean;
 }
 
