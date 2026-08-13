@@ -90,6 +90,60 @@ const RBAC_MODES = [
 
 const WRITE_METHODS = ['create', 'patch', 'remove'] as const;
 
+const runCapturedHooks = async (
+  captured: Map<string, CapturedHooks>,
+  path: string,
+  method: string,
+  role: string
+): Promise<void> => {
+  const hooks = captured.get(path)?.before;
+  if (!hooks) throw new Error(`${path} registers no before hooks`);
+  const context = {
+    path,
+    method,
+    id: method === 'get' ? '00000000-0000-7000-8000-000000000001' : undefined,
+    params: {
+      provider: 'rest',
+      query: {},
+      user: { user_id: '00000000-0000-7000-8000-0000000000ff', role },
+    },
+  } as unknown as HookContext;
+
+  for (const hook of [...(hooks.all ?? []), ...(hooks[method] ?? [])]) {
+    await hook(context);
+  }
+};
+
+describe('viewer read access', () => {
+  const captured = captureRegisteredHooks(false);
+
+  it.each([
+    ['repos', 'find'],
+    ['repos', 'get'],
+    ['branches', 'find'],
+    ['branches', 'get'],
+    ['session-mcp-servers', 'find'],
+    ['session-env-selections', 'find'],
+  ])('allows viewers to use %s.%s', async (path, method) => {
+    await expect(runCapturedHooks(captured, path, method, 'viewer')).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['repos', 'create'],
+    ['repos', 'patch'],
+    ['repos', 'remove'],
+    ['branches', 'create'],
+    ['branches', 'patch'],
+    ['branches', 'remove'],
+    ['branches', 'updateEnvironment'],
+    ['branches', 'ensureTeammateKnowledgeNamespace'],
+  ])('keeps %s.%s restricted to members', async (path, method) => {
+    await expect(runCapturedHooks(captured, path, method, 'viewer')).rejects.toMatchObject({
+      name: 'Forbidden',
+    });
+  });
+});
+
 /**
  * Services that gate a write verb but deliberately leave `update` ungated,
  * because `update` is not reachable from any transport.

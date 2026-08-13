@@ -1448,11 +1448,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('repos').hooks({
     before: {
-      all: [
-        typedValidateQuery(repoQueryValidator),
-        requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'access repositories'),
-      ],
+      all: [typedValidateQuery(repoQueryValidator), requireAuth],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
         requireAdminForEnvConfig(),
@@ -1477,12 +1473,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('branches').hooks({
     before: {
-      all: [
-        typedValidateQuery(branchQueryValidator),
-        requireAuth,
-        executorRuntimeScopeGuard(),
-        requireMinimumRole(ROLES.MEMBER, 'access branches'),
-      ],
+      all: [typedValidateQuery(branchQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: mark external regular-user finds for BranchesService to compose
         // the shared branch visibility predicate directly into its SQL read.
@@ -1508,6 +1499,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         validateBranchEnvPolicyHook(config),
       ],
       patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update branches'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         ...(branchRbacEnabled
@@ -1536,12 +1528,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete branches'),
         ...(branchRbacEnabled
           ? [
               loadBranch(branchRepository),
               ensureBranchPermission('all', 'delete branches', superadminOpts), // Require 'all' permission to delete
             ]
           : []),
+      ],
+      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
+      ensureTeammateKnowledgeNamespace: [
+        requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
       ],
     },
     after: {
@@ -1642,7 +1639,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
     },
-  });
+    // biome-ignore lint/suspicious/noExplicitAny: custom branch service methods are transport-exposed
+  } as any);
 
   // ============================================================================
   // Knowledge hooks
@@ -1903,7 +1901,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       find: [
-        requireMinimumRole(ROLES.MEMBER, 'list session MCP servers'),
         // RBAC: Scope to sessions the caller can access.
         ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
@@ -1916,14 +1913,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Top-level `/session-env-selections` exists mainly to surface WebSocket
   // events emitted by the `/sessions/:id/env-selections` route handlers. Its
   // `find()` must still be gated — without these hooks any authenticated
-  // member could read selection metadata for sessions they can't access,
+  // user could read selection metadata for sessions they can't access,
   // bypassing the creator/admin gate on the nested route. Mirror the
   // `/session-mcp-servers` pattern exactly so the two stay consistent.
   safeService('session-env-selections')?.hooks({
     before: {
       all: [requireAuth],
       find: [
-        requireMinimumRole(ROLES.MEMBER, 'list session env selections'),
         // This top-level service is event-only and always returns []; do not
         // run RBAC preloads for an intentionally empty result set.
       ],
