@@ -34,6 +34,10 @@ type CapturedHooks = { before: Record<string, RegisteredHook[]> };
  */
 const captureRegisteredHooks = (branchRbacEnabled: boolean): Map<string, CapturedHooks> => {
   const captured = new Map<string, CapturedHooks>();
+  const visibleBranch = {
+    branch_id: '00000000-0000-7000-8000-000000000001',
+    others_can: 'view',
+  };
   const app = {
     service(path: string) {
       return {
@@ -68,7 +72,11 @@ const captureRegisteredHooks = (branchRbacEnabled: boolean): Map<string, Capture
     sessionsService: {} as RegisterHooksContext['sessionsService'],
     messagesService: {} as RegisterHooksContext['messagesService'],
     boardsService: undefined,
-    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    branchRepository: {
+      findById: async () => visibleBranch,
+      isOwner: async () => false,
+      resolveUserPermission: async () => 'view',
+    } as unknown as RegisterHooksContext['branchRepository'],
     usersRepository: {} as RegisterHooksContext['usersRepository'],
     sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
   });
@@ -95,7 +103,7 @@ const runCapturedHooks = async (
   path: string,
   method: string,
   role: string
-): Promise<void> => {
+): Promise<HookContext> => {
   const hooks = captured.get(path)?.before;
   if (!hooks) throw new Error(`${path} registers no before hooks`);
   const context = {
@@ -112,10 +120,11 @@ const runCapturedHooks = async (
   for (const hook of [...(hooks.all ?? []), ...(hooks[method] ?? [])]) {
     await hook(context);
   }
+  return context;
 };
 
-describe('viewer read access', () => {
-  const captured = captureRegisteredHooks(false);
+describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) => {
+  const captured = captureRegisteredHooks(branchRbacEnabled);
 
   it.each([
     ['repos', 'find'],
@@ -125,8 +134,24 @@ describe('viewer read access', () => {
     ['session-mcp-servers', 'find'],
     ['session-env-selections', 'find'],
   ])('allows viewers to use %s.%s', async (path, method) => {
-    await expect(runCapturedHooks(captured, path, method, 'viewer')).resolves.toBeUndefined();
+    await expect(runCapturedHooks(captured, path, method, 'viewer')).resolves.toBeDefined();
   });
+
+  if (branchRbacEnabled) {
+    it('retains SQL branch visibility scoping for viewer branch finds', async () => {
+      const context = await runCapturedHooks(captured, 'branches', 'find', 'viewer');
+      expect(context.params).toMatchObject({
+        _agorSqlBranchAccessUserId: '00000000-0000-7000-8000-0000000000ff',
+      });
+    });
+
+    it('retains SQL session visibility scoping for viewer MCP assignment finds', async () => {
+      const context = await runCapturedHooks(captured, 'session-mcp-servers', 'find', 'viewer');
+      expect(context.params).toMatchObject({
+        _agorSqlSessionAccessUserId: '00000000-0000-7000-8000-0000000000ff',
+      });
+    });
+  }
 
   it.each([
     ['repos', 'create'],

@@ -1536,10 +1536,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
       ],
-      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
-      ensureTeammateKnowledgeNamespace: [
-        requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
-      ],
     },
     after: {
       create: [
@@ -1639,8 +1635,24 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
     },
-    // biome-ignore lint/suspicious/noExplicitAny: custom branch service methods are transport-exposed
-  } as any);
+  });
+
+  type BranchCustomHookRegistrar = {
+    hooks(options: {
+      before: Record<
+        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace',
+        Array<(context: HookContext) => HookContext>
+      >;
+    }): void;
+  };
+  (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
+    before: {
+      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
+      ensureTeammateKnowledgeNamespace: [
+        requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
+      ],
+    },
+  });
 
   // ============================================================================
   // Knowledge hooks
