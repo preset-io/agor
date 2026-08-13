@@ -39,13 +39,10 @@ import { ScreenshotGallery } from '../../components/ScreenshotGallery';
 Requires Node.js ≥ 22.12.
 
 ```bash
-npm install -g agor-live
-agor init
-agor daemon start
-agor open
+curl -fsSL https://agor.live/install.sh | bash
 ```
 
-Then add your first repo. For Docker, source builds, and other options, see [Extended Installation](/guide/extended-install).
+Installs Agor, initializes it, starts the daemon, and opens the UI in one step. Prefer npm or Homebrew, or want Docker, source builds, and other options? See the [Getting Started Guide](/guide/getting-started) and [Extended Installation](/guide/extended-install).
 
 **Then dive in:**
 
@@ -66,42 +63,42 @@ _Multiplayer spatial canvas with zones, branches, live cursors, notes, and agent
   shots={[
     {
       src: '/screenshots/conversation_full_page.png',
-      alt: 'Agor task-centric conversation UI showing AI agent messages, tool calls, and file changes in a structured timeline',
+      alt: "Agor task-centric conversation UI showing AI agent messages, tool calls, and file changes in a structured timeline",
       caption: 'Task-centric conversation UI',
     },
     {
       src: '/screenshots/settings_modal.png',
-      alt: 'Agor settings modal for configuring MCP servers, managing branches, and agent preferences',
+      alt: "Agor settings modal for configuring MCP servers, managing branches, and agent preferences",
       caption: 'MCP server and branch management',
     },
     {
       src: '/screenshots/zone-trigger.png',
-      alt: 'Agor zone trigger modal showing a templated prompt with mustache placeholders ({{ branch.name }}, {{ branch.pull_request_url }}) and Prompt/Fork/Spawn action choices',
+      alt: "Agor zone trigger modal showing a templated prompt with mustache placeholders ({{ branch.name }}, {{ branch.pull_request_url }}) and Prompt/Fork/Spawn action choices",
       caption: 'Zone trigger with templated prompt',
     },
     {
       src: '/screenshots/tool-blocks.png',
-      alt: 'Agor chat showing structured tool blocks: collapsible thinking, Grep with pattern badge, Edit with red/green inline diff, and Bash with expandable output',
+      alt: "Agor chat showing structured tool blocks: collapsible thinking, Grep with pattern badge, Edit with red/green inline diff, and Bash with expandable output",
       caption: 'Structured tool blocks with inline diffs',
     },
     {
       src: '/screenshots/env-variants-full.png',
-      alt: 'Agor branch environment tab showing YAML config with named variants (docs, full, sqlite, postgres) and Docker compose commands',
+      alt: "Agor branch environment tab showing YAML config with named variants (docs, full, sqlite, postgres) and Docker compose commands",
       caption: 'Branch environment with named variants',
     },
     {
       src: '/screenshots/create-session-modal.png',
-      alt: 'Agor create session modal showing five agent runtime cards side-by-side: Claude Code, Codex, Gemini, OpenCode, GitHub Copilot (BETA)',
+      alt: "Agor create session modal showing five agent runtime cards side-by-side: Claude Code, Codex, Gemini, OpenCode, GitHub Copilot (BETA)",
       caption: 'Pick any SDK: Claude, Codex, Gemini, OpenCode, Copilot',
     },
     {
       src: '/screenshots/baked_in_terminal.png',
-      alt: 'Agor built-in terminal with automatic branch context and environment variable injection',
+      alt: "Agor built-in terminal with automatic branch context and environment variable injection",
       caption: 'Built-in terminal with branch context',
     },
     {
       src: '/screenshots/onboarding.png',
-      alt: 'Agor onboarding welcome screen showing team status, recent activity, and quick start guide',
+      alt: "Agor onboarding welcome screen showing team status, recent activity, and quick start guide",
       caption: 'Welcome screen showing team status',
     },
   ]}

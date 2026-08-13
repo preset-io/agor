@@ -7,7 +7,7 @@ import InstallTabs from '../../components/InstallTabs.mdx';
 
 # Extended Installation
 
-The [Getting Started](/guide/getting-started) guide covers the recommended npm installation. This page covers everything else for **users and teams** running Agor, including optional companions, deployment alternatives, authentication options, and edge-case configurations.
+The [Getting Started](/guide/getting-started) guide covers the recommended user path: `curl -fsSL https://agor.live/install.sh | bash`. This page covers everything else for **users and teams** running Agor, including npm, Homebrew, optional companions, deployment alternatives, authentication options, and edge-case configurations.
 
 > Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development). It covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
 
@@ -17,15 +17,15 @@ The [Getting Started](/guide/getting-started) guide covers the recommended npm i
 - **Git** available on `PATH` (verify with `git --version`).
 - A working system CA trust store for HTTPS remotes. Minimal Linux images may need the `ca-certificates` package. SSH remotes additionally require an SSH client, keys or agent access, and host-key configuration.
 
-Agor supports Node releases that are Current, Active LTS, or Maintenance LTS upstream, subject to
-the Node ≥ 22.12 minimum. The packaged release gate currently runs Node 22, 24, and 26 end to end.
-Upstream EOL releases such as Node 25 are not supported production runtimes.
+The Homebrew formula installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
 
 ## Install paths
 
 Use whichever install method fits your setup:
 
 <InstallTabs />
+
+The curl script above is the recommended entry point; it runs the same npm install under the hood. npm directly and Homebrew remain fully supported for users who want to run each step themselves.
 
 ---
 
@@ -42,11 +42,10 @@ npm install -g agor-live@latest
 agor init
 ```
 
-The original npm installation never downloads agentic-tool runtimes. Interactive `agor init` shows all
-six supported tools in a multi-select and requires you to select at least one. Use the arrow keys to
-move, Space to select, and Enter to continue. Press Ctrl+C to cancel instead of creating a deployment
-accidentally. Init records the final selection in the newly created immutable `config.yaml` and
-reconciles the packages before it reports success.
+The original npm installation never downloads optional runtimes. Interactive `agor init` shows all
+six supported tools in a multi-select and requires you to select at least one. Press Ctrl+C to cancel
+instead of creating a deployment accidentally. Init records the final selection in the newly created
+immutable `config.yaml` and reconciles the packages before it reports success.
 
 The generated deployment policy has this shape:
 
@@ -57,18 +56,14 @@ agentic_tools:
     - codex
 ```
 
-`agor init` is the first-run command: it creates the config and database, records the initial tool
-selection, and installs those packages. After initialization, edit the list explicitly and run
-`agor install --sync` to change or repair only the package set; it does not initialize or recreate
-Agor. It installs missing packages and removes unselected or stale versions without rewriting the
-file. If an init-time npm operation fails, the config and any completed atomic package installs
+After initialization, edit this list explicitly and run `agor install --sync` to change or repair the
+package set. It installs missing packages and removes unselected or stale versions without rewriting
+the file. If an init-time npm operation fails, the config and any completed atomic package installs
 remain in place; fix npm registry/proxy/permission issues and run exactly `agor install --sync`.
 
-Stop the daemon before re-initializing. `agor init` refuses to replace an installation while its
-daemon is live. Interactive re-init recommends moving the entire `~/.agor` directory intact to a
-timestamped `~/.agor.bkp.YYYYMMDD-HHmmss` backup before starting normal fresh initialization. You
-can instead choose to delete the entire directory, including its config, database sidecars, logs,
-repositories, worktrees, and installed tools.
+Stop the daemon before accepting destructive re-initialization. `agor init` refuses to remove a live
+daemon's SQLite database; after shutdown it closes its own inspection handle and removes the database
+plus WAL/SHM sidecars before migrating the replacement.
 
 Configurations created before this onboarding contract may omit `agentic_tools.installed`. Those
 installations retain the backward-compatible host-local manifest mode: run `agor install` once to
@@ -85,12 +80,9 @@ Inspect the managed integrations at any time:
 agor doctor
 ```
 
-Packaged `agor daemon start` and `agor daemon restart` refuse before detaching or stopping a healthy
-daemon when a selected integration is absent, corrupt, or from a different Agor version. They print
-the exact `agor install --sync` repair command at the terminal. An explicitly empty headless
-selection does not block startup; an older installation with neither a YAML policy nor a local
-manifest must run interactive `agor install` and select at least one tool. Unselected tools are
-unavailable to tenants.
+The packaged daemon refuses to start when a selected integration is absent, corrupt, or from a
+different Agor version. An explicitly empty headless selection does not block startup; a missing
+legacy local manifest produces an actionable warning. Unselected tools are unavailable to tenants.
 In the UI, workspace admins see **Not installed by this deployment** separately from **Disabled in
 this workspace**; users configure credentials only for installed, enabled tools, and transient
 provider probes use a separate status-unavailable state. Workspace and tenant admins cannot install
@@ -119,13 +111,17 @@ command. Empty, whitespace-only, and comma-only values are rejected; use the lit
 an empty policy intentional.
 
 Set `AGOR_AGENTIC_TOOLS_DIR` when integrations must live in an administrator-provisioned shared
-read-only location. Executors receive the resolved absolute directory across Agor's supported execution modes; every runtime must be able to traverse and read that directory.
+read-only location. Executors receive the resolved absolute directory across Agor's supported Unix
+identity modes; every executing user must be able to traverse and read that directory.
 
 Run `agor install` as the user the daemon runs as. Integrations install under that user's home
 directory, so installing them with `sudo` places them in root's home where the daemon cannot see
-them — `agor doctor` then reports them as missing. Set `AGOR_AGENTIC_TOOLS_DIR` explicitly when an external substrate loads integrations from a separate runtime.
+them — `agor doctor` then reports them as missing. Set `AGOR_AGENTIC_TOOLS_DIR` explicitly when the
+daemon and its executors run as different users.
 
-Tool selection and exact-version validation are identical in `simple`, `delegated`, and `sandbox` execution modes. Every daemon or external runtime that loads the shared packages must be able to traverse and read `AGOR_AGENTIC_TOOLS_DIR`; only the
+Tool selection and exact-version validation are identical in `simple`, `delegated`, `insulated`, and
+`strict` execution modes. The difference is filesystem identity: every daemon/executor Unix identity
+that loads the shared packages must be able to traverse and read `AGOR_AGENTIC_TOOLS_DIR`; only the
 deployment installer should be able to write it.
 
 ### Upgrading
@@ -144,14 +140,9 @@ removes current-version packages absent from `agentic_tools.installed`, deletes 
 directory, and cleans interrupted staging/backup directories. There is currently no compatibility
 range or keep-old mode: every managed wrapper must exactly match `agor-live`.
 
-Both `agor daemon start` and `agor daemon restart` run package and migration preflights at the
-terminal. Restart performs them before stopping a healthy daemon, so an incomplete upgrade does not
-turn into an avoidable outage followed only by a log-file error.
-
 On upgrades from a legacy configuration where the YAML key and local manifest are both absent,
 `agor install --sync` fails without changing packages and directs the operator to interactive
-`agor install`; daemon startup fails with the same short instruction rather than opening a UI with
-no usable agent. Docker and Kubernetes deployments should always declare
+`agor install`. Docker and Kubernetes deployments should always declare
 `agentic_tools.installed` and use `--sync`.
 
 Microsoft Teams gateway support remains optional and separate from agentic tools:
@@ -184,61 +175,16 @@ If the error persists, collect `node -v`, `npm -v`, `ulimit -Sn`, `ulimit -Hn`, 
 
 ---
 
-## Optional web terminal runtime
+## Optional: Zellij (for the web terminal)
 
-Agor's CLI, daemon, sessions, boards, and agentic tools do not require a pseudo-terminal runtime.
-The npm package declares the prebuilt `@lydell/node-pty` runtime as optional so an unsupported
-platform artifact cannot block first run. `agor doctor` reports whether the capability is ready.
-
-The prebuilt runtime supports macOS, Linux, and Windows on x64 and arm64. If it is unavailable,
-opening the web terminal shows this documentation link rather than failing Agor startup. First retry
-the normal install without omitting optional dependencies:
-
-```bash
-npm install -g agor-live@latest
-agor doctor
-```
-
-If npm still cannot install the optional runtime for your OS/architecture, use Agor normally without
-the web terminal and include `node --version`, `npm --version`, OS/architecture, and the sanitized npm
-error when reporting the missing platform.
-
-### Optional: Zellij (for the web terminal)
-
-Agor has an optional branch-scoped web terminal. It uses
-[Zellij](https://zellij.dev/) when the selected terminal runtime provides it.
-Agor names each Zellij session from the trusted tenant, user, and branch and
-stores resurrection data beneath the effective execution home. It preserves
-the pane layout, cwd, visible viewport, and up to 1,000 lines of scrollback,
-with a one-second serialization interval.
-The browser-to-PTY attachment remains ephemeral and is not migrated or replayed
-after daemon/runtime loss. Resurrection creates new processes: it does not
-restore PIDs, shell variables, or a running command exactly where it stopped.
-
-Agor passes these bounded resurrection options explicitly when launching, so
-existing homes receive the same lifecycle contract without overwriting the
-user's other Zellij preferences. First creation uses Zellij's serializable
-new-session path; later launches attach to the known active or exited session.
-The cache directory is mode `0700`. In `simple` mode, users intentionally share the daemon account and therefore
-its home and resurrection data; use `sandbox` or a delegated per-user runtime
-when that sharing is inappropriate.
-
-Agor also places Zellij's Unix socket below that effective-home cache. This is
-what lets same-host daemon containers sharing a local home volume converge on
-one live session instead of each creating a container-local server. Unix
-sockets are not a cross-host protocol and generally do not work through a
-network filesystem; separate-host and ephemeral-executor deployments must keep
-the terminal capability disabled unless a single workspace runtime owns the
-home, socket, and PTY.
+Agor has a built-in web terminal that uses [Zellij](https://zellij.dev/) for persistent, multiplexed terminal sessions. The terminal is **optional**. Agor runs fine without it; if you don't have Zellij, terminal buttons in the UI will show a friendly message instead.
 
 If you want the terminal:
 
 1. Install Zellij from the [official installation guide](https://zellij.dev/documentation/installation).
 2. Restart the Agor daemon (`agor daemon restart`).
 
-In HA, only the `shared-local` topology supports this owner-local attachment.
-External/container workspace runtimes must advertise their own compatible
-terminal capability; otherwise Agor hides terminal controls.
+The daemon detects Zellij at startup and logs whether it's available.
 
 ---
 
@@ -256,17 +202,13 @@ Run that as a database owner or another role with permission to create extension
 
 If pgvector is missing or the Agor DB user cannot enable it, semantic search returns a clear `semantic_unavailable` error and text search continues to work.
 
-### Offline-cutover migrations
+### PostgreSQL offline-cutover migrations
 
-Some migrations change authorization, distributed ownership, or callback protocols and must be applied as a **stop-the-world cutover** on existing databases:
+Some migrations change distributed ownership or callback protocols and must be applied as a **stop-the-world cutover** on existing PostgreSQL installations:
 
 - `0074_knowledge_embedding_claims` changes the ownership protocol used by Knowledge embedding workers.
 - `0078_mcp_oauth_pending_flows` replaces plaintext, unfenced MCP OAuth grants with durable sealed callback and refresh authority.
 - `0082_github_install_state` moves GitHub App install callback state from a per-daemon Map to PostgreSQL. Old daemons cannot consume state issued by new daemons, and new daemons cannot consume state issued by old daemons.
-- `0091_codex_device_auth_attempts` moves Codex device authorization polling and exchange ownership into a fenced PostgreSQL protocol.
-- `0092_add_user_credential_generation` makes password-change revocation use generation-bearing tokens. Old daemons do not understand the claim and must not share a cohort once a password changes.
-- `0095_board_branch_capability_policies` (PostgreSQL) / `0098_board_branch_capability_policies` (SQLite) replaces board and branch RBAC with normalized capability policies. Its best-effort conversion is intentionally equal-or-less privilege: legacy prompt sharing is reduced to independent collaboration, and rules that cannot be represented safely may lose access rather than gain it.
-- `0100_claude_oauth_attempts` (PostgreSQL) / `0103_claude_oauth_attempts` (SQLite) moves Claude paste-back attempts and credential-file mutations into generation-fenced authority. Old daemons do not participate in that protocol and must not overlap the new cohort.
 
 Rolling old and new daemons against the same database across any cutover is not supported.
 
@@ -279,13 +221,9 @@ Rolling old and new daemons against the same database across any cutover is not 
 
 3. Start only daemons running the new release.
 
-Normal daemon startup and `agor db migrate --yes` deliberately refuse registered cutover migrations on an existing database unless `--offline-cutover` is present. The flag is an operator acknowledgement; it cannot verify that another host has stopped. Fresh installations do not require this acknowledgement because no old daemon can be attached.
-
-Before the board/branch RBAC cutover, take a complete database backup and review the migration preflight. The migration stops if a board or branch cannot be attributed to an existing primary owner. After migration, review access rules, especially board-aligned branches that were materialized as overrides and any legacy cross-user prompt access. A release rollback requires stopping all new daemons and restoring the complete pre-migration backup; do not run an old daemon against the new policy schema.
+Normal daemon startup and `agor db migrate --yes` deliberately refuse these migrations on an existing PostgreSQL database unless `--offline-cutover` is present. The flag is an operator acknowledgement; it cannot verify that another host has stopped. Fresh installations and SQLite databases do not require this cutover.
 
 Migration `0078` deletes existing MCP OAuth grant rows because the old plaintext, unfenced rows are not compatible with active-active callback and rotating-refresh ownership. Users must reconnect MCP OAuth after the upgrade. Take a backup before the cutover. A rollback to an older daemon requires restoring the pre-cutover backup; do not run an older cohort against the new OAuth schema.
-
-Migration `0100` is additive, so an offline binary rollback may retain its table, but its distributed protocol is not rollback compatible: stop every new daemon first, do not run mixed cohorts, and return to a release whose HA guard keeps Claude OAuth/logout disabled. Pending `0100` attempts then remain inert until the new cohort returns or an operator removes them in a coordinated schema-and-ledger rollback. Never advertise Claude HA credential mutation from a binary that does not own the `0100` generation/tombstone protocol and concrete runtime credential mask. Drain managed-file Claude tasks before rolling back to a runtime that can read or refresh the canonical file directly. Current-version standalone writers share one process-global queue and do not advance durable file tombstones; after an offline HA → standalone → HA deployment-mode transition, retained PostgreSQL sequences resume above the prior HA tombstones. This does not permit concurrent standalone/HA writers.
 
 Tenant archives deliberately omit MCP OAuth grants. The encrypted grant envelope is bound to the source tenant ID, server, generation, and deployment master secret, so importing or re-homing a tenant restores the MCP server configuration but requires users to reconnect OAuth. Pending OAuth attempts, executor token authorities, and GitHub install state are likewise non-portable.
 
@@ -326,26 +264,11 @@ Agor uses these credentials only to authenticate the agent runtime with the prov
 
 Mixing is fine: one user can run on a Claude subscription token while teammates use a workspace API key.
 
-The in-app **Sign in with Claude** OAuth flow is intentionally not a default
-authentication option. Operators must explicitly enable
-`agentic_tools.claude_subscription_oauth: true` after obtaining the appropriate
-provider authorization/client contract; see [Operator configuration](./config-yaml).
-Absent that clearance flag, Agor continues to support Anthropic API keys and
-manually pasted `claude setup-token` credentials without exposing the OAuth
-endpoint or tab. Managed sign-in additionally requires local sandbox execution
-with persistent per-user homes and `sandbox.home_mode: per_user`; other
-topologies fail closed. In that profile the daemon, not Claude Code, owns token
-refresh. Before each sandbox spawn Agor safely prepares the real `.claude`
-store; bubblewrap binds that writable directory as an immutable mountpoint and
-masks the credential, generation, and mutation-lock leaves. Claude settings,
-plugins, projects, and fork/resume state remain writable at their canonical
-paths.
-
 <a id="claude-max-pro" />
 
 ### Claude subscription auth (`claude setup-token`)
 
-Use this when you have Claude Pro, Max, Team, or Enterprise subscription access and want Agor to run Claude Code without an Anthropic Console API key. Run the command in the credential namespace used by the execution substrate. In `simple` or `sandbox`, that is the daemon account; delegated launchers own their credential route.
+Use this when you have Claude Pro, Max, Team, or Enterprise subscription access and want Agor to run Claude Code without an Anthropic Console API key. Run the command on the machine where Agor sessions execute. In `strict` Unix isolation, run it as the same Unix user that will own the sessions.
 
 **1. Install the Claude CLI** (skip if already installed):
 
@@ -391,60 +314,43 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 ---
 
-## MCP catalog
+## MCP catalog (`mcp_catalog.*`)
 
-Agor ships a browsable catalog of MCP servers. It is a reviewed file in the repository, parsed lazily
-on the daemon's first catalog read and then cached for the life of the process, so browsing the
-marketplace requires no external catalog service and there is nothing to configure.
+Agor ships a browsable catalog of MCP servers. Around fifty curated entries are
+checked into the repository and reapplied on every daemon start, so the
+marketplace is populated even with no network access.
 
-What the catalog offers is therefore a function of the deployed binary: rolling
-back to an older release withdraws entries added since, until you roll forward
-again. That is intended, but it is not something to discover during an incident.
+Mirroring the public [MCP registry](https://registry.modelcontextprotocol.io) on
+top of that is **off by default**. Turning it on makes outbound requests to the
+registry and, while probing which servers need authorization, to arbitrary
+hosts those registry records name.
 
-Each entry records whether its endpoint needs an account, but Connect checks the live endpoint rather
-than trusting that record. A completed MCP handshake is installed ready to use. An OAuth challenge is
-installed as a per-user connection. A non-OAuth challenge can be installed when the catalog includes a
-reviewed bearer-token recipe: the drawer asks for the token, and the daemon first durably claims this
-user's connect generation so a slower, older reconnect cannot overwrite a newer token. It then tests the
-token against the catalog URL and writes the server/session only after the probe accepts it. A stale
-catalog auth label therefore does not silently install a connection that the live endpoint will reject.
+```yaml
+# ~/.agor/config.yaml
+mcp_catalog:
+  registry_sync_enabled: false # true = also mirror the public registry
+  sync_interval_hours: 6
+  probe_budget: 40 # entries auth-probed per sync; 0 disables probing
+  # registry_url: https://registry.internal  # advanced override
+```
 
-Marketplace OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
-accepts only reviewed discovery differences while retaining same-origin bounds on those fallbacks,
-resource and issuer binding, the exact MCP URL in authorization and token requests, PKCE S256, and
-callback issuer checks. This profile is derived by the daemon; it cannot be selected or persisted as a
-general OAuth mode. An explicit **Strict** or **Legacy** choice on the saved connection remains
-authoritative; Legacy is the deliberately broader operator override. Entries that have passed the
-strict boundary can require it in the catalog — Monday, Cloudflare, and ClickUp currently do — and an
-edited or imported connection, a removed entry, or catalog-configuration drift falls back to Strict.
+| Setting | Default | Notes |
+| --- | --- | --- |
+| `registry_sync_enabled` | `false` | Mirror the public registry in addition to the curated entries. |
+| `sync_interval_hours` | `6` | Held between one minute and roughly 24 days; values outside that range are clamped. |
+| `probe_budget` | `40` | Entries auth-probed per sync. `0` disables probing while leaving the mirror on. |
+| `registry_url` | official registry | Point at a private mirror. |
 
-Agor removed GitHub, Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi from the catalog. The
-review could not establish a safely bound client-registration or issuer path for those endpoints. Their
-absence is not the earlier state where OAuth cards were offered but failed after Connect; unsupported
-providers are removed from the shelf instead.
+Because the seed *reconciles* rather than merely applies, the catalog's contents
+are a function of the deployed binary: rolling back to an older release
+withdraws curation added since, until you roll forward again. That is intended,
+but it is not something to discover during an incident.
 
-Connect may reuse an OAuth credential the caller already holds when it is a live per-user grant for the
-same endpoint, protected resource, requested scope, and catalog OAuth policy. It never reuses another
-user's or a shared grant, and declines rows with custom headers, credential-routing overrides, or stale
-configuration. An expired matching grant may be refreshed before reuse. Reconnecting a bearer-token
-entry reuses only that user's catalog connection and rotates the token after the new session and
-attachment have succeeded.
-
-Every successful Connect creates a new idle session, attaches the server, and opens that session. For an
-open server, a bearer-token server, or OAuth with a reusable live grant, the starter prompt is loaded in
-the composer. A new OAuth connection that still needs sign-in lands in the same session without the
-starter prompt. The dismissible notice above the composer and the warning MCP badge identify the
-unfinished connection; open the badge and activate the server pill to sign in. Agor does not auto-open
-OAuth after navigation because browsers require a short-lived user activation for a reliable popup.
-
-If you previously set an `mcp_catalog:` block in `~/.agor/config.yaml`, leave it
-or delete it — either works. The daemon still accepts the section so an upgrade
-cannot fail on it, and ignores every setting in it.
-
-The unauthenticated connect-time check is a single request to the entry's own URL. A bearer token adds
-one authenticated check to that same URL. Both resolve the hostname first, require every resolved
-address to be globally reachable, pin the checked address, bound the response, and refuse redirects so
-a credential is never forwarded to a destination the catalog did not name.
+The registry is far larger than one sync can walk, so each run resumes from
+where the previous one stopped and the probe sweep always gets a share of the
+run's time budget. Outbound probes only connect to public addresses: the
+hostname is resolved first and refused unless every resolved address is
+globally reachable.
 
 ---
 

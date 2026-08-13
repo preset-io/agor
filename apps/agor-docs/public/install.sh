@@ -10,6 +10,10 @@
 # Env overrides:
 #   AGOR_AGENTIC_TOOLS   comma-separated tool list, "all", or "none" (default: all)
 #   AGOR_VERSION         npm dist-tag or version to install (default: latest)
+#   AGOR_TELEMETRY       agor init's own separate, consent-based anonymous
+#                        telemetry (see docs/FAQ) — not sent by this script.
+#                        Defaults to disabled for a non-interactive init like
+#                        this one; set to 1 to opt in, 0 to hard-disable.
 set -euo pipefail
 
 BOLD='\033[1m'
