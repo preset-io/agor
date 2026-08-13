@@ -27,6 +27,7 @@ import styles from './AgorCloudLanding.module.css';
 import Aurora from './Aurora/Aurora';
 import { HubSpotFormModal } from './HubSpotFormModal';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
+import Lightfall from './Lightfall/Lightfall';
 
 const basePath = getBasePath();
 
@@ -197,6 +198,17 @@ export function AgorCloudLanding() {
   const shellRef = useRef<HTMLElement>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isDemoOpen, setIsDemoOpen] = useState(false);
+  // Lightfall runs its own requestAnimationFrame/WebGL loop regardless of
+  // CSS visibility, so respecting reduced-motion has to happen via its
+  // `paused` prop (stops the loop) rather than just hiding it with CSS.
+  const [reducedMotion, setReducedMotion] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setReducedMotion(media.matches);
+    const onChange = () => setReducedMotion(media.matches);
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
   // Which CTA opened the (single, shared) beta form, stamped into the form's
   // hidden source_page field for attribution, matching the site convention.
   const [formSource, setFormSource] = useState('cloud-page-hero');
@@ -267,23 +279,23 @@ export function AgorCloudLanding() {
     <main ref={shellRef} id="nextra-skip-nav" className={styles.landingShell}>
       {/* --- Hero --- */}
       <section className={styles.hero}>
-        {/* Same looping product-demo backdrop as the homepage hero, dimmed
-            further behind the glass card so the copy stays the loudest
-            thing on screen. Falls back to the poster frame under
-            prefers-reduced-motion (CSS hides the video element). */}
-        <div className={styles.heroVideo} aria-hidden="true">
-          <video
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="auto"
-            poster="/videos/agor-hero-poster.jpg"
-          >
-            <source src="/videos/agor-hero-540.mp4" type="video/mp4" media="(max-width: 720px)" />
-            <source src="/videos/agor-hero-720.mp4" type="video/mp4" media="(max-width: 1280px)" />
-            <source src="/videos/agor-hero.mp4" type="video/mp4" />
-          </video>
+        {/* React Bits shader backdrop (see components/Lightfall) instead of
+            product-demo video — tinted to Agor's brand palette. Hidden
+            under prefers-reduced-motion via CSS, same as the homepage's
+            video/Aurora treatments. */}
+        <div className={styles.heroBackdrop} aria-hidden="true">
+          <Lightfall
+            colors={['#34e6c4', '#7ad9ff', '#a8f5ed']}
+            backgroundColor="#2e9a92"
+            speed={0.35}
+            streakCount={2}
+            density={0.4}
+            glow={0.7}
+            opacity={0.6}
+            backgroundGlow={0.25}
+            mouseInteraction={false}
+            paused={reducedMotion}
+          />
         </div>
         <div className={styles.heroGlow} aria-hidden="true" />
         <div className={styles.heroInner} data-reveal>
@@ -589,7 +601,15 @@ export function AgorCloudLanding() {
           <div>
             <span className={styles.eyebrow}>Who runs it</span>
             <h2>
-              Operated by the team behind <span className={styles.headingStrong}>Preset Cloud</span>
+              Operated by the team behind{' '}
+              <Link
+                href={`${PRESET_URL}${presetUtm('agor-cloud-operator')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${styles.headingStrong} ${styles.headingLink}`}
+              >
+                Preset Cloud
+              </Link>
             </h2>
             <p>
               Preset runs Preset Cloud, a managed Apache Superset service used by thousands of

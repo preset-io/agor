@@ -161,6 +161,20 @@
   color: var(--landing-ink);
 }
 
+/* Combined with .headingStrong on the "Preset Cloud" heading link — keeps
+ * the same weight/color as the plain-text usages elsewhere but adds a
+ * subtle underline so it still reads as a link at heading size. */
+.headingLink {
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 230, 196, 0.4);
+  text-underline-offset: 6px;
+  transition: text-decoration-color 0.25s ease;
+}
+
+.headingLink:hover {
+  text-decoration-color: rgba(52, 230, 196, 0.9);
+}
+
 /* --- Buttons (mirrors LandingPage primary/secondary) ---------------------- */
 .primaryButton,
 .secondaryButton {
@@ -229,52 +243,40 @@
   overflow: hidden;
 }
 
-/* Looping product-demo backdrop (same asset/pattern as the homepage hero).
- * Sits behind .heroGlow and .heroInner — see their z-index. */
-.heroVideo {
+/* Lightfall shader backdrop (see components/Lightfall). Sits behind
+ * .heroGlow and .heroInner — see their z-index. Reduced-motion is handled
+ * via Lightfall's own `paused` prop (stops its render loop entirely, unlike
+ * a CSS hide which would leave the WebGL loop running invisibly). */
+.heroBackdrop {
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: url("/videos/agor-hero-poster.jpg") center top / cover no-repeat;
-}
-
-.heroVideo video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center top;
 }
 
 /* Heavier scrim than the homepage's — this hero centers a glass card over
- * the video rather than free-floating text, so the card needs a calmer
+ * the shader rather than free-floating text, so the card needs a calmer
  * backdrop to read against. */
-.heroVideo::after {
+.heroBackdrop::after {
   content: "";
   position: absolute;
   inset: 0;
   background:
     radial-gradient(
-      ellipse 70% 60% at 50% 35%,
-      rgba(7, 16, 15, 0.55) 0%,
-      rgba(7, 16, 15, 0.3) 55%,
-      rgba(7, 16, 15, 0.12) 78%
+      ellipse 76% 66% at 50% 35%,
+      rgba(7, 16, 15, 0.68) 0%,
+      rgba(7, 16, 15, 0.42) 55%,
+      rgba(7, 16, 15, 0.18) 78%
     ),
     linear-gradient(
       180deg,
-      rgba(7, 16, 15, 0.55) 0%,
-      rgba(7, 16, 15, 0.15) 30%,
+      rgba(7, 16, 15, 0.6) 0%,
+      rgba(7, 16, 15, 0.22) 30%,
       rgba(7, 16, 15, 0.97) 100%
     );
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .heroVideo video {
-    display: none;
-  }
-}
-
-/* Soft radial glows over the video: CSS only, reduced-motion safe. */
+/* Soft radial glows over the shader: CSS only, reduced-motion safe. */
 .heroGlow {
   position: absolute;
   inset: 0;
