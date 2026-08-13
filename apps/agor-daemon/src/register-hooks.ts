@@ -478,6 +478,11 @@ export const TENANT_OWNED_SERVICE_PATHS = [
 // so they carry tenant identity for the full request and open short database
 // units of work at the call site instead of holding an HTTP-long transaction.
 export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
+  // File browsing crosses the executor/process boundary. Its short repository
+  // reads open tenant DB units at the call site rather than holding a DB
+  // transaction over executor I/O.
+  'file',
+  'files',
   'check-auth',
   // Global catalog: no tenant column to scope, no writes to stamp.
   'mcp-catalog',

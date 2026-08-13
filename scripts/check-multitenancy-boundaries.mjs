@@ -92,6 +92,16 @@ const checks = [
   },
 
   {
+    name: 'parameterless custom authentication calls',
+    roots: ['apps/agor-daemon/src'],
+    excludeTests: true,
+    patterns: [/\bauthService\.create\(\s*\{[^)]*\}\s*\)/gs],
+    // Custom HTTP middleware must pass a mutable params object. The JWT
+    // strategy places its verified tenant claim there before loading Users;
+    // omitting params only fails when the hosted DB scope guard is enabled.
+    baseline: {},
+  },
+  {
     name: 'raw tenant database scope imports',
     roots: ['apps/agor-daemon/src'],
     excludeTests: true,

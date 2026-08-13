@@ -13,6 +13,9 @@ describe('prompt and widget transaction scopes', () => {
     expect(promptStart).toBeGreaterThan(0);
     expect(prompt).toContain('registerLongAuthenticatedRoute(');
     expect(prompt).toContain('bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db))');
+    expect(prompt).toContain('const getPromptSession = (sessionId: string) =>');
+    expect(prompt).toContain('runWithTenantDatabaseScope(db, promptTenantId');
+    expect(prompt).not.toMatch(/await sessionsService\.get\(/);
     expect(prompt).toContain(
       'isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool)'
     );

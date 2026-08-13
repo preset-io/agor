@@ -1482,7 +1482,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
-        let session = await sessionsService.get(id, params);
+        const getPromptSession = (sessionId: string) =>
+          runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.get(sessionId, params)
+          );
+        let session = await getPromptSession(id);
         id = session.session_id;
         const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
 
@@ -1565,7 +1569,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionTurnLocks,
           id as SessionID,
           async () => {
-            let lockedSession = await sessionsService.get(id, params);
+            let lockedSession = await getPromptSession(id);
             if (lockedSession.status === SessionStatus.STOPPING) {
               // The earlier STOPPING check was against pre-lock state — re-check
               // here so a session that entered STOPPING while we waited for our
@@ -2314,29 +2318,34 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       if (DEBUG_UPLOAD) console.log('🔑 [Upload Auth] JWT token found, verifying...');
 
       const authService = app.service('authentication');
-      const result = await authService.create({
-        strategy: 'jwt',
-        accessToken: token,
-      });
+      // Pass one mutable params object through authentication. The JWT strategy
+      // propagates the verified tenant claim onto it before its Users lookup,
+      // allowing the authentication service's tenant hook to open the required
+      // database scope. Calling create(data) without params works locally but
+      // reaches the guarded daemon DB without scope in required_from_auth mode.
+      const authParams: AuthenticatedParams = { headers: req.headers };
+      const result = await authService.create({ strategy: 'jwt', accessToken: token }, authParams);
 
       if (DEBUG_UPLOAD) {
         console.log('✅ [Upload Auth] Authentication successful');
         console.log('   User:', result.user?.user_id ? shortId(result.user.user_id) : 'unknown');
       }
 
-      const authParams = {
+      const authenticatedParams = {
         user: result.user,
         provider: 'rest',
         authentication: result.authentication,
         headers: req.headers,
       };
       req.feathers = {
-        ...authParams,
-        tenant: resolveTenantContext(multiTenancy, {
-          params: authParams,
-          authPayload: result.authentication?.payload,
-          headers: req.headers,
-        }),
+        ...authenticatedParams,
+        tenant:
+          authParams.tenant ??
+          resolveTenantContext(multiTenancy, {
+            params: authenticatedParams,
+            authPayload: result.authentication?.payload,
+            headers: req.headers,
+          }),
       };
 
       next();

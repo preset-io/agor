@@ -1,3 +1,4 @@
+import { createTenantScopedDatabaseProxy } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../utils/spawn-executor.js';
 import { FileService } from './file.js';
@@ -29,7 +30,7 @@ describe('FileService executor failures', () => {
     });
     const service = new FileService(
       { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
-      null as never,
+      {} as never,
       { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
     );
 
@@ -78,7 +79,7 @@ describe('FileService executor failures', () => {
       vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data });
       const service = new FileService(
         { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
-        null as never,
+        {} as never,
         { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
       );
       const params = {
@@ -98,4 +99,28 @@ describe('FileService executor failures', () => {
       );
     }
   );
+
+  it('opens a short tenant scope before the teammate Files branch lookup', async () => {
+    const rawDb = { run: vi.fn(), select: vi.fn(() => 'scoped lookup') };
+    const guardedDb = createTenantScopedDatabaseProxy(rawDb as never, {
+      requireScope: true,
+      label: 'daemon database',
+    });
+    const findById = vi.fn(async () => guardedDb.select());
+    vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data: { files: [] } });
+    const service = new FileService({ findById } as never, guardedDb, {
+      get: () => ({}),
+      settings: { authentication: { secret: 'test' } },
+    } as never);
+
+    await expect(
+      service.find({
+        query: { branch_id: 'branch-1' },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      })
+    ).resolves.toEqual([]);
+
+    expect(rawDb.select).toHaveBeenCalledOnce();
+  });
 });

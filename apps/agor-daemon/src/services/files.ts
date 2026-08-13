@@ -8,6 +8,7 @@
 
 import {
   BranchRepository,
+  runWithTenantDatabaseScope,
   SessionRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
@@ -92,13 +93,20 @@ export class FilesService {
 
     try {
       // Fetch session to get branch_id
-      const session = await this.sessionRepo.findById(sessionId);
-      if (!session) {
-        return [];
-      }
-
-      // Fetch branch to validate it still exists before crossing the executor boundary.
-      const branch = await this.branchRepo.findById(session.branch_id);
+      const { session, branch } = await runWithTenantDatabaseScope(
+        this.db,
+        params.tenant?.tenant_id,
+        async () => {
+          const session = await this.sessionRepo.findById(sessionId);
+          if (!session) return { session: null, branch: null };
+          return {
+            session,
+            // Validate it still exists before crossing the executor boundary.
+            branch: await this.branchRepo.findById(session.branch_id),
+          };
+        }
+      );
+      if (!session) return [];
       if (!branch?.path) {
         return [];
       }
@@ -108,7 +116,11 @@ export class FilesService {
       );
 
       const currentUserId = params.user?.user_id as UserID | undefined;
-      const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
+      const currentUser = currentUserId
+        ? await runWithTenantDatabaseScope(this.db, params.tenant?.tenant_id, () =>
+            this.usersRepo.findById(currentUserId)
+          )
+        : null;
 
       const result = await runExecutorCommand(
         {

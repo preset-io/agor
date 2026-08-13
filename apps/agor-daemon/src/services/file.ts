@@ -1,7 +1,11 @@
 /**
  * Read-only branch file browser. Tenant filesystem access is delegated to the executor.
  */
-import type { BranchRepository, TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  type BranchRepository,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
@@ -47,7 +51,9 @@ export class FileService
     ensureMinimumRole(params, ROLES.MEMBER, 'list files');
     const branchId = params?.query?.branch_id;
     if (!branchId) throw new Error('branch_id query parameter is required');
-    const branch = await this.branchRepo.findById(branchId);
+    const branch = await runWithTenantDatabaseScope(this.db, params?.tenant?.tenant_id, () =>
+      this.branchRepo.findById(branchId)
+    );
     if (!branch) throw new Error(`Branch not found: ${branchId}`);
 
     const result = await this.runCommand('branch.files.browse', branch.branch_id, params);
@@ -63,7 +69,9 @@ export class FileService
     ensureMinimumRole(params, ROLES.MEMBER, 'read file');
     const branchId = params?.query?.branch_id;
     if (!branchId) throw new Error('branch_id query parameter is required');
-    const branch = await this.branchRepo.findById(branchId);
+    const branch = await runWithTenantDatabaseScope(this.db, params?.tenant?.tenant_id, () =>
+      this.branchRepo.findById(branchId)
+    );
     if (!branch) throw new Error(`Branch not found: ${branchId}`);
 
     const result = await this.runCommand('branch.files.read', branch.branch_id, params, {
