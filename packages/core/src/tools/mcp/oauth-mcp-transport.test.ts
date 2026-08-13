@@ -19,7 +19,7 @@ vi.mock('../../utils/safe-outbound-fetch', () => ({
     }
     return url;
   },
-  safeOutboundFetch: (input: string | URL, options: Record<string, unknown> = {}) => {
+  safeOutboundFetch: vi.fn((input: string | URL, options: Record<string, unknown> = {}) => {
     const {
       timeoutMs: _timeout,
       maxRedirects: _max,
@@ -28,9 +28,10 @@ vi.mock('../../utils/safe-outbound-fetch', () => ({
       ...init
     } = options;
     return globalThis.fetch(input, init as RequestInit);
-  },
+  }),
 }));
 
+import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import {
   __dynamicClientCacheSizeForTests,
   __seedAuthCodeTokenCacheForTests,
@@ -1253,6 +1254,40 @@ describe('strict current MCP OAuth profile', () => {
     expect(error.message).toMatch(/rejected Dynamic Client Registration/i);
     expect(error.message).toMatch(/Client ID and Client Secret/i);
     expect(error.message).not.toContain(clientSecret);
+  });
+
+  it('passes the 16 KiB response limit to DCR requests', async () => {
+    clearAuthCodeTokenCache();
+    vi.mocked(safeOutboundFetch).mockClear();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          client_id: 'dcr-client',
+          redirect_uris: ['http://127.0.0.1:9999/oauth/callback'],
+          token_endpoint_auth_method: 'none',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      )
+    ) as unknown as typeof fetch;
+
+    await startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
+      prefetchedAuthServerMetadata: {
+        issuer: 'https://auth.reo.dev',
+        authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+        token_endpoint: 'https://auth.reo.dev/oauth/token',
+        registration_endpoint: 'https://auth.reo.dev/oauth/register',
+      },
+      cacheKey: 'https://mcp.reo.dev/mcp',
+      resourceUri: 'https://mcp.reo.dev/mcp',
+      compatibilityMode: 'legacy',
+      dcrMode: 'fallback',
+      allowLocalhostHttp: true,
+    });
+
+    expect(safeOutboundFetch).toHaveBeenCalledWith(
+      'https://auth.reo.dev/oauth/register',
+      expect.objectContaining({ maxResponseBytes: 16 * 1024 })
+    );
   });
 
   it('does not propagate provider error descriptions', async () => {

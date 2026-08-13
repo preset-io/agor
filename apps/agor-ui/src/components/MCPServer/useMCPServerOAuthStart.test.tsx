@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor-live/client';
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
@@ -59,6 +59,84 @@ describe('useMCPServerOAuthStart', () => {
     expect(onPrepareOAuthStart).toHaveBeenCalledOnce();
     expect(startOAuth).toHaveBeenCalledOnce();
     expect(startOAuth).toHaveBeenCalledWith({ mcp_server_id: 'server-1' });
+  });
+
+  it('does not start OAuth after unmount while preparation is pending', async () => {
+    let resolvePreparation: ((serverId: string) => void) | undefined;
+    const onPrepareOAuthStart = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvePreparation = resolve;
+        })
+    );
+    const startOAuth = vi.fn();
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const { result, unmount } = renderHook(() =>
+      useMCPServerOAuthStart({
+        client: oauthClient(startOAuth),
+        onPrepareOAuthStart,
+        showError,
+        showInfo,
+        showSuccess,
+      })
+    );
+
+    let startPromise: Promise<void> | undefined;
+    await act(async () => {
+      startPromise = result.current.handleStartOAuthFlow();
+      await Promise.resolve();
+    });
+
+    unmount();
+    await act(async () => {
+      resolvePreparation?.('server-1');
+      await startPromise;
+    });
+
+    expect(startOAuth).not.toHaveBeenCalled();
+    expect(windowOpen).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
+  });
+
+  it('does not open the authorization URL after unmount while oauth-start is pending', async () => {
+    let resolveStart:
+      | ((result: { success: true; authorizationUrl: string; attempt_id: string }) => void)
+      | undefined;
+    const startOAuth = vi.fn(
+      () =>
+        new Promise<{ success: true; authorizationUrl: string; attempt_id: string }>((resolve) => {
+          resolveStart = resolve;
+        })
+    );
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const { result, unmount } = renderHook(() =>
+      useMCPServerOAuthStart({
+        client: oauthClient(startOAuth),
+        onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
+        showError,
+        showInfo,
+        showSuccess,
+      })
+    );
+
+    let startPromise: Promise<void> | undefined;
+    await act(async () => {
+      startPromise = result.current.handleStartOAuthFlow();
+    });
+    await waitFor(() => expect(startOAuth).toHaveBeenCalledOnce());
+
+    unmount();
+    await act(async () => {
+      resolveStart?.({
+        success: true,
+        authorizationUrl: 'https://provider.example/authorize',
+        attempt_id: 'attempt-1',
+      });
+      await startPromise;
+    });
+
+    expect(windowOpen).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
   });
 
   it('classifies DCR recovery and accepts the authoritative redirect URL', async () => {

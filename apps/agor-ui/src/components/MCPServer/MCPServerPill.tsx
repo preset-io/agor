@@ -3,17 +3,14 @@ import { ApiOutlined, EditOutlined, LoginOutlined, ReloadOutlined } from '@ant-d
 import { Tooltip } from 'antd';
 import { useState } from 'react';
 import { usePermissions } from '@/hooks/usePermissions';
-import {
-  oauthAttemptFailureMessage,
-  refetchMCPOAuthDurableState,
-  refreshAndRefetchMCPOAuthGrant,
-  waitForMCPOAuthAttempt,
-} from '../../utils/mcpOAuthAttempt';
+import { refreshAndRefetchMCPOAuthGrant } from '../../utils/mcpOAuthAttempt';
 import { useThemedMessage } from '../../utils/message';
 import { formatAbsoluteTime } from '../../utils/time';
 import { ENTITY_PILL_COLORS } from '../Pill';
 import { Tag } from '../Tag';
+import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { MCPServerEditModal } from './MCPServerEditModal';
+import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
 interface MCPServerPillProps {
   server: MCPServer;
@@ -86,37 +83,14 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
   const isOAuthServer = server.auth?.type === 'oauth';
   const expiresAt = expiresAtOverride ?? server.auth?.oauth_token_expires_at;
 
-  const handleOAuthClick = async () => {
-    if (!client) return;
-    try {
-      const data = (await client.service('mcp-servers/oauth-start').create({
-        mcp_url: server.url,
-        mcp_server_id: server.mcp_server_id,
-        client_id: server.auth?.oauth_client_id,
-      })) as {
-        success: boolean;
-        error?: string;
-        authorizationUrl?: string;
-        attempt_id?: string;
-      };
-
-      if (data.success && data.authorizationUrl && data.attempt_id) {
-        window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
-        showInfo('Complete sign-in in the new tab.');
-        const attempt = await waitForMCPOAuthAttempt(client, data.attempt_id);
-        if (attempt.status === 'succeeded') {
-          await refetchMCPOAuthDurableState(client, server.mcp_server_id);
-          showSuccess(`${server.display_name || server.name} authenticated!`);
-        } else {
-          showError(oauthAttemptFailureMessage(attempt.status));
-        }
-      } else if (!data.success) {
-        showError(data.error || 'Failed to start OAuth flow');
-      }
-    } catch (err) {
-      showError(`OAuth error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
+  const { handleStartOAuthFlow, oauthFailure, startingOAuthFlow } = useMCPServerOAuthStart({
+    client,
+    onPrepareOAuthStart: async () => server.mcp_server_id,
+    onOAuthSucceeded: () => showSuccess(`${server.display_name || server.name} authenticated!`),
+    showError,
+    showInfo,
+    showSuccess,
+  });
 
   const handleRefreshClick = async () => {
     if (!client || refreshing) return;
@@ -135,7 +109,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
         setExpiresAtOverride(undefined);
         showWarning(formatRefreshError(result.error));
         // Fall through to full OAuth flow so the user can re-auth in one click.
-        await handleOAuthClick();
+        await handleStartOAuthFlow();
       } else {
         showError(`Refresh failed: ${formatRefreshError(result.error)}`);
       }
@@ -185,14 +159,31 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
 
   return (
     <>
-      <Tooltip title={needsAuth ? 'Click to authenticate' : authedTooltip}>
+      <Tooltip
+        title={
+          needsAuth
+            ? startingOAuthFlow
+              ? 'Starting OAuth authentication'
+              : 'Click to authenticate'
+            : authedTooltip
+        }
+      >
         <Tag
           color={needsAuth ? 'orange' : ENTITY_PILL_COLORS.mcp}
           icon={
             needsAuth ? <LoginOutlined /> : refreshing ? <ReloadOutlined spin /> : <ApiOutlined />
           }
-          style={{ cursor: refreshing ? 'wait' : isOAuthServer ? 'pointer' : 'default' }}
-          onClick={needsAuth ? handleOAuthClick : isOAuthServer ? handleRefreshClick : undefined}
+          style={{
+            cursor:
+              refreshing || startingOAuthFlow ? 'wait' : isOAuthServer ? 'pointer' : 'default',
+          }}
+          onClick={
+            needsAuth
+              ? () => void handleStartOAuthFlow()
+              : isOAuthServer
+                ? handleRefreshClick
+                : undefined
+          }
         >
           {server.display_name || server.name}
           {isAdmin && (
@@ -236,6 +227,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
           )}
         </Tag>
       </Tooltip>
+      {oauthFailure && <MCPOAuthRecoveryAlert failure={oauthFailure} />}
       {isAdmin && (
         <MCPServerEditModal
           server={server}

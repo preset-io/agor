@@ -40,20 +40,26 @@ export function useMCPServerOAuthStart({
   const [oauthFailure, setOauthFailure] = useState<MCPServerOAuthFailure | null>(null);
   const [oauthCallbackModalVisible, setOauthCallbackModalVisible] = useState(false);
   const oauthStartInFlightRef = useRef(false);
+  const oauthStartGenerationRef = useRef(0);
   const oauthCompletedCleanupRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
-    return () => {
-      oauthCompletedCleanupRef.current?.();
-    };
+  const invalidateOAuthStart = useCallback(() => {
+    oauthStartGenerationRef.current += 1;
+    oauthStartInFlightRef.current = false;
+    oauthCompletedCleanupRef.current?.();
   }, []);
+
+  useEffect(() => {
+    return invalidateOAuthStart;
+  }, [invalidateOAuthStart]);
 
   const clearOAuthFailure = useCallback(() => setOauthFailure(null), []);
 
   const cancelOAuthWait = useCallback(() => {
+    invalidateOAuthStart();
     setOauthCallbackModalVisible(false);
-    oauthCompletedCleanupRef.current?.();
-  }, []);
+    setStartingOAuthFlow(false);
+  }, [invalidateOAuthStart]);
 
   const handleStartOAuthFlow = useCallback(async () => {
     if (oauthStartInFlightRef.current) return;
@@ -63,19 +69,25 @@ export function useMCPServerOAuthStart({
     }
 
     oauthStartInFlightRef.current = true;
+    const startGeneration = ++oauthStartGenerationRef.current;
+    const isCurrentStart = () => oauthStartGenerationRef.current === startGeneration;
     setStartingOAuthFlow(true);
     setOauthFailure(null);
 
     try {
       const targetServerId = await onPrepareOAuthStart();
+      if (!isCurrentStart()) return;
       if (!targetServerId) return;
 
       showInfo('Starting OAuth authentication flow...');
+      if (!isCurrentStart()) return;
       const data = (await client.service('mcp-servers/oauth-start').create({
         mcp_server_id: targetServerId,
       })) as OAuthStartSuccess | MCPOAuthStartFailure;
+      if (!isCurrentStart()) return;
 
       if (data.success && data.authorizationUrl && data.attempt_id) {
+        if (!isCurrentStart()) return;
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
         setOauthCallbackModalVisible(true);
         showInfo('Authenticating... complete sign-in in the new tab.');
@@ -89,44 +101,55 @@ export function useMCPServerOAuthStart({
         oauthCompletedCleanupRef.current = cleanup;
         void waitForMCPOAuthAttempt(client, data.attempt_id, { signal: controller.signal })
           .then(async (attempt) => {
+            if (!isCurrentStart()) return;
             if (attempt.status === 'succeeded') {
               try {
                 await refetchMCPOAuthDurableState(client, targetServerId);
+                if (!isCurrentStart()) return;
               } catch {
-                console.warn('[OAuth] Durable completion refetch failed');
+                if (isCurrentStart()) console.warn('[OAuth] Durable completion refetch failed');
               }
+              if (!isCurrentStart()) return;
               showSuccess('OAuth authentication successful!');
               setOauthCallbackModalVisible(false);
               setOauthFailure(null);
               onOAuthSucceeded?.();
             } else {
+              if (!isCurrentStart()) return;
               showError(oauthAttemptFailureMessage(attempt.status));
               setOauthCallbackModalVisible(false);
             }
           })
           .catch((error) => {
+            if (!isCurrentStart()) return;
             if (error instanceof DOMException && error.name === 'AbortError') return;
             showError('Could not confirm OAuth status. Check the connection and try again.');
           })
           .finally(() => {
-            if (!controller.signal.aborted) cleanup();
+            if (!controller.signal.aborted && isCurrentStart()) cleanup();
           });
       } else if (!data.success) {
+        if (!isCurrentStart()) return;
         setOauthFailure({
           message: data.error || 'Failed to start OAuth flow',
           diagnostic: data.diagnostic,
           redirectUri: data.redirect_uri,
         });
       } else {
+        if (!isCurrentStart()) return;
         setOauthFailure({ message: 'Failed to start OAuth flow' });
       }
     } catch (error) {
-      setOauthFailure({
-        message: `OAuth flow error: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      if (isCurrentStart()) {
+        setOauthFailure({
+          message: `OAuth flow error: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
     } finally {
-      oauthStartInFlightRef.current = false;
-      setStartingOAuthFlow(false);
+      if (isCurrentStart()) {
+        oauthStartInFlightRef.current = false;
+        setStartingOAuthFlow(false);
+      }
     }
   }, [client, onOAuthSucceeded, onPrepareOAuthStart, showError, showInfo, showSuccess]);
 

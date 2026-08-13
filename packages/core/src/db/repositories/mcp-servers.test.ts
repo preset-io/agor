@@ -427,6 +427,39 @@ describe('MCPServerRepository custom headers', () => {
     }
   );
 
+  dbTest(
+    'should preserve existing OAuth secrets when update sends redacted sentinel',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const created = await repo.create(
+        createMCPServerData({
+          name: 'oauth-server',
+          transport: 'http',
+          url: 'https://mcp.example.com/mcp',
+          auth: {
+            type: 'oauth',
+            oauth_client_id: 'old-client-id',
+            oauth_client_secret: 'stored-client-secret',
+          },
+        })
+      );
+
+      const updated = await repo.update(created.mcp_server_id, {
+        auth: {
+          type: 'oauth',
+          oauth_client_id: 'new-client-id',
+          oauth_client_secret: MCP_HEADER_REDACTED_SENTINEL,
+        },
+      });
+
+      expect(updated.auth).toMatchObject({
+        type: 'oauth',
+        oauth_client_id: 'new-client-id',
+        oauth_client_secret: 'stored-client-secret',
+      });
+    }
+  );
+
   dbTest('should clear custom headers when updating to stdio transport', async ({ db }) => {
     const repo = new MCPServerRepository(db);
     const created = await repo.create(
