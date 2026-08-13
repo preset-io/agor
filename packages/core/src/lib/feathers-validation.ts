@@ -259,7 +259,12 @@ export const mcpServerQuerySchema = createQuerySchema(
     ),
     enabled: Type.Optional(Type.Boolean()),
     source: Type.Optional(
-      Type.Union([Type.Literal('user'), Type.Literal('imported'), Type.Literal('agor')])
+      Type.Union([
+        Type.Literal('user'),
+        Type.Literal('imported'),
+        Type.Literal('agor'),
+        Type.Literal('catalog'),
+      ])
     ),
     ownerless: Type.Optional(CommonSchemas.boolean),
     // Executor/session-token callers pass this so hooks can inject the

@@ -164,10 +164,13 @@ describe('marketplace install, as it lands in the database', () => {
     expect(server?.owner_user_id).toBe(user.user_id);
   });
 
+  // Pinned through connect rather than only against the authorizer: this is
+  // the path a user reaches by clicking Connect, and the sentence it produces
+  // is the one they read. Configuring a server directly still says so.
   it('refuses a member under the default use_existing_only, writing nothing', async () => {
     const { connect, installedServers } = await buildDaemon('use_existing_only');
 
-    await expect(connect()).rejects.toThrow(/does not allow members to configure MCP servers/);
+    await expect(connect()).rejects.toThrow(/this entry cannot be installed/);
     await expect(installedServers()).resolves.toHaveLength(0);
   });
 
@@ -189,9 +192,7 @@ describe('marketplace install, as it lands in the database', () => {
     await connectAs(admin, 'admin');
     const member = await addUser('bob@member.agor.live', 'member');
 
-    await expect(connectAs(member, 'member')).rejects.toThrow(
-      /does not allow members to configure MCP servers/
-    );
+    await expect(connectAs(member, 'member')).rejects.toThrow(/this entry cannot be installed/);
     const servers = await installedServers();
     expect(servers).toHaveLength(1);
     expect(servers[0]?.owner_user_id).toBe(admin.user_id);

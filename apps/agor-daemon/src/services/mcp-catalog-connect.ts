@@ -90,6 +90,17 @@ function sameEndpoint(a: string | undefined, b: string): boolean {
  *
  * Genuinely cosmetic fields stay the owner's: name, labels, description, and
  * scope. A second row for a benign edit would be its own bug.
+ *
+ * NOTE for the credentialed-entry phase: the `auth.type === 'none'` and
+ * zero-header conditions below are load-bearing for reuse, not only for safety.
+ * They hold because every entry this service can connect today is
+ * unauthenticated — connect refuses the others before reaching here. The first
+ * catalog entry carrying a credential inverts that: its own install stores an
+ * `auth` block, stops matching itself, and every subsequent connect creates a
+ * fresh row beside the one the caller already has. Whatever replaces these two
+ * conditions has to separate "the configuration this entry prescribes" from "an
+ * edit its owner made" — the distinction they stand in for while there is only
+ * ever one possible prescription.
  */
 function isInstallOf(server: MCPServer, entry: MCPCatalogEntry & { remote_url: string }): boolean {
   return (
@@ -263,7 +274,10 @@ export function createMCPCatalogConnectService(
         // Session scope: an install is for the session it launched, not
         // silently for every session its owner will ever start.
         scope: 'session',
-        source: 'user',
+        // Not `user`: nobody typed this configuration. It came from the
+        // catalog, and `catalog_entry_name` below records which entry — the
+        // same pairing `imported` has with `import_path`.
+        source: 'catalog',
       };
 
       // Provenance is named on params rather than in the payload: the write

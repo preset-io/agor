@@ -172,18 +172,26 @@ describe('member policy, as it lands in mcp_servers', () => {
     expect(patched.scope).toBe('session');
   });
 
-  it('leaves workspace-wide scope to allow_crud, which is the value that grants it', async () => {
+  it('leaves workspace-wide reach to allow_crud, which is the value that grants it', async () => {
     const { user, create, storedServers } = await buildDaemon('allow_crud');
 
+    // Owned, because saying nothing about ownership is not a decision to
+    // publish; the reach asked for is honoured either way.
     await create({ scope: 'global' });
 
     const [server] = await storedServers();
-    // Unowned, because `allow_crud` reads "no owner requested" as opting into a
-    // server the whole workspace may use. A shared server reads back with no
-    // owner at all, which is what `isMCPServerUsableBy` treats as everyone's.
+    expect(server).toMatchObject({ scope: 'global', owner_user_id: user.user_id });
+  });
+
+  it('lets an allow_crud member publish a server the workspace can use', async () => {
+    const { create, storedServers } = await buildDaemon('allow_crud');
+
+    await create({ scope: 'global', owner_user_id: null });
+
+    const [server] = await storedServers();
+    // No owner at all, which is what `isMCPServerUsableBy` treats as everyone's.
     expect(server?.scope).toBe('global');
     expect(server?.owner_user_id ?? null).toBeNull();
-    expect(server?.owner_user_id).not.toBe(user.user_id);
   });
 
   it('leaves an admin every scope under every policy value', async () => {

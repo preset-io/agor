@@ -71,6 +71,10 @@ export interface MCPServerCapabilityContext {
  * every policy, so the two cannot disagree — but an answer that arrives
  * without the field would otherwise leave an admin looking at a disabled
  * button and a reason that does not apply to them.
+ *
+ * This is about a capability that arrived. An answer that did not arrive at all
+ * is a separate state its caller handles, and there the control is withheld
+ * from everyone, admins included, rather than guessed at.
  */
 export function canAddMcpServer({ isAdmin, canConfigure }: MCPServerCapabilityContext): boolean {
   return isAdmin || canConfigure;
