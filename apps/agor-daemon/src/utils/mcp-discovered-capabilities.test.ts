@@ -4,6 +4,7 @@ import {
   type TenantScopeAwareDatabase,
   TenantWriteGateActiveError,
 } from '@agor/core/db';
+import type { MCPServerID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -54,6 +55,8 @@ vi.mock('@agor/core/db', async (importOriginal) => {
 
 const { persistDiscoveredMCPCapabilities } = await import('./mcp-discovered-capabilities.js');
 
+const SERVER_ID = 'server-1' as MCPServerID;
+
 /**
  * `isPostgresDatabase` keys off the absence of `run`, so the `run` stub is what
  * makes this handle SQLite-shaped and keeps the scope in-process rather than
@@ -83,7 +86,7 @@ describe('persistDiscoveredMCPCapabilities', () => {
       MissingTenantDatabaseScopeError
     );
 
-    await persistDiscoveredMCPCapabilities(db, 'tenant-a', 'server-1', {
+    await persistDiscoveredMCPCapabilities(db, 'tenant-a', SERVER_ID, {
       tools: [{ name: 'search', description: 'Search' }],
       resources: [],
       prompts: [],
@@ -94,7 +97,7 @@ describe('persistDiscoveredMCPCapabilities', () => {
   });
 
   it('clears the per-tenant write gate before writing', async () => {
-    await persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', 'server-1', {
+    await persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', SERVER_ID, {
       tools: [],
       resources: [],
       prompts: [],
@@ -107,7 +110,7 @@ describe('persistDiscoveredMCPCapabilities', () => {
     assertTenantWritable.mockRejectedValue(new TenantWriteGateActiveError('tenant-a', 'gen-1'));
 
     await expect(
-      persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', 'server-1', {
+      persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', SERVER_ID, {
         tools: [{ name: 'search', description: 'Search' }],
         resources: [],
         prompts: [],
@@ -117,21 +120,23 @@ describe('persistDiscoveredMCPCapabilities', () => {
     expect(updateCalls).toHaveLength(0);
   });
 
-  it('writes each capability list, defaulting a list the probe did not return to empty', async () => {
-    await persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', 'server-1', {
+  it('writes every capability list the probe reported', async () => {
+    await persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', SERVER_ID, {
       tools: [{ name: 'search', description: 'Search' }],
+      resources: [{ uri: 'file:///a', name: 'a' }],
+      prompts: [{ name: 'greet', description: 'Greet' }],
     });
 
-    expect(updateCalls[0].serverId).toBe('server-1');
+    expect(updateCalls[0].serverId).toBe(SERVER_ID);
     expect(updateCalls[0].updates).toEqual({
       tools: [{ name: 'search', description: 'Search' }],
-      resources: [],
-      prompts: [],
+      resources: [{ uri: 'file:///a', name: 'a' }],
+      prompts: [{ name: 'greet', description: 'Greet' }],
     });
   });
 
   it('carries no ownership field, so a refresh cannot move the row between owners', async () => {
-    await persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', 'server-1', {
+    await persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', SERVER_ID, {
       tools: [],
       resources: [],
       prompts: [],
@@ -144,7 +149,7 @@ describe('persistDiscoveredMCPCapabilities', () => {
     await persistDiscoveredMCPCapabilities(
       guardedDatabase({ requireScope: false }),
       undefined,
-      'server-1',
+      SERVER_ID,
       { tools: [], resources: [], prompts: [] }
     );
 

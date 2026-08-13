@@ -3867,7 +3867,7 @@ async function registerMCPServices(
           ])) as PromptsResult;
 
           if (serverId) {
-            await persistDiscoveredMCPCapabilities(db, tenantId, serverId, {
+            await persistDiscoveredMCPCapabilities(db, tenantId, serverId as MCPServerID, {
               tools: toolsResult.tools.map((t) => ({
                 name: t.name,
                 description: t.description || '',
