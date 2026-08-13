@@ -134,6 +134,67 @@ describe('refreshMCPToken', () => {
     expect(body.get('client_id')).toBeNull();
   });
 
+  it('uses client_secret_post when the grant was issued under it (HubSpot)', async () => {
+    mockFetchOnce({ access_token: 'new-a', expires_in: 1800 });
+
+    await refreshMCPToken({
+      tokenEndpoint: 'https://api.hubspot.example/oauth/v1/token',
+      refreshToken: 'rt-abc',
+      clientId: 'client-123',
+      clientSecret: 'secret-xyz',
+      authMethod: 'client_secret_post',
+    });
+
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    // RFC 6749 §2.3: one method only — no Basic header alongside body creds.
+    expect(init.headers.Authorization).toBeUndefined();
+    const body = new URLSearchParams(init.body as string);
+    expect(body.get('client_id')).toBe('client-123');
+    expect(body.get('client_secret')).toBe('secret-xyz');
+    expect(body.get('grant_type')).toBe('refresh_token');
+    expect(body.get('refresh_token')).toBe('rt-abc');
+  });
+
+  it('keeps HTTP Basic when the grant was issued under client_secret_basic', async () => {
+    mockFetchOnce({ access_token: 'new-a', expires_in: 1800 });
+
+    await refreshMCPToken({
+      tokenEndpoint: 'https://auth.example.com/token',
+      refreshToken: 'rt-abc',
+      clientId: 'client-123',
+      clientSecret: 'secret-xyz',
+      authMethod: 'client_secret_basic',
+    });
+
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.headers.Authorization).toBe(
+      `Basic ${Buffer.from('client-123:secret-xyz').toString('base64')}`
+    );
+    expect(new URLSearchParams(init.body as string).get('client_secret')).toBeNull();
+  });
+
+  it('never puts the client secret in a log line', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetchOnce({ access_token: 'new-a', expires_in: 1800 });
+
+    await refreshMCPToken({
+      tokenEndpoint: 'https://api.hubspot.example/oauth/v1/token',
+      refreshToken: 'REFRESH-DO-NOT-LOG-1a2b',
+      clientId: 'client-123',
+      clientSecret: 'SECRET-DO-NOT-LOG-9c8d',
+      authMethod: 'client_secret_post',
+    });
+
+    const emitted = [...log.mock.calls, ...warn.mock.calls, ...error.mock.calls]
+      .flat()
+      .map(String)
+      .join('\n');
+    expect(emitted).not.toContain('SECRET-DO-NOT-LOG-9c8d');
+    expect(emitted).not.toContain('REFRESH-DO-NOT-LOG-1a2b');
+  });
+
   it('puts client_id in the body for public clients (no secret)', async () => {
     mockFetchOnce({ access_token: 'new-a', expires_in: 3600 });
 
@@ -335,6 +396,123 @@ describe('refreshAndPersistToken', () => {
     const deltaSec = (call.expiresAt.getTime() - Date.now()) / 1000;
     expect(deltaSec).toBeGreaterThan(3595);
     expect(deltaSec).toBeLessThanOrEqual(3600);
+  });
+
+  it('replays the stored client_secret_post method on the standalone refresh', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'old-a',
+      oauth_refresh_token: 'rt-1',
+      oauth_client_id: 'cid',
+      oauth_client_secret: 'csec',
+      oauth_token_endpoint: 'https://api.hubspot.example/oauth/v1/token',
+      oauth_token_auth_method: 'client_secret_post',
+    });
+    mockFindById.mockResolvedValue({ url: 'https://mcp.hubspot.example/' });
+    mockCompleteStandaloneRefresh.mockResolvedValue(true);
+    mockFetchJson({ access_token: 'new-a', expires_in: 1800 });
+
+    await refreshAndPersistToken({
+      db: { run: () => undefined } as any,
+      userId: USER_ID,
+      mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
+      validateGrant: async () => true,
+    });
+
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.headers.Authorization).toBeUndefined();
+    const body = new URLSearchParams(init.body as string);
+    expect(body.get('client_id')).toBe('cid');
+    expect(body.get('client_secret')).toBe('csec');
+  });
+
+  it('falls back to HTTP Basic for rows stored before the method was persisted', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'old-a',
+      oauth_refresh_token: 'rt-1',
+      oauth_client_id: 'cid',
+      oauth_client_secret: 'csec',
+      oauth_token_endpoint: 'https://auth.example.com/token',
+      // oauth_token_auth_method absent — pre-migration grant.
+    });
+    mockFindById.mockResolvedValue({ url: 'https://srv.example.com/mcp' });
+    mockCompleteStandaloneRefresh.mockResolvedValue(true);
+    mockFetchJson({ access_token: 'new-a', expires_in: 3600 });
+
+    await refreshAndPersistToken({
+      db: { run: () => undefined } as any,
+      userId: USER_ID,
+      mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
+      validateGrant: async () => true,
+    });
+
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.headers.Authorization).toBe(`Basic ${Buffer.from('cid:csec').toString('base64')}`);
+  });
+
+  it('ignores an unrecognized stored method rather than sending it', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'old-a',
+      oauth_refresh_token: 'rt-1',
+      oauth_client_id: 'cid',
+      oauth_client_secret: 'csec',
+      oauth_token_endpoint: 'https://auth.example.com/token',
+      oauth_token_auth_method: 'private_key_jwt',
+    });
+    mockFindById.mockResolvedValue({ url: 'https://srv.example.com/mcp' });
+    mockCompleteStandaloneRefresh.mockResolvedValue(true);
+    mockFetchJson({ access_token: 'new-a', expires_in: 3600 });
+
+    await refreshAndPersistToken({
+      db: { run: () => undefined } as any,
+      userId: USER_ID,
+      mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
+      validateGrant: async () => true,
+    });
+
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.headers.Authorization).toBe(`Basic ${Buffer.from('cid:csec').toString('base64')}`);
+  });
+
+  it('does not let a stored public-client method withhold a now-configured secret', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'old-a',
+      oauth_refresh_token: 'rt-1',
+      oauth_client_id: 'cid',
+      oauth_token_endpoint: 'https://auth.example.com/token',
+      // Authorized as a public client (DCR), so 'none' was recorded…
+      oauth_token_auth_method: 'none',
+    });
+    // …but an admin has since configured a client secret on the server.
+    mockFindById.mockResolvedValue({
+      url: 'https://srv.example.com/mcp',
+      auth: { oauth_client_secret: 'later-secret' },
+    });
+    mockCompleteStandaloneRefresh.mockResolvedValue(true);
+    mockFetchJson({ access_token: 'new-a', expires_in: 3600 });
+
+    await refreshAndPersistToken({
+      db: { run: () => undefined } as any,
+      userId: USER_ID,
+      mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
+      validateGrant: async () => true,
+    });
+
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.headers.Authorization).toBe(
+      `Basic ${Buffer.from('cid:later-secret').toString('base64')}`
+    );
   });
 
   it('writes rotated refresh_token when provider returns one', async () => {

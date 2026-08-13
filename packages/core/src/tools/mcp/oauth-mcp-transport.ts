@@ -16,6 +16,7 @@ import type {
 } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
+import { selectTokenEndpointAuthMethod } from './oauth-client-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
 
 export interface OAuthMetadata {
@@ -1179,7 +1180,12 @@ export async function performMCPOAuthFlow(
       actualClientId,
       clientSecret,
       typeof resourceMetadata.resource === 'string' ? resourceMetadata.resource : undefined,
-      true
+      true,
+      selectTokenEndpointAuthMethod({
+        hasClientSecret: !!clientSecret,
+        supportedMethods: authServerMetadata.token_endpoint_auth_methods_supported,
+        registeredMethod: registeredAuthMethod,
+      })
     );
 
     console.log('[MCP OAuth] Access token received successfully');
@@ -1508,6 +1514,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   // Client ID resolution (DCR if available)
   let actualClientId = clientId;
   let resolvedClientSecret = opts.clientSecret;
+  let registeredAuthMethod: string | undefined;
 
   if (!actualClientId && dcrMode !== 'disabled') {
     const registrationEndpoint =
@@ -1530,6 +1537,7 @@ async function startMCPOAuthFlowWithAS(opts: {
         );
         actualClientId = registration.client_id;
         resolvedClientSecret = registration.client_secret;
+        registeredAuthMethod = registration.token_endpoint_auth_method;
       } catch (error) {
         if (error instanceof OAuthDCRFailure) throw error;
         throw registrationFailure({
@@ -1580,6 +1588,11 @@ async function startMCPOAuthFlowWithAS(opts: {
     pkceVerifier: pkce.verifier,
     clientId: actualClientId!,
     clientSecret: resolvedClientSecret,
+    tokenEndpointAuthMethod: selectTokenEndpointAuthMethod({
+      hasClientSecret: !!resolvedClientSecret,
+      supportedMethods: authServerMetadata?.token_endpoint_auth_methods_supported,
+      registeredMethod: registeredAuthMethod,
+    }),
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,

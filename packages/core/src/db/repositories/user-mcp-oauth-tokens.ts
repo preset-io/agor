@@ -372,6 +372,7 @@ export class UserMCPOAuthTokenRepository {
             oauth_issuer: binding.issuer,
             oauth_authorization_endpoint: binding.authorizationEndpoint,
             oauth_token_endpoint: binding.tokenEndpoint,
+            oauth_token_auth_method: input.tokenAuthMethod ?? null,
             oauth_redirect_uri: binding.redirectUri,
             refresh_status: 'idle' as const,
             refresh_generation: 0,
@@ -405,6 +406,7 @@ export class UserMCPOAuthTokenRepository {
         oauth_issuer: binding?.issuer,
         oauth_authorization_endpoint: binding?.authorizationEndpoint,
         oauth_token_endpoint: binding?.tokenEndpoint ?? input.tokenEndpoint,
+        oauth_token_auth_method: input.tokenAuthMethod,
         oauth_redirect_uri: binding?.redirectUri,
         refresh_status: 'idle',
         refresh_generation: 0,
@@ -476,6 +478,11 @@ export class UserMCPOAuthTokenRepository {
                     : {}),
                   ...(input.resourceUri != null ? { oauth_resource_uri: input.resourceUri } : {}),
                 }),
+            ...(input.tokenAuthMethod != null
+              ? { oauth_token_auth_method: input.tokenAuthMethod }
+              : binding
+                ? { oauth_token_auth_method: null }
+                : {}),
             updated_at: now,
           })
           .where(

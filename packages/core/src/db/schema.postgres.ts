@@ -1803,6 +1803,10 @@ export const userMcpOauthTokens = pgTable(
     oauth_issuer: text('oauth_issuer'),
     oauth_authorization_endpoint: text('oauth_authorization_endpoint'),
     oauth_token_endpoint: text('oauth_token_endpoint'),
+    // Token-endpoint client authentication method (RFC 8414 §2) the grant was
+    // issued under. Refresh must reuse it; NULL = pre-existing grant, falls
+    // back to the RFC default. Not a secret, so it is stored in the clear.
+    oauth_token_auth_method: text('oauth_token_auth_method'),
     oauth_redirect_uri: text('oauth_redirect_uri'),
     refresh_status: text('refresh_status').notNull().default('idle'),
     refresh_generation: bigint('refresh_generation', { mode: 'number' }).notNull().default(0),

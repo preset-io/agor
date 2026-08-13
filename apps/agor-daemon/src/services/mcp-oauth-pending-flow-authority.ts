@@ -75,6 +75,10 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.pkceVerifier === 'string' &&
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
+    (material.tokenEndpointAuthMethod === undefined ||
+      material.tokenEndpointAuthMethod === 'client_secret_basic' ||
+      material.tokenEndpointAuthMethod === 'client_secret_post' ||
+      material.tokenEndpointAuthMethod === 'none') &&
     (material.compatibilityMode === 'strict' ||
       material.compatibilityMode === 'legacy' ||
       material.compatibilityMode === 'marketplace') &&

@@ -160,6 +160,8 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
+  /** Token-endpoint authentication chosen when this flow started. */
+  tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post' | 'none';
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   /** Whether RFC 9207 says this AS will return `iss` on the callback. */
   authorizationResponseIssuerParameterSupported?: boolean;

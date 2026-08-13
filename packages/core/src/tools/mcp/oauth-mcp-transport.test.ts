@@ -957,6 +957,59 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(String(tokenCall?.[1]?.body)).not.toContain('client_id=');
   });
 
+  it('records the advertised client_secret_post method on the flow context', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow(
+      '',
+      'manual-client',
+      'https://agor.example.test/mcp-servers/oauth-callback',
+      {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://app.hubspot.example',
+          authorization_endpoint: 'https://app.hubspot.example/oauth/authorize',
+          token_endpoint: 'https://api.hubspot.example/oauth/v1/token',
+          token_endpoint_auth_methods_supported: ['client_secret_post'],
+        },
+        clientSecret: 'manual-secret',
+        cacheKey: 'https://mcp.hubspot.example/',
+        resourceUri: 'https://mcp.hubspot.example/',
+        compatibilityMode: 'legacy',
+        dcrMode: 'disabled',
+      }
+    );
+
+    expect(ctx.tokenEndpointAuthMethod).toBe('client_secret_post');
+  });
+
+  it('records client_secret_basic when the server advertises no auth methods', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow(
+      '',
+      'manual-client',
+      'https://agor.example.test/mcp-servers/oauth-callback',
+      {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://provider.example.test',
+          authorization_endpoint: 'https://provider.example.test/authorize',
+          token_endpoint: 'https://provider.example.test/token',
+        },
+        clientSecret: 'manual-secret',
+        cacheKey: 'https://mcp.example.test/mcp',
+        resourceUri: 'https://mcp.example.test/mcp',
+        compatibilityMode: 'legacy',
+        dcrMode: 'disabled',
+      }
+    );
+
+    expect(ctx.tokenEndpointAuthMethod).toBe('client_secret_basic');
+  });
+
   it('throws when cacheKey is missing (would silently break token reuse)', async () => {
     globalThis.fetch = vi.fn() as unknown as typeof fetch;
 

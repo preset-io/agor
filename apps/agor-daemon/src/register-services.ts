@@ -2285,6 +2285,7 @@ export async function registerMCPServices(
           clientId: pendingFlow.context.clientId,
           clientSecret: pendingFlow.context.clientSecret,
           tokenEndpoint: pendingFlow.context.tokenEndpoint,
+          tokenAuthMethod: pendingFlow.context.tokenEndpointAuthMethod,
           resourceUri: pendingFlow.context.resourceUri,
           ...(grantBinding ? { grantBinding } : {}),
         },

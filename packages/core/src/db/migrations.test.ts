@@ -128,6 +128,21 @@ describe('Postgres migrations', () => {
     }
   });
 
+  it('assigns the MCP OAuth client-auth method column strictly increasing watermarks', async () => {
+    const [postgresJournal, sqliteJournal] = await readJournals();
+
+    for (const [journal, expectedTag, expectedIndex] of [
+      [postgresJournal, '0093_mcp_oauth_token_auth_method', 93],
+      [sqliteJournal, '0096_mcp_oauth_token_auth_method', 96],
+    ] as const) {
+      const position = journal.entries.findIndex(({ tag }) => tag === expectedTag);
+      const entry = journal.entries[position];
+      const predecessor = journal.entries[position - 1];
+      expect(entry).toMatchObject({ idx: expectedIndex, tag: expectedTag });
+      expect(entry?.when).toBeGreaterThan(predecessor?.when ?? 0);
+    }
+  });
+
   it('gives the newest migration a unique watermark that sorts it last', async () => {
     // Drizzle applies pending migrations in `when` order, so a new migration
     // that does not sort after the one before it can run out of order against a
