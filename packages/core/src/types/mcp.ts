@@ -99,6 +99,16 @@ export interface MCPOAuthPendingFlowSealedMaterial {
 /**
  * What a non-admin member may do with MCP server configuration, tenant-wide.
  *
+ * "Configuration" is the caller-supplied surface — the fields somebody submits
+ * to create, update, or delete a server. Capability refresh is not on it:
+ * `mcp-servers/discover` opens the server's own transport and writes back the
+ * `tools` / `resources` / `prompts` that endpoint reported, which is nobody's
+ * submission. It answers to its own owner-or-admin rule
+ * (`denyDiscoverOfAnotherUsersServer`) instead, so that a member who may no
+ * longer configure servers can still refresh one that is already running in
+ * their sessions — revoking refresh would leave the stale tool list the agent
+ * actually sees, not stop the server being used.
+ *
  * - `use_existing_only` — members attach servers an admin already configured;
  *   they create nothing. The default, and the only behaviour that existed
  *   before private servers.
