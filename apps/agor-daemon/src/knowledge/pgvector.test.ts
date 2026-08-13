@@ -1,4 +1,8 @@
-import { createTenantScopedDatabaseProxy, type Database } from '@agor/core/db';
+import {
+  createTenantScopedDatabaseProxy,
+  type Database,
+  MissingTenantDatabaseScopeError,
+} from '@agor/core/db';
 import { describe, expect, it, vi } from 'vitest';
 import { ensureKnowledgePgvectorStorage, getKnowledgePgvectorCapability } from './pgvector';
 
@@ -18,10 +22,9 @@ describe('Knowledge pgvector capability detection', () => {
       }
     );
 
-    await expect(getKnowledgePgvectorCapability(db)).resolves.toMatchObject({
-      available: false,
-      reason: expect.stringContaining('unable to inspect pgvector capability'),
-    });
+    await expect(getKnowledgePgvectorCapability(db)).rejects.toBeInstanceOf(
+      MissingTenantDatabaseScopeError
+    );
   });
 
   it('treats postgres-js array results as available when extension and storage exist', async () => {

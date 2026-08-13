@@ -1,6 +1,7 @@
 import {
   executeRaw,
   isPostgresDatabaseHandle,
+  MissingTenantDatabaseScopeError,
   sql,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -114,6 +115,7 @@ async function readCapability(db: KnowledgeTenantDatabase): Promise<KnowledgePgv
       setupHint: reason ? SETUP_HINT : null,
     };
   } catch (error) {
+    if (error instanceof MissingTenantDatabaseScopeError) throw error;
     return {
       available: false,
       extensionInstalled: false,

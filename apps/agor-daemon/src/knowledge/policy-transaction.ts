@@ -1,6 +1,6 @@
 import {
   getCurrentTenantDatabase,
-  isPostgresDatabaseHandle,
+  isPostgresDatabase,
   isSQLiteDatabase,
   runDatabaseTransaction,
   type TenantScopeAwareDatabase,
@@ -18,7 +18,7 @@ export async function runKnowledgePolicyTransaction<T>(
   work: (tx: TenantScopedDatabase) => Promise<T>
 ): Promise<T> {
   const ambientDb = getCurrentTenantDatabase();
-  if (ambientDb && isPostgresDatabaseHandle(ambientDb)) {
+  if (ambientDb && isPostgresDatabase(ambientDb)) {
     return work(ambientDb as TenantScopedDatabase);
   }
 

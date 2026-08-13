@@ -5,7 +5,7 @@ import { isSessionExecuting, SessionStatus } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
 import { requestExecutorTermination, type TerminationResult } from '../termination-coordinator.js';
 import { requireActiveAgenticTool } from './agentic-tool-runtime.js';
-import { findActiveTasksForSession } from './session-tasks.js';
+import type { findActiveTasksForSession } from './session-tasks.js';
 
 export interface StopSessionResult {
   success: boolean;
@@ -19,7 +19,7 @@ export interface StopSessionDeps {
   app: Application;
   taskRepo: Pick<TaskRepository, 'findQueued'>;
   sessionsService: Pick<SessionsServiceImpl, 'get' | 'patch'>;
-  findActiveTasks?: typeof findActiveTasksForSession;
+  findActiveTasks: typeof findActiveTasksForSession;
   requestTermination?: typeof requestExecutorTermination;
 }
 
@@ -75,11 +75,7 @@ export async function stopSessionPreserveQueue(
     };
   }
 
-  const targetTasksArray = await (deps.findActiveTasks ?? findActiveTasksForSession)(
-    deps.app,
-    sessionId,
-    params
-  );
+  const targetTasksArray = await deps.findActiveTasks(deps.app, sessionId, params);
   const queuedTasks = await deps.taskRepo.findQueued(sessionId);
 
   if (targetTasksArray.length === 0) {

@@ -54,7 +54,6 @@ import {
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
-  Branch,
   HookContext,
   Message,
   MessageID,
@@ -317,6 +316,15 @@ export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | un
   );
 }
 
+/** Build the required short database unit used by authenticated long-route dependencies. */
+export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase) {
+  return <T>(work: () => Promise<T>): Promise<T> => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for database operation');
+    return runWithTenantDatabaseScope(db, tenantId, work);
+  };
+}
+
 /**
  * Register authentication configuration and custom REST routes.
  */
@@ -366,11 +374,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         hook(context)
       ) as Promise<Awaited<T>>;
     };
-  const inCurrentTenantDatabaseScope = <T>(work: () => Promise<T>): Promise<T> => {
-    const tenantId = getCurrentTenantId();
-    if (!tenantId) throw new Error('Missing active tenant context for database operation');
-    return runWithTenantDatabaseScope(db, tenantId, work);
-  };
+  const inCurrentTenantDatabaseScope = createRequiredTenantDatabaseRunner(db);
 
   /** Schedule orchestration after commit with tenant identity but no open transaction. */
   function deferInFreshTenantScope(params: RouteParams, fn: () => Promise<void>): void {
@@ -1620,9 +1624,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               status: TaskStatus.QUEUED,
               metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
             });
-            await runWithTenantDatabaseScope(db, promptTenantId, () =>
-              tasksService.autoTitleSession(task, params)
-            );
+            await tasksService.autoTitleSession(task, params);
 
             if (!prior) {
               // Repository admission bypasses TasksService.create. Publish the
@@ -2673,12 +2675,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             {
               app,
               taskRepo: stopRouteRepositories.taskRepo,
-              sessionsService: {
-                get: (...args) =>
-                  inCurrentTenantDatabaseScope(() => sessionsServiceWithHooks.get(...args)),
-                patch: (...args) =>
-                  inCurrentTenantDatabaseScope(() => sessionsServiceWithHooks.patch(...args)),
-              },
+              sessionsService: sessionsServiceWithHooks,
               findActiveTasks: (stopApp, sessionId, stopParams) =>
                 inCurrentTenantDatabaseScope(() =>
                   findActiveTasksForSession(stopApp, sessionId, stopParams)
@@ -2982,13 +2979,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
-    loadWidgetContext: (widgetId: string) =>
-      inCurrentTenantDatabaseScope(async () => {
-        const message = (await app.service('messages').get(widgetId)) as Message;
-        const session = (await app.service('sessions').get(message.session_id)) as Session;
-        const branch = (await app.service('branches').get(session.branch_id)) as Branch;
-        return { message, session, branch };
-      }),
+    runInTenantDatabaseScope: inCurrentTenantDatabaseScope,
     resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
       emitServiceEvent(app, {
         path: 'messages',
