@@ -5,8 +5,9 @@
  * Supports transcript queries by session and task.
  */
 
-import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
+import type { Message, MessageCreate, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
 import { and, asc, desc, eq, gt, inArray, lte, type SQL, sql } from 'drizzle-orm';
+import { generateId } from '../../lib/ids';
 import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
 import type { Database } from '../client';
 import {
@@ -174,7 +175,11 @@ export class MessagesRepository {
   /**
    * Create a single message
    */
-  async create(message: Message): Promise<Message> {
+  async create(input: MessageCreate): Promise<Message> {
+    const message: Message = {
+      ...input,
+      message_id: input.message_id ?? (generateId() as MessageID),
+    };
     const row = this.messageToRow(message);
     return this.runMetadataMutation(() =>
       runDatabaseTransaction(

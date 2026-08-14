@@ -36,16 +36,19 @@ export type PersistedMessageSource = MessageSource | LegacyMessageSource;
  * Message type
  * Distinguishes conversation messages from meta/synthetic messages
  */
-export type MessageType =
-  | 'user'
-  | 'assistant'
-  | 'system'
-  | 'file-history-snapshot'
-  | 'permission_request'
-  | 'input_request'
-  | 'daemon_restart'
-  | 'daemon_crash'
-  | 'widget_request';
+export const MESSAGE_TYPE_VALUES = [
+  'user',
+  'assistant',
+  'system',
+  'file-history-snapshot',
+  'permission_request',
+  'input_request',
+  'daemon_restart',
+  'daemon_crash',
+  'widget_request',
+] as const;
+
+export type MessageType = (typeof MESSAGE_TYPE_VALUES)[number];
 
 /**
  * Content block (for multi-modal messages)

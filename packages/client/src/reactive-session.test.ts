@@ -534,6 +534,53 @@ describe('ReactiveSessionHandle resync hydration parity', () => {
       secondNew.message_id,
     ]);
   });
+
+  it('preserves a Task loaded while lazy resync is in flight', async () => {
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.COMPLETED)],
+      messagesByTask: {
+        'task-1': [makeMessage('task-1', 0)],
+        'task-2': [makeMessage('task-2', 0)],
+      },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    opts.deferTaskMessageFetch = 'task-2';
+    const resync = handle.resync();
+    await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalledTimes(2));
+
+    await handle.loadTaskMessages('task-1');
+    expect(handle.isTaskLoaded('task-1')).toBe(true);
+
+    mock.releaseMessageFetch();
+    await resync;
+
+    expect(handle.isTaskLoaded('task-1')).toBe(true);
+    expect(handle.getTaskMessages('task-1')).toHaveLength(1);
+  });
+
+  it('preserves a Task unload while lazy resync is in flight', async () => {
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.COMPLETED)],
+      messagesByTask: { 'task-1': [makeMessage('task-1', 0)] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    opts.deferTaskMessageFetch = 'task-1';
+    const resync = handle.resync();
+    await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalledTimes(2));
+
+    handle.unloadTaskMessages('task-1');
+    mock.releaseMessageFetch();
+    await resync;
+
+    expect(handle.isTaskLoaded('task-1')).toBe(false);
+    expect(handle.getTaskMessages('task-1')).toEqual([]);
+  });
 });
 
 describe('ReactiveSessionHandle stream subscription', () => {

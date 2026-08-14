@@ -57,6 +57,27 @@ describe('Postgres migrations', () => {
     ).toEqual([]);
   });
 
+  it('enforces transcript index creation as an offline existing-db cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: ['0082_github_install_state'],
+        pending: ['0083_transcript_hydration_keysets'],
+      })
+    ).toEqual(['0083_transcript_hydration_keysets']);
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: ['0085_github_install_state'],
+        pending: ['0086_transcript_hydration_keysets'],
+      })
+    ).toEqual(['0086_transcript_hydration_keysets']);
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: [],
+        pending: ['0000_pretty_mac_gargan', '0083_transcript_hydration_keysets'],
+      })
+    ).toEqual([]);
+  });
+
   it('assigns GitHub install state unique post-HA migration watermarks', async () => {
     const [postgresJournal, sqliteJournal] = await Promise.all(
       [

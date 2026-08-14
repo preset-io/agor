@@ -39,6 +39,7 @@ import type {
   MCPMemberPolicySetting,
   MCPServer,
   Message,
+  MessageCreate,
   MessagePatch,
   OpenCodeModelCatalog,
   OpenCodeOAuthAttempt,
@@ -436,7 +437,10 @@ export interface TasksService extends AgorService<Task> {
 }
 
 /** Public Message CRUD surface. Full replacement is daemon-internal. */
-export type MessagesService = Omit<AgorService<Message>, 'update' | 'patch'> & {
+export type MessagesService = Omit<
+  AgorService<Message, ClientInput<MessageCreate>>,
+  'update' | 'patch'
+> & {
   patch(id: string, data: ClientInput<MessagePatch>, params?: Params): Promise<Message>;
 };
 

@@ -8,7 +8,7 @@ import {
   feathersExpress,
   rest,
 } from '@agor/core/feathers';
-import type { Message, SessionID, TaskID, UUID } from '@agor/core/types';
+import type { Message, MessageCreate, SessionID, TaskID, UUID } from '@agor/core/types';
 import { MessageRole, ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { describe, expect, vi } from 'vitest';
@@ -20,7 +20,7 @@ import { TaskRepository } from '../../../../packages/core/src/db/repositories/ta
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
 import { ServiceJWTStrategy } from '../auth/service-jwt-strategy';
-import { rejectMessageMultiCreate } from '../hooks/reject-message-multi-create';
+import { validateMessageCreate } from '../hooks/validate-message-create';
 import {
   resolveSessionContext,
   scopeFindToAccessibleSessionsSql,
@@ -236,6 +236,42 @@ describe('MessagesService.find pagination', () => {
 });
 
 describe('MessagesService.create boundary', () => {
+  dbTest('accepts the canonical DTO and generates an omitted message_id', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const { message_id: _messageId, ...input } = message(sessionId, 0);
+
+    const created = await createMessagesService(db).create(input);
+
+    expect(created).toMatchObject(input);
+    expect(Array.isArray(created) ? undefined : created.message_id).toEqual(expect.any(String));
+  });
+
+  dbTest(
+    'rejects missing, malformed, and unsupported create fields with BadRequest',
+    async ({ db }) => {
+      const sessionId = await createTestSession(db);
+      const valid = message(sessionId, 0);
+      const cases: Array<[unknown, string]> = [
+        [{ ...valid, session_id: undefined }, 'session_id is required'],
+        [{ ...valid, role: 'observer' }, 'Unsupported Message role'],
+        [{ ...valid, index: -1 }, 'index must be a non-negative integer'],
+        [{ ...valid, timestamp: 'not-a-date' }, 'timestamp must be a valid date string'],
+        [
+          Object.fromEntries(Object.entries(valid).filter(([field]) => field !== 'content')),
+          'content must be a string, content-block array, or request object',
+        ],
+        [{ ...valid, arbitrary: true }, 'Unsupported Message create fields: arbitrary'],
+      ];
+
+      for (const [input, error] of cases) {
+        await expect(
+          createMessagesService(db).create(input as MessageCreate)
+        ).rejects.toMatchObject({ code: 400, message: error });
+      }
+      await expect(new MessagesRepository(db).findBySessionId(sessionId)).resolves.toEqual([]);
+    }
+  );
+
   dbTest('rejects arrays on ordinary CRUD', async ({ db }) => {
     const sessionId = await createTestSession(db);
     await expect(
@@ -254,7 +290,7 @@ describe('MessagesService.create boundary', () => {
       before: {
         // This is the ordering used when branch RBAC is enabled. Without the
         // first hook, resolveSessionContext sees an array and reports a 500.
-        create: [rejectMessageMultiCreate, resolveSessionContext()],
+        create: [validateMessageCreate, resolveSessionContext()],
       },
     });
 

@@ -120,7 +120,7 @@ import {
   protectExternalProviderFailureMetadata,
 } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
-import { rejectMessageMultiCreate } from './hooks/reject-message-multi-create.js';
+import { validateMessageCreate } from './hooks/validate-message-create.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
@@ -1157,7 +1157,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create messages'),
-        rejectMessageMultiCreate,
+        validateMessageCreate,
         protectProviderFailureMetadata,
         protectWidgetMessageWrites,
         protectPermissionMessageWrites,

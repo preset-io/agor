@@ -16,7 +16,6 @@ export default defineConfig({
     'git/pure': 'src/git/pure.ts',
     'git/exec': 'src/git/exec.ts',
     'api/index': 'src/api/index.ts',
-    'claude/index': 'src/claude/index.ts',
     'codex/auth-file': 'src/codex/auth-file.ts', // Pure Codex auth.json schema inspection
     'config/index': 'src/config/index.ts',
     'config/agor-yml': 'src/config/agor-yml.ts', // Node-only .agor.yml file I/O

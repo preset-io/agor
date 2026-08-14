@@ -14,7 +14,9 @@ import {
 import { BadRequest } from '@agor/core/feathers';
 import {
   MESSAGE_PATCH_FIELDS,
+  MESSAGE_TYPE_VALUES,
   type Message,
+  type MessageCreate,
   type MessageID,
   type MessagePatch,
   MessageRole,
@@ -25,7 +27,7 @@ import {
   type UUID,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
-import { assertSingleMessageCreatePayload } from '../hooks/reject-message-multi-create.js';
+import { assertMessageCreatePayload } from '../hooks/validate-message-create.js';
 
 /**
  * Public Message transport surface. Full replacement is daemon-internal.
@@ -196,17 +198,7 @@ const MESSAGE_SELECT_FIELDS = new Set([
   'parent_tool_use_id',
   'metadata',
 ]);
-const MESSAGE_TYPES = new Set<Message['type']>([
-  'user',
-  'assistant',
-  'system',
-  'file-history-snapshot',
-  'permission_request',
-  'input_request',
-  'daemon_restart',
-  'daemon_crash',
-  'widget_request',
-]);
+const MESSAGE_TYPES = new Set<Message['type']>(MESSAGE_TYPE_VALUES);
 const MESSAGE_ROLES = new Set<Message['role']>([
   MessageRole.USER,
   MessageRole.ASSISTANT,
@@ -217,7 +209,7 @@ const MESSAGE_PATCH_FIELD_SET = new Set<keyof MessagePatch>(MESSAGE_PATCH_FIELDS
 /**
  * Extended messages service with custom methods
  */
-export class MessagesService extends DrizzleService<Message, Partial<Message>, MessageParams> {
+export class MessagesService extends DrizzleService<Message, MessageCreate, MessageParams> {
   private messagesRepo: MessagesRepository;
 
   constructor(db: TenantScopeAwareDatabase) {
@@ -238,10 +230,10 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
   }
 
   async create(
-    data: Partial<Message> | Partial<Message>[],
+    data: MessageCreate | MessageCreate[],
     params?: MessageParams
   ): Promise<Message | Message[]> {
-    assertSingleMessageCreatePayload(data);
+    assertMessageCreatePayload(data);
     try {
       return await super.create(data, params);
     } catch (error) {

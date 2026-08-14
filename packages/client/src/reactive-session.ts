@@ -171,6 +171,11 @@ export class ReactiveSessionHandle {
   // message that was already observed live (or resurrect a removed one).
   private readonly messageFetches = new Map<number, number>();
   private readonly messageMutations: MessageMutation[] = [];
+  // Loading and unloading are user-visible cache membership decisions, not
+  // Message mutations. Track them separately so a reconnect resync cannot
+  // commit an older membership snapshot over a concurrent expand/collapse.
+  private messageCacheMutationSequence = 0;
+  private readonly messageCacheMutationsByTask = new Map<string, number>();
   private taskMutationSequence = 0;
   private taskFetchTokenSequence = 0;
   private readonly taskFetches = new Map<number, number>();
@@ -321,6 +326,7 @@ export class ReactiveSessionHandle {
 
   async loadTaskMessages(taskId: string): Promise<Message[]> {
     this.assertNotDisposed();
+    this.recordMessageCacheMutation(taskId);
     const fetchToken = this.beginMessageFetch();
     try {
       const snapshot = await this.fetchTaskMessagesAtHighWater(taskId);
@@ -474,6 +480,9 @@ export class ReactiveSessionHandle {
 
   unloadTaskMessages(taskId: string): void {
     this.assertNotDisposed();
+    // Record the intent even when no bucket exists yet. A resync may currently
+    // be fetching this Task as its automatic latest-Task hydration target.
+    this.recordMessageCacheMutation(taskId);
     this.updateState((prev) => {
       if (!prev.loadedTaskIds.has(taskId) && !prev.messagesByTask.has(taskId)) {
         return prev;
@@ -488,6 +497,11 @@ export class ReactiveSessionHandle {
         loadedTaskIds: nextLoaded,
       };
     });
+  }
+
+  private recordMessageCacheMutation(taskId: string): void {
+    this.messageCacheMutationSequence += 1;
+    this.messageCacheMutationsByTask.set(taskId, this.messageCacheMutationSequence);
   }
 
   dispose(): void {
@@ -1241,6 +1255,7 @@ export class ReactiveSessionHandle {
       const provisionalTasks = this.reconcileTaskFetch(taskFetchToken, taskSnapshot);
       let eagerMessageSnapshot: Message[] | null = null;
       let lazyMessageSnapshots: Map<string, Message[]> | null = null;
+      let lazyMessageCacheSequences: Map<string, number> | null = null;
 
       if (this.options.taskHydration === 'eager') {
         messageFetchToken = this.beginMessageFetch();
@@ -1256,6 +1271,12 @@ export class ReactiveSessionHandle {
         if (toRefresh.size > 0) {
           messageFetchToken = this.beginMessageFetch();
           lazyMessageSnapshots = new Map<string, Message[]>();
+          lazyMessageCacheSequences = new Map(
+            [...toRefresh].map((taskId) => [
+              taskId,
+              this.messageCacheMutationsByTask.get(taskId) ?? 0,
+            ])
+          );
           for (const taskId of toRefresh) {
             const taskMessages = await this.fetchTaskMessagesAtHighWater(taskId);
             lazyMessageSnapshots.set(taskId, taskMessages);
@@ -1289,8 +1310,16 @@ export class ReactiveSessionHandle {
           messagesByTask = groupMessagesByTask(messages);
           loadedTaskIds = new Set(messagesByTask.keys());
         } else if (lazyMessageSnapshots) {
-          const refreshedByTask = new Map<string, Message[]>();
+          // Start from commit-time cache membership. Buckets loaded while the
+          // resync was in flight stay present, and buckets unloaded during the
+          // resync stay absent. Apply a refreshed snapshot only when this Task
+          // has had no intervening load/unload decision.
+          const refreshedByTask = new Map(prev.messagesByTask);
+          const refreshedTaskIds = new Set(prev.loadedTaskIds);
           for (const [taskId, snapshot] of lazyMessageSnapshots) {
+            const sequenceAtFetch = lazyMessageCacheSequences?.get(taskId) ?? 0;
+            const currentSequence = this.messageCacheMutationsByTask.get(taskId) ?? 0;
+            if (currentSequence !== sequenceAtFetch) continue;
             refreshedByTask.set(
               taskId,
               messageFetchToken === null
@@ -1302,9 +1331,10 @@ export class ReactiveSessionHandle {
                       message.task_id === taskId && this.matchesSession(message.session_id)
                   )
             );
+            refreshedTaskIds.add(taskId);
           }
           messagesByTask = refreshedByTask;
-          loadedTaskIds = new Set(refreshedByTask.keys());
+          loadedTaskIds = refreshedTaskIds;
         }
 
         const liveTaskIds = new Set<string>(tasks.map((task) => task.task_id));
