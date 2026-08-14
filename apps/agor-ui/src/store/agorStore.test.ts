@@ -1,4 +1,13 @@
-import type { Session, TenantAgenticToolSettings } from '@agor-live/client';
+import type {
+  Artifact,
+  Board,
+  BoardComment,
+  BoardEntityObject,
+  Branch,
+  GatewayChannel,
+  Session,
+  TenantAgenticToolSettings,
+} from '@agor-live/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   bumpRevision,
@@ -92,6 +101,93 @@ describe('agorStore scaffold', () => {
     const stable = agorStore.getState();
     agorStore.getState().replaceMaps({ sessionById: sessions });
     expect(agorStore.getState()).toBe(stable);
+  });
+});
+
+describe('agorStore branch hard-delete cascade', () => {
+  it('mirrors branch/session cascades and SET NULL updates across normalized slices', () => {
+    const branch = { branch_id: 'branch-1' } as Branch;
+    const deletedSession = { session_id: 'session-1', branch_id: branch.branch_id } as Session;
+    const retainedSession = { session_id: 'session-2', branch_id: 'branch-2' } as Session;
+    const boardObject = {
+      object_id: 'object-1',
+      board_id: 'board-1',
+      branch_id: branch.branch_id,
+    } as BoardEntityObject;
+    const branchComment = {
+      comment_id: 'comment-branch',
+      branch_id: branch.branch_id,
+    } as BoardComment;
+    const sessionComment = {
+      comment_id: 'comment-session',
+      session_id: deletedSession.session_id,
+    } as BoardComment;
+    const unrelatedComment = {
+      comment_id: 'comment-other',
+      session_id: retainedSession.session_id,
+    } as BoardComment;
+    const board = {
+      board_id: 'board-1',
+      primary_teammate_id: branch.branch_id,
+    } as Board;
+    const channel = {
+      id: 'channel-1',
+      target_branch_id: branch.branch_id,
+    } as GatewayChannel;
+    const artifact = {
+      artifact_id: 'artifact-1',
+      branch_id: branch.branch_id,
+      source_session_id: deletedSession.session_id,
+    } as Artifact;
+
+    agorStore.getState().replaceMaps({
+      branchById: new Map([[branch.branch_id, branch]]),
+      sessionById: new Map([
+        [deletedSession.session_id, deletedSession],
+        [retainedSession.session_id, retainedSession],
+      ]),
+      sessionsByBranch: new Map([
+        [branch.branch_id, [deletedSession]],
+        [retainedSession.branch_id, [retainedSession]],
+      ]),
+      boardById: new Map([[board.board_id, board]]),
+      boardObjectById: new Map([[boardObject.object_id, boardObject]]),
+      boardObjectByBranchId: new Map([[branch.branch_id, boardObject]]),
+      boardObjectsByBoardId: new Map([[board.board_id, [boardObject]]]),
+      commentById: new Map([
+        [branchComment.comment_id, branchComment],
+        [sessionComment.comment_id, sessionComment],
+        [unrelatedComment.comment_id, unrelatedComment],
+      ]),
+      sessionMcpServerIds: new Map([
+        [deletedSession.session_id, ['mcp-1']],
+        [retainedSession.session_id, ['mcp-2']],
+      ]),
+      gatewayChannelById: new Map([[channel.id, channel]]),
+      artifactById: new Map([[artifact.artifact_id, artifact]]),
+    });
+
+    agorStore.getState().applyBranchHardDeleteCascade(branch.branch_id);
+    const state = agorStore.getState();
+
+    expect(state.branchById.has(branch.branch_id)).toBe(false);
+    expect(state.sessionById.has(deletedSession.session_id)).toBe(false);
+    expect(state.sessionById.get(retainedSession.session_id)).toEqual(retainedSession);
+    expect(state.sessionsByBranch.has(branch.branch_id)).toBe(false);
+    expect(state.boardObjectById.has(boardObject.object_id)).toBe(false);
+    expect(state.boardObjectByBranchId.has(branch.branch_id)).toBe(false);
+    expect(state.boardObjectsByBoardId.has(board.board_id)).toBe(false);
+    expect(state.sessionMcpServerIds.has(deletedSession.session_id)).toBe(false);
+    expect(state.sessionMcpServerIds.get(retainedSession.session_id)).toEqual(['mcp-2']);
+    expect(state.commentById.has(branchComment.comment_id)).toBe(false);
+    expect(state.commentById.get(sessionComment.comment_id)?.session_id).toBeUndefined();
+    expect(state.commentById.get(unrelatedComment.comment_id)).toEqual(unrelatedComment);
+    expect(state.gatewayChannelById.has(channel.id)).toBe(false);
+    expect(state.boardById.get(board.board_id)?.primary_teammate_id).toBeUndefined();
+    expect(state.artifactById.get(artifact.artifact_id)).toMatchObject({
+      branch_id: null,
+      source_session_id: null,
+    });
   });
 });
 

@@ -56,6 +56,7 @@ import {
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
+  BranchArchiveOrDeleteOptions,
   HookContext,
   MCPMemberPolicy,
   Message,
@@ -74,6 +75,7 @@ import type {
 } from '@agor/core/types';
 import {
   hasMinimumRole,
+  isBranchArchiveOrDeleteOptions,
   isTaskPendingDispatch,
   MCP_MEMBER_POLICIES,
   MessageRole,
@@ -137,6 +139,7 @@ import {
   registerAuthenticatedRoute as registerAuthenticatedRouteBase,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
 import {
   cacheBranchAccess,
   checkSessionOwnerOrAdmin,
@@ -3527,10 +3530,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
       if (!id) throw new Error('Branch ID required');
-      const options = data as {
-        metadataAction: 'archive' | 'delete';
-        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-      };
+      if (!isBranchArchiveOrDeleteOptions(data)) {
+        throw new BadRequest('Invalid branch archive/delete options');
+      }
+      const options: BranchArchiveOrDeleteOptions = data;
       return branchesService.archiveOrDelete(
         id as import('@agor/core/types').BranchID,
         options,
@@ -3545,32 +3548,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'archive or delete branches'),
-        inTenantDatabaseScope(async (context: HookContext) => {
-          const id = context.params.route?.id;
-          if (!id) throw new Error('Branch ID required');
-
-          const branch = await branchRepository.findById(id);
-          if (!branch) {
-            throw new Forbidden(`Branch not found: ${id}`);
-          }
-
-          await cacheBranchAccess(context.params, branchRepository, branch);
-
-          return context;
-        }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'archive or delete branches', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to archive/delete branches'
-                );
-              }
-              return context;
-            },
+        inTenantDatabaseScope((context: HookContext) =>
+          authorizeBranchArchiveDelete(context, {
+            branchRepository,
+            branchRbacEnabled,
+            superadminOpts,
+          })
+        ),
       ],
     },
   });

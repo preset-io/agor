@@ -338,12 +338,9 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
   }>;
   archiveOrDelete(
     id: BranchID,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    },
+    options: import('@agor/core/types').BranchArchiveOrDeleteOptions,
     params?: FeathersParams
-  ): Promise<Branch | { deleted: true; branch_id: BranchID }>;
+  ): Promise<import('@agor/core/types').BranchArchiveOrDeleteResult>;
   unarchive(
     id: BranchID,
     options?: { boardId?: import('@agor/core/types').BoardID },

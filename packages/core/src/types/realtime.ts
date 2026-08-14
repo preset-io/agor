@@ -1,5 +1,4 @@
 import type { BranchID, UserID } from './id';
-import type { TenantID } from './tenant';
 
 /** Canonical discriminants for branch visibility at realtime boundaries. */
 export const BranchRealtimeVisibilityMode = {
@@ -32,21 +31,6 @@ export type BranchRemovalRealtimeVisibilitySnapshot =
       mode: typeof BranchRealtimeVisibilityMode.EXPLICIT_USERS;
       userIds: UserID[];
     };
-
-/** Wire version for the internal cross-replica Feathers publication relay. */
-export const REALTIME_RELAY_VERSION = 1 as const;
-
-/** Bounded JSON envelope sent over the existing HA realtime relay. */
-export interface RealtimeRelayEnvelope {
-  version: typeof REALTIME_RELAY_VERSION;
-  tenantId: TenantID;
-  path: string;
-  event: string;
-  method?: string;
-  id?: string | number;
-  data: unknown;
-  branchRemovalVisibility?: BranchRemovalRealtimeVisibilitySnapshot;
-}
 
 /** Redis-backed realtime dependency state exposed through daemon health. */
 export interface RedisRealtimeHealth {

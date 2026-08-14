@@ -130,6 +130,7 @@ import {
 } from './utils/authorization.js';
 import {
   cacheBranchAccess,
+  ensureBranchOwnerOrAdmin,
   ensureBranchPermission,
   ensureCanCreateSession,
   ensureCanModifySchedule,
@@ -1579,13 +1580,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete branches'),
+        loadBranch(branchRepository),
         ...(branchRbacEnabled
           ? [
-              loadBranch(branchRepository),
               ensureBranchPermission('all', 'delete branches', superadminOpts), // Require 'all' permission to delete
-              captureBranchRemovalRealtimeVisibility,
             ]
-          : []),
+          : [ensureBranchOwnerOrAdmin('delete branches')]),
+        captureBranchRemovalRealtimeVisibility,
       ],
     },
     after: {

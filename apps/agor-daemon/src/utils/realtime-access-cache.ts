@@ -51,6 +51,26 @@ function branchAllowsAllAuthenticated(branch: Pick<Branch, 'others_can'>): boole
   return PERMISSION_RANK[othersCan] >= PERMISSION_RANK.view;
 }
 
+/** Resolve current branch visibility without consulting daemon-local cache state. */
+export async function resolveBranchRealtimeVisibility(
+  repository: RealtimeAccessBranchRepository,
+  branchId: BranchID
+): Promise<BranchRealtimeVisibility | null> {
+  const branch = await repository.findRealtimeVisibilityBranch(branchId);
+  if (!branch) return null;
+
+  return branchAllowsAllAuthenticated(branch)
+    ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+    : {
+        mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+        userIds: new Set(
+          (await repository.findExplicitViewUserIds(branch.branch_id)).map(
+            (userId) => userId as UserID
+          )
+        ),
+      };
+}
+
 /**
  * Daemon-local cache for realtime delivery visibility. It intentionally caches
  * branch-level access state, not socket membership, so reconnects are handled by
@@ -118,24 +138,16 @@ export class RealtimeAccessCache {
       return this.visibilityFromEntry(cached);
     }
 
-    const branch = await this.options.branchRepository.findRealtimeVisibilityBranch(branchId);
-    if (!branch) {
+    const visibility = await resolveBranchRealtimeVisibility(
+      this.options.branchRepository,
+      branchId
+    );
+    if (!visibility) {
       this.branchVisibility.delete(branchId);
       return null;
     }
 
-    const visibility: BranchRealtimeVisibility = branchAllowsAllAuthenticated(branch)
-      ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
-      : {
-          mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
-          userIds: new Set(
-            (await this.options.branchRepository.findExplicitViewUserIds(branch.branch_id)).map(
-              (userId) => userId as UserID
-            )
-          ),
-        };
-
-    this.branchVisibility.set(branch.branch_id, {
+    this.branchVisibility.set(branchId, {
       ...visibility,
       expiresAt: now + this.branchVisibilityTtlMs,
     });

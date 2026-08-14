@@ -3,15 +3,16 @@
  *
  * Each function is one socket handler — `replaceIfChanged` / cascade /
  * index-rebuild logic, `Object.is` bail-outs, per-collection `bumpRevision`
- * calls — writing through the store primitives (`setMap` / `applyMaps` /
- * `evictBranchAndSessions`). `useAgorData`'s subscribe effect wires socket
+ * calls — writing through the store primitives (`setMap` / `applyMaps` and the
+ * named branch lifecycle cascades). `useAgorData`'s subscribe effect wires socket
  * events straight to these.
  *
  * Background hydration: each handler bumps the matching per-collection revision
  * counter (`bumpRevision`, from `agorHydration`) so an in-flight background
  * hydration discards its snapshot rather than clobbering this live write —
  * INCLUDING the branch-eviction cascade, which mutates sessions and, for a
- * hard delete, board-object maps, and so bumps the matching revisions.
+ * hard delete, every normalized FK-cascade/SET NULL slice, and so bumps the
+ * matching revisions.
  *
  * IMMER breadth/depth rule applied here:
  *  - HOT single-map `*:patched` writes → RAW reducer via `setMap`
@@ -23,7 +24,7 @@
  *    which commits every changed slice in ONE store notify — reference-stable so
  *    the contract the tests pin holds exactly.
  *  - the branch-eviction CASCADE → the store's immer action
- *    (`evictBranchAndSessions`).
+ *    (`evictArchivedBranch` / `applyBranchHardDeleteCascade`).
  */
 import type {
   Artifact,
@@ -52,14 +53,14 @@ import { type AgorState, agorStore } from './agorStore';
 // Thin bindings to the store primitives. The vanilla store and its actions are
 // stable module singletons, so these resolve the live action each call. The
 // signatures are pulled straight off `AgorState` so the generic `setMap` key→
-// value inference (and the `applyMaps` reducer / `evictBranchAndSessions`
+// value inference (and the `applyMaps` reducer / branch cascade
 // shapes) carry through to every callback below.
 const setMap: AgorState['setMap'] = (key, value) => agorStore.getState().setMap(key, value);
 const applyMaps: AgorState['applyMaps'] = (updater) => agorStore.getState().applyMaps(updater);
-const evictBranchAndSessions: AgorState['evictBranchAndSessions'] = (
-  branchId,
-  removeBoardObjects
-) => agorStore.getState().evictBranchAndSessions(branchId, removeBoardObjects);
+const evictArchivedBranch: AgorState['evictArchivedBranch'] = (branchId) =>
+  agorStore.getState().evictArchivedBranch(branchId);
+const applyBranchHardDeleteCascade: AgorState['applyBranchHardDeleteCascade'] = (branchId) =>
+  agorStore.getState().applyBranchHardDeleteCascade(branchId);
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 export function sessionCreated(session: Session) {
@@ -210,7 +211,7 @@ export function branchPatched(branch: Branch) {
   if (branch.archived) {
     // Archive preserves the board-object placement for a future unarchive.
     bumpRevision('sessions');
-    evictBranchAndSessions(branch.branch_id);
+    evictArchivedBranch(branch.branch_id);
     return;
   }
 
@@ -222,7 +223,12 @@ export function branchRemoved(branch: Branch) {
   // still track on that branch and its FK-cascaded board placement.
   bumpRevision('sessions');
   bumpRevision('boardObjects');
-  evictBranchAndSessions(branch.branch_id, true);
+  bumpRevision('boards');
+  bumpRevision('comments');
+  bumpRevision('sessionMcp');
+  bumpRevision('gatewayChannels');
+  bumpRevision('artifacts');
+  applyBranchHardDeleteCascade(branch.branch_id);
   // Collapse exceptions survive archive/move but not a hard delete.
   removeCollapsedBranchNode(branch.branch_id);
 }

@@ -11,6 +11,7 @@ import {
 import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
 import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
@@ -174,11 +175,12 @@ function createServiceHarness() {
     emit: vi.fn(),
   };
 
+  const sessionTokenService = {
+    generateToken: vi.fn(async () => 'executor-token'),
+  };
   const app = {
     get: () => ({}),
-    sessionTokenService: {
-      generateToken: vi.fn(async () => 'executor-token'),
-    },
+    sessionTokenService,
     service(path: string) {
       if (path === 'board-objects') return boardObjectsService;
       if (path === 'sessions') return sessionsService;
@@ -190,7 +192,7 @@ function createServiceHarness() {
   } as unknown as Application;
 
   const service = new BranchesService(createTenantScopeTestDb() as never, app);
-  return { service, boardObjectsService, sessionsService, branchesService };
+  return { service, boardObjectsService, sessionsService, branchesService, sessionTokenService };
 }
 
 async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
@@ -1223,13 +1225,16 @@ describe('BranchesService.archiveOrDelete', () => {
       zone_id: 'zone-review',
     });
 
+    const params = {
+      user: { user_id: userId },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+
     await service.archiveOrDelete(
       branchId,
       { metadataAction: 'archive', filesystemAction: 'preserved' },
-      {
-        user: { user_id: userId },
-        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-      } as never
+      params
     );
 
     expect(sessionsService.find).toHaveBeenCalledWith({
@@ -1254,7 +1259,7 @@ describe('BranchesService.archiveOrDelete', () => {
     );
   });
 
-  it('routes permanent metadata deletion through the hooked Feathers remove method', async () => {
+  it('deletes metadata without re-entering unrelated remove hooks and emits one tombstone', async () => {
     const { service, branchesService } = createServiceHarness();
     const branchId = 'wt-delete-op' as BranchID;
     const params = {
@@ -1268,7 +1273,13 @@ describe('BranchesService.archiveOrDelete', () => {
       archived: false,
       environment_instance: { status: 'stopped' },
     } as never);
-    const rawRemove = vi.spyOn(service, 'remove');
+    const removedBranch = {
+      branch_id: branchId,
+      name: 'WT Delete Op',
+      path: '/tmp/wt-delete-op',
+    } as never;
+    const rawRemove = vi.spyOn(service, 'remove').mockResolvedValue(removedBranch);
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
 
     await service.archiveOrDelete(
       branchId,
@@ -1276,9 +1287,50 @@ describe('BranchesService.archiveOrDelete', () => {
       params
     );
 
-    expect(branchesService.remove).toHaveBeenCalledOnce();
-    expect(branchesService.remove).toHaveBeenCalledWith(branchId, params);
-    expect(rawRemove).not.toHaveBeenCalled();
+    expect(branchesService.remove).not.toHaveBeenCalled();
+    expect(rawRemove).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({
+        query: { deleteFromFilesystem: false },
+      })
+    );
+    expect(branchesService.emit).toHaveBeenCalledOnce();
+    expect(branchesService.emit).toHaveBeenCalledWith(
+      'removed',
+      removedBranch,
+      expect.objectContaining({
+        path: 'branches',
+        method: 'remove',
+        event: 'removed',
+        id: branchId,
+        params,
+      })
+    );
+  });
+
+  it('rejects direct callers before any environment, token, executor, or metadata work', async () => {
+    const { service, sessionTokenService } = createServiceHarness();
+    const get = vi.spyOn(service, 'get');
+    const stopEnvironment = vi.spyOn(service, 'stopEnvironment');
+    const remove = vi.spyOn(service, 'remove');
+
+    await expect(
+      service.archiveOrDelete(
+        'wt-view-only' as BranchID,
+        { metadataAction: 'delete', filesystemAction: 'deleted' },
+        {
+          provider: 'mcp',
+          user: { user_id: 'view-only' as UUID, role: 'member' },
+          tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        } as never
+      )
+    ).rejects.toThrow('authorized archive-or-delete service');
+
+    expect(get).not.toHaveBeenCalled();
+    expect(stopEnvironment).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(sessionTokenService.generateToken).not.toHaveBeenCalled();
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 });
 

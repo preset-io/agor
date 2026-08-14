@@ -8,6 +8,7 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
+import { REALTIME_RELAY_VERSION } from '@agor/core/realtime';
 import type { Branch, BranchPermissionLevel, Session, User, UserID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -225,7 +226,7 @@ describe('HA Feathers publication relay', () => {
     });
 
     await remoteHandler?.({
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'tasks',
       event: 'termination_requested',
@@ -272,7 +273,7 @@ describe('HA Feathers publication relay', () => {
     });
 
     await remoteHandler?.({
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'messages',
       event: 'permission_resolved',
@@ -319,7 +320,7 @@ describe('HA Feathers publication relay', () => {
     });
 
     await remoteHandler?.({
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'boards',
       event: 'patched',
@@ -392,7 +393,7 @@ describe('HA Feathers publication relay', () => {
     expect(relay.relay).toHaveBeenCalledOnce();
     const envelope = relay.relay.mock.calls[0]?.[0];
     expect(envelope).toMatchObject({
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'branches',
       event: 'removed',
@@ -510,7 +511,7 @@ describe('HA Feathers publication relay', () => {
           realtimeRelay: relay,
         });
         const createdEnvelope = {
-          version: 1 as const,
+          version: REALTIME_RELAY_VERSION,
           tenantId: 'tenant-a',
           path,
           event: 'created',
@@ -531,7 +532,7 @@ describe('HA Feathers publication relay', () => {
         expect(app.emit).not.toHaveBeenCalled();
 
         const patchedEnvelope = {
-          version: 1 as const,
+          version: REALTIME_RELAY_VERSION,
           tenantId: 'tenant-a',
           path,
           event: 'patched',
@@ -615,7 +616,7 @@ describe('HA Feathers publication relay', () => {
 
       await namespaces.removeNamespaceAclEntry(namespace.namespace_id, 'user', reader.user_id);
       await remoteHandler?.({
-        version: 1,
+        version: REALTIME_RELAY_VERSION,
         tenantId: 'tenant-a',
         path: 'kb/documents',
         event: 'patched',
@@ -664,7 +665,7 @@ describe('HA Feathers publication relay', () => {
     });
 
     await remoteHandler?.({
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'kb/documents',
       event: 'patched',

@@ -11,7 +11,7 @@
  *   lifecycle; React binds via `useStore`.
  * - IMMER breadth/depth rule: `immer` is installed (and `enableMapSet()`
  *   called) so genuine CASCADE / multi-map mutations can be expressed as
- *   imperative draft edits (see `evictBranchAndSessions`). The HOT single-entity
+ *   imperative draft edits (see the named branch lifecycle cascades). The HOT single-entity
  *   `*:patched` writes go through the object-form `setMap` / `applyMaps` (the
  *   immer middleware passes object-form `set` straight through — no draft proxy
  *   on the hot path). Object-form `set` + early-return mirror today's
@@ -24,7 +24,7 @@
  */
 
 import type { TenantAgenticToolName, TenantAgenticToolSettings } from '@agor-live/client';
-import { enableMapSet } from 'immer';
+import { type Draft, enableMapSet } from 'immer';
 import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createStore } from 'zustand/vanilla';
@@ -56,7 +56,7 @@ interface AgorMeta {
   agenticToolSettingsHydrated: boolean;
 }
 
-/** Store actions: foundational primitives + the one immer cascade. */
+/** Store actions: foundational primitives + named branch lifecycle cascades. */
 interface AgorActions {
   /** Reset every data map to empty and meta to its initial (loading) values. */
   reset: () => void;
@@ -106,17 +106,24 @@ interface AgorActions {
    * all-no-op reducer leaves the outer state object untouched.
    */
   applyMaps: (updater: (prev: DataMaps) => DataMaps) => void;
-  /**
-   * CASCADE (immer): drop a branch from `branchById` and prune every session
-   * that lived on it. A hard delete also removes its FK-cascaded board
-   * placement; archive keeps that placement so unarchive can restore in-place.
-   * Expressed as a single immer draft (breadth=immer): structural sharing
-   * leaves untouched maps reference-stable.
-   */
-  evictBranchAndSessions: (branchId: string, removeBoardObjects?: boolean) => void;
+  /** Mirror archive visibility while retaining the persisted board placement. */
+  evictArchivedBranch: (branchId: string) => void;
+  /** Atomically mirror every normalized FK cascade/SET NULL from a hard delete. */
+  applyBranchHardDeleteCascade: (branchId: string) => void;
 }
 
 export type AgorState = DataMaps & AgorMeta & AgorActions;
+
+function evictBranchAndSessions(draft: Draft<AgorState>, branchId: string): Set<string> {
+  if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
+  if (draft.sessionsByBranch.has(branchId)) draft.sessionsByBranch.delete(branchId);
+  const removedSessionIds = new Set<string>();
+  for (const [sessionId, session] of draft.sessionById) {
+    if (session.branch_id === branchId) removedSessionIds.add(sessionId);
+  }
+  for (const sessionId of removedSessionIds) draft.sessionById.delete(sessionId);
+  return removedSessionIds;
+}
 
 /** Initial meta values — identical to `useAgorData`'s `useState` defaults. */
 const INITIAL_META: AgorMeta = {
@@ -227,17 +234,14 @@ export const agorStore = createStore<AgorState>()(
       set(changed as Partial<AgorState>);
     },
 
-    evictBranchAndSessions: (branchId, removeBoardObjects = false) =>
+    evictArchivedBranch: (branchId) =>
       set((draft) => {
-        if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
-        if (draft.sessionsByBranch.has(branchId)) draft.sessionsByBranch.delete(branchId);
-        const orphanIds: string[] = [];
-        for (const [sessionId, session] of draft.sessionById) {
-          if (session.branch_id === branchId) orphanIds.push(sessionId);
-        }
-        for (const sessionId of orphanIds) draft.sessionById.delete(sessionId);
+        evictBranchAndSessions(draft, branchId);
+      }),
 
-        if (!removeBoardObjects) return;
+    applyBranchHardDeleteCascade: (branchId) =>
+      set((draft) => {
+        const removedSessionIds = evictBranchAndSessions(draft, branchId);
 
         // The branch row owns its branch-type board_object via an FK cascade,
         // so the database cannot emit a separate board-objects.removed event.
@@ -266,6 +270,39 @@ export const agorStore = createStore<AgorState>()(
             } else {
               draft.boardObjectsByBoardId.delete(boardId);
             }
+          }
+        }
+
+        // Cascaded session relationship rows do not emit child service events.
+        for (const sessionId of removedSessionIds) {
+          draft.sessionMcpServerIds.delete(sessionId);
+        }
+
+        for (const [commentId, comment] of draft.commentById) {
+          if (comment.branch_id === branchId) {
+            draft.commentById.delete(commentId);
+          } else if (comment.session_id && removedSessionIds.has(comment.session_id)) {
+            // Session-attached comments survive with a SET NULL attachment.
+            comment.session_id = undefined;
+          }
+        }
+
+        for (const [channelId, channel] of draft.gatewayChannelById) {
+          if (channel.target_branch_id === branchId) {
+            draft.gatewayChannelById.delete(channelId);
+          }
+        }
+
+        for (const board of draft.boardById.values()) {
+          if (board.primary_teammate_id === branchId) {
+            board.primary_teammate_id = undefined;
+          }
+        }
+
+        for (const artifact of draft.artifactById.values()) {
+          if (artifact.branch_id === branchId) artifact.branch_id = null;
+          if (artifact.source_session_id && removedSessionIds.has(artifact.source_session_id)) {
+            artifact.source_session_id = null;
           }
         }
       }),

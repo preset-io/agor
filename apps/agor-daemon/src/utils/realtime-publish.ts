@@ -7,24 +7,24 @@ import type { BranchRepository, SessionRepository, TenantScopeAwareDatabase } fr
 import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
+  isBranchRemovalRealtimeVisibilitySnapshot,
+  isRealtimeRelayEnvelope,
+  MAX_REALTIME_RELAY_BYTES,
+  REALTIME_RELAY_VERSION,
+  type RealtimeRelayEnvelope,
+} from '@agor/core/realtime';
+import {
   type BranchID,
   type BranchRealtimeVisibility,
   BranchRealtimeVisibilityMode,
   type BranchRemovalRealtimeVisibilitySnapshot,
   type HookContext,
   hasMinimumRole,
-  REALTIME_RELAY_VERSION,
-  type RealtimeRelayEnvelope,
   ROLES,
   type TenantID,
   type User,
   type UserID,
 } from '@agor/core/types';
-import {
-  isBranchRemovalRealtimeVisibilitySnapshot,
-  isRealtimeRelayEnvelope,
-  MAX_REALTIME_RELAY_BYTES,
-} from '../realtime/redis-realtime.js';
 import { tenantChannelName } from '../realtime/routing.js';
 import { isSuperAdmin } from './branch-authorization.js';
 import {

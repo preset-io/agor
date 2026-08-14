@@ -45,6 +45,8 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchArchiveOrDeleteOptions,
+  BranchArchiveOrDeleteResult,
   BranchEnvironmentUpdate,
   BranchID,
   KnowledgeNamespace,
@@ -67,6 +69,7 @@ import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
+import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -1361,15 +1364,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async archiveOrDelete(
     id: BranchID,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    },
+    options: BranchArchiveOrDeleteOptions,
     params?: BranchParams
-  ): Promise<BranchWithZoneAndSessions | { deleted: true; branch_id: BranchID }> {
+  ): Promise<BranchArchiveOrDeleteResult> {
+    if (!params) {
+      throw new Forbidden(
+        'Branch archive/delete must be invoked through the authorized archive-or-delete service'
+      );
+    }
+    // This method coordinates external side effects, so a direct in-process
+    // call must never be able to bypass the route's branch-control hook.
+    consumeBranchArchiveDeleteAuthorization(params, id, options.metadataAction);
+
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    // Hook chain enforces auth before we get here.
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
     // Stop environment if running
@@ -1540,13 +1548,23 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
       console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
 
-      // Re-enter through the Feathers service proxy. Calling `this.remove()`
-      // from this custom method bypasses the standard remove hooks and event
-      // hook, which means UI/MCP archive-or-delete callers never get the same
-      // post-commit tombstone as direct REST/socket deletes. Do not wrap this
-      // proxy call in withTenantDatabase: the registered tenant around-hook
-      // must own the transaction so Feathers publishes only after it commits.
-      await this.app.service('branches').remove(id, params);
+      // Keep metadata removal isolated from the standard remove hook's Unix
+      // group/filesystem side effects. emitServiceEvent snapshots the HookContext
+      // now and queues the tombstone on the active tenant transaction, so a
+      // commit emits once and a rollback emits nothing.
+      await this.withTenantDatabase(params, async () => {
+        const removedBranch = await this.remove(id, {
+          ...params,
+          query: { ...(params.query ?? {}), deleteFromFilesystem: false },
+        });
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'removed',
+          data: removedBranch,
+          params,
+          id: removedBranch.branch_id,
+        });
+      });
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
       return { deleted: true, branch_id: id };

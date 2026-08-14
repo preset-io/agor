@@ -456,7 +456,14 @@ describe('useAgorData — socket-event bailouts', () => {
         .boardObjectsByBoardId.get('board-1')
         ?.some((object) => object.object_id === 'bo-1')
     ).toBe(true);
-    const boardObjectsRevision = getRevision('boardObjects');
+    const cascadeRevisions = {
+      boardObjects: getRevision('boardObjects'),
+      boards: getRevision('boards'),
+      comments: getRevision('comments'),
+      sessionMcp: getRevision('sessionMcp'),
+      gatewayChannels: getRevision('gatewayChannels'),
+      artifacts: getRevision('artifacts'),
+    };
 
     act(() => emit('branches', 'removed', branch));
 
@@ -478,7 +485,9 @@ describe('useAgorData — socket-event bailouts', () => {
         .boardObjectsByBoardId.get('board-2')
         ?.some((object) => object.branch_id === 'b-1') ?? false
     ).toBe(false);
-    expect(getRevision('boardObjects')).toBe(boardObjectsRevision + 1);
+    for (const [collection, before] of Object.entries(cascadeRevisions)) {
+      expect(getRevision(collection as keyof typeof cascadeRevisions)).toBe(before + 1);
+    }
   });
 
   it('keeps a missed hard delete removed after reconnect refetch', async () => {
