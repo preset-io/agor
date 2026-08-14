@@ -1759,8 +1759,11 @@ export function OnboardingWizard({
     // What the wizard has actually done by this point is create/confirm the
     // board. The teammate itself is seeded by the app shell *after* the user
     // clicks through, so claiming "Teammate ready" here would be a lie the
-    // checklist can't back up.
-    const boardReady = hasExistingBoard;
+    // checklist can't back up. "Workspace ready" is the warm version of the
+    // same true claim — the place to work exists, whoever ends up in it —
+    // and matches the word the skip path already uses ("<name>'s workspace
+    // is ready", seedOnboardingTeammate).
+    const workspaceReady = hasExistingBoard;
 
     return (
       <div style={{ textAlign: 'center', padding: '8px 0' }}>
@@ -1866,9 +1869,9 @@ export function OnboardingWizard({
               hint: 'Add in Settings - AI & Agents',
             },
             {
-              label: 'Board created',
-              done: boardReady,
-              hint: 'Create one anytime from the sidebar',
+              label: 'Workspace ready',
+              done: workspaceReady,
+              hint: 'Create a board anytime from the sidebar',
             },
             {
               label: 'MCP tools',

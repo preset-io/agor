@@ -517,8 +517,12 @@ describe('OnboardingWizard', () => {
     // integrations
     clickButton(/^continue →/i);
 
-    // done
+    // done — with a model connected the app shell *does* seed a first session,
+    // so the summary is allowed to promise one. The skipped-LLM flow asserts
+    // the other half of this below.
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(screen.getByText(/start your first AI session/i)).toBeInTheDocument();
+    expect(screen.queryByText(/connect an ai model in settings whenever/i)).not.toBeInTheDocument();
     clickButton(/open my board/i);
 
     // The wizard emits the teammate naming details + selected agent so the app
@@ -630,10 +634,10 @@ describe('OnboardingWizard', () => {
     expect(result.sessionId).toBe('');
   });
 
-  it('final checklist reports the board it created, not a teammate it has not seeded yet', () => {
+  it('final checklist reports the workspace it created, not a teammate it has not seeded yet', () => {
     renderWizard({ initialStep: 'done' });
 
-    expect(screen.getByText('Board created')).toBeInTheDocument();
+    expect(screen.getByText('Workspace ready')).toBeInTheDocument();
     // The teammate is seeded by the app shell *after* this step resolves, so
     // the wizard has nothing to tick off here.
     expect(screen.queryByText('Teammate ready')).not.toBeInTheDocument();
