@@ -3,6 +3,16 @@ import type { BoardID, BranchFilesystemOperationID, BranchID, UUID } from './id'
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
 
+/**
+ * One path segment used for every Agor-managed branch root. Keeping this
+ * shared prevents REST, MCP, UI, and executor safety checks from drifting.
+ */
+export const MANAGED_BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
+
+export function isValidManagedBranchName(value: unknown): value is BranchName {
+  return typeof value === 'string' && MANAGED_BRANCH_NAME_PATTERN.test(value);
+}
+
 /** Persisted lifecycle states for a branch filesystem. */
 export const BRANCH_FILESYSTEM_STATUSES = [
   'creating',
@@ -155,6 +165,23 @@ export function isBranchArchiveOrDeleteOptions(
 }
 
 export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };
+
+/** Shared request shape used by UI, REST, Socket, and MCP unarchive paths. */
+export interface BranchUnarchiveOptions {
+  boardId?: BoardID;
+}
+
+/** Runtime boundary shared by every unarchive transport. */
+export function isBranchUnarchiveOptions(value: unknown): value is BranchUnarchiveOptions {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  return (
+    keys.every((key) => key === 'boardId') &&
+    (record.boardId === undefined ||
+      (typeof record.boardId === 'string' && record.boardId.length > 0))
+  );
+}
 
 /**
  * Storage model for a branch's filesystem.

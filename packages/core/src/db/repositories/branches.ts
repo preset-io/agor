@@ -21,6 +21,7 @@ import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, exists, getTableColumns, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
+import { BRANCH_IMMUTABLE_FIELDS } from '../../types/branch';
 import { resolveBranchGroupName, resolveBranchGroupUpdate } from '../../unix/group-manager';
 import { getBranchUrl } from '../../utils/url';
 import type { Database } from '../client';
@@ -633,15 +634,15 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
       assertExpectedFilesystemLifecycle(current, options?.expectedFilesystemLifecycle);
 
+      const immutableValues = Object.fromEntries(
+        BRANCH_IMMUTABLE_FIELDS.map((field) => [field, current[field]])
+      ) as Partial<Branch>;
+
       // STEP 3: Deep merge updates into current branch (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context
       const merged = deepMerge(current, {
         ...updates,
-        branch_id: current.branch_id, // Never change ID
-        repo_id: current.repo_id, // Never change repo
-        created_at: current.created_at, // Never change created timestamp
-        created_by: current.created_by, // Selects Unix identity and private environment
-        branch_unique_id: current.branch_unique_id, // Selects managed environment ports
+        ...immutableValues,
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
       merged.unix_group = resolveBranchGroupUpdate(

@@ -22,6 +22,7 @@ import {
   BRANCH_STORAGE_MODES,
   getTeammateConfig,
   isTeammate,
+  isValidManagedBranchName,
 } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
@@ -61,7 +62,6 @@ import { coerceString, sessionContextRequiredResult, textResult } from '../serve
 import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 import { assertValidVariant } from './_environment-helpers.js';
 
-const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const BRANCH_LIST_DEFAULT_LIMIT = 50;
 const BRANCH_LIST_MAX_LIMIT = 100;
@@ -639,7 +639,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const zoneId = coerceString(args.zoneId);
       const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : true;
 
-      if (!BRANCH_NAME_PATTERN.test(branchName)) {
+      if (!isValidManagedBranchName(branchName)) {
         throw new Error('branchName must use lowercase letters, numbers, or hyphens');
       }
 
@@ -1496,12 +1496,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       const boardIdStr = coerceString(args.boardId);
       const boardId = boardIdStr ? await resolveBoardId(ctx, boardIdStr) : undefined;
-      const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
-      const result = await branchesService.unarchive(
-        branchId as BranchID,
-        boardId ? { boardId: boardId as BoardID } : undefined,
-        ctx.baseServiceParams
-      );
+      const result = await ctx.app
+        .service('/branches/:id/unarchive')
+        .create(boardId ? { boardId: boardId as BoardID } : {}, {
+          ...ctx.baseServiceParams,
+          route: { id: branchId },
+        });
       return textResult({
         success: true,
         branch: result,

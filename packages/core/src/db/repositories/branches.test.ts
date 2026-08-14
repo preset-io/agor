@@ -13,6 +13,7 @@ import type {
 } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
+import { BRANCH_IMMUTABLE_FIELDS } from '../../types/branch';
 import { boards } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
@@ -315,6 +316,29 @@ describe('BranchRepository.create', () => {
     const fetched = await wtRepo.findById(created.branch_id);
     expect(fetched?.storage_mode).toBe('clone');
     expect(fetched?.clone_depth).toBe(100);
+  });
+
+  dbTest('allows only one metadata row to own a repo/name filesystem root', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const first = await branchRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'preserved-owner' })
+    );
+    await branchRepo.update(first.branch_id, {
+      archived: true,
+      filesystem_status: 'preserved',
+    });
+
+    await expect(
+      branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'preserved-owner',
+          branch_unique_id: 99,
+        })
+      )
+    ).rejects.toThrow();
   });
 
   // Note: storage_mode enum validation is enforced at the application
@@ -776,24 +800,39 @@ describe('BranchRepository.findByRepoAndName', () => {
 // ============================================================================
 
 describe('BranchRepository.update', () => {
-  dbTest('preserves execution identity fields across direct repository updates', async ({ db }) => {
-    const repoRepo = new RepoRepository(db);
-    const branchRepo = new BranchRepository(db);
-    const repo = await repoRepo.create(createRepoData());
-    const branch = await branchRepo.create({
-      ...createBranchData({ repo_id: repo.repo_id }),
-      created_by: generateId() as UUID,
-      branch_unique_id: 7301,
-    });
+  dbTest(
+    'preserves every centralized immutable field across repository updates',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const repo = await repoRepo.create(createRepoData());
+      const branch = await branchRepo.create({
+        ...createBranchData({ repo_id: repo.repo_id }),
+        created_by: generateId() as UUID,
+        branch_unique_id: 7301,
+      });
 
-    const updated = await branchRepo.update(branch.branch_id, {
-      created_by: generateId() as UUID,
-      branch_unique_id: 999_999,
-    });
+      const attempted: Partial<typeof branch> = {
+        branch_id: generateId() as BranchID,
+        repo_id: generateId() as UUID,
+        name: 'forged-name',
+        ref: 'forged-ref',
+        ref_type: 'tag',
+        path: '/tmp/forged',
+        new_branch: !branch.new_branch,
+        storage_mode: branch.storage_mode === 'clone' ? 'worktree' : 'clone',
+        clone_depth: 999,
+        created_at: '2030-01-01T00:00:00.000Z',
+        created_by: generateId() as UUID,
+        branch_unique_id: 999_999,
+      };
+      const updated = await branchRepo.update(branch.branch_id, attempted);
 
-    expect(updated.created_by).toBe(branch.created_by);
-    expect(updated.branch_unique_id).toBe(7301);
-  });
+      for (const field of BRANCH_IMMUTABLE_FIELDS) {
+        expect(updated[field], field).toEqual(branch[field]);
+      }
+    }
+  );
 
   dbTest('rejects a stale filesystem operation generation', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
@@ -974,7 +1013,7 @@ describe('BranchRepository.update', () => {
     expect(updated.base_sha).toBe('abc123');
     expect(updated.last_commit_sha).toBe('def456');
     expect(updated.tracking_branch).toBe('origin/feature');
-    expect(updated.new_branch).toBe(true);
+    expect(updated.new_branch).toBe(created.new_branch);
     expect(updated.issue_url).toBe('https://github.com/test/repo/issues/123');
     expect(updated.pull_request_url).toBe('https://github.com/test/repo/pull/456');
     expect(updated.notes).toBe('Updated notes');

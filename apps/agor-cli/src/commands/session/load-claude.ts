@@ -13,16 +13,7 @@ import {
   transcriptsToMessages,
 } from '@agor/core/claude';
 import { generateId, shortId } from '@agor/core/db';
-import type {
-  Branch,
-  BranchID,
-  MessageID,
-  Repo,
-  Session,
-  SessionID,
-  TaskID,
-  UUID,
-} from '@agor-live/client';
+import type { MessageID, Repo, Session, SessionID, TaskID } from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -32,8 +23,8 @@ export default class SessionLoadClaude extends BaseCommand {
   static description = 'Load a local Claude Code session into Agor';
 
   static examples = [
-    '<%= config.bin %> <%= command.id %> <session-id>',
-    '<%= config.bin %> <%= command.id %> 34e94925-f4cc-4685-8869-83c77062ad14',
+    '<%= config.bin %> <%= command.id %> <session-id> --board-id <board-id>',
+    '<%= config.bin %> <%= command.id %> 34e94925-f4cc-4685-8869-83c77062ad14 --board-id 01933e4b',
   ];
 
   static args = {
@@ -46,6 +37,10 @@ export default class SessionLoadClaude extends BaseCommand {
   static flags = {
     'project-dir': Flags.string({
       description: 'Project directory (defaults to current directory)',
+    }),
+    'board-id': Flags.string({
+      description: 'Board on which to place the imported session branch',
+      required: true,
     }),
   };
 
@@ -86,7 +81,7 @@ export default class SessionLoadClaude extends BaseCommand {
       const projectName = path.basename(absoluteProjectDir);
 
       // Try to find existing repo by path
-      let repo: { repo_id: UUID; slug: string } | null = null;
+      let repo: Repo | null = null;
       try {
         const reposList = await reposService.findAll({ query: { $limit: 1000 } });
         repo = reposList.find((r: Repo) => r.local_path === absoluteProjectDir) || null;
@@ -100,28 +95,21 @@ export default class SessionLoadClaude extends BaseCommand {
           path: absoluteProjectDir,
           slug: `imported-${projectName}`,
         })) as Repo;
-        repo = { repo_id: newRepo.repo_id, slug: newRepo.slug };
+        repo = newRepo;
         this.log(`${chalk.green('✓')} Created repo: ${chalk.cyan(repo.slug)}`);
       } else {
         this.log(`${chalk.green('✓')} Found existing repo: ${chalk.cyan(repo.slug)}`);
       }
 
       // Create branch for this imported session
-      const branchesService = client.service('branches');
       const branchName = `imported-${shortId(sessionId)}`;
-      const branch = (await branchesService.create({
-        branch_id: generateId() as BranchID,
-        repo_id: repo.repo_id,
+      const branch = await reposService.createBranch(repo.repo_id, {
         name: branchName,
-        ref: 'unknown', // Claude sessions don't track git state
-        branch_unique_id: 0, // Will be auto-assigned by service hook
-        path: absoluteProjectDir,
-        new_branch: false,
-        last_used: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        created_by: 'cli-import' as UUID,
-      })) as Branch;
+        ref: branchName,
+        createBranch: true,
+        sourceBranch: repo.default_branch || 'main',
+        boardId: flags['board-id'],
+      });
       this.log(`${chalk.green('✓')} Created branch: ${chalk.cyan(branchName)}`);
 
       // Create Agor session

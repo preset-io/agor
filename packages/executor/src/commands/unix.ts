@@ -431,7 +431,7 @@ export async function handleUnixSyncBranch(
       if (latestBranch.unix_group != null) {
         branch = latestBranch;
       } else {
-        await client.service('branches').patch(branchId, {
+        await getExecutorBranchesService(client).patch(branchId, {
           unix_group: generateBranchGroupName(branchId as BranchID),
         });
         branch = await client.service('branches').get(branchId);

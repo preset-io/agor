@@ -27,18 +27,19 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
-  getCurrentTenantId,
   generateId,
+  getCurrentTenantId,
   RepoRepository,
   runWithTenantDatabaseTransaction,
   shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
-import { type Application, BadRequest } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
+  BoardID,
   Branch,
   BranchFilesystemOperationID,
   BranchStorageMode,
@@ -50,6 +51,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
+import { isValidManagedBranchName } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
@@ -634,6 +636,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     if (!data.boardId) {
       throw new BadRequest('boardId is required when creating a branch');
     }
+    if (!isValidManagedBranchName(data.name)) {
+      throw new BadRequest('Branch name may contain only lowercase letters, numbers, and hyphens');
+    }
 
     const repo = await this.get(id, params);
 
@@ -644,14 +649,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       remote_url: repo.remote_url ? redactGitUrlCredentials(repo.remote_url) : repo.remote_url,
     });
 
-    // Check for duplicate branch name in this repo (non-archived only)
+    // A branch name owns one canonical filesystem root for as long as its
+    // metadata exists. Archived/preserved rows must therefore block name
+    // reuse too; otherwise two rows can race to delete the same directory.
     const branchRepo = new BranchRepository(this.db);
-    const existingBranch = await branchRepo.findActiveByRepoAndName(
-      repo.repo_id as UUID,
-      data.name
-    );
+    const existingBranch = await branchRepo.findByRepoAndName(repo.repo_id as UUID, data.name);
     if (existingBranch) {
-      throw new Error(`A branch named '${data.name}' already exists in this repository`);
+      throw new Conflict(
+        `A branch named '${data.name}' already exists in this repository, including archived branches. Unarchive or permanently delete it before reusing the name.`
+      );
     }
 
     // Resolve + validate the storage mode. The daemon owns DB/auth/config
@@ -753,7 +759,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const allUsedIds = await branchRepo.getAllUsedUniqueIds();
     const branchUniqueId = autoAssignBranchUniqueId(allUsedIds);
 
-    const branchesService = this.app.service('branches');
+    const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
 
     // NOTE: Environment command templates (start_command, stop_command, etc.) are NOT
     // rendered here. They will be rendered by the executor after Unix groups are created
@@ -770,36 +776,33 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 3. Render environment templates with full context including GID
     // 4. Patch branch to 'ready' with rendered templates
     const filesystemOperationId = generateId() as BranchFilesystemOperationID;
-    const branch = (await branchesService.create(
-      {
-        repo_id: repo.repo_id,
-        name: data.name,
-        path: branchPath,
-        ref: data.ref,
-        ref_type: data.refType,
-        base_ref: data.sourceBranch,
-        new_branch: data.createBranch ?? false,
-        branch_unique_id: branchUniqueId,
-        filesystem_status: 'creating', // Will be set to 'ready' by executor
-        filesystem_operation_id: filesystemOperationId,
-        // Environment templates will be rendered by executor after Unix group creation
-        // RBAC fields are intentionally omitted at creation: new branches
-        // always align with their board defaults. Overrides are a deliberate
-        // post-create action from the Branch permissions tab.
-        ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
-        storage_mode: storageMode,
-        ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
-        sessions: [],
-        last_used: new Date().toISOString(),
-        issue_url: data.issue_url,
-        pull_request_url: data.pull_request_url,
-        notes: data.notes,
-        custom_context: data.custom_context,
-        board_id: data.boardId,
-        created_by: userId,
-      },
-      params
-    )) as Branch;
+    const branchCreateData: Partial<Branch> = {
+      repo_id: repo.repo_id,
+      name: data.name,
+      path: branchPath,
+      ref: data.ref,
+      ref_type: data.refType,
+      base_ref: data.sourceBranch,
+      new_branch: data.createBranch ?? false,
+      branch_unique_id: branchUniqueId,
+      filesystem_status: 'creating', // Will be set to 'ready' by executor
+      filesystem_operation_id: filesystemOperationId,
+      // Environment templates will be rendered by executor after Unix group creation
+      // RBAC fields are intentionally omitted at creation: new branches
+      // always align with their board defaults. Overrides are a deliberate
+      // post-create action from the Branch permissions tab.
+      ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
+      storage_mode: storageMode,
+      ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
+      last_used: new Date().toISOString(),
+      issue_url: data.issue_url,
+      pull_request_url: data.pull_request_url,
+      notes: data.notes ?? undefined,
+      custom_context: data.custom_context,
+      board_id: data.boardId as BoardID,
+      created_by: userId,
+    };
+    const branch = (await branchesService.create(branchCreateData, params)) as Branch;
 
     // Add creating user as owner of the branch
     {

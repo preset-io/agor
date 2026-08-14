@@ -106,7 +106,7 @@ import {
   executorRuntimeScopeGuard,
   isTaskScopedExecutorRequest,
   requireExecutorRuntimeToken,
-  validateBranchExternalManagedPatch,
+  validateBranchExternalManagedWrite,
 } from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
@@ -370,7 +370,9 @@ export function protectExternalBranchManagedWrites(context: HookContext): HookCo
   }
 
   const branchId = String(context.id ?? (context.data as Record<string, unknown>).branch_id ?? '');
-  validateBranchExternalManagedPatch(context.params, branchId, context.data as Partial<Branch>);
+  validateBranchExternalManagedWrite(context.params, branchId, context.data as Partial<Branch>, {
+    allowExecutorReports: context.method === 'patch',
+  });
   return context;
 }
 

@@ -143,10 +143,11 @@ export function isBranchUnixGroupExecutorRequest(context: HookContext, branchId:
 }
 
 /** Canonical runtime boundary for every externally transported branch patch. */
-export function validateBranchExternalManagedPatch(
+export function validateBranchExternalManagedWrite(
   params: AuthenticatedParams,
   branchId: string,
-  data: Partial<Branch>
+  data: Partial<Branch>,
+  options: { allowExecutorReports: boolean } = { allowExecutorReports: true }
 ): void {
   if (!params.provider) return;
   const fields = Object.keys(data);
@@ -168,7 +169,9 @@ export function validateBranchExternalManagedPatch(
     fields.includes(field)
   );
   if (filesystemFields.length > 0) {
-    const capability = getBranchFilesystemLifecycleCapability(params, branchId);
+    const capability = options.allowExecutorReports
+      ? getBranchFilesystemLifecycleCapability(params, branchId)
+      : null;
     const status = data.filesystem_status;
     const statusAllowed =
       status === undefined ||
@@ -187,7 +190,10 @@ export function validateBranchExternalManagedPatch(
   );
   const context = { params } as HookContext;
   const forbiddenServerManagedField = serverManagedFields.find(
-    (field) => field !== 'unix_group' || !isBranchUnixGroupExecutorRequest(context, branchId)
+    (field) =>
+      field !== 'unix_group' ||
+      !options.allowExecutorReports ||
+      !isBranchUnixGroupExecutorRequest(context, branchId)
   );
   if (forbiddenServerManagedField) {
     throw new BadRequest(`Branch field '${forbiddenServerManagedField}' is managed by the daemon`);

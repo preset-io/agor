@@ -107,7 +107,7 @@ import { createBoardObjectsService } from './services/board-objects.js';
 import { setupBoardOwnersService } from './services/board-owners.js';
 import { createBoardsService } from './services/boards.js';
 import { setupBranchOwnersService } from './services/branch-owners.js';
-import { createBranchesService } from './services/branches.js';
+import { BRANCHES_SERVICE_TRANSPORT_METHODS, createBranchesService } from './services/branches.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
@@ -419,16 +419,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   app.use('/branches', createBranchesService(db, app), {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'update',
-      'patch',
-      'remove',
-      'updateEnvironment',
-      'ensureTeammateKnowledgeNamespace',
-    ],
+    methods: [...BRANCHES_SERVICE_TRANSPORT_METHODS],
   });
 
   console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);

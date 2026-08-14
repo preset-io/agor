@@ -24,7 +24,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
-import type { BranchID } from '@agor/core/types';
+import { type BranchID, isValidManagedBranchName } from '@agor/core/types';
 import { diagnoseGit } from '@agor/git';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
@@ -347,6 +347,7 @@ async function fetchBranchForRepo(client: AgorClient, repoId: string, branchId: 
 
 interface BranchPathRecord {
   repo_id?: string;
+  name?: string;
   path?: string;
 }
 
@@ -586,7 +587,12 @@ export async function handleGitRepoDelete(
 
     for (const branch of branches) {
       if (!branch.path) continue;
-      await deleteBranchDirectory(branch.path, payload.params.branchesRoot);
+      if (!isValidManagedBranchName(branch.name)) {
+        throw new Error('SAFETY CHECK FAILED: Branch filesystem identity is incomplete');
+      }
+      await deleteBranchDirectory(branch.path, payload.params.branchesRoot, {
+        expectedRelativePath: join(repo.slug, branch.name),
+      });
       deletedPaths.push(branch.path);
       console.log(`🗑️  [git.repo.delete] Deleted branch directory: ${branch.path}`);
     }
@@ -1445,8 +1451,17 @@ export async function handleGitBranchRemove(
     if (payload.params.storageMode && payload.params.storageMode !== storageMode) {
       throw new Error('Deletion request no longer matches the persisted branch storage mode');
     }
+    if (!persistedBranch.repo_id) {
+      throw new Error('Safety check failed: Branch repository metadata is missing');
+    }
+    if (!isValidManagedBranchName(persistedBranch.name)) {
+      throw new Error('Safety check failed: Branch name is not a single managed path segment');
+    }
+    const persistedRepo = await client.service('repos').get(persistedBranch.repo_id);
+    const expectedRelativePath = join(persistedRepo.slug, persistedBranch.name);
     const deleteDirectory = () =>
       deleteBranchDirectory(branchPath, branchesRoot, {
+        expectedRelativePath,
         privileged: payload.params.privilegedFilesystemDelete,
       });
 
@@ -1457,7 +1472,7 @@ export async function handleGitBranchRemove(
     // Find the repo path from the branch's .git file
     const { lstat, readFile, realpath, stat } = await import('node:fs/promises');
     const { existsSync } = await import('node:fs');
-    const { join, dirname, isAbsolute, resolve } = await import('node:path');
+    const { dirname, isAbsolute, resolve } = await import('node:path');
 
     const gitPath = join(branchPath, '.git');
     let filesystemRemoved = false;
@@ -1517,10 +1532,6 @@ export async function handleGitBranchRemove(
         // The .git pointer lives in user-writable branch content. Never trust
         // it to select a repository: bind it back to the tenant/RLS-scoped DB
         // record before asking git to mutate shared worktree metadata.
-        if (!persistedBranch.repo_id) {
-          throw new Error('Safety check failed: Branch repository metadata is missing');
-        }
-        const persistedRepo = await client.service('repos').get(persistedBranch.repo_id);
         const [resolvedRepoPath, resolvedPersistedRepoPath] = await Promise.all([
           realpath(repoPath),
           realpath(persistedRepo.local_path),

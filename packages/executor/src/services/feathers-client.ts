@@ -5,26 +5,15 @@
  * Uses session token for authentication instead of user credentials.
  */
 
-import {
-  type AgorClient,
-  type BranchesService,
-  type ClientInput,
-  createClient,
-} from '@agor/core/api';
+import { type AgorClient, type BranchesExecutorService, createClient } from '@agor/core/api';
 import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
-import type { Branch, BranchExecutorPatch } from '@agor/core/types';
 import { createAuthRetryAroundHook, createSingleFlight } from './feathers-auth-retry.js';
 
 // Re-export AgorClient type for use in other executor files
 export type { AgorClient } from '@agor/core/api';
 
-/** Privileged patch surface used only by operation-scoped lifecycle executors. */
-export type ExecutorBranchesService = Omit<BranchesService, 'patch'> & {
-  patch(id: string | null, data: ClientInput<BranchExecutorPatch>): Promise<Branch>;
-};
-
-export function getExecutorBranchesService(client: AgorClient): ExecutorBranchesService {
-  return client.service('branches') as unknown as ExecutorBranchesService;
+export function getExecutorBranchesService(client: AgorClient): BranchesExecutorService {
+  return client.service('branches') as unknown as BranchesExecutorService;
 }
 
 const DEBUG_FEATHERS_CLIENT =

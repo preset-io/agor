@@ -11,14 +11,15 @@ import type {
   Board,
   BoardExportBlob,
   BoardGroupGrantWithGroup,
-  BoardID,
   Branch,
   BranchArchiveOrDeleteOptions,
   BranchClientPatch,
   BranchEnvironmentUpdate,
+  BranchExecutorPatch,
   BranchGroupGrantWithGroup,
   BranchID,
   BranchStorageMode,
+  BranchUnarchiveOptions,
   CardType,
   CardWithType,
   CloneRepositoryResult,
@@ -578,12 +579,7 @@ export interface UsersService extends AgorService<User> {
  * Branches service with environment management
  */
 export interface BranchesService
-  extends AgorService<
-    Branch,
-    CreatePayload<Branch>,
-    ClientInput<BranchClientPatch>,
-    ClientInput<BranchClientPatch> | null
-  > {
+  extends AgorService<Branch, never, never, ClientInput<BranchClientPatch> | null> {
   /**
    * Create or repair the primary Knowledge namespace for a teammate branch.
    * API/UI-only; not exposed through teammate MCP config mutation tools.
@@ -654,6 +650,19 @@ export interface BranchesService
   checkHealth(id: string, params?: Params): Promise<Branch>;
 }
 
+/**
+ * Privileged branch patch surface used only by operation-scoped executors.
+ * Keeping this separate prevents browser/CLI callers from being typed as able
+ * to report filesystem lifecycle or Unix-group state.
+ */
+export type BranchesExecutorService = Omit<BranchesService, 'patch'> & {
+  patch(
+    id: string | null,
+    data: ClientInput<BranchExecutorPatch>,
+    params?: Params
+  ): Promise<Branch>;
+};
+
 /** Parameterized REST/socket route for one branch archive/delete operation. */
 export interface BranchArchiveOrDeleteService {
   create(
@@ -664,7 +673,7 @@ export interface BranchArchiveOrDeleteService {
 
 /** Parameterized REST/socket route for one branch unarchive operation. */
 export interface BranchUnarchiveService {
-  create(data?: ClientInput<{ boardId?: BoardID }>, params?: Params): Promise<Branch>;
+  create(data: ClientInput<BranchUnarchiveOptions>, params?: Params): Promise<Branch>;
 }
 
 /**

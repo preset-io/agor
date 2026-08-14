@@ -58,11 +58,12 @@ describe('protectExternalBranchManagedWrites', () => {
       serviceBranchId?: string;
       serviceCommand?: string;
       omitFilesystemOperationId?: boolean;
+      method?: 'patch' | 'update';
     } = { provider: 'rest' }
   ) =>
     ({
       path: 'branches',
-      method: 'patch',
+      method: options.method ?? 'patch',
       id: 'branch-attacker',
       data,
       params: {
@@ -145,6 +146,21 @@ describe('protectExternalBranchManagedWrites', () => {
       { provider: 'socketio', serviceBranchId: 'branch-attacker' }
     );
     expect(protectExternalBranchManagedWrites(hook)).toBe(hook);
+  });
+
+  it('rejects lifecycle credentials on whole-row update even when the generation is current', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'ready' },
+          {
+            provider: 'socketio',
+            serviceBranchId: 'branch-attacker',
+            method: 'update',
+          }
+        )
+      )
+    ).toThrow(/lifecycle/);
   });
 
   it('does not let a lifecycle executor smuggle the operation generation beside status', () => {

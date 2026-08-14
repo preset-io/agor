@@ -33,7 +33,9 @@ describe('managed directory deletion roots', () => {
     await fs.mkdir(repoPath, { recursive: true });
     await fs.mkdir(branchPath, { recursive: true });
 
-    await deleteBranchDirectory(branchPath, branchesRoot);
+    await deleteBranchDirectory(branchPath, branchesRoot, {
+      expectedRelativePath: path.join('org', 'repo', 'feature'),
+    });
     await deleteRepoDirectory(repoPath, reposRoot);
 
     await expect(fs.access(branchPath)).rejects.toThrow();
@@ -55,9 +57,11 @@ describe('managed directory deletion roots', () => {
     await fs.mkdir(otherBranch, { recursive: true });
 
     await expect(deleteRepoDirectory(otherRepo, reposRoot)).rejects.toThrow(/Safety check failed/);
-    await expect(deleteBranchDirectory(otherBranch, branchesRoot)).rejects.toThrow(
-      /Safety check failed/
-    );
+    await expect(
+      deleteBranchDirectory(otherBranch, branchesRoot, {
+        expectedRelativePath: path.join('org', 'repo', 'feature'),
+      })
+    ).rejects.toThrow(/Safety check failed/);
   });
 
   it('refuses a symlinked branch root even when its target stays inside the allowed root', async () => {
@@ -66,7 +70,11 @@ describe('managed directory deletion roots', () => {
     await fs.mkdir(realBranch, { recursive: true });
     await fs.symlink(realBranch, linkedBranch, 'dir');
 
-    await expect(deleteBranchDirectory(linkedBranch, branchesRoot)).rejects.toThrow(/symlink/i);
+    await expect(
+      deleteBranchDirectory(linkedBranch, branchesRoot, {
+        expectedRelativePath: path.join('org', 'repo', 'linked-feature'),
+      })
+    ).rejects.toThrow(/symlink/i);
     await expect(fs.access(realBranch)).resolves.toBeUndefined();
   });
 
@@ -77,7 +85,11 @@ describe('managed directory deletion roots', () => {
     await fs.mkdir(path.join(realRepo, 'feature'), { recursive: true });
     await fs.symlink(path.join(branchesRoot, 'real-org'), linkedOrg, 'dir');
 
-    await expect(deleteBranchDirectory(branchPath, branchesRoot)).rejects.toThrow(/symlink/i);
+    await expect(
+      deleteBranchDirectory(branchPath, branchesRoot, {
+        expectedRelativePath: path.join('linked-org', 'repo', 'feature'),
+      })
+    ).rejects.toThrow(/symlink/i);
     await expect(fs.access(path.join(realRepo, 'feature'))).resolves.toBeUndefined();
   });
 
@@ -92,6 +104,7 @@ describe('managed directory deletion roots', () => {
     };
 
     await deleteBranchDirectory(branchPath, branchesRoot, {
+      expectedRelativePath: path.join('org', 'repo', 'feature'),
       privileged: true,
       privilegedDelete,
     });
@@ -114,11 +127,14 @@ describe('managed directory deletion roots', () => {
     // This is the production failure mode: recursive removal reaches the deep
     // directory, but cannot unlink its contents after the ACL mask/mode clips
     // write access.
-    await expect(deleteBranchDirectory(branchPath, branchesRoot)).rejects.toMatchObject({
-      code: 'EACCES',
-    });
+    await expect(
+      deleteBranchDirectory(branchPath, branchesRoot, {
+        expectedRelativePath: path.join('org', 'repo', 'acl-fixture'),
+      })
+    ).rejects.toMatchObject({ code: 'EACCES' });
 
     await deleteBranchDirectory(branchPath, branchesRoot, {
+      expectedRelativePath: path.join('org', 'repo', 'acl-fixture'),
       privileged: true,
       privilegedDelete: async (target) => {
         await fs.chmod(protectedDirectory, 0o770);
@@ -135,6 +151,7 @@ describe('managed directory deletion roots', () => {
 
     await expect(
       deleteBranchDirectory(branchPath, branchesRoot, {
+        expectedRelativePath: path.join('org', 'repo', 'feature'),
         privileged: true,
         privilegedDelete: async () => undefined,
       })
@@ -147,6 +164,7 @@ describe('managed directory deletion roots', () => {
     let invoked = false;
 
     await deleteBranchDirectory(branchPath, branchesRoot, {
+      expectedRelativePath: path.join('org', 'repo', 'missing'),
       privileged: true,
       privilegedDelete: async () => {
         invoked = true;
@@ -154,6 +172,33 @@ describe('managed directory deletion roots', () => {
     });
 
     expect(invoked).toBe(false);
+  });
+
+  it('rejects a containing repository directory instead of trusting containment alone', async () => {
+    const repoRoot = path.join(branchesRoot, 'org', 'repo');
+    const ownedBranch = path.join(repoRoot, 'feature');
+    await fs.mkdir(ownedBranch, { recursive: true });
+
+    await expect(
+      deleteBranchDirectory(repoRoot, branchesRoot, {
+        expectedRelativePath: path.join('org', 'repo', 'feature'),
+      })
+    ).rejects.toThrow(/canonical identity/i);
+
+    await expect(fs.access(ownedBranch)).resolves.toBeUndefined();
+  });
+
+  it('rejects a different same-tenant branch root', async () => {
+    const victim = path.join(branchesRoot, 'org', 'repo', 'victim');
+    await fs.mkdir(victim, { recursive: true });
+
+    await expect(
+      deleteBranchDirectory(victim, branchesRoot, {
+        expectedRelativePath: path.join('org', 'repo', 'attacker'),
+      })
+    ).rejects.toThrow(/canonical identity/i);
+
+    await expect(fs.access(victim)).resolves.toBeUndefined();
   });
 });
 

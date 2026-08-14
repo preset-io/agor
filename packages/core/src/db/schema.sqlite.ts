@@ -19,11 +19,6 @@ import type {
   Task,
   UserExternalIdentity,
 } from '@agor/core/types';
-import {
-  BRANCH_FILESYSTEM_STATUSES,
-  BRANCH_PERMISSION_LEVELS,
-  BRANCH_STORAGE_MODES,
-} from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
 import {
   type AnySQLiteColumn,
@@ -35,6 +30,11 @@ import {
   text,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
+import {
+  BRANCH_FILESYSTEM_STATUSES,
+  BRANCH_PERMISSION_LEVELS,
+  BRANCH_STORAGE_MODES,
+} from '../types/branch';
 
 // SQLite-specific type helpers (inline to avoid factory pattern type issues)
 const t = {
@@ -842,7 +842,7 @@ export const branches = sqliteTable(
       table.branch_id
     ),
     // Composite unique constraint (repo + name)
-    uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
+    uniqueRepoName: uniqueIndex('branches_repo_name_unique').on(table.repo_id, table.name),
   })
 );
 

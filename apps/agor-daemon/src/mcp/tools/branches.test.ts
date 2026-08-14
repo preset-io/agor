@@ -183,6 +183,50 @@ describe('agor_branches_delete authorization boundary', () => {
   });
 });
 
+describe('agor_branches_unarchive authorization boundary', () => {
+  it('uses the hooked route so a view-only caller cannot invoke the raw service method', async () => {
+    const branchId = '01900000-0000-7000-8000-000000000001';
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'view-only', role: 'member' },
+    };
+    const directUnarchive = vi.fn();
+    const routeCreate = vi.fn(async () => {
+      throw new Forbidden("You need 'all' permission to unarchive branches");
+    });
+    const app = {
+      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      service(name: string) {
+        if (name === 'branches') {
+          return {
+            get: vi.fn(async () => ({ branch_id: branchId })),
+            unarchive: directUnarchive,
+          };
+        }
+        if (name === '/branches/:id/unarchive') return { create: routeCreate };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const unarchive = registerAndCaptureHandler('agor_branches_unarchive', {
+      app,
+      userId: 'view-only',
+      baseServiceParams,
+    });
+
+    await expect(unarchive({ branchId })).rejects.toBeInstanceOf(Forbidden);
+
+    expect(routeCreate).toHaveBeenCalledWith(
+      {},
+      {
+        ...baseServiceParams,
+        route: { id: branchId },
+      }
+    );
+    expect(directUnarchive).not.toHaveBeenCalled();
+  });
+});
+
 describe('agor_branches_update', () => {
   it('can persist an explicit None override instead of an inherited board default', async () => {
     const branchesPatch = vi.fn(async (_id, data) => ({ branch_id: 'branch-1', ...data }));

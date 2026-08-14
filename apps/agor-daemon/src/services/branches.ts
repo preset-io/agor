@@ -54,11 +54,11 @@ import type {
   Board,
   BoardID,
   Branch,
-  BranchArchiveOrDeleteOptions,
   BranchArchiveOrDeleteResult,
   BranchEnvironmentUpdate,
   BranchFilesystemOperationID,
   BranchID,
+  BranchUnarchiveOptions,
   KnowledgeNamespace,
   QueryParams,
   Repo,
@@ -70,6 +70,7 @@ import {
   BRANCH_IMMUTABLE_FIELDS,
   getTeammateConfig,
   isBranchArchiveOrDeleteOptions,
+  isBranchUnarchiveOptions,
   isTeammate,
 } from '@agor/core/types';
 import {
@@ -83,10 +84,13 @@ import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import {
   getBranchFilesystemLifecycleCapability,
-  validateBranchExternalManagedPatch,
+  validateBranchExternalManagedWrite,
 } from '../auth/executor-runtime-scope.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
-import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
+import {
+  consumeBranchArchiveDeleteAuthorization,
+  consumeBranchUnarchiveAuthorization,
+} from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-realtime.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
@@ -124,6 +128,22 @@ export type BranchParams = QueryParams<{
     /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
     _agorSqlBranchAccessUserId?: UUID;
   };
+
+/**
+ * Public Feathers transport surface for branches.
+ *
+ * Branch rows are created only by the repository branch workflow, which
+ * derives filesystem identity and launches materialization. Whole-row PUT is
+ * likewise daemon-internal; external callers use the narrowed patch surface.
+ */
+export const BRANCHES_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'patch',
+  'remove',
+  'updateEnvironment',
+  'ensureTeammateKnowledgeNamespace',
+] as const;
 
 type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
 
@@ -1294,7 +1314,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<BranchWithZoneAndSessions> {
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
-    validateBranchExternalManagedPatch(params ?? ({} as BranchParams), id, data);
+    validateBranchExternalManagedWrite(params ?? ({} as BranchParams), id, data, {
+      allowExecutorReports: true,
+    });
     for (const field of BRANCH_IMMUTABLE_FIELDS) {
       if (Object.hasOwn(data, field) && !isDeepStrictEqual(data[field], currentBranch[field])) {
         throw new BadRequest(`Branch field '${field}' is immutable after creation`);
@@ -1413,7 +1435,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   async update(id: BranchID, data: Partial<Branch>, params?: BranchParams): Promise<Branch> {
     const currentBranch = await super.get(id, params);
-    validateBranchExternalManagedPatch(params ?? ({} as BranchParams), id, data);
+    validateBranchExternalManagedWrite(params ?? ({} as BranchParams), id, data, {
+      allowExecutorReports: false,
+    });
     for (const field of BRANCH_IMMUTABLE_FIELDS) {
       if (Object.hasOwn(data, field) && !isDeepStrictEqual(data[field], currentBranch[field])) {
         throw new BadRequest(`Branch field '${field}' is immutable after creation`);
@@ -1905,9 +1929,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async unarchive(
     id: BranchID,
-    options?: { boardId?: BoardID },
+    options: unknown,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
+    if (!isBranchUnarchiveOptions(options)) {
+      throw new BadRequest('Invalid unarchive options: expected an optional boardId');
+    }
+    if (!params) {
+      throw new Forbidden(
+        'Branch unarchive must be invoked through the authorized unarchive service'
+      );
+    }
+    consumeBranchUnarchiveAuthorization(params, id);
+    const unarchiveOptions: BranchUnarchiveOptions = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     if (
       (branch.storage_mode ?? 'worktree') === 'worktree' &&
@@ -1925,8 +1959,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     console.log(`📦 Unarchiving branch: ${branch.name}`);
 
-    const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
-    const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : branch.board_id;
+    const boardIdExplicitlyProvided = 'boardId' in unarchiveOptions;
+    const targetBoardId = boardIdExplicitlyProvided ? unarchiveOptions.boardId : branch.board_id;
 
     const filesystemOperationId = this.newFilesystemOperationId();
 
@@ -1943,7 +1977,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       updated_at: new Date().toISOString(),
     };
     if (boardIdExplicitlyProvided) {
-      patchData.board_id = options?.boardId;
+      patchData.board_id = unarchiveOptions.boardId;
     }
 
     let unarchivedBranch = await this.withTenantDatabase(params, () =>

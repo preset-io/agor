@@ -1,7 +1,7 @@
 import type { BranchRepository } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { BranchID, BranchMetadataAction, HookContext } from '@agor/core/types';
-import { isBranchArchiveOrDeleteOptions } from '@agor/core/types';
+import { isBranchArchiveOrDeleteOptions, isBranchUnarchiveOptions } from '@agor/core/types';
 import {
   cacheBranchAccess,
   ensureBranchOwnerOrAdmin,
@@ -17,6 +17,14 @@ const authorizedParams = new WeakMap<
   object,
   { branchId: BranchID; metadataAction: BranchMetadataAction }
 >();
+const authorizedUnarchiveParams = new WeakMap<object, BranchID>();
+
+export function markBranchUnarchiveAuthorized(
+  params: HookContext['params'],
+  branchId: BranchID
+): void {
+  authorizedUnarchiveParams.set(params, branchId);
+}
 
 export function markBranchArchiveDeleteAuthorized(
   params: HookContext['params'],
@@ -36,6 +44,19 @@ export function consumeBranchArchiveDeleteAuthorization(
   if (grant?.branchId !== branchId || grant.metadataAction !== metadataAction) {
     throw new Forbidden(
       'Branch archive/delete must be invoked through the authorized archive-or-delete service'
+    );
+  }
+}
+
+export function consumeBranchUnarchiveAuthorization(
+  params: HookContext['params'],
+  branchId: BranchID
+): void {
+  const grantedBranchId = authorizedUnarchiveParams.get(params);
+  authorizedUnarchiveParams.delete(params);
+  if (grantedBranchId !== branchId) {
+    throw new Forbidden(
+      'Branch unarchive must be invoked through the authorized unarchive service'
     );
   }
 }
@@ -77,5 +98,35 @@ export async function authorizeBranchArchiveDelete(
   // reads this same params object after before hooks finish.
   context.params.route = { ...(context.params.route ?? {}), id: branch.branch_id };
   markBranchArchiveDeleteAuthorized(context.params, branch.branch_id, metadataAction);
+  return context;
+}
+
+/** Canonical branch-control gate for the unarchive service and MCP route. */
+export async function authorizeBranchUnarchive(
+  context: HookContext,
+  options: {
+    branchRepository: BranchRepository;
+    branchRbacEnabled: boolean;
+    superadminOpts?: { allowSuperadmin?: boolean };
+  }
+): Promise<HookContext> {
+  const id = context.params.route?.id;
+  if (!id) throw new Error('Branch ID required');
+  if (!isBranchUnarchiveOptions(context.data)) {
+    throw new BadRequest('Invalid branch unarchive options');
+  }
+
+  const branch = await options.branchRepository.findById(id);
+  if (!branch) throw new Forbidden(`Branch not found: ${id}`);
+
+  await cacheBranchAccess(context.params, options.branchRepository, branch);
+  if (options.branchRbacEnabled) {
+    ensureBranchPermission('all', 'unarchive branches', options.superadminOpts)(context);
+  } else {
+    ensureBranchOwnerOrAdmin('unarchive branches')(context);
+  }
+
+  context.params.route = { ...(context.params.route ?? {}), id: branch.branch_id };
+  markBranchUnarchiveAuthorized(context.params, branch.branch_id);
   return context;
 }

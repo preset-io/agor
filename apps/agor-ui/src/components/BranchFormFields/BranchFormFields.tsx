@@ -6,7 +6,7 @@
  * - BranchesTable (create standalone branch)
  */
 
-import type { Board, Repo } from '@agor-live/client';
+import { type Board, MANAGED_BRANCH_NAME_PATTERN, type Repo } from '@agor-live/client';
 import {
   Checkbox,
   Form,
@@ -206,7 +206,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
         rules={[
           { required: true, message: 'Please enter a branch name' },
           {
-            pattern: /^[a-z0-9-]+$/,
+            pattern: MANAGED_BRANCH_NAME_PATTERN,
             message: 'Only lowercase letters, numbers, and hyphens allowed',
           },
         ]}

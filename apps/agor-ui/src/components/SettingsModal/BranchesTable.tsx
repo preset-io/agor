@@ -8,7 +8,7 @@ import type {
   Repo,
   Session,
 } from '@agor-live/client';
-import { isTeammate } from '@agor-live/client';
+import { isTeammate, isValidManagedBranchName } from '@agor-live/client';
 import {
   AimOutlined,
   BranchesOutlined,
@@ -167,7 +167,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
   // Archived branches are intentionally absent from the main branch store.
   // Keep the locally fetched archived rows current while the asynchronous
-  // executor publishes deleting -> deleted/delete_failed transitions.
+  // executor publishes deleting -> deleted/delete_failed transitions, and
+  // evict hard-deleted metadata after the authoritative removed event.
   useEffect(() => {
     if (!client) return;
     const branchesService = client.service('branches');
@@ -180,9 +181,18 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         return next;
       });
     };
+    const handleRemoved = (branch: Branch) => {
+      setArchivedBranches((previous) =>
+        previous.filter((candidate) => candidate.branch_id !== branch.branch_id)
+      );
+    };
 
     branchesService.on('patched', handlePatched);
-    return () => branchesService.removeListener('patched', handlePatched);
+    branchesService.on('removed', handleRemoved);
+    return () => {
+      branchesService.removeListener('patched', handlePatched);
+      branchesService.removeListener('removed', handleRemoved);
+    };
   }, [client]);
 
   // Validate form fields to enable/disable Create button
@@ -190,7 +200,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     const values = form.getFieldsValue();
     const hasRepo = !!values.repoId;
     const hasSourceBranch = !!values.sourceBranch;
-    const hasName = !!values.name && /^[a-z0-9-]+$/.test(values.name);
+    const hasName = isValidManagedBranchName(values.name);
     const hasBranchName = useSameBranchName || !!values.branchName;
     const hasBoard = !!values.boardId;
 

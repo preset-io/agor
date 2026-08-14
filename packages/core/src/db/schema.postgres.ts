@@ -19,11 +19,6 @@ import type {
   Task,
   UserExternalIdentity,
 } from '@agor/core/types';
-import {
-  BRANCH_FILESYSTEM_STATUSES,
-  BRANCH_PERMISSION_LEVELS,
-  BRANCH_STORAGE_MODES,
-} from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
@@ -41,6 +36,11 @@ import {
   uniqueIndex,
   varchar,
 } from 'drizzle-orm/pg-core';
+import {
+  BRANCH_FILESYSTEM_STATUSES,
+  BRANCH_PERMISSION_LEVELS,
+  BRANCH_STORAGE_MODES,
+} from '../types/branch';
 
 // PostgreSQL bytea column mapped to Node.js Buffer
 const bytea = customType<{ data: Buffer | null; driverData: Buffer | null }>({
@@ -876,7 +876,7 @@ export const branches = pgTable(
         sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running')`
       ),
     // Composite unique constraint (repo + name)
-    uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
+    uniqueRepoName: uniqueIndex('branches_repo_name_unique').on(table.repo_id, table.name),
   })
 );
 

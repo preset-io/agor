@@ -12,10 +12,10 @@
  * `createModalOpen=true` session.
  */
 
-import type { Board, Branch, Repo } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import type { AgorClient, Board, Branch, Repo } from '@agor-live/client';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BranchesTable } from './BranchesTable';
 
 /** BranchesTable uses useAppNavigation → useNavigate under the hood,
@@ -111,5 +111,48 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
     );
 
     expect(screen.getByText('delete failed')).toBeInTheDocument();
+  });
+
+  it('evicts an archived row when metadata is removed by another client', async () => {
+    const repo = makeRepo();
+    const archivedBranch = {
+      branch_id: 'branch-removed-remotely',
+      repo_id: repo.repo_id,
+      name: 'removed-remotely',
+      ref: 'removed-remotely',
+      path: '/tmp/removed-remotely',
+      archived: true,
+      filesystem_status: 'deleted',
+      created_at: '2026-08-14T00:00:00.000Z',
+    } as unknown as Branch;
+    let removedListener: ((branch: Branch) => void) | undefined;
+    const branchesService = {
+      findAll: vi.fn().mockResolvedValue([archivedBranch]),
+      on: vi.fn((event: string, listener: (branch: Branch) => void) => {
+        if (event === 'removed') removedListener = listener;
+      }),
+      removeListener: vi.fn(),
+    };
+    const client = {
+      service: vi.fn(() => branchesService),
+    } as unknown as AgorClient;
+
+    renderWithProviders(
+      <BranchesTable
+        client={client}
+        branchById={new Map()}
+        repoById={new Map([[repo.repo_id, repo]])}
+        boardById={new Map<string, Board>()}
+        sessionsByBranch={new Map()}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByTitle('Archived'));
+    expect(await screen.findByText('removed-remotely')).toBeInTheDocument();
+
+    act(() => removedListener?.(archivedBranch));
+
+    await waitFor(() => expect(screen.queryByText('removed-remotely')).not.toBeInTheDocument());
   });
 });

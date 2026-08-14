@@ -4,7 +4,9 @@ import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   authorizeBranchArchiveDelete,
+  authorizeBranchUnarchive,
   consumeBranchArchiveDeleteAuthorization,
+  consumeBranchUnarchiveAuthorization,
 } from './branch-archive-delete-authorization';
 
 function context(): HookContext {
@@ -24,33 +26,36 @@ function context(): HookContext {
 }
 
 describe('authorizeBranchArchiveDelete', () => {
-  it('rejects a view-only MCP caller before granting destructive authority', async () => {
-    const branch = {
-      branch_id: '00000000-0000-7000-8000-000000000001',
-      others_can: 'view',
-    };
-    const findRealtimeVisibilityBranch = vi.fn();
-    const branchRepository = {
-      findById: vi.fn(async () => branch),
-      isOwner: vi.fn(async () => false),
-      resolveUserPermission: vi.fn(async () => 'view'),
-      findRealtimeVisibilityBranch,
-      findExplicitViewUserIds: vi.fn(),
-    } as unknown as BranchRepository;
-    const hook = context();
+  it.each(['view', 'session', 'prompt'] as const)(
+    'rejects an MCP caller with only %s permission before granting destructive authority',
+    async (permission) => {
+      const branch = {
+        branch_id: '00000000-0000-7000-8000-000000000001',
+        others_can: permission,
+      };
+      const findRealtimeVisibilityBranch = vi.fn();
+      const branchRepository = {
+        findById: vi.fn(async () => branch),
+        isOwner: vi.fn(async () => false),
+        resolveUserPermission: vi.fn(async () => permission),
+        findRealtimeVisibilityBranch,
+        findExplicitViewUserIds: vi.fn(),
+      } as unknown as BranchRepository;
+      const hook = context();
 
-    await expect(
-      authorizeBranchArchiveDelete(hook, {
-        branchRepository,
-        branchRbacEnabled: true,
-      })
-    ).rejects.toBeInstanceOf(Forbidden);
+      await expect(
+        authorizeBranchArchiveDelete(hook, {
+          branchRepository,
+          branchRbacEnabled: true,
+        })
+      ).rejects.toBeInstanceOf(Forbidden);
 
-    expect(findRealtimeVisibilityBranch).not.toHaveBeenCalled();
-    expect(() =>
-      consumeBranchArchiveDeleteAuthorization(hook.params, branch.branch_id as never, 'delete')
-    ).toThrow(Forbidden);
-  });
+      expect(findRealtimeVisibilityBranch).not.toHaveBeenCalled();
+      expect(() =>
+        consumeBranchArchiveDeleteAuthorization(hook.params, branch.branch_id as never, 'delete')
+      ).toThrow(Forbidden);
+    }
+  );
 
   it('canonicalizes a short route ID before granting authority without capturing visibility', async () => {
     const branch = {
@@ -84,4 +89,31 @@ describe('authorizeBranchArchiveDelete', () => {
       consumeBranchArchiveDeleteAuthorization(hook.params, branch.branch_id as never, 'delete')
     ).not.toThrow();
   });
+});
+
+describe('authorizeBranchUnarchive', () => {
+  it.each(['view', 'session', 'prompt'] as const)(
+    'rejects an MCP caller with only %s permission before granting authority',
+    async (permission) => {
+      const branch = {
+        branch_id: '00000000-0000-7000-8000-000000000001',
+        others_can: permission,
+      };
+      const branchRepository = {
+        findById: vi.fn(async () => branch),
+        isOwner: vi.fn(async () => false),
+        resolveUserPermission: vi.fn(async () => permission),
+      } as unknown as BranchRepository;
+      const hook = context();
+      hook.path = '/branches/:id/unarchive';
+      hook.data = {};
+
+      await expect(
+        authorizeBranchUnarchive(hook, { branchRepository, branchRbacEnabled: true })
+      ).rejects.toBeInstanceOf(Forbidden);
+      expect(() =>
+        consumeBranchUnarchiveAuthorization(hook.params, branch.branch_id as never)
+      ).toThrow(Forbidden);
+    }
+  );
 });

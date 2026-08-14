@@ -12,7 +12,10 @@ import {
 import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
-import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
+import {
+  markBranchArchiveDeleteAuthorized,
+  markBranchUnarchiveAuthorized,
+} from '../utils/branch-archive-delete-authorization.js';
 import { BRANCH_REMOVAL_VISIBILITY_PARAM } from '../utils/realtime-publish.js';
 import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
@@ -1151,6 +1154,33 @@ describe('BranchesService one-shot teammate creation wiring', () => {
 });
 
 describe('BranchesService.unarchive', () => {
+  const unarchiveAuthorized = (
+    service: BranchesService,
+    branchId: BranchID,
+    options: { boardId?: BoardID } = {}
+  ) => {
+    const params = {};
+    markBranchUnarchiveAuthorized(params, branchId);
+    return service.unarchive(branchId, options, params);
+  };
+
+  it('rejects direct callers that bypass the authorized route', async () => {
+    const { service } = createServiceHarness();
+    await expect(service.unarchive('wt-direct' as BranchID, {}, {})).rejects.toThrow(
+      /authorized unarchive service/i
+    );
+  });
+
+  it.each([undefined, null, 'board-a', 42, { boardId: null }, { boardId: 'x', extra: true }])(
+    'rejects invalid runtime options %#',
+    async (options) => {
+      const { service } = createServiceHarness();
+      await expect(service.unarchive('wt-invalid' as BranchID, options)).rejects.toThrow(
+        /invalid unarchive options/i
+      );
+    }
+  );
+
   it('rejects unarchive while asynchronous filesystem deletion is in progress', async () => {
     const { service } = createServiceHarness();
     const branchId = 'wt-deleting' as BranchID;
@@ -1164,7 +1194,7 @@ describe('BranchesService.unarchive', () => {
     } as never);
     const patchSpy = vi.spyOn(service, 'patch');
 
-    await expect(service.unarchive(branchId)).rejects.toThrow(/still in progress/i);
+    await expect(unarchiveAuthorized(service, branchId)).rejects.toThrow(/still in progress/i);
     expect(patchSpy).not.toHaveBeenCalled();
     expect(mockedRunExecutorCommand).not.toHaveBeenCalled();
   });
@@ -1193,7 +1223,7 @@ describe('BranchesService.unarchive', () => {
       y: 222,
     });
 
-    await service.unarchive(branchId);
+    await unarchiveAuthorized(service, branchId);
 
     expect(patchSpy).toHaveBeenCalledWith(
       branchId,
@@ -1241,7 +1271,7 @@ describe('BranchesService.unarchive', () => {
     } as never);
     boardObjectsService.findByBranchId.mockResolvedValue({ object_id: 'existing' });
 
-    await service.unarchive(branchId);
+    await unarchiveAuthorized(service, branchId);
 
     expect(boardObjectsService.findByBranchId).toHaveBeenCalledWith(branchId);
     expect(boardObjectsService.create).not.toHaveBeenCalled();
@@ -1272,7 +1302,7 @@ describe('BranchesService.unarchive', () => {
       y: 8,
     });
 
-    await service.unarchive(branchId, { boardId: newBoardId });
+    await unarchiveAuthorized(service, branchId, { boardId: newBoardId });
 
     expect(patchSpy).toHaveBeenCalledWith(
       branchId,
@@ -1304,7 +1334,7 @@ describe('BranchesService.unarchive', () => {
       new BranchFilesystemLifecycleConflictError(branchId, 'deleting', true, undefined)
     );
 
-    await expect(service.unarchive(branchId)).rejects.toThrow(/changed concurrently/i);
+    await expect(unarchiveAuthorized(service, branchId)).rejects.toThrow(/changed concurrently/i);
     expect(mockedRunExecutorCommand).not.toHaveBeenCalled();
   });
 });
@@ -1424,7 +1454,10 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(branchesService.remove).not.toHaveBeenCalled();
     expect(wrappedRemove).not.toHaveBeenCalled();
     expect(repositoryDelete).toHaveBeenCalledOnce();
-    expect(repositoryDelete).toHaveBeenCalledWith(branchId);
+    expect(repositoryDelete).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ expectedFilesystemLifecycle: expect.any(Object) })
+    );
     expect(branchesService.emit).toHaveBeenCalledOnce();
     expect(branchesService.emit).toHaveBeenCalledWith(
       'removed',
@@ -1507,6 +1540,8 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(remove).not.toHaveBeenCalled();
     expect(sessionTokenService.generateToken).not.toHaveBeenCalled();
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  });
+
   it('archives with deleting before spawning a privileged filesystem delete', async () => {
     const { service } = createServiceHarness({
       execution: { unix_user_mode: 'strict', branch_rbac: true },
@@ -1536,13 +1571,15 @@ describe('BranchesService.archiveOrDelete', () => {
       } as never;
     });
 
+    const params = {
+      user: { user_id: 'user-1' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
     await service.archiveOrDelete(
       branchId,
       { metadataAction: 'archive', filesystemAction: 'deleted' },
-      {
-        user: { user_id: 'user-1' },
-        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-      } as never
+      params
     );
 
     expect(patches[0]).toMatchObject({
@@ -1563,7 +1600,7 @@ describe('BranchesService.archiveOrDelete', () => {
   });
 
   it('retains hard-delete metadata and records delete_failed when the executor fails', async () => {
-    const { service } = createServiceHarness({
+    const { service, branchRepo } = createServiceHarness({
       execution: { unix_user_mode: 'strict', branch_rbac: true },
     });
     const branchId = 'wt-hard-delete-failure' as BranchID;
@@ -1584,7 +1621,7 @@ describe('BranchesService.archiveOrDelete', () => {
       patches.push(data as Record<string, unknown>);
       return { branch_id: branchId, ...(data as Record<string, unknown>) } as never;
     });
-    const removeSpy = vi.spyOn(service, 'remove').mockResolvedValue({} as never);
+    const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
     mockedRunExecutorCommand.mockResolvedValueOnce({
       success: false,
       error: {
@@ -1594,11 +1631,17 @@ describe('BranchesService.archiveOrDelete', () => {
       },
     });
 
+    const params = {
+      user: { user_id: 'user-1' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
     await expect(
-      service.archiveOrDelete(branchId, { metadataAction: 'delete', filesystemAction: 'deleted' }, {
-        user: { user_id: 'user-1' },
-        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-      } as never)
+      service.archiveOrDelete(
+        branchId,
+        { metadataAction: 'delete', filesystemAction: 'deleted' },
+        params
+      )
     ).rejects.toThrow(/metadata was retained/i);
 
     expect(patches).toContainEqual(
@@ -1611,15 +1654,15 @@ describe('BranchesService.archiveOrDelete', () => {
       filesystem_status: 'delete_failed',
       error_message: expect.stringContaining('sudoers'),
     });
-    expect(removeSpy).not.toHaveBeenCalled();
+    expect(repositoryDelete).not.toHaveBeenCalled();
   });
 
   it('hard-deletes metadata only after verified filesystem deletion succeeds', async () => {
-    const { service } = createServiceHarness({
+    const { service, branchRepo } = createServiceHarness({
       execution: { unix_user_mode: 'strict', branch_rbac: true },
     });
     const branchId = 'wt-hard-delete-success' as BranchID;
-    vi.spyOn(service, 'get').mockResolvedValue({
+    const removedBranch = {
       branch_id: branchId,
       repo_id: 'repo-1',
       name: 'WT Hard Delete Success',
@@ -1630,7 +1673,8 @@ describe('BranchesService.archiveOrDelete', () => {
       storage_mode: 'clone',
       new_branch: true,
       environment_instance: { status: 'stopped' },
-    } as never);
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
     const patchSpy = vi.spyOn(service, 'patch').mockImplementation(
       async (_id, data) =>
         ({
@@ -1638,21 +1682,24 @@ describe('BranchesService.archiveOrDelete', () => {
           ...(data as Record<string, unknown>),
         }) as never
     );
-    const removeSpy = vi
-      .spyOn(service, 'remove')
-      .mockResolvedValue({ branch_id: branchId } as never);
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findExplicitViewUserIds').mockResolvedValue([]);
+    const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
     mockedRunExecutorCommand.mockResolvedValueOnce({
       success: true,
       data: { branchId, filesystemRemoved: true },
     });
 
+    const params = {
+      user: { user_id: 'user-1' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
     await service.archiveOrDelete(
       branchId,
       { metadataAction: 'delete', filesystemAction: 'deleted' },
-      {
-        user: { user_id: 'user-1' },
-        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-      } as never
+      params
     );
 
     expect(patchSpy).toHaveBeenCalledWith(
@@ -1670,38 +1717,39 @@ describe('BranchesService.archiveOrDelete', () => {
       }),
       expect.objectContaining({ timeoutMs: expect.any(Number) })
     );
-    expect(removeSpy).toHaveBeenCalledTimes(1);
+    expect(repositoryDelete).toHaveBeenCalledTimes(1);
   });
 
   it('does not let a custom-route query override a preserved filesystem selection', async () => {
-    const { service } = createServiceHarness();
+    const { service, branchRepo } = createServiceHarness();
     const branchId = 'wt-hard-delete-preserved' as BranchID;
-    vi.spyOn(service, 'get').mockResolvedValue({
+    const removedBranch = {
       branch_id: branchId,
       name: 'WT Hard Delete Preserved',
       path: '/safe/worktrees/repo/feature',
       archived: true,
       environment_instance: { status: 'stopped' },
-    } as never);
-    const removeSpy = vi
-      .spyOn(service, 'remove')
-      .mockResolvedValue({ branch_id: branchId } as never);
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findExplicitViewUserIds').mockResolvedValue([]);
+    const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
 
+    const params = {
+      query: { deleteFromFilesystem: true },
+      user: { user_id: 'user-1' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
     await service.archiveOrDelete(
       branchId,
       { metadataAction: 'delete', filesystemAction: 'preserved' },
-      {
-        query: { deleteFromFilesystem: true },
-        user: { user_id: 'user-1' },
-        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-      } as never
+      params
     );
 
     expect(mockedRunExecutorCommand).not.toHaveBeenCalled();
-    expect(removeSpy).toHaveBeenCalledWith(
-      branchId,
-      expect.objectContaining({ query: expect.objectContaining({ deleteFromFilesystem: false }) })
-    );
+    expect(repositoryDelete).toHaveBeenCalledTimes(1);
   });
 });
 

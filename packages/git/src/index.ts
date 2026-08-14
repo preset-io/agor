@@ -1838,11 +1838,13 @@ export async function deleteBranchDirectory(
   branchPath: string,
   allowedBranchesDir: string,
   options: {
+    /** Trusted repo-slug/name identity derived by the lifecycle executor. */
+    expectedRelativePath: string;
     /** Use the narrowly-scoped sudo deletion path (strict/insulated mode). */
     privileged?: boolean;
     /** Test seam; production callers use the built-in sudo runner. */
     privilegedDelete?: (target: string) => Promise<void>;
-  } = {}
+  }
 ): Promise<void> {
   const { lstat, realpath, rm, stat } = await import('node:fs/promises');
   const { dirname, isAbsolute, relative, resolve, sep } = await import('node:path');
@@ -1850,6 +1852,7 @@ export async function deleteBranchDirectory(
   const requestedRoot = resolve(allowedBranchesDir);
   const requestedTarget = resolve(branchPath);
   const lexicalRelativePath = relative(requestedRoot, requestedTarget);
+  const expectedTarget = resolve(requestedRoot, options.expectedRelativePath);
 
   // Validate lexical containment before touching the target. A missing target is
   // an idempotent success, but an out-of-root path is never accepted as one.
@@ -1860,6 +1863,9 @@ export async function deleteBranchDirectory(
     isAbsolute(lexicalRelativePath)
   ) {
     throw new Error('Safety check failed: Branch path must be a child of the branches root');
+  }
+  if (requestedTarget !== expectedTarget) {
+    throw new Error('Safety check failed: Branch path does not match its canonical identity');
   }
 
   let targetInfo: Awaited<ReturnType<typeof lstat>>;

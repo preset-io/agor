@@ -76,6 +76,7 @@ import type {
 import {
   hasMinimumRole,
   isBranchArchiveOrDeleteOptions,
+  isBranchUnarchiveOptions,
   isTaskPendingDispatch,
   MCP_MEMBER_POLICIES,
   MessageRole,
@@ -140,7 +141,10 @@ import {
   registerAuthenticatedRoute as registerAuthenticatedRouteBase,
   requireMinimumRole,
 } from './utils/authorization.js';
-import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
+import {
+  authorizeBranchArchiveDelete,
+  authorizeBranchUnarchive,
+} from './utils/branch-archive-delete-authorization.js';
 import {
   cacheBranchAccess,
   checkSessionOwnerOrAdmin,
@@ -3566,8 +3570,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
       if (!id) throw new Error('Branch ID required');
-      const options = data as { boardId?: import('@agor/core/types').BoardID };
-      return branchesService.unarchive(id as import('@agor/core/types').BranchID, options, params);
+      if (!isBranchUnarchiveOptions(data)) {
+        throw new BadRequest('Invalid unarchive options: expected an optional boardId');
+      }
+      return branchesService.unarchive(id as import('@agor/core/types').BranchID, data, params);
     },
   });
 
@@ -3577,32 +3583,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'unarchive branches'),
-        inTenantDatabaseScope(async (context: HookContext) => {
-          const id = context.params.route?.id;
-          if (!id) throw new Error('Branch ID required');
-
-          const branch = await branchRepository.findById(id);
-          if (!branch) {
-            throw new Forbidden(`Branch not found: ${id}`);
-          }
-
-          await cacheBranchAccess(context.params, branchRepository, branch);
-
-          return context;
-        }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'unarchive branches', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to unarchive branches'
-                );
-              }
-              return context;
-            },
+        inTenantDatabaseScope((context: HookContext) =>
+          authorizeBranchUnarchive(context, {
+            branchRepository,
+            branchRbacEnabled,
+            superadminOpts,
+          })
+        ),
       ],
     },
   });

@@ -32,7 +32,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
     ...actual,
     BranchRepository: vi.fn().mockImplementation(function BranchRepository() {
       return {
-        findActiveByRepoAndName: vi.fn(async () => null),
+        findByRepoAndName: vi.fn(async () => null),
         findAllByRepoId: repositoryMocks.findAllBranchesByRepoId,
         getAllUsedUniqueIds: vi.fn(async () => []),
         addOwner: vi.fn(async () => undefined),
@@ -134,6 +134,30 @@ describe('ReposService.addLocalRepository executor boundary', () => {
 });
 
 describe('ReposService.createBranch Git lifecycle identity', () => {
+  it.each(['..', '../victim', 'feature/nested', '/absolute'])(
+    'rejects unsafe managed branch name %s before deriving a filesystem path',
+    async (name) => {
+      const app = {
+        get: () => ({}),
+        service: vi.fn(() => {
+          throw new Error('No service should be reached for invalid branch identity');
+        }),
+      } as unknown as Application;
+      const service = new ReposService({} as never, app);
+      const get = vi.spyOn(service, 'get');
+
+      await expect(
+        service.createBranch('550e8400-e29b-41d4-a716-446655440001', {
+          name,
+          ref: 'main',
+          boardId: '550e8400-e29b-41d4-a716-446655440003',
+        })
+      ).rejects.toThrow(/lowercase letters, numbers, and hyphens/);
+
+      expect(get).not.toHaveBeenCalled();
+    }
+  );
+
   it('uses the Git lifecycle resolver rather than the requesting-user read resolver', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
     impersonationMocks.resolveExecutorReadAsUser.mockClear();

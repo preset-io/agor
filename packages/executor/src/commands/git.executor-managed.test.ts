@@ -127,7 +127,11 @@ function createClient(records: {
           }
         );
         return {
-          get: vi.fn(async () => records.repo),
+          get: vi.fn(async () =>
+            records.repo || records.branch
+              ? { repo_id: repoId, slug: 'repo', ...(records.repo ?? {}) }
+              : undefined
+          ),
           patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
             records.patchedRepos?.push(data);
             return { ...(records.repo ?? {}), ...data };
@@ -169,6 +173,8 @@ function createClient(records: {
               ? {
                   filesystem_status: 'creating',
                   filesystem_operation_id: '550e8400-e29b-41d4-a716-446655440099',
+                  repo_id: repoId,
+                  name: 'feature',
                   ...records.branch,
                 }
               : undefined
@@ -582,6 +588,7 @@ describe('managed executor git/fs commands', () => {
 
       expect(result.success).toBe(true);
       expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot, {
+        expectedRelativePath: join('repo', 'feature'),
         privileged: true,
       });
       expect(patchedBranches).toContainEqual({ filesystem_status: 'deleted' });
@@ -629,6 +636,47 @@ describe('managed executor git/fs commands', () => {
       error_message: expect.stringContaining('safety check'),
     });
     expect(JSON.stringify(result)).not.toContain('/safe/worktrees/repo/from-payload');
+  });
+
+  it('refuses a persisted branch name that can traverse out of its canonical root', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      branch: {
+        branch_id: branchId,
+        name: '../victim',
+        path: '/safe/worktrees/victim',
+        storage_mode: 'clone',
+        filesystem_status: 'deleting',
+      },
+      patchedBranches,
+    });
+
+    const result = await handleGitBranchRemove(
+      {
+        command: 'git.branch.remove',
+        sessionToken: 'jwt',
+        params: {
+          branchId,
+          filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
+          branchPath: '/safe/worktrees/victim',
+          branchesRoot: '/safe/worktrees',
+          storageMode: 'clone',
+          privilegedFilesystemDelete: true,
+          deleteDbRecord: false,
+        },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('safety check') },
+    });
+    expect(mocks.deleteBranchDirectory).not.toHaveBeenCalled();
+    expect(patchedBranches).toContainEqual({
+      filesystem_status: 'delete_failed',
+      error_message: expect.stringContaining('safety check'),
+    });
   });
 
   it('does not delete or report failure for a superseded deletion generation', async () => {
@@ -776,6 +824,7 @@ describe('managed executor git/fs commands', () => {
         expect(result.success).toBe(true);
         expect(mocks.removeGitWorktree).toHaveBeenNthCalledWith(1, repoPath, branchPath);
         expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot, {
+          expectedRelativePath: join('repo', 'feature'),
           privileged: true,
         });
         expect(mocks.removeGitWorktree).toHaveBeenNthCalledWith(2, repoPath, branchPath);
@@ -906,7 +955,14 @@ describe('managed executor git/fs commands', () => {
   it('derives git.repo.delete paths from daemon records instead of payload paths', async () => {
     createClient({
       repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
-      branches: [{ branch_id: branchId, repo_id: repoId, path: '/safe/worktrees/repo/feature' }],
+      branches: [
+        {
+          branch_id: branchId,
+          repo_id: repoId,
+          name: 'feature',
+          path: '/safe/worktrees/repo/feature',
+        },
+      ],
     });
 
     const result = await handleGitRepoDelete(
@@ -917,7 +973,8 @@ describe('managed executor git/fs commands', () => {
     expect(result.success).toBe(true);
     expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(
       '/safe/worktrees/repo/feature',
-      '/safe/worktrees'
+      '/safe/worktrees',
+      { expectedRelativePath: join('repo', 'feature') }
     );
     expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
   });
@@ -1003,6 +1060,7 @@ describe('managed executor git/fs commands', () => {
     const branches = Array.from({ length: 1002 }, (_, index) => ({
       branch_id: `branch-${index}`,
       repo_id: repoId,
+      name: `branch-${index}`,
       path: `/safe/worktrees/repo/branch-${index}`,
     }));
     createClient({
@@ -1020,7 +1078,8 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.deleteBranchDirectory).toHaveBeenNthCalledWith(
       1001,
       '/safe/worktrees/repo/branch-1000',
-      '/safe/worktrees'
+      '/safe/worktrees',
+      { expectedRelativePath: join('repo', 'branch-1000') }
     );
     expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
   });
