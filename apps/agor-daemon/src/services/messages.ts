@@ -9,10 +9,10 @@ import { MESSAGE_PAGINATION } from '@agor/core/config';
 import { MessagesRepository, TaskRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import {
+  MESSAGE_PATCH_FIELDS,
   type Message,
   type MessageID,
   type MessagePatch,
-  MESSAGE_PATCH_FIELDS,
   MessageRole,
   type Paginated,
   type QueryParams,
