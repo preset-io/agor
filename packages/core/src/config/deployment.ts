@@ -7,6 +7,7 @@ import type {
   AgorExecutorUserHomeStorage,
   AgorHaSupportProfile,
 } from './types';
+import { BRANCH_STORAGE_MODES, DEFAULT_BRANCH_STORAGE_MODE } from './types';
 
 export const DEFAULT_REDIS_CONNECT_TIMEOUT_MS = 5_000;
 export const DEFAULT_REDIS_STARTUP_TIMEOUT_MS = 15_000;
@@ -396,8 +397,8 @@ export function resolveDeploymentConfig(
   }
 
   const branchStorage = config.execution?.branch_storage;
-  const allowedBranchModes = branchStorage?.allowed_modes ?? ['worktree', 'clone'];
-  const defaultBranchMode = branchStorage?.default_mode ?? 'worktree';
+  const allowedBranchModes = branchStorage?.allowed_modes ?? BRANCH_STORAGE_MODES;
+  const defaultBranchMode = branchStorage?.default_mode ?? DEFAULT_BRANCH_STORAGE_MODE;
   if (!allowedBranchModes.includes(defaultBranchMode)) {
     throw new Error(
       'Config error: HA requires execution.branch_storage.default_mode to appear in allowed_modes'

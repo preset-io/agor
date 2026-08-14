@@ -5,7 +5,7 @@
  * cleaning or removing files from the filesystem.
  */
 
-import { shortId } from '@agor-live/client';
+import { BRANCH_FILESYSTEM_ACTIONS, type BranchFilesystemAction, shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -31,13 +31,14 @@ export default class BranchArchive extends BaseCommand {
     filesystem: Flags.string({
       description:
         'Filesystem action: preserved (keep files), cleaned (remove build artifacts), deleted (remove all files)',
-      options: ['preserved', 'cleaned', 'deleted'],
+      options: [...BRANCH_FILESYSTEM_ACTIONS],
       default: 'preserved',
     }),
   };
 
   async run(): Promise<void> {
     const { args, flags } = await this.parse(BranchArchive);
+    const filesystemAction = flags.filesystem as BranchFilesystemAction;
 
     // Connect to daemon
     const client = await this.connectToDaemon();
@@ -79,13 +80,13 @@ export default class BranchArchive extends BaseCommand {
         // Ignore errors querying sessions
       }
 
-      this.log(`  Filesystem: ${chalk.cyan(flags.filesystem)}`);
+      this.log(`  Filesystem: ${chalk.cyan(filesystemAction)}`);
       this.log('');
 
-      if (flags.filesystem === 'deleted') {
+      if (filesystemAction === 'deleted') {
         this.log(chalk.red('  ⚠  This will remove all files from the filesystem!'));
         this.log('');
-      } else if (flags.filesystem === 'cleaned') {
+      } else if (filesystemAction === 'cleaned') {
         this.log(chalk.yellow('  ⚠  This will clean build artifacts (node_modules, etc.)'));
         this.log('');
       }
@@ -93,7 +94,7 @@ export default class BranchArchive extends BaseCommand {
       // Archive branch using the custom route
       await client.service(`branches/${branch.branch_id}/archive-or-delete`).create({
         metadataAction: 'archive',
-        filesystemAction: flags.filesystem,
+        filesystemAction,
       });
 
       this.log(chalk.green(`✓ Archived branch "${branch.name}"`));

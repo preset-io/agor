@@ -3,6 +3,8 @@ import type {
   Board,
   Branch,
   BranchArchiveOrDeleteOptions,
+  BranchMetadataAction,
+  BranchStorageMode,
   Repo,
   Session,
 } from '@agor-live/client';
@@ -62,7 +64,7 @@ interface BranchesTableProps {
       sourceBranch: string;
       pullLatest: boolean;
       boardId?: string;
-      storage_mode?: 'worktree' | 'clone';
+      storage_mode?: BranchStorageMode;
       clone_depth?: number;
     }
   ) => void;
@@ -119,9 +121,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   );
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
-  const [initialArchiveDeleteAction, setInitialArchiveDeleteAction] = useState<
-    'archive' | 'delete'
-  >('archive');
+  const [initialArchiveDeleteAction, setInitialArchiveDeleteAction] =
+    useState<BranchMetadataAction>('archive');
   const [archivedBranches, setArchivedBranches] = useState<Branch[]>([]);
   const [archivedLoaded, setArchivedLoaded] = useState(false);
   const [archivedLoading, setArchivedLoading] = useState(false);

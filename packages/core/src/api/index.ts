@@ -12,8 +12,10 @@ import type {
   BoardExportBlob,
   BoardGroupGrantWithGroup,
   Branch,
+  BranchArchiveOrDeleteOptions,
   BranchEnvironmentUpdate,
   BranchGroupGrantWithGroup,
+  BranchStorageMode,
   CardType,
   CardWithType,
   CloneRepositoryResult,
@@ -466,7 +468,7 @@ export interface ReposService extends AgorService<Repo> {
        * 'worktree' (default) = native `git worktree add`.
        * 'clone' = self-standing `git clone` with its own `.git/`.
        */
-      storage_mode?: 'worktree' | 'clone';
+      storage_mode?: BranchStorageMode;
       /** Shallow clone depth (only when storage_mode='clone'). */
       clone_depth?: number;
     },
@@ -647,10 +649,7 @@ export interface BranchesService extends AgorService<Branch> {
    */
   archiveOrDelete(
     id: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    },
+    options: BranchArchiveOrDeleteOptions,
     params?: Params
   ): Promise<Branch | { deleted: true; branch_id: string }>;
 

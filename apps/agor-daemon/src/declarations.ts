@@ -22,6 +22,7 @@ import type { ExpressApplication, Service } from '@agor/core/feathers';
 import type {
   Board,
   Branch,
+  BranchArchiveOrDeleteOptions,
   BranchEnvironmentUpdate,
   BranchID,
   CloneRepositoryResult,
@@ -338,7 +339,7 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
   }>;
   archiveOrDelete(
     id: BranchID,
-    options: import('@agor/core/types').BranchArchiveOrDeleteOptions,
+    options: BranchArchiveOrDeleteOptions,
     params?: FeathersParams
   ): Promise<import('@agor/core/types').BranchArchiveOrDeleteResult>;
   /** Internal only; intentionally omitted from the branches transport methods. */

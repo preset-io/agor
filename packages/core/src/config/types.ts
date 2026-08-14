@@ -4,6 +4,7 @@
 
 import type { InstallableAgenticTool } from '../agentic-integrations';
 import type { ManagedEnvExecutionMode } from '../environment/webhook';
+import type { BranchStorageMode } from '../types/branch';
 
 export type { ManagedEnvExecutionMode };
 export type ManagedEnvsExecutionMode = ManagedEnvExecutionMode;
@@ -585,17 +586,13 @@ export interface AgorExecutionSettings {
   branch_storage?: AgorBranchStorageSettings;
 }
 
-/**
- * Storage model for a branch's filesystem.
- *
- * - `'worktree'` — native `git worktree add` (shared base `.git/config`,
- *   legacy default).
- * - `'clone'` — self-standing `git clone` with its own `.git/` directory;
- *   closes cross-branch credential/config leak vectors.
- */
-export const BRANCH_STORAGE_MODES = ['worktree', 'clone'] as const;
-export type BranchStorageMode = (typeof BRANCH_STORAGE_MODES)[number];
-export const DEFAULT_BRANCH_STORAGE_MODE: BranchStorageMode = 'worktree';
+export type { BranchStorageMode } from '../types/branch';
+// Compatibility re-exports: storage is a Branch domain concept, while config
+// consumers historically imported these names from `@agor/core/config`.
+export {
+  BRANCH_STORAGE_MODES,
+  DEFAULT_BRANCH_STORAGE_MODE,
+} from '../types/branch';
 
 export interface ResolvedBranchStorageConfig {
   defaultMode: BranchStorageMode;

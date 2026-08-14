@@ -4,14 +4,23 @@ import type {
   BoardID,
   Branch,
   BranchFilesystemAction,
+  BranchFilesystemStatus,
   BranchID,
+  BranchStorageMode,
   Repo,
   Session,
   TeammateConfig,
   UUID,
   ZoneBoardObject,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS, getTeammateConfig, isTeammate } from '@agor/core/types';
+import {
+  BRANCH_FILESYSTEM_ACTIONS,
+  BRANCH_FILESYSTEM_STATUSES,
+  BRANCH_PERMISSION_LEVELS,
+  BRANCH_STORAGE_MODES,
+  getTeammateConfig,
+  isTeammate,
+} from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -56,24 +65,18 @@ const BRANCH_LIST_DEFAULT_LIMIT = 50;
 const BRANCH_LIST_MAX_LIMIT = 100;
 const CLEANUP_CANDIDATE_DEFAULT_OLDER_THAN_DAYS = 7;
 const CLEANUP_CANDIDATE_SOURCE_PAGE_LIMIT = 10000;
-type CleanupCandidateFilesystemStatus = NonNullable<Branch['filesystem_status']>;
 const CLEANUP_CANDIDATE_DEFAULT_FILESYSTEM_STATUSES = [
   'ready',
   'preserved',
   'cleaned',
   'delete_failed',
-] as const satisfies readonly CleanupCandidateFilesystemStatus[];
-const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = [
-  'creating',
-  'ready',
-  'failed',
+] as const satisfies readonly BranchFilesystemStatus[];
+const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = BRANCH_FILESYSTEM_STATUSES;
+const CLEANUP_CANDIDATE_STORAGE_MODES = BRANCH_STORAGE_MODES;
+const HARD_DELETE_FILESYSTEM_ACTIONS = [
   'preserved',
-  'cleaned',
-  'deleting',
   'deleted',
-  'delete_failed',
-] as const satisfies readonly CleanupCandidateFilesystemStatus[];
-const CLEANUP_CANDIDATE_STORAGE_MODES = ['worktree', 'clone'] as const;
+] as const satisfies readonly BranchFilesystemAction[];
 
 function containsTeammateKnowledgeConfigMutation(customContext: unknown): boolean {
   if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
@@ -89,7 +92,7 @@ function containsTeammateKnowledgeConfigMutation(customContext: unknown): boolea
   return false;
 }
 
-function normalizeFilesystemStatus(branch: Branch): CleanupCandidateFilesystemStatus {
+function normalizeFilesystemStatus(branch: Branch): BranchFilesystemStatus {
   return branch.filesystem_status ?? 'ready';
 }
 
@@ -288,7 +291,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .array(z.enum(CLEANUP_CANDIDATE_FILESYSTEM_STATUSES))
           .optional()
           .describe(
-            'Filesystem statuses to include. Default: ["ready","preserved","cleaned"], intentionally excluding "deleted". Undefined branch statuses are treated as "ready".'
+            'Filesystem statuses to include. Default: ["ready","preserved","cleaned","delete_failed"], intentionally excluding "deleted". Undefined branch statuses are treated as "ready".'
           ),
         storageMode: z
           .enum(CLEANUP_CANDIDATE_STORAGE_MODES)
@@ -571,7 +574,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             'Use agor_environment_set later to switch variants on an existing branch.'
         ),
         storage_mode: z
-          .enum(['worktree', 'clone'])
+          .enum(BRANCH_STORAGE_MODES)
           .optional()
           .describe(
             'Branch storage model. ' +
@@ -811,7 +814,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // Positioning is handled automatically by the repos service —
       // agents don't need to think about x/y coordinates.
 
-      const storageMode = args.storage_mode as 'worktree' | 'clone' | undefined;
+      const storageMode = args.storage_mode as BranchStorageMode | undefined;
       const cloneDepth = typeof args.clone_depth === 'number' ? args.clone_depth : undefined;
 
       const branch = await reposService.createBranch(
@@ -1448,7 +1451,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to archive (UUIDv7 or short ID)'),
         filesystemAction: z
-          .enum(['preserved', 'cleaned', 'deleted'])
+          .enum(BRANCH_FILESYSTEM_ACTIONS)
           .optional()
           .describe(
             'What to do with the branch files on disk. "preserved" leaves files untouched, "cleaned" runs git clean -fdx (removes node_modules, builds, untracked files), "deleted" removes the entire branch directory. Default: "cleaned".'
@@ -1457,7 +1460,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'cleaned';
+      const filesystemAction =
+        (args.filesystemAction as BranchFilesystemAction | undefined) ?? 'cleaned';
       const result = await ctx.app
         .service('/branches/:id/archive-or-delete')
         .create(
@@ -1519,7 +1523,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to delete (UUIDv7 or short ID)'),
         filesystemAction: z
-          .enum(['preserved', 'deleted'])
+          .enum(HARD_DELETE_FILESYSTEM_ACTIONS)
           .optional()
           .describe(
             'What to do with the branch files on disk. "preserved" leaves files untouched, "deleted" removes the entire branch directory. Default: "deleted".'
@@ -1528,7 +1532,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'deleted';
+      const filesystemAction =
+        (args.filesystemAction as BranchFilesystemAction | undefined) ?? 'deleted';
       await ctx.app
         .service('/branches/:id/archive-or-delete')
         .create(

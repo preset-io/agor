@@ -6,6 +6,7 @@ import type {
   BoardID,
   Branch,
   BranchArchiveOrDeleteOptions,
+  BranchStorageMode,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -206,7 +207,7 @@ export interface AppProps {
       custom_context?: Record<string, unknown>;
       notes?: string | null;
       position?: { x: number; y: number };
-      storage_mode?: 'worktree' | 'clone';
+      storage_mode?: BranchStorageMode;
       clone_depth?: number;
     }
   ) => Promise<Branch | null>;

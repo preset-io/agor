@@ -1,4 +1,4 @@
-import type { Board, Repo } from '@agor-live/client';
+import type { Board, BranchStorageMode, Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
@@ -23,7 +23,7 @@ export interface BranchTabConfig {
    * self-standing `git clone`. Default 'branch' preserves existing flow.
    * See context/explorations/clone-redesign.md.
    */
-  storage_mode?: 'worktree' | 'clone';
+  storage_mode?: BranchStorageMode;
   /** Shallow-clone depth — only meaningful when storage_mode='clone'. */
   clone_depth?: number;
 }

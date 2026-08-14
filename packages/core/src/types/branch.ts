@@ -3,11 +3,26 @@ import type { BoardID, BranchID, UUID } from './id';
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
 
-export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
-export type BranchMetadataAction = (typeof BRANCH_METADATA_ACTIONS)[number];
+/** Persisted lifecycle states for a branch filesystem. */
+export const BRANCH_FILESYSTEM_STATUSES = [
+  'creating',
+  'ready',
+  'failed',
+  'preserved',
+  'cleaned',
+  'deleting',
+  'deleted',
+  'delete_failed',
+] as const;
+export type BranchFilesystemStatus = (typeof BRANCH_FILESYSTEM_STATUSES)[number];
 
+/** Filesystem dispositions accepted by the archive-or-delete API. */
 export const BRANCH_FILESYSTEM_ACTIONS = ['preserved', 'cleaned', 'deleted'] as const;
 export type BranchFilesystemAction = (typeof BRANCH_FILESYSTEM_ACTIONS)[number];
+
+/** Metadata dispositions accepted by the archive-or-delete API. */
+export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
+export type BranchMetadataAction = (typeof BRANCH_METADATA_ACTIONS)[number];
 
 /** Canonical request contract for the hooked branch archive/delete boundary. */
 export interface BranchArchiveOrDeleteOptions {
@@ -27,6 +42,18 @@ export function isBranchArchiveOrDeleteOptions(
 }
 
 export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };
+
+/**
+ * Storage model for a branch's filesystem.
+ *
+ * - `'worktree'` — native `git worktree add` (shared base `.git/config`,
+ *   legacy default).
+ * - `'clone'` — self-standing `git clone` with its own `.git/` directory;
+ *   closes cross-branch credential/config leak vectors.
+ */
+export const BRANCH_STORAGE_MODES = ['worktree', 'clone'] as const;
+export type BranchStorageMode = (typeof BRANCH_STORAGE_MODES)[number];
+export const DEFAULT_BRANCH_STORAGE_MODE: BranchStorageMode = 'worktree';
 
 /**
  * Git branch - First-class entity for isolated development contexts
@@ -331,15 +358,7 @@ export interface Branch {
    *
    * Note: null/undefined means 'ready' for backward compatibility
    */
-  filesystem_status?:
-    | 'creating'
-    | 'ready'
-    | 'failed'
-    | 'preserved'
-    | 'cleaned'
-    | 'deleting'
-    | 'deleted'
-    | 'delete_failed';
+  filesystem_status?: BranchFilesystemStatus;
 
   /**
    * Error message when filesystem_status is 'failed' or 'delete_failed'
@@ -412,7 +431,7 @@ export interface Branch {
    *
    * Selected at create time. Existing rows default to 'worktree'.
    */
-  storage_mode?: 'worktree' | 'clone';
+  storage_mode?: BranchStorageMode;
 
   /**
    * Optional `git clone --depth N` for shallow clones. Only meaningful when

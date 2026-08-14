@@ -4,7 +4,7 @@
  * Tests for type-safe CRUD operations on branches with short ID support.
  */
 
-import type { BoardID, BranchID, UUID } from '@agor/core/types';
+import type { BoardID, BranchID, BranchStorageMode, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
 import { boards } from '../schema';
@@ -61,7 +61,7 @@ function createBranchData(overrides?: {
   custom_context?: Record<string, unknown>;
   created_at?: string;
   updated_at?: string;
-  storage_mode?: 'worktree' | 'clone';
+  storage_mode?: BranchStorageMode;
   clone_depth?: number;
   permission_source?: 'board' | 'override';
   others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';

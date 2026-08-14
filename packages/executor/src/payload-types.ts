@@ -9,7 +9,7 @@
  */
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
-import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
+import { AGENTIC_TOOL_NAMES, type AgenticToolName, BRANCH_STORAGE_MODES } from '@agor/core/types';
 import { z } from 'zod';
 
 // Re-export so existing executor consumers (handlers, tool-registry, etc.)
@@ -357,7 +357,7 @@ export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
      * base repo) and just removes the directory. Defaults to 'worktree' for
      * back-compat with payloads issued before this field existed.
      */
-    storageMode: z.enum(['worktree', 'clone']).optional(),
+    storageMode: z.enum(BRANCH_STORAGE_MODES).optional(),
   }),
 });
 

@@ -1,3 +1,4 @@
+import type { BranchStorageMode } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -20,7 +21,7 @@ const branchId = '019fc9dc-1dc5-7e69-b060-785569277230';
 const repoId = '019fc9dc-2a17-7384-bfa7-d8b327614088';
 
 function makeClient(
-  storageMode: 'worktree' | 'clone' = 'worktree',
+  storageMode: BranchStorageMode = 'worktree',
   branchGroup: string | null = 'agor_wt_019fc9dc'
 ) {
   const branch = {

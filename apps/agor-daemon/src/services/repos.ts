@@ -39,6 +39,7 @@ import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/
 import type {
   AuthenticatedParams,
   Branch,
+  BranchStorageMode,
   CloneRepositoryResult,
   QueryParams,
   Repo,
@@ -622,7 +623,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
        * Branch storage model — see context/explorations/clone-redesign.md.
        * 'worktree' (default) = native `git worktree add`. 'clone' = self-standing `git clone`.
        */
-      storage_mode?: 'worktree' | 'clone';
+      storage_mode?: BranchStorageMode;
       /** Shallow clone depth (only when storage_mode='clone'). NULL/undefined = full clone. */
       clone_depth?: number;
     },
@@ -656,7 +657,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // path-exists checks) belongs to the executor (see operator's layering
     // rule: "daemon/client = database, executor = filesystem").
     const { defaultMode } = resolveBranchStorageConfig();
-    const storageMode: 'worktree' | 'clone' = data.storage_mode ?? defaultMode;
+    const storageMode: BranchStorageMode = data.storage_mode ?? defaultMode;
     ensureBranchStorageModeAllowed(storageMode);
     if (
       storageMode === 'worktree' &&

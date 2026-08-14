@@ -57,6 +57,7 @@ import {
 import type {
   AuthenticatedParams,
   BranchArchiveOrDeleteOptions,
+  BranchStorageMode,
   HookContext,
   MCPMemberPolicy,
   Message,
@@ -3224,7 +3225,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
            *  user invoked the dialog. */
           position?: { x: number; y: number };
           // Branch storage model — see context/explorations/clone-redesign.md.
-          storage_mode?: 'worktree' | 'clone';
+          storage_mode?: BranchStorageMode;
           clone_depth?: number;
         },
         params: RouteParams

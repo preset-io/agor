@@ -4,6 +4,7 @@ import type {
   Board,
   Branch,
   BranchArchiveOrDeleteOptions,
+  BranchStorageMode,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -96,7 +97,7 @@ export interface SettingsModalProps {
       pullLatest: boolean;
       issue_url?: string;
       pull_request_url?: string;
-      storage_mode?: 'worktree' | 'clone';
+      storage_mode?: BranchStorageMode;
       clone_depth?: number;
     }
   ) => Promise<Branch | null>;

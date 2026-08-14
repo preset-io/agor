@@ -19,7 +19,11 @@ import type {
   Task,
   UserExternalIdentity,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
+import {
+  BRANCH_FILESYSTEM_STATUSES,
+  BRANCH_PERMISSION_LEVELS,
+  BRANCH_STORAGE_MODES,
+} from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
 import {
   type AnySQLiteColumn,
@@ -729,16 +733,7 @@ export const branches = sqliteTable(
     archived_at: t.timestamp('archived_at'),
     archived_by: text('archived_by', { length: 36 }),
     filesystem_status: text('filesystem_status', {
-      enum: [
-        'creating',
-        'ready',
-        'failed',
-        'preserved',
-        'cleaned',
-        'deleting',
-        'deleted',
-        'delete_failed',
-      ],
+      enum: [...BRANCH_FILESYSTEM_STATUSES],
     }),
 
     // RBAC: App-layer permissions (rbac.md)
@@ -765,7 +760,7 @@ export const branches = sqliteTable(
     // Enum is validated at the Drizzle/TS/Zod/service layer (no DB-side
     // CHECK) per context/guides/creating-database-migrations.md so adding a
     // value later doesn't force a table-recreation migration on SQLite.
-    storage_mode: text('storage_mode', { enum: ['worktree', 'clone'] })
+    storage_mode: text('storage_mode', { enum: [...BRANCH_STORAGE_MODES] })
       .notNull()
       .default('worktree'),
     // Only meaningful when storage_mode='clone'. NULL = full clone, positive
