@@ -191,6 +191,48 @@ describe('MessagesService.find pagination', () => {
   });
 });
 
+describe('MessagesService.patch boundary', () => {
+  dbTest('keeps identity/order immutable and validates one-time Task linkage', async ({ db }) => {
+    const firstSessionId = await createTestSession(db);
+    const secondSessionId = await createTestSession(db);
+    const taskRepository = new TaskRepository(db);
+    const firstTask = await taskRepository.create({
+      session_id: firstSessionId,
+      full_prompt: 'first task',
+      created_by: generateId() as UUID,
+    });
+    const secondTask = await taskRepository.create({
+      session_id: secondSessionId,
+      full_prompt: 'second task',
+      created_by: generateId() as UUID,
+    });
+    const repository = new MessagesRepository(db);
+    const created = await repository.create(message(firstSessionId, 0));
+    const service = createMessagesService(db);
+
+    await expect(
+      service.patch(created.message_id, { session_id: secondSessionId } as never)
+    ).rejects.toThrow('Message fields are immutable: session_id');
+    await expect(service.patch(created.message_id, { index: 99 } as never)).rejects.toThrow(
+      'Message fields are immutable: index'
+    );
+    await expect(
+      service.patch(created.message_id, { task_id: secondTask.task_id })
+    ).rejects.toThrow('task_id must belong to the Message Session');
+
+    const linked = await service.patch(created.message_id, { task_id: firstTask.task_id });
+    expect(linked).toMatchObject({
+      message_id: created.message_id,
+      session_id: firstSessionId,
+      task_id: firstTask.task_id,
+      index: 0,
+    });
+    await expect(
+      service.patch(created.message_id, { task_id: secondTask.task_id })
+    ).rejects.toThrow('Message task_id cannot be reassigned');
+  });
+});
+
 dbTest(
   'parses authenticated REST role filters and scopes inaccessible sessions',
   async ({ db }) => {

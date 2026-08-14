@@ -268,14 +268,11 @@ export class MessagesRepository {
     const sortColumns = {
       message_id: messages.message_id,
       session_id: messages.session_id,
-      task_id: messages.task_id,
       type: messages.type,
       role: messages.role,
       index: messages.index,
       timestamp: messages.timestamp,
       created_at: messages.created_at,
-      content_preview: messages.content_preview,
-      parent_tool_use_id: messages.parent_tool_use_id,
     } as const;
     const orderBy = Object.entries(opts.sort ?? {})
       .map(([field, direction]) => {
@@ -362,12 +359,20 @@ export class MessagesRepository {
       throw new Error(`Message ${messageId} not found`);
     }
 
-    // Merge updates with existing message
-    const updated = { ...existing, ...updates };
+    // Creation identity and ordering are immutable at the repository update
+    // boundary. Public callers are constrained further by MessagesService's
+    // patch DTO; preserving these fields here also protects daemon-internal
+    // callers from accidentally rewriting the primary key or creation clock.
+    const updated = {
+      ...existing,
+      ...updates,
+      message_id: existing.message_id,
+    };
     const row = this.messageToRow(updated);
+    const { created_at: _createdAt, ...mutableRow } = row;
 
     const result = await update(this.db, messages)
-      .set(row)
+      .set(mutableRow)
       .where(eq(messages.message_id, messageId))
       .returning()
       .one();

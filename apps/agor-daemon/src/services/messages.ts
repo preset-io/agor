@@ -6,11 +6,13 @@
  */
 
 import { MESSAGE_PAGINATION } from '@agor/core/config';
-import { MessagesRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import { MessagesRepository, TaskRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import {
   type Message,
   type MessageID,
+  type MessagePatch,
+  MESSAGE_PATCH_FIELDS,
   MessageRole,
   type Paginated,
   type QueryParams,
@@ -146,14 +148,11 @@ const MESSAGE_QUERY_FIELDS = new Set([
 const MESSAGE_SORT_FIELDS = new Set([
   'message_id',
   'session_id',
-  'task_id',
   'type',
   'role',
   'index',
   'timestamp',
   'created_at',
-  'content_preview',
-  'parent_tool_use_id',
 ]);
 const MESSAGE_SELECT_FIELDS = new Set([
   'message_id',
@@ -185,12 +184,14 @@ const MESSAGE_ROLES = new Set<Message['role']>([
   MessageRole.ASSISTANT,
   MessageRole.SYSTEM,
 ]);
+const MESSAGE_PATCH_FIELD_SET = new Set<keyof MessagePatch>(MESSAGE_PATCH_FIELDS);
 
 /**
  * Extended messages service with custom methods
  */
 export class MessagesService extends DrizzleService<Message, Partial<Message>, MessageParams> {
   private messagesRepo: MessagesRepository;
+  private taskRepo: TaskRepository;
 
   constructor(db: TenantScopeAwareDatabase) {
     const messagesRepo = new MessagesRepository(db);
@@ -205,6 +206,47 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     });
 
     this.messagesRepo = messagesRepo;
+    this.taskRepo = new TaskRepository(db);
+  }
+
+  /**
+   * Keep generic PATCH calls inside one narrow DTO. In particular, a caller
+   * that can prompt one Session must not be able to move its Message into
+   * another Session/Task or change a pagination key.
+   */
+  async patch(
+    id: string | null,
+    data: MessagePatch,
+    params?: MessageParams
+  ): Promise<Message | Message[]> {
+    if (id === null) throw new BadRequest('Bulk Message patch is not supported');
+
+    const unsupported = Object.keys(data).filter(
+      (field) => !MESSAGE_PATCH_FIELD_SET.has(field as keyof MessagePatch)
+    );
+    if (unsupported.length > 0) {
+      throw new BadRequest(`Message fields are immutable: ${unsupported.join(', ')}`);
+    }
+
+    if (Object.hasOwn(data, 'task_id')) {
+      if (typeof data.task_id !== 'string') {
+        throw new BadRequest('task_id must be a Task ID');
+      }
+      const existing = await this.messagesRepo.findById(id as MessageID);
+      if (existing) {
+        if (existing.task_id && existing.task_id !== data.task_id) {
+          throw new BadRequest('Message task_id cannot be reassigned');
+        }
+        if (existing.task_id !== data.task_id) {
+          const targetTask = await this.taskRepo.findById(data.task_id);
+          if (!targetTask || targetTask.session_id !== existing.session_id) {
+            throw new BadRequest('task_id must belong to the Message Session');
+          }
+        }
+      }
+    }
+
+    return super.patch(id, data, params);
   }
 
   /**

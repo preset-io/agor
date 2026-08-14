@@ -11,7 +11,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
-import { update } from '../database-wrapper';
+import { select, update } from '../database-wrapper';
 import { messages as messagesTable } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
@@ -593,6 +593,25 @@ describe('MessagesRepository.findByRange', () => {
 // ============================================================================
 
 describe('MessagesRepository.update', () => {
+  dbTest('preserves the immutable database creation timestamp', async ({ db }) => {
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await repository.create(createMessageData({ session_id: sessionId }));
+    const originalCreatedAt = new Date('2024-01-02T03:04:05.000Z');
+    await update(db, messagesTable)
+      .set({ created_at: originalCreatedAt })
+      .where(eq(messagesTable.message_id, created.message_id))
+      .run();
+
+    await repository.update(created.message_id, { content_preview: 'patched' });
+
+    const row = await select(db, { created_at: messagesTable.created_at })
+      .from(messagesTable)
+      .where(eq(messagesTable.message_id, created.message_id))
+      .one();
+    expect(row?.created_at).toEqual(originalCreatedAt);
+  });
+
   dbTest('should update message fields and preserve unchanged fields', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);

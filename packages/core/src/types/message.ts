@@ -317,6 +317,26 @@ export type MessageCreate = Omit<Message, 'message_id'> & {
 };
 
 /**
+ * Fields that may change after a Message is created.
+ *
+ * Message identity, Session membership, transcript position, type/role, and
+ * timestamps are deliberately immutable. `task_id` is retained for the
+ * one-time linkage performed by legacy transcript imports; the service
+ * verifies that the target Task belongs to the Message's existing Session and
+ * refuses reassignment once a Task has been set.
+ */
+export const MESSAGE_PATCH_FIELDS = [
+  'task_id',
+  'content_preview',
+  'content',
+  'tool_uses',
+  'parent_tool_use_id',
+  'metadata',
+] as const satisfies readonly (keyof Message)[];
+
+export type MessagePatch = Partial<Pick<Message, (typeof MESSAGE_PATCH_FIELDS)[number]>>;
+
+/**
  * Streaming event types
  *
  * These events are broadcast by the executor to the daemon via /messages/streaming

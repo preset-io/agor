@@ -38,6 +38,7 @@ import type {
   MCPCatalogEntry,
   MCPServer,
   Message,
+  MessagePatch,
   OpenCodeModelCatalog,
   OpenCodeOAuthAttempt,
   OpenCodeOAuthAttemptPatch,
@@ -423,7 +424,9 @@ export interface TasksService extends AgorService<Task> {
 }
 
 /** Public Message CRUD surface. Full replacement is daemon-internal. */
-export type MessagesService = Omit<AgorService<Message>, 'update'>;
+export type MessagesService = Omit<AgorService<Message>, 'update' | 'patch'> & {
+  patch(id: string | null, data: MessagePatch, params?: Params): Promise<Message>;
+};
 
 /** Narrow transport contract for `POST /messages/bulk`. */
 export interface MessagesBulkService {

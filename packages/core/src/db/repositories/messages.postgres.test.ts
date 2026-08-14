@@ -1,12 +1,13 @@
 import { type Message, MessageRole, type UUID } from '@agor/core/types';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
 import { createDatabase, type Database } from '../client';
-import { executeRaw } from '../database-wrapper';
+import { executeRaw, select } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import { sanitizeDbError } from '../sanitize-error';
+import { messages as messagesTable } from '../schema';
 import { runWithTenantDatabaseScope } from '../tenant-scope';
 import { BranchRepository } from './branches';
 import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
@@ -81,6 +82,10 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         content,
       });
       const first = await repository.create(message(0, `zip${actualNul}${loneHighSurrogate}😀`));
+      const createdBeforePatch = await select(scoped, { created_at: messagesTable.created_at })
+        .from(messagesTable)
+        .where(eq(messagesTable.message_id, first.message_id))
+        .one();
       expect(first.content).toBe('zip��😀');
       const [second] = await repository.createMany([message(1, `bulk${loneLowSurrogate}`)]);
       expect(second.content).toBe('bulk�');
@@ -114,6 +119,11 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
       expect(finalized.tool_uses).toEqual([
         { id: 'read-binary', name: 'read', input: { 'path�': 'file�' } },
       ]);
+      const createdAfterPatch = await select(scoped, { created_at: messagesTable.created_at })
+        .from(messagesTable)
+        .where(eq(messagesTable.message_id, first.message_id))
+        .one();
+      expect(createdAfterPatch?.created_at).toEqual(createdBeforePatch?.created_at);
       expect(
         (await repository.mutateMetadataLocked(first.message_id, () => ({ value: actualNul })))
           .message.metadata
