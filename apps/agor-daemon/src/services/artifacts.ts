@@ -485,6 +485,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const sessionToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } },
       {
+        command: 'branch.artifact.publish',
+        branch_id: branch.branch_id,
         executor_action: 'artifact.publish',
         executor_user_id: params.user?.user_id,
         executor_branch_id: branch.branch_id,
@@ -960,7 +962,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       'session'
     );
     const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      {
+        command: 'branch.artifact.land',
+        branch_id: branch.branch_id,
+        artifact_id: artifactId,
+      }
     );
     const result = await runExecutorCommand(
       {
@@ -1693,6 +1700,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         sessionToken: generateScopedServiceToken(
           this.app as unknown as { settings: { authentication?: { secret?: string } } },
           {
+            command: 'branch.artifact.validate',
+            branch_id: branch.branch_id,
             executor_action: 'artifact.validate',
             executor_user_id: params.user?.user_id,
             executor_branch_id: branch.branch_id,

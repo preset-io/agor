@@ -1227,6 +1227,8 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           sessionToken: generateScopedServiceToken(
             ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
             {
+              command: 'branch.upload.materialize',
+              branch_id: session.branch_id,
               executor_action: 'upload.materialize',
               executor_user_id: ctx.authenticatedUser.user_id,
               executor_branch_id: session.branch_id,
@@ -1716,6 +1718,8 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
             sessionToken: generateScopedServiceToken(
               ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
               {
+                command: 'branch.gateway.slack-file-upload',
+                branch_id: target.channel.target_branch_id,
                 executor_action: 'gateway.slack-file-upload',
                 executor_user_id: ctx.authenticatedUser.user_id,
                 executor_branch_id: target.channel.target_branch_id,

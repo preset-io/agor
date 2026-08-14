@@ -174,7 +174,6 @@ const checks = [
       // capabilities use a second transaction path so their RLS GUC is local
       // to one pooled connection checkout and cannot leak after discovery.
       'packages/core/src/db/tenant-scope.ts': 2,
-      'packages/core/src/db/repositories/branches.ts': 1,
       // Deterministic PostgreSQL lifecycle race coverage holds an explicit row
       // lock inside a tenant-scoped test transaction before releasing a CAS.
       'packages/core/src/db/branch-filesystem-lifecycle.postgres.test.ts': 1,

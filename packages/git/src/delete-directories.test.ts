@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  assertNoManagedRootMounts,
   buildPrivilegedBranchDeleteArgs,
   deleteBranchDirectory,
   deleteRepoDirectory,
@@ -221,6 +222,53 @@ describe('managed directory deletion roots', () => {
     ).rejects.toThrow(/canonical identity/i);
 
     await expect(fs.access(victim)).resolves.toBeUndefined();
+  });
+
+  it('rejects descendant mounts, including same-device bind mounts, before deletion', async () => {
+    const branchPath = path.join(branchesRoot, 'org', 'repo', 'mounted-feature');
+    const nestedMount = path.join(branchPath, 'vendor', 'shared');
+    await fs.mkdir(nestedMount, { recursive: true });
+    await fs.writeFile(path.join(nestedMount, 'must-survive.txt'), 'fixture');
+    const escapedMount = nestedMount.replaceAll(' ', '\\040');
+    const sameDeviceBindMountInfo = `412 31 8:1 /source ${escapedMount} rw,relatime - ext4 /dev/sda1 rw\n`;
+
+    await expect(
+      deleteBranchDirectory(branchPath, branchesRoot, {
+        expectedRelativePath: path.join('org', 'repo', 'mounted-feature'),
+        mountInfo: sameDeviceBindMountInfo,
+      })
+    ).rejects.toThrow(/contains a filesystem mount/i);
+    await expect(fs.readFile(path.join(nestedMount, 'must-survive.txt'), 'utf8')).resolves.toBe(
+      'fixture'
+    );
+  });
+
+  it('rejects a nested bind mount before repository deletion', async () => {
+    const repoPath = path.join(reposRoot, 'org', 'mounted-repo');
+    const nestedMount = path.join(repoPath, 'vendor-cache');
+    await fs.mkdir(nestedMount, { recursive: true });
+    await fs.writeFile(path.join(nestedMount, 'must-survive.txt'), 'fixture');
+
+    await expect(
+      deleteRepoDirectory(repoPath, reposRoot, {
+        expectedRelativePath: 'org/mounted-repo',
+        mountInfo: `512 31 8:1 /cache ${nestedMount} rw,relatime - ext4 /dev/sda1 rw\n`,
+      })
+    ).rejects.toThrow(/contains a filesystem mount/i);
+    await expect(fs.readFile(path.join(nestedMount, 'must-survive.txt'), 'utf8')).resolves.toBe(
+      'fixture'
+    );
+  });
+
+  it('recognizes mountinfo paths with escaped whitespace', async () => {
+    const target = path.join(branchesRoot, 'org', 'repo', 'feature with space');
+    const mountPoint = path.join(target, 'same device bind');
+    await expect(
+      assertNoManagedRootMounts(
+        target,
+        `99 1 8:1 / ${mountPoint.replaceAll(' ', '\\040')} rw - ext4 /dev/sda1 rw\n`
+      )
+    ).rejects.toThrow(/filesystem mount/i);
   });
 });
 

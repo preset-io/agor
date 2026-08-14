@@ -62,4 +62,30 @@ describe('ServiceJWTStrategy terminal-scoped identity', () => {
     expect(result.user._isTerminalExecutor).toBeUndefined();
     expect(result.user.terminal_user_id).toBeUndefined();
   });
+
+  it('preserves verified service capability claims for later Socket RPCs', async () => {
+    const payload = {
+      sub: 'executor-service',
+      type: 'service',
+      purpose: 'executor-service',
+      role: 'service',
+      command: 'git.branch.add',
+      branch_id: 'branch-1',
+      repo_id: 'repo-1',
+      user_id: ALICE,
+    };
+    stubSuperAuthenticate(payload);
+    const strategy = new ServiceJWTStrategy();
+    const params = { connection: { feathers: {} } };
+
+    await strategy.authenticate({ accessToken: 'header.payload.sig' }, params);
+
+    expect(params.connection.feathers).toMatchObject({
+      authentication: {
+        strategy: 'jwt',
+        accessToken: 'header.payload.sig',
+        payload,
+      },
+    });
+  });
 });

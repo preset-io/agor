@@ -4,7 +4,7 @@
  * Type-safe CRUD operations for branches with short ID support.
  */
 
-import { dirname, isAbsolute, sep as pathSeparator, relative, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import type {
   AgenticToolName,
   BoardID,
@@ -13,8 +13,12 @@ import type {
   BranchFilesystemStatus,
   BranchFsAccessLevel,
   BranchID,
+  BranchRepositoryCreate,
   EffectiveBranchAccess,
   GroupID,
+  RepoFilesystemOperationID,
+  RepoFilesystemStatus,
+  RepoID,
   SessionStatus,
   UUID,
 } from '@agor/core/types';
@@ -25,6 +29,7 @@ import { isValidManagedRepoSlug } from '../../config/repo-reference';
 import { generateId } from '../../lib/ids';
 import { BRANCH_IMMUTABLE_FIELDS } from '../../types/branch';
 import { resolveBranchGroupName, resolveBranchGroupUpdate } from '../../unix/group-manager';
+import { filesystemPathsOverlap } from '../../utils/path';
 import { getBranchUrl } from '../../utils/url';
 import type { Database } from '../client';
 import {
@@ -35,7 +40,6 @@ import {
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
-  txAsDb,
   update,
 } from '../database-wrapper';
 import {
@@ -65,7 +69,11 @@ import {
 import { visibleBranchAccessCondition } from './branch-access';
 import { GroupRepository } from './groups';
 import { deepMerge } from './merge-utils';
-import { lockRepoFilesystemNamespaceMutation, RepoFilesystemNamespaceConflictError } from './repos';
+import {
+  lockRepoFilesystemNamespaceMutation,
+  RepoFilesystemLifecycleConflictError,
+  RepoFilesystemNamespaceConflictError,
+} from './repos';
 
 const BRANCH_PERMISSION_RANK = Object.fromEntries(
   BRANCH_PERMISSION_LEVELS.map((level, index) => [level, index - 1])
@@ -79,15 +87,6 @@ const VIEW_OR_BETTER_BRANCH_PERMISSIONS = ['view', 'session', 'prompt', 'all'] a
 const BRANCH_PERMISSION_SOURCES = ['board', 'override'] as const;
 const FS_ACCESS_BRANCH_PERMISSIONS = ['read', 'write'] as const;
 
-function filesystemPathContains(parent: string, child: string): boolean {
-  const rel = relative(resolve(parent), resolve(child));
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${pathSeparator}`) && !isAbsolute(rel));
-}
-
-function filesystemPathsOverlap(left: string, right: string): boolean {
-  return filesystemPathContains(left, right) || filesystemPathContains(right, left);
-}
-
 function deriveBranchesRoot(branchPath: string, repoSlug: string): string {
   let branchesRoot = dirname(resolve(branchPath));
   for (const _segment of repoSlug.split('/')) branchesRoot = dirname(branchesRoot);
@@ -100,6 +99,11 @@ export interface BranchRepositoryUpdateOptions {
   invalidateEnvironmentObservation?: boolean;
   /** Compare against the row after its transaction lock is acquired. */
   expectedFilesystemLifecycle?: BranchFilesystemLifecycleExpectation;
+  /**
+   * Serialize a branch materialization claim with parent repository deletion.
+   * Lock order is namespace -> parent repo -> branch.
+   */
+  reserveParentRepoForMaterialization?: boolean;
 }
 
 export interface BranchFilesystemLifecycleExpectation {
@@ -320,7 +324,19 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   /**
    * Create a new branch
    */
-  async create(branch: Partial<Branch>): Promise<Branch> {
+  async create(branch: BranchRepositoryCreate): Promise<Branch> {
+    if (
+      typeof branch.repo_id !== 'string' ||
+      typeof branch.name !== 'string' ||
+      typeof branch.ref !== 'string' ||
+      typeof branch.path !== 'string' ||
+      typeof branch.created_by !== 'string' ||
+      typeof branch.branch_unique_id !== 'number'
+    ) {
+      throw new RepositoryError(
+        'Branch creation requires server-derived repo_id, name, ref, path, created_by, and branch_unique_id fields'
+      );
+    }
     const insertData = this.branchToInsert(branch);
     try {
       const row = await runDatabaseTransaction(this.db, async (transactionDb) => {
@@ -336,12 +352,18 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           .where(eq(repos.repo_id, insertData.repo_id))
           .one();
         if (!parent) throw new EntityNotFoundError('Repo', String(insertData.repo_id));
-        const parentData = parent.data as { filesystem_status?: unknown };
+        const parentData = parent.data as {
+          filesystem_status?: RepoFilesystemStatus;
+          filesystem_operation_id?: RepoFilesystemOperationID;
+        };
         if (
           parentData.filesystem_status === 'deleting' ||
           parentData.filesystem_status === 'delete_failed'
         ) {
-          throw new RepositoryError(
+          throw new RepoFilesystemLifecycleConflictError(
+            parent.repo_id as RepoID,
+            parentData.filesystem_status,
+            parentData.filesystem_operation_id,
             `Cannot create branch '${branch.name}': repository deletion must be completed or recovered first`
           );
         }
@@ -402,7 +424,12 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           error
         );
       }
-      if (error instanceof RepoFilesystemNamespaceConflictError) throw error;
+      if (
+        error instanceof RepoFilesystemNamespaceConflictError ||
+        error instanceof RepoFilesystemLifecycleConflictError
+      ) {
+        throw error;
+      }
       throw new RepositoryError(`Failed to create branch '${branch.name}': ${msg}`, error);
     }
   }
@@ -673,7 +700,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   /** Resolve a branch ID, acquire its row lock, and re-read it in one transaction. */
   private async withLockedBranch<T>(
     id: string,
-    work: (transactionDb: Database, currentRow: BranchRow) => Promise<T>
+    work: (transactionDb: Database, currentRow: BranchRow) => Promise<T>,
+    options?: { reserveParentRepoForMaterialization?: boolean }
   ): Promise<T> {
     // Short-ID resolution intentionally happens before the transaction. The
     // exact UUID is then locked and re-read, so the callback never acts on the
@@ -681,8 +709,31 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const existing = await this.findById(id);
     if (!existing) throw new EntityNotFoundError('Branch', id);
 
-    return this.db.transaction(async (tx) => {
-      const transactionDb = txAsDb(tx);
+    return runDatabaseTransaction(this.db, async (transactionDb) => {
+      if (options?.reserveParentRepoForMaterialization) {
+        await lockRepoFilesystemNamespaceMutation(this.db, transactionDb);
+        await lockRowForUpdate(transactionDb, this.db, repos, eq(repos.repo_id, existing.repo_id));
+        const parentRow = await select(transactionDb)
+          .from(repos)
+          .where(eq(repos.repo_id, existing.repo_id))
+          .one();
+        if (!parentRow) throw new EntityNotFoundError('Repo', existing.repo_id);
+        const parentData = parentRow.data as {
+          filesystem_status?: RepoFilesystemStatus;
+          filesystem_operation_id?: RepoFilesystemOperationID;
+        };
+        if (
+          parentData.filesystem_status === 'deleting' ||
+          parentData.filesystem_status === 'delete_failed'
+        ) {
+          throw new RepoFilesystemLifecycleConflictError(
+            parentRow.repo_id as RepoID,
+            parentData.filesystem_status,
+            parentData.filesystem_operation_id,
+            `Repository ${parentRow.repo_id} deletion must be completed or recovered before materializing a branch`
+          );
+        }
+      }
       await lockRowForUpdate(
         transactionDb,
         this.db,
@@ -711,92 +762,98 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   ): Promise<Branch> {
     const baseUrl = await getBaseUrl();
 
-    return this.withLockedBranch(id, async (transactionDb, currentRow) => {
-      const current = this.rowToBranch(currentRow, baseUrl);
+    return this.withLockedBranch(
+      id,
+      async (transactionDb, currentRow) => {
+        const current = this.rowToBranch(currentRow, baseUrl);
 
-      assertExpectedFilesystemLifecycle(current, options?.expectedFilesystemLifecycle);
+        assertExpectedFilesystemLifecycle(current, options?.expectedFilesystemLifecycle);
 
-      const immutableValues = Object.fromEntries(
-        BRANCH_IMMUTABLE_FIELDS.map((field) => [field, current[field]])
-      ) as Partial<Branch>;
+        const immutableValues = Object.fromEntries(
+          BRANCH_IMMUTABLE_FIELDS.map((field) => [field, current[field]])
+        ) as Partial<Branch>;
 
-      // STEP 3: Deep merge updates into current branch (in memory)
-      // Preserves nested objects like schedule, environment_instance, custom_context
-      const merged = deepMerge(current, {
-        ...updates,
-        ...immutableValues,
-        updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
-      });
-      merged.unix_group = resolveBranchGroupUpdate(
-        current.branch_id,
-        current.unix_group,
-        Object.hasOwn(updates, 'unix_group') ? updates.unix_group : undefined
-      );
-      // `undefined` normally means "preserve" to deepMerge. These lifecycle
-      // fields also need an internal clear operation for unarchive. JSON
-      // clients cannot transmit undefined, so this remains a server-only
-      // contract while branchToInsert maps the omitted fields back to SQL NULL.
-      for (const field of [
-        'archived_at',
-        'archived_by',
-        'filesystem_status',
-        'error_message',
-      ] as const) {
-        if (Object.hasOwn(updates, field) && updates[field] === undefined) {
-          delete merged[field];
-        }
-      }
-      // A materialization error describes only the failed filesystem state.
-      // Clear it atomically with every explicit transition away from failed
-      // so a successful retry/unarchive cannot remain visually poisoned by
-      // the previous attempt. undefined cannot express deletion through
-      // deepMerge because it intentionally means preserve.
-      if (
-        updates.filesystem_status !== undefined &&
-        updates.filesystem_status !== 'failed' &&
-        updates.filesystem_status !== 'delete_failed'
-      ) {
-        delete merged.error_message;
-      }
-
-      const insertData = this.branchToInsert(merged);
-      if (options?.preserveUpdatedAt) {
-        insertData.updated_at = new Date(current.updated_at);
-      }
-
-      // Any eligibility/lifecycle change invalidates an observation that may
-      // currently be outside the database performing HTTP. The result writer
-      // also compares this generation, so clearing the token is not the only
-      // fence. Health observations use their dedicated repository and never
-      // enter this generic update path.
-      const currentStatus = current.environment_instance?.status;
-      const mergedStatus = merged.environment_instance?.status;
-      const invalidatesEnvironmentObservation =
-        options?.invalidateEnvironmentObservation === true ||
-        currentStatus !== mergedStatus ||
-        current.health_check_url !== merged.health_check_url ||
-        Boolean(current.archived) !== Boolean(merged.archived);
-      const environmentCoordinationUpdate = invalidatesEnvironmentObservation
-        ? {
-            environment_generation: sql`${branches.environment_generation} + 1`,
-            environment_health_claim_token: null,
-            environment_health_claimed_at: null,
-            environment_health_claim_expires_at: null,
-            environment_health_next_observation_at: null,
-            environment_health_claim_instance_id: null,
-            environment_health_claim_boot_id: null,
+        // STEP 3: Deep merge updates into current branch (in memory)
+        // Preserves nested objects like schedule, environment_instance, custom_context
+        const merged = deepMerge(current, {
+          ...updates,
+          ...immutableValues,
+          updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
+        });
+        merged.unix_group = resolveBranchGroupUpdate(
+          current.branch_id,
+          current.unix_group,
+          Object.hasOwn(updates, 'unix_group') ? updates.unix_group : undefined
+        );
+        // `undefined` normally means "preserve" to deepMerge. These lifecycle
+        // fields also need an internal clear operation for unarchive. JSON
+        // clients cannot transmit undefined, so this remains a server-only
+        // contract while branchToInsert maps the omitted fields back to SQL NULL.
+        for (const field of [
+          'archived_at',
+          'archived_by',
+          'filesystem_status',
+          'error_message',
+        ] as const) {
+          if (Object.hasOwn(updates, field) && updates[field] === undefined) {
+            delete merged[field];
           }
-        : {};
+        }
+        // A materialization error describes only the failed filesystem state.
+        // Clear it atomically with every explicit transition away from failed
+        // so a successful retry/unarchive cannot remain visually poisoned by
+        // the previous attempt. undefined cannot express deletion through
+        // deepMerge because it intentionally means preserve.
+        if (
+          updates.filesystem_status !== undefined &&
+          updates.filesystem_status !== 'failed' &&
+          updates.filesystem_status !== 'delete_failed'
+        ) {
+          delete merged.error_message;
+        }
 
-      // STEP 4: Write merged branch (within same transaction)
-      const row = await update(transactionDb, branches)
-        .set({ ...insertData, ...environmentCoordinationUpdate })
-        .where(eq(branches.branch_id, current.branch_id))
-        .returning()
-        .one();
+        const insertData = this.branchToInsert(merged);
+        if (options?.preserveUpdatedAt) {
+          insertData.updated_at = new Date(current.updated_at);
+        }
 
-      return this.rowToBranch(row, baseUrl);
-    });
+        // Any eligibility/lifecycle change invalidates an observation that may
+        // currently be outside the database performing HTTP. The result writer
+        // also compares this generation, so clearing the token is not the only
+        // fence. Health observations use their dedicated repository and never
+        // enter this generic update path.
+        const currentStatus = current.environment_instance?.status;
+        const mergedStatus = merged.environment_instance?.status;
+        const invalidatesEnvironmentObservation =
+          options?.invalidateEnvironmentObservation === true ||
+          currentStatus !== mergedStatus ||
+          current.health_check_url !== merged.health_check_url ||
+          Boolean(current.archived) !== Boolean(merged.archived);
+        const environmentCoordinationUpdate = invalidatesEnvironmentObservation
+          ? {
+              environment_generation: sql`${branches.environment_generation} + 1`,
+              environment_health_claim_token: null,
+              environment_health_claimed_at: null,
+              environment_health_claim_expires_at: null,
+              environment_health_next_observation_at: null,
+              environment_health_claim_instance_id: null,
+              environment_health_claim_boot_id: null,
+            }
+          : {};
+
+        // STEP 4: Write merged branch (within same transaction)
+        const row = await update(transactionDb, branches)
+          .set({ ...insertData, ...environmentCoordinationUpdate })
+          .where(eq(branches.branch_id, current.branch_id))
+          .returning()
+          .one();
+
+        return this.rowToBranch(row, baseUrl);
+      },
+      {
+        reserveParentRepoForMaterialization: options?.reserveParentRepoForMaterialization,
+      }
+    );
   }
 
   /**

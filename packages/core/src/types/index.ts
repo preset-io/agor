@@ -10,6 +10,7 @@ export * from './board-comment';
 export * from './branch';
 export * from './card';
 export * from './context';
+export * from './executor-service-token';
 export * from './feathers';
 export * from './file';
 export * from './gateway';

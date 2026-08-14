@@ -108,6 +108,7 @@ import {
 } from '@agor/core/unix';
 import {
   executorRuntimeScopeGuard,
+  executorServiceCapabilityGuard,
   getRepoExecutorServicePayload,
   isTaskScopedExecutorRequest,
   requireExecutorRuntimeToken,
@@ -427,6 +428,7 @@ const REPO_CLONE_PATCH_FIELDS = new Set<string>(REPO_CLONE_EXECUTOR_PATCH_FIELDS
 const REPO_SERVICE_GET_COMMANDS = new Set([
   'git.clone',
   'git.branch.add',
+  'git.branch.remove',
   'git.repo.delete',
   'git.repo.realign-origin',
   'unix.sync-repo',
@@ -454,7 +456,7 @@ export async function enforceRepoServiceAccountCapability(
   if (!payload) throw new Forbidden('Repository service credential is missing resource scope');
 
   if (context.method === 'find') {
-    if (payload.command === 'git.repo.delete') {
+    if (payload.command === 'git.repo.delete' || payload.command === 'git.branch.remove') {
       return context;
     }
     throw new Forbidden('Repository service credential cannot enumerate repositories');
@@ -3770,4 +3772,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     registerTenantIdentityForOwnedServices();
   }
   registerTenantIdentityHooks();
+
+  // Service JWTs authenticate a process, not an authority. Apply the
+  // command/resource allow-list to every service registered at this point so
+  // a credential minted for one executor operation cannot pivot into another
+  // service whose ordinary RBAC treats service accounts as trusted.
+  for (const path of Object.keys(
+    (app.services as Record<string, FeathersService> | undefined) ?? {}
+  )) {
+    safeService(path)?.hooks({ before: { all: [executorServiceCapabilityGuard()] } } as never);
+  }
 }

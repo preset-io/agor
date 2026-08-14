@@ -36,13 +36,15 @@ async function createBoard(db: any): Promise<UUID> {
 async function createBranchOnBoard(db: any, boardId: UUID | null): Promise<UUID> {
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);
+  const fixtureId = generateId();
+  const repoPath = `/tmp/test-repo-${fixtureId}`;
   const repo = await repoRepo.create({
     repo_id: generateId(),
     slug: `repo-${generateId()}`,
     name: 'Test Repo',
     repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/repo.git',
-    local_path: '/tmp/test-repo',
+    local_path: repoPath,
     default_branch: 'main',
   });
   const branch = await branchRepo.create({
@@ -51,7 +53,7 @@ async function createBranchOnBoard(db: any, boardId: UUID | null): Promise<UUID>
     name: 'feature',
     ref: 'feature',
     branch_unique_id: Math.floor(Math.random() * 1_000_000),
-    path: '/tmp/test-repo',
+    path: `${repoPath}-feature`,
     base_ref: 'main',
     new_branch: false,
     created_by: 'test-user' as UUID,

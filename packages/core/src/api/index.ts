@@ -446,11 +446,6 @@ export interface RepoBranchesService {
   create(data: ClientInput<RepoBranchCreateRequest>, params?: Params): Promise<Branch>;
 }
 
-/** Dedicated `DELETE /repos/:id/branches/:name` route service. */
-export interface RepoBranchService {
-  remove(id?: string | null, params?: Params): Promise<Repo>;
-}
-
 /** Privileged repository patch surface used only by scoped lifecycle executors. */
 export type ReposExecutorService = Omit<ReposService, 'patch'> & {
   patch(id: string | null, data: ClientInput<RepoExecutorPatch>, params?: Params): Promise<Repo>;
@@ -618,7 +613,6 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/clone'): ReposCloneService;
   service(path: 'repos/local'): ReposLocalService;
   service(path: `repos/${string}/branches`): RepoBranchesService;
-  service(path: `repos/${string}/branches/${string}`): RepoBranchService;
   service(path: 'branches'): BranchesService;
   service(path: `branches/${string}/archive-or-delete`): BranchArchiveOrDeleteService;
   service(path: `branches/${string}/unarchive`): BranchUnarchiveService;

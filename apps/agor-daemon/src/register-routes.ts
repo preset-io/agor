@@ -3229,24 +3229,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerAuthenticatedRoute(
     app,
-    '/repos/:id/branches/:name',
-    {
-      async remove(_id: unknown, params: RouteParams & { route?: { name?: string } }) {
-        const id = params.route?.id;
-        const name = params.route?.name;
-        if (!id) throw new Error('Repo ID required');
-        if (!name) throw new Error('Branch name required');
-        return reposService.removeBranch(id, name, params);
-      },
-    },
-    {
-      remove: { role: ROLES.MEMBER, action: 'remove branches' },
-    },
-    requireAuth
-  );
-
-  registerAuthenticatedRoute(
-    app,
     '/repos/:id/import-agor-yml',
     {
       async create(data: { branch_id: string }, params: RouteParams) {

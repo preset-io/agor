@@ -635,6 +635,16 @@ export interface Branch {
 }
 
 /**
+ * Server-derived branch row creation contract.
+ *
+ * These fields establish the durable filesystem owner and execution identity;
+ * repository callers must supply them rather than relying on permissive
+ * `Partial<Branch>` fallbacks.
+ */
+export type BranchRepositoryCreate = Partial<Branch> &
+  Required<Pick<Branch, 'repo_id' | 'name' | 'ref' | 'path' | 'created_by' | 'branch_unique_id'>>;
+
+/**
  * Ordered permission levels for branch RBAC (least → most privileged).
  *
  * Single source of truth — derive types, zod schemas, DB enums, and rank maps from this.

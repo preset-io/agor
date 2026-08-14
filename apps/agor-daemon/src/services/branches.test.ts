@@ -17,7 +17,11 @@ import {
   markBranchUnarchiveAuthorized,
 } from '../utils/branch-archive-delete-authorization.js';
 import { BRANCH_REMOVAL_VISIBILITY_PARAM } from '../utils/realtime-publish.js';
-import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
+import {
+  generateScopedServiceToken,
+  runExecutorCommand,
+  spawnExecutor,
+} from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
 vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
@@ -229,6 +233,7 @@ function waitForDeferredWork(): Promise<void> {
 
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
 const mockedRunExecutorCommand = vi.mocked(runExecutorCommand);
+const mockedGenerateScopedServiceToken = vi.mocked(generateScopedServiceToken);
 
 beforeEach(() => {
   mockedSpawnExecutor.mockReset();
@@ -1275,6 +1280,65 @@ describe('BranchesService.unarchive', () => {
 
     expect(boardObjectsService.findByBranchId).toHaveBeenCalledWith(branchId);
     expect(boardObjectsService.create).not.toHaveBeenCalled();
+  });
+
+  it('binds missing-filesystem recreation credentials to the immutable branch creator', async () => {
+    const { service } = createServiceHarness();
+    const branchId = 'wt-recreate' as BranchID;
+    const creatorId = '00000000-0000-7000-8000-000000000123' as UUID;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'WT Recreate',
+      ref: 'feature',
+      path: '/tmp/wt-recreate',
+      archived: true,
+      created_by: creatorId,
+      storage_mode: 'worktree',
+    } as never);
+    vi.spyOn(service, 'patch').mockImplementation(
+      async (_id, data) =>
+        ({
+          branch_id: branchId,
+          repo_id: 'repo-1',
+          name: 'WT Recreate',
+          ref: 'feature',
+          path: '/tmp/wt-recreate',
+          archived: false,
+          created_by: creatorId,
+          storage_mode: 'worktree',
+          ...(data as object),
+        }) as never
+    );
+    mockedRunExecutorCommand.mockResolvedValueOnce({
+      success: true,
+      data: { exists: false, kind: 'missing' },
+    });
+
+    await unarchiveAuthorized(service, branchId);
+
+    expect(mockedGenerateScopedServiceToken).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        command: 'git.branch.add',
+        branch_id: branchId,
+        repo_id: 'repo-1',
+        user_id: creatorId,
+        filesystem_operation_id: expect.any(String),
+      })
+    );
+    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.branch.add',
+        params: expect.objectContaining({
+          branchId,
+          repoId: 'repo-1',
+          userId: creatorId,
+          filesystemOperationId: expect.any(String),
+        }),
+      }),
+      expect.anything()
+    );
   });
 
   it('uses explicit options.boardId override for patch and placement', async () => {

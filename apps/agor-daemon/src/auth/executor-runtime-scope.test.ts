@@ -5,10 +5,178 @@ import { SessionTokenService } from '../services/session-token-service';
 import { createServiceToken } from '../utils/spawn-executor';
 import {
   executorRuntimeScopeGuard,
+  executorServiceCapabilityGuard,
   isBranchFilesystemLifecycleExecutorRequest,
   requireExecutorRuntimeToken,
   scopeExecutorRuntimeAuth,
 } from './executor-runtime-scope';
+
+function serviceCtx(
+  command: string,
+  overrides: Partial<HookContext>,
+  claims: Record<string, unknown> = {}
+): HookContext {
+  return {
+    path: 'branches',
+    method: 'get',
+    id: 'branch-1',
+    app: { service: () => ({}) },
+    params: {
+      provider: 'socketio',
+      query: {},
+      authentication: {
+        payload: {
+          type: 'service',
+          sub: 'executor-service',
+          purpose: 'executor-service',
+          role: 'service',
+          command,
+          ...claims,
+        },
+      },
+    },
+    ...overrides,
+  } as HookContext;
+}
+
+describe('executor service command capabilities', () => {
+  it('allows branch deletion to inventory tenant rows and read only its exact repo', async () => {
+    const guard = executorServiceCapabilityGuard();
+    await expect(
+      guard(
+        serviceCtx(
+          'git.branch.remove',
+          { path: 'branches', method: 'find', id: null },
+          { branch_id: 'branch-1', repo_id: 'repo-1' }
+        )
+      )
+    ).resolves.toBeDefined();
+    await expect(
+      guard(
+        serviceCtx(
+          'git.branch.remove',
+          { path: 'repos', method: 'find', id: null },
+          { branch_id: 'branch-1', repo_id: 'repo-1' }
+        )
+      )
+    ).resolves.toBeDefined();
+    await expect(
+      guard(
+        serviceCtx(
+          'git.branch.remove',
+          { path: 'repos', method: 'get', id: 'repo-2' },
+          { branch_id: 'branch-1', repo_id: 'repo-1' }
+        )
+      )
+    ).rejects.toThrow(/not valid/i);
+  });
+
+  it('allows repository deletion a read-only overlap inventory, not cross-repo mutation', async () => {
+    const guard = executorServiceCapabilityGuard();
+    const claims = { repo_id: 'repo-1', filesystem_operation_id: 'operation-1' };
+    await expect(
+      guard(serviceCtx('git.repo.delete', { path: 'branches', method: 'find', id: null }, claims))
+    ).resolves.toBeDefined();
+    await expect(
+      guard(serviceCtx('git.repo.delete', { path: 'repos', method: 'find', id: null }, claims))
+    ).resolves.toBeDefined();
+    await expect(
+      guard(
+        serviceCtx(
+          'git.repo.delete',
+          { path: 'repos', method: 'patch', id: 'repo-2', data: { name: 'changed' } },
+          claims
+        )
+      )
+    ).rejects.toThrow(/not valid/i);
+  });
+
+  it('denies deletion credentials access to user credentials and unrelated services', async () => {
+    const guard = executorServiceCapabilityGuard();
+    const claims = { branch_id: 'branch-1', repo_id: 'repo-1' };
+    await expect(
+      guard(
+        serviceCtx(
+          'git.branch.remove',
+          {
+            path: 'users',
+            method: 'getGitEnvironment',
+            id: null,
+            data: { userId: 'victim-user' },
+          },
+          claims
+        )
+      )
+    ).rejects.toThrow(/not valid/i);
+    await expect(
+      guard(serviceCtx('git.branch.remove', { path: 'boards', method: 'find', id: null }, claims))
+    ).rejects.toThrow(/not valid/i);
+  });
+
+  it('binds credential reads to a signed user and clone command', async () => {
+    const guard = executorServiceCapabilityGuard();
+    await expect(
+      guard(
+        serviceCtx(
+          'git.clone',
+          {
+            path: 'users',
+            method: 'getGitEnvironment',
+            id: null,
+            data: { userId: 'user-1' },
+          },
+          { repo_id: 'repo-1', user_id: 'user-1' }
+        )
+      )
+    ).resolves.toBeDefined();
+    await expect(
+      guard(
+        serviceCtx(
+          'git.clone',
+          {
+            path: 'users',
+            method: 'getGitEnvironment',
+            id: null,
+            data: { userId: 'user-2' },
+          },
+          { repo_id: 'repo-1', user_id: 'user-1' }
+        )
+      )
+    ).rejects.toThrow(/not valid/i);
+    await expect(
+      guard(
+        serviceCtx(
+          'git.clone',
+          { path: 'users', method: 'get', id: 'user-1' },
+          {
+            repo_id: 'repo-1',
+            user_id: 'user-1',
+          }
+        )
+      )
+    ).resolves.toBeDefined();
+    await expect(
+      guard(
+        serviceCtx(
+          'git.clone',
+          { path: 'users', method: 'get', id: 'user-2' },
+          {
+            repo_id: 'repo-1',
+            user_id: 'user-1',
+          }
+        )
+      )
+    ).rejects.toThrow(/not valid/i);
+  });
+
+  it('rejects unscoped and unknown full service tokens', async () => {
+    await expect(
+      executorServiceCapabilityGuard()(
+        serviceCtx('unknown.command', { path: 'branches', method: 'get', id: 'branch-1' })
+      )
+    ).rejects.toThrow(/recognized command/i);
+  });
+});
 
 const payload = {
   type: 'executor-session',

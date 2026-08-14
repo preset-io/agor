@@ -153,6 +153,11 @@ export class ServiceJWTStrategy extends JWTStrategy {
       if (payload.purpose !== undefined && payload.purpose !== 'executor-service') {
         throw new Error('Invalid service token purpose');
       }
+      // Socket.io reconstructs service params from the connection on every
+      // later RPC. Preserve the verified claims there, just as we do for
+      // executor-session tokens, so command/resource capability checks cannot
+      // silently lose scope after the authentication call.
+      persistExecutorJwtPayloadOnConnection(params, authentication?.accessToken, payload);
       const terminalUserId =
         typeof payload.terminal_user_id === 'string' ? payload.terminal_user_id : undefined;
       // A terminal-scoped token is a RESTRICTED identity: it authenticates the

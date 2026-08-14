@@ -126,7 +126,8 @@ export class FilesService {
 
     try {
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        { command: 'branch.files.list', branch_id: resolved.branchId }
       );
 
       const result = await runExecutorCommand(

@@ -41,17 +41,19 @@ dbTest(
 
     const branchEmit = vi.fn();
     let branchesService!: BranchesService;
+    let reposService!: ReposService;
     const app = {
       get: vi.fn(() => ({})),
       service: vi.fn((path: string) => {
         if (path === 'branches') return branchesService;
+        if (path === 'repos') return reposService;
         throw new Error(`Unexpected service: ${path}`);
       }),
     } as unknown as Application;
     const serviceDb = createTenantScopedDatabaseProxy(db);
     branchesService = new BranchesService(serviceDb, app);
     branchesService.emit = branchEmit;
-    const reposService = new ReposService(serviceDb, app);
+    reposService = new ReposService(serviceDb, app);
     const serviceRepo = (reposService as unknown as { repoRepo: RepoRepository }).repoRepo;
     vi.spyOn(serviceRepo, 'delete').mockRejectedValueOnce(
       new Error('forced final repository deletion failure')

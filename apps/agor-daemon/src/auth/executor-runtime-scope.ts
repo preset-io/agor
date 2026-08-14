@@ -3,6 +3,7 @@ import type {
   AuthenticatedParams,
   Branch,
   BranchID,
+  ExecutorServiceTokenPayload,
   HookContext,
   Params,
   RepoFilesystemOperationID,
@@ -12,6 +13,7 @@ import {
   BRANCH_FILESYSTEM_LIFECYCLE_FIELDS,
   BRANCH_IMMUTABLE_FIELDS,
   BRANCH_SERVER_MANAGED_FIELDS,
+  isExecutorServiceTokenPayload,
 } from '@agor/core/types';
 import {
   EXECUTOR_SESSION_TOKEN_PURPOSE,
@@ -66,22 +68,9 @@ export function isBranchScopedExecutorRequest(context: HookContext, branchId: st
   return scopedPayload(context)?.branch_id === branchId;
 }
 
-type BranchExecutorServicePayload = {
-  type: 'service';
-  sub: 'executor-service';
-  purpose: 'executor-service';
-  role: 'service';
-  command: string;
-  branch_id: string;
-  filesystem_operation_id?: string;
-};
+type BranchExecutorServicePayload = ExecutorServiceTokenPayload & { branch_id: string };
 
-export type RepoExecutorServicePayload = {
-  type: 'service';
-  sub: 'executor-service';
-  purpose: 'executor-service';
-  role: 'service';
-  command: string;
+export type RepoExecutorServicePayload = ExecutorServiceTokenPayload & {
   repo_id: string;
   filesystem_operation_id?: RepoFilesystemOperationID;
 };
@@ -89,14 +78,7 @@ export type RepoExecutorServicePayload = {
 export function isRepoExecutorServicePayload(value: unknown): value is RepoExecutorServicePayload {
   if (!value || typeof value !== 'object') return false;
   const payload = value as Partial<RepoExecutorServicePayload>;
-  return (
-    payload.type === 'service' &&
-    payload.sub === 'executor-service' &&
-    payload.purpose === 'executor-service' &&
-    payload.role === 'service' &&
-    typeof payload.command === 'string' &&
-    typeof payload.repo_id === 'string'
-  );
+  return isExecutorServiceTokenPayload(payload) && typeof payload.repo_id === 'string';
 }
 
 export function getRepoExecutorServicePayload(
@@ -112,14 +94,7 @@ export function getRepoExecutorServicePayload(
 function isBranchExecutorServicePayload(value: unknown): value is BranchExecutorServicePayload {
   if (!value || typeof value !== 'object') return false;
   const payload = value as Partial<BranchExecutorServicePayload>;
-  return (
-    payload.type === 'service' &&
-    payload.sub === 'executor-service' &&
-    payload.purpose === 'executor-service' &&
-    payload.role === 'service' &&
-    typeof payload.command === 'string' &&
-    typeof payload.branch_id === 'string'
-  );
+  return isExecutorServiceTokenPayload(payload) && typeof payload.branch_id === 'string';
 }
 
 export type BranchFilesystemLifecycleCapability =
@@ -148,11 +123,19 @@ export function getBranchFilesystemLifecycleCapability(
   const payload = params.authentication?.payload;
   if (
     isBranchExecutorServicePayload(payload) &&
-    payload.command === 'git.branch.add' &&
     payload.branch_id === branchId &&
     typeof payload.filesystem_operation_id === 'string'
   ) {
-    return { kind: 'create', operationId: payload.filesystem_operation_id };
+    if (payload.command === 'git.branch.add') {
+      return { kind: 'create', operationId: payload.filesystem_operation_id };
+    }
+    if (payload.command === 'git.branch.remove') {
+      return {
+        kind: 'delete',
+        operationId: payload.filesystem_operation_id,
+        metadataRemovalAllowed: false,
+      };
+    }
   }
   return null;
 }
@@ -275,6 +258,260 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function routeId(context: HookContext): string | undefined {
   return (context.params as Params & { route?: { id?: string } }).route?.id;
+}
+
+const EXECUTOR_SERVICE_CAPABILITY_AUTHORIZED = Symbol('executorServiceCapabilityAuthorized');
+
+export function hasAuthorizedExecutorServiceCapability(params: Params | undefined): boolean {
+  return Boolean(
+    (params as (Params & { [EXECUTOR_SERVICE_CAPABILITY_AUTHORIZED]?: boolean }) | undefined)?.[
+      EXECUTOR_SERVICE_CAPABILITY_AUTHORIZED
+    ]
+  );
+}
+
+function requestId(context: HookContext): string | undefined {
+  return typeof context.id === 'string' ? context.id : routeId(context);
+}
+
+function servicePayload(context: HookContext): ExecutorServiceTokenPayload | null {
+  const raw = (context.params as AuthenticatedParams).authentication?.payload as
+    | Record<string, unknown>
+    | undefined;
+  if (raw?.type !== 'service' || raw.sub !== 'executor-service') return null;
+  // Terminal tokens share the JWT strategy but are deliberately not service
+  // capabilities and do not call Feathers services.
+  if (raw.role === 'terminal-executor' || typeof raw.terminal_user_id === 'string') return null;
+  if (!isExecutorServiceTokenPayload(raw)) {
+    throw new Forbidden('Executor service token is missing a recognized command capability');
+  }
+  return raw;
+}
+
+function payloadAllowsBranch(payload: ExecutorServiceTokenPayload, branchId: string): boolean {
+  return (
+    payload.branch_id === branchId ||
+    (Array.isArray(payload.branch_ids) && payload.branch_ids.includes(branchId))
+  );
+}
+
+async function loadBranchForServiceCapability(
+  context: HookContext,
+  branchId: string
+): Promise<{ repo_id?: string; board_id?: string } | null> {
+  try {
+    return (await context.app.service('branches').get(branchId, {
+      ...context.params,
+      provider: undefined,
+    })) as { repo_id?: string; board_id?: string };
+  } catch {
+    return null;
+  }
+}
+
+async function branchMatchesServiceScope(
+  context: HookContext,
+  payload: ExecutorServiceTokenPayload,
+  branchId: string
+): Promise<boolean> {
+  if (payloadAllowsBranch(payload, branchId)) return true;
+  if (!payload.repo_id && !payload.board_id) return false;
+  const branch = await loadBranchForServiceCapability(context, branchId);
+  return Boolean(
+    branch &&
+      ((payload.repo_id !== undefined && branch.repo_id === payload.repo_id) ||
+        (payload.board_id !== undefined && branch.board_id === payload.board_id))
+  );
+}
+
+const EXACT_BRANCH_READ_COMMANDS = new Set<ExecutorServiceTokenPayload['command']>([
+  'git.branch.add',
+  'git.branch.remove',
+  'branch.files.list',
+  'branch.files.browse',
+  'branch.files.read',
+  'branch.filesystem.status',
+  'branch.artifact.publish',
+  'branch.artifact.land',
+  'branch.artifact.validate',
+  'branch.knowledge.write',
+  'branch.knowledge.read',
+  'branch.gateway.slack-file-upload',
+  'branch.upload.materialize',
+  'branch.agor-yml.import',
+  'branch.agor-yml.export',
+  'unix.sync-branch',
+]);
+
+async function executorServiceRequestIsAllowed(
+  context: HookContext,
+  payload: ExecutorServiceTokenPayload
+): Promise<boolean> {
+  const path = normalizePath(context.path);
+  const id = requestId(context);
+  const query = ((context.params as Params).query ?? {}) as Record<string, unknown>;
+  const data = asRecord(context.data);
+
+  if (path === 'branches') {
+    if (context.method === 'find') {
+      if (payload.command === 'git.branch.remove') return true;
+      if (payload.command === 'git.managed-credentials.reconcile') return true;
+      // Repository deletion must prove that none of its branch roots overlap
+      // any other tenant-owned branch or repository namespace before it
+      // recursively removes them. This is a read-only tenant inventory; every
+      // mutation remains bound to the exact signed repo/operation claims.
+      if (payload.command === 'git.repo.delete') return true;
+      if (payload.command === 'git.clone' || payload.command === 'unix.sync-repo') {
+        return query.repo_id === payload.repo_id;
+      }
+      return false;
+    }
+    if (!id) return false;
+    if (context.method === 'get') {
+      if (EXACT_BRANCH_READ_COMMANDS.has(payload.command)) {
+        return payloadAllowsBranch(payload, id);
+      }
+      if (payload.command === 'unix.sync-board') {
+        return branchMatchesServiceScope(context, payload, id);
+      }
+      return false;
+    }
+    if (context.method === 'patch') {
+      if (
+        payload.command !== 'git.branch.add' &&
+        payload.command !== 'git.branch.remove' &&
+        payload.command !== 'unix.sync-branch' &&
+        payload.command !== 'unix.sync-board'
+      ) {
+        return false;
+      }
+      return branchMatchesServiceScope(context, payload, id);
+    }
+    return false;
+  }
+
+  if (path === 'repos') {
+    if (context.method === 'find') {
+      return (
+        payload.command === 'git.branch.remove' ||
+        payload.command === 'git.repo.delete' ||
+        payload.command === 'git.managed-credentials.reconcile'
+      );
+    }
+    if (!id) return false;
+    if (context.method === 'get') {
+      if (payload.repo_id === id) return true;
+      if (payload.command === 'unix.sync-branch' && payload.branch_id) {
+        const branch = await loadBranchForServiceCapability(context, payload.branch_id);
+        return branch?.repo_id === id;
+      }
+      if (payload.command === 'unix.sync-board' && payload.board_id) {
+        const branches = await context.app.service('branches').find({
+          ...context.params,
+          provider: undefined,
+          query: { repo_id: id, board_id: payload.board_id, $limit: 1 },
+        });
+        const rows = Array.isArray(branches) ? branches : branches.data;
+        return rows.length > 0;
+      }
+      return false;
+    }
+    if (context.method === 'patch') {
+      return (
+        payload.repo_id === id &&
+        (payload.command === 'git.clone' || payload.command === 'unix.sync-repo')
+      );
+    }
+    return false;
+  }
+
+  if (path === 'users') {
+    if (context.method === 'getGitEnvironment') {
+      return (
+        (payload.command === 'git.clone' || payload.command === 'git.branch.add') &&
+        typeof data?.userId === 'string' &&
+        data.userId === payload.user_id
+      );
+    }
+    return (
+      context.method === 'get' &&
+      id === payload.user_id &&
+      (payload.command === 'git.clone' ||
+        payload.command === 'unix.sync-user' ||
+        payload.command === 'unix.sync-repo')
+    );
+  }
+
+  if (path === 'sessions') {
+    if (context.method !== 'find' || typeof query.branch_id !== 'string') return false;
+    if (payload.command === 'git.branch.add' || payload.command === 'unix.sync-branch') {
+      return query.branch_id === payload.branch_id;
+    }
+    if (payload.command === 'unix.sync-board') {
+      return branchMatchesServiceScope(context, payload, query.branch_id);
+    }
+    return false;
+  }
+
+  if (path === 'branches/:id/owners' || path === 'branches/:id/fs-access-users') {
+    if (context.method !== 'find' || !id) return false;
+    if (
+      payload.command !== 'git.clone' &&
+      payload.command !== 'git.branch.add' &&
+      payload.command !== 'unix.sync-repo' &&
+      payload.command !== 'unix.sync-branch' &&
+      payload.command !== 'unix.sync-board'
+    ) {
+      return false;
+    }
+    return branchMatchesServiceScope(context, payload, id);
+  }
+
+  if (path === 'boards/:id/aligned-branches') {
+    return (
+      context.method === 'find' && payload.command === 'unix.sync-board' && id === payload.board_id
+    );
+  }
+
+  if (path === 'artifacts') {
+    if (context.method === 'get') {
+      return payload.command === 'branch.artifact.land' && id === payload.artifact_id;
+    }
+    if (context.method === 'publishFromExecutor' || context.method === 'validateFromExecutor') {
+      return (
+        (payload.command === 'branch.artifact.publish' ||
+          payload.command === 'branch.artifact.validate') &&
+        data?.branch_id === payload.branch_id
+      );
+    }
+    return false;
+  }
+
+  return false;
+}
+
+/**
+ * Fail-closed command/resource boundary for every full executor service JWT.
+ * Install this as an `all` hook on every Feathers service: a role=`service`
+ * identity is never authority by itself.
+ */
+export function executorServiceCapabilityGuard() {
+  return async (context: HookContext): Promise<HookContext> => {
+    if (!(context.params as Params).provider) return context;
+    const payload = servicePayload(context);
+    if (!payload) return context;
+    if (!(await executorServiceRequestIsAllowed(context, payload))) {
+      throw new Forbidden(
+        `Executor service capability '${payload.command}' is not valid for ${normalizePath(context.path)}.${context.method}`
+      );
+    }
+    (
+      context.params as Params & {
+        [EXECUTOR_SERVICE_CAPABILITY_AUTHORIZED]?: boolean;
+      }
+    )[EXECUTOR_SERVICE_CAPABILITY_AUTHORIZED] = true;
+    return context;
+  };
 }
 
 function routeSessionId(context: HookContext): string | undefined {

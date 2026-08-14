@@ -388,7 +388,7 @@ describe('protectExternalRepoManagedWrites', () => {
         method: 'get',
         data: undefined,
       })
-    ).rejects.toThrow(/cannot perform get/);
+    ).rejects.toThrow(/missing resource scope/);
     await expect(
       enforceRepoServiceAccountCapability({
         ...context({}, payload),

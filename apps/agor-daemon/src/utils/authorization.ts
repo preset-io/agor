@@ -5,7 +5,11 @@
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, UserRole } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
-import { executorRuntimeScopeGuard } from '../auth/executor-runtime-scope.js';
+import {
+  executorRuntimeScopeGuard,
+  executorServiceCapabilityGuard,
+  hasAuthorizedExecutorServiceCapability,
+} from '../auth/executor-runtime-scope.js';
 
 export type Role = UserRole;
 
@@ -29,10 +33,13 @@ export function ensureMinimumRole(
     throw new NotAuthenticated('Authentication required');
   }
 
-  // Skip authorization for service accounts (executor, etc.)
-  // biome-ignore lint/suspicious/noExplicitAny: Service account flag is added dynamically by auth strategy
-  if ((params.user as any)._isServiceAccount === true) {
-    return;
+  // A service identity is not itself authorization. The global executor
+  // capability hook must have matched its signed command and exact resource
+  // before ordinary role gates may be bypassed. Route services registered
+  // after the global hook fail closed here.
+  if ((params.user as { _isServiceAccount?: boolean })._isServiceAccount === true) {
+    if (hasAuthorizedExecutorServiceCapability(params)) return;
+    throw new Forbidden('Executor service credential is not valid for this operation');
   }
 
   if (!hasMinimumRole(params.user.role, minimumRole)) {
@@ -155,6 +162,7 @@ export function registerAuthenticatedRoute(
   for (const [method, config] of Object.entries(authConfig)) {
     hooks[method] = [
       requireAuth,
+      executorServiceCapabilityGuard(),
       executorRuntimeScopeGuard(),
       requireMinimumRole(config.role, config.action),
     ];

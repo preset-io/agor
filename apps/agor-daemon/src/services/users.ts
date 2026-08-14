@@ -59,6 +59,7 @@ import {
   AGENTIC_TOOL_NAMES,
   extractAgenticToolsPublicValues,
   hasMinimumRole,
+  isExecutorServiceTokenPayload,
   normalizeRole,
   ROLES,
   toAgenticToolsStatus,
@@ -845,7 +846,8 @@ export class UsersService {
    * Feathers RPC so per-user credentials flow through the daemon's auth
    * boundary instead of being baked into spawn payloads.
    *
-   * Auth: service-account JWTs may fetch any user's env (executor is trusted).
+   * Auth: only clone/materialization capabilities signed for this exact user
+   * may fetch their environment. A service identity alone is never enough.
    * User JWTs may only fetch their own env.
    */
   async getGitEnvironment(
@@ -855,14 +857,24 @@ export class UsersService {
     const userId = data.userId as UserID;
     const caller = (params as AuthenticatedParams | undefined)?.user;
 
-    // Auth check: service accounts can fetch any user's env;
-    // regular users can only fetch their own.
+    // Auth check: regular users can only fetch their own. Executor service
+    // accounts additionally need a command-scoped credential bound to this
+    // user; deletion/status capabilities deliberately carry no such claim.
     if (params?.provider) {
       if (!caller) {
         throw new NotAuthenticated('Authentication required');
       }
       const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
-      if (!isService && caller.user_id !== userId) {
+      if (isService) {
+        const payload = (params as AuthenticatedParams).authentication?.payload;
+        if (
+          !isExecutorServiceTokenPayload(payload) ||
+          (payload.command !== 'git.clone' && payload.command !== 'git.branch.add') ||
+          payload.user_id !== userId
+        ) {
+          throw new Forbidden('Executor credential cannot access this git environment');
+        }
+      } else if (caller.user_id !== userId) {
         throw new Forbidden("Cannot access another user's git environment");
       }
     }

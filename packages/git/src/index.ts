@@ -1792,7 +1792,7 @@ export async function getGitState(repoPath: string): Promise<string> {
 export async function deleteRepoDirectory(
   repoPath: string,
   allowedReposDir: string,
-  options: { expectedRelativePath: string }
+  options: { expectedRelativePath: string; mountInfo?: string }
 ): Promise<void> {
   const { lstat, realpath, rm, stat } = await import('node:fs/promises');
   const { dirname, isAbsolute, relative, resolve, sep } = await import('node:path');
@@ -1836,6 +1836,7 @@ export async function deleteRepoDirectory(
   if (targetInfo.dev !== parentInfo.dev) {
     throw new Error('Safety check failed: Repository root is a filesystem mount point');
   }
+  await assertNoManagedRootMounts(resolvedTarget, options.mountInfo);
 
   await rm(resolvedTarget, { recursive: true, force: true });
   try {
@@ -1866,6 +1867,8 @@ export async function deleteBranchDirectory(
     privileged?: boolean;
     /** Test seam; production callers use the built-in sudo runner. */
     privilegedDelete?: (target: string) => Promise<void>;
+    /** Test seam for Linux mount-table validation. */
+    mountInfo?: string;
   }
 ): Promise<void> {
   const { lstat, realpath, rm, stat } = await import('node:fs/promises');
@@ -1924,6 +1927,7 @@ export async function deleteBranchDirectory(
   if (targetInfo.dev !== parentInfo.dev) {
     throw new Error('Safety check failed: Branch root is a filesystem mount point');
   }
+  await assertNoManagedRootMounts(resolvedTarget, options.mountInfo);
 
   if (options.privileged) {
     const privilegedDelete = options.privilegedDelete ?? deleteBranchDirectoryWithSudo;
@@ -1942,6 +1946,48 @@ export async function deleteBranchDirectory(
     throw error;
   }
   throw new Error('Branch directory deletion could not be verified');
+}
+
+/** Decode the octal escapes used for mount paths in `/proc/self/mountinfo`. */
+function decodeMountInfoPath(value: string): string {
+  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
+    String.fromCharCode(Number.parseInt(octal, 8))
+  );
+}
+
+/**
+ * Refuse a managed deletion root that is itself a mount or contains one.
+ *
+ * `rm --one-file-system` compares device IDs and therefore cannot protect a
+ * same-device bind mount. Linux mountinfo lists mount identities directly, so
+ * checking mount points closes that gap before either privileged or ordinary
+ * recursive deletion starts. An attacker capable of racing mount-table changes
+ * already has host mount authority; `--one-file-system` remains the second
+ * fence for ordinary cross-device mounts.
+ */
+export async function assertNoManagedRootMounts(
+  target: string,
+  suppliedMountInfo?: string
+): Promise<void> {
+  if (process.platform !== 'linux' && suppliedMountInfo === undefined) return;
+  const { readFile } = await import('node:fs/promises');
+  const { isAbsolute, relative, resolve, sep } = await import('node:path');
+  const mountInfo = suppliedMountInfo ?? (await readFile('/proc/self/mountinfo', 'utf8'));
+  const resolvedTarget = resolve(target);
+
+  for (const line of mountInfo.split('\n')) {
+    if (!line) continue;
+    const fields = line.split(' ');
+    if (fields.length < 6) continue;
+    const mountPoint = resolve(decodeMountInfoPath(fields[4]));
+    const fromTarget = relative(resolvedTarget, mountPoint);
+    const isTargetOrDescendant =
+      fromTarget === '' ||
+      (fromTarget !== '..' && !fromTarget.startsWith(`..${sep}`) && !isAbsolute(fromTarget));
+    if (isTargetOrDescendant) {
+      throw new Error('Safety check failed: Managed deletion root contains a filesystem mount');
+    }
+  }
 }
 
 const PRIVILEGED_BRANCH_DELETE_TIMEOUT_MS = 10 * 60_000;

@@ -28,6 +28,7 @@ import {
   generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
+  RepoFilesystemLifecycleConflictError,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   UsersRepository,
@@ -152,9 +153,11 @@ type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
 // client-forgeable query or service argument.
 const BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE = Symbol('branchPatchExpectedFilesystemLifecycle');
 const BRANCH_REMOVE_EXPECT_FILESYSTEM_LIFECYCLE = Symbol('branchRemoveExpectedFilesystemLifecycle');
+const BRANCH_PATCH_RESERVE_PARENT_REPO = Symbol('branchPatchReserveParentRepo');
 type InternalBranchPatchParams = BranchParams & {
   [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]?: BranchFilesystemLifecycleExpectation;
   [BRANCH_REMOVE_EXPECT_FILESYSTEM_LIFECYCLE]?: BranchFilesystemLifecycleExpectation;
+  [BRANCH_PATCH_RESERVE_PARENT_REPO]?: boolean;
 };
 
 // The sudo rm helper has its own 10-minute resource bound. Leave a minute for
@@ -300,27 +303,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     };
   }
 
-  private async generateBranchFilesystemDeleteToken(
-    branch: Branch,
-    userId: UserID,
-    params: BranchParams | undefined,
-    tokenType: 'branch-delete' | 'branch-remove'
-  ): Promise<string> {
+  private generateBranchFilesystemDeleteToken(branch: Branch): string {
     if (!branch.filesystem_operation_id) {
       throw new Error('Branch filesystem deletion has no operation generation');
     }
-    const tokenService = (
-      this.app as unknown as {
-        sessionTokenService?: import('../services/session-token-service').SessionTokenService;
+    return generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      {
+        command: 'git.branch.remove',
+        branch_id: branch.branch_id,
+        repo_id: branch.repo_id,
+        filesystem_operation_id: branch.filesystem_operation_id,
       }
-    ).sessionTokenService;
-    if (!tokenService) throw new Error('Session token service unavailable');
-    return this.withTenantDatabase(params, () =>
-      tokenService.generateToken(tokenType, userId, {
-        branchId: branch.branch_id,
-        filesystemOperationId: branch.filesystem_operation_id,
-        maxUses: -1,
-      })
     );
   }
 
@@ -395,20 +389,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return patched;
   }
 
-  private async runBranchFilesystemDelete(
-    branch: Branch,
-    userId: UserID,
-    params: BranchParams | undefined,
-    tokenType: 'branch-delete' | 'branch-remove'
-  ) {
+  private async runBranchFilesystemDelete(branch: Branch, params: BranchParams | undefined) {
     let sessionToken: string;
     try {
-      sessionToken = await this.generateBranchFilesystemDeleteToken(
-        branch,
-        userId,
-        params,
-        tokenType
-      );
+      sessionToken = this.generateBranchFilesystemDeleteToken(branch);
     } catch {
       await this.patchBranchDeleteFailed(branch, GENERIC_BRANCH_DELETE_FAILURE, params);
       return {
@@ -435,18 +419,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return result;
   }
 
-  private async spawnBranchFilesystemDelete(
-    branch: Branch,
-    userId: UserID,
-    params?: BranchParams
-  ): Promise<void> {
+  private async spawnBranchFilesystemDelete(branch: Branch, params?: BranchParams): Promise<void> {
     try {
-      const sessionToken = await this.generateBranchFilesystemDeleteToken(
-        branch,
-        userId,
-        params,
-        'branch-delete'
-      );
+      const sessionToken = this.generateBranchFilesystemDeleteToken(branch);
       spawnExecutor(this.branchFilesystemDeletePayload(branch, sessionToken, params), {
         logPrefix: `[BranchesService.delete ${branch.name}]`,
         onExit: async (code) => {
@@ -1361,13 +1336,22 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     let updatedBranch: Branch;
     try {
       updatedBranch = (
-        expectedFilesystemLifecycle
-          ? await this.branchRepo.update(id, data, { expectedFilesystemLifecycle })
+        expectedFilesystemLifecycle ||
+        (params as InternalBranchPatchParams | undefined)?.[BRANCH_PATCH_RESERVE_PARENT_REPO]
+          ? await this.branchRepo.update(id, data, {
+              expectedFilesystemLifecycle,
+              reserveParentRepoForMaterialization: (
+                params as InternalBranchPatchParams | undefined
+              )?.[BRANCH_PATCH_RESERVE_PARENT_REPO],
+            })
           : await super.patch(id, data, params)
       ) as Branch;
     } catch (error) {
       if (error instanceof BranchFilesystemLifecycleConflictError) {
         throw new Conflict('Branch filesystem lifecycle changed; retry the operation');
+      }
+      if (error instanceof RepoFilesystemLifecycleConflictError) {
+        throw new Conflict('Repository filesystem lifecycle changed; retry the operation');
       }
       throw error;
     }
@@ -1627,15 +1611,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // requested. Keeping the row is what makes a failure visible and retryable.
     if (deleteFromFilesystem) {
       console.log(`🗑️  Removing branch filesystem before metadata: ${branch.path}`);
-      const userId = (params as AuthenticatedParams).user!.user_id as UserID;
       this.assertFilesystemLifecycleIdle(branch);
       const deletingBranch = await this.markBranchDeleting(branch, params);
-      const deletion = await this.runBranchFilesystemDelete(
-        deletingBranch,
-        userId,
-        params,
-        'branch-remove'
-      );
+      const deletion = await this.runBranchFilesystemDelete(deletingBranch, params);
       if (!deletion.success) {
         throw new Conflict(
           `${deletion.error?.message || GENERIC_BRANCH_DELETE_FAILURE} Branch metadata was retained.`
@@ -1856,11 +1834,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       if (filesystemAction === 'deleted') {
         // Once `deleting` is persisted, start the owner immediately so an
         // unrelated session-archive failure cannot strand the lifecycle lock.
-        await this.spawnBranchFilesystemDelete(
-          archivedBranch as Branch,
-          (userId ?? currentUserId) as UserID,
-          params
-        );
+        await this.spawnBranchFilesystemDelete(archivedBranch as Branch, params);
       }
 
       // Archive all sessions in this branch
@@ -1893,12 +1867,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       let deletingBranch: Branch | undefined;
       if (filesystemAction === 'deleted') {
         deletingBranch = await this.markBranchDeleting(branch, params);
-        const deletion = await this.runBranchFilesystemDelete(
-          deletingBranch,
-          (userId ?? currentUserId) as UserID,
-          params,
-          'branch-delete'
-        );
+        const deletion = await this.runBranchFilesystemDelete(deletingBranch, params);
         if (!deletion.success) {
           throw new Conflict(
             `${deletion.error?.message || GENERIC_BRANCH_DELETE_FAILURE} Branch metadata was retained.`
@@ -1985,6 +1954,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         ...params,
         provider: undefined,
         [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]: this.filesystemLifecycleExpectation(branch),
+        [BRANCH_PATCH_RESERVE_PARENT_REPO]: true,
       } as InternalBranchPatchParams)
     );
     emitServiceEvent(this.app, {
@@ -1998,7 +1968,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
     const statusToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      { command: 'branch.filesystem.status', branch_id: branch.branch_id }
     );
     const statusResult = await runExecutorCommand(
       {
@@ -2124,6 +2095,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             command: 'git.branch.add',
             branch_id: branch.branch_id,
             repo_id: repo.repo_id,
+            user_id: branch.created_by,
             filesystem_operation_id: filesystemOperationId,
           }
         );
@@ -2135,6 +2107,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             params: {
               branchId: branch.branch_id,
               repoId: repo.repo_id,
+              userId: branch.created_by,
               filesystemOperationId,
               branchesRoot: getBranchesDir(params?.tenant?.tenant_id ?? getCurrentTenantId()),
               // Use restore mode: checks if branch exists on remote via ls-remote,

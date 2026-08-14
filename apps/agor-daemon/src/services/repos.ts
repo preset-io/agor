@@ -760,7 +760,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     try {
       branch = (await branchesService.create(branchCreateData, params)) as Branch;
     } catch (error) {
-      if (error instanceof RepoFilesystemNamespaceConflictError) {
+      if (
+        error instanceof RepoFilesystemLifecycleConflictError ||
+        error instanceof RepoFilesystemNamespaceConflictError
+      ) {
         throw new Conflict(error.message);
       }
       if (isDatabaseUniqueConstraintError(error)) {
@@ -892,6 +895,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           command: 'git.branch.add',
           branch_id: branch.branch_id,
           repo_id: repo.repo_id,
+          user_id: userId,
           filesystem_operation_id: filesystemOperationId,
         }
       );
@@ -1004,7 +1008,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     serviceParams?: RepoParams
   ) {
     const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      { command, branch_id: branch.branch_id, repo_id: repo.repo_id }
     );
     const asUser = await resolveExecutorReadAsUser(
       this.db,

@@ -13,6 +13,7 @@ import { ensureTeammateKnowledgeNamespace } from './teammate-knowledge';
 
 describe('ensureTeammateKnowledgeNamespace', () => {
   dbTest('creates an open primary namespace and stores teammate kb config', async ({ db }) => {
+    const fixtureId = generateId();
     const user = await new UsersRepository(db).create({
       user_id: generateId() as UserID,
       email: `teammate-kb-${Date.now()}@test.local`,
@@ -25,7 +26,7 @@ describe('ensureTeammateKnowledgeNamespace', () => {
       name: 'Teammate KB Repo',
       repo_type: 'remote',
       remote_url: 'https://github.com/test/repo.git',
-      local_path: '/tmp/repo',
+      local_path: `/tmp/teammate-kb-repo-${fixtureId}`,
       default_branch: 'main',
     });
     const branch = await new BranchRepository(db).create({
@@ -34,6 +35,7 @@ describe('ensureTeammateKnowledgeNamespace', () => {
       name: 'teammate-branch',
       ref: 'teammate-branch',
       branch_unique_id: 1,
+      path: `/tmp/teammate-kb-branch-${fixtureId}`,
       created_by: user.user_id,
       custom_context: {
         teammate: { kind: 'teammate', displayName: 'Helper' },

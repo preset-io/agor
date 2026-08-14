@@ -21,11 +21,12 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { realpath as fsRealpath } from 'node:fs/promises';
 import { userInfo } from 'node:os';
-import { isAbsolute, join, sep as pathSeparator, relative, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { getReposDir, isValidManagedRepoSlug, isValidSlug } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
 import { type BranchID, isValidManagedBranchName, type Repo } from '@agor/core/types';
+import { filesystemPathsOverlap, findFilesystemPathOverlap } from '@agor/core/utils/path';
 import { diagnoseGit } from '@agor/git';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
@@ -84,16 +85,6 @@ async function canonicalFilesystemIdentity(inputPath: string): Promise<string> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return resolve(inputPath);
     throw error;
   }
-}
-
-function filesystemPathsOverlap(left: string, right: string): boolean {
-  const contains = (parent: string, child: string) => {
-    const rel = relative(parent, child);
-    return (
-      rel === '' || (rel !== '..' && !rel.startsWith(`..${pathSeparator}`) && !isAbsolute(rel))
-    );
-  };
-  return contains(left, right) || contains(right, left);
 }
 
 /**
@@ -648,14 +639,25 @@ export async function handleGitRepoDelete(
     // valid cleanup before deletion even starts.
     const canonicalBranches: Array<{
       branchId: string | undefined;
+      repoId: string | undefined;
       canonicalPath: string;
     }> = [];
     for (const candidate of allBranches) {
       if (!candidate.path) continue;
       canonicalBranches.push({
         branchId: candidate.branch_id,
+        repoId: candidate.repo_id,
         canonicalPath: await canonicalFilesystemIdentity(candidate.path),
       });
+    }
+    if (
+      findFilesystemPathOverlap(
+        canonicalBranches,
+        (candidate) => candidate.canonicalPath,
+        (left, right) => left.repoId === repoId || right.repoId === repoId
+      )
+    ) {
+      throw new Error('SAFETY CHECK FAILED: Branch root overlaps another metadata owner');
     }
     const otherRepoNamespaces: string[] = [];
     for (const candidateRepo of allRepos) {
@@ -675,12 +677,6 @@ export async function handleGitRepoDelete(
       const canonicalBranchPath =
         canonicalBranches.find((candidate) => candidate.branchId === branch.branch_id)
           ?.canonicalPath ?? (await canonicalFilesystemIdentity(branch.path));
-      for (const candidate of canonicalBranches) {
-        if (candidate.branchId === branch.branch_id) continue;
-        if (filesystemPathsOverlap(canonicalBranchPath, candidate.canonicalPath)) {
-          throw new Error('SAFETY CHECK FAILED: Branch root overlaps another metadata owner');
-        }
-      }
       for (const candidateNamespace of otherRepoNamespaces) {
         if (filesystemPathsOverlap(canonicalBranchPath, candidateNamespace)) {
           throw new Error(
@@ -692,8 +688,8 @@ export async function handleGitRepoDelete(
         expectedRelativePath: join(repo.slug, branch.name),
       });
       deletedPaths.push(branch.path);
-      console.log(`🗑️  [git.repo.delete] Deleted branch directory: ${branch.path}`);
     }
+    console.log(`🗑️  [git.repo.delete] Deleted ${branches.length} branch directories`);
 
     await deleteRepoDirectory(repoPath, payload.params.reposRoot, {
       expectedRelativePath: repo.slug,
@@ -1158,6 +1154,9 @@ export async function handleGitBranchAdd(
     }
     lifecycleOwnershipVerified = true;
     const repo = await client.service('repos').get(payload.params.repoId);
+    if (repo.filesystem_status === 'deleting' || repo.filesystem_status === 'delete_failed') {
+      throw new BranchFilesystemOperationSupersededError('creation');
+    }
 
     // Fetch per-user git credentials via Feathers RPC
     const env = await fetchUserGitEnvironment(client, payload.params.userId);

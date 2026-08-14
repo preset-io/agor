@@ -69,7 +69,7 @@ async function seedRepoAndBranch(db: Database, branchPath: string) {
     name: 'Artifact Test Repo',
     repo_type: 'remote',
     remote_url: 'https://github.com/test/repo.git',
-    local_path: path.dirname(branchPath),
+    local_path: `${branchPath}-repo-root`,
     default_branch: 'main',
   });
   return new BranchRepository(db).create({

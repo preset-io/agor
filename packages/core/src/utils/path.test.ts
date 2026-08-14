@@ -1,7 +1,35 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { expandPath, extractDbFilePath } from './path';
+import {
+  expandPath,
+  extractDbFilePath,
+  filesystemPathsOverlap,
+  findFilesystemPathOverlap,
+} from './path';
+
+describe('filesystem path ownership', () => {
+  it('distinguishes a sibling prefix from a descendant', () => {
+    expect(filesystemPathsOverlap('/managed/repo', '/managed/repo-old')).toBe(false);
+    expect(filesystemPathsOverlap('/managed/repo', '/managed/repo/branch')).toBe(true);
+  });
+
+  it('finds a relevant overlap in a large inventory without sibling-prefix confusion', () => {
+    const values = [
+      { id: 'unrelated', path: '/managed/repo-old' },
+      { id: 'owner', path: '/managed/repo' },
+      { id: 'target', path: '/managed/repo/branch' },
+    ];
+
+    expect(
+      findFilesystemPathOverlap(
+        values,
+        (value) => value.path,
+        (left, right) => left.id === 'target' || right.id === 'target'
+      )?.map((value) => value.id)
+    ).toEqual(['owner', 'target']);
+  });
+});
 
 describe('expandPath', () => {
   it('expands ~/ to home directory', () => {

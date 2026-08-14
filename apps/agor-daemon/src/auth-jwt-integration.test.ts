@@ -444,25 +444,6 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         app.service('/repos/:id/branches').create({}, { provider: 'rest' })
       ).rejects.toThrow();
     });
-
-    it('DELETE /repos/:id/branches/:name rejects unauthenticated requests', async () => {
-      const reposBranchesDeleteService = {
-        async remove() {
-          return { deleted: true };
-        },
-      };
-
-      app.use('/repos/:id/branches/:name', reposBranchesDeleteService);
-      app.service('/repos/:id/branches/:name').hooks({
-        before: {
-          remove: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'remove')],
-        },
-      });
-
-      await expect(
-        app.service('/repos/:id/branches/:name').remove('id', { provider: 'rest' })
-      ).rejects.toThrow();
-    });
   });
 
   describe('Board Endpoints - Authentication Required', () => {

@@ -121,7 +121,7 @@ describe('ensureMinimumRole', () => {
       expect(() => ensureMinimumRole(params, ROLES.MEMBER)).toThrow(NotAuthenticated);
     });
 
-    it('skips check for service accounts', () => {
+    it('rejects service accounts without a command/resource authorization marker', () => {
       const params = {
         user: {
           user_id: 'svc-001',
@@ -132,7 +132,7 @@ describe('ensureMinimumRole', () => {
         authenticated: true,
         provider: 'rest',
       } as AuthenticatedParams;
-      expect(() => ensureMinimumRole(params, ROLES.ADMIN)).not.toThrow();
+      expect(() => ensureMinimumRole(params, ROLES.ADMIN)).toThrow(Forbidden);
     });
   });
 });
@@ -200,7 +200,7 @@ describe('registerAuthenticatedRoute', () => {
     } as HookContext;
 
     const hooks = installed.before?.create ?? [];
-    expect(hooks).toHaveLength(3);
-    await expect(hooks[1](context)).rejects.toThrow(/task scope/);
+    expect(hooks).toHaveLength(4);
+    await expect(hooks[2](context)).rejects.toThrow(/task scope/);
   });
 });

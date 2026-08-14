@@ -4,7 +4,6 @@
  * Type-safe CRUD operations for git repositories with short ID support.
  */
 
-import { isAbsolute, sep as pathSeparator, relative, resolve } from 'node:path';
 import type {
   Repo,
   RepoEnvironment,
@@ -20,6 +19,7 @@ import { and, eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
 import { resolveRepoGroupName, resolveRepoGroupUpdate } from '../../unix/group-manager';
+import { filesystemPathsOverlap, managedSlugNamespacesOverlap } from '../../utils/path';
 import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
 import {
@@ -123,25 +123,6 @@ function assertExpectedFilesystemLifecycle(
   }
 }
 
-function pathContains(parent: string, child: string): boolean {
-  const rel = relative(resolve(parent), resolve(child));
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${pathSeparator}`) && !isAbsolute(rel));
-}
-
-function pathsOverlap(left: string, right: string): boolean {
-  return pathContains(left, right) || pathContains(right, left);
-}
-
-function slugNamespacesOverlap(left: string, right: string): boolean {
-  const leftSegments = left.split('/');
-  const rightSegments = right.split('/');
-  const sharedLength = Math.min(leftSegments.length, rightSegments.length);
-  for (let index = 0; index < sharedLength; index += 1) {
-    if (leftSegments[index] !== rightSegments[index]) return false;
-  }
-  return true;
-}
-
 export async function lockRepoFilesystemNamespaceMutation(
   db: Database,
   transactionDb: Database
@@ -168,14 +149,14 @@ function assertFilesystemNamespaceAvailable(candidate: Repo, existing: readonly 
     // whose base clone is registered outside Agor's managed repositories
     // directory. A legacy one-segment slug (`org`) must therefore never
     // coexist with a descendant namespace (`org/repo`).
-    const worktreeNamespaceOverlap = slugNamespacesOverlap(other.slug, candidate.slug);
+    const worktreeNamespaceOverlap = managedSlugNamespacesOverlap(other.slug, candidate.slug);
     // Local repositories are user-owned inputs and are never recursively
     // removed by Agor, so registering the same checkout twice is not a
     // destructive-root alias. Any overlap involving a managed remote clone is
     // unsafe because that root can be deleted.
     const destructiveOverlap =
       (other.repo_type === 'remote' || candidate.repo_type === 'remote') &&
-      pathsOverlap(other.local_path, candidate.local_path);
+      filesystemPathsOverlap(other.local_path, candidate.local_path);
     if (worktreeNamespaceOverlap || destructiveOverlap) {
       throw new RepoFilesystemNamespaceConflictError();
     }

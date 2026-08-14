@@ -723,7 +723,8 @@ async function runBranchKnowledgeCommand(
     {
       command,
       sessionToken: generateScopedServiceToken(
-        ctx.app as unknown as { settings: { authentication?: { secret?: string } } }
+        ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
+        { command, branch_id: branchId }
       ),
       daemonUrl: getDaemonUrl(),
       params,
