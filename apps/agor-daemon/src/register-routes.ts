@@ -56,7 +56,6 @@ import {
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
-  BranchArchiveOrDeleteOptions,
   BranchStorageMode,
   HookContext,
   MCPMemberPolicy,
@@ -3533,12 +3532,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const id = params.route?.id;
       if (!id) throw new Error('Branch ID required');
       if (!isBranchArchiveOrDeleteOptions(data)) {
-        throw new BadRequest('Invalid branch archive/delete options');
+        throw new BadRequest(
+          'Invalid archive/delete options: expected a supported metadataAction and filesystemAction'
+        );
       }
-      const options: BranchArchiveOrDeleteOptions = data;
       return branchesService.archiveOrDelete(
         id as import('@agor/core/types').BranchID,
-        options,
+        data,
         params
       );
     },

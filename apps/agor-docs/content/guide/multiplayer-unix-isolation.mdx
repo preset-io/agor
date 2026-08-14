@@ -118,6 +118,9 @@ The daemon requires sudo access for Unix user/group management. Agor provides a 
 **Installation:**
 
 ```bash
+# Exact branch-delete argument boundaries require sudo 1.9.10 or newer.
+sudo --version
+
 # Download the sudoers file
 curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-daemon.sudoers
 
@@ -215,6 +218,9 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
 **Customization:**
 
 - Replace `agor` with your daemon username throughout (e.g., `agorpg`)
+- Use sudo 1.9.10 or newer. The branch-delete grants use anchored POSIX
+  argument regular expressions; older sudo versions cannot enforce that
+  exact-root boundary and must not install those grants.
 - Reinstall the shipped sudoers file after upgrading. Strict and insulated
   branch deletion needs the exact-root `rm` rules shown above; without them,
   the branch is retained with a retryable `delete_failed` filesystem status.

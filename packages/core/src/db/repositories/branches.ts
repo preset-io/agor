@@ -585,6 +585,20 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         current.unix_group,
         Object.hasOwn(updates, 'unix_group') ? updates.unix_group : undefined
       );
+      // `undefined` normally means "preserve" to deepMerge. These lifecycle
+      // fields also need an internal clear operation for unarchive. JSON
+      // clients cannot transmit undefined, so this remains a server-only
+      // contract while branchToInsert maps the omitted fields back to SQL NULL.
+      for (const field of [
+        'archived_at',
+        'archived_by',
+        'filesystem_status',
+        'error_message',
+      ] as const) {
+        if (Object.hasOwn(updates, field) && updates[field] === undefined) {
+          delete merged[field];
+        }
+      }
       // A materialization error describes only the failed filesystem state.
       // Clear it atomically with every explicit transition away from failed
       // so a successful retry/unarchive cannot remain visually poisoned by

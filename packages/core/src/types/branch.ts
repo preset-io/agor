@@ -24,21 +24,66 @@ export type BranchFilesystemAction = (typeof BRANCH_FILESYSTEM_ACTIONS)[number];
 export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
 export type BranchMetadataAction = (typeof BRANCH_METADATA_ACTIONS)[number];
 
-/** Canonical request contract for the hooked branch archive/delete boundary. */
-export interface BranchArchiveOrDeleteOptions {
-  metadataAction: BranchMetadataAction;
-  filesystemAction: BranchFilesystemAction;
-}
+/**
+ * Persisted fields that define which exact filesystem and git object a branch
+ * owns. They are assigned at creation and are never client-managed afterward.
+ */
+export const BRANCH_FILESYSTEM_IDENTITY_FIELDS = [
+  'repo_id',
+  'name',
+  'ref',
+  'ref_type',
+  'path',
+  'new_branch',
+  'storage_mode',
+  'clone_depth',
+] as const satisfies readonly (keyof Branch)[];
+export type BranchFilesystemIdentityField = (typeof BRANCH_FILESYSTEM_IDENTITY_FIELDS)[number];
 
+/** Archive metadata written only by daemon-owned archive/unarchive workflows. */
+export const BRANCH_ARCHIVE_LIFECYCLE_FIELDS = [
+  'archived',
+  'archived_at',
+  'archived_by',
+] as const satisfies readonly (keyof Branch)[];
+export type BranchArchiveLifecycleField = (typeof BRANCH_ARCHIVE_LIFECYCLE_FIELDS)[number];
+
+/** Filesystem lifecycle fields a branch-scoped executor may report. */
+export const BRANCH_FILESYSTEM_LIFECYCLE_FIELDS = [
+  'filesystem_status',
+  'error_message',
+] as const satisfies readonly (keyof Branch)[];
+export type BranchFilesystemLifecycleField = (typeof BRANCH_FILESYSTEM_LIFECYCLE_FIELDS)[number];
+
+/** Shared request shape used by UI, REST, Socket, and MCP deletion paths. */
+export type BranchArchiveOrDeleteOptions =
+  | {
+      metadataAction: 'archive';
+      filesystemAction: BranchFilesystemAction;
+    }
+  | {
+      metadataAction: 'delete';
+      /** Cleaning a directory immediately before discarding its metadata is nonsensical. */
+      filesystemAction: Exclude<BranchFilesystemAction, 'cleaned'>;
+    };
+
+/** Runtime boundary shared by every archive/delete transport. */
 export function isBranchArchiveOrDeleteOptions(
   value: unknown
 ): value is BranchArchiveOrDeleteOptions {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const options = value as Record<string, unknown>;
-  return (
-    BRANCH_METADATA_ACTIONS.some((candidate) => candidate === options.metadataAction) &&
-    BRANCH_FILESYSTEM_ACTIONS.some((candidate) => candidate === options.filesystemAction)
-  );
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (
+    keys.length !== 2 ||
+    !keys.includes('metadataAction') ||
+    !keys.includes('filesystemAction') ||
+    !BRANCH_METADATA_ACTIONS.some((action) => action === record.metadataAction) ||
+    !BRANCH_FILESYSTEM_ACTIONS.some((action) => action === record.filesystemAction)
+  ) {
+    return false;
+  }
+  return record.metadataAction !== 'delete' || record.filesystemAction !== 'cleaned';
 }
 
 export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };

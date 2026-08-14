@@ -36,10 +36,18 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   useEffect(() => {
     if (open) {
       setMetadataAction(initialMetadataAction);
+      setFilesystemAction(initialMetadataAction === 'delete' ? 'deleted' : 'cleaned');
     }
   }, [initialMetadataAction, open]);
 
   const handleOk = () => {
+    if (metadataAction === 'delete') {
+      onConfirm({
+        metadataAction,
+        filesystemAction: filesystemAction === 'cleaned' ? 'deleted' : filesystemAction,
+      });
+      return;
+    }
     onConfirm({ metadataAction, filesystemAction });
   };
 
@@ -97,7 +105,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="cleaned">
+              <Radio value="cleaned" disabled={metadataAction === 'delete'}>
                 <div>
                   <div>Clean workspace (git clean -fdx)</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -122,7 +130,16 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           <Text strong style={{ display: 'block', marginBottom: 8 }}>
             Metadata & Sessions
           </Text>
-          <Radio.Group value={metadataAction} onChange={(e) => setMetadataAction(e.target.value)}>
+          <Radio.Group
+            value={metadataAction}
+            onChange={(e) => {
+              const nextAction = e.target.value as BranchMetadataAction;
+              setMetadataAction(nextAction);
+              if (nextAction === 'delete' && filesystemAction === 'cleaned') {
+                setFilesystemAction('deleted');
+              }
+            }}
+          >
             <Space orientation="vertical">
               <Radio value="archive">
                 <div>

@@ -893,6 +893,30 @@ describe('BranchesService environment start async behavior', () => {
 });
 
 describe('BranchesService.patch primary teammate invariants', () => {
+  it('cannot repoint a same-tenant branch at another branch filesystem identity', async () => {
+    const branchId = 'branch-attacker' as BranchID;
+    const { service, repository } = createPatchHarness({
+      current: {
+        branch_id: branchId,
+        repo_id: 'repo-1',
+        name: 'attacker',
+        ref: 'attacker',
+        path: '/tenant-a/worktrees/org/repo/attacker',
+        new_branch: true,
+        storage_mode: 'clone',
+      },
+      updated: {},
+    });
+
+    await expect(
+      service.patch(branchId, { path: '/tenant-a/worktrees/org/repo/victim' }, {
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never)
+    ).rejects.toThrow(/path.*immutable/i);
+
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
   it('clears the old primary and sets the new board primary when a teammate moves boards', async () => {
     const boardA = 'board-a' as BoardID;
     const boardB = 'board-b' as BoardID;
@@ -1091,6 +1115,24 @@ describe('BranchesService one-shot teammate creation wiring', () => {
 });
 
 describe('BranchesService.unarchive', () => {
+  it('rejects unarchive while asynchronous filesystem deletion is in progress', async () => {
+    const { service } = createServiceHarness();
+    const branchId = 'wt-deleting' as BranchID;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      name: 'WT Deleting',
+      path: '/tmp/wt-deleting',
+      archived: true,
+      filesystem_status: 'deleting',
+      storage_mode: 'clone',
+    } as never);
+    const patchSpy = vi.spyOn(service, 'patch');
+
+    await expect(service.unarchive(branchId)).rejects.toThrow(/still in progress/i);
+    expect(patchSpy).not.toHaveBeenCalled();
+    expect(mockedRunExecutorCommand).not.toHaveBeenCalled();
+  });
+
   it('preserves existing board_id when options.boardId is not provided', async () => {
     const { service, boardObjectsService, sessionsService } = createServiceHarness();
     const branchId = 'wt-1' as BranchID;
@@ -1124,8 +1166,9 @@ describe('BranchesService.unarchive', () => {
         archived_at: undefined,
         archived_by: undefined,
         filesystem_status: undefined,
+        error_message: undefined,
       }),
-      undefined
+      { provider: undefined }
     );
     expect(patchSpy.mock.calls[0][1]).not.toHaveProperty('board_id');
 
@@ -1200,7 +1243,7 @@ describe('BranchesService.unarchive', () => {
         archived: false,
         board_id: newBoardId,
       }),
-      undefined
+      { provider: undefined }
     );
     expect(boardObjectsService.create).toHaveBeenCalledWith({
       board_id: newBoardId,
@@ -1211,6 +1254,25 @@ describe('BranchesService.unarchive', () => {
 });
 
 describe('BranchesService.archiveOrDelete', () => {
+  it.each([
+    { metadataAction: 'destroy', filesystemAction: 'deleted' },
+    { metadataAction: 'delete', filesystemAction: 'cleaned' },
+    { metadataAction: 'archive', filesystemAction: 'typo' },
+  ])(
+    'rejects invalid destructive request %# before reading or mutating a branch',
+    async (options) => {
+      const { service } = createServiceHarness();
+      const getSpy = vi.spyOn(service, 'get');
+      const removeSpy = vi.spyOn(service, 'remove');
+
+      await expect(service.archiveOrDelete('branch-1' as BranchID, options)).rejects.toThrow(
+        /invalid archive\/delete options/i
+      );
+      expect(getSpy).not.toHaveBeenCalled();
+      expect(removeSpy).not.toHaveBeenCalled();
+    }
+  );
+
   it('preserves placement and manually emits the tenant-aware archive transition', async () => {
     const { service, boardObjectsService, sessionsService, branchesService } =
       createServiceHarness();
@@ -1542,6 +1604,37 @@ describe('BranchesService.archiveOrDelete', () => {
       expect.objectContaining({ timeoutMs: expect.any(Number) })
     );
     expect(removeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a custom-route query override a preserved filesystem selection', async () => {
+    const { service } = createServiceHarness();
+    const branchId = 'wt-hard-delete-preserved' as BranchID;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      name: 'WT Hard Delete Preserved',
+      path: '/safe/worktrees/repo/feature',
+      archived: true,
+      environment_instance: { status: 'stopped' },
+    } as never);
+    const removeSpy = vi
+      .spyOn(service, 'remove')
+      .mockResolvedValue({ branch_id: branchId } as never);
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'delete', filesystemAction: 'preserved' },
+      {
+        query: { deleteFromFilesystem: true },
+        user: { user_id: 'user-1' },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never
+    );
+
+    expect(mockedRunExecutorCommand).not.toHaveBeenCalled();
+    expect(removeSpy).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ query: expect.objectContaining({ deleteFromFilesystem: false }) })
+    );
   });
 });
 

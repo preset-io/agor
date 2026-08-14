@@ -237,6 +237,8 @@ Before enabling RBAC + Unix integration, ensure:
 2. **Sudoers configuration** - Install the Agor sudoers file:
 
    ```bash
+   # Exact branch-delete argument boundaries require sudo 1.9.10 or newer.
+   sudo --version
    # Download and install
    curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-daemon.sudoers
    sudo visudo -c -f ./agor-daemon.sudoers  # Validate first!
@@ -364,6 +366,7 @@ We provide a comprehensive, well-documented sudoers template:
 
 ```bash
 # Download and validate
+sudo --version # must be 1.9.10+
 curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-daemon.sudoers
 sudo visudo -c -f ./agor-daemon.sudoers
 

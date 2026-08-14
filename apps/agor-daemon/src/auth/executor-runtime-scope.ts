@@ -48,6 +48,11 @@ export function isTaskScopedExecutorRequest(context: HookContext, taskId: string
   return scopedPayload(context)?.task_id === taskId;
 }
 
+/** Whether this request carries a validated executor scope for one branch. */
+export function isBranchScopedExecutorRequest(context: HookContext, branchId: string): boolean {
+  return scopedPayload(context)?.branch_id === branchId;
+}
+
 /** Whether this request carries a validated executor-session scope. */
 export function hasExecutorRuntimeScope(context: HookContext): boolean {
   return scopedPayload(context) !== null;

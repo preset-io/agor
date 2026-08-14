@@ -33,6 +33,7 @@ import {
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  protectExternalBranchManagedWrites,
   protectExternalTaskCreate,
   protectServerManagedTaskWrites,
   protectServerManagedUnixGroupWrites,
@@ -45,6 +46,87 @@ import {
   TENANT_OWNED_SERVICE_PATHS,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
+
+describe('protectExternalBranchManagedWrites', () => {
+  const context = (
+    data: unknown,
+    options: { provider?: string; executorBranchId?: string } = { provider: 'rest' }
+  ) =>
+    ({
+      path: 'branches',
+      method: 'patch',
+      id: 'branch-attacker',
+      data,
+      params: {
+        provider: options.provider,
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        ...(options.executorBranchId
+          ? {
+              authentication: {
+                payload: {
+                  type: 'executor-session',
+                  purpose: 'executor-task',
+                  session_id: 'branch-delete',
+                  branch_id: options.executorBranchId,
+                },
+              },
+            }
+          : {}),
+      },
+    }) as HookContext;
+
+  it.each(['path', 'storage_mode', 'ref', 'new_branch'])(
+    'rejects external mutation of destructive identity field %s',
+    (field) => {
+      expect(() =>
+        protectExternalBranchManagedWrites(
+          context({ [field]: field === 'path' ? '/tenant-a/worktrees/org/repo/victim' : 'forged' })
+        )
+      ).toThrow(/immutable/);
+    }
+  );
+
+  it('rejects lifecycle forgery by a normal branch owner', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(context({ filesystem_status: 'deleted' }))
+    ).toThrow(/lifecycle/);
+  });
+
+  it('allows only lifecycle state to arrive from a branch-scoped executor', () => {
+    const hook = context(
+      { filesystem_status: 'delete_failed', error_message: 'sanitized' },
+      { provider: 'socketio', executorBranchId: 'branch-attacker' }
+    );
+    expect(protectExternalBranchManagedWrites(hook)).toBe(hook);
+  });
+
+  it('rejects filesystem state from an executor scoped to another same-tenant branch', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'deleted' },
+          { provider: 'socketio', executorBranchId: 'branch-victim' }
+        )
+      )
+    ).toThrow(/branch-scoped/);
+  });
+
+  it('does not let an executor token write daemon-owned archive metadata', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context({ archived: true }, { provider: 'socketio', executorBranchId: 'branch-attacker' })
+      )
+    ).toThrow(/archive lifecycle/);
+  });
+
+  it('allows trusted internal lifecycle transitions', () => {
+    const hook = context(
+      { archived: true, filesystem_status: 'deleting' },
+      { provider: undefined }
+    );
+    expect(protectExternalBranchManagedWrites(hook)).toBe(hook);
+  });
+});
 
 const makeSession = (sessionId: string): import('@agor/core/types').Session =>
   ({

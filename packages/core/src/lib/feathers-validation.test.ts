@@ -61,6 +61,21 @@ describe('branchQueryValidator', () => {
       archived: false,
     });
   });
+
+  it('preserves and coerces the destructive remove filesystem precondition', async () => {
+    const context = {
+      params: {
+        query: {
+          deleteFromFilesystem: 'true',
+          unknown: 'removed',
+        },
+      },
+    };
+
+    await typedValidateQuery(branchQueryValidator)(context);
+
+    expect(context.params.query).toEqual({ deleteFromFilesystem: true });
+  });
 });
 
 describe('userQueryValidator', () => {

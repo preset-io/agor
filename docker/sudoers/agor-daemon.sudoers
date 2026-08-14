@@ -100,22 +100,25 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /home/*/.agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/*/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/*/.agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/ln -sfn * /home/*/agor/worktrees/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/rm -f /home/*/agor/worktrees/*
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-f /home/[^/[:space:]]+/agor/worktrees/[^/[:space:]]+$
 
 # Exact branch-root deletion for strict/insulated mode. Code validates the
 # tenant-aware worktrees root, rejects symlinked roots/components, executes rm
-# argv-style (no shell), and verifies absence afterward. Keep these argv flags
-# in sync with packages/git/src/index.ts; do not grant a generic `rm -rf *`.
-agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /home/*/.agor/worktrees/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /home/*/agor/worktrees/*
+# argv-style (no shell), and verifies absence afterward. Sudoers wildcards in
+# command arguments also match slashes and whitespace, so these MUST remain
+# anchored POSIX EREs (sudo 1.9.10+) rather than `/worktrees/*`. Each expression
+# accepts exactly <repo-owner>/<repo-name>/<branch-name> and no second operand.
+# Keep the argv flags in sync with packages/git/src/index.ts.
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /home/[^/[:space:]]+/[.]agor/worktrees/[^/[:space:]]+/[^/[:space:]]+/[^/[:space:]]+$
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /home/[^/[:space:]]+/agor/worktrees/[^/[:space:]]+/[^/[:space:]]+/[^/[:space:]]+$
 
 # Optional: /var/agor for shared worktree storage
 agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /var/agor/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /var/agor/worktrees/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /var/agor/tenants/*/worktrees/*
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /var/agor/worktrees/[^/[:space:]]+/[^/[:space:]]+/[^/[:space:]]+$
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /var/agor/tenants/[^/[:space:]]+/worktrees/[^/[:space:]]+/[^/[:space:]]+/[^/[:space:]]+$
 
 # ============================================================================
 # FILE CONTENT - Writing Config Files (SCOPED TO AGOR PATHS)

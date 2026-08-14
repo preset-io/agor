@@ -156,6 +156,10 @@ export const branchQuerySchema = createQuerySchema(
     zone_id: Type.Optional(Type.String({ maxLength: 255 })),
     name: Type.Optional(Type.String({ maxLength: 255 })),
     archived: Type.Optional(CommonSchemas.boolean),
+    // Destructive remove option. It must survive `removeAdditional: 'all'`
+    // before BranchesService.remove enforces filesystem cleanup as a metadata
+    // deletion precondition.
+    deleteFromFilesystem: Type.Optional(CommonSchemas.boolean),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),
   })

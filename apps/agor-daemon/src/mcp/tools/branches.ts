@@ -77,6 +77,7 @@ const HARD_DELETE_FILESYSTEM_ACTIONS = [
   'preserved',
   'deleted',
 ] as const satisfies readonly BranchFilesystemAction[];
+type HardDeleteFilesystemAction = (typeof HARD_DELETE_FILESYSTEM_ACTIONS)[number];
 
 function containsTeammateKnowledgeConfigMutation(customContext: unknown): boolean {
   if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
@@ -1533,7 +1534,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       const filesystemAction =
-        (args.filesystemAction as BranchFilesystemAction | undefined) ?? 'deleted';
+        (args.filesystemAction as HardDeleteFilesystemAction | undefined) ?? 'deleted';
       await ctx.app
         .service('/branches/:id/archive-or-delete')
         .create(

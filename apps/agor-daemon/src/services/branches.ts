@@ -63,7 +63,9 @@ import type {
 } from '@agor/core/types';
 import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  BRANCH_FILESYSTEM_IDENTITY_FIELDS,
   getTeammateConfig,
+  isBranchArchiveOrDeleteOptions,
   isTeammate,
 } from '@agor/core/types';
 import {
@@ -1231,6 +1233,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<BranchWithZoneAndSessions> {
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
+    for (const field of BRANCH_FILESYSTEM_IDENTITY_FIELDS) {
+      if (Object.hasOwn(data, field) && !isDeepStrictEqual(data[field], currentBranch[field])) {
+        throw new BadRequest(`Branch field '${field}' is immutable after creation`);
+      }
+    }
     await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
     this.assertTeammateKindIsStable(currentBranch, data);
 
@@ -1546,9 +1553,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async archiveOrDelete(
     id: BranchID,
-    options: BranchArchiveOrDeleteOptions,
+    options: unknown,
     params?: BranchParams
   ): Promise<BranchArchiveOrDeleteResult> {
+    if (!isBranchArchiveOrDeleteOptions(options)) {
+      throw new BadRequest(
+        'Invalid archive/delete options: expected a supported metadataAction and filesystemAction'
+      );
+    }
     if (!params) {
       throw new Forbidden(
         'Branch archive/delete must be invoked through the authorized archive-or-delete service'
@@ -1557,7 +1569,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // This method coordinates external side effects, so a direct in-process
     // call must never be able to bypass the route's branch-control hook.
     consumeBranchArchiveDeleteAuthorization(params, id, options.metadataAction);
-
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
@@ -1651,7 +1662,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             // Preserve board_id + board_object placement so unarchive can restore in-place
             updated_at: new Date().toISOString(),
           },
-          params
+          { ...params, provider: undefined }
         )
       );
 
@@ -1746,6 +1757,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!branch.archived) {
       throw new Error(`Branch ${branch.name} is not archived`);
     }
+    if (branch.filesystem_status === 'deleting') {
+      throw new Conflict('Branch filesystem deletion is still in progress; retry unarchive later');
+    }
 
     console.log(`📦 Unarchiving branch: ${branch.name}`);
 
@@ -1758,6 +1772,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       archived_at: undefined,
       archived_by: undefined,
       filesystem_status: undefined,
+      error_message: undefined,
       updated_at: new Date().toISOString(),
     };
     if (boardIdExplicitlyProvided) {
@@ -1765,7 +1780,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const unarchivedBranch = await this.withTenantDatabase(params, () =>
-      this.patch(id, patchData, params)
+      this.patch(id, patchData, { ...params, provider: undefined })
     );
     emitServiceEvent(this.app, {
       path: 'branches',

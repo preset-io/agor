@@ -87,6 +87,9 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  BRANCH_ARCHIVE_LIFECYCLE_FIELDS,
+  BRANCH_FILESYSTEM_IDENTITY_FIELDS,
+  BRANCH_FILESYSTEM_LIFECYCLE_FIELDS,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
@@ -104,6 +107,7 @@ import {
 } from '@agor/core/unix';
 import {
   executorRuntimeScopeGuard,
+  isBranchScopedExecutorRequest,
   isTaskScopedExecutorRequest,
   requireExecutorRuntimeToken,
 } from './auth/executor-runtime-scope.js';
@@ -355,6 +359,44 @@ export function isPromptFlowPatchOnly(data: unknown): boolean {
   const keys = Object.keys(data);
   if (keys.length === 0) return false;
   return keys.every((key) => PROMPT_FLOW_PATCH_FIELDS.includes(key));
+}
+
+/**
+ * Keep destructive branch identity and lifecycle state behind server-owned
+ * workflows. In particular, an owner must not be able to repoint `path` at a
+ * different same-tenant branch before asking the executor to delete it.
+ */
+export function protectExternalBranchManagedWrites(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+  if (!context.data || typeof context.data !== 'object' || Array.isArray(context.data)) {
+    throw new BadRequest('Branch writes require an object payload');
+  }
+
+  const fields = Object.keys(context.data as Record<string, unknown>);
+  const identityField = BRANCH_FILESYSTEM_IDENTITY_FIELDS.find((field) => fields.includes(field));
+  if (identityField) {
+    throw new BadRequest(
+      `Branch field '${identityField}' is assigned at creation and is immutable`
+    );
+  }
+
+  const archiveField = BRANCH_ARCHIVE_LIFECYCLE_FIELDS.find((field) => fields.includes(field));
+  if (archiveField) {
+    throw new BadRequest(
+      `Branch field '${archiveField}' is managed by archive lifecycle operations`
+    );
+  }
+
+  const filesystemField = BRANCH_FILESYSTEM_LIFECYCLE_FIELDS.find((field) =>
+    fields.includes(field)
+  );
+  const branchId = String(context.id ?? (context.data as Record<string, unknown>).branch_id ?? '');
+  if (filesystemField && !isBranchScopedExecutorRequest(context, branchId)) {
+    throw new BadRequest(
+      `Branch field '${filesystemField}' is managed by branch-scoped filesystem lifecycle operations`
+    );
+  }
+  return context;
 }
 
 export function shouldRunSessionPostTurnHooks(
@@ -1619,13 +1661,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
-        protectServerManagedUnixGroupWrites('branch'),
+        protectExternalBranchManagedWrites,
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
-        protectServerManagedUnixGroupWrites('branch'),
+        protectExternalBranchManagedWrites,
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         ...(branchRbacEnabled

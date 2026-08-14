@@ -11,10 +11,12 @@ import type {
   Board,
   BoardExportBlob,
   BoardGroupGrantWithGroup,
+  BoardID,
   Branch,
   BranchArchiveOrDeleteOptions,
   BranchEnvironmentUpdate,
   BranchGroupGrantWithGroup,
+  BranchID,
   BranchStorageMode,
   CardType,
   CardWithType,
@@ -643,20 +645,19 @@ export interface BranchesService extends AgorService<Branch> {
    * Check environment health
    */
   checkHealth(id: string, params?: Params): Promise<Branch>;
+}
 
-  /**
-   * Archive or delete a branch with filesystem cleanup options
-   */
-  archiveOrDelete(
-    id: string,
-    options: BranchArchiveOrDeleteOptions,
+/** Parameterized REST/socket route for one branch archive/delete operation. */
+export interface BranchArchiveOrDeleteService {
+  create(
+    data: ClientInput<BranchArchiveOrDeleteOptions>,
     params?: Params
-  ): Promise<Branch | { deleted: true; branch_id: string }>;
+  ): Promise<Branch | { deleted: true; branch_id: BranchID }>;
+}
 
-  /**
-   * Unarchive a branch
-   */
-  unarchive(id: string, options?: { boardId?: string }, params?: Params): Promise<Branch>;
+/** Parameterized REST/socket route for one branch unarchive operation. */
+export interface BranchUnarchiveService {
+  create(data?: ClientInput<{ boardId?: BoardID }>, params?: Params): Promise<Branch>;
 }
 
 /**
@@ -675,6 +676,8 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/clone'): ReposCloneService;
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
+  service(path: `branches/${string}/archive-or-delete`): BranchArchiveOrDeleteService;
+  service(path: `branches/${string}/unarchive`): BranchUnarchiveService;
   service(path: 'boards'): BoardsService;
   service(path: 'schedules'): SchedulesService;
   service(path: 'gateway-channels'): GatewayChannelsService;

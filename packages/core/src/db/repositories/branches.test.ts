@@ -972,6 +972,43 @@ describe('BranchRepository.update', () => {
     expect(retrying.error_message).toBeUndefined();
   });
 
+  dbTest(
+    'clears archive and filesystem lifecycle fields for an internal unarchive',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const repo = await repoRepo.create(createRepoData());
+      const created = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+      await branchRepo.update(created.branch_id, {
+        archived: true,
+        archived_at: '2026-08-13T22:22:51.000Z',
+        archived_by: 'user-1' as UUID,
+        filesystem_status: 'delete_failed',
+        error_message: 'Privileged filesystem deletion is unavailable',
+      });
+
+      const restored = await branchRepo.update(created.branch_id, {
+        archived: false,
+        archived_at: undefined,
+        archived_by: undefined,
+        filesystem_status: undefined,
+        error_message: undefined,
+      });
+
+      expect(restored.archived).toBe(false);
+      expect(restored.archived_at).toBeUndefined();
+      expect(restored.archived_by).toBeUndefined();
+      expect(restored.filesystem_status).toBeUndefined();
+      expect(restored.error_message).toBeUndefined();
+
+      const refetched = await branchRepo.findById(created.branch_id);
+      expect(refetched?.archived_at).toBeUndefined();
+      expect(refetched?.archived_by).toBeUndefined();
+      expect(refetched?.filesystem_status).toBeUndefined();
+      expect(refetched?.error_message).toBeUndefined();
+    }
+  );
+
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
     const wtRepo = new BranchRepository(db);
 
