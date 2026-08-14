@@ -22,11 +22,11 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '@agor/core/config';
+import { loadConfigFromFile } from '@agor/core/config';
 import {
   and,
   branches,
@@ -36,6 +36,7 @@ import {
   inArray,
   isNull,
   repos,
+  resolveDatabaseUrl,
   select,
   shortId,
   update,
@@ -228,62 +229,52 @@ export default class SyncUnix extends Command {
     let syncErrors = 0;
 
     try {
-      // Connect to database
-      // When running via sudo, os.homedir() returns /root, but we need the original user's DB.
-      // Use SUDO_USER env var to resolve the correct home directory.
-      let databaseUrl = process.env.DATABASE_URL;
-      if (!databaseUrl) {
-        const sudoUser = process.env.SUDO_USER;
-        let agorHome: string;
-
-        if (sudoUser) {
-          // Running under sudo - use the invoking user's home directory
-          // Try to get home directory from passwd entry
-          try {
-            const passwdEntry = execSync(`getent passwd ${sudoUser}`, {
-              encoding: 'utf-8',
-              stdio: ['pipe', 'pipe', 'ignore'],
-            }).trim();
-            const homeDir = passwdEntry.split(':')[5]; // 6th field is home directory
-            agorHome = join(homeDir, '.agor');
-          } catch {
-            // Fallback to /home/<user>/.agor if getent fails
-            agorHome = join('/home', sudoUser, '.agor');
-          }
-        } else {
-          // Not running under sudo - use current user's home
-          agorHome = join(homedir(), '.agor');
+      // Resolve both config and database relative to the invoking user. When
+      // running via sudo, os.homedir() points at /root rather than the Agor
+      // installation being administered.
+      const sudoUser = process.env.SUDO_USER;
+      let operatorHome = homedir();
+      if (sudoUser) {
+        try {
+          const passwdEntry = execFileSync('getent', ['passwd', sudoUser], {
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'ignore'],
+          }).trim();
+          operatorHome = passwdEntry.split(':')[5] || join('/home', sudoUser);
+        } catch {
+          operatorHome = join('/home', sudoUser);
         }
+      }
 
-        const dbPath = join(agorHome, 'agor.db');
+      const agorHome = join(operatorHome, '.agor');
+      const configPath = join(agorHome, 'config.yaml');
+      if (!existsSync(configPath)) {
+        this.error(`Config not found: ${configPath}`);
+      }
+      const config = await loadConfigFromFile(configPath);
+      const resolvedDatabaseUrl = resolveDatabaseUrl({
+        config,
+        env: process.env,
+        homeDir: operatorHome,
+      });
+      const databaseUrl =
+        resolvedDatabaseUrl.startsWith('file:') || /^[a-z][a-z0-9+.-]*:/i.test(resolvedDatabaseUrl)
+          ? resolvedDatabaseUrl
+          : `file:${resolvedDatabaseUrl}`;
 
-        // Verify the database exists
+      if (databaseUrl.startsWith('file:')) {
+        const dbPath = databaseUrl.slice('file:'.length);
         if (!existsSync(dbPath)) {
-          this.log(chalk.red(`Database not found: ${dbPath}`));
-          if (sudoUser) {
-            this.log(
-              chalk.yellow(
-                `\nHint: Running as root via sudo. Expected database at ~${sudoUser}/.agor/agor.db`
-              )
-            );
-            this.log(
-              chalk.yellow('If your database is elsewhere, set DATABASE_URL environment variable:')
-            );
-            this.log(chalk.gray('  sudo DATABASE_URL=file:/path/to/agor.db agor local sync-unix'));
-          }
-          process.exit(1);
+          this.error(`Database not found: ${dbPath}`);
         }
-
-        databaseUrl = `file:${dbPath}`;
       }
 
       const db = createDatabase({ url: databaseUrl });
 
-      // Load config and get daemon user
+      // Get daemon user from the same operator config used for DB resolution.
       // The daemon user must be added to all Unix groups so it can access files
       // Since this command runs under sudo, we MUST require explicit config
       // (process.env.USER would return 'root' which is wrong)
-      const config = await loadConfig();
       const daemonUser = config.daemon?.unix_user;
 
       if (!daemonUser) {
