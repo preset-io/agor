@@ -10,7 +10,11 @@
  */
 
 import { execSync } from 'node:child_process';
-import { UnixGroupCommands } from './group-manager.js';
+import {
+  isValidBranchGroupName,
+  isValidRepoGroupName,
+  UnixGroupCommands,
+} from './group-manager.js';
 import { UnixUserCommands } from './user-manager.js';
 
 // ============================================================
@@ -124,7 +128,7 @@ export function listBranchGroups(): string[] {
     return output
       .trim()
       .split('\n')
-      .filter((g) => g && /^agor_wt_[0-9a-f]{8}$/.test(g));
+      .filter((g) => g && isValidBranchGroupName(g));
   } catch {
     return [];
   }
@@ -144,7 +148,7 @@ export function listRepoGroups(): string[] {
     return output
       .trim()
       .split('\n')
-      .filter((g) => g && /^agor_rp_[0-9a-f]{8}$/.test(g));
+      .filter((g) => g && isValidRepoGroupName(g));
   } catch {
     return [];
   }

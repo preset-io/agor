@@ -1,7 +1,7 @@
 import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   assertValidTenantId,
-  isPostgresDatabase,
+  isPostgresDatabaseHandle,
   type RawDatabase,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
@@ -52,7 +52,7 @@ async function resolveMaintenanceTenants(options: UploadCleanupOptions): Promise
   if (!options.allTenants) {
     throw new Error('Multi-tenant upload cleanup requires --tenant-id or --all-tenants');
   }
-  if (!isPostgresDatabase(options.db)) {
+  if (!isPostgresDatabaseHandle(options.db)) {
     throw new Error('Cross-tenant upload cleanup requires PostgreSQL');
   }
 

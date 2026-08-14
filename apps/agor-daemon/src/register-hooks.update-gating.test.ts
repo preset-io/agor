@@ -9,9 +9,9 @@
  * registration code installs and fail when that shape reappears.
  */
 
-import { feathers, feathersExpress, rest } from '@agor/core/feathers';
+import { Forbidden, feathers, feathersExpress, rest } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from './register-hooks';
 import { ARTIFACTS_SERVICE_TRANSPORT_METHODS } from './services/artifacts';
 import { GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS } from './services/gateway-channels';
@@ -20,6 +20,7 @@ import { KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS } from './services/knowledge-
 import { SCHEDULES_SERVICE_TRANSPORT_METHODS } from './services/schedules';
 import { TASKS_SERVICE_TRANSPORT_METHODS } from './services/tasks';
 import { USERS_SERVICE_TRANSPORT_METHODS } from './services/users';
+import { BRANCH_REMOVAL_VISIBILITY_PARAM } from './utils/realtime-publish';
 
 type RegisteredHook = (context: HookContext) => unknown;
 type CapturedHooks = { before: Record<string, RegisteredHook[]> };
@@ -32,8 +33,15 @@ type CapturedHooks = { before: Record<string, RegisteredHook[]> };
  * `branchRbacEnabled` is true, so each mode is captured and asserted on its
  * own — see {@link RBAC_MODES}.
  */
-const captureRegisteredHooks = (branchRbacEnabled: boolean): Map<string, CapturedHooks> => {
+const captureRegisteredHooks = (
+  branchRbacEnabled: boolean,
+  branchRepositoryOverride?: RegisterHooksContext['branchRepository']
+): Map<string, CapturedHooks> => {
   const captured = new Map<string, CapturedHooks>();
+  const visibleBranch = {
+    branch_id: '00000000-0000-7000-8000-000000000001',
+    others_can: 'view',
+  };
   const app = {
     service(path: string) {
       return {
@@ -68,13 +76,119 @@ const captureRegisteredHooks = (branchRbacEnabled: boolean): Map<string, Capture
     sessionsService: {} as RegisterHooksContext['sessionsService'],
     messagesService: {} as RegisterHooksContext['messagesService'],
     boardsService: undefined,
-    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    branchRepository:
+      branchRepositoryOverride ??
+      ({
+        findById: async () => visibleBranch,
+        isOwner: async () => false,
+        resolveUserPermission: async () => 'view',
+      } as unknown as RegisterHooksContext['branchRepository']),
     usersRepository: {} as RegisterHooksContext['usersRepository'],
     sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
   });
 
   return captured;
 };
+
+describe('branch hard-delete realtime hook', () => {
+  it('captures current authorized recipients before the branch and ACL rows are removed', async () => {
+    const branchId = '00000000-0000-7000-8000-000000000001';
+    const ownerId = '00000000-0000-7000-8000-0000000000ff';
+    const branch = { branch_id: branchId, others_can: 'none' };
+    const branchRepository = {
+      findById: async () => branch,
+      isOwner: async () => true,
+      resolveUserPermission: async () => 'all',
+      findRealtimeVisibilityBranch: async () => branch,
+      findExplicitViewUserIds: async () => [ownerId, '00000000-0000-7000-8000-0000000000aa'],
+    } as unknown as RegisterHooksContext['branchRepository'];
+    const hooks = captureRegisteredHooks(true, branchRepository).get('branches')?.before;
+    if (!hooks) throw new Error('branches registers no before hooks');
+    const context = {
+      path: 'branches',
+      method: 'remove',
+      id: branchId,
+      params: {
+        provider: 'rest',
+        query: {},
+        user: { user_id: ownerId, role: 'member' },
+      },
+    } as unknown as HookContext;
+
+    for (const hook of hooks.remove ?? []) {
+      await hook(context);
+    }
+
+    expect((context.params as Record<string, unknown>)[BRANCH_REMOVAL_VISIBILITY_PARAM]).toEqual({
+      branchId,
+      mode: 'explicitUsers',
+      userIds: ['00000000-0000-7000-8000-0000000000aa', '00000000-0000-7000-8000-0000000000ff'],
+    });
+  });
+
+  it('captures an open-mode snapshot so every relay revision has a complete tombstone', async () => {
+    const branchId = '00000000-0000-7000-8000-000000000001';
+    const branch = { branch_id: branchId, others_can: 'session' };
+    const branchRepository = {
+      findById: async () => branch,
+      isOwner: async () => true,
+      resolveUserPermission: async () => 'session',
+      findRealtimeVisibilityBranch: async () => branch,
+      findExplicitViewUserIds: async () => [],
+    } as unknown as RegisterHooksContext['branchRepository'];
+    const hooks = captureRegisteredHooks(false, branchRepository).get('branches')?.before;
+    if (!hooks) throw new Error('branches registers no before hooks');
+    const context = {
+      path: 'branches',
+      method: 'remove',
+      id: branchId,
+      params: {
+        provider: 'rest',
+        query: {},
+        user: { user_id: '00000000-0000-7000-8000-0000000000ff', role: 'member' },
+      },
+    } as unknown as HookContext;
+
+    for (const hook of hooks.remove ?? []) await hook(context);
+
+    expect((context.params as Record<string, unknown>)[BRANCH_REMOVAL_VISIBILITY_PARAM]).toEqual({
+      branchId,
+      mode: 'allAuthenticated',
+    });
+  });
+
+  it('keeps direct REST/socket removal aligned with the open-mode owner/admin boundary', async () => {
+    const branchId = '00000000-0000-7000-8000-000000000001';
+    const branch = { branch_id: branchId, others_can: 'session' };
+    const findRealtimeVisibilityBranch = vi.fn(async () => branch);
+    const branchRepository = {
+      findById: async () => branch,
+      isOwner: async () => false,
+      resolveUserPermission: async () => 'session',
+      findRealtimeVisibilityBranch,
+      findExplicitViewUserIds: async () => [],
+    } as unknown as RegisterHooksContext['branchRepository'];
+    const hooks = captureRegisteredHooks(false, branchRepository).get('branches')?.before;
+    if (!hooks) throw new Error('branches registers no before hooks');
+    const context = {
+      path: 'branches',
+      method: 'remove',
+      id: branchId,
+      params: {
+        provider: 'socketio',
+        query: {},
+        user: { user_id: '00000000-0000-7000-8000-0000000000ff', role: 'member' },
+      },
+    } as unknown as HookContext;
+
+    await expect(
+      (async () => {
+        for (const hook of hooks.remove ?? []) await hook(context);
+      })()
+    ).rejects.toBeInstanceOf(Forbidden);
+    expect(findRealtimeVisibilityBranch).not.toHaveBeenCalled();
+  });
+});
 
 /**
  * Both RBAC modes, kept separate on purpose.
@@ -89,6 +203,77 @@ const RBAC_MODES = [
 ] as const;
 
 const WRITE_METHODS = ['create', 'patch', 'remove'] as const;
+
+const runCapturedHooks = async (
+  captured: Map<string, CapturedHooks>,
+  path: string,
+  method: string,
+  role: string
+): Promise<HookContext> => {
+  const hooks = captured.get(path)?.before;
+  if (!hooks) throw new Error(`${path} registers no before hooks`);
+  const context = {
+    path,
+    method,
+    id: method === 'get' ? '00000000-0000-7000-8000-000000000001' : undefined,
+    params: {
+      provider: 'rest',
+      query: {},
+      user: { user_id: '00000000-0000-7000-8000-0000000000ff', role },
+    },
+  } as unknown as HookContext;
+
+  for (const hook of [...(hooks.all ?? []), ...(hooks[method] ?? [])]) {
+    await hook(context);
+  }
+  return context;
+};
+
+describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) => {
+  const captured = captureRegisteredHooks(branchRbacEnabled);
+
+  it.each([
+    ['repos', 'find'],
+    ['repos', 'get'],
+    ['branches', 'find'],
+    ['branches', 'get'],
+    ['session-mcp-servers', 'find'],
+    ['session-env-selections', 'find'],
+  ])('allows viewers to use %s.%s', async (path, method) => {
+    await expect(runCapturedHooks(captured, path, method, 'viewer')).resolves.toBeDefined();
+  });
+
+  if (branchRbacEnabled) {
+    it('retains SQL branch visibility scoping for viewer branch finds', async () => {
+      const context = await runCapturedHooks(captured, 'branches', 'find', 'viewer');
+      expect(context.params).toMatchObject({
+        _agorSqlBranchAccessUserId: '00000000-0000-7000-8000-0000000000ff',
+      });
+    });
+
+    it('retains SQL session visibility scoping for viewer MCP assignment finds', async () => {
+      const context = await runCapturedHooks(captured, 'session-mcp-servers', 'find', 'viewer');
+      expect(context.params).toMatchObject({
+        _agorSqlSessionAccessUserId: '00000000-0000-7000-8000-0000000000ff',
+      });
+    });
+  }
+
+  it.each([
+    ['repos', 'create'],
+    ['repos', 'patch'],
+    ['repos', 'remove'],
+    ['branches', 'create'],
+    ['branches', 'patch'],
+    ['branches', 'remove'],
+    ['branches', 'updateEnvironment'],
+    ['branches', 'ensureTeammateKnowledgeNamespace'],
+  ])('keeps %s.%s restricted to members', async (path, method) => {
+    await expect(runCapturedHooks(captured, path, method, 'viewer')).rejects.toMatchObject({
+      name: 'Forbidden',
+    });
+  });
+});
 
 /**
  * Services that gate a write verb but deliberately leave `update` ungated,

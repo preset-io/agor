@@ -1,7 +1,12 @@
 /**
  * Read-only branch file browser. Tenant filesystem access is delegated to the executor.
  */
-import type { BranchRepository, TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  type BranchRepository,
+  requireCurrentTenantId,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
@@ -9,6 +14,7 @@ import type {
   FileListItem,
   Id,
   QueryParams,
+  RBACParams,
   ServiceMethods,
 } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
@@ -47,10 +53,9 @@ export class FileService
     ensureMinimumRole(params, ROLES.MEMBER, 'list files');
     const branchId = params?.query?.branch_id;
     if (!branchId) throw new Error('branch_id query parameter is required');
-    const branch = await this.branchRepo.findById(branchId);
-    if (!branch) throw new Error(`Branch not found: ${branchId}`);
+    const resolved = await this.resolveBranchRead(branchId, params);
 
-    const result = await this.runCommand('branch.files.browse', branch.branch_id, params);
+    const result = await this.runCommand('branch.files.browse', resolved.branchId, resolved.asUser);
     if (!result.success) {
       throw new Error(
         `Failed to browse files: ${result.error?.message ?? 'unknown executor error'}`
@@ -63,10 +68,9 @@ export class FileService
     ensureMinimumRole(params, ROLES.MEMBER, 'read file');
     const branchId = params?.query?.branch_id;
     if (!branchId) throw new Error('branch_id query parameter is required');
-    const branch = await this.branchRepo.findById(branchId);
-    if (!branch) throw new Error(`Branch not found: ${branchId}`);
+    const resolved = await this.resolveBranchRead(branchId, params);
 
-    const result = await this.runCommand('branch.files.read', branch.branch_id, params, {
+    const result = await this.runCommand('branch.files.read', resolved.branchId, resolved.asUser, {
       filePath: id.toString(),
     });
     if (!result.success) {
@@ -80,7 +84,7 @@ export class FileService
   private async runCommand(
     command: 'branch.files.browse' | 'branch.files.read',
     branchId: string,
-    params?: FileParams,
+    asUser?: string,
     extraParams: Record<string, unknown> = {}
   ) {
     const sessionToken = generateScopedServiceToken(
@@ -95,13 +99,29 @@ export class FileService
       },
       {
         logPrefix: `[FileService ${branchId}]`,
-        asUser: await resolveExecutorReadAsUser(
-          this.db,
-          params?.user?.user_id,
-          this.app.get('config')
-        ),
+        asUser,
       }
     );
+  }
+
+  private async resolveBranchRead(branchId: string, params?: FileParams) {
+    const tenantId = requireCurrentTenantId(
+      'Missing active tenant context for file database access'
+    );
+    return runWithTenantDatabaseScope(this.db, tenantId, async () => {
+      const cachedBranch = (params as Partial<RBACParams> | undefined)?.branch;
+      const branch =
+        cachedBranch?.branch_id === branchId
+          ? cachedBranch
+          : await this.branchRepo.findById(branchId);
+      if (!branch) throw new Error(`Branch not found: ${branchId}`);
+      const asUser = await resolveExecutorReadAsUser(
+        this.db,
+        params?.user?.user_id,
+        this.app.get('config')
+      );
+      return { branchId: branch.branch_id, asUser };
+    });
   }
 
   async setup(): Promise<void> {}

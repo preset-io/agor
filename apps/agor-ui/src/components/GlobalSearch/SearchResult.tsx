@@ -61,9 +61,9 @@ export const SearchResult: React.FC<SearchResultProps> = ({
       }}
     >
       {/* Icon column is opt-in: rendered only when the entity itself has an
-          emoji/icon (teammate `config.emoji`, board `item.icon`). For other
-          types the section header above already conveys the kind, so we drop
-          the per-row glyph to keep visual noise down. */}
+          emoji (teammate `config.emoji`). For other types the section header
+          above already conveys the kind, so we drop the per-row glyph to keep
+          visual noise down. */}
       {icon && <span style={{ fontSize: 18, lineHeight: '20px', flexShrink: 0 }}>{icon}</span>}
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* Title row: title takes remaining width and ellipsizes; tag + time
@@ -126,9 +126,9 @@ function renderResult(result: SearchResultItem): {
   tag?: string;
   secondary?: string;
   time?: string;
-  /** Only set when the entity itself has an emoji/icon (teammate config,
-   * board icon). Generic per-type emojis dropped — section headers carry
-   * the entity-kind affordance instead. */
+  /** Only set when the entity itself has an emoji (teammate config).
+   * Generic per-type emojis are dropped — section headers carry the
+   * entity-kind affordance instead. */
   icon?: string;
 } {
   switch (result.type) {
@@ -166,7 +166,6 @@ function renderResult(result: SearchResultItem): {
     }
     case 'board': {
       return {
-        icon: result.item.icon,
         title: result.item.name,
         time: formatRelativeTimeSafe(result.item.last_updated),
       };

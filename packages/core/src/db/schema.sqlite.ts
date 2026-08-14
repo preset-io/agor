@@ -598,7 +598,7 @@ export const repos = sqliteTable(
       .notNull()
       .default('remote'),
 
-    // Unix group for repo-level git access (agor_rp_<short-id>)
+    // Unix group for repo-level git access (canonical 24-char suffix; legacy 8-char valid)
     // Users who have access to ANY branch in this repo get added to this group.
     // Applied to repo Unix-group-managed paths:
     // - repo root (non-recursive) for traversal into .git/worktrees/<name>
@@ -742,7 +742,7 @@ export const branches = sqliteTable(
     }).default('view'),
 
     // RBAC: OS-layer permissions (unix-user-modes.md)
-    unix_group: text('unix_group'), // e.g., 'agor_wt_abc123'
+    unix_group: text('unix_group'), // canonical 24-char suffix; legacy 8-char stamps remain valid
     others_fs_access: text('others_fs_access', {
       enum: ['none', 'read', 'write'],
     })

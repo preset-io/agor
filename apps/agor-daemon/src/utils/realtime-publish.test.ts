@@ -1,11 +1,19 @@
 import {
+  type Database,
+  generateId,
   getCurrentTenantId,
+  KnowledgeDocumentRepository,
+  KnowledgeNamespaceRepository,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
+  UsersRepository,
 } from '@agor/core/db';
-import type { Branch, BranchPermissionLevel, Session, User } from '@agor/core/types';
+import { REALTIME_RELAY_VERSION } from '@agor/core/realtime';
+import type { Branch, BranchPermissionLevel, Session, User, UserID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { KNOWLEDGE_REALTIME_SUPPRESSED_CREATE_PATHS } from './knowledge-realtime-publish';
 import type {
   RealtimeAccessBranchRepository,
   RealtimeAccessSessionRepository,
@@ -16,6 +24,7 @@ import {
   leaveAllSessionStreamChannels,
   markConnectionSessionStreamsAware,
   REDIS_FEATHERS_DENIED_PATHS,
+  setBranchRemovalRealtimeVisibility,
 } from './realtime-publish';
 
 class FakeChannel {
@@ -217,7 +226,7 @@ describe('HA Feathers publication relay', () => {
     });
 
     await remoteHandler?.({
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'tasks',
       event: 'termination_requested',
@@ -264,7 +273,7 @@ describe('HA Feathers publication relay', () => {
     });
 
     await remoteHandler?.({
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'messages',
       event: 'permission_resolved',
@@ -311,7 +320,7 @@ describe('HA Feathers publication relay', () => {
     });
 
     await remoteHandler?.({
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'boards',
       event: 'patched',
@@ -324,6 +333,86 @@ describe('HA Feathers publication relay', () => {
     const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
     expect(channel.connections).toEqual([tenantAUser]);
     expect(channel.connections).not.toContain(tenantBUser);
+  });
+
+  it('relays a branch tombstone snapshot and re-applies tenant/RBAC containment on the receiving replica', async () => {
+    const allowed = { user: user('allowed') };
+    const denied = { user: user('denied') };
+    const otherTenant = { user: user('other-tenant') };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: vi.fn((handler) => {
+        remoteHandler = handler;
+      }),
+    };
+    const app = makeApp(
+      [allowed, denied, otherTenant],
+      {},
+      {
+        'tenant:tenant-a': [allowed, denied],
+        'tenant:tenant-b': [otherTenant],
+      }
+    );
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async () => null),
+      findExplicitViewUserIds: vi.fn(async () => []),
+    } as unknown as RealtimeAccessBranchRepository;
+    const params = {
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as any;
+    setBranchRemovalRealtimeVisibility(params, 'b1' as never, {
+      mode: 'explicitUsers',
+      userIds: new Set(['allowed' as UserID]),
+    });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: true,
+      branchRepository,
+      sessionsRepository: {
+        findBranchIdBySessionId: vi.fn(async () => null),
+        findCreatedByBySessionId: vi.fn(async () => null),
+      } as unknown as RealtimeAccessSessionRepository,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: relay,
+    });
+
+    const local = await app.runPublish(branch('b1', 'none'), {
+      path: 'branches',
+      event: 'removed',
+      method: 'remove',
+      id: 'b1',
+      params,
+    });
+
+    expect(local.connections).toEqual([allowed]);
+    expect(relay.relay).toHaveBeenCalledOnce();
+    const envelope = relay.relay.mock.calls[0]?.[0];
+    expect(envelope).toMatchObject({
+      version: REALTIME_RELAY_VERSION,
+      tenantId: 'tenant-a',
+      path: 'branches',
+      event: 'removed',
+      branchRemovalVisibility: {
+        branchId: 'b1',
+        mode: 'explicitUsers',
+        userIds: ['allowed'],
+      },
+    });
+
+    app.emit.mockClear();
+    await remoteHandler?.(envelope);
+
+    expect(app.emit).toHaveBeenCalledOnce();
+    const remote = app.emit.mock.calls[0]?.[2] as FakeChannel;
+    expect(remote.connections).toEqual([allowed]);
+    expect(remote.connections).not.toContain(denied);
+    expect(remote.connections).not.toContain(otherTenant);
+    expect(branchRepository.findRealtimeVisibilityBranch).not.toHaveBeenCalled();
   });
 
   it('never places authentication results on the shared relay', async () => {
@@ -394,7 +483,251 @@ describe('HA Feathers publication relay', () => {
       ])
     );
   });
+
+  for (const path of KNOWLEDGE_REALTIME_SUPPRESSED_CREATE_PATHS) {
+    dbTest(
+      `suppresses only created ${path} events at local and Redis boundaries`,
+      async ({ db }) => {
+        const tenantConnection = {
+          user: await seedRealtimeUser(db, `event-${path.replaceAll('/', '-')}`),
+        };
+        const serviceConnection = { user: { _isServiceAccount: true, role: 'service' } };
+        const connections = [tenantConnection, serviceConnection];
+        let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+        const relay = {
+          relay: vi.fn(),
+          setRelayHandler: vi.fn((handler) => {
+            remoteHandler = handler;
+          }),
+        };
+        const app = makeApp(connections, {}, { 'tenant:tenant-a': connections });
+        configureRealtimePublish({
+          app,
+          db,
+          branchRbacEnabled: false,
+          branchRepository: {} as never,
+          sessionsRepository: {} as never,
+          multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+          realtimeRelay: relay,
+        });
+        const createdEnvelope = {
+          version: REALTIME_RELAY_VERSION,
+          tenantId: 'tenant-a',
+          path,
+          event: 'created',
+          method: 'create',
+          data: { boundary: 'created' },
+        };
+
+        const createdChannel = await app.runPublish(createdEnvelope.data, {
+          path,
+          event: createdEnvelope.event,
+          method: createdEnvelope.method,
+          params: {},
+        });
+        expect(createdChannel.connections).toEqual([]);
+        expect(relay.relay).not.toHaveBeenCalled();
+
+        await remoteHandler?.(createdEnvelope);
+        expect(app.emit).not.toHaveBeenCalled();
+
+        const patchedEnvelope = {
+          version: REALTIME_RELAY_VERSION,
+          tenantId: 'tenant-a',
+          path,
+          event: 'patched',
+          method: 'patch',
+          data: { boundary: 'non-created' },
+        };
+
+        const patchedChannel = await app.runPublish(patchedEnvelope.data, {
+          path,
+          event: patchedEnvelope.event,
+          method: patchedEnvelope.method,
+          params: {},
+        });
+        expect(patchedChannel.connections).toEqual(connections);
+        expect(relay.relay).toHaveBeenCalledWith(patchedEnvelope);
+
+        await remoteHandler?.(patchedEnvelope);
+        expect(app.emit).toHaveBeenCalledOnce();
+        const receivedChannel = app.emit.mock.calls[0]?.[2] as FakeChannel;
+        expect(receivedChannel.connections).toEqual(connections);
+      }
+    );
+  }
+
+  dbTest(
+    're-authorizes Knowledge readers on the receiving replica after revocation',
+    async ({ db }) => {
+      const reader = await seedRealtimeUser(db, 'reader');
+      const owner = await seedRealtimeUser(db, 'owner');
+      const namespaces = new KnowledgeNamespaceRepository(db);
+      const namespace = await namespaces.create({
+        slug: 'relay-revocation',
+        display_name: 'Relay revocation',
+        others_can: 'none',
+      });
+      const document = await new KnowledgeDocumentRepository(db).create({
+        namespace_id: namespace.namespace_id,
+        path: 'page.md',
+        title: 'Page',
+        content_text: '# Page',
+        visibility: 'public',
+        created_by: owner.user_id,
+      });
+      await namespaces.upsertNamespaceAclEntry({
+        namespace_id: namespace.namespace_id,
+        subject_type: 'user',
+        subject_id: reader.user_id,
+        permission: 'read',
+      });
+
+      const readerConnection = { user: reader };
+      const serviceConnection = { user: { _isServiceAccount: true, role: 'service' } };
+      let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+      const relay = {
+        relay: vi.fn(),
+        setRelayHandler: vi.fn((handler) => {
+          remoteHandler = handler;
+        }),
+      };
+      const app = makeApp(
+        [readerConnection, serviceConnection],
+        {},
+        {
+          authenticated: [readerConnection, serviceConnection],
+          'tenant:tenant-a': [readerConnection, serviceConnection],
+        }
+      );
+      const r = repos({ branch: branch('unused'), permissions: {} });
+      configureRealtimePublish({
+        app,
+        db,
+        branchRbacEnabled: false,
+        multiTenancy: {
+          mode: 'required_from_auth',
+          static_tenant_id: 'unused' as never,
+          auth_claim: 'tenant_id',
+        },
+        realtimeRelay: relay,
+        ...r,
+      });
+
+      await namespaces.removeNamespaceAclEntry(namespace.namespace_id, 'user', reader.user_id);
+      await remoteHandler?.({
+        version: REALTIME_RELAY_VERSION,
+        tenantId: 'tenant-a',
+        path: 'kb/documents',
+        event: 'patched',
+        method: 'patch',
+        id: document.document_id,
+        data: document,
+      });
+
+      expect(app.emit).toHaveBeenCalledOnce();
+      const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
+      expect(channel.connections).toEqual([serviceConnection]);
+      expect(channel.connections).not.toContain(readerConnection);
+    }
+  );
+
+  dbTest('reloads current Knowledge principals on the receiving replica', async ({ db }) => {
+    const { document, connections, promotedConnection, serviceConnection } =
+      await seedCurrentKnowledgePrincipals(db, 'relay');
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: vi.fn((handler) => {
+        remoteHandler = handler;
+      }),
+    };
+    const app = makeApp(
+      connections,
+      {},
+      {
+        authenticated: connections,
+        'tenant:tenant-a': connections,
+      }
+    );
+    const r = repos({ branch: branch('unused'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      db,
+      branchRbacEnabled: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: relay,
+      ...r,
+    });
+
+    await remoteHandler?.({
+      version: REALTIME_RELAY_VERSION,
+      tenantId: 'tenant-a',
+      path: 'kb/documents',
+      event: 'patched',
+      method: 'patch',
+      id: document.document_id,
+      data: document,
+    });
+
+    expect(app.emit).toHaveBeenCalledOnce();
+    const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
+    expect(channel.connections).toEqual([promotedConnection, serviceConnection]);
+  });
 });
+
+async function seedRealtimeUser(
+  db: Database,
+  label: string,
+  role: User['role'] = ROLES.MEMBER
+): Promise<User> {
+  return new UsersRepository(db).create({
+    user_id: generateId() as UserID,
+    email: `${label}-${generateId()}@test.local`,
+    name: label,
+    role,
+  }) as Promise<User>;
+}
+
+async function seedCurrentKnowledgePrincipals(db: Database, label: string) {
+  const owner = await seedRealtimeUser(db, `${label}-owner`);
+  const demoted = await seedRealtimeUser(db, `${label}-demoted`, ROLES.ADMIN);
+  const promoted = await seedRealtimeUser(db, `${label}-promoted`);
+  const removed = await seedRealtimeUser(db, `${label}-removed`, ROLES.ADMIN);
+  const namespace = await new KnowledgeNamespaceRepository(db).create({
+    slug: `${label}-current-principals`,
+    display_name: `${label} current principals`,
+    others_can: 'none',
+  });
+  const document = await new KnowledgeDocumentRepository(db).create({
+    namespace_id: namespace.namespace_id,
+    path: 'page.md',
+    title: 'Page',
+    content_text: '# Page',
+    visibility: 'public',
+    created_by: owner.user_id,
+  });
+  const users = new UsersRepository(db);
+  await users.update(demoted.user_id, { role: ROLES.MEMBER });
+  await users.update(promoted.user_id, { role: ROLES.ADMIN });
+  await users.delete(removed.user_id);
+
+  const promotedConnection = { user: promoted };
+  const serviceConnection = { user: { _isServiceAccount: true, role: 'service' } };
+  const connections = [
+    { user: demoted },
+    promotedConnection,
+    { user: removed },
+    // Tenant RLS-hidden and absent principals both resolve to null locally.
+    { user: user(generateId(), ROLES.ADMIN) },
+    serviceConnection,
+  ];
+  return { document, connections, promotedConnection, serviceConnection };
+}
 
 function repos(options: {
   branch: Branch;
@@ -438,6 +771,134 @@ describe('configureRealtimePublish', () => {
 
     expect(channel.connections).toHaveLength(2);
   });
+
+  dbTest('enforces Knowledge ACLs independently of branch RBAC', async ({ db }) => {
+    const owner = await seedRealtimeUser(db, 'owner');
+    const allowed = await seedRealtimeUser(db, 'allowed');
+    const denied = await seedRealtimeUser(db, 'denied');
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const namespace = await namespaces.create({
+      slug: 'rbac-independent',
+      display_name: 'RBAC independent',
+      others_can: 'none',
+    });
+    const document = await new KnowledgeDocumentRepository(db).create({
+      namespace_id: namespace.namespace_id,
+      path: 'page.md',
+      title: 'Page',
+      content_text: '# Page',
+      visibility: 'public',
+      created_by: owner.user_id,
+    });
+    await namespaces.upsertNamespaceAclEntry({
+      namespace_id: namespace.namespace_id,
+      subject_type: 'user',
+      subject_id: allowed.user_id,
+      permission: 'read',
+    });
+    const allowedConnection = { user: allowed };
+    const deniedConnection = { user: denied };
+    const serviceConnection = { user: { _isServiceAccount: true, role: 'service' } };
+
+    for (const branchRbacEnabled of [false, true]) {
+      const app = makeApp([allowedConnection, deniedConnection, serviceConnection]);
+      const r = repos({ branch: branch('unused'), permissions: {} });
+      configureRealtimePublish({ app, db, branchRbacEnabled, ...r });
+
+      const channel = await app.runPublish(document, {
+        path: 'kb/documents',
+        method: 'patch',
+        event: 'patched',
+        id: document.document_id,
+        params: {},
+      });
+
+      expect(channel.connections).toEqual([allowedConnection, serviceConnection]);
+    }
+  });
+
+  dbTest('reloads current Knowledge principals without reconnecting', async ({ db }) => {
+    const { document, connections, promotedConnection, serviceConnection } =
+      await seedCurrentKnowledgePrincipals(db, 'local');
+    const app = makeApp(
+      connections,
+      {},
+      {
+        authenticated: connections,
+        'tenant:tenant-a': connections,
+      }
+    );
+    const r = repos({ branch: branch('unused'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      db,
+      branchRbacEnabled: false,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+      ...r,
+    });
+
+    const channel = await app.runPublish(document, {
+      path: 'kb/documents',
+      method: 'patch',
+      event: 'patched',
+      id: document.document_id,
+      params: {},
+    });
+
+    expect(channel.connections).toEqual([promotedConnection, serviceConnection]);
+  });
+
+  dbTest(
+    'contains Knowledge events to the resolved tenant before applying document ACLs',
+    async ({ db }) => {
+      const owner = await seedRealtimeUser(db, 'owner');
+      const tenantAUser = await seedRealtimeUser(db, 'tenant-a-user');
+      const tenantBUser = await seedRealtimeUser(db, 'tenant-b-user');
+      const namespace = await new KnowledgeNamespaceRepository(db).create({
+        slug: 'tenant-contained',
+        display_name: 'Tenant contained',
+        others_can: 'read',
+      });
+      const document = await new KnowledgeDocumentRepository(db).create({
+        namespace_id: namespace.namespace_id,
+        path: 'page.md',
+        title: 'Page',
+        content_text: '# Page',
+        visibility: 'public',
+        created_by: owner.user_id,
+      });
+      const tenantAConnection = { user: tenantAUser };
+      const tenantBConnection = { user: tenantBUser };
+      const app = makeApp(
+        [tenantAConnection, tenantBConnection],
+        {},
+        {
+          authenticated: [tenantAConnection, tenantBConnection],
+          'tenant:tenant-a': [tenantAConnection],
+          'tenant:tenant-b': [tenantBConnection],
+        }
+      );
+      const r = repos({ branch: branch('unused'), permissions: {} });
+      configureRealtimePublish({
+        app,
+        db,
+        branchRbacEnabled: false,
+        multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+        ...r,
+      });
+
+      const channel = await app.runPublish(document, {
+        path: 'kb/documents',
+        method: 'patch',
+        event: 'patched',
+        id: document.document_id,
+        params: {},
+      });
+
+      expect(channel.connections).toEqual([tenantAConnection]);
+      expect(channel.connections).not.toContain(tenantBConnection);
+    }
+  );
 
   it('scopes broadcasts to the resolved tenant channel in static multi-tenancy mode', async () => {
     const tenantUser = user('tenant-user');
@@ -782,6 +1243,83 @@ describe('configureRealtimePublish', () => {
 
     expect(channel.connections).toEqual([allowedConnection]);
     expect(r.branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledWith('b1');
+  });
+
+  it('delivers a removed branch from its pre-delete visibility snapshot after the row is gone', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const otherTenant = user('other-tenant');
+    const allowedConnection = { user: allowed };
+    const deniedConnection = { user: denied };
+    const app = makeApp(
+      [allowedConnection, deniedConnection, { user: otherTenant }],
+      {},
+      {
+        authenticated: [allowedConnection, deniedConnection, { user: otherTenant }],
+        'tenant:tenant-a': [allowedConnection, deniedConnection],
+      }
+    );
+    const deletedBranch = branch('b1', 'none');
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async () => null),
+      findExplicitViewUserIds: vi.fn(async () => []),
+    } as unknown as RealtimeAccessBranchRepository;
+    const sessionsRepository = {
+      findBranchIdBySessionId: vi.fn(async () => null),
+      findCreatedByBySessionId: vi.fn(async () => null),
+    } as unknown as RealtimeAccessSessionRepository;
+    configureRealtimePublish({
+      app,
+      db: scopeOnlyDb,
+      branchRbacEnabled: true,
+      branchRepository,
+      sessionsRepository,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+    });
+
+    const channel = await app.runPublish(deletedBranch, {
+      path: 'branches',
+      method: 'remove',
+      event: 'removed',
+      id: 'b1',
+      params: {
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        _agorRealtimeBranchRemovalVisibility: {
+          branchId: 'b1',
+          mode: 'explicitUsers',
+          userIds: ['allowed'],
+        },
+      },
+    });
+
+    expect(channel.connections).toEqual([allowedConnection]);
+    expect(branchRepository.findRealtimeVisibilityBranch).not.toHaveBeenCalled();
+  });
+
+  it('fails a branch removal closed when its server-captured visibility snapshot is missing', async () => {
+    const allowed = { user: user('allowed') };
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([allowed, service]);
+    const r = repos({
+      branch: branch('b1', 'view'),
+      permissions: { allowed: 'view' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(branch('b1', 'view'), {
+      path: 'branches',
+      method: 'remove',
+      event: 'removed',
+      id: 'b1',
+      params: {},
+    });
+
+    expect(channel.connections).toEqual([service]);
+    expect(r.branchRepository.findRealtimeVisibilityBranch).not.toHaveBeenCalled();
   });
 
   it('scopes nested branch permission service events through the route branch id', async () => {

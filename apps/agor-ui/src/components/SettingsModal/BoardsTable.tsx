@@ -26,6 +26,7 @@ import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ArchiveToggleButton } from '../ArchiveButton';
 import { BoardEditModal } from '../BoardEditModal';
+import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
@@ -230,11 +231,12 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 
   const columns = [
     {
-      title: 'Icon',
-      dataIndex: 'icon',
-      key: 'icon',
+      title: 'Board',
+      key: 'tile',
       width: 80,
-      render: (icon: string) => <span style={{ fontSize: 24 }}>{icon || '📋'}</span>,
+      render: (_: unknown, board: Board) => (
+        <BoardTile emoji={getBoardEmoji(board, branchById)} size={32} />
+      ),
     },
     {
       title: 'Name',

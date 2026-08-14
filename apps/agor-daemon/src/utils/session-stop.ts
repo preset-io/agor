@@ -5,7 +5,7 @@ import { isSessionExecuting, SessionStatus } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
 import { requestExecutorTermination, type TerminationResult } from '../termination-coordinator.js';
 import { requireActiveAgenticTool } from './agentic-tool-runtime.js';
-import { findActiveTasksForSession } from './session-tasks.js';
+import type { findActiveTasksForSession } from './session-tasks.js';
 
 export interface StopSessionResult {
   success: boolean;
@@ -19,6 +19,7 @@ export interface StopSessionDeps {
   app: Application;
   taskRepo: Pick<TaskRepository, 'findQueued'>;
   sessionsService: Pick<SessionsServiceImpl, 'get' | 'patch'>;
+  findActiveTasks: typeof findActiveTasksForSession;
   requestTermination?: typeof requestExecutorTermination;
 }
 
@@ -67,6 +68,19 @@ export async function stopSessionPreserveQueue(
 ): Promise<StopSessionResult> {
   const session = await deps.sessionsService.get(sessionId, params);
 
+  // Stop is idempotent across retries and the per-session turn lock. A
+  // concurrent caller can observe the first caller's already-committed idle
+  // projection; report the requested postcondition instead of a false failure.
+  if (session.status === SessionStatus.IDLE) {
+    const queuedTasks = await deps.taskRepo.findQueued(sessionId);
+    return {
+      success: true,
+      status: SessionStatus.IDLE,
+      reason: 'Session is already idle',
+      queuedTasksPreserved: queuedTasks.length,
+    };
+  }
+
   if (!isSessionExecuting(session)) {
     return {
       success: false,
@@ -74,7 +88,7 @@ export async function stopSessionPreserveQueue(
     };
   }
 
-  const targetTasksArray = await findActiveTasksForSession(deps.app, sessionId, params);
+  const targetTasksArray = await deps.findActiveTasks(deps.app, sessionId, params);
   const queuedTasks = await deps.taskRepo.findQueued(sessionId);
 
   if (targetTasksArray.length === 0) {

@@ -12,7 +12,6 @@ import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,
   Checkbox,
-  Flex,
   Form,
   Input,
   Modal,
@@ -28,7 +27,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
-import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -129,7 +127,6 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           email: values.email,
           password: values.password,
           name: values.name,
-          emoji: values.emoji || '👤',
           role: values.role || ROLES.MEMBER,
           unix_username: values.unix_username,
           must_change_password: values.must_change_password || false,
@@ -286,15 +283,8 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         width={800}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="Name" style={{ marginBottom: 24 }}>
-            <Flex gap={8}>
-              <Form.Item name="emoji" initialValue="👤" noStyle>
-                <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
-              </Form.Item>
-              <Form.Item name="name" noStyle style={{ flex: 1 }}>
-                <Input placeholder="John Doe" style={{ flex: 1 }} />
-              </Form.Item>
-            </Flex>
+          <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
+            <Input placeholder="John Doe" />
           </Form.Item>
 
           <Form.Item

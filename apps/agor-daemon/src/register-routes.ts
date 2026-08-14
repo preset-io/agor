@@ -56,6 +56,7 @@ import {
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
+  BranchArchiveOrDeleteOptions,
   HookContext,
   MCPMemberPolicy,
   MCPMemberPolicySetting,
@@ -75,6 +76,7 @@ import type {
 } from '@agor/core/types';
 import {
   hasMinimumRole,
+  isBranchArchiveOrDeleteOptions,
   isTaskPendingDispatch,
   MCP_MEMBER_POLICIES,
   MessageRole,
@@ -126,6 +128,7 @@ import {
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
@@ -138,6 +141,7 @@ import {
   registerAuthenticatedRoute as registerAuthenticatedRouteBase,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
 import {
   cacheBranchAccess,
   checkSessionOwnerOrAdmin,
@@ -317,10 +321,115 @@ export async function authorizeTaskTerminalRoute(input: {
   return internalParams;
 }
 
-export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | undefined {
+export function findMatchingUnverifiedTerminationTask(
+  tasks: readonly Task[],
+  expected: { taskId: string; terminationRequestedAt: string }
+): Task | undefined {
   return tasks.find(
-    (task) => task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
+    (task) =>
+      task.task_id === expected.taskId &&
+      task.status === TaskStatus.STOPPING &&
+      task.sdk_failure?.termination === 'unverified' &&
+      task.termination_request?.requested_at === expected.terminationRequestedAt
   );
+}
+
+/** Build the required short database unit used by authenticated long-route dependencies. */
+export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase) {
+  return <T>(work: () => Promise<T>): Promise<T> => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for database operation');
+    return runWithTenantDatabaseScope(db, tenantId, work);
+  };
+}
+
+export function createUploadAuthMiddleware(input: {
+  authentication: {
+    create(
+      data: { strategy: 'jwt'; accessToken: string },
+      params: AuthenticatedParams
+    ): Promise<{ user?: User; authentication?: { payload?: unknown } }>;
+  };
+  multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
+}) {
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 middleware request augmentation
+  return async (req: any, res: any, next: NextFunction) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+      if (!token) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      const authParams: AuthenticatedParams = { headers: req.headers };
+      const result = await input.authentication.create(
+        { strategy: 'jwt', accessToken: token },
+        authParams
+      );
+      const authenticatedParams = {
+        user: result.user,
+        provider: 'rest',
+        authentication: result.authentication,
+        headers: req.headers,
+      };
+      req.feathers = {
+        ...authenticatedParams,
+        tenant:
+          authParams.tenant ??
+          resolveTenantContext(input.multiTenancy, {
+            params: {
+              authentication: result.authentication,
+              headers: req.headers,
+            },
+            authPayload: result.authentication?.payload,
+            headers: req.headers,
+          }),
+      };
+      next();
+    } catch (error) {
+      console.error('❌ [Upload Auth] Authentication failed:', error);
+      res.status(401).json({ error: 'Authentication required' });
+    }
+  };
+}
+
+export async function authorizeForceFailRoute(input: {
+  session: Pick<Session, 'branch_id'>;
+  params: RouteParams;
+  body: Record<string, unknown>;
+  findActiveTasks: () => Promise<readonly Task[]>;
+  isBranchOwner: (branchId: Session['branch_id'], userId: UUID) => Promise<boolean>;
+}): Promise<{ task: Task; confirmation: string; terminationRequestedAt: string }> {
+  const userId = input.params.user?.user_id;
+  const isAdmin = hasMinimumRole(input.params.user?.role, ROLES.ADMIN);
+  const isOwner =
+    !isAdmin && !!userId && (await input.isBranchOwner(input.session.branch_id, userId as UUID));
+  if (!isAdmin && !isOwner) {
+    throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
+  }
+  if (typeof input.body.confirmation !== 'string') {
+    throw new BadRequest('Type STOP to confirm force-fail.');
+  }
+  if (
+    typeof input.body.task_id !== 'string' ||
+    typeof input.body.termination_requested_at !== 'string'
+  ) {
+    throw new BadRequest('Force-fail requires the exact Task termination request.');
+  }
+  const task = findMatchingUnverifiedTerminationTask(await input.findActiveTasks(), {
+    taskId: input.body.task_id,
+    terminationRequestedAt: input.body.termination_requested_at,
+  });
+  if (!task) {
+    throw new Conflict(
+      'The Task termination state changed. Review the current Task before force-failing.'
+    );
+  }
+  return {
+    task,
+    confirmation: input.body.confirmation,
+    terminationRequestedAt: input.body.termination_requested_at,
+  };
 }
 
 /**
@@ -372,6 +481,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         hook(context)
       ) as Promise<Awaited<T>>;
     };
+  const inCurrentTenantDatabaseScope = createRequiredTenantDatabaseRunner(db);
 
   /** Schedule orchestration after commit with tenant identity but no open transaction. */
   function deferInFreshTenantScope(params: RouteParams, fn: () => Promise<void>): void {
@@ -1007,14 +1117,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       `🧹 [PromptState] Repairing stuck session ${shortId(session.session_id)} ` +
         `(status=${session.status}, ready_for_prompt=${session.ready_for_prompt})`
     );
-    return (await app.service('sessions').patch(
-      session.session_id,
-      {
-        status: SessionStatus.IDLE,
-        ready_for_prompt: true,
-      },
-      params
-    )) as Session;
+    return inCurrentTenantDatabaseScope(
+      async () =>
+        (await app.service('sessions').patch(
+          session.session_id,
+          {
+            status: SessionStatus.IDLE,
+            ready_for_prompt: true,
+          },
+          params
+        )) as Session
+    );
   }
 
   /**
@@ -1207,7 +1320,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (!agenticToolEnabled) {
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
-    const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
+    const session = await runWithTenantDatabaseScope(db, tenantId, () =>
+      sessionsService.materializeAgenticToolPreset(loadedSession, params)
+    );
     const startTimestamp = new Date().toISOString();
 
     // The daemon persists launch intent and writes required sentinel git fields
@@ -1312,14 +1427,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // explicit patch, `session.status` stays IDLE while a task is RUNNING,
     // causing the queue gate in the prompt route to wave subsequent prompts
     // through instead of queuing them.
-    await app.service('sessions').patch(
-      task.session_id,
-      {
-        status: SessionStatus.RUNNING,
-        ready_for_prompt: false,
-        tasks: [...session.tasks, task.task_id],
-      },
-      params
+    await runWithTenantDatabaseScope(db, tenantId, () =>
+      app.service('sessions').patch(
+        task.session_id,
+        {
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          tasks: [...session.tasks, task.task_id],
+        },
+        params
+      )
     );
 
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
@@ -1489,7 +1606,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
-        let session = await sessionsService.get(id, params);
+        const requestedSessionId = id;
+        let session = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+          sessionsService.get(requestedSessionId, params)
+        );
         id = session.session_id;
         const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
 
@@ -1525,7 +1645,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (!(await isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool))) {
             throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
           }
-          session = await sessionsService.materializeAgenticToolPreset(session, params);
+          session = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.materializeAgenticToolPreset(session, params)
+          );
           if (
             session.agentic_tool_preset_id &&
             data.permissionMode !== undefined &&
@@ -1547,10 +1669,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.log(
             `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
           );
-          session = (await sessionsService.patch(
-            id,
-            { archived: false, archived_reason: undefined },
-            params
+          session = (await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.patch(id, { archived: false, archived_reason: undefined }, params)
           )) as typeof session;
         }
 
@@ -1572,7 +1692,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionTurnLocks,
           id as SessionID,
           async () => {
-            let lockedSession = await sessionsService.get(id, params);
+            let lockedSession = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+              sessionsService.get(id, params)
+            );
             if (lockedSession.status === SessionStatus.STOPPING) {
               // The earlier STOPPING check was against pre-lock state — re-check
               // here so a session that entered STOPPING while we waited for our
@@ -2296,62 +2418,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     next();
   };
 
-  // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-  const uploadAuthMiddleware: any = async (req: any, res: any, next: any) => {
-    try {
-      if (DEBUG_UPLOAD) console.log('🔐 [Upload Auth] Attempting authentication');
-
-      let token = null;
-
-      // Bearer-only. We previously fell back to feathers-jwt / agor-access-token
-      // / jwt cookies, which made the upload endpoint vulnerable to CSRF (a
-      // forged form-post would inherit the user's cookie). All in-tree callers
-      // (UI FileUpload component) already send `Authorization: Bearer …`.
-      const authHeader = req.headers.authorization;
-      if (authHeader?.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
-        if (DEBUG_UPLOAD) console.log('   Found token in Authorization header');
-      }
-
-      if (!token) {
-        if (DEBUG_UPLOAD) console.log('⚠️  [Upload Auth] No JWT token found, rejecting');
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-
-      if (DEBUG_UPLOAD) console.log('🔑 [Upload Auth] JWT token found, verifying...');
-
-      const authService = app.service('authentication');
-      const result = await authService.create({
-        strategy: 'jwt',
-        accessToken: token,
-      });
-
-      if (DEBUG_UPLOAD) {
-        console.log('✅ [Upload Auth] Authentication successful');
-        console.log('   User:', result.user?.user_id ? shortId(result.user.user_id) : 'unknown');
-      }
-
-      const authParams = {
-        user: result.user,
-        provider: 'rest',
-        authentication: result.authentication,
-        headers: req.headers,
-      };
-      req.feathers = {
-        ...authParams,
-        tenant: resolveTenantContext(multiTenancy, {
-          params: authParams,
-          authPayload: result.authentication?.payload,
-          headers: req.headers,
-        }),
-      };
-
-      next();
-    } catch (error) {
-      console.error('❌ [Upload Auth] Authentication failed:', error);
-      res.status(401).json({ error: 'Authentication required' });
-    }
-  };
+  const uploadAuthMiddleware = createUploadAuthMiddleware({
+    authentication: app.service('authentication'),
+    multiTenancy,
+  });
 
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
   (app as any).post(
@@ -2619,27 +2689,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         };
         if (body.force_unverified === true) {
           const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
-            const session = await app.service('sessions').get(id, params);
-            const task = findUnverifiedTerminationTask(
-              await findActiveTasksForSession(app, session.session_id, params)
-            );
-            if (!task) throw new BadRequest('Session has no unverified Task to force-fail.');
-            const taskId = task.task_id;
-            const userId = params.user?.user_id;
-            const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
-            const isOwner =
-              !!userId &&
-              (await stopRouteRepositories.branchRepo.isOwner(session.branch_id, userId as UUID));
-            if (!isAdmin && !isOwner) {
-              throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
-            }
-            if (typeof body.confirmation !== 'string') {
-              throw new BadRequest(`Type ${shortId(taskId)} to confirm force-fail.`);
-            }
+            const target = await inCurrentTenantDatabaseScope(async () => {
+              const session = await app.service('sessions').get(id, params);
+              return authorizeForceFailRoute({
+                session,
+                params,
+                body,
+                findActiveTasks: () => findActiveTasksForSession(app, session.session_id, params),
+                isBranchOwner: (branchId, userId) =>
+                  stopRouteRepositories.branchRepo.isOwner(branchId, userId),
+              });
+            });
             const failedTask = await forceFailUnverifiedTask({
               app,
-              taskId,
-              confirmation: body.confirmation,
+              taskId: target.task.task_id,
+              terminationRequestedAt: target.terminationRequestedAt,
+              confirmation: target.confirmation,
               params,
             });
             return {
@@ -2659,6 +2724,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               app,
               taskRepo: stopRouteRepositories.taskRepo,
               sessionsService: sessionsServiceWithHooks,
+              findActiveTasks: (stopApp, sessionId, stopParams) =>
+                inCurrentTenantDatabaseScope(() =>
+                  findActiveTasksForSession(stopApp, sessionId, stopParams)
+                ),
             },
             id as SessionID,
             params,
@@ -2958,6 +3027,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
+    runInTenantDatabaseScope: inCurrentTenantDatabaseScope,
     resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
       emitServiceEvent(app, {
         path: 'messages',
@@ -3462,10 +3532,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
       if (!id) throw new Error('Branch ID required');
-      const options = data as {
-        metadataAction: 'archive' | 'delete';
-        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-      };
+      if (!isBranchArchiveOrDeleteOptions(data)) {
+        throw new BadRequest('Invalid branch archive/delete options');
+      }
+      const options: BranchArchiveOrDeleteOptions = data;
       return branchesService.archiveOrDelete(
         id as import('@agor/core/types').BranchID,
         options,
@@ -3480,32 +3550,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'archive or delete branches'),
-        inTenantDatabaseScope(async (context: HookContext) => {
-          const id = context.params.route?.id;
-          if (!id) throw new Error('Branch ID required');
-
-          const branch = await branchRepository.findById(id);
-          if (!branch) {
-            throw new Forbidden(`Branch not found: ${id}`);
-          }
-
-          await cacheBranchAccess(context.params, branchRepository, branch);
-
-          return context;
-        }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'archive or delete branches', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to archive/delete branches'
-                );
-              }
-              return context;
-            },
+        inTenantDatabaseScope((context: HookContext) =>
+          authorizeBranchArchiveDelete(context, {
+            branchRepository,
+            branchRbacEnabled,
+            superadminOpts,
+          })
+        ),
       ],
     },
   });
@@ -4325,7 +4376,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Server-side gate in register-hooks.ts is the source of truth; this
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
-          webTerminal: config.execution?.allow_web_terminal !== false,
+          webTerminal: resolveWebTerminalCapability({ config, deployment }).enabled,
+          webTerminalCapability: resolveWebTerminalCapability({ config, deployment }),
           // How managed environment lifecycle fields execute. In
           // webhook-only mode the UI/MCP may still show env controls, but
           // non-URL rendered commands are rejected server-side.

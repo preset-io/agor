@@ -2,7 +2,7 @@
 
 import Script from 'next/script';
 import { useEffect, useId, useState } from 'react';
-import { AGOR_CLOUD_DEMO_URL } from '../lib/links';
+import { AGOR_CLOUD_DEMO_URL, HUBSPOT_FORM_ID } from '../lib/links';
 import styles from './HubSpotForm.module.css';
 
 declare global {
@@ -25,7 +25,6 @@ declare global {
 // Source form (edit submit button copy, fields, etc. in HubSpot):
 // https://app-na2.hubspot.com/forms/246818610/editor/56f5b614-72f0-4412-9247-33b53715fda4/edit
 const HUBSPOT_PORTAL_ID = '246818610';
-const HUBSPOT_FORM_ID = '56f5b614-72f0-4412-9247-33b53715fda4';
 const HUBSPOT_REGION = 'na2';
 const HUBSPOT_SCRIPT_SRC = 'https://js.hsforms.net/forms/embed/v2.js';
 

@@ -8248,6 +8248,46 @@
         }
       }
     },
+    "/terminals/{id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID of terminals to remove",
+            "schema": {
+              "type": "integer"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/terminals"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "404": {
+            "description": "not found"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
+        "tags": ["terminals"],
+        "security": []
+      }
+    },
     "/session-env-selections": {
       "get": {
         "parameters": [

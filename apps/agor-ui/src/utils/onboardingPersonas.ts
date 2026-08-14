@@ -8,7 +8,6 @@
  */
 export interface OnboardingPersona {
   id: string;
-  emoji: string;
   title: string;
   desc: string;
 }
@@ -16,25 +15,21 @@ export interface OnboardingPersona {
 export const ONBOARDING_PERSONAS: OnboardingPersona[] = [
   {
     id: 'developer',
-    emoji: '🔨',
     title: 'I write code',
     desc: 'AI does the repetitive parts - I focus on what is actually hard.',
   },
   {
     id: 'pm',
-    emoji: '📋',
     title: 'I manage projects',
     desc: "AI drafts, summarizes, and chases status so I don't have to.",
   },
   {
     id: 'lead',
-    emoji: '🎯',
     title: 'I lead a team',
     desc: 'AI multiplies what my team can do. I set direction, it handles the rest.',
   },
   {
     id: 'solo',
-    emoji: '⚡',
     title: 'Building solo',
     desc: 'AI is the rest of the team - research, writing, execution, all of it.',
   },

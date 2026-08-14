@@ -1,3 +1,4 @@
+import { getCurrentTenantDatabaseScope, runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../utils/spawn-executor.js';
 import { FileService } from './file.js';
@@ -29,19 +30,21 @@ describe('FileService executor failures', () => {
     });
     const service = new FileService(
       { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
-      null as never,
+      { run: vi.fn() } as never,
       { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
     );
 
     await expect(
-      service.find({
-        query: { branch_id: 'branch-1' },
-        user: {
-          user_id: 'user-1',
-          email: 'member@example.com',
-          role: 'member',
-        },
-      })
+      runWithTenantContext('tenant-a', () =>
+        service.find({
+          query: { branch_id: 'branch-1' },
+          user: {
+            user_id: 'user-1',
+            email: 'member@example.com',
+            role: 'member',
+          },
+        })
+      )
     ).rejects.toThrow('Failed to browse files: executor unavailable');
   });
 
@@ -78,7 +81,7 @@ describe('FileService executor failures', () => {
       vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data });
       const service = new FileService(
         { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
-        null as never,
+        { run: vi.fn() } as never,
         { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
       );
       const params = {
@@ -90,7 +93,7 @@ describe('FileService executor failures', () => {
         },
       };
 
-      await invoke(service, params);
+      await runWithTenantContext('tenant-a', () => invoke(service, params));
 
       expect(runExecutorCommand).toHaveBeenCalledWith(
         expect.objectContaining({ command }),
@@ -98,4 +101,78 @@ describe('FileService executor failures', () => {
       );
     }
   );
+
+  it('scopes database reads but leaves executor work outside the transaction', async () => {
+    const db = { run: vi.fn() } as never;
+    const findById = vi.fn(async () => {
+      expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+      return { branch_id: 'branch-1' };
+    });
+    impersonationMocks.resolveExecutorReadAsUser.mockImplementation(async () => {
+      expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+      return 'alice';
+    });
+    vi.mocked(runExecutorCommand).mockImplementation(async () => {
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      return { success: true, data: { files: [] } };
+    });
+    const service = new FileService({ findById } as never, db, {
+      get: () => ({}),
+      settings: { authentication: { secret: 'test' } },
+    } as never);
+
+    await runWithTenantContext('tenant-a', () =>
+      service.find({
+        query: { branch_id: 'branch-1' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      })
+    );
+
+    expect(findById).toHaveBeenCalledOnce();
+    expect(runExecutorCommand).toHaveBeenCalledOnce();
+  });
+
+  it('fails before repository access when tenant identity is missing', async () => {
+    const findById = vi.fn();
+    const service = new FileService(
+      { findById } as never,
+      { run: vi.fn() } as never,
+      {
+        get: () => ({}),
+        settings: { authentication: { secret: 'test' } },
+      } as never
+    );
+
+    await expect(
+      service.find({
+        query: { branch_id: 'branch-1' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      })
+    ).rejects.toThrow('Missing active tenant context for file database access');
+    expect(findById).not.toHaveBeenCalled();
+  });
+
+  it('reuses the branch authorized by the registered RBAC preload', async () => {
+    const findById = vi.fn();
+    vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data: { files: [] } });
+    const service = new FileService(
+      { findById } as never,
+      { run: vi.fn() } as never,
+      {
+        get: () => ({}),
+        settings: { authentication: { secret: 'test' } },
+      } as never
+    );
+
+    await runWithTenantContext('tenant-a', () =>
+      service.find({
+        query: { branch_id: 'branch-1' },
+        branch: { branch_id: 'branch-1', path: '/tenant-a/branch-1' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      } as never)
+    );
+
+    expect(findById).not.toHaveBeenCalled();
+    expect(runExecutorCommand).toHaveBeenCalledOnce();
+  });
 });

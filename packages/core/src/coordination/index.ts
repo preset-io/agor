@@ -11,15 +11,17 @@ export interface DistributedWorkIdentity {
    * Diagnostic daemon-instance label. It is stable across restarts only when
    * the deployment supplies a stable configured/environment value.
    *
-   * This is not an authorization, fencing, lease, liveness, or correctness
-   * boundary.
+   * This does not confer authorization, a lease, liveness, or correctness by
+   * itself. Consumers may include it as a diagnostic discriminator alongside
+   * their own authoritative state.
    */
   readonly instanceId: string;
   /**
    * Diagnostic identity for one daemon process incarnation.
    *
-   * This is not an authorization, fencing, lease, liveness, or correctness
-   * boundary.
+   * This does not confer authorization, a lease, liveness, or correctness by
+   * itself. Process-local resources may bind a capability to this incarnation
+   * only when their own local registry remains the authoritative fence.
    */
   readonly bootId: string;
 }
@@ -49,8 +51,10 @@ function normalizedNonEmpty(value: unknown): string | undefined {
  * `daemon` fallback. A dedicated YAML deployment identity may be added later
  * with the HA configuration contract; unrelated configuration must not be
  * reused here. This helper is deliberately stateless: it does not cache,
- * register, heartbeat, claim, lease, fence, or confer any authority. The
- * caller owns creating it exactly once and sharing the result.
+ * register, heartbeat, claim, lease, or confer any authority by itself. The
+ * caller owns creating it exactly once and sharing the result; a resource
+ * owner may use bootId as an incarnation discriminator only with its own
+ * authoritative lifecycle state.
  */
 export function createDistributedWorkIdentity(
   options: CreateDistributedWorkIdentityOptions

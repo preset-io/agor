@@ -42,6 +42,7 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 ### Fixes
 
+- **Collision-safe Unix group names** — new branch/repo groups use canonical 24-character short IDs while persisted legacy names remain authoritative. Existing `strict`/`insulated` installations should run `sudo agor local fix-group-uuids --only-dups` (preview with `--dry-run`); an optional run without `--only-dups` migrates every legacy group and safely cleans verified legacy orphans.
 - **Reliable fresh and destructive init** — interactive init requires an intentional nonempty agentic-tool selection, persists the immutable deployment policy, and finishes package reconciliation before success. Destructive re-init now refuses a live daemon, closes SQLite inspection handles, and removes WAL/SHM sidecars before replacing the database.
 - **Reliable cold-cache global installs** — removes deprecated transitive trees and bundled agent runtimes from `agor-live`, bundles selected high-fanout pure-JS dependencies, and adds package-content and low-file-descriptor installation checks. ([#2201](https://github.com/preset-io/agor/pull/2201))
 

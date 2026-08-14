@@ -66,7 +66,6 @@ import {
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { CodexAuthSettings } from '../CodexAuth';
-import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
 import { SessionMcpServersField } from '../MCPServerSelect';
@@ -411,7 +410,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       form.setFieldsValue({
         email: userData.email,
         name: userData.name,
-        emoji: userData.emoji,
         role: userData.role,
         unix_username: userData.unix_username,
         groupIds: [],
@@ -672,7 +670,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       const toValidate: string[] = [];
-      if (panels.has('profile')) toValidate.push('email', 'name', 'emoji', 'role');
+      if (panels.has('profile')) toValidate.push('email', 'name', 'role');
       if (panels.has('security')) toValidate.push('unix_username');
       if (toValidate.length) await form.validateFields(toValidate);
 
@@ -681,10 +679,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       let preferencesTouched = false;
 
       if (panels.has('profile')) {
-        const values = form.getFieldsValue(['email', 'name', 'emoji', 'role', 'useSlackAvatar']);
+        const values = form.getFieldsValue(['email', 'name', 'role', 'useSlackAvatar']);
         updates.email = values.email;
         updates.name = values.name;
-        updates.emoji = values.emoji;
         updates.role = values.role;
         if (values.useSlackAvatar === false) {
           nextPreferences.use_slack_avatar = false;
@@ -1443,13 +1440,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     <>
       <PanelHeader title={PANEL_META.profile.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
-        <FieldRow label="Name">
-          <Space.Compact style={{ width: '100%' }}>
-            <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
-            <Form.Item name="name" noStyle>
-              <Input placeholder="John Doe" />
-            </Form.Item>
-          </Space.Compact>
+        <FieldRow label="Name" name="name">
+          <Input placeholder="John Doe" />
         </FieldRow>
 
         <FieldRow
@@ -1468,7 +1460,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           label="Use Slack avatar when available"
           name="useSlackAvatar"
           valuePropName="checked"
-          tooltip="Shows your Slack-synced profile image instead of the emoji tile above. Turns off automatically if Slack sync is removed."
+          tooltip="Shows your Slack-synced profile image instead of your initials tile. Turns off automatically if Slack sync is removed."
         >
           <Switch />
         </FieldRow>

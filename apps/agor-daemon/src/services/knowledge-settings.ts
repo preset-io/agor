@@ -1,6 +1,6 @@
 import {
   executeRaw,
-  isPostgresDatabase,
+  isPostgresDatabaseHandle,
   KnowledgeSemanticSettingsRepository,
   kbDocumentUnits,
   sql,
@@ -154,7 +154,7 @@ export class KnowledgeSettingsService {
       .returning({ unit_id: kbDocumentUnits.unit_id })
       .all();
 
-    if (isPostgresDatabase(db) && rows.length > 0) {
+    if (isPostgresDatabaseHandle(db) && rows.length > 0) {
       const pgvector = await getKnowledgePgvectorCapability(db);
       if (pgvector.storageReady) {
         await executeRaw(
@@ -225,7 +225,7 @@ export class KnowledgeSettingsService {
 
       if (identityChanged || chunkingChanged) {
         const configured =
-          isPostgresDatabase(db) &&
+          isPostgresDatabaseHandle(db) &&
           isUsableOpenAIEmbeddingConfig(saved, saved.api_key_configured) &&
           (await ensureKnowledgePgvectorStorage(db)).available;
         const queued = chunkingChanged

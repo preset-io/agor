@@ -24,7 +24,11 @@ import {
   generateBranchGroupName,
   generateRepoGroupName,
   getBranchPermissionMode,
+  isLegacyBranchGroupName,
+  isLegacyRepoGroupName,
   REPO_GIT_PERMISSION_MODE,
+  resolveBranchGroupName,
+  resolveRepoGroupName,
   UnixGroupCommands,
 } from './group-manager.js';
 import { getBranchSymlinkPath, SymlinkCommands } from './symlink-manager.js';
@@ -39,22 +43,43 @@ import {
 } from './user-manager.js';
 
 /**
- * Minimal Zellij configuration for Agor users
+ * Default Zellij configuration for Agor users.
  *
- * Only suppresses startup banners for cleaner UX.
- * Users can customize further by editing ~/.config/zellij/config.kdl
+ * Session resurrection is stored beneath the effective user's home. The
+ * stable session name is tenant/user/branch-scoped, while the live Agor PTY
+ * attachment remains owner-local and ephemeral. Users can customize further
+ * by editing ~/.config/zellij/config.kdl.
  */
 export const AGOR_ZELLIJ_CONFIG = `// Agor Zellij Config
 // Customize as needed
 
-// Hide startup banners for cleaner embedded terminal UX
+// Embedded terminal UX
 show_startup_tips false
 show_release_notes false
+pane_frames false
+simplified_ui false
+default_layout "default"
+auto_layout true
+default_shell "bash"
 
 // Clipboard configuration for web terminal (xterm.js)
 // Disable Zellij clipboard handling to allow native browser copy/paste
 mouse_mode false
 copy_on_select false
+
+// Keep the in-memory scroll buffer useful while the runtime is alive.
+scroll_buffer_size 10000
+
+// Closing an Agor attachment exits the live Zellij server instead of leaving
+// an unbounded background process. The next attachment can resurrect its
+// serialized state from the effective user's home cache.
+on_force_close "quit"
+session_serialization true
+pane_viewport_serialization true
+scrollback_lines_to_serialize 1000
+// Pin the interval across Zellij versions so owner loss has at most a small
+// serialization window.
+serialization_interval 1
 `;
 
 /**
@@ -243,7 +268,26 @@ export class UnixIntegrationService {
    * @returns Group name created
    */
   async createBranchGroup(branchId: BranchID): Promise<string> {
-    const groupName = generateBranchGroupName(branchId);
+    // A persisted name is authoritative. In particular, do not silently move
+    // legacy 8-character groups during normal lifecycle reconciliation.
+    let branch = await this.branchRepo.findById(branchId);
+    if (!branch) {
+      throw new Error(`Branch not found: ${branchId}`);
+    }
+
+    // Persist the canonical candidate before any system-global group or
+    // filesystem operation. A failed OS step is forward-recoverable because a
+    // rerun reads this same authoritative stamp.
+    if (branch.unix_group == null) {
+      await this.branchRepo.update(branchId, {
+        unix_group: generateBranchGroupName(branchId),
+      });
+      branch = await this.branchRepo.findById(branchId);
+    }
+    if (!branch?.unix_group) {
+      throw new Error(`Branch ${branchId} has no persisted Unix group after stamping`);
+    }
+    const groupName = resolveBranchGroupName(branchId, branch.unix_group);
 
     console.log(`[UnixIntegration] Creating group ${groupName} for branch ${shortId(branchId)}`);
 
@@ -254,14 +298,6 @@ export class UnixIntegrationService {
     } else {
       await this.executor.exec(UnixGroupCommands.createGroup(groupName));
     }
-
-    // Fetch current branch to get existing data and path
-    const branch = await this.branchRepo.findById(branchId);
-
-    // Update branch record with group name (using repository)
-    await this.branchRepo.update(branchId, {
-      unix_group: groupName,
-    });
 
     // Apply group ownership and permissions to branch directory
     if (branch?.path) {
@@ -309,15 +345,24 @@ export class UnixIntegrationService {
       console.log(`[UnixIntegration] No Unix group for branch ${shortId(branchId)}`);
       return;
     }
+    const groupName = resolveBranchGroupName(branchId, branch.unix_group);
 
-    console.log(
-      `[UnixIntegration] Deleting group ${branch.unix_group} for branch ${shortId(branchId)}`
-    );
+    // Legacy short names may be shared by multiple UUIDv7 rows (and even by
+    // rows hidden behind another tenant's RLS scope). Only the global,
+    // verification-heavy local migration command may remove them.
+    if (isLegacyBranchGroupName(groupName)) {
+      console.log(
+        `[UnixIntegration] Retaining legacy group ${groupName}; run agor local fix-group-uuids for verified cleanup`
+      );
+      return;
+    }
+
+    console.log(`[UnixIntegration] Deleting group ${groupName} for branch ${shortId(branchId)}`);
 
     // Check if group exists before deleting
-    const exists = await this.executor.check(UnixGroupCommands.groupExists(branch.unix_group));
+    const exists = await this.executor.check(UnixGroupCommands.groupExists(groupName));
     if (exists) {
-      await this.executor.exec(UnixGroupCommands.deleteGroup(branch.unix_group));
+      await this.executor.exec(UnixGroupCommands.deleteGroup(groupName));
     }
   }
 
@@ -335,6 +380,7 @@ export class UnixIntegrationService {
       );
       return;
     }
+    const groupName = resolveBranchGroupName(branchId, branch.unix_group);
 
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
@@ -344,20 +390,16 @@ export class UnixIntegrationService {
       return;
     }
 
-    console.log(
-      `[UnixIntegration] Adding user ${user.unix_username} to group ${branch.unix_group}`
-    );
+    console.log(`[UnixIntegration] Adding user ${user.unix_username} to group ${groupName}`);
 
     // Check if already in group
     const inGroup = await this.executor.check(
-      UnixGroupCommands.isUserInGroup(user.unix_username, branch.unix_group)
+      UnixGroupCommands.isUserInGroup(user.unix_username, groupName)
     );
     if (inGroup) {
       console.log(`[UnixIntegration] User ${user.unix_username} already in group`);
     } else {
-      await this.executor.exec(
-        UnixGroupCommands.addUserToGroup(user.unix_username, branch.unix_group)
-      );
+      await this.executor.exec(UnixGroupCommands.addUserToGroup(user.unix_username, groupName));
     }
 
     // Also create symlink if auto-manage is enabled
@@ -380,6 +422,7 @@ export class UnixIntegrationService {
       );
       return;
     }
+    const groupName = resolveBranchGroupName(branchId, branch.unix_group);
 
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
@@ -389,17 +432,15 @@ export class UnixIntegrationService {
       return;
     }
 
-    console.log(
-      `[UnixIntegration] Removing user ${user.unix_username} from group ${branch.unix_group}`
-    );
+    console.log(`[UnixIntegration] Removing user ${user.unix_username} from group ${groupName}`);
 
     // Check if in group before removing
     const inGroup = await this.executor.check(
-      UnixGroupCommands.isUserInGroup(user.unix_username, branch.unix_group)
+      UnixGroupCommands.isUserInGroup(user.unix_username, groupName)
     );
     if (inGroup) {
       await this.executor.exec(
-        UnixGroupCommands.removeUserFromGroup(user.unix_username, branch.unix_group)
+        UnixGroupCommands.removeUserFromGroup(user.unix_username, groupName)
       );
     }
 
@@ -423,15 +464,16 @@ export class UnixIntegrationService {
       );
       return;
     }
+    const groupName = resolveBranchGroupName(branchId, branch.unix_group);
 
     const permissionMode = getBranchPermissionMode(branch.others_fs_access || 'read');
 
     console.log(
-      `[UnixIntegration] Setting permissions ${permissionMode} for ${branchPath} (group: ${branch.unix_group})`
+      `[UnixIntegration] Setting permissions ${permissionMode} for ${branchPath} (group: ${groupName})`
     );
 
     await this.executor.execAll(
-      UnixGroupCommands.setDirectoryGroup(branchPath, branch.unix_group, permissionMode)
+      UnixGroupCommands.setDirectoryGroup(branchPath, groupName, permissionMode)
     );
 
     // Set explicit user ACL for the daemon user so it can access branch files
@@ -485,7 +527,25 @@ export class UnixIntegrationService {
    * @returns Group name created
    */
   async createRepoGroup(repoId: RepoID): Promise<string> {
-    const groupName = generateRepoGroupName(repoId);
+    // A persisted name is authoritative. In particular, do not silently move
+    // legacy 8-character groups during normal lifecycle reconciliation.
+    let repo = await this.repoRepo.findById(repoId);
+    if (!repo) {
+      throw new Error(`Repo not found: ${repoId}`);
+    }
+
+    // See createBranchGroup(): persist first, then use only the re-read value
+    // for privileged operations.
+    if (repo.unix_group == null) {
+      await this.repoRepo.update(repoId, {
+        unix_group: generateRepoGroupName(repoId),
+      });
+      repo = await this.repoRepo.findById(repoId);
+    }
+    if (!repo?.unix_group) {
+      throw new Error(`Repo ${repoId} has no persisted Unix group after stamping`);
+    }
+    const groupName = resolveRepoGroupName(repoId, repo.unix_group);
 
     console.log(`[UnixIntegration] Creating repo group ${groupName} for repo ${shortId(repoId)}`);
 
@@ -497,15 +557,9 @@ export class UnixIntegrationService {
       await this.executor.exec(UnixGroupCommands.createGroup(groupName));
     }
 
-    // Update repo record with group name
-    await this.repoRepo.update(repoId, {
-      unix_group: groupName,
-    });
-
     // Apply group ownership and permissions to repo Unix-group-managed paths:
     // - repo root (non-recursive, traversal)
     // - `.git` (recursive, shared git objects/refs + branch metadata)
-    const repo = await this.repoRepo.findById(repoId);
     if (repo?.local_path) {
       await this.setRepoPermissions(repoId, repo.local_path);
     }
@@ -552,15 +606,23 @@ export class UnixIntegrationService {
       console.log(`[UnixIntegration] No Unix group for repo ${shortId(repoId)}`);
       return;
     }
+    const groupName = resolveRepoGroupName(repoId, repo.unix_group);
 
-    console.log(
-      `[UnixIntegration] Deleting repo group ${repo.unix_group} for repo ${shortId(repoId)}`
-    );
+    // See deleteBranchGroup(): tenant-scoped lifecycle work cannot prove a
+    // system-global legacy group is unshared.
+    if (isLegacyRepoGroupName(groupName)) {
+      console.log(
+        `[UnixIntegration] Retaining legacy repo group ${groupName}; run agor local fix-group-uuids for verified cleanup`
+      );
+      return;
+    }
+
+    console.log(`[UnixIntegration] Deleting repo group ${groupName} for repo ${shortId(repoId)}`);
 
     // Check if group exists before deleting
-    const exists = await this.executor.check(UnixGroupCommands.groupExists(repo.unix_group));
+    const exists = await this.executor.check(UnixGroupCommands.groupExists(groupName));
     if (exists) {
-      await this.executor.exec(UnixGroupCommands.deleteGroup(repo.unix_group));
+      await this.executor.exec(UnixGroupCommands.deleteGroup(groupName));
     }
   }
 
@@ -582,25 +644,22 @@ export class UnixIntegrationService {
       );
       return;
     }
+    const groupName = resolveRepoGroupName(repoId, repo.unix_group);
 
     const gitPath = `${repoPath}/.git`;
     const gitExists = await this.executor.check(`[ -d "${gitPath}" ]`);
 
     console.log(
-      `[UnixIntegration] Setting repo permissions ${REPO_GIT_PERMISSION_MODE} for ${repoPath}${gitExists ? ' and .git' : ''} (group: ${repo.unix_group})`
+      `[UnixIntegration] Setting repo permissions ${REPO_GIT_PERMISSION_MODE} for ${repoPath}${gitExists ? ' and .git' : ''} (group: ${groupName})`
     );
 
     await this.executor.execAll(
-      UnixGroupCommands.setDirectoryGroupShallow(
-        repoPath,
-        repo.unix_group,
-        REPO_GIT_PERMISSION_MODE
-      )
+      UnixGroupCommands.setDirectoryGroupShallow(repoPath, groupName, REPO_GIT_PERMISSION_MODE)
     );
 
     if (gitExists) {
       await this.executor.execAll(
-        UnixGroupCommands.setDirectoryGroup(gitPath, repo.unix_group, REPO_GIT_PERMISSION_MODE)
+        UnixGroupCommands.setDirectoryGroup(gitPath, groupName, REPO_GIT_PERMISSION_MODE)
       );
     }
 
@@ -640,6 +699,7 @@ export class UnixIntegrationService {
       console.log(`[UnixIntegration] Repo has no Unix group or path, skipping .git/worktrees fix`);
       return;
     }
+    const groupName = resolveRepoGroupName(branch.repo_id as RepoID, repo.unix_group);
 
     // The branch's git dir is at .git/worktrees/<branch-name>/
     // Extract branch name from path (last component)
@@ -652,11 +712,11 @@ export class UnixIntegrationService {
     const branchGitDir = `${repo.local_path}/.git/worktrees/${branchName}`;
 
     console.log(
-      `[UnixIntegration] Setting .git/worktrees/${branchName} permissions ${REPO_GIT_PERMISSION_MODE} (group: ${repo.unix_group})`
+      `[UnixIntegration] Setting .git/worktrees/${branchName} permissions ${REPO_GIT_PERMISSION_MODE} (group: ${groupName})`
     );
 
     await this.executor.execAll(
-      UnixGroupCommands.setDirectoryGroup(branchGitDir, repo.unix_group, REPO_GIT_PERMISSION_MODE)
+      UnixGroupCommands.setDirectoryGroup(branchGitDir, groupName, REPO_GIT_PERMISSION_MODE)
     );
 
     // Set explicit user ACL for the daemon user on .git/worktrees/<name>
@@ -681,6 +741,7 @@ export class UnixIntegrationService {
       console.log(`[UnixIntegration] No Unix group for repo ${shortId(repoId)}, skipping user add`);
       return;
     }
+    const groupName = resolveRepoGroupName(repoId, repo.unix_group);
 
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
@@ -690,20 +751,16 @@ export class UnixIntegrationService {
       return;
     }
 
-    console.log(
-      `[UnixIntegration] Adding user ${user.unix_username} to repo group ${repo.unix_group}`
-    );
+    console.log(`[UnixIntegration] Adding user ${user.unix_username} to repo group ${groupName}`);
 
     // Check if already in group
     const inGroup = await this.executor.check(
-      UnixGroupCommands.isUserInGroup(user.unix_username, repo.unix_group)
+      UnixGroupCommands.isUserInGroup(user.unix_username, groupName)
     );
     if (inGroup) {
       console.log(`[UnixIntegration] User ${user.unix_username} already in repo group`);
     } else {
-      await this.executor.exec(
-        UnixGroupCommands.addUserToGroup(user.unix_username, repo.unix_group)
-      );
+      await this.executor.exec(UnixGroupCommands.addUserToGroup(user.unix_username, groupName));
     }
   }
 
@@ -724,6 +781,7 @@ export class UnixIntegrationService {
       );
       return;
     }
+    const groupName = resolveRepoGroupName(repoId, repo.unix_group);
 
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
@@ -734,16 +792,16 @@ export class UnixIntegrationService {
     }
 
     console.log(
-      `[UnixIntegration] Removing user ${user.unix_username} from repo group ${repo.unix_group}`
+      `[UnixIntegration] Removing user ${user.unix_username} from repo group ${groupName}`
     );
 
     // Check if in group before removing
     const inGroup = await this.executor.check(
-      UnixGroupCommands.isUserInGroup(user.unix_username, repo.unix_group)
+      UnixGroupCommands.isUserInGroup(user.unix_username, groupName)
     );
     if (inGroup) {
       await this.executor.exec(
-        UnixGroupCommands.removeUserFromGroup(user.unix_username, repo.unix_group)
+        UnixGroupCommands.removeUserFromGroup(user.unix_username, groupName)
       );
     }
   }
@@ -837,7 +895,7 @@ export class UnixIntegrationService {
     const repo = await this.repoRepo.findById(repoId);
     if (repo?.unix_group) {
       await this.reconcileUnixGroupMembers(
-        repo.unix_group,
+        resolveRepoGroupName(repoId, repo.unix_group),
         await this.getUnixUsernamesForUsers(userIds),
         { label: 'repo' }
       );
@@ -1216,7 +1274,7 @@ export class UnixIntegrationService {
     const branch = await this.branchRepo.findById(branchId);
     if (branch?.unix_group) {
       await this.reconcileUnixGroupMembers(
-        branch.unix_group,
+        resolveBranchGroupName(branchId, branch.unix_group),
         await this.getUnixUsernamesForUsers(userIds),
         { label: 'branch' }
       );

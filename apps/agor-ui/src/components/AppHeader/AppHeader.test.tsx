@@ -86,43 +86,35 @@ describe('AppHeader Knowledge Base button', () => {
   });
 });
 
-describe('AppHeader Marketplace button', () => {
+describe('AppHeader navigation entries', () => {
   beforeEach(() => {
     mockNavigate.mockClear();
   });
 
-  it('renders a promoted top-level Marketplace entry, not a gear-menu item', () => {
+  it('advertises exactly these surfaces', () => {
     renderHeader();
 
-    const button = screen.getByRole('link', { name: 'Marketplace' });
-    expect(button).toHaveAttribute('href', '/ui/marketplace');
+    // The whole set, so adding or removing an entry has to be a deliberate
+    // edit here rather than something that slips in. Marketplace is absent on
+    // purpose: the surface answers at /marketplace but is not advertised while
+    // the feature is incomplete, so re-adding the link should fail this and
+    // make whoever does it confirm that decision has been reversed.
+    const linkNames = screen
+      .getAllByRole('link')
+      .map((link) => link.getAttribute('aria-label') ?? link.textContent?.trim());
+
+    expect(linkNames).toEqual(['Knowledge Base']);
   });
 
-  it('shows the word without hovering — the label is why it earned a top-level slot', () => {
+  it('does not link to the marketplace from anywhere in the header', () => {
     renderHeader();
 
-    // Visible text, not a tooltip or an aria-label standing in for one.
-    expect(screen.getByText('Marketplace')).toBeVisible();
-  });
+    const marketplaceLinks = screen
+      .getAllByRole('link')
+      .filter((link) => (link.getAttribute('href') ?? '').includes('marketplace'));
 
-  it('navigates to /marketplace via SPA navigation on plain click', () => {
-    renderHeader();
-
-    fireEvent.click(screen.getByRole('link', { name: 'Marketplace' }));
-
-    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/marketplace');
-  });
-
-  it('lets modifier clicks fall through to the browser', () => {
-    renderHeader();
-
-    const button = screen.getByRole('link', { name: 'Marketplace' });
-    button.removeAttribute('href');
-
-    const eventWasNotCancelled = fireEvent.click(button, { metaKey: true });
-
-    expect(eventWasNotCancelled).toBe(true);
-    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(marketplaceLinks).toEqual([]);
+    expect(screen.queryByText('Marketplace')).not.toBeInTheDocument();
   });
 });
 

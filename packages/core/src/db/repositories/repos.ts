@@ -4,10 +4,17 @@
  * Type-safe CRUD operations for git repositories with short ID support.
  */
 
-import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor/core/types';
+import type {
+  Repo,
+  RepoEnvironment,
+  RepoEnvironmentConfigV1,
+  RepoID,
+  UUID,
+} from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
+import { resolveRepoGroupName, resolveRepoGroupUpdate } from '../../unix/group-manager';
 import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
@@ -138,7 +145,8 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       created_at: new Date(repo.created_at ?? now),
       updated_at: repo.last_updated ? new Date(repo.last_updated) : new Date(now),
       repo_type: repo.repo_type,
-      unix_group: repo.unix_group ?? null,
+      unix_group:
+        repo.unix_group == null ? null : resolveRepoGroupName(repoId as RepoID, repo.unix_group),
       data: {
         name: repo.name ?? repo.slug,
         remote_url: repo.remote_url ? stripHttpUrlUserinfo(repo.remote_url) : undefined,
@@ -242,6 +250,32 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all repos: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Lock the canonical repository row before inventorying branches for delete.
+   *
+   * The caller must already own a native transaction. PostgreSQL's FOR UPDATE
+   * lock conflicts with the key-share lock taken by a concurrent branch FK
+   * insert, so no new child can appear between inventory and repository delete.
+   * SQLite relies on the caller's IMMEDIATE transaction for the equivalent
+   * write exclusion.
+   */
+  async lockForBranchInventory(id: string): Promise<Repo> {
+    try {
+      const fullId = await this.resolveId(id);
+      await lockRowForUpdate(this.db, this.db, repos, eq(repos.repo_id, fullId));
+
+      const row = await select(this.db).from(repos).where(eq(repos.repo_id, fullId)).one();
+      if (!row) throw new EntityNotFoundError('Repo', id);
+      return this.rowToRepo(row);
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to lock repo branch inventory: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -363,6 +397,11 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // STEP 2: Deep merge updates into current repo (in memory)
         // Preserves nested objects like permission_config when doing partial updates
         const merged = deepMerge(current, updates);
+        merged.unix_group = resolveRepoGroupUpdate(
+          current.repo_id as RepoID,
+          current.unix_group,
+          Object.hasOwn(updates, 'unix_group') ? updates.unix_group : undefined
+        );
         const insertData = this.repoToInsert(merged);
 
         // STEP 3: Write merged repo (within same transaction)
@@ -373,7 +412,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
             slug: insertData.slug,
             updated_at: newUpdatedAt,
             repo_type: insertData.repo_type,
-            unix_group: merged.unix_group ?? null,
+            unix_group: insertData.unix_group,
             data: insertData.data,
           })
           .where(eq(repos.repo_id, fullId))
@@ -432,6 +471,11 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
 
         const current = this.rowToRepo(currentRow);
         const next: Repo = { ...current, ...patch };
+        next.unix_group = resolveRepoGroupUpdate(
+          current.repo_id as RepoID,
+          current.unix_group,
+          Object.hasOwn(patch, 'unix_group') ? patch.unix_group : undefined
+        );
 
         const insertData = this.repoToInsert(next);
         const newUpdatedAt = new Date();
@@ -440,7 +484,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
             slug: insertData.slug,
             updated_at: newUpdatedAt,
             repo_type: insertData.repo_type,
-            unix_group: next.unix_group ?? null,
+            unix_group: insertData.unix_group,
             data: insertData.data,
           })
           .where(eq(repos.repo_id, fullId))

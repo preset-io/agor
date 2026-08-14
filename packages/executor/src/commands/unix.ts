@@ -27,8 +27,12 @@ import {
   generateBranchGroupName,
   generateRepoGroupName,
   getBranchPermissionMode,
+  isLegacyBranchGroupName,
+  isLegacyRepoGroupName,
   isValidUnixUsername,
   REPO_GIT_PERMISSION_MODE,
+  resolveBranchGroupName,
+  resolveRepoGroupName,
   UnixGroupCommands,
   UnixUserCommands,
 } from '@agor/core/unix';
@@ -194,17 +198,24 @@ export async function handleUnixSyncRepo(
       // Fetch repo to get group name
       const repo = await client.service('repos').get(repoId);
       if (repo.unix_group) {
-        const exists = await checkCommand(UnixGroupCommands.groupExists(repo.unix_group));
+        const persistedGroup = resolveRepoGroupName(repoId as RepoID, repo.unix_group);
+        if (isLegacyRepoGroupName(persistedGroup)) {
+          console.log(
+            `[unix.sync-repo] Retaining legacy group ${persistedGroup}; verified cleanup requires agor local fix-group-uuids`
+          );
+          return { success: true, data: { repoId, deleted: false, retainedLegacyGroup: true } };
+        }
+        const exists = await checkCommand(UnixGroupCommands.groupExists(persistedGroup));
         if (exists) {
-          await runCommand(UnixGroupCommands.deleteGroup(repo.unix_group));
-          console.log(`[unix.sync-repo] Deleted group ${repo.unix_group}`);
+          await runCommand(UnixGroupCommands.deleteGroup(persistedGroup));
+          console.log(`[unix.sync-repo] Deleted group ${persistedGroup}`);
         }
       }
       return { success: true, data: { repoId, deleted: true } };
     }
 
     // Fetch repo details
-    const repo = await client.service('repos').get(repoId);
+    let repo = await client.service('repos').get(repoId);
     if (!repo.local_path) {
       return {
         success: false,
@@ -212,10 +223,27 @@ export async function handleUnixSyncRepo(
       };
     }
 
-    const groupName = generateRepoGroupName(repoId as RepoID);
+    // Stamp before touching system-global Unix state. Re-read immediately
+    // before and after patching so a concurrently persisted value wins.
+    if (repo.unix_group == null) {
+      const latestRepo = await client.service('repos').get(repoId);
+      if (latestRepo.unix_group != null) {
+        repo = latestRepo;
+      } else {
+        await client.service('repos').patch(repoId, {
+          unix_group: generateRepoGroupName(repoId as RepoID),
+        });
+        repo = await client.service('repos').get(repoId);
+        console.log(`[unix.sync-repo] Stamped repo record with unix_group`);
+      }
+    }
+    if (!repo.unix_group) {
+      throw new Error(`Repo ${repoId} has no persisted Unix group after stamping`);
+    }
+    const groupName = resolveRepoGroupName(repoId as RepoID, repo.unix_group);
     console.log(`[unix.sync-repo] Syncing repo ${shortId(repoId)} with group ${groupName}`);
 
-    // Ensure group exists
+    // Ensure the persisted group exists
     const groupExists = await checkCommand(UnixGroupCommands.groupExists(groupName));
     if (!groupExists) {
       await runCommand(UnixGroupCommands.createGroup(groupName));
@@ -247,12 +275,6 @@ export async function handleUnixSyncRepo(
         await runCommand(UnixGroupCommands.addUserToGroup(payload.params.daemonUser, groupName));
         console.log(`[unix.sync-repo] Added daemon user ${payload.params.daemonUser} to group`);
       }
-    }
-
-    // Update repo record with group name
-    if (repo.unix_group !== groupName) {
-      await client.service('repos').patch(repoId, { unix_group: groupName });
-      console.log(`[unix.sync-repo] Updated repo record with unix_group`);
     }
 
     // Fetch all branches for this repo and add their owners to repo group
@@ -370,10 +392,20 @@ export async function handleUnixSyncBranch(
       try {
         const branch = await client.service('branches').get(branchId);
         if (branch.unix_group) {
-          const exists = await checkCommand(UnixGroupCommands.groupExists(branch.unix_group));
+          const persistedGroup = resolveBranchGroupName(branchId as BranchID, branch.unix_group);
+          if (isLegacyBranchGroupName(persistedGroup)) {
+            console.log(
+              `[unix.sync-branch] Retaining legacy group ${persistedGroup}; verified cleanup requires agor local fix-group-uuids`
+            );
+            return {
+              success: true,
+              data: { branchId, deleted: false, retainedLegacyGroup: true },
+            };
+          }
+          const exists = await checkCommand(UnixGroupCommands.groupExists(persistedGroup));
           if (exists) {
-            await runCommand(UnixGroupCommands.deleteGroup(branch.unix_group));
-            console.log(`[unix.sync-branch] Deleted group ${branch.unix_group}`);
+            await runCommand(UnixGroupCommands.deleteGroup(persistedGroup));
+            console.log(`[unix.sync-branch] Deleted group ${persistedGroup}`);
           }
         }
       } catch {
@@ -384,7 +416,7 @@ export async function handleUnixSyncBranch(
     }
 
     // Fetch branch details
-    const branch = await client.service('branches').get(branchId);
+    let branch = await client.service('branches').get(branchId);
     if (!branch.path) {
       return {
         success: false,
@@ -392,10 +424,27 @@ export async function handleUnixSyncBranch(
       };
     }
 
-    const groupName = generateBranchGroupName(branchId as BranchID);
+    // Stamp before touching system-global Unix state. Re-read immediately
+    // before and after patching so a concurrently persisted value wins.
+    if (branch.unix_group == null) {
+      const latestBranch = await client.service('branches').get(branchId);
+      if (latestBranch.unix_group != null) {
+        branch = latestBranch;
+      } else {
+        await client.service('branches').patch(branchId, {
+          unix_group: generateBranchGroupName(branchId as BranchID),
+        });
+        branch = await client.service('branches').get(branchId);
+        console.log(`[unix.sync-branch] Stamped branch record with unix_group`);
+      }
+    }
+    if (!branch.unix_group) {
+      throw new Error(`Branch ${branchId} has no persisted Unix group after stamping`);
+    }
+    const groupName = resolveBranchGroupName(branchId as BranchID, branch.unix_group);
     console.log(`[unix.sync-branch] Syncing branch ${shortId(branchId)} with group ${groupName}`);
 
-    // Ensure group exists
+    // Ensure the persisted group exists
     const groupExists = await checkCommand(UnixGroupCommands.groupExists(groupName));
     if (!groupExists) {
       await runCommand(UnixGroupCommands.createGroup(groupName));
@@ -426,12 +475,6 @@ export async function handleUnixSyncBranch(
         await runCommand(UnixGroupCommands.addUserToGroup(payload.params.daemonUser, groupName));
         console.log(`[unix.sync-branch] Added daemon user to branch group`);
       }
-    }
-
-    // Update branch record with group name
-    if (branch.unix_group !== groupName) {
-      await client.service('branches').patch(branchId, { unix_group: groupName });
-      console.log(`[unix.sync-branch] Updated branch record with unix_group`);
     }
 
     // Fetch and add all owners to branch group
@@ -563,21 +606,22 @@ export async function handleUnixSyncBranch(
           );
         }
         if (repo.unix_group) {
+          const repoGroup = resolveRepoGroupName(branch.repo_id as RepoID, repo.unix_group);
           // Add daemon user to repo group if provided
           if (payload.params.daemonUser) {
             const inRepoGroup = await checkCommand(
-              UnixGroupCommands.isUserInGroup(payload.params.daemonUser, repo.unix_group)
+              UnixGroupCommands.isUserInGroup(payload.params.daemonUser, repoGroup)
             );
             if (!inRepoGroup) {
               await runCommand(
-                UnixGroupCommands.addUserToGroup(payload.params.daemonUser, repo.unix_group)
+                UnixGroupCommands.addUserToGroup(payload.params.daemonUser, repoGroup)
               );
-              console.log(`[unix.sync-branch] Added daemon user to repo group ${repo.unix_group}`);
+              console.log(`[unix.sync-branch] Added daemon user to repo group ${repoGroup}`);
             }
           }
 
           // Add all explicit filesystem access users to repo group (for .git/ access)
-          await addUsersToGroup(explicitFsUsernames, repo.unix_group);
+          await addUsersToGroup(explicitFsUsernames, repoGroup);
 
           // Add all branch owners to repo group (for .git/ access)
           // This ensures owners can run git commands which need .git/ access
@@ -588,14 +632,14 @@ export async function handleUnixSyncBranch(
             for (const owner of owners as Array<{ unix_username?: string }>) {
               if (owner.unix_username) {
                 const inRepoGroup = await checkCommand(
-                  UnixGroupCommands.isUserInGroup(owner.unix_username, repo.unix_group)
+                  UnixGroupCommands.isUserInGroup(owner.unix_username, repoGroup)
                 );
                 if (!inRepoGroup) {
                   await runCommand(
-                    UnixGroupCommands.addUserToGroup(owner.unix_username, repo.unix_group)
+                    UnixGroupCommands.addUserToGroup(owner.unix_username, repoGroup)
                   );
                   console.log(
-                    `[unix.sync-branch] Added owner ${owner.unix_username} to repo group ${repo.unix_group}`
+                    `[unix.sync-branch] Added owner ${owner.unix_username} to repo group ${repoGroup}`
                   );
                 }
               }
@@ -629,12 +673,12 @@ export async function handleUnixSyncBranch(
 
               for (const username of sessionUsernames) {
                 const inRepoGroup = await checkCommand(
-                  UnixGroupCommands.isUserInGroup(username, repo.unix_group)
+                  UnixGroupCommands.isUserInGroup(username, repoGroup)
                 );
                 if (!inRepoGroup) {
-                  await runCommand(UnixGroupCommands.addUserToGroup(username, repo.unix_group));
+                  await runCommand(UnixGroupCommands.addUserToGroup(username, repoGroup));
                   console.log(
-                    `[unix.sync-branch] Added session user ${username} to repo group ${repo.unix_group} (others_fs_access: ${othersAccess})`
+                    `[unix.sync-branch] Added session user ${username} to repo group ${repoGroup} (others_fs_access: ${othersAccess})`
                   );
                 }
               }
@@ -649,7 +693,7 @@ export async function handleUnixSyncBranch(
             const branchGitDir = `${repo.local_path}/.git/worktrees/${branchName}`;
             const fixCommands = UnixGroupCommands.setDirectoryGroup(
               branchGitDir,
-              repo.unix_group,
+              repoGroup,
               REPO_GIT_PERMISSION_MODE
             );
             await runCommands(fixCommands);

@@ -153,10 +153,14 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
         task_id: '018f0000-0000-7000-8000-000000000001',
         status: 'stopping',
         sdk_failure: { termination: 'unverified' },
+        termination_request: {
+          cause: 'user_stop',
+          requested_at: '2026-06-24T00:00:01.000Z',
+        },
       } as Task,
     ];
     const create = vi.fn().mockRejectedValue(new Error('denied'));
-    vi.spyOn(window, 'prompt').mockReturnValue('018f00000000700080000000');
+    const nativePrompt = vi.spyOn(window, 'prompt');
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     renderPanel({
       client: {
@@ -167,7 +171,38 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
 
     fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
 
+    expect(await screen.findByRole('dialog', { name: 'Force-fail task?' })).toBeInTheDocument();
+    expect(screen.getByText('Executor termination is unverified')).toBeInTheDocument();
+    expect(screen.getByText(/cannot prove or guarantee process termination/i)).toBeInTheDocument();
+    const forceFail = screen.getByRole('button', { name: 'Force fail' });
+    expect(forceFail).toBeDisabled();
+    const confirmation = screen.getByRole('textbox', {
+      name: 'Type STOP to confirm force-fail',
+    });
+    await waitFor(() => expect(confirmation).toHaveFocus());
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Force-fail task?' })).not.toBeInTheDocument()
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    const reopenedConfirmation = await screen.findByRole('textbox', {
+      name: 'Type STOP to confirm force-fail',
+    });
+    const reopenedForceFail = screen.getByRole('button', { name: 'Force fail' });
+    expect(reopenedForceFail).toBeDisabled();
+    fireEvent.change(reopenedConfirmation, { target: { value: 'STOP' } });
+    expect(reopenedForceFail).toBeEnabled();
+    fireEvent.keyDown(reopenedConfirmation, { key: 'Enter', code: 'Enter' });
+
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create).toHaveBeenCalledWith({
+      force_unverified: true,
+      confirmation: 'STOP',
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      termination_requested_at: '2026-06-24T00:00:01.000Z',
+    });
+    expect(nativePrompt).not.toHaveBeenCalled();
     expect(
       await screen.findByText('Failed to force-fail execution. You can try again.')
     ).toBeVisible();

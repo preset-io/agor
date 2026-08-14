@@ -45,6 +45,8 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchArchiveOrDeleteOptions,
+  BranchArchiveOrDeleteResult,
   BranchEnvironmentUpdate,
   BranchID,
   KnowledgeNamespace,
@@ -60,6 +62,7 @@ import {
 } from '@agor/core/types';
 import {
   getGidFromGroupName,
+  resolveBranchGroupName,
   resolveUnixUserForImpersonation,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
@@ -67,7 +70,9 @@ import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
+import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
+import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-realtime.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
@@ -1350,6 +1355,39 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
+   * Internal metadata-only hard-delete primitive.
+   *
+   * The visibility snapshot, row deletion, and post-commit tombstone enqueue
+   * share one tenant transaction. This method deliberately bypasses the
+   * registered `remove` wrapper and its filesystem/Unix hooks; it is not listed
+   * in the service's transport methods.
+   */
+  async removeMetadataWithRealtime(id: BranchID, params?: BranchParams): Promise<Branch> {
+    const removalParams = params ?? ({} as BranchParams);
+    return this.withTenantDatabase(removalParams, async () => {
+      const branch = (await super.get(id, removalParams)) as Branch;
+      await captureBranchRemovalRealtimeVisibility({
+        params: removalParams,
+        branchRepository: this.branchRepo,
+        branchId: branch.branch_id,
+      });
+
+      // Feathers replaces registered standard methods with event-producing
+      // wrappers. The adapter call performs only the metadata deletion; the
+      // explicit event below is the single authoritative tombstone.
+      const removedBranch = (await super.remove(branch.branch_id, removalParams)) as Branch;
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'removed',
+        data: removedBranch,
+        params: removalParams,
+        id: removedBranch.branch_id,
+      });
+      return removedBranch;
+    });
+  }
+
+  /**
    * Custom method: Archive or delete branch with filesystem options
    *
    * This method implements the archive/delete modal functionality.
@@ -1361,15 +1399,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async archiveOrDelete(
     id: BranchID,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    },
+    options: BranchArchiveOrDeleteOptions,
     params?: BranchParams
-  ): Promise<BranchWithZoneAndSessions | { deleted: true; branch_id: BranchID }> {
+  ): Promise<BranchArchiveOrDeleteResult> {
+    if (!params) {
+      throw new Forbidden(
+        'Branch archive/delete must be invoked through the authorized archive-or-delete service'
+      );
+    }
+    // This method coordinates external side effects, so a direct in-process
+    // call must never be able to bypass the route's branch-control hook.
+    consumeBranchArchiveDeleteAuthorization(params, id, options.metadataAction);
+
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    // Hook chain enforces auth before we get here.
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
     // Stop environment if running
@@ -1481,6 +1524,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         });
     }
 
+    // Retire branch-scoped terminal attachments before archive/delete. The
+    // local event handles this replica; serverSideEmit carries only trusted
+    // tenant/branch lifecycle metadata (never terminal contents) to peer
+    // replicas when the HA adapter is available.
+    const terminalTenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    if (!terminalTenantId) throw new Error('Missing tenant context for branch terminal cleanup');
+    const terminalClose = {
+      tenantId: String(terminalTenantId),
+      branchId: branch.branch_id,
+    };
+    this.app.emit?.('terminal:close-branch', terminalClose);
+    this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
+
     // Metadata action: archive or delete
     if (metadataAction === 'archive') {
       // Archive: Soft delete branch and cascade to sessions
@@ -1540,7 +1596,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
       console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
 
-      await this.withTenantDatabase(params, () => this.remove(id, params));
+      await this.removeMetadataWithRealtime(id, params);
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
       return { deleted: true, branch_id: id };
@@ -2557,7 +2613,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Resolve host IP + unix GID (matches executor's renderEnvironmentTemplates).
     const config = this.app.get('config');
     const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
-    const unixGid = branch.unix_group ? getGidFromGroupName(branch.unix_group) : undefined;
+    const unixGid = branch.unix_group
+      ? getGidFromGroupName(resolveBranchGroupName(branch.branch_id as BranchID, branch.unix_group))
+      : undefined;
 
     const snapshot = renderBranchSnapshot(
       { slug: repo.slug, environment: env },

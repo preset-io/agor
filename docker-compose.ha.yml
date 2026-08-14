@@ -94,7 +94,10 @@ services:
 
   migrate:
     <<: *daemon-common
-    command: ['agor', 'db', 'migrate', '--yes', '--offline-cutover']
+    # This one-shot preparation job owns both managed-tool reconciliation and
+    # schema migration. Daemons wait for it, preventing startup races against
+    # the shared agentic-tools directory.
+    command: ['sh', '-c', 'agor install --sync && agor db migrate --yes --offline-cutover']
     restart: 'no'
     healthcheck:
       disable: true

@@ -395,6 +395,10 @@ export interface AgorExecutionSettings {
    *
    * Branch-level permissions still apply: opening a terminal against a
    * branch requires at least `session` permission on that branch.
+   *
+   * Terminals are branch-scoped, owner-local, ephemeral attachments. In HA,
+   * only the `shared-local` execution topology may enable this flag; external
+   * runtimes remain disabled until they provide owner-affine routing.
    */
   allow_web_terminal?: boolean;
 

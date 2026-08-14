@@ -6,6 +6,7 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -1387,10 +1388,7 @@ function AppContent() {
 
   const handleArchiveOrDeleteBranch = async (
     branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
+    options: BranchArchiveOrDeleteOptions
   ) => {
     if (!client) {
       throw new Error('Not connected to daemon');

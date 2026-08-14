@@ -282,6 +282,117 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
     });
   });
 
+  it('reconciles late executor quiescence through RLS without exposing it cross-tenant', async () => {
+    const owner = await seedTenant(db, 'late-quiescence-owner');
+    const other = await seedTenant(db, 'late-quiescence-other');
+    const { task, requestedAt } = await runWithTenantDatabaseScope(
+      db,
+      owner.tenantId,
+      async (scoped) => {
+        const tasks = new TaskRepository(scoped);
+        const task = await tasks.create(
+          taskInput(owner, TaskStatus.RUNNING, {
+            executor_mode: 'templated',
+            executor_connected_at: '2026-08-06T12:00:00.000Z',
+          })
+        );
+        const request = await tasks.claimTermination({
+          taskId: task.task_id,
+          cause: 'user_stop',
+          errorMessage: 'Stopped by user',
+          now: new Date('2026-08-06T12:01:00.000Z'),
+        });
+        await tasks.claimTerminationCoordination({
+          taskId: task.task_id,
+          claimToken: 'initial-unverified',
+          leaseDurationMs: 30_000,
+          instanceId: 'daemon-a',
+          bootId: 'boot-a',
+          now: new Date('2026-08-06T12:01:00.010Z'),
+        });
+        await tasks.settleTermination({
+          taskId: task.task_id,
+          outcome: 'unverified',
+          coordinationToken: 'initial-unverified',
+          errorMessage: 'Executor acknowledgement did not arrive in time.',
+          sdkFailure: {
+            reason: 'termination_unverified',
+            detected_at: '2026-08-06T12:01:01.500Z',
+            tool: 'codex',
+            termination: 'unverified',
+          },
+          now: new Date('2026-08-06T12:01:01.500Z'),
+        });
+        return {
+          task,
+          requestedAt: request.task.termination_request!.requested_at,
+        };
+      }
+    );
+
+    await runWithTenantDatabaseScope(db, other.tenantId, async (scoped) => {
+      await expect(
+        new TaskRepository(scoped).recordExecutorQuiescence({
+          task_id: task.task_id,
+          requested_at: requestedAt,
+        })
+      ).rejects.toThrow();
+    });
+
+    await runWithTenantDatabaseScope(db, owner.tenantId, async (scoped) => {
+      const reported = await new TaskRepository(scoped).recordExecutorQuiescence(
+        { task_id: task.task_id, requested_at: requestedAt },
+        new Date('2026-08-06T12:01:02.000Z')
+      );
+      expect(reported).toMatchObject({ status: TaskStatus.STOPPING });
+      expect(reported?.sdk_failure).toBeUndefined();
+      expect(reported?.error_message).toBeUndefined();
+    });
+
+    const stranded = await runWithSystemDatabaseScope(
+      db,
+      'late quiescence discovery',
+      (systemDb) =>
+        new TaskRepository(systemDb).findStrandedTerminationRefs({
+          now: new Date('2026-08-06T12:01:02.001Z'),
+          limit: 1_000,
+        }),
+      { capability: 'task_runtime_discovery' }
+    );
+    expect(stranded).toContainEqual(
+      expect.objectContaining({ task_id: task.task_id, tenant_id: owner.tenantId })
+    );
+
+    await runWithTenantDatabaseScope(db, owner.tenantId, async (scoped) => {
+      const tasks = new TaskRepository(scoped);
+      await expect(
+        tasks.claimTerminationCoordination({
+          taskId: task.task_id,
+          claimToken: 'late-quiescence',
+          leaseDurationMs: 30_000,
+          instanceId: 'daemon-b',
+          bootId: 'boot-b',
+          now: new Date('2026-08-06T12:01:02.010Z'),
+        })
+      ).resolves.toMatchObject({ outcome: 'claimed' });
+      await expect(
+        tasks.settleTermination({
+          taskId: task.task_id,
+          outcome: 'verified_absent',
+          coordinationToken: 'late-quiescence',
+          now: new Date('2026-08-06T12:01:02.020Z'),
+        })
+      ).resolves.toMatchObject({
+        outcome: 'transitioned',
+        task: { status: TaskStatus.STOPPED },
+      });
+      await expect(new SessionRepository(scoped).findById(owner.sessionId)).resolves.toMatchObject({
+        status: SessionStatus.IDLE,
+        ready_for_prompt: true,
+      });
+    });
+  });
+
   it('discovers routing refs globally but rejects cross-tenant reload and mutation', async () => {
     const a = await seedTenant(db, 'tenant-a');
     const b = await seedTenant(db, 'tenant-b');

@@ -177,14 +177,41 @@ If the error persists, collect `node -v`, `npm -v`, `ulimit -Sn`, `ulimit -Hn`, 
 
 ## Optional: Zellij (for the web terminal)
 
-Agor has a built-in web terminal that uses [Zellij](https://zellij.dev/) for persistent, multiplexed terminal sessions. The terminal is **optional**. Agor runs fine without it; if you don't have Zellij, terminal buttons in the UI will show a friendly message instead.
+Agor has an optional branch-scoped web terminal. It uses
+[Zellij](https://zellij.dev/) when the selected terminal runtime provides it.
+Agor names each Zellij session from the trusted tenant, user, and branch and
+stores resurrection data beneath the effective Unix user's home. It preserves
+the pane layout, cwd, visible viewport, and up to 1,000 lines of scrollback,
+with a one-second serialization interval.
+The browser-to-PTY attachment remains ephemeral and is not migrated or replayed
+after daemon/runtime loss. Resurrection creates new processes: it does not
+restore PIDs, shell variables, or a running command exactly where it stopped.
+
+Agor passes these bounded resurrection options explicitly when launching, so
+existing homes receive the same lifecycle contract without overwriting the
+user's other Zellij preferences. First creation uses Zellij's serializable
+new-session path; later launches attach to the known active or exited session.
+The cache directory is mode `0700`. In
+`simple` or `insulated` mode, users intentionally share a Unix identity and
+therefore its home and resurrection data; use `strict` or a delegated
+per-user runtime when that sharing is inappropriate.
+
+Agor also places Zellij's Unix socket below that effective-home cache. This is
+what lets same-host daemon containers sharing a local home volume converge on
+one live session instead of each creating a container-local server. Unix
+sockets are not a cross-host protocol and generally do not work through a
+network filesystem; separate-host and ephemeral-executor deployments must keep
+the terminal capability disabled unless a single workspace runtime owns the
+home, socket, and PTY.
 
 If you want the terminal:
 
 1. Install Zellij from the [official installation guide](https://zellij.dev/documentation/installation).
 2. Restart the Agor daemon (`agor daemon restart`).
 
-The daemon detects Zellij at startup and logs whether it's available.
+In HA, only the `shared-local` topology supports this owner-local attachment.
+External/container workspace runtimes must advertise their own compatible
+terminal capability; otherwise Agor hides terminal controls.
 
 ---
 

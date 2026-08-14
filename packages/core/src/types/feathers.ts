@@ -64,6 +64,12 @@ export interface AuthenticatedUser {
   _isTerminalExecutor?: boolean;
   /** The single user a terminal-executor identity may act for on its channel. */
   terminal_user_id?: string;
+  /** The single process-local terminal attachment this identity may bridge. */
+  terminal_id?: string;
+  /** Server-derived branch scope for the attachment. */
+  terminal_branch_id?: string;
+  /** Daemon boot fence: a replacement replica/boot must reject this identity. */
+  terminal_owner_boot_id?: string;
 }
 
 /**

@@ -1,5 +1,5 @@
 import {
-  isPostgresDatabase,
+  isPostgresDatabaseHandle,
   KnowledgeSemanticSettingsRepository,
   kbDocumentUnits,
   select,
@@ -87,7 +87,8 @@ export class KnowledgeIndexingStatusService {
       semantic,
       semantic.api_key_configured
     );
-    const configured = isPostgresDatabase(this.db) && pgvector.available && embeddingConfigUsable;
+    const configured =
+      isPostgresDatabaseHandle(this.db) && pgvector.available && embeddingConfigUsable;
 
     const lastError = semanticEnabled
       ? ((configured ? durableLastError : null) ?? (!pgvector.available ? pgvector.reason : null))
@@ -96,7 +97,7 @@ export class KnowledgeIndexingStatusService {
     return {
       enabled: semanticEnabled,
       configured,
-      dialect: isPostgresDatabase(this.db) ? 'postgresql' : 'sqlite',
+      dialect: isPostgresDatabaseHandle(this.db) ? 'postgresql' : 'sqlite',
       pgvector_available: pgvector.available,
       pgvector_extension_installed: pgvector.extensionInstalled,
       pgvector_storage_ready: pgvector.storageReady,

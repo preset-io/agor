@@ -66,6 +66,37 @@ describe('startExecutorHeartbeat', () => {
     }
   });
 
+  it('logs only the first consecutive write failure and one recovery summary', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportRuntimeTelemetry = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('offline'))
+        .mockRejectedValueOnce(new Error('still offline'))
+        .mockResolvedValue({});
+      const warn = vi.fn();
+      const log = vi.fn();
+      const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
+      const handle = startExecutorHeartbeat({
+        client,
+        taskId: 'task-1',
+        intervalMs: 1000,
+        warn,
+        log,
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('event=write_failed'));
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('missed_writes=2'));
+      handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('coalesces many pulses into the latest fact at heartbeat cadence', async () => {
     vi.useFakeTimers();
     try {

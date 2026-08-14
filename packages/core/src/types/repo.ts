@@ -120,7 +120,8 @@ export interface Repo {
   /**
    * Unix group for .git/ directory access
    *
-   * Format: agor_rp_<short-id> (e.g., 'agor_rp_03b62447')
+   * Format: `agor_rp_<canonical-24-char-short-id>`; legacy persisted rows may
+   * retain the older 8-character form until explicitly migrated.
    *
    * This group is created when branch RBAC is enabled and controls access
    * to the shared .git/ directory. Users who have access to ANY branch

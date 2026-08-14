@@ -5,7 +5,12 @@ import Script from 'next/script';
 import { type ReactNode, Suspense } from 'react';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
 import { GoogleAnalytics } from '../components/GoogleAnalytics';
-import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
+import {
+  AGOR_CLOUD_DEMO_URL,
+  DISCORD_INVITE_URL,
+  GITHUB_REPO_URL,
+  HUBSPOT_FORM_ID,
+} from '../lib/links';
 import {
   BRAND_NAME,
   DEFAULT_DESCRIPTION,
@@ -19,6 +24,7 @@ import './styles.css';
 
 const basePath = getBasePath();
 const siteUrl = getSiteUrl();
+const hubspotMeetingOrigin = new URL(AGOR_CLOUD_DEMO_URL).origin;
 const googleAnalyticsId = process.env.NEXT_PUBLIC_GA_ID;
 const analyticsEnabled =
   Boolean(googleAnalyticsId) &&
@@ -159,6 +165,84 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           strategy="afterInteractive"
           src="https://js-na2.hs-scripts.com/246818610.js"
         />
+        {/* GTM event on contact-form submission. HubSpot's forms-embed
+            runtime calls window.postMessage({type:'hsFormCallback', ...})
+            unconditionally on every form event — confirmed by reading its
+            shipped JS (js.hsforms.net/forms/embed/v2.js): the dispatch isn't
+            gated on iframe/cross-origin embedding, so this fires the same
+            way whether the form's rendered inline (as ours is, via
+            HubSpotForm) or in a HubSpot-hosted iframe. `id` is the form
+            GUID; `source_page` (when present in submissionValues) carries
+            the per-CTA attribution already stamped by HubSpotForm, so this
+            single site-wide listener covers every "Sign up for Agor Cloud"
+            entry point without needing one tag per placement. */}
+        <Script id="hs-form-submit-tracking" strategy="afterInteractive">
+          {`(function () {
+            window.addEventListener('message', function (event) {
+              var payload = event.data;
+              if (
+                !payload ||
+                payload.type !== 'hsFormCallback' ||
+                payload.eventName !== 'onFormSubmitted' ||
+                payload.id !== '${HUBSPOT_FORM_ID}'
+              ) {
+                return;
+              }
+              var submissionValues = (payload.data && payload.data.submissionValues) || {};
+              var sourcePage;
+              if (Array.isArray(submissionValues)) {
+                var match = submissionValues.filter(function (field) {
+                  return field.name === 'source_page';
+                })[0];
+                sourcePage = match && match.value;
+              } else {
+                sourcePage = submissionValues.source_page;
+              }
+              window.dataLayer = window.dataLayer || [];
+              window.dataLayer.push({
+                event: 'hubspot_interest_form_success',
+                form_name: 'agor_cloud_beta',
+                source_page: sourcePage || 'unknown',
+              });
+            });
+          })();`}
+        </Script>
+        {/* GTM events for the "Book a demo" HubSpot meeting scheduler.
+            Unlike the contact form, this is a genuinely cross-origin iframe
+            (meetings-na2.hubspot.com), so its postMessage contract is much
+            narrower — confirmed by reading its shipped JS bundle
+            (MeetingsPublic .../bundles/project.js): it only ever posts a
+            consent-readiness handshake, an iframe-resize notice, and a
+            final `{meetingBookSucceeded}`/`{meetingBookFailed}` on booking
+            completion. There's no "opened" or "in progress" signal — the
+            scheduler never tells the embedder someone's picking a date.
+            "Opened" is tracked separately, client-side, in MeetingEmbed
+            (HubSpotMeetingModal.tsx), since we already know that moment
+            ourselves without needing HubSpot's cooperation. Origin-checked
+            here (unlike the form listener above) because this really is a
+            different origin posting to us, not our own same-window script. */}
+        <Script id="hs-meeting-book-tracking" strategy="afterInteractive">
+          {`(function () {
+            window.addEventListener('message', function (event) {
+              if (event.origin !== '${hubspotMeetingOrigin}') {
+                return;
+              }
+              var payload = event.data;
+              if (!payload || typeof payload !== 'object') {
+                return;
+              }
+              window.dataLayer = window.dataLayer || [];
+              if (payload.meetingBookSucceeded) {
+                window.dataLayer.push({
+                  event: 'hubspot_meeting_booked',
+                  form_name: 'agor_cloud_demo',
+                });
+              } else if (payload.meetingBookFailed) {
+                window.dataLayer.push({ event: 'hubspot_meeting_book_failed' });
+              }
+            });
+          })();`}
+        </Script>
         {/* Microsoft Clarity analytics (project xroxavynkf). */}
         <Script id="ms-clarity" strategy="afterInteractive">
           {`(function(c,l,a,r,i,t,y){c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);})(window,document,"clarity","script","xroxavynkf");`}

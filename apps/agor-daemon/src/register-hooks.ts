@@ -28,6 +28,7 @@ import {
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   isPostgresDatabaseHandle,
+  requireCurrentTenantId,
   runWithTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
@@ -79,6 +80,7 @@ import type {
   MessageID,
   Paginated,
   Params,
+  RepoID,
   Session,
   Task,
   User,
@@ -94,6 +96,12 @@ import {
   SCHEDULE_PATCH_WRITE_FIELDS,
   TaskStatus,
 } from '@agor/core/types';
+import {
+  generateBranchGroupName,
+  generateRepoGroupName,
+  resolveBranchGroupName,
+  resolveRepoGroupName,
+} from '@agor/core/unix';
 import {
   executorRuntimeScopeGuard,
   isTaskScopedExecutorRequest,
@@ -119,7 +127,8 @@ import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
 } from './services/sessions.js';
-import { isLocalAuthenticationLookup } from './services/users.js';
+import { isAuthenticationUserLookup, isLocalAuthenticationLookup } from './services/users.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
   ensureMinimumRole,
@@ -129,6 +138,7 @@ import {
 } from './utils/authorization.js';
 import {
   cacheBranchAccess,
+  ensureBranchOwnerOrAdmin,
   ensureBranchPermission,
   ensureCanCreateSession,
   ensureCanModifySchedule,
@@ -150,6 +160,7 @@ import {
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
+import { captureBranchRemovalRealtimeVisibility as captureBranchRemovalVisibility } from './utils/branch-removal-realtime.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
@@ -480,6 +491,11 @@ export const TENANT_OWNED_SERVICE_PATHS = [
 // units of work at the call site instead of holding an HTTP-long transaction.
 export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'check-auth',
+  // File browsing delegates to the executor after bounded repository reads.
+  // Keep request-wide tenant identity while each service opens only a short
+  // database unit of work before crossing the executor boundary.
+  'file',
+  'files',
   // Global catalog: no tenant column to scope, no writes to stamp.
   'mcp-catalog',
   'codex-auth/device',
@@ -502,6 +518,12 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'mcp-servers/oauth-refresh',
   'mcp-servers/test-oauth',
 ] as const;
+
+/** Caller-specific Knowledge command responses must never become service events. */
+export function suppressKnowledgeCommandRealtimeEvent(context: HookContext): HookContext {
+  context.event = null;
+  return context;
+}
 
 /**
  * Service endpoints whose implementation retains process-local credentials,
@@ -589,6 +611,100 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
     throw new Forbidden('Task patch contains fields that are not executor-managed');
   }
 
+  return context;
+}
+
+type ManagedUnixGroupKind = 'branch' | 'repo';
+
+/**
+ * Keep `unix_group` server-owned and validate every trusted write.
+ *
+ * Executor service accounts may perform the one normal transport write: stamp
+ * the canonical group on a row whose field is still absent. Explicit legacy
+ * migration writes directly through the local database after global checks.
+ */
+export function protectServerManagedUnixGroupWrites(kind: ManagedUnixGroupKind) {
+  return async (context: HookContext): Promise<HookContext> => {
+    const data =
+      context.data && typeof context.data === 'object' && !Array.isArray(context.data)
+        ? (context.data as Record<string, unknown>)
+        : undefined;
+    if (!data || !Object.hasOwn(data, 'unix_group')) return context;
+
+    const value = data.unix_group;
+    const id =
+      typeof context.id === 'string'
+        ? context.id
+        : typeof data[`${kind}_id`] === 'string'
+          ? (data[`${kind}_id`] as string)
+          : undefined;
+
+    if (value !== null && value !== undefined) {
+      if (typeof value !== 'string' || !id) {
+        throw new BadRequest(`A valid ${kind} id is required to validate unix_group`);
+      }
+      if (kind === 'branch') {
+        resolveBranchGroupName(id as BranchID, value);
+      } else {
+        resolveRepoGroupName(id as RepoID, value);
+      }
+    }
+
+    if (!context.params.provider) return context;
+    if (!context.params.user?._isServiceAccount) {
+      throw new Forbidden('unix_group is server-managed');
+    }
+
+    // A transported executor may only stamp an absent field with the row's
+    // canonical name. It cannot clear, rename, or migrate an existing stamp.
+    if (context.method !== 'patch' || !id || typeof value !== 'string') {
+      throw new Forbidden('Executor unix_group writes must stamp one existing row');
+    }
+    const canonical =
+      kind === 'branch'
+        ? generateBranchGroupName(id as BranchID)
+        : generateRepoGroupName(id as RepoID);
+    if (value !== canonical) {
+      throw new Forbidden('Executor unix_group writes must use the canonical group name');
+    }
+
+    const existing = (await context.service.get(id, {
+      ...context.params,
+      provider: undefined,
+    })) as { unix_group?: string | null };
+    if (existing.unix_group != null && existing.unix_group !== value) {
+      throw new Forbidden('Persisted unix_group is authoritative and cannot be changed');
+    }
+
+    return context;
+  };
+}
+
+/** Run an identity-only service's database-reading before hooks in one short unit of work. */
+export function createTenantScopedBeforeHookChain(
+  db: TenantScopeAwareDatabase,
+  ...hooks: Array<(context: HookContext) => HookContext | Promise<HookContext>>
+) {
+  return async (context: HookContext): Promise<HookContext> => {
+    const tenantId = requireCurrentTenantId(
+      `Missing active tenant context for ${context.path} authorization`
+    );
+    return runWithTenantDatabaseScope(db, tenantId, async () => {
+      let current = context;
+      for (const hook of hooks) current = await hook(current);
+      return current;
+    });
+  };
+}
+
+export function authorizeUsersGet(context: HookContext): HookContext {
+  const params = context.params as AuthenticatedParams;
+
+  if (isAuthenticationUserLookup(params)) {
+    return context;
+  }
+
+  ensureMinimumRole(params, ROLES.MEMBER, 'view users');
   return context;
 }
 
@@ -790,6 +906,26 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const branchId =
       (context.result as { branch_id?: unknown } | undefined)?.branch_id ?? context.id;
     await invalidateRealtimeBranchAccess(branchId);
+    return context;
+  };
+
+  const captureBranchRemovalRealtimeVisibility = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    const loadedBranch = (context.params as AuthenticatedParams & { branch?: Branch }).branch;
+    const branch =
+      loadedBranch ??
+      (typeof context.id === 'string' ? await branchRepository.findById(context.id) : null);
+    if (!branch) {
+      throw new NotFound(`Branch not found: ${String(context.id)}`);
+    }
+
+    await captureBranchRemovalVisibility({
+      params: context.params,
+      branchRepository,
+      branchId: branch.branch_id,
+      realtimeAccessCache,
+    });
     return context;
   };
 
@@ -1432,23 +1568,22 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('repos').hooks({
     before: {
-      all: [
-        typedValidateQuery(repoQueryValidator),
-        requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'access repositories'),
-      ],
+      all: [typedValidateQuery(repoQueryValidator), requireAuth],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
@@ -1461,12 +1596,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('branches').hooks({
     before: {
-      all: [
-        typedValidateQuery(branchQueryValidator),
-        requireAuth,
-        executorRuntimeScopeGuard(),
-        requireMinimumRole(ROLES.MEMBER, 'access branches'),
-      ],
+      all: [typedValidateQuery(branchQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: mark external regular-user finds for BranchesService to compose
         // the shared branch visibility predicate directly into its SQL read.
@@ -1482,16 +1612,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create branches'),
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         injectCreatedBy(),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
       ],
       patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update branches'),
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         ...(branchRbacEnabled
@@ -1520,12 +1654,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete branches'),
+        loadBranch(branchRepository),
         ...(branchRbacEnabled
           ? [
-              loadBranch(branchRepository),
               ensureBranchPermission('all', 'delete branches', superadminOpts), // Require 'all' permission to delete
             ]
-          : []),
+          : [ensureBranchOwnerOrAdmin('delete branches')]),
+        captureBranchRemovalRealtimeVisibility,
       ],
     },
     after: {
@@ -1628,6 +1764,23 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
+  type BranchCustomHookRegistrar = {
+    hooks(options: {
+      before: Record<
+        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace',
+        Array<(context: HookContext) => HookContext>
+      >;
+    }): void;
+  };
+  (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
+    before: {
+      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
+      ensureTeammateKnowledgeNamespace: [
+        requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
+      ],
+    },
+  });
+
   // ============================================================================
   // Knowledge hooks
   // ============================================================================
@@ -1660,6 +1813,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'edit knowledge documents')],
     },
+    after: {
+      create: [suppressKnowledgeCommandRealtimeEvent],
+    },
   });
 
   safeService('kb/versions')?.hooks({
@@ -1671,6 +1827,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('kb/search')?.hooks({
     before: {
       all: [requireAuth],
+    },
+    after: {
+      create: [suppressKnowledgeCommandRealtimeEvent],
     },
   });
 
@@ -1689,6 +1848,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('kb/indexing/reindex')?.hooks({
     before: {
       all: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'reindex Knowledge embeddings')],
+    },
+    after: {
+      create: [suppressKnowledgeCommandRealtimeEvent],
     },
   });
 
@@ -1886,7 +2048,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       find: [
-        requireMinimumRole(ROLES.MEMBER, 'list session MCP servers'),
         // RBAC: Scope to sessions the caller can access.
         ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
@@ -1899,14 +2060,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Top-level `/session-env-selections` exists mainly to surface WebSocket
   // events emitted by the `/sessions/:id/env-selections` route handlers. Its
   // `find()` must still be gated — without these hooks any authenticated
-  // member could read selection metadata for sessions they can't access,
+  // user could read selection metadata for sessions they can't access,
   // bypassing the creator/admin gate on the nested route. Mirror the
   // `/session-mcp-servers` pattern exactly so the two stay consistent.
   safeService('session-env-selections')?.hooks({
     before: {
       all: [requireAuth],
       find: [
-        requireMinimumRole(ROLES.MEMBER, 'list session env selections'),
         // This top-level service is event-only and always returns []; do not
         // run RBAC preloads for an intentionally empty result set.
       ],
@@ -2148,7 +2308,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // case rather than throwing.
         ...(branchRbacEnabled
           ? [
-              async (context: HookContext) => {
+              createTenantScopedBeforeHookChain(db, async (context: HookContext) => {
                 if (!context.params.provider) return context;
                 if (context.params.user?._isServiceAccount) return context;
                 const query = context.params.query as { sessionId?: string } | undefined;
@@ -2160,7 +2320,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 await loadBranchFromSession(branchRepository)(context);
                 await ensureCanView(superadminOpts)(context);
                 return context;
-              },
+              }),
             ]
           : []),
       ],
@@ -2175,7 +2335,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'read files'),
         ...(branchRbacEnabled
-          ? [loadBranch(branchRepository, 'branch_id'), ensureCanView(superadminOpts)]
+          ? [
+              createTenantScopedBeforeHookChain(
+                db,
+                loadBranch(branchRepository, 'branch_id'),
+                ensureCanView(superadminOpts)
+              ),
+            ]
           : []),
       ],
     },
@@ -2187,7 +2353,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   //   still applies inside the service (see services/terminals.ts).
   // - Setting the flag to false disables the terminal for everyone (including
   //   admins). The modal is hidden from the UI in that case.
-  const webTerminalEnabled = config.execution?.allow_web_terminal !== false;
+  const webTerminalCapability = resolveWebTerminalCapability({ config, deployment });
+  const webTerminalEnabled = webTerminalCapability.enabled;
   safeService('terminals')?.hooks({
     before: {
       all: [
@@ -2195,7 +2362,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           if (!webTerminalEnabled) {
             throw new Forbidden(
-              'Web terminal is disabled on this instance. Ask an administrator to unset or enable execution.allow_web_terminal in the daemon config.'
+              `Web terminal is unavailable on this instance (${webTerminalCapability.reason ?? 'disabled'}).`
             );
           }
           return context;
@@ -2338,12 +2505,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           throw new NotAuthenticated('Authentication required');
         },
       ],
-      get: [
-        (context) => {
-          ensureMinimumRole(context.params as AuthenticatedParams, ROLES.MEMBER, 'view users');
-          return context;
-        },
-      ],
+      get: [authorizeUsersGet],
       create: [
         async (context: HookContext<Board>) => {
           const params = context.params as AuthenticatedParams;

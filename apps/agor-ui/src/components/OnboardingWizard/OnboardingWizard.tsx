@@ -20,16 +20,30 @@ import {
   CheckCircleOutlined,
   CheckOutlined,
   CloseOutlined,
+  CodeOutlined,
   LeftOutlined,
   LoadingOutlined,
+  ProjectOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
+import { McpLogo } from '../McpLogo';
+import { ToolIcon } from '../ToolIcon';
+
+/** AntD icon per onboarding persona id — keeps the persona cards on-brand with the rest of the app. */
+const PERSONA_ICONS: Record<string, ReactNode> = {
+  developer: <CodeOutlined />,
+  pm: <ProjectOutlined />,
+  lead: <TeamOutlined />,
+  solo: <ThunderboltOutlined />,
+};
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -80,7 +94,6 @@ const PERSONAS = ONBOARDING_PERSONAS;
 interface LlmOption {
   id: string;
   agent: AgenticToolName;
-  symbol: string;
   provider: string;
   title: string;
   description: string;
@@ -94,7 +107,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'claude',
     agent: 'claude-code',
-    symbol: '✦',
     provider: 'Anthropic',
     title: 'Claude',
     description: 'Best for complex coding, long context, and nuanced reasoning',
@@ -106,7 +118,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'openai',
     agent: 'codex',
-    symbol: '⬡',
     provider: 'OpenAI',
     title: 'GPT',
     description: 'Fast and strong at structured reasoning and code generation',
@@ -117,7 +128,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'gemini',
     agent: 'gemini',
-    symbol: '◈',
     provider: 'Google',
     title: 'Gemini',
     description: 'Excellent at multimodal tasks and very long context windows',
@@ -128,7 +138,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'custom',
     agent: 'opencode',
-    symbol: openCodeOnboarding.symbol,
     provider: '',
     title: openCodeOnboarding.title,
     description: openCodeOnboarding.description,
@@ -141,7 +150,6 @@ const LLM_OPTIONS: LlmOption[] = [
 interface McpRecommendation {
   id: string;
   name: string;
-  emoji: string;
   description: string;
   docsUrl: string;
   featured?: boolean;
@@ -154,7 +162,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Get notified when sessions finish, send prompts from Slack, and schedule agents that post daily build reports.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -163,21 +170,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'github',
       name: 'GitHub',
-      emoji: '🐙',
       description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
       docsUrl: 'https://agor.live/docs/mcp/github',
     },
     {
       id: 'sentry',
       name: 'Sentry',
-      emoji: '🚨',
       description: 'Let your AI read error traces and fix bugs straight from the issue.',
       docsUrl: 'https://agor.live/docs/mcp/sentry',
     },
     {
       id: 'datadog',
       name: 'Datadog',
-      emoji: '🐕',
       description: 'Query metrics, read alerts, and have your AI investigate anomalies for you.',
       docsUrl: 'https://agor.live/docs/mcp/datadog',
     },
@@ -186,7 +190,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Post standup summaries, unblock threads, and set up agents that DM you scheduled status reports.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -195,21 +198,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'hubspot',
       name: 'HubSpot',
-      emoji: '🟠',
       description: 'Pull customer context into sessions - your AI knows who you are building for.',
       docsUrl: 'https://agor.live/docs/mcp/hubspot',
     },
     {
       id: 'amplitude',
       name: 'Amplitude',
-      emoji: '📈',
       description: 'Ask your AI what the data says without writing a single query.',
       docsUrl: 'https://agor.live/docs/mcp/amplitude',
     },
     {
       id: 'figma',
       name: 'Figma',
-      emoji: '🎨',
       description: 'Read design files and write feedback without switching tabs.',
       docsUrl: 'https://agor.live/docs/mcp/figma',
     },
@@ -218,7 +218,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Broadcast outcomes, surface blockers, and schedule weekly digest agents that report to your team channel.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -227,7 +226,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'hubspot',
       name: 'HubSpot',
-      emoji: '🟠',
       description:
         'Keep an eye on the pipeline without leaving your session - revenue visibility in context.',
       docsUrl: 'https://agor.live/docs/mcp/hubspot',
@@ -235,7 +233,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'linear',
       name: 'Linear',
-      emoji: '🎯',
       description:
         'See what is in progress, what is blocked, and what shipped - without chasing updates.',
       docsUrl: 'https://agor.live/docs/mcp/linear',
@@ -243,7 +240,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'datadog',
       name: 'Datadog',
-      emoji: '🐕',
       description: 'Get a live health read on your systems without pinging the on-call engineer.',
       docsUrl: 'https://agor.live/docs/mcp/datadog',
     },
@@ -252,7 +248,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Get pinged when sessions finish and run agents that talk to you on Slack - like a personal AI assistant.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -261,21 +256,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'github',
       name: 'GitHub',
-      emoji: '🐙',
       description: 'Open PRs, push commits, and manage your repos hands-free.',
       docsUrl: 'https://agor.live/docs/mcp/github',
     },
     {
       id: 'stripe',
       name: 'Stripe',
-      emoji: '💳',
       description: 'Ask your AI what revenue looks like today - no dashboard needed.',
       docsUrl: 'https://agor.live/docs/mcp/stripe',
     },
     {
       id: 'hubspot',
       name: 'HubSpot',
-      emoji: '🟠',
       description:
         'Let your AI handle follow-ups, log calls, and keep your pipeline moving while you build.',
       docsUrl: 'https://agor.live/docs/mcp/hubspot',
@@ -285,7 +277,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -294,21 +285,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'github',
       name: 'GitHub',
-      emoji: '🐙',
       description: 'Open PRs, review code, and sync issues automatically.',
       docsUrl: 'https://agor.live/docs/mcp/github',
     },
     {
       id: 'linear',
       name: 'Linear',
-      emoji: '🎯',
       description: 'Pick up issues and update status automatically.',
       docsUrl: 'https://agor.live/docs/mcp/linear',
     },
     {
       id: 'notion',
       name: 'Notion',
-      emoji: '📝',
       description: 'Write and update docs as your AI works.',
       docsUrl: 'https://agor.live/docs/mcp/notion',
     },
@@ -1221,7 +1209,9 @@ export function OnboardingWizard({
                   width: '100%',
                 }}
               >
-                <div style={{ fontSize: 24, marginBottom: 8 }}>{persona.emoji}</div>
+                <div style={{ fontSize: 24, marginBottom: 8, color: TEXT_SECONDARY }}>
+                  {PERSONA_ICONS[persona.id]}
+                </div>
                 <div
                   style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14, marginBottom: 6 }}
                 >
@@ -1296,15 +1286,7 @@ export function OnboardingWizard({
                     gap: 12,
                   }}
                 >
-                  <span
-                    style={{
-                      fontSize: 20,
-                      flexShrink: 0,
-                      color: TEXT_SECONDARY,
-                    }}
-                  >
-                    {option.symbol}
-                  </span>
+                  <ToolIcon tool={option.agent} size={22} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div
                       style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
@@ -1609,13 +1591,59 @@ export function OnboardingWizard({
         change everything anytime.
       </Paragraph>
 
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div>
+          <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}>
+            Teammate name
+          </Text>
+          <div style={{ display: 'flex', gap: 0 }}>
+            <EmojiPickerInput value={teammateEmoji} onChange={setTeammateEmoji} defaultEmoji="🤖" />
+            <Input
+              aria-label="Teammate name"
+              placeholder="e.g. Rusty, Ada, Scout…"
+              value={teammateName}
+              onChange={(e) => setTeammateName(e.target.value)}
+              style={{
+                background: 'rgba(0,0,0,0.3)',
+                borderColor: 'rgba(255,255,255,0.12)',
+                borderTopLeftRadius: 0,
+                borderBottomLeftRadius: 0,
+                flex: 1,
+              }}
+            />
+          </div>
+          {hasExistingBoard && (
+            <Text style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}>
+              They'll join your existing board
+              {verifiedBoard?.name ? ` "${verifiedBoard.name}"` : ''}.
+            </Text>
+          )}
+        </div>
+        {(() => {
+          const chosenOption = LLM_OPTIONS.find((o) => o.agent === selectedAgent);
+          return (
+            <div>
+              <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
+                Board's AI tool
+              </Text>
+              <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
+                Each board runs on one AI tool for every session created here.
+                {chosenOption
+                  ? ` Currently: ${chosenOption.title}. Change anytime in Settings.`
+                  : ' Connect your AI in the previous step.'}
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+
       {/* Concept pills */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 24 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 }}>
         {[
-          { emoji: '🌿', term: 'Branch', def: 'isolated workspace per task' },
-          { emoji: '💬', term: 'Session', def: 'conversation with your AI' },
-          { emoji: '📋', term: 'Board', def: 'kanban view of all branches' },
-        ].map(({ emoji, term, def }) => (
+          { term: 'Branch', def: 'isolated workspace per task' },
+          { term: 'Session', def: 'conversation with your AI' },
+          { term: 'Board', def: 'kanban view of all branches' },
+        ].map(({ term, def }) => (
           <div
             key={term}
             style={{
@@ -1631,98 +1659,10 @@ export function OnboardingWizard({
               boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09)',
             }}
           >
-            {emoji} <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> - {def}
+            <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> - {def}
           </div>
         ))}
       </div>
-
-      {hasExistingBoard ? (
-        <div
-          style={{
-            background: 'rgba(16,185,129,0.08)',
-            border: '1px solid rgba(16,185,129,0.25)',
-            borderRadius: 10,
-            padding: '14px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-          }}
-        >
-          <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 18 }} />
-          <div>
-            <Text style={{ color: SUCCESS_GREEN, fontWeight: 500, fontSize: 14 }}>
-              Board already set up
-            </Text>
-            <div>
-              <Text style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
-                {verifiedBoard?.name || 'Your board is ready.'}
-              </Text>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div>
-            <Text
-              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
-            >
-              Teammate name
-            </Text>
-            <div style={{ display: 'flex', gap: 0 }}>
-              <EmojiPickerInput
-                value={teammateEmoji}
-                onChange={setTeammateEmoji}
-                defaultEmoji="🤖"
-              />
-              <Input
-                aria-label="Teammate name"
-                placeholder="e.g. Rusty, Ada, Scout…"
-                value={teammateName}
-                onChange={(e) => setTeammateName(e.target.value)}
-                style={{
-                  background: 'rgba(0,0,0,0.3)',
-                  borderColor: 'rgba(255,255,255,0.12)',
-                  borderTopLeftRadius: 0,
-                  borderBottomLeftRadius: 0,
-                  flex: 1,
-                }}
-              />
-            </div>
-          </div>
-          {(() => {
-            const chosenOption = LLM_OPTIONS.find((o) => o.agent === selectedAgent);
-            return (
-              <div
-                style={{
-                  background: GLASS_CARD_BG,
-                  border: GLASS_CARD_BORDER,
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
-                  boxShadow: GLASS_CARD_SHADOW,
-                  borderRadius: 10,
-                  padding: '12px 14px',
-                  display: 'flex',
-                  gap: 10,
-                  alignItems: 'flex-start',
-                }}
-              >
-                <span style={{ fontSize: 18, flexShrink: 0 }}>🤖</span>
-                <div>
-                  <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
-                    Board's AI tool
-                  </Text>
-                  <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
-                    Each board runs on one AI tool for every session created here.
-                    {chosenOption
-                      ? ` Currently: ${chosenOption.title}. Change anytime in Settings.`
-                      : ' Connect your AI in the previous step.'}
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-        </div>
-      )}
 
       {boardError && <Alert type="error" message={boardError} showIcon style={{ marginTop: 16 }} />}
     </div>
@@ -1734,17 +1674,10 @@ export function OnboardingWizard({
       <div>
         {renderStepBadge('Connect your tools via MCP')}
 
-        {/* General MCP intro */}
+        {/* General MCP intro — plain helper text, not a card */}
         <div
           style={{
-            padding: '10px 14px',
             marginBottom: 16,
-            background: GLASS_CARD_BG,
-            border: GLASS_CARD_BORDER,
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            boxShadow: GLASS_CARD_SHADOW,
-            borderRadius: 10,
             fontSize: 12,
             color: TEXT_SECONDARY,
             lineHeight: 1.6,
@@ -1787,7 +1720,7 @@ export function OnboardingWizard({
                   gap: 12,
                 }}
               >
-                <span style={{ fontSize: 20, flexShrink: 0 }}>{rec.emoji}</span>
+                <McpLogo id={rec.id} name={rec.name} size={20} color={TEXT_PRIMARY} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>

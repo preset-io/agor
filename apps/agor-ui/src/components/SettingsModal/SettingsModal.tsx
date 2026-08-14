@@ -3,6 +3,7 @@ import type {
   Artifact,
   Board,
   Branch,
+  BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -82,13 +83,7 @@ export interface SettingsModalProps {
   onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
-  onArchiveOrDeleteBranch?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onCreateBranch?: (
@@ -197,10 +192,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // Wrapper to close modal after archive/delete
   const handleArchiveOrDeleteBranchWithClose = async (
     branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
+    options: BranchArchiveOrDeleteOptions
   ) => {
     await onArchiveOrDeleteBranch?.(branchId, options);
     handleBranchModalClose();

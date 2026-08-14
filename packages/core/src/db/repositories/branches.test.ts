@@ -1238,6 +1238,46 @@ describe('BranchRepository resolveUserAccess', () => {
 });
 
 describe('BranchRepository findExplicitFsAccessUserIds', () => {
+  dbTest('expands direct owners and branch group filesystem grants', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const groupRepo = new GroupRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'direct-fs-users-repo' }));
+    const creatorId = generateId() as UUID;
+    const ownerId = generateId() as UUID;
+    const groupMemberId = generateId() as UUID;
+
+    await usersRepo.create({ user_id: creatorId, email: 'creator-direct-fs@example.com' });
+    await usersRepo.create({ user_id: ownerId, email: 'owner-direct-fs@example.com' });
+    await usersRepo.create({
+      user_id: groupMemberId,
+      email: 'member-direct-fs@example.com',
+    });
+    const branch = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'direct-fs-users',
+        branch_unique_id: 9300,
+        created_by: creatorId,
+      })
+    );
+    await branchRepo.addOwner(branch.branch_id, ownerId);
+    const group = await groupRepo.create({ name: 'Direct FS Group', created_by: creatorId });
+    await groupRepo.addMember(group.group_id, groupMemberId, creatorId);
+    await groupRepo.upsertBranchGrant({
+      branch_id: branch.branch_id,
+      group_id: group.group_id,
+      can: 'session',
+      fs_access: 'write',
+      created_by: creatorId,
+    });
+
+    expect(await branchRepo.findExplicitFsAccessUserIds(branch.branch_id)).toEqual(
+      expect.arrayContaining([ownerId, groupMemberId])
+    );
+  });
+
   dbTest(
     'expands board owners and board groups only for board-aligned branches',
     async ({ db }) => {

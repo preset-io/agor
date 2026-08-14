@@ -1,6 +1,7 @@
 import { AuthenticationService, feathers } from '@agor/core/feathers';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { authorizeUsersGet } from '../register-hooks';
 import { AgorLocalStrategy } from '../register-routes';
 import { createUsersService, LOCAL_AUTH_LOOKUP_PARAM, UsersService } from './users';
 
@@ -190,6 +191,7 @@ describe('UsersService.find exact-email hardening', () => {
     });
 
     app.use('users', createUsersService(db));
+    app.service('users').hooks({ before: { get: [authorizeUsersGet] } });
 
     const authentication = new AuthenticationService(app);
     authentication.register('local', new AgorLocalStrategy());
@@ -198,6 +200,7 @@ describe('UsersService.find exact-email hardening', () => {
     await app.service('users').create({
       email: 'strategy-login@example.com',
       password: 'password-123',
+      role: 'viewer',
     });
 
     const result = await app.service('authentication').create(
@@ -210,6 +213,7 @@ describe('UsersService.find exact-email hardening', () => {
     );
 
     expect(result.user.email).toBe('strategy-login@example.com');
+    expect(result.user.role).toBe('viewer');
     expect(result.user).not.toHaveProperty('password');
   });
 });

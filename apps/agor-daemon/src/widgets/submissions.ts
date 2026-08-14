@@ -56,6 +56,8 @@ export interface WidgetResolverApp {
 
 export interface WidgetResolverDeps {
   app: WidgetResolverApp;
+  /** Required short database unit for the initial, consistent authorization snapshot. */
+  runInTenantDatabaseScope<T>(work: () => Promise<T>): Promise<T>;
   /** Durable, short-transaction state machine shared by every daemon. */
   resolutionStore: WidgetResolutionStore;
   /** Tenant-scoped custom-event publisher; production must not emit globally. */
@@ -153,26 +155,28 @@ async function doResolveWidget(
   caller: AuthenticatedCaller,
   deps: WidgetResolverDeps
 ): Promise<WidgetResolutionResult> {
-  // 1. Load the widget message.
-  let message: Message;
-  try {
-    message = (await deps.app.service('messages').get(widgetId)) as Message;
-  } catch {
-    throw new NotFound(`Widget ${widgetId} not found`);
-  }
+  // 1. Load the widget and authorization context in one short database unit.
+  const { message, session, branch, widget } = await deps.runInTenantDatabaseScope(async () => {
+    let message: Message;
+    try {
+      message = (await deps.app.service('messages').get(widgetId)) as Message;
+    } catch (error) {
+      if (error instanceof NotFound) throw new NotFound(`Widget ${widgetId} not found`);
+      throw error;
+    }
 
-  if (message.type !== 'widget_request') {
-    throw new NotFound(`Message ${widgetId} is not a widget request`);
-  }
+    if (message.type !== 'widget_request') {
+      throw new NotFound(`Message ${widgetId} is not a widget request`);
+    }
+    const widget = message.metadata?.widget;
+    if (!widget) throw new NotFound(`Widget ${widgetId} has no widget metadata`);
 
-  const widget = message.metadata?.widget;
-  if (!widget) {
-    throw new NotFound(`Widget ${widgetId} has no widget metadata`);
-  }
+    const session = (await deps.app.service('sessions').get(message.session_id)) as Session;
+    const branch = (await deps.app.service('branches').get(session.branch_id)) as Branch;
+    return { message, session, branch, widget };
+  });
 
-  // 2. Load the session + branch for authz.
-  const session = (await deps.app.service('sessions').get(message.session_id)) as Session;
-  const branch = (await deps.app.service('branches').get(session.branch_id)) as Branch;
+  // 2. Authorize using the context loaded above.
   const isOwner = await deps.isBranchOwner(branch.branch_id, caller.user_id);
   const effectivePermission = await deps.resolveBranchPermission?.(branch, caller.user_id);
 

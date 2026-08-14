@@ -355,6 +355,20 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
   });
 
+  it("workspace step renders the concept tags at the bottom, below the Board's AI tool helper", () => {
+    renderWizard({ initialStep: 'workspace' });
+
+    const aiTool = screen.getByText("Board's AI tool");
+    const branchTag = screen.getByText('Branch');
+    const sessionTag = screen.getByText('Session');
+    expect(branchTag).toBeInTheDocument();
+    expect(sessionTag).toBeInTheDocument();
+    // Tags moved below the name field + AI-tool helper (Fix 2).
+    expect(
+      aiTool.compareDocumentPosition(branchTag) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it('workspace step skips board creation when the user already has one', async () => {
     const boardById = new Map<string, Board>([['board-existing', makeBoard()]]);
     const { boardsService } = renderWizard({
@@ -363,8 +377,10 @@ describe('OnboardingWizard', () => {
       user: makeUser({ preferences: { mainBoardId: 'board-existing' } } as Partial<User>),
     });
 
-    expect(screen.getByText('Board already set up')).toBeInTheDocument();
-    expect(screen.getByText('Existing board')).toBeInTheDocument();
+    // Teammate-first: the name UI always renders; the existing board is only a
+    // muted caption, not a replacement for the name field.
+    expect(screen.getByLabelText('Teammate name')).toBeInTheDocument();
+    expect(screen.getByText(/join your existing board/i)).toHaveTextContent('Existing board');
 
     clickButton(/keep going/i);
 
@@ -391,8 +407,8 @@ describe('OnboardingWizard', () => {
     });
 
     await waitFor(() => expect(boardsService.get).toHaveBeenCalledWith('board-existing'));
-    expect(await screen.findByText('Board already set up')).toBeInTheDocument();
-    expect(screen.getByText('My board')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Teammate name')).toBeInTheDocument();
+    expect(screen.getByText(/join your existing board/i)).toHaveTextContent('My board');
 
     clickButton(/keep going/i);
     expect(boardsService.create).not.toHaveBeenCalled();

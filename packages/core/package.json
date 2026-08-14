@@ -22,6 +22,12 @@
       "import": "./dist/types/index.js",
       "require": "./dist/types/index.cjs"
     },
+    "./realtime": {
+      "source": "./src/realtime/index.ts",
+      "types": "./dist/realtime/index.d.ts",
+      "import": "./dist/realtime/index.js",
+      "require": "./dist/realtime/index.cjs"
+    },
     "./executor-protocol": {
       "source": "./src/executor-protocol.ts",
       "types": "./dist/executor-protocol.d.ts",

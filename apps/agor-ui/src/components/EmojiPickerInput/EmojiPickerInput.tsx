@@ -1,5 +1,4 @@
-import { SmileOutlined } from '@ant-design/icons';
-import { Button, Flex, Form, Input, Popover, Typography } from 'antd';
+import { Button, Flex, Form, Popover, Typography } from 'antd';
 import type { EmojiClickData, PickerProps } from 'emoji-picker-react';
 import { lazy, Suspense, useState } from 'react';
 
@@ -38,8 +37,9 @@ interface EmojiPickerInputProps {
 }
 
 /**
- * Reusable emoji picker input — compact style with emoji preview + picker button.
- * Use directly with value/onChange, or use FormEmojiPickerInput for Ant Design forms.
+ * Reusable emoji picker input — a single clickable emoji tile that opens the
+ * picker. Use directly with value/onChange, or use FormEmojiPickerInput for
+ * Ant Design forms.
  */
 export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
   value,
@@ -58,39 +58,31 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
   const effectivePickerOpen = disabled ? false : pickerOpen;
 
   return (
-    <div style={{ display: 'flex', gap: 0 }}>
-      <Input
-        prefix={<span style={{ fontSize: 14 }}>{value || defaultEmoji}</span>}
-        readOnly
+    <Popover
+      content={<AgorEmojiPicker onEmojiClick={handleEmojiClick} />}
+      trigger={disabled ? [] : 'click'}
+      open={effectivePickerOpen}
+      onOpenChange={(next) => {
+        if (disabled) return;
+        setPickerOpen(next);
+      }}
+      placement="right"
+    >
+      <Button
+        aria-label="Choose emoji"
         disabled={disabled}
         style={{
-          cursor: 'default',
           width: 40,
+          padding: 0,
+          fontSize: 14,
+          // Squared right edge so the tile joins the adjacent name Input.
           borderTopRightRadius: 0,
           borderBottomRightRadius: 0,
         }}
-      />
-      <Popover
-        content={<AgorEmojiPicker onEmojiClick={handleEmojiClick} />}
-        trigger={disabled ? [] : 'click'}
-        open={effectivePickerOpen}
-        onOpenChange={(next) => {
-          if (disabled) return;
-          setPickerOpen(next);
-        }}
-        placement="right"
       >
-        <Button
-          icon={<SmileOutlined />}
-          disabled={disabled}
-          style={{
-            borderTopLeftRadius: 0,
-            borderBottomLeftRadius: 0,
-            borderLeft: 'none',
-          }}
-        />
-      </Popover>
-    </div>
+        {value || defaultEmoji}
+      </Button>
+    </Popover>
   );
 };
 

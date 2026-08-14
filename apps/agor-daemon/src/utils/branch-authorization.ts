@@ -488,6 +488,20 @@ export function ensureBranchPermission(
 }
 
 /**
+ * Destructive fallback used when branch RBAC is disabled. Preserve the legacy
+ * owner/admin boundary while allowing internal and service-account maintenance.
+ */
+export function ensureBranchOwnerOrAdmin(action: string) {
+  return (context: HookContext) => {
+    if (!context.params.provider || context.params.user?._isServiceAccount) return context;
+    if (context.params.isBranchOwner || hasMinimumRole(context.params.user?.role, ROLES.ADMIN)) {
+      return context;
+    }
+    throw new Forbidden(`You must be the branch owner or a global admin to ${action}`);
+  };
+}
+
+/**
  * Scope branch query to only return authorized branches (OPTIMIZED SQL VERSION)
  *
  * Replaces the default find() query with an optimized SQL query that uses JOIN

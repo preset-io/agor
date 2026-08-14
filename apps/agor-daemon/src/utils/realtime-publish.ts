@@ -6,19 +6,81 @@ import {
 import type { BranchRepository, SessionRepository, TenantScopeAwareDatabase } from '@agor/core/db';
 import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { BranchID, HookContext, User, UserID } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
 import {
+  isBranchRemovalRealtimeVisibilitySnapshot,
+  isRealtimeRelayEnvelope,
   MAX_REALTIME_RELAY_BYTES,
+  REALTIME_RELAY_VERSION,
   type RealtimeRelayEnvelope,
-} from '../realtime/redis-realtime.js';
+} from '@agor/core/realtime';
+import {
+  type BranchID,
+  type BranchRealtimeVisibility,
+  BranchRealtimeVisibilityMode,
+  type BranchRemovalRealtimeVisibilitySnapshot,
+  type HookContext,
+  hasMinimumRole,
+  ROLES,
+  type TenantID,
+  type User,
+  type UserID,
+} from '@agor/core/types';
 import { tenantChannelName } from '../realtime/routing.js';
 import { isSuperAdmin } from './branch-authorization.js';
+import {
+  isKnowledgeRealtimeSuppressedEvent,
+  resolveKnowledgeRealtimeUserIds,
+} from './knowledge-realtime-publish.js';
 import {
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
 } from './realtime-access-cache.js';
+
+export const BRANCH_REMOVAL_VISIBILITY_PARAM = '_agorRealtimeBranchRemovalVisibility';
+
+/** Capture the branch visibility fact while its ACL rows still exist. */
+export function setBranchRemovalRealtimeVisibility(
+  params: HookContext['params'],
+  branchId: BranchID,
+  visibility: BranchRealtimeVisibility
+): void {
+  const snapshot: BranchRemovalRealtimeVisibilitySnapshot =
+    visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED
+      ? { branchId, mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+      : {
+          branchId,
+          mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+          userIds: [...visibility.userIds].sort(),
+        };
+  (params as HookContext['params'] & Record<string, unknown>)[BRANCH_REMOVAL_VISIBILITY_PARAM] =
+    snapshot;
+}
+
+function branchRemovalVisibilitySnapshot(
+  context: PublishContext,
+  branchId: BranchID
+): BranchRemovalRealtimeVisibilitySnapshot | null {
+  if (context.path !== 'branches' || context.event !== 'removed') return null;
+  const value = (context.params as Record<string, unknown> | undefined)?.[
+    BRANCH_REMOVAL_VISIBILITY_PARAM
+  ];
+  return isBranchRemovalRealtimeVisibilitySnapshot(value) && value.branchId === branchId
+    ? value
+    : null;
+}
+
+function visibilityFromRemovalSnapshot(
+  snapshot: BranchRemovalRealtimeVisibilitySnapshot | null
+): BranchRealtimeVisibility | null {
+  if (!snapshot) return null;
+  return snapshot.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED
+    ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+    : {
+        mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+        userIds: new Set(snapshot.userIds),
+      };
+}
 
 /**
  * Per-session channel that carries only the high-frequency streaming events
@@ -212,6 +274,7 @@ export const REDIS_FEATHERS_DENIED_PATHS = new Set([
 
 function mayEnterRedisRelay(path: string, event: string): boolean {
   if (REDIS_FEATHERS_DENIED_PATHS.has(path)) return false;
+  if (isKnowledgeRealtimeSuppressedEvent(path, event)) return false;
   // Runtime DOM/status results can contain secret-derived values. CRUD events
   // for Artifact metadata remain ordinary tenant-authorized service payloads.
   if (path === 'artifacts' && event === 'agor-query') return false;
@@ -481,6 +544,27 @@ function filterToServiceConnections(authenticated: PublishChannel): PublishChann
   return authenticated.filter((connection: unknown) => isServiceConnection(connection));
 }
 
+function uniqueUserIds(authenticated: PublishChannel): string[] {
+  const userIds = new Set<string>();
+  for (const connection of authenticated.connections as unknown[]) {
+    if (isServiceConnection(connection)) continue;
+    const userId = userFromConnection(connection)?.user_id;
+    if (typeof userId === 'string') userIds.add(userId);
+  }
+  return [...userIds];
+}
+
+function filterToUserIdsOrServices(
+  authenticated: PublishChannel,
+  userIds: Set<string>
+): PublishChannel {
+  return authenticated.filter((connection: unknown) => {
+    if (isServiceConnection(connection)) return true;
+    const userId = userFromConnection(connection)?.user_id;
+    return typeof userId === 'string' && userIds.has(userId);
+  });
+}
+
 /**
  * Delivery set for a streaming event. Streaming chunks are the dominant
  * always-on realtime cost, so they bypass the tenant-wide broadcast and go to:
@@ -570,7 +654,7 @@ async function resolveStreamingDelivery(
   const visibility = branchId ? await accessCache.getBranchVisibility(branchId) : null;
   if (!visibility) return serviceConnections;
 
-  if (visibility.mode === 'allAuthenticated') {
+  if (visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) {
     const channels: PublishChannel[] = [serviceConnections];
     if (room) channels.push(room);
     if (ownerId) channels.push(ownerChannel());
@@ -605,7 +689,7 @@ function filterToUserIdsOrAdmins(
 
 function filterToUserIdsOrSuperadmins(
   authenticated: PublishChannel,
-  userIds: Set<UserID>,
+  userIds: ReadonlySet<UserID>,
   allowSuperadmin: boolean
 ): PublishChannel {
   return authenticated.filter((connection: unknown) => {
@@ -617,7 +701,7 @@ function filterToUserIdsOrSuperadmins(
   });
 }
 
-function extractConnectionTenantId(context: HookContext): string | undefined {
+function extractConnectionTenantId(context: HookContext): TenantID | undefined {
   const params = context.params as
     | {
         connection?: {
@@ -629,12 +713,15 @@ function extractConnectionTenantId(context: HookContext): string | undefined {
   const tenant = params?.connection?.tenant ?? params?.connection?.data?.tenant;
   return tenant && typeof tenant === 'object' && 'tenant_id' in tenant
     ? typeof tenant.tenant_id === 'string'
-      ? tenant.tenant_id
+      ? (tenant.tenant_id as TenantID)
       : undefined
     : undefined;
 }
 
-function resolveRealtimeTenantId(multiTenancy: ResolvedMultiTenancyConfig, context: HookContext) {
+function resolveRealtimeTenantId(
+  multiTenancy: ResolvedMultiTenancyConfig,
+  context: HookContext
+): TenantID {
   try {
     return resolveTenantContext(multiTenancy, { params: context.params }).tenant_id;
   } catch (error) {
@@ -642,7 +729,9 @@ function resolveRealtimeTenantId(multiTenancy: ResolvedMultiTenancyConfig, conte
     if (error instanceof TenantResolutionError && connectionTenantId) return connectionTenantId;
 
     const ambientTenantId = getCurrentTenantId();
-    if (error instanceof TenantResolutionError && ambientTenantId) return ambientTenantId;
+    if (error instanceof TenantResolutionError && ambientTenantId) {
+      return ambientTenantId as TenantID;
+    }
     throw error;
   }
 }
@@ -674,8 +763,12 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
 
   const resolveLocalDelivery = async (data: unknown, context: HookContext) => {
     const authenticated = app.channel('authenticated');
+    if (context.path && isKnowledgeRealtimeSuppressedEvent(context.path, context.event)) {
+      return { delivery: authenticated.filter(() => false), tenantId: undefined };
+    }
+
     let tenantScoped = authenticated;
-    let tenantId: string | undefined;
+    let tenantId: TenantID | undefined;
     if (multiTenancy) {
       try {
         tenantId = resolveRealtimeTenantId(multiTenancy, context);
@@ -714,6 +807,18 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
           allowSuperadmin
         );
       }
+
+      const knowledgeUserIds = await resolveKnowledgeRealtimeUserIds({
+        app,
+        db,
+        data,
+        context,
+        userIds: uniqueUserIds(tenantScoped),
+      });
+      if (knowledgeUserIds) {
+        return filterToUserIdsOrServices(tenantScoped, knowledgeUserIds);
+      }
+
       if (!branchRbacEnabled) return tenantScoped;
 
       const scope = await resolvePublishScope(data, context, accessCache);
@@ -731,7 +836,14 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         return filterToServiceConnections(tenantScoped);
       }
 
-      const visibility = await accessCache.getBranchVisibility(scope.branchId);
+      // A hard delete has already committed when Feathers emits `removed`, so
+      // the branch/owner/grant rows can no longer authorize the tombstone. Use
+      // the server-captured pre-delete fact for this one event; every other
+      // branch event continues to authorize from current database state.
+      const isBranchRemoval = context.path === 'branches' && context.event === 'removed';
+      const visibility = isBranchRemoval
+        ? visibilityFromRemovalSnapshot(branchRemovalVisibilitySnapshot(context, scope.branchId))
+        : await accessCache.getBranchVisibility(scope.branchId);
       if (!visibility) {
         console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
           path: context.path,
@@ -740,7 +852,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         });
         return filterToServiceConnections(tenantScoped);
       }
-      if (visibility.mode === 'allAuthenticated') return tenantScoped;
+      if (visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) return tenantScoped;
       return filterToUserIdsOrSuperadmins(tenantScoped, visibility.userIds, allowSuperadmin);
     };
 
@@ -748,6 +860,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       db && tenantId
         ? await runWithTenantDatabaseScope(db, tenantId, resolveDelivery)
         : await resolveDelivery();
+    if (context.path === 'branches' && context.event === 'removed') {
+      const removedBranchId = extractBranchId(data, context);
+      if (removedBranchId) accessCache.invalidateBranch(removedBranchId);
+    }
     return { delivery, tenantId };
   };
 
@@ -776,18 +892,28 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       const dispatchedData = context.dispatch !== undefined ? context.dispatch : data;
       const relayData = safeRelayData(dispatchedData);
       if (relayData !== undefined) {
+        const removedBranchId = extractBranchId(relayData, context) as BranchID | undefined;
+        const removalVisibility = removedBranchId
+          ? branchRemovalVisibilitySnapshot(context, removedBranchId)
+          : null;
+        const envelope: RealtimeRelayEnvelope = {
+          version: REALTIME_RELAY_VERSION,
+          tenantId: resolved.tenantId,
+          path: context.path,
+          event: context.event,
+          ...(context.method ? { method: context.method } : {}),
+          ...(typeof context.id === 'string' || typeof context.id === 'number'
+            ? { id: context.id }
+            : {}),
+          data: relayData,
+          ...(removalVisibility ? { branchRemovalVisibility: removalVisibility } : {}),
+        };
         try {
-          realtimeRelay.relay({
-            version: 1,
-            tenantId: resolved.tenantId,
-            path: context.path,
-            event: context.event,
-            ...(context.method ? { method: context.method } : {}),
-            ...(typeof context.id === 'string' || typeof context.id === 'number'
-              ? { id: context.id }
-              : {}),
-            data: relayData,
-          });
+          if (!isRealtimeRelayEnvelope(envelope)) {
+            console.warn('[realtime/redis] publication omitted: envelope is not bounded JSON');
+            return resolved.delivery;
+          }
+          realtimeRelay.relay(envelope);
         } catch {
           // Redis readiness has already turned false. The durable mutation is
           // not rolled back merely because its best-effort notification failed.
@@ -804,16 +930,20 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     // Never trust the Redis namespace as authorization. Re-run the exact local
     // tenant/RBAC publisher against this replica's own authenticated channels.
     if (!mayEnterRedisRelay(envelope.path, envelope.event)) return;
+    const params: HookContext['params'] & Record<string, unknown> = {
+      provider: 'socketio-redis-relay',
+      tenant: { tenant_id: envelope.tenantId, source: 'explicit' },
+    };
+    if (envelope.branchRemovalVisibility) {
+      params[BRANCH_REMOVAL_VISIBILITY_PARAM] = envelope.branchRemovalVisibility;
+    }
     const context = {
       app,
       path: envelope.path,
       event: envelope.event,
       method: envelope.method,
       id: envelope.id,
-      params: {
-        provider: 'socketio-redis-relay',
-        tenant: { tenant_id: envelope.tenantId, source: 'explicit' },
-      },
+      params,
       result: envelope.data,
       dispatch: envelope.data,
     } as unknown as HookContext;
