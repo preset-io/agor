@@ -402,6 +402,53 @@ it('removes a terminal room when authentication changes while its join is pendin
   });
 });
 
+it('does not let a stale join remove the replacement generation from the same room', async () => {
+  const { app, io } = buildHarness({
+    multiTenancy: {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default' as never,
+      auth_claim: 'tenant_id',
+    },
+  });
+  const socket = makeSocket('same-identity-replacement', io);
+  socket.feathers = { user: { user_id: ALICE } };
+  socket.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+  connect(io, socket);
+  const connection = socket.feathers;
+  const staleJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  const channel = terminalChannel(ALICE, TERMINAL, 'tenant-a');
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+  let releaseStaleJoin!: () => void;
+  const staleJoinGate = new Promise<void>((resolve) => {
+    releaseStaleJoin = resolve;
+  });
+  const normalJoin = socket.join.bind(socket);
+  let terminalJoinCount = 0;
+  socket.join = async (candidate) => {
+    if (candidate === channel && terminalJoinCount++ === 0) await staleJoinGate;
+    await normalJoin(candidate);
+  };
+
+  const staleResult = staleJoin?.(channel, allocation);
+  await Promise.resolve();
+  (app as any).eventHandlers.get('login')?.(
+    { user: { user_id: ALICE } },
+    {
+      connection,
+      params: { authentication: { payload: { tenant_id: 'tenant-a' } } },
+    }
+  );
+  const replacementJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  expect(replacementJoin).not.toBe(staleJoin);
+  await expect(replacementJoin?.(channel, allocation)).resolves.toBe(true);
+
+  releaseStaleJoin();
+  await expect(staleResult).resolves.toBe(false);
+  expect(socket.joined).toContain(channel);
+  expect(socket.left).not.toContain(channel);
+  expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
+});
+
 function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
   browser.handlers.get('join')?.(terminalChannel());
   const executor = makeSocket('exec-sock', io);

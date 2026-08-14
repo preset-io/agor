@@ -388,6 +388,10 @@ export function createSocketIOConfig(
     // Revokes captured terminal-subscription functions across logout and live
     // authentication replacement, even when the transport stays connected.
     const terminalAuthGenerations = new WeakMap<Socket, number>();
+    // A stale async join may finish after a replacement generation has joined
+    // the same room. Track the latest claimant so stale cleanup cannot remove
+    // the newer valid subscription.
+    const terminalRoomClaimGenerations = new WeakMap<Socket, Map<string, number>>();
 
     const invalidateTerminalRequestJoin = (socket: FeathersSocket): void => {
       terminalAuthGenerations.set(socket, (terminalAuthGenerations.get(socket) ?? 0) + 1);
@@ -454,6 +458,12 @@ export function createSocketIOConfig(
         enumerable: false,
         value: async (channel: string, allocation: TerminalAllocatedEvent) => {
           if (!isCurrentAllocation(channel, allocation)) return false;
+          let roomClaims = terminalRoomClaimGenerations.get(socket);
+          if (!roomClaims) {
+            roomClaims = new Map();
+            terminalRoomClaimGenerations.set(socket, roomClaims);
+          }
+          roomClaims.set(channel, boundGeneration);
           let joined = false;
           try {
             await socket.join(channel);
@@ -461,8 +471,18 @@ export function createSocketIOConfig(
           } catch {
             // Fall through to the same best-effort cleanup as auth revocation.
           }
-          if (!joined || !isCurrentAllocation(channel, allocation)) {
-            await socket.leave(channel);
+          if (
+            !joined ||
+            !isCurrentAllocation(channel, allocation) ||
+            roomClaims.get(channel) !== boundGeneration
+          ) {
+            const currentClaim = roomClaims.get(channel);
+            // A newer generation may already own this same qualified room. In
+            // that case the stale join must not remove its valid membership.
+            if (currentClaim === boundGeneration || currentClaim === undefined) {
+              roomClaims.delete(channel);
+              await socket.leave(channel);
+            }
             return false;
           }
           // Establish the terminal identity in the browser before the executor
@@ -1121,6 +1141,7 @@ export function createSocketIOConfig(
           }
         }
         console.log(`🖥️  Socket ${socket.id} leaving channel: ${channel}`);
+        terminalRoomClaimGenerations.get(socket)?.delete(channel);
         socket.leave(channel);
       });
 
