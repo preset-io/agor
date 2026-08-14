@@ -192,7 +192,19 @@ function createServiceHarness() {
   } as unknown as Application;
 
   const service = new BranchesService(createTenantScopeTestDb() as never, app);
-  return { service, boardObjectsService, sessionsService, branchesService, sessionTokenService };
+  const branchRepo = (
+    service as unknown as {
+      branchRepo: BranchRepository;
+    }
+  ).branchRepo;
+  return {
+    service,
+    branchRepo,
+    boardObjectsService,
+    sessionsService,
+    branchesService,
+    sessionTokenService,
+  };
 }
 
 async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
@@ -1260,25 +1272,22 @@ describe('BranchesService.archiveOrDelete', () => {
   });
 
   it('deletes metadata without re-entering unrelated remove hooks and emits one tombstone', async () => {
-    const { service, branchesService } = createServiceHarness();
+    const { service, branchRepo, branchesService } = createServiceHarness();
     const branchId = 'wt-delete-op' as BranchID;
     const params = {
       user: { user_id: 'user-1' as UUID },
       tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
     } as never;
-    vi.spyOn(service, 'get').mockResolvedValue({
+    const removedBranch = {
       branch_id: branchId,
       name: 'WT Delete Op',
       path: '/tmp/wt-delete-op',
       archived: false,
       environment_instance: { status: 'stopped' },
-    } as never);
-    const removedBranch = {
-      branch_id: branchId,
-      name: 'WT Delete Op',
-      path: '/tmp/wt-delete-op',
     } as never;
-    const rawRemove = vi.spyOn(service, 'remove').mockResolvedValue(removedBranch);
+    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
+    const wrappedRemove = vi.spyOn(service, 'remove');
+    const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
     markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
 
     await service.archiveOrDelete(
@@ -1288,12 +1297,9 @@ describe('BranchesService.archiveOrDelete', () => {
     );
 
     expect(branchesService.remove).not.toHaveBeenCalled();
-    expect(rawRemove).toHaveBeenCalledWith(
-      branchId,
-      expect.objectContaining({
-        query: { deleteFromFilesystem: false },
-      })
-    );
+    expect(wrappedRemove).not.toHaveBeenCalled();
+    expect(repositoryDelete).toHaveBeenCalledOnce();
+    expect(repositoryDelete).toHaveBeenCalledWith(branchId);
     expect(branchesService.emit).toHaveBeenCalledOnce();
     expect(branchesService.emit).toHaveBeenCalledWith(
       'removed',

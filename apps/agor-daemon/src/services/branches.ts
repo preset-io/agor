@@ -1553,10 +1553,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // now and queues the tombstone on the active tenant transaction, so a
       // commit emits once and a rollback emits nothing.
       await this.withTenantDatabase(params, async () => {
-        const removedBranch = await this.remove(id, {
-          ...params,
-          query: { ...(params.query ?? {}), deleteFromFilesystem: false },
-        });
+        // Call the adapter implementation directly. Feathers replaces the
+        // registered service's standard methods with event-producing wrappers;
+        // calling `this.remove()` here would therefore publish once through
+        // Feathers and once through the explicit post-commit tombstone below.
+        // `super.remove()` performs only the transactional metadata deletion,
+        // without the standard remove hooks or their Unix/filesystem effects.
+        const removedBranch = (await super.remove(id, params)) as Branch;
         emitServiceEvent(this.app, {
           path: 'branches',
           event: 'removed',
