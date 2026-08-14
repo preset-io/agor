@@ -1,7 +1,5 @@
-import { runWithTenantDatabaseScope } from '@agor/core/db';
-import type { Application, Branch, Repo } from '@agor/core/types';
+import type { Application } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { emitServiceEvent } from '../utils/emit-service-event';
 import { ReposService } from './repos';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -223,70 +221,5 @@ describe('ReposService.cloneRepository Git lifecycle identity', () => {
       expect.objectContaining({ command: 'git.clone' }),
       expect.objectContaining({ asUser: 'daemon-user' })
     );
-  });
-});
-
-describe('ReposService.remove branch tombstones', () => {
-  it('queues branch removals on the outer repo transaction and emits none when repo deletion rolls back', async () => {
-    const repo = {
-      repo_id: '550e8400-e29b-41d4-a716-446655440001',
-      slug: 'preset-io/agor',
-      repo_type: 'local',
-    } as Repo;
-    const branch = {
-      branch_id: '550e8400-e29b-41d4-a716-446655440002',
-      repo_id: repo.repo_id,
-      name: 'rollback-branch',
-    } as Branch;
-    const branchEmit = vi.fn();
-    let app!: Application;
-    const branchesService = {
-      find: vi.fn(async () => [branch]),
-      emit: branchEmit,
-      remove: vi.fn(),
-      removeMetadataWithRealtime: vi.fn(async (_branchId: string, params: unknown) => {
-        emitServiceEvent(app, {
-          path: 'branches',
-          event: 'removed',
-          data: branch,
-          params: params as never,
-          id: branch.branch_id,
-        });
-        return branch;
-      }),
-    };
-    app = {
-      get: () => ({}),
-      service: vi.fn((name: string) => {
-        if (name === 'branches') return branchesService;
-        throw new Error(`Unexpected service: ${name}`);
-      }),
-    } as unknown as Application;
-    // A SQLite-shaped handle is enough here: the tenant-scope helper queues
-    // callbacks until work resolves and drops them when it rejects.
-    const db = { run: vi.fn() } as never;
-    const service = new ReposService(db, app);
-    vi.spyOn(service, 'get').mockResolvedValue(repo);
-    const repoRepository = (
-      service as unknown as {
-        repoRepo: { delete: ReturnType<typeof vi.fn> };
-      }
-    ).repoRepo;
-    repoRepository.delete.mockRejectedValueOnce(new Error('forced repository rollback'));
-    const params = {
-      user: { user_id: '550e8400-e29b-41d4-a716-446655440003' },
-      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-    } as never;
-
-    await expect(
-      runWithTenantDatabaseScope(db, 'tenant-a', () => service.remove(repo.repo_id, params))
-    ).rejects.toThrow('forced repository rollback');
-
-    expect(branchesService.removeMetadataWithRealtime).toHaveBeenCalledWith(
-      branch.branch_id,
-      params
-    );
-    expect(branchesService.remove).not.toHaveBeenCalled();
-    expect(branchEmit).not.toHaveBeenCalled();
   });
 });

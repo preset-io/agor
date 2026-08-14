@@ -5,6 +5,8 @@ import type { Database } from './client';
 export interface TenantDatabaseScope {
   db: Database;
   kind: 'tenant' | 'system';
+  /** Whether `db` is a native transaction handle rather than an identity-only scope. */
+  transactionActive?: boolean;
   tenantId?: TenantID | string;
   systemReason?: string;
   systemCapability?: SystemDatabaseCapability;

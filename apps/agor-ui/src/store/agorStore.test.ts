@@ -6,6 +6,7 @@ import type {
   Branch,
   GatewayChannel,
   Session,
+  SessionRelationship,
   TenantAgenticToolSettings,
 } from '@agor-live/client';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -188,6 +189,104 @@ describe('agorStore branch hard-delete cascade', () => {
       branch_id: null,
       source_session_id: null,
     });
+  });
+
+  it('removes a deleted remote target surrogate from the surviving source branch', () => {
+    const sourceBranch = { branch_id: 'source-branch' } as Branch;
+    const targetBranch = { branch_id: 'target-branch' } as Branch;
+    const relationship = {
+      relationship_id: 'relationship-1',
+      relationship_type: 'remote_create',
+      source_session_id: 'source-session',
+      target_session_id: 'target-session',
+    } as SessionRelationship;
+    const source = {
+      session_id: relationship.source_session_id,
+      branch_id: sourceBranch.branch_id,
+      remote_relationships: { as_source: [relationship] },
+    } as Session;
+    const target = {
+      session_id: relationship.target_session_id,
+      branch_id: targetBranch.branch_id,
+      remote_relationships: { as_target: [relationship] },
+    } as Session;
+    const surrogate = {
+      ...target,
+      branch_id: sourceBranch.branch_id,
+      remote_surrogate: {
+        relationship,
+        source_session_id: source.session_id,
+        source_branch_id: sourceBranch.branch_id,
+        target_branch_id: targetBranch.branch_id,
+      },
+    } as Session;
+    agorStore.getState().replaceMaps({
+      branchById: new Map([
+        [sourceBranch.branch_id, sourceBranch],
+        [targetBranch.branch_id, targetBranch],
+      ]),
+      sessionById: new Map([
+        [source.session_id, source],
+        [target.session_id, target],
+      ]),
+      sessionsByBranch: new Map([
+        [sourceBranch.branch_id, [source, surrogate]],
+        [targetBranch.branch_id, [target]],
+      ]),
+    });
+
+    agorStore.getState().applyBranchHardDeleteCascade(targetBranch.branch_id);
+    const state = agorStore.getState();
+
+    expect(
+      state.sessionsByBranch.get(sourceBranch.branch_id)?.map((session) => session.session_id)
+    ).toEqual([source.session_id]);
+    expect(state.sessionById.get(source.session_id)?.remote_relationships).toBeUndefined();
+    expect(state.sessionById.has(target.session_id)).toBe(false);
+  });
+
+  it('clears a surviving remote target relationship when the source branch is deleted', () => {
+    const sourceBranch = { branch_id: 'source-branch' } as Branch;
+    const targetBranch = { branch_id: 'target-branch' } as Branch;
+    const relationship = {
+      relationship_id: 'relationship-1',
+      relationship_type: 'remote_create',
+      source_session_id: 'source-session',
+      target_session_id: 'target-session',
+    } as SessionRelationship;
+    const source = {
+      session_id: relationship.source_session_id,
+      branch_id: sourceBranch.branch_id,
+      remote_relationships: { as_source: [relationship] },
+    } as Session;
+    const target = {
+      session_id: relationship.target_session_id,
+      branch_id: targetBranch.branch_id,
+      remote_relationships: { as_target: [relationship] },
+    } as Session;
+    agorStore.getState().replaceMaps({
+      branchById: new Map([
+        [sourceBranch.branch_id, sourceBranch],
+        [targetBranch.branch_id, targetBranch],
+      ]),
+      sessionById: new Map([
+        [source.session_id, source],
+        [target.session_id, target],
+      ]),
+      sessionsByBranch: new Map([
+        [sourceBranch.branch_id, [source]],
+        [targetBranch.branch_id, [target]],
+      ]),
+    });
+
+    agorStore.getState().applyBranchHardDeleteCascade(sourceBranch.branch_id);
+    const state = agorStore.getState();
+
+    expect(state.sessionsByBranch.has(sourceBranch.branch_id)).toBe(false);
+    expect(state.sessionById.get(target.session_id)?.remote_relationships).toBeUndefined();
+    expect(
+      state.sessionsByBranch.get(targetBranch.branch_id)?.[0].remote_relationships
+    ).toBeUndefined();
   });
 });
 

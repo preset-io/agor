@@ -513,14 +513,14 @@ describe('useAgorData — socket-event bailouts', () => {
     await waitForInitialLoad(result);
 
     seed['board-comments:findAll'] = [
-      { ...taskComment, task_id: null },
-      { ...messageComment, message_id: null },
+      { ...taskComment, task_id: undefined },
+      { ...messageComment, message_id: undefined },
     ];
     act(() => emit('branches', 'removed', branch));
 
     await waitFor(() => {
-      expect(agorStore.getState().commentById.get('comment-task')?.task_id).toBeNull();
-      expect(agorStore.getState().commentById.get('comment-message')?.message_id).toBeNull();
+      expect(agorStore.getState().commentById.get('comment-task')?.task_id).toBeUndefined();
+      expect(agorStore.getState().commentById.get('comment-message')?.message_id).toBeUndefined();
     });
   });
 

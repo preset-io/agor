@@ -27,7 +27,9 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
+  getCurrentTenantId,
   RepoRepository,
+  runWithTenantDatabaseTransaction,
   shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -1156,23 +1158,22 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // CRITICAL: Use an internal call (no provider) so repo deletion owns the
     // full branch inventory for this repo, independent of caller RBAC scope.
     const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
-    const branchesResult = (await branchesService.find({
-      query: { repo_id: repo.repo_id },
-      paginate: false,
-    })) as unknown as Branch[] | { data: Branch[] };
-
-    const branches = (
-      Array.isArray(branchesResult) ? branchesResult : branchesResult.data
-    ) as Branch[];
-
-    // Safety check: verify all branches belong to this repo (defense in depth)
-    const foreignBranches = branches.filter((wt) => wt.repo_id !== repo.repo_id);
-    if (foreignBranches.length > 0) {
-      throw new Error(
-        `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(s) not belonging to repo ${repo.repo_id}. ` +
-          `Aborting deletion to prevent cross-repo data loss. This is a bug — please report it.`
-      );
-    }
+    const findRepoBranches = async (): Promise<Branch[]> => {
+      const result = (await branchesService.find({
+        query: { repo_id: repo.repo_id },
+        paginate: false,
+      })) as unknown as Branch[] | { data: Branch[] };
+      const found = Array.isArray(result) ? result : result.data;
+      const foreignBranches = found.filter((branch) => branch.repo_id !== repo.repo_id);
+      if (foreignBranches.length > 0) {
+        throw new Error(
+          `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(s) not belonging to repo ${repo.repo_id}. ` +
+            `Aborting deletion to prevent cross-repo data loss. This is a bug — please report it.`
+        );
+      }
+      return found;
+    };
+    const branches = await findRepoBranches();
 
     console.log(
       `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`
@@ -1236,20 +1237,24 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Only reach here if filesystem cleanup succeeded (or wasn't requested)
     // Now safe to delete from database
 
-    // Delete each branch through the internal metadata-only primitive while the
-    // repository's tenant transaction is still active. It captures the current
-    // ACL audience, deletes the branch, and queues exactly one tombstone for the
-    // OUTER commit. Any branch or repository failure aborts the transaction, so
-    // queued removals are discarded and the repository FK cascade is never used
-    // as a silent fallback. The repo deletion itself is already authorized;
-    // individual branch permission hooks would incorrectly block full cleanup.
-    for (const branch of branches) {
-      await branchesService.removeMetadataWithRealtime(branch.branch_id, params);
-      console.log(`🗑️  Deleted branch from database: ${branch.name}`);
-    }
+    const tenantId =
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+    return runWithTenantDatabaseTransaction(this.db, tenantId, async () => {
+      // Re-read under the native metadata transaction so a branch added while
+      // filesystem orchestration was in flight cannot disappear through the
+      // repository FK cascade without its own tombstone.
+      const metadataBranches = await findRepoBranches();
+      for (const branch of metadataBranches) {
+        // The repo deletion itself is already authorized; individual branch
+        // permission hooks would incorrectly block full repository cleanup.
+        await branchesService.removeMetadataWithRealtime(branch.branch_id, params);
+        console.log(`🗑️  Deleted branch from database: ${branch.name}`);
+      }
 
-    // Finally, delete repository from database
-    return super.remove(id, params) as Promise<Repo>;
+      // The native transaction covers every branch row plus the repository.
+      // Tombstones queued above drain once, only after this final delete commits.
+      return super.remove(id, params) as Promise<Repo>;
+    });
   }
 }
 

@@ -23,7 +23,7 @@
  *   in `agorHydration.ts`.
  */
 
-import type { TenantAgenticToolName, TenantAgenticToolSettings } from '@agor-live/client';
+import type { Session, TenantAgenticToolName, TenantAgenticToolSettings } from '@agor-live/client';
 import { type Draft, enableMapSet } from 'immer';
 import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
@@ -123,6 +123,32 @@ function evictBranchAndSessions(draft: Draft<AgorState>, branchId: string): Set<
   }
   for (const sessionId of removedSessionIds) draft.sessionById.delete(sessionId);
   return removedSessionIds;
+}
+
+function removeRelationshipsToDeletedSessions(
+  session: Draft<Session>,
+  removedSessionIds: Set<string>
+): void {
+  const relationships = session.remote_relationships;
+  if (!relationships) return;
+  const survives = (relationship: { source_session_id: string; target_session_id: string }) =>
+    !removedSessionIds.has(relationship.source_session_id) &&
+    !removedSessionIds.has(relationship.target_session_id);
+  const asSource = relationships.as_source?.filter(survives);
+  const asTarget = relationships.as_target?.filter(survives);
+  if (
+    asSource?.length === relationships.as_source?.length &&
+    asTarget?.length === relationships.as_target?.length
+  ) {
+    return;
+  }
+  session.remote_relationships =
+    (asSource?.length ?? 0) > 0 || (asTarget?.length ?? 0) > 0
+      ? {
+          ...(asSource && asSource.length > 0 ? { as_source: asSource } : {}),
+          ...(asTarget && asTarget.length > 0 ? { as_target: asTarget } : {}),
+        }
+      : undefined;
 }
 
 /** Initial meta values — identical to `useAgorData`'s `useState` defaults. */
@@ -276,6 +302,35 @@ export const agorStore = createStore<AgorState>()(
         // Cascaded session relationship rows do not emit child service events.
         for (const sessionId of removedSessionIds) {
           draft.sessionMcpServerIds.delete(sessionId);
+        }
+
+        // Cross-branch remote-create relationships are also cascaded by the
+        // database without child service events. A target session can appear as
+        // a surrogate in another branch bucket, so remove deleted IDs from every
+        // bucket and strip the now-deleted relationship from surviving sessions.
+        for (const session of draft.sessionById.values()) {
+          removeRelationshipsToDeletedSessions(session, removedSessionIds);
+        }
+        for (const [bucketBranchId, sessions] of draft.sessionsByBranch) {
+          const remaining = sessions.filter((session) => {
+            if (removedSessionIds.has(session.session_id)) return false;
+            const surrogate = session.remote_surrogate;
+            return !(
+              surrogate &&
+              (removedSessionIds.has(surrogate.source_session_id) ||
+                removedSessionIds.has(surrogate.relationship.target_session_id))
+            );
+          });
+          for (const session of remaining) {
+            removeRelationshipsToDeletedSessions(session, removedSessionIds);
+          }
+          if (remaining.length !== sessions.length) {
+            if (remaining.length > 0) {
+              draft.sessionsByBranch.set(bucketBranchId, remaining);
+            } else {
+              draft.sessionsByBranch.delete(bucketBranchId);
+            }
+          }
         }
 
         for (const [commentId, comment] of draft.commentById) {

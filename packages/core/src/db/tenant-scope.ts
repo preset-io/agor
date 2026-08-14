@@ -29,7 +29,7 @@ import type {
   TenantScopeAwareDatabase,
   TenantScopedDatabase,
 } from './client';
-import { isPostgresDatabase } from './database-wrapper';
+import { isPostgresDatabase, runDatabaseTransaction } from './database-wrapper';
 
 const tenantScopedProxyTargets = new WeakMap<object, RawDatabase | Database>();
 const tenantScopedProxyOptions = new WeakMap<object, TenantScopedDatabaseProxyOptions>();
@@ -124,8 +124,11 @@ export async function runWithTenantDatabaseScope<T>(
       `Cannot enter tenant database scope ${tenantId} from active tenant context ${operationTenantId}`
     );
   }
-  const effectiveTenantId = tenantId ?? operationTenantId;
   const existingScope = tenantDatabaseScope.getStore();
+  const effectiveTenantId =
+    tenantId ??
+    operationTenantId ??
+    (existingScope?.kind === 'tenant' ? existingScope.tenantId : undefined);
   if (existingScope) {
     if (existingScope.kind === 'system') {
       if (effectiveTenantId) {
@@ -157,6 +160,7 @@ export async function runWithTenantDatabaseScope<T>(
         db: baseDb,
         kind: 'tenant',
         tenantId: effectiveTenantId,
+        transactionActive: false,
         postCommitCallbacks,
         afterCommitCallbacks,
       },
@@ -177,12 +181,96 @@ export async function runWithTenantDatabaseScope<T>(
         db: scopedDb,
         kind: 'tenant',
         tenantId: effectiveTenantId,
+        transactionActive: true,
         postCommitCallbacks,
         afterCommitCallbacks,
       },
       () => work(scopedDb as TenantScopedDatabase)
     );
   });
+  await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
+  await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
+  return result;
+}
+
+/**
+ * Run one short tenant-owned metadata unit in a native database transaction on
+ * both supported dialects.
+ *
+ * Normal SQLite request scopes intentionally carry identity only, because a
+ * whole Feathers request can include slow network/process work. Callers use
+ * this narrower primitive for metadata phases that must commit atomically. If
+ * a PostgreSQL request already owns a transaction, the work joins it. Queued
+ * realtime/deferred callbacks drain only after the native transaction commits.
+ */
+export async function runWithTenantDatabaseTransaction<T>(
+  db: TenantScopeAwareDatabase | RawDatabase | Database,
+  tenantId: TenantID | string | undefined,
+  work: (db: TenantScopedDatabase) => Promise<T>
+): Promise<T> {
+  const operationTenantId = tenantContextScope.getStore()?.tenantId;
+  if (tenantId && operationTenantId && tenantId !== operationTenantId) {
+    throw new Error(
+      `Cannot enter tenant database transaction ${tenantId} from active tenant context ${operationTenantId}`
+    );
+  }
+  const existingScope = tenantDatabaseScope.getStore();
+  const effectiveTenantId =
+    tenantId ??
+    operationTenantId ??
+    (existingScope?.kind === 'tenant' ? existingScope.tenantId : undefined);
+  if (existingScope?.kind === 'system') {
+    if (effectiveTenantId) {
+      throw new Error(
+        `Cannot enter tenant transaction ${effectiveTenantId} from active system database scope (${existingScope.systemReason})`
+      );
+    }
+    throw new Error('Cannot enter a tenant transaction from an active system database scope');
+  }
+  if (
+    existingScope?.kind === 'tenant' &&
+    effectiveTenantId &&
+    existingScope.tenantId &&
+    effectiveTenantId !== existingScope.tenantId
+  ) {
+    throw new Error(
+      `Cannot enter tenant transaction ${effectiveTenantId} from active tenant scope ${existingScope.tenantId}`
+    );
+  }
+  if (existingScope?.kind === 'tenant' && existingScope.transactionActive) {
+    return work(existingScope.db as TenantScopedDatabase);
+  }
+
+  const baseDb = unwrapTenantScopedDatabaseProxy(db);
+  const postCommitCallbacks: Array<() => Promise<void>> = [];
+  const afterCommitCallbacks: Array<() => Promise<void> | void> = [];
+  const execute = () =>
+    runDatabaseTransaction(
+      baseDb,
+      async (tx) => {
+        if (isPostgresDatabase(baseDb) && effectiveTenantId) {
+          await (tx as unknown as { execute(query: unknown): Promise<unknown> }).execute(
+            sql`SELECT set_config('agor.tenant_id', ${effectiveTenantId}, true)`
+          );
+        }
+        return tenantDatabaseScope.run(
+          {
+            db: tx,
+            kind: 'tenant',
+            tenantId: effectiveTenantId,
+            transactionActive: true,
+            postCommitCallbacks,
+            afterCommitCallbacks,
+          },
+          () => work(tx as TenantScopedDatabase)
+        );
+      },
+      { sqliteImmediate: true }
+    );
+
+  // SQLite requests normally have an identity-only DB scope. Temporarily leave
+  // it so the repository proxy targets the new native transaction handle.
+  const result = existingScope ? await runWithoutTenantDatabaseScope(execute) : await execute();
   await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
   await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
   return result;
