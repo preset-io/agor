@@ -17,7 +17,18 @@ vi.mock('@/utils/message', () => ({
   }),
 }));
 
-const oauthButton = (name = 'Start OAuth Flow') => screen.getByRole('button', { name });
+// `getByRole('button', { name })` prices in an accessible-name and visibility
+// pass over the whole form, and jsdom's getComputedStyle runs ~18ms per node
+// against antd's injected stylesheets — ~2.5s per query here, which is what
+// pushed these tests past the 15s timeout on CI. The label IS the accessible
+// name on these buttons, so reach them through their text instead.
+const buttonLabeled = (name: string) => {
+  const button = screen.getByText(name).closest('button');
+  if (!button) throw new Error(`No button labeled "${name}"`);
+  return button;
+};
+
+const oauthButton = (name = 'Start OAuth Flow') => buttonLabeled(name);
 
 describe('MCPServerFormFields OAuth start', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -82,7 +93,7 @@ describe('MCPServerFormFields OAuth start', () => {
     render(<Harness />);
 
     // Testing auth is what reveals the browser-flow button.
-    fireEvent.click(screen.getByRole('button', { name: 'Test Authentication' }));
+    fireEvent.click(buttonLabeled('Test Authentication'));
     await waitFor(() => expect(testOAuth).toHaveBeenCalledTimes(1));
     expect(testOAuth).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -92,7 +103,7 @@ describe('MCPServerFormFields OAuth start', () => {
       })
     );
 
-    await screen.findByRole('button', { name: 'Start OAuth Flow' });
+    await screen.findByText('Start OAuth Flow');
     await waitFor(() => expect(oauthButton()).toBeEnabled());
     fireEvent.click(oauthButton());
     await waitFor(() => expect(startOAuth).toHaveBeenCalledTimes(1));
@@ -103,7 +114,8 @@ describe('MCPServerFormFields OAuth start', () => {
     fireEvent.change(screen.getByLabelText('URL'), {
       target: { value: 'https://b.example/mcp' },
     });
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry OAuth Flow' }));
+    await screen.findByText('Retry OAuth Flow');
+    fireEvent.click(oauthButton('Retry OAuth Flow'));
 
     await waitFor(() => expect(startOAuth).toHaveBeenCalledTimes(2));
     expect(onPrepareOAuthStart).toHaveBeenCalledTimes(2);
@@ -159,10 +171,10 @@ describe('MCPServerFormFields OAuth start', () => {
 
     render(<Harness />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Test Authentication' }));
+    fireEvent.click(buttonLabeled('Test Authentication'));
     await waitFor(() => expect(testOAuth).toHaveBeenCalledTimes(1));
 
-    await screen.findByRole('button', { name: 'Start OAuth Flow' });
+    await screen.findByText('Start OAuth Flow');
     expect(oauthButton()).toBeDisabled();
 
     // A disabled button that explains nothing is what sent people looking for
