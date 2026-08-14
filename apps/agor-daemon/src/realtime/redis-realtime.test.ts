@@ -31,6 +31,23 @@ describe('isRealtimeRelayEnvelope', () => {
     ).toBe(true);
   });
 
+  it('accepts a bounded authorization snapshot only for a branch removal', () => {
+    expect(
+      isRealtimeRelayEnvelope({
+        version: 1,
+        tenantId: 'tenant-a',
+        path: 'branches',
+        event: 'removed',
+        data: { branch_id: 'branch-a' },
+        branchRemovalVisibility: {
+          branchId: 'branch-a',
+          mode: 'explicitUsers',
+          userIds: ['user-a'],
+        },
+      })
+    ).toBe(true);
+  });
+
   it.each([
     null,
     { version: 2, tenantId: 'tenant-a', path: 'boards', event: 'patched', data: {} },
@@ -50,6 +67,30 @@ describe('isRealtimeRelayEnvelope', () => {
       path: 'boards',
       event: 'patched',
       data: 'x'.repeat(512 * 1024 + 1),
+    },
+    {
+      version: 1,
+      tenantId: 'tenant-a',
+      path: 'branches',
+      event: 'patched',
+      data: { branch_id: 'branch-a' },
+      branchRemovalVisibility: {
+        branchId: 'branch-a',
+        mode: 'explicitUsers',
+        userIds: ['user-a'],
+      },
+    },
+    {
+      version: 1,
+      tenantId: 'tenant-a',
+      path: 'branches',
+      event: 'removed',
+      data: { branch_id: 'branch-a' },
+      branchRemovalVisibility: {
+        branchId: 'branch-a',
+        mode: 'explicitUsers',
+        userIds: [42],
+      },
     },
   ])('rejects malformed/unversioned Redis input', (value) => {
     expect(isRealtimeRelayEnvelope(value)).toBe(false);

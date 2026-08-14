@@ -164,7 +164,10 @@ import {
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
 } from './utils/realtime-access-cache.js';
-import { configureRealtimePublish } from './utils/realtime-publish.js';
+import {
+  configureRealtimePublish,
+  setBranchRemovalRealtimeVisibility,
+} from './utils/realtime-publish.js';
 import {
   ensureCurrentScheduleLoaded,
   ensureScheduleRunsAsCaller,
@@ -830,6 +833,29 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const branchId =
       (context.result as { branch_id?: unknown } | undefined)?.branch_id ?? context.id;
     await invalidateRealtimeBranchAccess(branchId);
+    return context;
+  };
+
+  const captureBranchRemovalRealtimeVisibility = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    const loadedBranch = (context.params as AuthenticatedParams & { branch?: Branch }).branch;
+    const branch =
+      loadedBranch ??
+      (typeof context.id === 'string' ? await branchRepository.findById(context.id) : null);
+    if (!branch) {
+      throw new NotFound(`Branch not found: ${String(context.id)}`);
+    }
+
+    // This fact must reflect the same tenant-scoped transaction that is about
+    // to delete the branch. Bypass any older daemon-local cache entry before
+    // the ACL rows disappear with the branch.
+    realtimeAccessCache.invalidateBranch(branch.branch_id);
+    const visibility = await realtimeAccessCache.getBranchVisibility(branch.branch_id);
+    if (!visibility) {
+      throw new NotFound(`Branch not found: ${branch.branch_id}`);
+    }
+    setBranchRemovalRealtimeVisibility(context.params, branch.branch_id, visibility);
     return context;
   };
 
@@ -1557,6 +1583,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ? [
               loadBranch(branchRepository),
               ensureBranchPermission('all', 'delete branches', superadminOpts), // Require 'all' permission to delete
+              captureBranchRemovalRealtimeVisibility,
             ]
           : []),
       ],

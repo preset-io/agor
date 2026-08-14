@@ -6,6 +6,15 @@ import type { Namespace, Server } from 'socket.io';
 export const FEATHERS_RELAY_EVENT = 'agor:feathers-publication:v1';
 export const MAX_REALTIME_RELAY_BYTES = 512 * 1024;
 
+/**
+ * Authorization snapshot for a branch tombstone. Branch and ACL rows are gone
+ * by the time a committed `branches.removed` event is published, so every HA
+ * replica needs the pre-delete visibility fact carried by the existing relay.
+ */
+export type BranchRemovalRealtimeVisibilitySnapshot =
+  | { branchId: string; mode: 'allAuthenticated' }
+  | { branchId: string; mode: 'explicitUsers'; userIds: string[] };
+
 export function redisAdapterKey(keyPrefix: string): string {
   return `${keyPrefix}:socket.io`;
 }
@@ -18,6 +27,7 @@ export interface RealtimeRelayEnvelope {
   method?: string;
   id?: string | number;
   data: unknown;
+  branchRemovalVisibility?: BranchRemovalRealtimeVisibilitySnapshot;
 }
 
 export interface RedisRealtimeHealth {
@@ -237,14 +247,20 @@ export class RedisRealtimeRuntime {
 export function isRealtimeRelayEnvelope(value: unknown): value is RealtimeRelayEnvelope {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const v = value as Record<string, unknown>;
-  let dataIsBoundedJson = false;
+  let envelopeIsBoundedJson = false;
   try {
-    const encoded = JSON.stringify(v.data);
-    dataIsBoundedJson =
+    const encoded = JSON.stringify(v);
+    envelopeIsBoundedJson =
       encoded !== undefined && Buffer.byteLength(encoded, 'utf8') <= MAX_REALTIME_RELAY_BYTES;
   } catch {
-    dataIsBoundedJson = false;
+    envelopeIsBoundedJson = false;
   }
+  const removalVisibility = v.branchRemovalVisibility;
+  const removalVisibilityValid =
+    removalVisibility === undefined ||
+    (v.path === 'branches' &&
+      v.event === 'removed' &&
+      isBranchRemovalRealtimeVisibilitySnapshot(removalVisibility));
   return (
     v.version === 1 &&
     typeof v.tenantId === 'string' &&
@@ -261,6 +277,29 @@ export function isRealtimeRelayEnvelope(value: unknown): value is RealtimeRelayE
       (typeof v.id === 'string' && v.id.length <= 256) ||
       (typeof v.id === 'number' && Number.isFinite(v.id))) &&
     'data' in v &&
-    dataIsBoundedJson
+    envelopeIsBoundedJson &&
+    removalVisibilityValid
+  );
+}
+
+export function isBranchRemovalRealtimeVisibilitySnapshot(
+  value: unknown
+): value is BranchRemovalRealtimeVisibilitySnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  if (
+    typeof snapshot.branchId !== 'string' ||
+    snapshot.branchId.length === 0 ||
+    snapshot.branchId.length > 256
+  ) {
+    return false;
+  }
+  if (snapshot.mode === 'allAuthenticated') return snapshot.userIds === undefined;
+  return (
+    snapshot.mode === 'explicitUsers' &&
+    Array.isArray(snapshot.userIds) &&
+    snapshot.userIds.every(
+      (userId) => typeof userId === 'string' && userId.length > 0 && userId.length <= 256
+    )
   );
 }

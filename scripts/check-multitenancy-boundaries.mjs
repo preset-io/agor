@@ -49,6 +49,10 @@ const checks = [
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,
       'apps/agor-daemon/src/services/repos.ts': 1,
+      // Socket/browser integration harness explicitly joins one authenticated
+      // connection to its verified tenant before asserting hard-delete
+      // publication containment.
+      'apps/agor-daemon/src/utils/branch-removal-realtime.integration.test.ts': 2,
       // The tenant-aware realtime facade: tenant/session channel join, the
       // publish handler, session-stream and tenant+task executor-control joins,
       // the existence-gated room lookup (existingChannel — used by publish +

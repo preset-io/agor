@@ -18,6 +18,7 @@
  */
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { getRevision } from '../store/agorHydration';
 import { agorStore } from '../store/agorStore';
 // Session `patched`/`updated` writes are coalesced to one flush per frame (see
 // realtimeBatch); flush synchronously in tests that assert the post-patch store.
@@ -339,7 +340,12 @@ describe('useAgorData — socket-event bailouts', () => {
   it('evicts an archived branch and its sessions on branches.patched', async () => {
     const branch = makeBranch();
     const session = makeSession();
-    const { client, emit } = makeMockClient({ branches: [branch], sessions: [session] });
+    const boardObject = makeBoardObject({ object_id: 'bo-1', branch_id: branch.branch_id });
+    const { client, emit } = makeMockClient({
+      branches: [branch],
+      sessions: [session],
+      'board-objects': [boardObject],
+    });
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
@@ -351,6 +357,10 @@ describe('useAgorData — socket-event bailouts', () => {
     expect(agorStore.getState().branchById.has('b-1')).toBe(false);
     expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
     expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);
+    // Archive preserves placement in the database for unarchive, so unlike a
+    // hard delete it must stay in the client indexes too.
+    expect(agorStore.getState().boardObjectById.get('bo-1')).toEqual(boardObject);
+    expect(agorStore.getState().boardObjectByBranchId.get('b-1')).toEqual(boardObject);
   });
 
   it('drops a duplicate `sessions.created` for an existing id', async () => {
@@ -421,19 +431,85 @@ describe('useAgorData — socket-event bailouts', () => {
   it('evicts a branch and its sessions on `branches.removed`', async () => {
     const session = makeSession({ session_id: 's-1', branch_id: 'b-1' });
     const branch = makeBranch({ branch_id: 'b-1' });
-    const { client, emit } = makeMockClient({ sessions: [session], branches: [branch] });
+    const boardObject = makeBoardObject({ object_id: 'bo-1', branch_id: 'b-1' });
+    const duplicateBoardObject = makeBoardObject({
+      object_id: 'bo-duplicate',
+      board_id: 'board-2',
+      branch_id: 'b-1',
+    });
+    const { client, emit } = makeMockClient({
+      sessions: [session],
+      branches: [branch],
+      'board-objects': [boardObject, duplicateBoardObject],
+    });
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
     expect(agorStore.getState().branchById.has('b-1')).toBe(true);
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
     expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(true);
+    expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(true);
+    expect(agorStore.getState().boardObjectByBranchId.has('b-1')).toBe(true);
+    expect(
+      agorStore
+        .getState()
+        .boardObjectsByBoardId.get('board-1')
+        ?.some((object) => object.object_id === 'bo-1')
+    ).toBe(true);
+    const boardObjectsRevision = getRevision('boardObjects');
 
     act(() => emit('branches', 'removed', branch));
 
     expect(agorStore.getState().branchById.has('b-1')).toBe(false);
     expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
     expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);
+    expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(false);
+    expect(agorStore.getState().boardObjectById.has('bo-duplicate')).toBe(false);
+    expect(agorStore.getState().boardObjectByBranchId.has('b-1')).toBe(false);
+    expect(
+      agorStore
+        .getState()
+        .boardObjectsByBoardId.get('board-1')
+        ?.some((object) => object.object_id === 'bo-1') ?? false
+    ).toBe(false);
+    expect(
+      agorStore
+        .getState()
+        .boardObjectsByBoardId.get('board-2')
+        ?.some((object) => object.branch_id === 'b-1') ?? false
+    ).toBe(false);
+    expect(getRevision('boardObjects')).toBe(boardObjectsRevision + 1);
+  });
+
+  it('keeps a missed hard delete removed after reconnect refetch', async () => {
+    const session = makeSession({ session_id: 's-1', branch_id: 'b-1' });
+    const branch = makeBranch({ branch_id: 'b-1' });
+    const boardObject = makeBoardObject({ object_id: 'bo-1', branch_id: 'b-1' });
+    const seed: Record<string, unknown[]> = {
+      'sessions:find': [session],
+      'sessions:findAll': [session],
+      'branches:findAll': [branch],
+      'board-objects:findAll': [boardObject],
+    };
+    const { client, emitIo } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    expect(agorStore.getState().branchById.has('b-1')).toBe(true);
+    expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(true);
+
+    seed['sessions:find'] = [];
+    seed['sessions:findAll'] = [];
+    seed['branches:findAll'] = [];
+    seed['board-objects:findAll'] = [];
+    act(() => emitIo('connect'));
+
+    await waitFor(() => {
+      expect(agorStore.getState().branchById.has('b-1')).toBe(false);
+      expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
+      expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(false);
+      expect(agorStore.getState().boardObjectByBranchId.has('b-1')).toBe(false);
+    });
   });
 
   it('dispatches `agor:artifact-patched` when the artifact actually changes', async () => {

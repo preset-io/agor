@@ -10,8 +10,8 @@
  * Background hydration: each handler bumps the matching per-collection revision
  * counter (`bumpRevision`, from `agorHydration`) so an in-flight background
  * hydration discards its snapshot rather than clobbering this live write —
- * INCLUDING the branch-eviction cascade, which mutates the sessions maps and so
- * bumps `sessions` too.
+ * INCLUDING the branch-eviction cascade, which mutates sessions and, for a
+ * hard delete, board-object maps, and so bumps the matching revisions.
  *
  * IMMER breadth/depth rule applied here:
  *  - HOT single-map `*:patched` writes → RAW reducer via `setMap`
@@ -56,8 +56,10 @@ import { type AgorState, agorStore } from './agorStore';
 // shapes) carry through to every callback below.
 const setMap: AgorState['setMap'] = (key, value) => agorStore.getState().setMap(key, value);
 const applyMaps: AgorState['applyMaps'] = (updater) => agorStore.getState().applyMaps(updater);
-const evictBranchAndSessions: AgorState['evictBranchAndSessions'] = (branchId) =>
-  agorStore.getState().evictBranchAndSessions(branchId);
+const evictBranchAndSessions: AgorState['evictBranchAndSessions'] = (
+  branchId,
+  removeBoardObjects
+) => agorStore.getState().evictBranchAndSessions(branchId, removeBoardObjects);
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 export function sessionCreated(session: Session) {
@@ -206,10 +208,7 @@ export function branchCreated(branch: Branch) {
 export function branchPatched(branch: Branch) {
   bumpRevision('branches');
   if (branch.archived) {
-    // The eviction cascade mutates BOTH the branches map (bumped above) and the
-    // sessions maps, so bump the sessions revision too — otherwise a sessions
-    // hydration in flight could resurrect the evicted sessions with a
-    // pre-eviction snapshot.
+    // Archive preserves the board-object placement for a future unarchive.
     bumpRevision('sessions');
     evictBranchAndSessions(branch.branch_id);
     return;
@@ -220,9 +219,10 @@ export function branchPatched(branch: Branch) {
 export function branchRemoved(branch: Branch) {
   bumpRevision('branches');
   // Mirror the archive path: a hard delete should also evict any sessions we
-  // still track on that branch (and bump `sessions` for the cascade).
+  // still track on that branch and its FK-cascaded board placement.
   bumpRevision('sessions');
-  evictBranchAndSessions(branch.branch_id);
+  bumpRevision('boardObjects');
+  evictBranchAndSessions(branch.branch_id, true);
   // Collapse exceptions survive archive/move but not a hard delete.
   removeCollapsedBranchNode(branch.branch_id);
 }

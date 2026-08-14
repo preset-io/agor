@@ -168,7 +168,11 @@ function createServiceHarness() {
 
   // The `branches` self-reference is used by updateEnvironment to manually
   // emit the `patched` event (this.patch bypasses Feathers auto-dispatch).
-  const branchesService = { find: vi.fn(async () => []), emit: vi.fn() };
+  const branchesService = {
+    find: vi.fn(async () => []),
+    remove: vi.fn(async () => ({})),
+    emit: vi.fn(),
+  };
 
   const app = {
     get: () => ({}),
@@ -1248,6 +1252,33 @@ describe('BranchesService.archiveOrDelete', () => {
         }),
       })
     );
+  });
+
+  it('routes permanent metadata deletion through the hooked Feathers remove method', async () => {
+    const { service, branchesService } = createServiceHarness();
+    const branchId = 'wt-delete-op' as BranchID;
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      name: 'WT Delete Op',
+      path: '/tmp/wt-delete-op',
+      archived: false,
+      environment_instance: { status: 'stopped' },
+    } as never);
+    const rawRemove = vi.spyOn(service, 'remove');
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'delete', filesystemAction: 'preserved' },
+      params
+    );
+
+    expect(branchesService.remove).toHaveBeenCalledOnce();
+    expect(branchesService.remove).toHaveBeenCalledWith(branchId, params);
+    expect(rawRemove).not.toHaveBeenCalled();
   });
 });
 

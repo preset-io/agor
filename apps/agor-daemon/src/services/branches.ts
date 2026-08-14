@@ -1540,7 +1540,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
       console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
 
-      await this.withTenantDatabase(params, () => this.remove(id, params));
+      // Re-enter through the Feathers service proxy. Calling `this.remove()`
+      // from this custom method bypasses the standard remove hooks and event
+      // hook, which means UI/MCP archive-or-delete callers never get the same
+      // post-commit tombstone as direct REST/socket deletes. Do not wrap this
+      // proxy call in withTenantDatabase: the registered tenant around-hook
+      // must own the transaction so Feathers publishes only after it commits.
+      await this.app.service('branches').remove(id, params);
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
       return { deleted: true, branch_id: id };

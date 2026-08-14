@@ -108,13 +108,12 @@ interface AgorActions {
   applyMaps: (updater: (prev: DataMaps) => DataMaps) => void;
   /**
    * CASCADE (immer): drop a branch from `branchById` and prune every session
-   * that lived on it from `sessionById` / `sessionsByBranch`. Shared between the
-   * `archived: true` patch path and the hard-delete `removed` path. Expressed
-   * as a single immer draft (breadth=immer): structural sharing leaves
-   * untouched maps reference-stable and a no-op (unknown branch) produces no new
-   * state, matching the old three-`setState` version.
+   * that lived on it. A hard delete also removes its FK-cascaded board
+   * placement; archive keeps that placement so unarchive can restore in-place.
+   * Expressed as a single immer draft (breadth=immer): structural sharing
+   * leaves untouched maps reference-stable.
    */
-  evictBranchAndSessions: (branchId: string) => void;
+  evictBranchAndSessions: (branchId: string, removeBoardObjects?: boolean) => void;
 }
 
 export type AgorState = DataMaps & AgorMeta & AgorActions;
@@ -228,7 +227,7 @@ export const agorStore = createStore<AgorState>()(
       set(changed as Partial<AgorState>);
     },
 
-    evictBranchAndSessions: (branchId) =>
+    evictBranchAndSessions: (branchId, removeBoardObjects = false) =>
       set((draft) => {
         if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
         if (draft.sessionsByBranch.has(branchId)) draft.sessionsByBranch.delete(branchId);
@@ -237,6 +236,38 @@ export const agorStore = createStore<AgorState>()(
           if (session.branch_id === branchId) orphanIds.push(sessionId);
         }
         for (const sessionId of orphanIds) draft.sessionById.delete(sessionId);
+
+        if (!removeBoardObjects) return;
+
+        // The branch row owns its branch-type board_object via an FK cascade,
+        // so the database cannot emit a separate board-objects.removed event.
+        // Mirror that cascade in the normalized client indexes when the branch
+        // tombstone arrives.
+        const removedObjectIds = new Set<string>();
+        for (const [objectId, boardObject] of draft.boardObjectById) {
+          if (boardObject.branch_id === branchId) {
+            removedObjectIds.add(objectId);
+            draft.boardObjectById.delete(objectId);
+          }
+        }
+        const indexedBoardObject = draft.boardObjectByBranchId.get(branchId);
+        if (indexedBoardObject) removedObjectIds.add(indexedBoardObject.object_id);
+        if (draft.boardObjectByBranchId.has(branchId)) {
+          draft.boardObjectByBranchId.delete(branchId);
+        }
+        for (const [boardId, boardObjects] of draft.boardObjectsByBoardId) {
+          const remaining = boardObjects.filter(
+            (candidate) =>
+              candidate.branch_id !== branchId && !removedObjectIds.has(candidate.object_id)
+          );
+          if (remaining.length !== boardObjects.length) {
+            if (remaining.length > 0) {
+              draft.boardObjectsByBoardId.set(boardId, remaining);
+            } else {
+              draft.boardObjectsByBoardId.delete(boardId);
+            }
+          }
+        }
       }),
   }))
 );

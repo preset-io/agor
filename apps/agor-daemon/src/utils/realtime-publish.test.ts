@@ -23,6 +23,7 @@ import {
   leaveAllSessionStreamChannels,
   markConnectionSessionStreamsAware,
   REDIS_FEATHERS_DENIED_PATHS,
+  setBranchRemovalRealtimeVisibility,
 } from './realtime-publish';
 
 class FakeChannel {
@@ -331,6 +332,86 @@ describe('HA Feathers publication relay', () => {
     const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
     expect(channel.connections).toEqual([tenantAUser]);
     expect(channel.connections).not.toContain(tenantBUser);
+  });
+
+  it('relays a branch tombstone snapshot and re-applies tenant/RBAC containment on the receiving replica', async () => {
+    const allowed = { user: user('allowed') };
+    const denied = { user: user('denied') };
+    const otherTenant = { user: user('other-tenant') };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: vi.fn((handler) => {
+        remoteHandler = handler;
+      }),
+    };
+    const app = makeApp(
+      [allowed, denied, otherTenant],
+      {},
+      {
+        'tenant:tenant-a': [allowed, denied],
+        'tenant:tenant-b': [otherTenant],
+      }
+    );
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async () => null),
+      findExplicitViewUserIds: vi.fn(async () => []),
+    } as unknown as RealtimeAccessBranchRepository;
+    const params = {
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as any;
+    setBranchRemovalRealtimeVisibility(params, 'b1' as never, {
+      mode: 'explicitUsers',
+      userIds: new Set(['allowed' as UserID]),
+    });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: true,
+      branchRepository,
+      sessionsRepository: {
+        findBranchIdBySessionId: vi.fn(async () => null),
+        findCreatedByBySessionId: vi.fn(async () => null),
+      } as unknown as RealtimeAccessSessionRepository,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: relay,
+    });
+
+    const local = await app.runPublish(branch('b1', 'none'), {
+      path: 'branches',
+      event: 'removed',
+      method: 'remove',
+      id: 'b1',
+      params,
+    });
+
+    expect(local.connections).toEqual([allowed]);
+    expect(relay.relay).toHaveBeenCalledOnce();
+    const envelope = relay.relay.mock.calls[0]?.[0];
+    expect(envelope).toMatchObject({
+      version: 1,
+      tenantId: 'tenant-a',
+      path: 'branches',
+      event: 'removed',
+      branchRemovalVisibility: {
+        branchId: 'b1',
+        mode: 'explicitUsers',
+        userIds: ['allowed'],
+      },
+    });
+
+    app.emit.mockClear();
+    await remoteHandler?.(envelope);
+
+    expect(app.emit).toHaveBeenCalledOnce();
+    const remote = app.emit.mock.calls[0]?.[2] as FakeChannel;
+    expect(remote.connections).toEqual([allowed]);
+    expect(remote.connections).not.toContain(denied);
+    expect(remote.connections).not.toContain(otherTenant);
+    expect(branchRepository.findRealtimeVisibilityBranch).not.toHaveBeenCalled();
   });
 
   it('never places authentication results on the shared relay', async () => {
@@ -1161,6 +1242,83 @@ describe('configureRealtimePublish', () => {
 
     expect(channel.connections).toEqual([allowedConnection]);
     expect(r.branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledWith('b1');
+  });
+
+  it('delivers a removed branch from its pre-delete visibility snapshot after the row is gone', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const otherTenant = user('other-tenant');
+    const allowedConnection = { user: allowed };
+    const deniedConnection = { user: denied };
+    const app = makeApp(
+      [allowedConnection, deniedConnection, { user: otherTenant }],
+      {},
+      {
+        authenticated: [allowedConnection, deniedConnection, { user: otherTenant }],
+        'tenant:tenant-a': [allowedConnection, deniedConnection],
+      }
+    );
+    const deletedBranch = branch('b1', 'none');
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async () => null),
+      findExplicitViewUserIds: vi.fn(async () => []),
+    } as unknown as RealtimeAccessBranchRepository;
+    const sessionsRepository = {
+      findBranchIdBySessionId: vi.fn(async () => null),
+      findCreatedByBySessionId: vi.fn(async () => null),
+    } as unknown as RealtimeAccessSessionRepository;
+    configureRealtimePublish({
+      app,
+      db: scopeOnlyDb,
+      branchRbacEnabled: true,
+      branchRepository,
+      sessionsRepository,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+    });
+
+    const channel = await app.runPublish(deletedBranch, {
+      path: 'branches',
+      method: 'remove',
+      event: 'removed',
+      id: 'b1',
+      params: {
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        _agorRealtimeBranchRemovalVisibility: {
+          branchId: 'b1',
+          mode: 'explicitUsers',
+          userIds: ['allowed'],
+        },
+      },
+    });
+
+    expect(channel.connections).toEqual([allowedConnection]);
+    expect(branchRepository.findRealtimeVisibilityBranch).not.toHaveBeenCalled();
+  });
+
+  it('fails a branch removal closed when its server-captured visibility snapshot is missing', async () => {
+    const allowed = { user: user('allowed') };
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([allowed, service]);
+    const r = repos({
+      branch: branch('b1', 'view'),
+      permissions: { allowed: 'view' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(branch('b1', 'view'), {
+      path: 'branches',
+      method: 'remove',
+      event: 'removed',
+      id: 'b1',
+      params: {},
+    });
+
+    expect(channel.connections).toEqual([service]);
+    expect(r.branchRepository.findRealtimeVisibilityBranch).not.toHaveBeenCalled();
   });
 
   it('scopes nested branch permission service events through the route branch id', async () => {
