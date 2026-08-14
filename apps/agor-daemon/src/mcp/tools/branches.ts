@@ -5,6 +5,7 @@ import type {
   Branch,
   BranchFilesystemAction,
   BranchFilesystemStatus,
+  BranchHardDeleteFilesystemAction,
   BranchID,
   BranchStorageMode,
   Repo,
@@ -16,6 +17,7 @@ import type {
 import {
   BRANCH_FILESYSTEM_ACTIONS,
   BRANCH_FILESYSTEM_STATUSES,
+  BRANCH_HARD_DELETE_FILESYSTEM_ACTIONS,
   BRANCH_PERMISSION_LEVELS,
   BRANCH_STORAGE_MODES,
   getTeammateConfig,
@@ -73,12 +75,6 @@ const CLEANUP_CANDIDATE_DEFAULT_FILESYSTEM_STATUSES = [
 ] as const satisfies readonly BranchFilesystemStatus[];
 const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = BRANCH_FILESYSTEM_STATUSES;
 const CLEANUP_CANDIDATE_STORAGE_MODES = BRANCH_STORAGE_MODES;
-const HARD_DELETE_FILESYSTEM_ACTIONS = [
-  'preserved',
-  'deleted',
-] as const satisfies readonly BranchFilesystemAction[];
-type HardDeleteFilesystemAction = (typeof HARD_DELETE_FILESYSTEM_ACTIONS)[number];
-
 function containsTeammateKnowledgeConfigMutation(customContext: unknown): boolean {
   if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
     return false;
@@ -1524,7 +1520,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to delete (UUIDv7 or short ID)'),
         filesystemAction: z
-          .enum(HARD_DELETE_FILESYSTEM_ACTIONS)
+          .enum(BRANCH_HARD_DELETE_FILESYSTEM_ACTIONS)
           .optional()
           .describe(
             'What to do with the branch files on disk. "preserved" leaves files untouched, "deleted" removes the entire branch directory. Default: "deleted".'
@@ -1534,7 +1530,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       const filesystemAction =
-        (args.filesystemAction as HardDeleteFilesystemAction | undefined) ?? 'deleted';
+        (args.filesystemAction as BranchHardDeleteFilesystemAction | undefined) ?? 'deleted';
       await ctx.app
         .service('/branches/:id/archive-or-delete')
         .create(

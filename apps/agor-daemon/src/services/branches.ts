@@ -21,6 +21,7 @@ import {
 } from '@agor/core/config';
 import {
   BoardRepository,
+  BranchFilesystemStatusConflictError,
   BranchRepository,
   type BranchWithZoneAndSessions,
   getCurrentTenantId,
@@ -118,6 +119,14 @@ export type BranchParams = QueryParams<{
   };
 
 type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
+
+// Symbols cannot cross a Feathers transport. This keeps the repository CAS
+// precondition available to daemon-owned workflows without adding a
+// client-forgeable query or service argument.
+const BRANCH_PATCH_REJECT_FILESYSTEM_STATUSES = Symbol('branchPatchRejectFilesystemStatuses');
+type InternalBranchPatchParams = BranchParams & {
+  [BRANCH_PATCH_REJECT_FILESYSTEM_STATUSES]?: readonly NonNullable<Branch['filesystem_status']>[];
+};
 
 // The sudo rm helper has its own 10-minute resource bound. Leave a minute for
 // absence verification, the final Feathers patch, and JSON result delivery so
@@ -1256,8 +1265,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
     }
 
-    // Call parent patch
-    const updatedBranch = (await super.patch(id, data, params)) as Branch;
+    // Call parent patch for normal service traffic. Daemon-owned lifecycle
+    // workflows can attach a symbol-only precondition that is checked after
+    // the repository has acquired its PostgreSQL row lock (and inside the
+    // SQLite transaction), closing check-then-update races.
+    const rejectFilesystemStatuses = (params as InternalBranchPatchParams | undefined)?.[
+      BRANCH_PATCH_REJECT_FILESYSTEM_STATUSES
+    ];
+    const updatedBranch = (
+      rejectFilesystemStatuses
+        ? await this.branchRepo.update(id, data, { rejectFilesystemStatuses })
+        : await super.patch(id, data, params)
+    ) as Branch;
     await this.maintainPrimaryTeammateAfterPatch(currentBranch, updatedBranch, params);
 
     // Handle board_objects changes if board_id changed
@@ -1779,9 +1798,23 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       patchData.board_id = options?.boardId;
     }
 
-    const unarchivedBranch = await this.withTenantDatabase(params, () =>
-      this.patch(id, patchData, { ...params, provider: undefined })
-    );
+    let unarchivedBranch: BranchWithZoneAndSessions;
+    try {
+      unarchivedBranch = await this.withTenantDatabase(params, () =>
+        this.patch(id, patchData, {
+          ...params,
+          provider: undefined,
+          [BRANCH_PATCH_REJECT_FILESYSTEM_STATUSES]: ['deleting'],
+        } as InternalBranchPatchParams)
+      );
+    } catch (error) {
+      if (error instanceof BranchFilesystemStatusConflictError) {
+        throw new Conflict(
+          'Branch filesystem deletion is still in progress; retry unarchive later'
+        );
+      }
+      throw error;
+    }
     emitServiceEvent(this.app, {
       path: 'branches',
       event: 'patched',

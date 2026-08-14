@@ -20,6 +20,7 @@
 import type {
   AgorClient,
   Branch,
+  BranchClientPatch,
   BranchGroupGrantWithGroup,
   BranchPermissionLevel,
   EffectiveBranchAccess,
@@ -32,7 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /** Patchable subset of `Branch` writable from the modal form. */
 export type BranchUpdate = Omit<
-  Partial<Branch>,
+  BranchClientPatch,
   'issue_url' | 'pull_request_url' | 'notes' | 'board_id'
 > & {
   board_id?: string | null | undefined;

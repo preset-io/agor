@@ -770,6 +770,38 @@ describe('BranchRepository.findByRepoAndName', () => {
 // ============================================================================
 
 describe('BranchRepository.update', () => {
+  dbTest(
+    'atomically rejects a forbidden filesystem status before unarchive writes',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const repo = await repoRepo.create(createRepoData());
+      const branch = await branchRepo.create({
+        ...createBranchData({ repo_id: repo.repo_id }),
+        archived: true,
+        archived_at: '2026-08-14T00:00:00.000Z',
+        filesystem_status: 'deleting',
+      });
+
+      await expect(
+        branchRepo.update(
+          branch.branch_id,
+          { archived: false, filesystem_status: undefined },
+          { rejectFilesystemStatuses: ['deleting'] }
+        )
+      ).rejects.toMatchObject({
+        name: 'BranchFilesystemStatusConflictError',
+        branchId: branch.branch_id,
+        currentStatus: 'deleting',
+      });
+
+      await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+        archived: true,
+        filesystem_status: 'deleting',
+      });
+    }
+  );
+
   dbTest('can preserve updated_at for observation-only bookkeeping', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);

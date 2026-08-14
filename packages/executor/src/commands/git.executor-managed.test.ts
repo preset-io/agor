@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   parseAgorYml: vi.fn(),
   writeAgorYml: vi.fn(),
   deleteBranchDirectory: vi.fn(),
+  listGitWorktrees: vi.fn(),
   removeGitWorktree: vi.fn(),
   deleteRepoDirectory: vi.fn(),
   cloneRepo: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock('../git/index.js', async () => {
     cloneRepo: mocks.cloneRepo,
     createBranchAsClone: mocks.createBranchAsClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
+    listGitWorktrees: mocks.listGitWorktrees,
     removeGitWorktree: mocks.removeGitWorktree,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
     isValidGitRepo: mocks.isValidGitRepo,
@@ -196,6 +198,7 @@ beforeEach(() => {
   });
   mocks.createBranchAsClone.mockResolvedValue({ path: '/trusted/branch', ref: 'main' });
   mocks.removeGitWorktree.mockResolvedValue(undefined);
+  mocks.listGitWorktrees.mockResolvedValue([]);
   mocks.isValidGitRepo.mockResolvedValue(true);
   mocks.getDefaultBranch.mockResolvedValue('main');
   mocks.getRemoteUrl.mockResolvedValue('https://user:secret@example.com/org/repo.git');
@@ -613,8 +616,75 @@ describe('managed executor git/fs commands', () => {
     }
   });
 
-  it('uses privileged exact-root deletion when git worktree removal hits an ACL boundary', async () => {
-    const tempRoot = await mkdtemp(join(tmpdir(), 'agor-worktree-delete-'));
+  it.each([
+    'EACCES: permission denied, rmdir node_modules/native',
+    "error: failed to delete '/safe/worktrees/repo/feature': Directory not empty",
+  ])(
+    'uses privileged exact-root deletion when git worktree removal leaves ACL residue: %s',
+    async (removalError) => {
+      const tempRoot = await mkdtemp(join(tmpdir(), 'agor-worktree-delete-'));
+      const branchesRoot = join(tempRoot, 'worktrees');
+      const branchPath = join(branchesRoot, 'repo', 'feature');
+      const repoPath = join(tempRoot, 'repos', 'repo');
+      const patchedBranches: Array<Record<string, unknown>> = [];
+      await mkdir(branchPath, { recursive: true });
+      await mkdir(repoPath, { recursive: true });
+      await writeFile(
+        join(branchPath, '.git'),
+        `gitdir: ${join(repoPath, '.git', 'worktrees', 'feature')}\n`
+      );
+      createClient({
+        repo: { repo_id: repoId, local_path: repoPath },
+        branch: {
+          branch_id: branchId,
+          repo_id: repoId,
+          path: branchPath,
+          storage_mode: 'worktree',
+        },
+        patchedBranches,
+      });
+      mocks.removeGitWorktree
+        .mockRejectedValueOnce(new Error(removalError))
+        .mockResolvedValueOnce(undefined);
+      mocks.listGitWorktrees.mockResolvedValueOnce([
+        { path: branchPath, name: 'feature', sha: 'abc', ref: 'feature', detached: false },
+      ]);
+      mocks.deleteBranchDirectory.mockImplementationOnce(async () => {
+        await rm(branchPath, { recursive: true, force: true });
+      });
+
+      try {
+        const result = await handleGitBranchRemove(
+          {
+            command: 'git.branch.remove',
+            sessionToken: 'jwt',
+            params: {
+              branchId,
+              branchPath,
+              branchesRoot,
+              storageMode: 'worktree',
+              privilegedFilesystemDelete: true,
+              deleteDbRecord: false,
+            },
+          },
+          {}
+        );
+
+        expect(result.success).toBe(true);
+        expect(mocks.removeGitWorktree).toHaveBeenNthCalledWith(1, repoPath, branchPath);
+        expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot, {
+          privileged: true,
+        });
+        expect(mocks.removeGitWorktree).toHaveBeenNthCalledWith(2, repoPath, branchPath);
+        expect(patchedBranches).toContainEqual({ filesystem_status: 'deleted' });
+      } finally {
+        await rm(tempRoot, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it('accepts a partial worktree removal that already deregistered the exact path', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'agor-worktree-partial-delete-'));
     const branchesRoot = join(tempRoot, 'worktrees');
     const branchPath = join(branchesRoot, 'repo', 'feature');
     const repoPath = join(tempRoot, 'repos', 'repo');
@@ -635,12 +705,13 @@ describe('managed executor git/fs commands', () => {
       },
       patchedBranches,
     });
-    mocks.removeGitWorktree
-      .mockRejectedValueOnce(new Error('EACCES: permission denied, rmdir node_modules/native'))
-      .mockResolvedValueOnce(undefined);
+    mocks.removeGitWorktree.mockRejectedValueOnce(
+      new Error(`error: failed to delete '${branchPath}': Directory not empty`)
+    );
     mocks.deleteBranchDirectory.mockImplementationOnce(async () => {
       await rm(branchPath, { recursive: true, force: true });
     });
+    mocks.listGitWorktrees.mockResolvedValueOnce([]);
 
     try {
       const result = await handleGitBranchRemove(
@@ -660,11 +731,8 @@ describe('managed executor git/fs commands', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(mocks.removeGitWorktree).toHaveBeenNthCalledWith(1, repoPath, branchPath);
-      expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot, {
-        privileged: true,
-      });
-      expect(mocks.removeGitWorktree).toHaveBeenNthCalledWith(2, repoPath, branchPath);
+      expect(mocks.removeGitWorktree).toHaveBeenCalledTimes(1);
+      expect(mocks.listGitWorktrees).toHaveBeenCalledWith(repoPath);
       expect(patchedBranches).toContainEqual({ filesystem_status: 'deleted' });
     } finally {
       await rm(tempRoot, { recursive: true, force: true });

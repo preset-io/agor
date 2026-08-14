@@ -107,7 +107,7 @@ import {
 } from '@agor/core/unix';
 import {
   executorRuntimeScopeGuard,
-  isBranchScopedExecutorRequest,
+  isBranchFilesystemLifecycleExecutorRequest,
   isTaskScopedExecutorRequest,
   requireExecutorRuntimeToken,
 } from './auth/executor-runtime-scope.js';
@@ -391,7 +391,7 @@ export function protectExternalBranchManagedWrites(context: HookContext): HookCo
     fields.includes(field)
   );
   const branchId = String(context.id ?? (context.data as Record<string, unknown>).branch_id ?? '');
-  if (filesystemField && !isBranchScopedExecutorRequest(context, branchId)) {
+  if (filesystemField && !isBranchFilesystemLifecycleExecutorRequest(context, branchId)) {
     throw new BadRequest(
       `Branch field '${filesystemField}' is managed by branch-scoped filesystem lifecycle operations`
     );

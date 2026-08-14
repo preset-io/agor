@@ -20,6 +20,14 @@ export type BranchFilesystemStatus = (typeof BRANCH_FILESYSTEM_STATUSES)[number]
 export const BRANCH_FILESYSTEM_ACTIONS = ['preserved', 'cleaned', 'deleted'] as const;
 export type BranchFilesystemAction = (typeof BRANCH_FILESYSTEM_ACTIONS)[number];
 
+/** Filesystem dispositions that remain meaningful when metadata is permanently deleted. */
+export const BRANCH_HARD_DELETE_FILESYSTEM_ACTIONS = [
+  'preserved',
+  'deleted',
+] as const satisfies readonly BranchFilesystemAction[];
+export type BranchHardDeleteFilesystemAction =
+  (typeof BRANCH_HARD_DELETE_FILESYSTEM_ACTIONS)[number];
+
 /** Metadata dispositions accepted by the archive-or-delete API. */
 export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
 export type BranchMetadataAction = (typeof BRANCH_METADATA_ACTIONS)[number];
@@ -55,6 +63,12 @@ export const BRANCH_FILESYSTEM_LIFECYCLE_FIELDS = [
 ] as const satisfies readonly (keyof Branch)[];
 export type BranchFilesystemLifecycleField = (typeof BRANCH_FILESYSTEM_LIFECYCLE_FIELDS)[number];
 
+/** Fields accepted from ordinary external branch patch callers. */
+export type BranchClientPatch = Omit<
+  Partial<Branch>,
+  BranchFilesystemIdentityField | BranchArchiveLifecycleField | BranchFilesystemLifecycleField
+>;
+
 /** Shared request shape used by UI, REST, Socket, and MCP deletion paths. */
 export type BranchArchiveOrDeleteOptions =
   | {
@@ -64,7 +78,7 @@ export type BranchArchiveOrDeleteOptions =
   | {
       metadataAction: 'delete';
       /** Cleaning a directory immediately before discarding its metadata is nonsensical. */
-      filesystemAction: Exclude<BranchFilesystemAction, 'cleaned'>;
+      filesystemAction: BranchHardDeleteFilesystemAction;
     };
 
 /** Runtime boundary shared by every archive/delete transport. */
@@ -83,7 +97,10 @@ export function isBranchArchiveOrDeleteOptions(
   ) {
     return false;
   }
-  return record.metadataAction !== 'delete' || record.filesystemAction !== 'cleaned';
+  return (
+    record.metadataAction !== 'delete' ||
+    BRANCH_HARD_DELETE_FILESYSTEM_ACTIONS.some((action) => action === record.filesystemAction)
+  );
 }
 
 export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };

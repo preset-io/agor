@@ -41,6 +41,7 @@ import {
   getDefaultBranch,
   getRemoteUrl,
   isValidGitRepo,
+  listGitWorktrees,
   redactGitUrlCredentials,
   removeGitWorktree,
   restoreBranchFilesystem,
@@ -1515,9 +1516,16 @@ export async function handleGitBranchRemove(
         } catch (worktreeError) {
           const worktreeMessage =
             worktreeError instanceof Error ? worktreeError.message : String(worktreeError);
-          const permissionFailure =
-            /\b(?:EACCES|EPERM)\b|permission denied|operation not permitted/i.test(worktreeMessage);
-          if (!payload.params.privilegedFilesystemDelete || !permissionFailure) {
+          // Git can surface the same partial ACL failure in two ways: the
+          // underlying unlink/rmdir EACCES, or a final ENOTEMPTY/"Directory
+          // not empty" after it removed everything it could. Both leave the
+          // already-validated exact branch root behind and are safe to hand to
+          // the scoped privileged remover before retrying deregistration.
+          const partialFilesystemRemoval =
+            /\b(?:EACCES|EPERM|ENOTEMPTY)\b|permission denied|operation not permitted|directory not empty/i.test(
+              worktreeMessage
+            );
+          if (!payload.params.privilegedFilesystemDelete || !partialFilesystemRemoval) {
             throw worktreeError;
           }
 
@@ -1529,8 +1537,17 @@ export async function handleGitBranchRemove(
             '[git.branch.remove] Worktree removal hit a permission boundary; retrying exact-root deletion through sudo'
           );
           await deleteDirectory();
-          await removeGitWorktree(resolvedRepoPath, branchPath);
-          console.log(`[git.branch.remove] Git worktree deregistered after privileged removal`);
+          const worktreeStillRegistered = (await listGitWorktrees(resolvedRepoPath)).some(
+            (worktree) => resolve(worktree.path) === resolve(branchPath)
+          );
+          if (worktreeStillRegistered) {
+            await removeGitWorktree(resolvedRepoPath, branchPath);
+            console.log(`[git.branch.remove] Git worktree deregistered after privileged removal`);
+          } else {
+            console.log(
+              '[git.branch.remove] Git worktree was already deregistered by the partial removal'
+            );
+          }
         }
 
         // git worktree remove --force may leave residual files on disk.

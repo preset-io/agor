@@ -8,6 +8,7 @@ import type {
   AgenticToolName,
   BoardID,
   Branch,
+  BranchFilesystemStatus,
   BranchFsAccessLevel,
   BranchID,
   EffectiveBranchAccess,
@@ -69,6 +70,25 @@ const FS_ACCESS_RANK: Record<BranchFsAccessLevel, number> = {
 const VIEW_OR_BETTER_BRANCH_PERMISSIONS = ['view', 'session', 'prompt', 'all'] as const;
 const BRANCH_PERMISSION_SOURCES = ['board', 'override'] as const;
 const FS_ACCESS_BRANCH_PERMISSIONS = ['read', 'write'] as const;
+
+export interface BranchRepositoryUpdateOptions {
+  preserveUpdatedAt?: boolean;
+  /** Explicit lifecycle boundary, including starting -> starting retries. */
+  invalidateEnvironmentObservation?: boolean;
+  /** Reject the update atomically when the locked row is in one of these states. */
+  rejectFilesystemStatuses?: readonly BranchFilesystemStatus[];
+}
+
+/** A lifecycle precondition changed before the repository acquired its row lock. */
+export class BranchFilesystemStatusConflictError extends RepositoryError {
+  constructor(
+    public readonly branchId: BranchID,
+    public readonly currentStatus: BranchFilesystemStatus
+  ) {
+    super(`Branch ${branchId} filesystem status is ${currentStatus}`);
+    this.name = 'BranchFilesystemStatusConflictError';
+  }
+}
 
 /**
  * Session activity summary for a branch
@@ -535,11 +555,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async update(
     id: string,
     updates: Partial<Branch>,
-    options?: {
-      preserveUpdatedAt?: boolean;
-      /** Explicit lifecycle boundary, including starting -> starting retries. */
-      invalidateEnvironmentObservation?: boolean;
-    }
+    options?: BranchRepositoryUpdateOptions
   ): Promise<Branch> {
     // STEP 1: Read current branch (outside transaction for short ID resolution)
     const existing = await this.findById(id);
@@ -570,6 +586,13 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       }
 
       const current = this.rowToBranch(currentRow, baseUrl);
+
+      if (
+        current.filesystem_status !== undefined &&
+        options?.rejectFilesystemStatuses?.includes(current.filesystem_status)
+      ) {
+        throw new BranchFilesystemStatusConflictError(current.branch_id, current.filesystem_status);
+      }
 
       // STEP 3: Deep merge updates into current branch (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context

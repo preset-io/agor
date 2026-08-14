@@ -1,7 +1,11 @@
 import type { HookContext } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
+import { SessionTokenService } from '../services/session-token-service';
+import { createServiceToken } from '../utils/spawn-executor';
 import {
   executorRuntimeScopeGuard,
+  isBranchFilesystemLifecycleExecutorRequest,
   requireExecutorRuntimeToken,
   scopeExecutorRuntimeAuth,
 } from './executor-runtime-scope';
@@ -22,6 +26,70 @@ function ctx(overrides: Partial<HookContext>): HookContext {
     ...overrides,
   } as HookContext;
 }
+
+function lifecycleCtx(authenticationPayload: Record<string, unknown>): HookContext {
+  return {
+    path: 'branches',
+    method: 'patch',
+    id: 'branch-1',
+    data: { filesystem_status: 'ready' },
+    params: {
+      authentication: { payload: authenticationPayload },
+      provider: 'socketio',
+      query: {},
+    },
+  } as HookContext;
+}
+
+describe('branch filesystem lifecycle executor scope', () => {
+  const secret = 'branch-filesystem-lifecycle-test-secret';
+
+  it.each(['branch-delete', 'branch-remove'])('accepts the actual %s token shape', async (kind) => {
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: 1 },
+      { startCleanupTimer: false }
+    );
+    service.setJwtSecret(secret);
+    const token = await service.generateToken(kind, 'user-1', {
+      branchId: 'branch-1',
+      maxUses: -1,
+    });
+    const decoded = jwt.decode(token) as Record<string, unknown>;
+
+    expect(isBranchFilesystemLifecycleExecutorRequest(lifecycleCtx(decoded), 'branch-1')).toBe(
+      true
+    );
+  });
+
+  it('accepts the actual branch creation service-token shape', () => {
+    const token = createServiceToken(secret, '5m', {
+      command: 'git.branch.add',
+      branch_id: 'branch-1',
+    });
+    const decoded = jwt.decode(token) as Record<string, unknown>;
+
+    expect(isBranchFilesystemLifecycleExecutorRequest(lifecycleCtx(decoded), 'branch-1')).toBe(
+      true
+    );
+  });
+
+  it('rejects an actual ordinary task token even on the same branch', async () => {
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: 1 },
+      { startCleanupTimer: false }
+    );
+    service.setJwtSecret(secret);
+    const token = await service.generateToken('019ffe00-0000-7000-8000-000000000001', 'user-1', {
+      taskId: '019ffe00-0000-7000-8000-000000000002',
+      branchId: 'branch-1',
+    });
+    const decoded = jwt.decode(token) as Record<string, unknown>;
+
+    expect(isBranchFilesystemLifecycleExecutorRequest(lifecycleCtx(decoded), 'branch-1')).toBe(
+      false
+    );
+  });
+});
 
 describe('executorRuntimeScopeGuard', () => {
   it.each([

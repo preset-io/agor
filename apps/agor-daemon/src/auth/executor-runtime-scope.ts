@@ -53,6 +53,53 @@ export function isBranchScopedExecutorRequest(context: HookContext, branchId: st
   return scopedPayload(context)?.branch_id === branchId;
 }
 
+type BranchFilesystemLifecycleServicePayload = {
+  type: 'service';
+  sub: 'executor-service';
+  purpose: 'executor-service';
+  role: 'service';
+  command: 'git.branch.add';
+  branch_id: string;
+};
+
+function isBranchFilesystemLifecycleServicePayload(
+  value: unknown
+): value is BranchFilesystemLifecycleServicePayload {
+  if (!value || typeof value !== 'object') return false;
+  const payload = value as Partial<BranchFilesystemLifecycleServicePayload>;
+  return (
+    payload.type === 'service' &&
+    payload.sub === 'executor-service' &&
+    payload.purpose === 'executor-service' &&
+    payload.role === 'service' &&
+    payload.command === 'git.branch.add' &&
+    typeof payload.branch_id === 'string'
+  );
+}
+
+/**
+ * Whether a verified executor transport may report filesystem lifecycle state
+ * for this branch. Deletion uses an executor-session token; materialization
+ * uses the narrowly-command-scoped service token minted by ReposService and
+ * BranchesService.unarchive.
+ */
+export function isBranchFilesystemLifecycleExecutorRequest(
+  context: HookContext,
+  branchId: string
+): boolean {
+  const executorPayload = scopedPayload(context);
+  if (
+    executorPayload?.branch_id === branchId &&
+    executorPayload.task_id === undefined &&
+    (executorPayload.session_id === 'branch-delete' ||
+      executorPayload.session_id === 'branch-remove')
+  ) {
+    return true;
+  }
+  const payload = (context.params as AuthenticatedParams).authentication?.payload;
+  return isBranchFilesystemLifecycleServicePayload(payload) && payload.branch_id === branchId;
+}
+
 /** Whether this request carries a validated executor-session scope. */
 export function hasExecutorRuntimeScope(context: HookContext): boolean {
   return scopedPayload(context) !== null;

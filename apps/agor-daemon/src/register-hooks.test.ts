@@ -50,7 +50,14 @@ import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
 describe('protectExternalBranchManagedWrites', () => {
   const context = (
     data: unknown,
-    options: { provider?: string; executorBranchId?: string } = { provider: 'rest' }
+    options: {
+      provider?: string;
+      executorBranchId?: string;
+      executorSessionId?: string;
+      executorTaskId?: string;
+      serviceBranchId?: string;
+      serviceCommand?: string;
+    } = { provider: 'rest' }
   ) =>
     ({
       path: 'branches',
@@ -66,8 +73,23 @@ describe('protectExternalBranchManagedWrites', () => {
                 payload: {
                   type: 'executor-session',
                   purpose: 'executor-task',
-                  session_id: 'branch-delete',
+                  session_id: options.executorSessionId ?? 'branch-delete',
+                  ...(options.executorTaskId ? { task_id: options.executorTaskId } : {}),
                   branch_id: options.executorBranchId,
+                },
+              },
+            }
+          : {}),
+        ...(options.serviceBranchId
+          ? {
+              authentication: {
+                payload: {
+                  type: 'service',
+                  sub: 'executor-service',
+                  purpose: 'executor-service',
+                  role: 'service',
+                  command: options.serviceCommand ?? 'git.branch.add',
+                  branch_id: options.serviceBranchId,
                 },
               },
             }
@@ -100,12 +122,62 @@ describe('protectExternalBranchManagedWrites', () => {
     expect(protectExternalBranchManagedWrites(hook)).toBe(hook);
   });
 
+  it('allows branch creation lifecycle state from its scoped service executor', () => {
+    const hook = context(
+      { filesystem_status: 'ready', error_message: undefined },
+      { provider: 'socketio', serviceBranchId: 'branch-attacker' }
+    );
+    expect(protectExternalBranchManagedWrites(hook)).toBe(hook);
+  });
+
+  it('rejects lifecycle state from an unrelated service command', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'ready' },
+          {
+            provider: 'socketio',
+            serviceBranchId: 'branch-attacker',
+            serviceCommand: 'git.repo.delete',
+          }
+        )
+      )
+    ).toThrow(/branch-scoped/);
+  });
+
+  it('rejects branch creation state scoped to another same-tenant branch', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'ready' },
+          { provider: 'socketio', serviceBranchId: 'branch-victim' }
+        )
+      )
+    ).toThrow(/branch-scoped/);
+  });
+
   it('rejects filesystem state from an executor scoped to another same-tenant branch', () => {
     expect(() =>
       protectExternalBranchManagedWrites(
         context(
           { filesystem_status: 'deleted' },
           { provider: 'socketio', executorBranchId: 'branch-victim' }
+        )
+      )
+    ).toThrow(/branch-scoped/);
+  });
+
+  it('rejects lifecycle forgery from an ordinary task executor on the same branch', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'deleted' },
+          {
+            provider: 'socketio',
+            executorBranchId: 'branch-attacker',
+            executorSessionId: '019ffe00-0000-7000-8000-000000000001',
+            executorTaskId: '019ffe00-0000-7000-8000-000000000002',
+          }
         )
       )
     ).toThrow(/branch-scoped/);

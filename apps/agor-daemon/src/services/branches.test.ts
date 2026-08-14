@@ -1,5 +1,6 @@
 import {
   BoardRepository,
+  BranchFilesystemStatusConflictError,
   BranchRepository,
   type Database,
   GroupRepository,
@@ -1168,7 +1169,7 @@ describe('BranchesService.unarchive', () => {
         filesystem_status: undefined,
         error_message: undefined,
       }),
-      { provider: undefined }
+      expect.objectContaining({ provider: undefined })
     );
     expect(patchSpy.mock.calls[0][1]).not.toHaveProperty('board_id');
 
@@ -1243,13 +1244,32 @@ describe('BranchesService.unarchive', () => {
         archived: false,
         board_id: newBoardId,
       }),
-      { provider: undefined }
+      expect.objectContaining({ provider: undefined })
     );
     expect(boardObjectsService.create).toHaveBeenCalledWith({
       board_id: newBoardId,
       branch_id: branchId,
       position: { x: 7, y: 8 },
     });
+  });
+
+  it('rejects when deletion starts after the initial unarchive read', async () => {
+    const { service } = createServiceHarness();
+    const branchId = 'wt-racing-delete' as BranchID;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      name: 'WT Racing Delete',
+      path: '/tmp/wt-racing-delete',
+      archived: true,
+      filesystem_status: 'delete_failed',
+      storage_mode: 'clone',
+    } as never);
+    vi.spyOn(service, 'patch').mockRejectedValue(
+      new BranchFilesystemStatusConflictError(branchId, 'deleting')
+    );
+
+    await expect(service.unarchive(branchId)).rejects.toThrow(/still in progress/i);
+    expect(mockedRunExecutorCommand).not.toHaveBeenCalled();
   });
 });
 
