@@ -208,8 +208,6 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
     id: string,
     patch: {
       name?: string;
-      slug?: string;
-      repo_type?: 'remote' | 'local';
       remote_url?: string;
       default_branch?: string;
     },

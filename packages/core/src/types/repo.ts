@@ -157,6 +157,46 @@ export interface Repo {
   last_updated: string;
 }
 
+/**
+ * Persisted fields that select a repository's filesystem namespace and
+ * deletion semantics. These are assigned when the repository is registered
+ * and must not be repointed afterward.
+ */
+export const REPO_FILESYSTEM_IDENTITY_FIELDS = [
+  'slug',
+  'repo_type',
+  'local_path',
+] as const satisfies readonly (keyof Repo)[];
+export type RepoFilesystemIdentityField = (typeof REPO_FILESYSTEM_IDENTITY_FIELDS)[number];
+
+/** Creation identity that remains authoritative for the lifetime of a row. */
+export const REPO_IMMUTABLE_FIELDS = [
+  ...REPO_FILESYSTEM_IDENTITY_FIELDS,
+  'repo_id',
+  'created_at',
+] as const satisfies readonly (keyof Repo)[];
+export type RepoImmutableField = (typeof REPO_IMMUTABLE_FIELDS)[number];
+
+/** Fields written by repository clone/Unix lifecycle executors, not clients. */
+export const REPO_SERVER_MANAGED_FIELDS = [
+  'unix_group',
+  'clone_status',
+  'clone_error',
+  'last_updated',
+] as const satisfies readonly (keyof Repo)[];
+export type RepoServerManagedField = (typeof REPO_SERVER_MANAGED_FIELDS)[number];
+
+/** Metadata accepted from ordinary external repository patch callers. */
+export type RepoClientPatch = Omit<Partial<Repo>, RepoImmutableField | RepoServerManagedField>;
+
+/** Privileged repository fields reported by clone/Unix lifecycle executors. */
+export type RepoExecutorPatch = Partial<
+  Pick<
+    Repo,
+    'name' | 'default_branch' | 'environment' | 'unix_group' | 'clone_status' | 'clone_error'
+  >
+>;
+
 export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
 
 export type RepoCloneErrorCategory =

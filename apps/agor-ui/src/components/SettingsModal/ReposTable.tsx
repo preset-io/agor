@@ -1,4 +1,9 @@
-import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
+import type {
+  CreateLocalRepoRequest,
+  CreateRepoRequest,
+  Repo,
+  RepoClientPatch,
+} from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
 import { Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
@@ -13,7 +18,7 @@ interface ReposTableProps {
   repoById: Map<string, Repo>;
   onCreate?: (data: CreateRepoRequest) => void;
   onCreateLocal?: (data: CreateLocalRepoRequest) => void;
-  onUpdate?: (repoId: string, updates: Partial<Repo>) => void;
+  onUpdate?: (repoId: string, updates: RepoClientPatch) => void;
   onDelete?: (repoId: string, cleanup: boolean) => void;
 }
 
@@ -86,13 +91,11 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   const handleSaveRepo = () => {
     repoForm.validateFields().then((values) => {
       if (isEditing && editingRepo) {
-        const updates: Partial<Repo> = {
-          slug: values.slug,
-        };
+        const updates: RepoClientPatch = {};
         if (values.default_branch) {
           updates.default_branch = values.default_branch;
         }
-        onUpdate?.(editingRepo.repo_id, updates);
+        if (Object.keys(updates).length > 0) onUpdate?.(editingRepo.repo_id, updates);
       } else {
         if (repoMode === 'local') {
           onCreateLocal?.({
@@ -209,12 +212,14 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                 }
                 extra={
                   <Space>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => handleOpenEditModal(repo)}
-                    />
+                    {!isLocal && (
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        onClick={() => handleOpenEditModal(repo)}
+                      />
+                    )}
                     <Button
                       type="text"
                       size="small"

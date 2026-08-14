@@ -3120,41 +3120,6 @@
         "summary": "Retrieves a list of all resources from the service",
         "tags": ["branches"],
         "security": []
-      },
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/branches"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["branches"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/branches"
-              }
-            }
-          }
-        }
       }
     },
     "/branches/{branch_id}": {
@@ -3195,54 +3160,6 @@
         "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["branches"],
         "security": []
-      },
-      "put": {
-        "parameters": [
-          {
-            "in": "path",
-            "name": "branch_id",
-            "description": "ID of branches to update",
-            "schema": {
-              "type": "integer"
-            },
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/branches"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "404": {
-            "description": "not found"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Updates the resource identified by id using data.",
-        "summary": "Updates the resource identified by id using data",
-        "tags": ["branches"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/branches"
-              }
-            }
-          }
-        }
       },
       "patch": {
         "parameters": [
@@ -3970,41 +3887,6 @@
         "summary": "Retrieves a list of all resources from the service",
         "tags": ["repos"],
         "security": []
-      },
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/repos"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["repos"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/repos"
-              }
-            }
-          }
-        }
       }
     },
     "/repos/{repo_id}": {
@@ -4045,54 +3927,6 @@
         "summary": "Retrieves a single resource with the given id from the service",
         "tags": ["repos"],
         "security": []
-      },
-      "put": {
-        "parameters": [
-          {
-            "in": "path",
-            "name": "repo_id",
-            "description": "ID of repos to update",
-            "schema": {
-              "type": "integer"
-            },
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/repos"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "404": {
-            "description": "not found"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Updates the resource identified by id using data.",
-        "summary": "Updates the resource identified by id using data",
-        "tags": ["repos"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/repos"
-              }
-            }
-          }
-        }
       },
       "patch": {
         "parameters": [

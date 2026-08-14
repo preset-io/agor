@@ -127,6 +127,10 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   const [archivedLoaded, setArchivedLoaded] = useState(false);
   const [archivedLoading, setArchivedLoading] = useState(false);
   const archivedFetchingRef = useRef(false);
+  const archivedRealtimeRef = useRef<{
+    removed: Set<string>;
+    patched: Map<string, Branch>;
+  }>({ removed: new Set(), patched: new Map() });
 
   // No need for reposById anymore, we already have it as a prop
 
@@ -147,7 +151,18 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       .findAll({ query: { archived: true, $limit: 1000, $sort: { created_at: -1 } } })
       .then((result) => {
         if (cancelled) return;
-        setArchivedBranches(result as Branch[]);
+        // Reconcile realtime writes that landed after the request began. A
+        // wholesale assignment here would resurrect a hard-deleted row from
+        // a stale response or lose a branch archived by another replica.
+        const byId = new Map<string, Branch>(
+          (result as Branch[]).map((branch) => [branch.branch_id, branch] as const)
+        );
+        for (const branchId of archivedRealtimeRef.current.removed) byId.delete(branchId);
+        for (const [branchId, branch] of archivedRealtimeRef.current.patched) {
+          if (branch.archived) byId.set(branchId, branch);
+          else byId.delete(branchId);
+        }
+        setArchivedBranches([...byId.values()]);
         setArchivedLoaded(true);
       })
       .catch(() => {
@@ -170,18 +185,39 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   // executor publishes deleting -> deleted/delete_failed transitions, and
   // evict hard-deleted metadata after the authoritative removed event.
   useEffect(() => {
+    // A client change can represent a reconnect to a different authenticated
+    // tenant. Never carry archived rows or event tombstones across that boundary.
+    archivedRealtimeRef.current = { removed: new Set(), patched: new Map() };
+    archivedFetchingRef.current = false;
+    setArchivedBranches([]);
+    setArchivedLoaded(false);
+    setArchivedLoading(false);
     if (!client) return;
     const branchesService = client.service('branches');
     const handlePatched = (branch: Branch) => {
+      if (branch.archived) {
+        archivedRealtimeRef.current.removed.delete(branch.branch_id);
+        archivedRealtimeRef.current.patched.set(branch.branch_id, branch);
+      } else {
+        archivedRealtimeRef.current.patched.delete(branch.branch_id);
+        archivedRealtimeRef.current.removed.add(branch.branch_id);
+      }
       setArchivedBranches((previous) => {
         const index = previous.findIndex((candidate) => candidate.branch_id === branch.branch_id);
-        if (index === -1) return previous;
+        if (!branch.archived) {
+          return index === -1
+            ? previous
+            : previous.filter((_, candidateIndex) => candidateIndex !== index);
+        }
+        if (index === -1) return [branch, ...previous];
         const next = [...previous];
         next[index] = branch;
         return next;
       });
     };
     const handleRemoved = (branch: Branch) => {
+      archivedRealtimeRef.current.patched.delete(branch.branch_id);
+      archivedRealtimeRef.current.removed.add(branch.branch_id);
       setArchivedBranches((previous) =>
         previous.filter((candidate) => candidate.branch_id !== branch.branch_id)
       );

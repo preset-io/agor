@@ -14,7 +14,7 @@ import type {
   GatewayChannelCreateData,
   GatewayChannelPatchData,
   PermissionMode,
-  Repo,
+  RepoClientPatch,
   Session,
   SpawnConfig,
   UpdateUserInput,
@@ -187,7 +187,7 @@ export interface AppProps {
   onUnarchiveBoard?: (boardId: string) => void;
   onCreateRepo?: (data: CreateRepoRequest) => unknown;
   onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
-  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
+  onUpdateRepo?: (repoId: string, updates: RepoClientPatch) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;

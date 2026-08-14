@@ -2136,6 +2136,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               branchId: branch.branch_id,
               repoId: repo.repo_id,
               filesystemOperationId,
+              branchesRoot: getBranchesDir(params?.tenant?.tenant_id ?? getCurrentTenantId()),
               // Use restore mode: checks if branch exists on remote via ls-remote,
               // checks out existing branch if found, otherwise creates new branch from base_ref.
               // This is safe because it only creates a new branch when ls-remote confirms

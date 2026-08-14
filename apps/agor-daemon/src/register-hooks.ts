@@ -91,6 +91,8 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
+  REPO_FILESYSTEM_IDENTITY_FIELDS,
+  REPO_SERVER_MANAGED_FIELDS,
   ROLES,
   SCHEDULE_CREATE_WRITE_FIELDS,
   SCHEDULE_PATCH_WRITE_FIELDS,
@@ -373,6 +375,46 @@ export function protectExternalBranchManagedWrites(context: HookContext): HookCo
   validateBranchExternalManagedWrite(context.params, branchId, context.data as Partial<Branch>, {
     allowExecutorReports: context.method === 'patch',
   });
+  return context;
+}
+
+/** Keep repository filesystem identity and clone lifecycle state server-owned. */
+export function protectExternalRepoManagedWrites(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+  if (!context.data || typeof context.data !== 'object' || Array.isArray(context.data)) {
+    throw new BadRequest('Repository writes require an object payload');
+  }
+
+  const data = context.data as Record<string, unknown>;
+  const identityField = REPO_FILESYSTEM_IDENTITY_FIELDS.find((field) => Object.hasOwn(data, field));
+  if (identityField) {
+    throw new BadRequest(
+      `Repository field '${identityField}' is assigned at registration and is immutable`
+    );
+  }
+
+  // unix_group has stricter canonical-stamp validation in
+  // protectServerManagedUnixGroupWrites(). Clone result fields additionally
+  // require the one-purpose git.clone service credential for this row.
+  const lifecycleField = REPO_SERVER_MANAGED_FIELDS.find(
+    (field) => field !== 'unix_group' && Object.hasOwn(data, field)
+  );
+  if (!lifecycleField) return context;
+
+  const payload = (context.params as AuthenticatedParams).authentication?.payload as
+    | Record<string, unknown>
+    | undefined;
+  const repoId = String(context.id ?? '');
+  const isCloneExecutor =
+    context.method === 'patch' &&
+    payload?.type === 'service' &&
+    payload.sub === 'executor-service' &&
+    payload.purpose === 'executor-service' &&
+    payload.command === 'git.clone' &&
+    payload.repo_id === repoId;
+  if (!isCloneExecutor) {
+    throw new BadRequest(`Repository field '${lifecycleField}' is managed by the daemon`);
+  }
   return context;
 }
 
@@ -1597,12 +1639,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
         protectServerManagedUnixGroupWrites('repo'),
+        protectExternalRepoManagedWrites,
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
         protectServerManagedUnixGroupWrites('repo'),
+        protectExternalRepoManagedWrites,
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],

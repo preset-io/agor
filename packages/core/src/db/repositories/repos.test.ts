@@ -4,7 +4,7 @@
  * Tests for type-safe CRUD operations on git repositories with short ID support.
  */
 
-import type { UUID } from '@agor/core/types';
+import { REPO_IMMUTABLE_FIELDS, type UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
@@ -573,7 +573,26 @@ describe('RepoRepository.update', () => {
 
     expect(updated.name).toBe('Updated');
     expect(updated.default_branch).toBe('develop');
-    expect(updated.local_path).toBe('/new/path');
+    expect(updated.local_path).toBe(data.local_path);
+  });
+
+  dbTest('preserves every centralized immutable identity field', async ({ db }) => {
+    const repository = new RepoRepository(db);
+    const created = await repository.create(createRepoData({ slug: 'owner/repository' }));
+
+    const updated = await repository.update(created.repo_id, {
+      repo_id: '550e8400-e29b-41d4-a716-446655440099' as never,
+      slug: 'attacker/alias',
+      repo_type: 'local',
+      local_path: '/tmp/attacker-alias',
+      created_at: '2000-01-01T00:00:00.000Z',
+      name: 'Allowed metadata update',
+    });
+
+    for (const field of REPO_IMMUTABLE_FIELDS) {
+      expect(updated[field]).toEqual(created[field]);
+    }
+    expect(updated.name).toBe('Allowed metadata update');
   });
 
   dbTest('should update local repo without requiring remote_url', async ({ db }) => {

@@ -52,6 +52,8 @@ import type {
   PatchAgenticToolPreset,
   PermissionMode,
   Repo,
+  RepoClientPatch,
+  RepoExecutorPatch,
   RuntimeTelemetryInput,
   Schedule,
   ScheduleCreateData,
@@ -439,7 +441,8 @@ export interface MessagesBulkService {
 /**
  * Repos service with branch management
  */
-export interface ReposService extends AgorService<Repo> {
+export interface ReposService
+  extends AgorService<Repo, never, never, ClientInput<RepoClientPatch> | null> {
   /**
    * Create a git branch for a repository.
    *
@@ -485,7 +488,12 @@ export interface ReposService extends AgorService<Repo> {
   removeBranch(id: string, name: string, params?: Params): Promise<Repo>;
 }
 
-export interface ReposLocalService extends AgorService<Repo> {
+/** Privileged repository patch surface used only by scoped lifecycle executors. */
+export type ReposExecutorService = Omit<ReposService, 'patch'> & {
+  patch(id: string | null, data: ClientInput<RepoExecutorPatch>, params?: Params): Promise<Repo>;
+};
+
+export interface ReposLocalService {
   create(data: { path: string; slug?: string }, params?: Params): Promise<Repo>;
 }
 
@@ -589,31 +597,6 @@ export interface BranchesService
     params?: Params
   ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }>;
   /**
-   * Find branch by repo_id and name
-   */
-  findByRepoAndName(repoId: string, name: string, params?: Params): Promise<Branch | null>;
-
-  /**
-   * Add session to branch
-   */
-  addSession(id: string, sessionId: string, params?: Params): Promise<Branch>;
-
-  /**
-   * Remove session from branch
-   */
-  removeSession(id: string, sessionId: string, params?: Params): Promise<Branch>;
-
-  /**
-   * Add branch to board
-   */
-  addToBoard(id: string, boardId: string, params?: Params): Promise<Branch>;
-
-  /**
-   * Remove branch from board
-   */
-  removeFromBoard(id: string, params?: Params): Promise<Branch>;
-
-  /**
    * Update environment status
    */
   updateEnvironment(
@@ -628,26 +611,6 @@ export interface BranchesService
     environmentUpdate?: BranchEnvironmentUpdate,
     params?: Params
   ): Promise<Branch>;
-
-  /**
-   * Start branch environment
-   */
-  startEnvironment(id: string, params?: Params): Promise<Branch>;
-
-  /**
-   * Stop branch environment
-   */
-  stopEnvironment(id: string, params?: Params): Promise<Branch>;
-
-  /**
-   * Restart branch environment
-   */
-  restartEnvironment(id: string, params?: Params): Promise<Branch>;
-
-  /**
-   * Check environment health
-   */
-  checkHealth(id: string, params?: Params): Promise<Branch>;
 }
 
 /**

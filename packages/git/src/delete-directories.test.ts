@@ -36,7 +36,7 @@ describe('managed directory deletion roots', () => {
     await deleteBranchDirectory(branchPath, branchesRoot, {
       expectedRelativePath: path.join('org', 'repo', 'feature'),
     });
-    await deleteRepoDirectory(repoPath, reposRoot);
+    await deleteRepoDirectory(repoPath, reposRoot, { expectedRelativePath: 'org/repo' });
 
     await expect(fs.access(branchPath)).rejects.toThrow();
     await expect(fs.access(repoPath)).rejects.toThrow();
@@ -56,7 +56,9 @@ describe('managed directory deletion roots', () => {
     await fs.mkdir(otherRepo, { recursive: true });
     await fs.mkdir(otherBranch, { recursive: true });
 
-    await expect(deleteRepoDirectory(otherRepo, reposRoot)).rejects.toThrow(/Safety check failed/);
+    await expect(
+      deleteRepoDirectory(otherRepo, reposRoot, { expectedRelativePath: 'org/repo' })
+    ).rejects.toThrow(/Safety check failed/);
     await expect(
       deleteBranchDirectory(otherBranch, branchesRoot, {
         expectedRelativePath: path.join('org', 'repo', 'feature'),
@@ -76,6 +78,26 @@ describe('managed directory deletion roots', () => {
       })
     ).rejects.toThrow(/symlink/i);
     await expect(fs.access(realBranch)).resolves.toBeUndefined();
+  });
+
+  it('rejects a different same-tenant repository root and symlink traversal', async () => {
+    const victim = path.join(reposRoot, 'org', 'victim');
+    await fs.mkdir(victim, { recursive: true });
+    await expect(
+      deleteRepoDirectory(victim, reposRoot, { expectedRelativePath: 'org/attacker' })
+    ).rejects.toThrow(/canonical identity/i);
+    await expect(fs.access(victim)).resolves.toBeUndefined();
+
+    const realOrg = path.join(reposRoot, 'real-org');
+    const linkedOrg = path.join(reposRoot, 'linked-org');
+    await fs.mkdir(path.join(realOrg, 'repo'), { recursive: true });
+    await fs.symlink(realOrg, linkedOrg, 'dir');
+    await expect(
+      deleteRepoDirectory(path.join(linkedOrg, 'repo'), reposRoot, {
+        expectedRelativePath: 'linked-org/repo',
+      })
+    ).rejects.toThrow(/symlink/i);
+    await expect(fs.access(path.join(realOrg, 'repo'))).resolves.toBeUndefined();
   });
 
   it('refuses a branch path that traverses a symlink below the allowed root', async () => {

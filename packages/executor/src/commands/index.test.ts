@@ -255,6 +255,7 @@ describe('executeCommand - git.branch.add', () => {
       branchId: '550e8400-e29b-41d4-a716-446655440002',
       filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
       repoId: '550e8400-e29b-41d4-a716-446655440003',
+      branchesRoot: '/safe/worktrees',
     },
   };
 

@@ -13,6 +13,10 @@ vi.mock('node:child_process', () => ({
 
 vi.mock('../services/feathers-client.js', () => ({
   createExecutorClient: mocks.createExecutorClient,
+  getExecutorBranchesService: (client: { service: (name: string) => unknown }) =>
+    client.service('branches'),
+  getExecutorReposService: (client: { service: (name: string) => unknown }) =>
+    client.service('repos'),
 }));
 
 import { handleUnixSyncBranch } from './unix.js';

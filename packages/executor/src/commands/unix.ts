@@ -44,7 +44,11 @@ import type {
   UnixSyncUserPayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
-import { createExecutorClient, getExecutorBranchesService } from '../services/feathers-client.js';
+import {
+  createExecutorClient,
+  getExecutorBranchesService,
+  getExecutorReposService,
+} from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 
 const execAsync = promisify(exec);
@@ -230,7 +234,7 @@ export async function handleUnixSyncRepo(
       if (latestRepo.unix_group != null) {
         repo = latestRepo;
       } else {
-        await client.service('repos').patch(repoId, {
+        await getExecutorReposService(client).patch(repoId, {
           unix_group: generateRepoGroupName(repoId as RepoID),
         });
         repo = await client.service('repos').get(repoId);

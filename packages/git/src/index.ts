@@ -1791,38 +1791,60 @@ export async function getGitState(repoPath: string): Promise<string> {
  */
 export async function deleteRepoDirectory(
   repoPath: string,
-  allowedReposDir: string
+  allowedReposDir: string,
+  options: { expectedRelativePath: string }
 ): Promise<void> {
-  const { rm } = await import('node:fs/promises');
-  const { realpathSync, existsSync } = await import('node:fs');
-  const { resolve, relative } = await import('node:path');
+  const { lstat, realpath, rm, stat } = await import('node:fs/promises');
+  const { dirname, isAbsolute, relative, resolve, sep } = await import('node:path');
+  const requestedRoot = resolve(allowedReposDir);
+  const requestedTarget = resolve(repoPath);
+  const lexicalRelativePath = relative(requestedRoot, requestedTarget);
+  const expectedTarget = resolve(requestedRoot, options.expectedRelativePath);
 
-  // Safety check: ensure we're only deleting from ~/.agor/repos/
-  const reposDir = allowedReposDir;
-
-  // Use realpathSync to follow symlinks and canonicalize paths.
-  // If the directory was already removed, fall back to resolving via parent.
-  const resolvedReposDir = realpathSync(reposDir);
-  const resolvedRepoPath = existsSync(repoPath)
-    ? realpathSync(repoPath)
-    : resolve(realpathSync(resolve(repoPath, '..')), resolve(repoPath).split('/').pop()!);
-
-  // Get relative path from reposDir to repoPath
-  const relativePath = relative(resolvedReposDir, resolvedRepoPath);
-
-  // Check if relative path goes outside (starts with '..' or is absolute)
-  if (relativePath.startsWith('..') || resolve(relativePath) === relativePath) {
-    throw new Error(
-      `Safety check failed: Repository path must be inside ${reposDir}. Got: ${repoPath}`
-    );
+  if (
+    lexicalRelativePath === '' ||
+    lexicalRelativePath === '..' ||
+    lexicalRelativePath.startsWith(`..${sep}`) ||
+    isAbsolute(lexicalRelativePath)
+  ) {
+    throw new Error('Safety check failed: Repository path must be a child of the repos root');
+  }
+  if (requestedTarget !== expectedTarget) {
+    throw new Error('Safety check failed: Repository path does not match its canonical identity');
   }
 
-  // Additional safety: don't allow deleting the repos directory itself
-  if (resolvedRepoPath === resolvedReposDir || relativePath === '') {
-    throw new Error('Cannot delete the repos directory itself');
+  let targetInfo: Awaited<ReturnType<typeof lstat>>;
+  try {
+    targetInfo = await lstat(requestedTarget);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (targetInfo.isSymbolicLink()) {
+    throw new Error('Safety check failed: Repository root is a symlink');
+  }
+  if (!targetInfo.isDirectory()) {
+    throw new Error('Safety check failed: Repository root is not a directory');
   }
 
-  await rm(resolvedRepoPath, { recursive: true, force: true });
+  const resolvedRoot = await realpath(requestedRoot);
+  const resolvedTarget = await realpath(requestedTarget);
+  if (resolvedTarget !== resolve(resolvedRoot, lexicalRelativePath)) {
+    throw new Error('Safety check failed: Repository path traverses a symlink');
+  }
+  const parentInfo = await stat(dirname(resolvedTarget));
+  if (targetInfo.dev !== parentInfo.dev) {
+    throw new Error('Safety check failed: Repository root is a filesystem mount point');
+  }
+
+  await rm(resolvedTarget, { recursive: true, force: true });
+  try {
+    await lstat(requestedTarget);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  throw new Error('Repository directory deletion could not be verified');
 }
 
 /**

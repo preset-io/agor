@@ -155,4 +155,83 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
 
     await waitFor(() => expect(screen.queryByText('removed-remotely')).not.toBeInTheDocument());
   });
+
+  it('does not resurrect a removed row from an in-flight archived fetch', async () => {
+    const repo = makeRepo();
+    const branch = {
+      branch_id: 'branch-raced-remove',
+      repo_id: repo.repo_id,
+      name: 'raced-remove',
+      archived: true,
+      created_at: '2026-08-14T00:00:00.000Z',
+    } as unknown as Branch;
+    let resolveFetch!: (branches: Branch[]) => void;
+    const fetchResult = new Promise<Branch[]>((resolve) => {
+      resolveFetch = resolve;
+    });
+    let removedListener: ((value: Branch) => void) | undefined;
+    const service = {
+      findAll: vi.fn(() => fetchResult),
+      on: vi.fn((event: string, listener: (value: Branch) => void) => {
+        if (event === 'removed') removedListener = listener;
+      }),
+      removeListener: vi.fn(),
+    };
+    const client = { service: vi.fn(() => service) } as unknown as AgorClient;
+
+    renderWithProviders(
+      <BranchesTable
+        client={client}
+        branchById={new Map()}
+        repoById={new Map([[repo.repo_id, repo]])}
+        boardById={new Map()}
+        sessionsByBranch={new Map()}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByTitle('Archived'));
+    await waitFor(() => expect(service.findAll).toHaveBeenCalled());
+
+    act(() => removedListener?.(branch));
+    await act(async () => resolveFetch([branch]));
+
+    await waitFor(() => expect(screen.queryByText('raced-remove')).not.toBeInTheDocument());
+  });
+
+  it('inserts a branch archived by another client even when it was not cached', async () => {
+    const repo = makeRepo();
+    const branch = {
+      branch_id: 'branch-newly-archived',
+      repo_id: repo.repo_id,
+      name: 'newly-archived',
+      archived: true,
+      created_at: '2026-08-14T00:00:00.000Z',
+    } as unknown as Branch;
+    let patchedListener: ((value: Branch) => void) | undefined;
+    const service = {
+      findAll: vi.fn().mockResolvedValue([]),
+      on: vi.fn((event: string, listener: (value: Branch) => void) => {
+        if (event === 'patched') patchedListener = listener;
+      }),
+      removeListener: vi.fn(),
+    };
+    const client = { service: vi.fn(() => service) } as unknown as AgorClient;
+
+    renderWithProviders(
+      <BranchesTable
+        client={client}
+        branchById={new Map()}
+        repoById={new Map([[repo.repo_id, repo]])}
+        boardById={new Map()}
+        sessionsByBranch={new Map()}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByTitle('Archived'));
+    await waitFor(() => expect(service.findAll).toHaveBeenCalled());
+
+    act(() => patchedListener?.(branch));
+
+    expect(await screen.findByText('newly-archived')).toBeInTheDocument();
+  });
 });

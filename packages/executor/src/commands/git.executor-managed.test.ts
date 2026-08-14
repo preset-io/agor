@@ -73,6 +73,8 @@ vi.mock('../services/feathers-client.js', () => ({
   createExecutorClient: mocks.createExecutorClient,
   getExecutorBranchesService: (client: { service: (name: string) => unknown }) =>
     client.service('branches'),
+  getExecutorReposService: (client: { service: (name: string) => unknown }) =>
+    client.service('repos'),
 }));
 
 vi.mock('./unix.js', async () => {
@@ -272,13 +274,14 @@ describe('managed executor git/fs commands', () => {
     createClient({
       repo: {
         repo_id: repoId,
+        slug: 'preset-io/agor',
         local_path: '/trusted/repo',
         remote_url: 'https://user:secret@example.com/trusted/repo.git',
       },
       branch: {
         branch_id: branchId,
         repo_id: repoId,
-        path: '/trusted/branch',
+        path: '/safe/worktrees/preset-io/agor/feature',
         name: 'feature',
         ref: 'trusted-ref',
         base_ref: 'trusted-base',
@@ -297,6 +300,7 @@ describe('managed executor git/fs commands', () => {
           branchId,
           filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
           repoId,
+          branchesRoot: '/safe/worktrees',
           useReference: true,
         },
       },
@@ -320,13 +324,14 @@ describe('managed executor git/fs commands', () => {
     createClient({
       repo: {
         repo_id: repoId,
+        slug: 'preset-io/agor',
         local_path: '/trusted/repo',
         remote_url: 'https://example.com/repo.git',
       },
       branch: {
         branch_id: branchId,
         repo_id: repoId,
-        path: '/trusted/branch',
+        path: '/safe/worktrees/preset-io/agor/feature',
         name: 'feature',
         ref: 'feature',
         base_ref: 'main',
@@ -349,6 +354,7 @@ describe('managed executor git/fs commands', () => {
           branchId,
           filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
           repoId,
+          branchesRoot: '/safe/worktrees',
           initUnixGroup: true,
           daemonUser: 'agor',
         },
@@ -390,6 +396,7 @@ describe('managed executor git/fs commands', () => {
           branchId,
           filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
           repoId,
+          branchesRoot: '/safe/worktrees',
         },
       },
       {}
@@ -426,6 +433,7 @@ describe('managed executor git/fs commands', () => {
           branchId,
           filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
           repoId,
+          branchesRoot: '/safe/worktrees',
         },
       },
       {}
@@ -954,13 +962,18 @@ describe('managed executor git/fs commands', () => {
 
   it('derives git.repo.delete paths from daemon records instead of payload paths', async () => {
     createClient({
-      repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
+      repo: {
+        repo_id: repoId,
+        slug: 'org/repo',
+        repo_type: 'remote',
+        local_path: '/safe/repos/org/repo',
+      },
       branches: [
         {
           branch_id: branchId,
           repo_id: repoId,
           name: 'feature',
-          path: '/safe/worktrees/repo/feature',
+          path: '/safe/worktrees/org/repo/feature',
         },
       ],
     });
@@ -972,17 +985,62 @@ describe('managed executor git/fs commands', () => {
 
     expect(result.success).toBe(true);
     expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(
-      '/safe/worktrees/repo/feature',
+      '/safe/worktrees/org/repo/feature',
       '/safe/worktrees',
-      { expectedRelativePath: join('repo', 'feature') }
+      { expectedRelativePath: join('org/repo', 'feature') }
     );
-    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
+    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/org/repo', '/safe/repos', {
+      expectedRelativePath: 'org/repo',
+    });
+  });
+
+  it('refuses deletion when another same-tenant repo row aliases the managed root', async () => {
+    const repo = {
+      repo_id: repoId,
+      slug: 'org/repo',
+      repo_type: 'remote',
+      local_path: '/safe/repos/org/repo',
+    };
+    createClient({
+      repo,
+      repoPages: [
+        [
+          repo,
+          {
+            repo_id: '550e8400-e29b-41d4-a716-446655440099',
+            slug: 'attacker/alias',
+            repo_type: 'local',
+            local_path: repo.local_path,
+          },
+        ],
+      ],
+      branches: [],
+    });
+
+    const result = await handleGitRepoDelete(
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: expect.stringMatching(/multiple metadata rows/i) },
+    });
+    expect(mocks.deleteRepoDirectory).not.toHaveBeenCalled();
   });
 
   it('uses slug-derived output paths for git.clone to avoid same-basename collisions', async () => {
     const previousGitConfigParameters = process.env.GIT_CONFIG_PARAMETERS;
     const patchedRepos: Array<Record<string, unknown>> = [];
-    createClient({ repo: { repo_id: repoId }, patchedRepos });
+    createClient({
+      repo: {
+        repo_id: repoId,
+        slug: 'smoke/agor-assistant-pr1258',
+        repo_type: 'remote',
+        local_path: '/safe/repos/smoke/agor-assistant-pr1258',
+      },
+      patchedRepos,
+    });
 
     try {
       const result = await handleGitClone(
@@ -1006,10 +1064,8 @@ describe('managed executor git/fs commands', () => {
       expect(process.env.GIT_CONFIG_PARAMETERS).toContain(
         "'safe.directory=/safe/repos/smoke/agor-assistant-pr1258'"
       );
-      expect(patchedRepos).toContainEqual(
-        expect.objectContaining({
-          local_path: '/safe/repos/smoke/agor-assistant-pr1258',
-        })
+      expect(patchedRepos).not.toContainEqual(
+        expect.objectContaining({ local_path: expect.anything() })
       );
       expect(patchedRepos.at(-1)).toMatchObject({ clone_status: 'ready' });
     } finally {
@@ -1023,7 +1079,20 @@ describe('managed executor git/fs commands', () => {
 
   it('keeps a cloned repo non-ready when lifecycle permission sync fails', async () => {
     const patchedRepos: Array<Record<string, unknown>> = [];
-    createClient({ repo: { repo_id: repoId }, patchedRepos });
+    createClient({
+      repo: {
+        repo_id: repoId,
+        slug: 'org/repo',
+        repo_type: 'remote',
+        local_path: '/safe/repos/org/repo',
+      },
+      patchedRepos,
+    });
+    mocks.cloneRepo.mockResolvedValueOnce({
+      path: '/safe/repos/org/repo',
+      repoName: 'repo',
+      defaultBranch: 'main',
+    });
     mocks.handleUnixSyncRepo.mockResolvedValueOnce({
       success: false,
       error: { code: 'UNIX_SYNC_REPO_FAILED', message: 'chgrp failed' },
@@ -1035,7 +1104,7 @@ describe('managed executor git/fs commands', () => {
         sessionToken: 'tenant-token',
         params: {
           url: 'https://example.com/repo.git',
-          slug: 'repo',
+          slug: 'org/repo',
           repoId,
           initUnixGroup: true,
           daemonUser: 'agor',
@@ -1061,10 +1130,15 @@ describe('managed executor git/fs commands', () => {
       branch_id: `branch-${index}`,
       repo_id: repoId,
       name: `branch-${index}`,
-      path: `/safe/worktrees/repo/branch-${index}`,
+      path: `/safe/worktrees/org/repo/branch-${index}`,
     }));
     createClient({
-      repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
+      repo: {
+        repo_id: repoId,
+        slug: 'org/repo',
+        repo_type: 'remote',
+        local_path: '/safe/repos/org/repo',
+      },
       branchPages: [branches.slice(0, 1000), branches.slice(1000)],
     });
 
@@ -1077,16 +1151,23 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.deleteBranchDirectory).toHaveBeenCalledTimes(1002);
     expect(mocks.deleteBranchDirectory).toHaveBeenNthCalledWith(
       1001,
-      '/safe/worktrees/repo/branch-1000',
+      '/safe/worktrees/org/repo/branch-1000',
       '/safe/worktrees',
-      { expectedRelativePath: join('repo', 'branch-1000') }
+      { expectedRelativePath: join('org/repo', 'branch-1000') }
     );
-    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
+    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/org/repo', '/safe/repos', {
+      expectedRelativePath: 'org/repo',
+    });
   });
 
   it('rejects git.repo.delete if branch query returns a foreign branch', async () => {
     createClient({
-      repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
+      repo: {
+        repo_id: repoId,
+        slug: 'org/repo',
+        repo_type: 'remote',
+        local_path: '/safe/repos/org/repo',
+      },
       branches: [
         { branch_id: branchId, repo_id: '550e8400-e29b-41d4-a716-446655440099', path: '/bad' },
       ],

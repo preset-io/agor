@@ -167,34 +167,21 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
 
   // Tool 5: agor_repos_update
   //
-  // Patch repo metadata after creation. Validation + uniqueness checks live
+  // Patch non-filesystem repo metadata after creation. Validation lives
   // on the service (`ReposService.updateMetadata`) so REST / UI / direct
   // callers can't drift from this surface.
   server.registerTool(
     'agor_repos_update',
     {
       description:
-        "Patch a repository's metadata (name, slug, repo_type, remote_url, default_branch). " +
-        'Useful for correcting metadata after a `create_local` workaround — e.g. flipping ' +
-        '`repo_type: "local" → "remote"` so the repo is treated as a managed clone. ' +
-        'Note: changing `slug` updates the DB only; the on-disk directory at ' +
-        '~/.agor/repos/<slug> is NOT moved.',
+        "Patch a repository's non-filesystem metadata (name, remote_url, default_branch). " +
+        'The slug, repository type, and local path are immutable because they own filesystem roots.',
       inputSchema: z.object({
         repoId: mcpRequiredId('repoId', 'Repository'),
         name: mcpOptionalString('name', 'Human-readable name'),
-        slug: mcpOptionalString(
-          'slug',
-          'URL-friendly slug in org/name format. Must be unique across all repos.'
-        ),
-        repo_type: z
-          .enum(['remote', 'local'])
-          .optional()
-          .describe(
-            'Repository management type. Switching to "remote" requires `remote_url` (in this patch or already set on the repo).'
-          ),
         remote_url: mcpOptionalString(
           'remote_url',
-          'Git remote URL. Required when `repo_type` is "remote".'
+          'Git remote URL. Managed remote repositories must retain a URL.'
         ),
         default_branch: mcpOptionalString(
           'default_branch',
@@ -209,10 +196,6 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       const patch: Parameters<ReposServiceImpl['updateMetadata']>[1] = {};
       const name = coerceString(args.name);
       if (name !== undefined) patch.name = name;
-      const slug = coerceString(args.slug);
-      if (slug !== undefined) patch.slug = slug;
-      const repoType = coerceString(args.repo_type);
-      if (repoType === 'remote' || repoType === 'local') patch.repo_type = repoType;
       const remoteUrl = coerceString(args.remote_url);
       if (remoteUrl !== undefined) patch.remote_url = remoteUrl;
       const defaultBranch = coerceString(args.default_branch);

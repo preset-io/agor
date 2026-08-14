@@ -461,7 +461,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   app.use('/repos', createReposService(db, app), {
-    methods: ['find', 'get', 'create', 'update', 'patch', 'remove'],
+    // Registration goes through /repos/clone or /repos/local so filesystem
+    // identity is derived server-side. Whole-row replacement is never public.
+    methods: ['find', 'get', 'patch', 'remove'],
   });
 
   // First-class schedules. RBAC hooks wired in register-hooks.ts.

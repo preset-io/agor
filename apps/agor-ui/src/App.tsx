@@ -16,6 +16,7 @@ import type {
   GatewayChannelPatchData,
   PermissionMode,
   Repo,
+  RepoClientPatch,
   Session,
   SessionID,
   SpawnConfig,
@@ -1345,7 +1346,7 @@ function AppContent() {
     }
   };
 
-  const handleUpdateRepo = async (repoId: string, updates: Partial<Repo>) => {
+  const handleUpdateRepo = async (repoId: string, updates: RepoClientPatch) => {
     if (!client) return;
     try {
       await client.service('repos').patch(repoId, updates);

@@ -4,6 +4,7 @@ import {
   extractSlugFromUrl,
   formatRepoReference,
   isValidGitUrl,
+  isValidManagedRepoSlug,
   isValidSlug,
   parseRepoReference,
   resolveRepoReference,
@@ -444,6 +445,24 @@ describe('isValidSlug', () => {
     it('should reject slug with backslash', () => {
       expect(isValidSlug('org\\repo')).toBe(false);
     });
+
+    it('should reject filesystem dot segments', () => {
+      expect(isValidSlug('../victim')).toBe(false);
+      expect(isValidSlug('org/..')).toBe(false);
+      expect(isValidSlug('./victim')).toBe(false);
+      expect(isValidSlug('org/.')).toBe(false);
+    });
+  });
+});
+
+describe('isValidManagedRepoSlug', () => {
+  it('keeps legacy single-segment namespaces safe and rejects traversal', () => {
+    expect(isValidManagedRepoSlug('agor')).toBe(true);
+    expect(isValidManagedRepoSlug('preset-io/agor')).toBe(true);
+    expect(isValidManagedRepoSlug('../victim')).toBe(false);
+    expect(isValidManagedRepoSlug('org/..')).toBe(false);
+    expect(isValidManagedRepoSlug('org/repo/nested')).toBe(false);
+    expect(isValidManagedRepoSlug('/absolute')).toBe(false);
   });
 });
 

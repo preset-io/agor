@@ -5,7 +5,12 @@
  * Uses session token for authentication instead of user credentials.
  */
 
-import { type AgorClient, type BranchesExecutorService, createClient } from '@agor/core/api';
+import {
+  type AgorClient,
+  type BranchesExecutorService,
+  createClient,
+  type ReposExecutorService,
+} from '@agor/core/api';
 import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 import { createAuthRetryAroundHook, createSingleFlight } from './feathers-auth-retry.js';
 
@@ -14,6 +19,10 @@ export type { AgorClient } from '@agor/core/api';
 
 export function getExecutorBranchesService(client: AgorClient): BranchesExecutorService {
   return client.service('branches') as unknown as BranchesExecutorService;
+}
+
+export function getExecutorReposService(client: AgorClient): ReposExecutorService {
+  return client.service('repos') as unknown as ReposExecutorService;
 }
 
 const DEBUG_FEATHERS_CLIENT =

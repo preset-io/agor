@@ -34,6 +34,7 @@ import {
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
   protectExternalBranchManagedWrites,
+  protectExternalRepoManagedWrites,
   protectExternalTaskCreate,
   protectServerManagedTaskWrites,
   protectServerManagedUnixGroupWrites,
@@ -297,6 +298,52 @@ describe('protectExternalBranchManagedWrites', () => {
       { provider: undefined }
     );
     expect(protectExternalBranchManagedWrites(hook)).toBe(hook);
+  });
+});
+
+describe('protectExternalRepoManagedWrites', () => {
+  const context = (data: Record<string, unknown>, payload?: Record<string, unknown>): HookContext =>
+    ({
+      path: 'repos',
+      method: 'patch',
+      id: '550e8400-e29b-41d4-a716-446655440001',
+      data,
+      params: {
+        provider: 'rest',
+        authentication: payload ? { payload } : undefined,
+      },
+    }) as HookContext;
+
+  it.each(['slug', 'repo_type', 'local_path'])(
+    'rejects external mutation of filesystem identity field %s',
+    (field) => {
+      expect(() => protectExternalRepoManagedWrites(context({ [field]: 'forged' }))).toThrow(
+        /immutable/
+      );
+    }
+  );
+
+  it('rejects clone lifecycle forgery by an ordinary member', () => {
+    expect(() => protectExternalRepoManagedWrites(context({ clone_status: 'ready' }))).toThrow(
+      /managed by the daemon/
+    );
+  });
+
+  it('accepts clone lifecycle results only for the credential-scoped row', () => {
+    const payload = {
+      type: 'service',
+      sub: 'executor-service',
+      purpose: 'executor-service',
+      command: 'git.clone',
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+    };
+    const hook = context({ clone_status: 'ready' }, payload);
+    expect(protectExternalRepoManagedWrites(hook)).toBe(hook);
+    expect(() =>
+      protectExternalRepoManagedWrites(
+        context({ clone_status: 'ready' }, { ...payload, repo_id: 'victim' })
+      )
+    ).toThrow(/managed by the daemon/);
   });
 });
 

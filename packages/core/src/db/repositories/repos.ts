@@ -11,6 +11,7 @@ import type {
   RepoID,
   UUID,
 } from '@agor/core/types';
+import { REPO_IMMUTABLE_FIELDS } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
@@ -397,6 +398,14 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // STEP 2: Deep merge updates into current repo (in memory)
         // Preserves nested objects like permission_config when doing partial updates
         const merged = deepMerge(current, updates);
+        // Filesystem identity is creation-time state. Enforce this at the
+        // repository boundary as defense in depth for daemon-internal callers
+        // that do not traverse Feathers transport hooks.
+        for (const field of REPO_IMMUTABLE_FIELDS) {
+          (merged as unknown as Record<string, unknown>)[field] = (
+            current as unknown as Record<string, unknown>
+          )[field];
+        }
         merged.unix_group = resolveRepoGroupUpdate(
           current.repo_id as RepoID,
           current.unix_group,

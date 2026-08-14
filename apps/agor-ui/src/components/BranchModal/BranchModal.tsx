@@ -4,6 +4,7 @@ import type {
   Branch,
   BranchArchiveOrDeleteOptions,
   Repo,
+  RepoClientPatch,
   Session,
   User,
 } from '@agor-live/client';
@@ -47,7 +48,7 @@ export interface BranchModalProps {
   // The General / Teammate / Permissions form does NOT route through this —
   // it calls `client.service('branches').patch()` directly so errors bubble.
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
-  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
+  onUpdateRepo?: (repoId: string, updates: RepoClientPatch) => void;
   onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onOpenSettings?: () => void; // Navigate to Settings → Repositories
   onSessionClick?: (sessionId: string) => void;

@@ -24,6 +24,7 @@ import {
   type AgorClient,
   type Branch,
   type Repo,
+  type RepoClientPatch,
   type RepoEnvironment,
   validateRepoEnvironment,
 } from '@agor-live/client';
@@ -65,7 +66,7 @@ interface EnvironmentTabProps {
   branch: Branch;
   repo: Repo;
   client: AgorClient | null;
-  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
+  onUpdateRepo?: (repoId: string, updates: RepoClientPatch) => void;
   onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => void;
   canControlEnvironment?: boolean;
 }

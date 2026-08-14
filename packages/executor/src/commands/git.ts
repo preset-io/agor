@@ -21,10 +21,10 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { getReposDir } from '@agor/core/config';
+import { getReposDir, isValidManagedRepoSlug, isValidSlug } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
-import { type BranchID, isValidManagedBranchName } from '@agor/core/types';
+import { type BranchID, isValidManagedBranchName, type Repo } from '@agor/core/types';
 import { diagnoseGit } from '@agor/git';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
@@ -64,7 +64,11 @@ import type {
   GitRepoRealignOriginPayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
-import { createExecutorClient, getExecutorBranchesService } from '../services/feathers-client.js';
+import {
+  createExecutorClient,
+  getExecutorBranchesService,
+  getExecutorReposService,
+} from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 import {
   fixBranchGitDirPermissionsBasic,
@@ -351,6 +355,19 @@ interface BranchPathRecord {
   path?: string;
 }
 
+async function fetchAllRepos(client: AgorClient): Promise<Repo[]> {
+  const repos: Repo[] = [];
+  const limit = 1000;
+  let skip = 0;
+  while (true) {
+    const result = await client.service('repos').find({ query: { $limit: limit, $skip: skip } });
+    const page = Array.isArray(result) ? result : result.data;
+    repos.push(...page);
+    if (Array.isArray(result) || page.length === 0 || repos.length >= result.total) return repos;
+    skip += page.length;
+  }
+}
+
 async function fetchAllBranchesForRepo(
   client: AgorClient,
   repoId: string
@@ -572,8 +589,17 @@ export async function handleGitRepoDelete(
 
     const repo = await client.service('repos').get(repoId);
     repoPath = repo.local_path;
-    if (!repoPath) {
-      throw new Error(`Repo ${repoId} has no local_path`);
+    if (!repoPath || repo.repo_type !== 'remote' || !isValidManagedRepoSlug(repo.slug)) {
+      throw new Error(`SAFETY CHECK FAILED: Repo ${repoId} has no canonical managed identity`);
+    }
+    const managedRepoPath = repoPath;
+    const aliases = (await fetchAllRepos(client)).filter(
+      (candidate) =>
+        candidate.repo_id !== repo.repo_id &&
+        resolve(candidate.local_path) === resolve(managedRepoPath)
+    );
+    if (aliases.length > 0) {
+      throw new Error('SAFETY CHECK FAILED: Repository root is owned by multiple metadata rows');
     }
 
     const branches = await fetchAllBranchesForRepo(client, repoId);
@@ -597,7 +623,9 @@ export async function handleGitRepoDelete(
       console.log(`🗑️  [git.repo.delete] Deleted branch directory: ${branch.path}`);
     }
 
-    await deleteRepoDirectory(repoPath, payload.params.reposRoot);
+    await deleteRepoDirectory(repoPath, payload.params.reposRoot, {
+      expectedRelativePath: repo.slug,
+    });
     deletedPaths.push(repoPath);
     console.log(`🗑️  [git.repo.delete] Deleted repository directory: ${repoPath}`);
 
@@ -678,6 +706,24 @@ export async function handleGitClone(
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.clone] Connected to daemon');
 
+    if (createDbRecord && !payload.params.repoId) {
+      throw new Error(
+        'Managed repository clones require a daemon-created repository identity before filesystem materialization'
+      );
+    }
+    if (createDbRecord) {
+      const persistedRepo = await client.service('repos').get(payload.params.repoId!);
+      if (
+        persistedRepo.repo_type !== 'remote' ||
+        persistedRepo.slug !== payload.params.slug ||
+        !cloneOutputPath ||
+        resolve(persistedRepo.local_path) !== resolve(cloneOutputPath) ||
+        !isValidSlug(persistedRepo.slug)
+      ) {
+        throw new Error('SAFETY CHECK FAILED: Repository filesystem identity is not canonical');
+      }
+    }
+
     // This check must run inside the executor, after impersonation/template
     // setup, because that is the process whose PATH and identity own the
     // actual clone. A CLI/daemon preflight can pass while this runtime cannot
@@ -726,6 +772,10 @@ export async function handleGitClone(
 
     console.log(`[git.clone] Clone successful: ${cloneResult.path}`);
 
+    if (outputPath && resolve(cloneResult.path) !== resolve(outputPath)) {
+      throw new Error('SAFETY CHECK FAILED: Clone result escaped the canonical repository root');
+    }
+
     // Compute slug for the repo
     const slug = payload.params.slug || computeRepoSlug(safeCloneUrl);
     const repoName = extractRepoName(slug);
@@ -770,9 +820,8 @@ export async function handleGitClone(
             `slug=${slug} default_branch=${defaultBranch}` +
             (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
         );
-        await client.service('repos').patch(repoId, {
+        await getExecutorReposService(client).patch(repoId, {
           name: repoName,
-          local_path: cloneResult.path,
           default_branch: defaultBranch,
           clone_status: 'cloning',
           // Explicit null clears any prior `clone_error` (e.g. from a retry
@@ -785,26 +834,6 @@ export async function handleGitClone(
           clone_error: null as unknown as undefined,
           ...(environment ? { environment } : {}),
         });
-      } else {
-        // Legacy fallback (no pre-created row): create the record now. Used
-        // when a caller invokes the executor directly without going through
-        // `reposService.cloneRepository` (e.g. ad-hoc tooling).
-        console.log(
-          `[git.clone] Creating repo record: slug=${slug} default_branch=${defaultBranch}` +
-            (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
-        );
-        const repoRecord = await client.service('repos').create({
-          repo_type: 'remote',
-          slug,
-          name: repoName,
-          remote_url: safeCloneUrl,
-          local_path: cloneResult.path,
-          default_branch: defaultBranch,
-          clone_status: 'cloning',
-          ...(environment ? { environment } : {}),
-        });
-        repoId = repoRecord.repo_id;
-        console.log(`[git.clone] Repo record created: ${repoId}`);
       }
 
       // Apply Unix isolation in this tenant-mounted lifecycle executor. Do not
@@ -835,7 +864,7 @@ export async function handleGitClone(
       }
 
       if (repoId) {
-        await client.service('repos').patch(repoId, { clone_status: 'ready' });
+        await getExecutorReposService(client).patch(repoId, { clone_status: 'ready' });
       }
     }
 
@@ -864,7 +893,7 @@ export async function handleGitClone(
       try {
         const category = categorizeGitError(errorMessage);
         const firstLine = errorMessage.split('\n')[0]?.slice(0, 500) || errorMessage.slice(0, 500);
-        await client.service('repos').patch(payload.params.repoId, {
+        await getExecutorReposService(client).patch(payload.params.repoId, {
           clone_status: 'failed',
           clone_error: {
             // simple-git wraps git's exit code in the message rather than
@@ -1078,6 +1107,14 @@ export async function handleGitBranchAdd(
     const cloneDepth = branchRecord.clone_depth;
     const remoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
     const referencePath = payload.params.useReference ? repo.local_path : undefined;
+
+    if (!isValidManagedRepoSlug(repo.slug) || !isValidManagedBranchName(branchName)) {
+      throw new Error('SAFETY CHECK FAILED: Branch filesystem identity is incomplete');
+    }
+    const canonicalBranchPath = resolve(payload.params.branchesRoot, repo.slug, branchName);
+    if (resolve(branchPath) !== canonicalBranchPath) {
+      throw new Error('SAFETY CHECK FAILED: Branch path does not match its canonical identity');
+    }
 
     if (!repoPath && storageMode === 'worktree') {
       throw new Error(`Repository ${repoId} has no local_path for worktree materialization`);

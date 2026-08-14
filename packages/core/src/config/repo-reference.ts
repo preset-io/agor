@@ -116,7 +116,29 @@ export function extractSlugFromUrl(url: string): RepoSlug {
 export const REPO_SLUG_PATTERN = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
 
 export function isValidSlug(slug: string): boolean {
-  return REPO_SLUG_PATTERN.test(slug);
+  if (!REPO_SLUG_PATTERN.test(slug)) return false;
+  // Dot path segments are syntactically accepted by the character class but
+  // are not filesystem names. Reject them before a slug reaches path.join().
+  return slug.split('/').every((segment) => segment !== '.' && segment !== '..');
+}
+
+/**
+ * Filesystem-safe persisted repository namespace.
+ *
+ * Current registrations use `org/name`, while legacy rows may contain one
+ * segment (for example `agor`). Both remain safe and deletable; traversal,
+ * absolute paths, empty components, and deeper paths are rejected.
+ */
+export function isValidManagedRepoSlug(slug: unknown): slug is string {
+  if (typeof slug !== 'string') return false;
+  const segments = slug.split('/');
+  return (
+    segments.length >= 1 &&
+    segments.length <= 2 &&
+    segments.every(
+      (segment) => segment !== '.' && segment !== '..' && /^[a-zA-Z0-9._-]+$/.test(segment)
+    )
+  );
 }
 
 /**

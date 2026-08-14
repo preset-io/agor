@@ -322,6 +322,7 @@ describe('GitBranchAddPayloadSchema', () => {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        branchesRoot: '/safe/worktrees',
       },
     };
 
@@ -339,6 +340,7 @@ describe('GitBranchAddPayloadSchema', () => {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        branchesRoot: '/safe/worktrees',
         branch: 'untrusted',
         storageMode: 'worktree',
         cloneDepth: 100,
@@ -554,6 +556,7 @@ describe('Type guards', () => {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        branchesRoot: '/safe/worktrees',
       },
     };
     expect(isGitBranchAddPayload(payload)).toBe(true);

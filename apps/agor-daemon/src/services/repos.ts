@@ -18,6 +18,7 @@ import {
   getBranchPath,
   getReposDir,
   isValidGitUrl,
+  isValidManagedRepoSlug,
   isValidSlug,
   normalizeRepoUrl,
   PAGINATION,
@@ -29,6 +30,7 @@ import {
   BranchRepository,
   generateId,
   getCurrentTenantId,
+  isDatabaseUniqueConstraintError,
   RepoRepository,
   runWithTenantDatabaseTransaction,
   shortId,
@@ -46,12 +48,13 @@ import type {
   CloneRepositoryResult,
   QueryParams,
   Repo,
+  RepoClientPatch,
   RepoEnvironment,
   RepoSlug,
   UserID,
   UUID,
 } from '@agor/core/types';
-import { isValidManagedBranchName } from '@agor/core/types';
+import { isValidManagedBranchName, REPO_FILESYSTEM_IDENTITY_FIELDS } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
@@ -155,24 +158,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
   override async patch(
     id: string | null,
-    data: Partial<Repo>,
+    data: RepoClientPatch | Partial<Repo>,
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
-    if (
-      data.repo_type === 'local' &&
-      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
-    ) {
-      if (!id) {
-        throw new BadRequest(
-          'Bulk conversion to local repositories is unavailable in hosted multi-tenant mode.'
-        );
-      }
-      const current = await this.get(id, params);
-      if (current.repo_type !== 'local') {
-        throw new BadRequest(
-          'Local repository registration is unavailable in hosted multi-tenant mode.'
-        );
-      }
+    const identityField = REPO_FILESYSTEM_IDENTITY_FIELDS.find((field) =>
+      Object.hasOwn(data, field)
+    );
+    if (identityField) {
+      throw new BadRequest(
+        `Repository field '${identityField}' is assigned at registration and is immutable`
+      );
     }
     return super.patch(id, data, params);
   }
@@ -419,21 +414,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    *
    * Centralizes the rules that wrap the bare Feathers `patch` so callers
    * (MCP, REST, UI, internal) can't drift:
-   * - `slug` must match `isValidSlug` and be unique across all repos.
    * - `remote_url`, when provided, must be a valid git URL.
-   * - Resulting `repo_type: 'remote'` requires a `remote_url` (the patch's
-   *   own field or the existing row's).
    *
-   * Slug renames are DB-only — `local_path` on disk is not moved. Branches
-   * and running sessions hold absolute paths into the old directory, so a
-   * directory move is intentionally out of scope (do delete + re-clone).
+   * Filesystem identity (`slug`, `repo_type`, and `local_path`) is immutable.
+   * Changing it would detach branch roots from their durable owner. Operators
+   * who need a different identity must remove and re-register the repository.
    */
   async updateMetadata(
     id: string,
     patch: {
       name?: string;
-      slug?: string;
-      repo_type?: 'remote' | 'local';
       remote_url?: string;
       default_branch?: string;
     },
@@ -441,20 +431,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   ): Promise<Repo> {
     const cleanPatch: Partial<Repo> = {};
     if (patch.name !== undefined) cleanPatch.name = patch.name;
-
-    if (patch.slug !== undefined) {
-      if (!isValidSlug(patch.slug)) {
-        throw new Error('slug must be in org/name format');
-      }
-      cleanPatch.slug = patch.slug as RepoSlug;
-    }
-
-    if (patch.repo_type !== undefined) {
-      if (patch.repo_type !== 'remote' && patch.repo_type !== 'local') {
-        throw new Error('repo_type must be "remote" or "local"');
-      }
-      cleanPatch.repo_type = patch.repo_type;
-    }
 
     if (patch.remote_url !== undefined) {
       const safeRemoteUrl = patch.remote_url ? stripGitUrlCredentials(patch.remote_url) : '';
@@ -477,31 +453,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     const current = (await this.get(id, params)) as Repo;
 
-    // Slug uniqueness — pre-check for a clean error message, but the DB
-    // uniqueness constraint remains authoritative for concurrent writes.
-    if (cleanPatch.slug && cleanPatch.slug !== current.slug) {
-      const collision = await this.repoRepo.findBySlug(cleanPatch.slug);
-      if (collision && collision.repo_id !== current.repo_id) {
-        throw new Error(`A repository with slug '${cleanPatch.slug}' already exists`);
-      }
-    }
-
-    // Resulting `remote` repos must have a remote_url. Evaluate against the
-    // post-patch shape so we catch both "URL provided in patch" and
-    // "URL already on the row".
-    const effectiveType = cleanPatch.repo_type ?? current.repo_type;
-    if (
-      effectiveType === 'local' &&
-      current.repo_type !== 'local' &&
-      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
-    ) {
-      throw new BadRequest(
-        'Local repository registration is unavailable in hosted multi-tenant mode.'
-      );
-    }
     const effectiveRemoteUrl =
       'remote_url' in cleanPatch ? cleanPatch.remote_url : current.remote_url;
-    if (effectiveType === 'remote' && !effectiveRemoteUrl) {
+    if (current.repo_type === 'remote' && !effectiveRemoteUrl) {
       throw new Error('repo_type "remote" requires a remote_url');
     }
 
@@ -641,6 +595,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const repo = await this.get(id, params);
+    if (!isValidManagedRepoSlug(repo.slug)) {
+      throw new BadRequest('Repository filesystem identity is invalid; repair it before use');
+    }
 
     console.log('🔍 RepoService.createBranch - repo lookup result:', {
       repo_id: repo.repo_id,
@@ -802,7 +759,17 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       board_id: data.boardId as BoardID,
       created_by: userId,
     };
-    const branch = (await branchesService.create(branchCreateData, params)) as Branch;
+    let branch: Branch;
+    try {
+      branch = (await branchesService.create(branchCreateData, params)) as Branch;
+    } catch (error) {
+      if (isDatabaseUniqueConstraintError(error)) {
+        throw new Conflict(
+          `A branch named '${data.name}' already exists in this repository, including archived branches.`
+        );
+      }
+      throw error;
+    }
 
     // Add creating user as owner of the branch
     {
@@ -950,6 +917,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             branchId: branch.branch_id,
             repoId: repo.repo_id,
             filesystemOperationId,
+            branchesRoot: getBranchesDir(tenantId),
             userId: userId as string | undefined,
             // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
@@ -1221,7 +1189,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
     if (cleanup && repo.repo_type === 'remote') {
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        { command: 'git.repo.delete', repo_id: repo.repo_id }
       );
 
       const cleanupResult = await runExecutorCommand(

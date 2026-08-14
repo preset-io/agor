@@ -76,6 +76,25 @@ vi.mock('../utils/git-impersonation.js', () => ({
   resolveGitImpersonationForUser: impersonationMocks.resolveGitImpersonationForUser,
 }));
 
+describe('ReposService filesystem identity boundary', () => {
+  it.each([
+    ['slug', 'attacker/alias'],
+    ['repo_type', 'local'],
+    ['local_path', '/managed/repos/victim'],
+  ])('rejects direct mutation of %s before repository persistence', async (field, value) => {
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+
+    await expect(
+      service.patch('550e8400-e29b-41d4-a716-446655440001', {
+        [field]: value,
+      })
+    ).rejects.toThrow(/immutable/);
+  });
+});
+
 describe('ReposService.addLocalRepository executor boundary', () => {
   it('persists sanitized executor metadata with an explicit slug and no remote URL', async () => {
     executorMocks.runExecutorCommand.mockResolvedValueOnce({
@@ -158,6 +177,29 @@ describe('ReposService.createBranch Git lifecycle identity', () => {
     }
   );
 
+  it.each(['../victim', 'org/..', 'org/repo/nested', '/absolute'])(
+    'rejects unsafe persisted repository namespace %s before deriving a branch path',
+    async (slug) => {
+      const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
+      const service = new ReposService({} as never, app);
+      vi.spyOn(service, 'get').mockResolvedValue({
+        repo_id: '550e8400-e29b-41d4-a716-446655440001',
+        slug,
+        repo_type: 'remote',
+        local_path: '/managed/repos/victim',
+      } as never);
+
+      await expect(
+        service.createBranch('550e8400-e29b-41d4-a716-446655440001', {
+          name: 'safe-name',
+          ref: 'main',
+          boardId: '550e8400-e29b-41d4-a716-446655440003',
+        })
+      ).rejects.toThrow(/filesystem identity is invalid/);
+      expect(app.service).not.toHaveBeenCalled();
+    }
+  );
+
   it('uses the Git lifecycle resolver rather than the requesting-user read resolver', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
     impersonationMocks.resolveExecutorReadAsUser.mockClear();
@@ -219,6 +261,40 @@ describe('ReposService.createBranch Git lifecycle identity', () => {
       expect.objectContaining({ command: 'git.branch.add' }),
       expect.objectContaining({ asUser: 'daemon-user' })
     );
+  });
+
+  it('maps the authoritative concurrent name constraint to Conflict', async () => {
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor',
+      repo_type: 'remote',
+      local_path: '/managed/repos/preset-io/agor',
+      default_branch: 'main',
+    };
+    const app = {
+      get: () => ({}),
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
+        if (name === 'branches') {
+          return { create: vi.fn(async () => Promise.reject({ cause: { code: '23505' } })) };
+        }
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+
+    await expect(
+      service.createBranch(
+        repo.repo_id,
+        {
+          name: 'same-name',
+          ref: 'main',
+          boardId: '550e8400-e29b-41d4-a716-446655440003',
+        },
+        { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+      )
+    ).rejects.toMatchObject({ code: 409 });
   });
 });
 
