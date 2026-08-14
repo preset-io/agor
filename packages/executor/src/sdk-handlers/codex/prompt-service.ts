@@ -766,6 +766,17 @@ export class CodexPromptService {
         const customHeaders = headers ? { ...headers } : undefined;
         if (customHeaders) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
+          // Codex's streamable-HTTP MCP config takes `env_http_headers`: a map
+          // of header NAME -> the NAME of an env var whose value Codex reads at
+          // runtime. (It will not accept literal header values here the way
+          // Claude's `.mcp.json` `headers` object does — that indirection is
+          // also what keeps secrets out of the SDK-generated `--config` argv.)
+          // The env var name itself is arbitrary to Codex; we synthesize a
+          // unique one per session + server + position so concurrent sessions
+          // and multi-header servers don't clobber each other in the shared
+          // process.env. The index (not the header name) keys the suffix
+          // because header names like `X-API-Key` aren't valid env-var
+          // identifiers.
           const envHttpHeaders: Record<string, string> = {};
           for (const [index, [headerName, headerValue]] of Object.entries(
             customHeaders
