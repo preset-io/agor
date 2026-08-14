@@ -1147,7 +1147,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // different target branch is remote provenance/callback state, not a
       // tree child of the caller. Keep the implicit convenience branch-local:
       // - explicit string: resolve (supports short IDs), require same branch, and use
-      // - explicit null: opt out — create a root session with no parent
+      // - explicit null: opt out of genealogy — create a session with no
+      //   same-branch parent (cross-branch remote provenance is still recorded
+      //   below when a callback endpoint is configured)
       // - undefined (omitted): auto-link to the calling session only when the
       //   calling session lives in the same branch as the new session
       let resolvedParentSessionId: string | undefined;
@@ -1182,6 +1184,43 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           skippedAutoParentDueToBranchMismatch = true;
           remoteRelationshipSourceSessionId = callingSession.session_id;
           remoteRelationshipSourceBranchId = callingSession.branch_id;
+        }
+      }
+
+      // Durable remote-provenance backstop.
+      //
+      // The auto-parent detection above only records a `remote_create`
+      // relationship on the implicit convenience path: `parentSessionId`
+      // omitted AND a same-user session context present AND cross-branch. Two
+      // legitimate callback-configured paths fall through it and would produce
+      // a session that carries `callback_config` but no durable relationship —
+      // making the child invisible in the orchestrator's SessionTree even
+      // though the remote branch still renders the link/unlink toggle:
+      //   - `parentSessionId: null` — the caller opts out of *genealogy* (a
+      //     same-branch tree link), which is orthogonal to cross-branch remote
+      //     provenance. An "unlinked root session" that still reports back to a
+      //     remote parent must keep that edge.
+      //   - an explicit `callbackSessionId` targeting a session in another
+      //     branch (source of the callback ≠ the calling session, or no calling
+      //     session at all).
+      // A cross-branch callback endpoint IS the remote parent, so back it with
+      // the relationship whenever one isn't already established. The callback
+      // target's branch prompt permission was validated above, so this adds no
+      // new authorization surface.
+      if (
+        wantsCallback &&
+        effectiveCallbackSessionId &&
+        !resolvedParentSessionId &&
+        !remoteRelationshipSourceSessionId
+      ) {
+        const callbackTargetSession = (await ctx.app
+          .service('sessions')
+          .get(effectiveCallbackSessionId, ctx.baseServiceParams)) as Session;
+
+        if (callbackTargetSession.branch_id !== branch.branch_id) {
+          skippedAutoParentDueToBranchMismatch = true;
+          remoteRelationshipSourceSessionId = callbackTargetSession.session_id;
+          remoteRelationshipSourceBranchId = callbackTargetSession.branch_id;
         }
       }
 

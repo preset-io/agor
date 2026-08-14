@@ -910,6 +910,65 @@ describe('agor_sessions_create', () => {
     expect(patchCalls).toHaveLength(0);
   });
 
+  // Regression: an orchestrator that opts out of same-branch genealogy with
+  // `parentSessionId: null` while still requesting a callback to itself created
+  // a session that carried `callback_config` but NO durable `remote_create`
+  // relationship. The remote branch's link/unlink toggle (which reads
+  // callback_config / as_target) rendered, but the parent SessionTree — which
+  // projects surrogates from the source session's `remote_relationships` — had
+  // no edge to show, so the child was invisible upstream.
+  it('records a remote_create relationship for parentSessionId: null cross-branch with a callback', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-caller',
+          genealogy: { children: [] },
+        }),
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+      parentSessionId: null,
+      enableCallback: true,
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    // Genealogy opt-out is preserved: no same-branch parent, no parent patch.
+    expect(created.genealogy.parent_session_id).toBeUndefined();
+    expect(patchCalls).toHaveLength(0);
+    // But the durable cross-branch provenance edge IS recorded so the
+    // orchestrator's SessionTree can surface the child.
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toMatchObject({
+      source_session_id: 'sess-caller',
+      target_session_id: 'sess-new',
+      relationship_type: 'remote_create',
+      callback_enabled: true,
+      callback_session_id: 'sess-caller',
+    });
+  });
+
   it('does not auto-link to the calling session when creating in a different branch', async () => {
     const sessionCreates: unknown[] = [];
     const patchCalls: unknown[] = [];
