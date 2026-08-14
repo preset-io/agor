@@ -1,20 +1,15 @@
 /**
  * One catalog entry in the browse grid.
  *
- * The badge is `curated` and only `curated`. The row also carries a `verified`
- * boolean — a registry name match — which is deliberately not rendered: it
- * reads backwards exactly where curation was most careful, because the vendor
- * endpoints a Preset engineer hand-picked from vendor docs never appeared in
- * the registry under a matching name.
+ * The card carries no trust badge. Every entry on the shelf is hand-reviewed
+ * and shipped in the same file, so a mark saying so would be on every row —
+ * telling a user nothing they could act on and drawing the eye away from the
+ * one status that does differ between rows, which is whether Connect will get
+ * anywhere.
  */
 
 import type { MCPCatalogEntry } from '@agor/core/types';
-import {
-  CheckCircleOutlined,
-  LockOutlined,
-  QuestionCircleOutlined,
-  SafetyCertificateOutlined,
-} from '@ant-design/icons';
+import { CheckCircleOutlined, LockOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import { Avatar, Card, Flex, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { memo } from 'react';
 import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
@@ -61,17 +56,9 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
             {title.charAt(0).toUpperCase()}
           </Avatar>
           <Flex vertical style={{ minWidth: 0, flex: 1 }}>
-            <Space size={token.marginXXS} align="center">
-              <Text strong ellipsis>
-                {title}
-              </Text>
-              <Tooltip title="Reviewed by Preset">
-                <SafetyCertificateOutlined
-                  aria-label="Reviewed by Preset"
-                  style={{ color: token.colorPrimary }}
-                />
-              </Tooltip>
-            </Space>
+            <Text strong ellipsis>
+              {title}
+            </Text>
             <Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
               {entry.name}
             </Text>

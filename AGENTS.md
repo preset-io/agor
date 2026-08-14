@@ -524,27 +524,27 @@ takes it off the shelf on the next deploy.
 The file lists ~50 entries across two keys. `entries:` are servers the public
 [MCP registry](https://registry.modelcontextprotocol.io) publishes under exactly
 that `name`; `unpublished:` are vendor-run endpoints whose reverse-DNS name Agor
-inferred. Only the first may set `verified: true`, because only there has
-anything confirmed the name identifies the vendor's own server — the loader
-enforces that rather than trusting the file to stay honest.
+inferred. The split is a curation record only — both lists are offered on one
+shelf and connect the same way — and it is the only place that distinction is
+written down, since parsing flattens the two.
 
 `name` is the identity. It is what an installed server records in
 `catalog_entry_name`, so renaming an entry orphans every install of it.
 
 Each entry states an `auth_type` (`none` / `oauth` / `credentials`), or omits it
-where nobody has established the answer. That decides what the marketplace tells
-a user before they press Connect, and lets an entry needing an account be
-refused without a request. It is **not** what authorises an install:
-`mcp-catalog-connect.ts` probes the endpoint on every connect that is not
-already refused, because the file records what was true when it was last edited
-and a vendor can add authentication at any time. Only a valid JSON-RPC
-`initialize` result earns a connect. Servers requiring auth are refused —
-there is no credential model for them yet.
+where nobody has established the answer. It decides what the marketplace tells a
+user before they press Connect, and nothing else: `mcp-catalog-connect.ts`
+probes the endpoint on every connect, whatever the entry says, and installs only
+on a valid JSON-RPC `initialize` result. Servers the probe finds behind an
+account are refused — there is no credential model for them yet. When the probe
+contradicts the entry, the daemon logs it at `warn` with the stated and probed
+values; that log is the only thing that can catch a stale `auth_type`, because
+nothing else compares the file against the servers it describes.
 
 That probe goes through `createPinnedFetch`
 (`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,
 refuses it unless every resolved address is public, and connects to the address
-it checked.
+it checked. It is one request, to the entry's URL and nowhere else.
 
 The `mcp_catalog:` config section is retired. It stays loadable — an
 unrecognized top-level key throws, so removing it would stop the daemon of

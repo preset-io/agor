@@ -95,12 +95,10 @@ export type MCPCatalogCapability = (typeof MCP_CATALOG_CAPABILITIES)[number];
  *                   so it wants an API key.
  * - `unknown`     — `curated.yaml` does not state one.
  *
- * Nothing but `none` may be read as "this server is open", and `none` is a
- * claim about a third party's endpoint that a checked-in file cannot keep
- * current on its own. It decides what the marketplace renders and lets connect
- * refuse an entry without a round trip; it never stands in for the check
- * connect makes before it installs anything. See {@link MCP_CATALOG_AUTH_TYPES}
- * against {@link MCPCatalogProbedAuthType}.
+ * Every value here is a claim about a third party's endpoint that a checked-in
+ * file cannot keep current on its own, so this decides what the marketplace
+ * renders and nothing more. Connect probes the endpoint whatever the entry
+ * states, and takes the answer. See {@link MCPCatalogProbedAuthType}.
  */
 export const MCP_CATALOG_AUTH_TYPES = ['none', 'oauth', 'credentials', 'unknown'] as const;
 
@@ -118,22 +116,14 @@ export const MCP_CATALOG_AUTHORED_AUTH_TYPES = ['none', 'oauth', 'credentials'] 
 export type MCPCatalogAuthoredAuthType = (typeof MCP_CATALOG_AUTHORED_AUTH_TYPES)[number];
 
 /**
- * Result of an unauthenticated `initialize` probe against a remote MCP URL.
+ * Verdict of an unauthenticated `initialize` probe against a remote MCP URL.
  *
  * A superset of {@link MCPCatalogAuthType}: a live request can also find that
  * nothing answered, which is a statement about one moment and therefore
  * something only a probe can report. An entry cannot carry this verdict — it
  * exists to be acted on immediately, at the point of connecting.
  */
-export const MCP_CATALOG_PROBED_AUTH_TYPES = [
-  'none',
-  'oauth',
-  'credentials',
-  'unreachable',
-  'unknown',
-] as const;
-
-export type MCPCatalogProbedAuthType = (typeof MCP_CATALOG_PROBED_AUTH_TYPES)[number];
+export type MCPCatalogProbedAuthType = 'none' | 'oauth' | 'credentials' | 'unreachable' | 'unknown';
 
 /** Transport a catalog entry can be connected over. */
 export type MCPCatalogTransport = 'streamable-http' | 'sse' | 'stdio';
@@ -168,7 +158,6 @@ export interface MCPCatalogEntry {
   /** Plain-language statement of what connecting grants access to. */
   permission_disclosure: string;
   icon_url?: string;
-  verified: boolean;
   /** 1 = most popular. Absent sorts last. */
   popularity_rank?: number;
 
@@ -258,7 +247,7 @@ export function catalogServerSlug(name: string): string {
 }
 
 /** Sort keys the catalog service accepts. */
-export type MCPCatalogSort = 'popularity' | 'name' | 'relevance';
+export type MCPCatalogSort = 'popularity' | 'name';
 
 /**
  * Filters a catalog read narrows by.
@@ -274,7 +263,6 @@ export interface MCPCatalogFilters {
   category?: MCPCatalogCategory;
   /** Matches entries carrying this capability tag. */
   capability?: string;
-  verified?: boolean;
   has_remote?: boolean;
   auth_type?: MCPCatalogAuthType;
   /**
@@ -327,15 +315,4 @@ export interface MCPCatalogConnectResult {
   starter_prompt?: string;
   /** True when an existing install was reused rather than a second row created. */
   reused_existing_server: boolean;
-}
-
-/** Result of probing one endpoint. */
-export interface MCPCatalogProbeResult {
-  probed_auth_type: MCPCatalogProbedAuthType;
-  probed_at: Date;
-  /** The endpoint this verdict describes. */
-  probed_url: string;
-  auth_server_origin?: string;
-  /** Challenge scheme seen on a `credentials` verdict, e.g. `Basic`, `ApiKey`. */
-  probed_auth_scheme?: string;
 }

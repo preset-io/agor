@@ -18,7 +18,6 @@ function entry(overrides: Partial<MCPCatalogEntry> = {}): MCPCatalogEntry {
     benefit: 'Does a useful thing.',
     starter_prompt: 'Show me what you can do.',
     has_remote: true,
-    verified: false,
     remote_url: 'https://mcp.example.com/mcp',
     transport: 'streamable-http',
     auth_type: 'none',

@@ -121,7 +121,9 @@ export const entryTitle = catalogDisplayName;
  * without this the default experience is accepting a disclosure and then being
  * refused. `unknown` is its own case rather than being folded into either side:
  * connecting checks the endpoint and may well succeed, but an entry that does
- * not say cannot promise it will.
+ * not say cannot promise it will. It is what an entry naming an endpoint and
+ * stating no `auth_type` reads as, which is what curation is told to write
+ * wherever nobody has established one.
  */
 export type ConnectReadiness = 'ready' | 'unchecked' | 'blocked';
 
@@ -172,9 +174,8 @@ const CONNECT_STATUSES = {
 export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = ['none', 'unknown'];
 
 export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
-  if (!entry.has_remote || !entry.remote_url || entry.transport === 'stdio') {
-    return CONNECT_STATUSES.local;
-  }
+  // `has_remote` is derived from `remote_url`, so testing the URL tests both.
+  if (!entry.remote_url || entry.transport === 'stdio') return CONNECT_STATUSES.local;
   if (entry.auth_type === 'oauth' || entry.auth_type === 'credentials') {
     return CONNECT_STATUSES.needsAccount;
   }

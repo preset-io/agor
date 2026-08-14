@@ -31,7 +31,6 @@ entries:
     benefit: Alpha does issues.
     starter_prompt: Show me my issues.
     permission_disclosure: Reads issues.
-    verified: true
     popularity_rank: 1
     remote_url: https://mcp.alpha.example/mcp
     transport: streamable-http
@@ -44,7 +43,6 @@ entries:
     benefit: Bravo searches.
     starter_prompt: Search for something.
     permission_disclosure: Reads the public web.
-    verified: true
     popularity_rank: 2
     remote_url: https://mcp.bravo.example/mcp
     transport: streamable-http
@@ -106,16 +104,12 @@ describe('MCPCatalogService find', () => {
     ]);
   });
 
-  it('narrows by category, capability, and verified', async () => {
+  it('narrows by category and capability', async () => {
     expect(names((await service().find({ query: { category: 'search' } })).data)).toEqual([
       'com.bravo/mcp',
     ]);
     expect(names((await service().find({ query: { capability: 'logs' } })).data)).toEqual([
       'com.charlie/mcp',
-    ]);
-    expect(names((await service().find({ query: { verified: true } })).data)).toEqual([
-      'com.alpha/mcp',
-      'com.bravo/mcp',
     ]);
   });
 

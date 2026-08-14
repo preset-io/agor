@@ -9,7 +9,7 @@
  */
 
 import type { AgenticToolName, Branch, MCPCatalogEntry } from '@agor/core/types';
-import { SafetyCertificateOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { ThunderboltOutlined } from '@ant-design/icons';
 import {
   Alert,
   Avatar,
@@ -126,9 +126,6 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
               {title.charAt(0).toUpperCase()}
             </Avatar>
             <Text strong>{title}</Text>
-            <Tag color="success" icon={<SafetyCertificateOutlined />}>
-              Reviewed by Preset
-            </Tag>
           </Space>
         )
       }

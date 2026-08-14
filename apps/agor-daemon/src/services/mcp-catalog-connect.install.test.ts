@@ -52,7 +52,6 @@ const CURATED = {
   remote_url: 'https://mcp.deepwiki.com/mcp',
   has_remote: true,
   has_package: false,
-  verified: false,
   auth_type: 'none',
   permission_disclosure: 'Reads public GitHub repository content only.',
 } as unknown as MCPCatalogEntry;
@@ -127,7 +126,7 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
 describe('marketplace install, as it lands in the database', () => {
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
-    probeRemoteAuthType.mockResolvedValue({ probed_auth_type: 'none', probed_at: new Date() });
+    probeRemoteAuthType.mockResolvedValue('none');
   });
 
   it('leaves the install owned by the member who connected it', async () => {

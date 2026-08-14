@@ -22,7 +22,6 @@ const DEEPWIKI = {
   permission_disclosure: 'Reads public GitHub repository content only.',
   capabilities: ['docs'],
   has_remote: true,
-  verified: false,
   remote_url: 'https://mcp.deepwiki.com/mcp',
   transport: 'streamable-http',
   auth_type: 'none',

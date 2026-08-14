@@ -37,7 +37,6 @@ export type MCPCatalogParams = QueryParams<{
   search?: string;
   category?: MCPCatalogCategory;
   capability?: string;
-  verified?: boolean;
   has_remote?: boolean;
   auth_type?: MCPCatalogAuthType;
   auth_types?: MCPCatalogAuthType[];
@@ -64,7 +63,6 @@ export class MCPCatalogService {
       filters.category = query.category as MCPCatalogCategory;
     }
     if (typeof query.capability === 'string') filters.capability = query.capability;
-    if (typeof query.verified === 'boolean') filters.verified = query.verified;
     if (typeof query.has_remote === 'boolean') filters.has_remote = query.has_remote;
     if (typeof query.auth_type === 'string') {
       filters.auth_type = query.auth_type as MCPCatalogAuthType;

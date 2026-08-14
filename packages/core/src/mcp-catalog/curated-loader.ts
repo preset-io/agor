@@ -54,7 +54,6 @@ const catalogEntrySchema = z
     description: nonEmpty.optional(),
     icon_url: httpUrl.optional(),
     website_url: httpUrl.optional(),
-    verified: z.boolean().default(false),
     popularity_rank: z.int().positive().optional(),
     remote_url: httpUrl.optional(),
     transport: z.enum(TRANSPORTS).optional(),
@@ -86,13 +85,12 @@ export function curatedCatalogPath(): string {
 /**
  * Parse the catalog file.
  *
- * Both top-level lists are one catalog: every entry in either is offered, and
- * the split exists for a single invariant. `verified` is a user-facing trust
- * badge, so it has to mean that Agor vouches this name identifies the vendor's
- * own server — and under `unpublished:` nothing has confirmed that mapping,
- * because the name is Agor's inference from a domain. Enforcing it here rather
- * than relying on the file staying honest is the point: the data fix alone
- * decays as entries are added.
+ * Both top-level lists are one catalog: every entry in either is offered. The
+ * split records how the entry's `name` was arrived at — the registry publishes
+ * a server under exactly that name, or Agor inferred it from the vendor's
+ * domain. That is a curation fact, checked by a reviewer against a diff, and it
+ * survives here because nothing in the running system could recover it later:
+ * once parsed, an inferred name is indistinguishable from a confirmed one.
  *
  * Rejects duplicate `name`s and duplicate `popularity_rank`s across both lists:
  * either would make the marketplace's ordering depend on file order, which is
@@ -114,17 +112,6 @@ export function parseCuratedCatalog(source: string): MCPCatalogEntry[] {
       .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
       .join('; ');
     throw new CuratedCatalogError(`curated.yaml failed validation: ${issues}`);
-  }
-
-  for (const entry of parsed.data.unpublished) {
-    if (entry.verified) {
-      throw new CuratedCatalogError(
-        `curated.yaml marks ${entry.name} as verified, but it is listed under ` +
-          '`unpublished:` — nothing has confirmed that name identifies the ' +
-          "vendor's own server. Set `verified: false`, or move the entry to " +
-          '`entries:` once the registry publishes it under exactly this name.'
-      );
-    }
   }
 
   const parsedEntries = [...parsed.data.entries, ...parsed.data.unpublished];

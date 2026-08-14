@@ -294,7 +294,6 @@ export const mcpCatalogQuerySchema = Type.Intersect(
         Type.Union(MCP_CATALOG_CATEGORIES.map((category) => Type.Literal(category)))
       ),
       capability: Type.Optional(Type.String({ maxLength: 64 })),
-      verified: Type.Optional(Type.Boolean()),
       has_remote: Type.Optional(Type.Boolean()),
       auth_type: Type.Optional(
         Type.Union(MCP_CATALOG_AUTH_TYPES.map((value) => Type.Literal(value)))
@@ -307,9 +306,7 @@ export const mcpCatalogQuerySchema = Type.Intersect(
           maxItems: MCP_CATALOG_AUTH_TYPES.length,
         })
       ),
-      sort: Type.Optional(
-        Type.Union([Type.Literal('popularity'), Type.Literal('name'), Type.Literal('relevance')])
-      ),
+      sort: Type.Optional(Type.Union([Type.Literal('popularity'), Type.Literal('name')])),
     }),
     // Deliberately not `createQuerySchema`: that shape also advertises `$sort`
     // and `$select`, and this service honours neither. Ordering is the domain

@@ -24,7 +24,6 @@ const DEEPWIKI = {
   starter_prompt: 'Explain how authentication works in a repo I name.',
   capabilities: ['docs', 'code-search'],
   has_remote: true,
-  verified: false,
   remote_url: 'https://mcp.deepwiki.com/mcp',
   transport: 'streamable-http',
   auth_type: 'none',

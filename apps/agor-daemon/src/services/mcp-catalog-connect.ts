@@ -26,6 +26,7 @@ import type {
   MCPCatalogConnectData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
+  MCPCatalogProbedAuthType,
   MCPServer,
   MCPTransport,
   Session,
@@ -115,7 +116,9 @@ function isInstallOf(server: MCPServer, entry: MCPCatalogEntry & { remote_url: s
 function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCatalogEntry & {
   remote_url: string;
 } {
-  if (!entry.has_remote || !entry.remote_url || entry.transport === 'stdio') {
+  // `has_remote` is derived from `remote_url`, so testing the URL tests both —
+  // and is also what narrows the type.
+  if (!entry.remote_url || entry.transport === 'stdio') {
     throw new BadRequest(
       `${catalogDisplayName(entry)} has no remote endpoint; locally-run MCP servers are configured by an admin`
     );
@@ -150,34 +153,59 @@ function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unkn
 }
 
 /**
+ * Record an endpoint that answered differently from what its entry states.
+ *
+ * `auth_type` is authored text about somebody else's server, and connecting is
+ * the only moment anything compares it against that server. Without this the
+ * claim is unfalsifiable: nothing in the running system can ever contradict it,
+ * so an entry that was right when it was written stays "right" long after the
+ * vendor changed the endpoint. The disagreement is a curation defect whose fix
+ * is an edit to `curated.yaml`, so it is a warning and the connect carries on
+ * to whatever the endpoint actually said.
+ *
+ * Only a verdict about credentials counts. `unreachable` and `unknown` mean the
+ * endpoint disclosed nothing about authentication, and reporting those as a
+ * wrong entry would fill the log with claims about hosts nothing was learned
+ * from.
+ */
+function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAuthType): void {
+  if (entry.auth_type === 'unknown' || probed === entry.auth_type) return;
+  if (probed !== 'none' && probed !== 'oauth' && probed !== 'credentials') return;
+  console.warn(
+    '[mcp-catalog/connect] Catalog auth_type disagrees with the endpoint ' +
+      `entry=${entry.name} stated=${entry.auth_type} probed=${probed}`
+  );
+}
+
+/**
  * Establish that the entry's endpoint will accept an unauthenticated client,
  * and refuse the connect otherwise.
  *
- * An entry that states it needs an account is refused without a request: the
- * answer is already known and the endpoint has nothing to add. Every other
- * entry is probed, including one stating `none`. The statement is a claim about
- * a third party's endpoint made when the file was last edited, and a server may
- * since have started demanding credentials or stopped answering; installing on
- * the strength of it would hand the user a server that fails on first use. The
- * probe is one request against a server the user just asked to install.
+ * Every connectable entry is probed, whatever it states. `auth_type` is a claim
+ * about a third party's endpoint recorded when the file was last edited, and a
+ * vendor can put a server behind an account, or take it out from behind one, at
+ * any time. Believing the claim in either direction goes wrong, and one of the
+ * two directions goes wrong silently and forever: a stale `none` produces an
+ * install that fails on first use, which the user reports, while a stale
+ * `oauth` produces a refusal nothing can contradict. So the file decides what
+ * the marketplace renders, the endpoint decides what gets installed, and
+ * {@link logProbeDisagreement} is what keeps the two from drifting apart
+ * unnoticed.
  *
- * So the file decides what the marketplace shows and what can be refused for
- * free, and the endpoint itself decides what actually gets installed.
+ * The cost is one request, on a connect the user explicitly asked for.
  */
 async function resolveAuthRequirement(
   entry: MCPCatalogEntry & { remote_url: string }
 ): Promise<void> {
-  const needsAuth = (): never => {
+  const probed = await probeRemoteAuthType(entry.remote_url);
+  logProbeDisagreement(entry, probed);
+
+  if (probed === 'none') return;
+  if (probed === 'oauth' || probed === 'credentials') {
     throw new BadRequest(
       `${catalogDisplayName(entry)} requires authentication, which is not supported yet`
     );
-  };
-
-  if (entry.auth_type === 'oauth' || entry.auth_type === 'credentials') needsAuth();
-
-  const probed = (await probeRemoteAuthType(entry.remote_url)).probed_auth_type;
-  if (probed === 'none') return;
-  if (probed === 'oauth' || probed === 'credentials') needsAuth();
+  }
 
   throw new BadRequest(
     `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`

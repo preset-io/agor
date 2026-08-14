@@ -148,7 +148,7 @@ describe('mcpCatalogQueryValidator', () => {
   it('preserves a set of auth types, which one filter genuinely needs', async () => {
     const context = {
       params: {
-        query: { auth_types: ['none', 'unknown'], verified: 'true', unknown: 'removed' },
+        query: { auth_types: ['none', 'unknown'], has_remote: 'true', unknown: 'removed' },
       },
     };
 
@@ -158,7 +158,7 @@ describe('mcpCatalogQueryValidator', () => {
     // schema does not name arrives as no filter at all.
     expect(context.params.query).toEqual({
       auth_types: ['none', 'unknown'],
-      verified: true,
+      has_remote: true,
     });
   });
 

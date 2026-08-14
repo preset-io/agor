@@ -17,12 +17,11 @@ entries:
     benefit: Does a useful thing.
     starter_prompt: Try the useful thing.
     permission_disclosure: Reads your repositories.
-    verified: true
     popularity_rank: 1
 `;
 
 describe('parseCuratedCatalog', () => {
-  it('parses a well-formed entry and defaults verified to false', () => {
+  it('parses a well-formed entry', () => {
     const [entry] = parseCuratedCatalog(`
 entries:
   - name: com.example/mcp
@@ -36,7 +35,6 @@ entries:
     expect(entry.name).toBe('com.example/mcp');
     expect(entry.category).toBe('search');
     expect(entry.capabilities).toEqual(['web-search']);
-    expect(entry.verified).toBe(false);
     expect(entry.popularity_rank).toBeUndefined();
   });
 
@@ -85,63 +83,6 @@ entries:
     expect(() => parseCuratedCatalog(VALID_ENTRY + second)).toThrow(/duplicate popularity_rank 1/);
   });
 
-  it('rejects verified: true on an unpublished entry', () => {
-    // `verified` backs a user-facing trust badge and the "verified only"
-    // filter. Under `unpublished:` the name is Agor's inference from a domain,
-    // so nothing has confirmed it identifies that vendor's server.
-    const source = `
-entries:
-  - name: com.published/mcp
-    category: dev-tools
-    capabilities: [code-repos]
-    benefit: Real.
-    starter_prompt: Do it.
-    permission_disclosure: Reads repos.
-    verified: true
-    popularity_rank: 1
-unpublished:
-  - name: com.guessed/mcp
-    category: dev-tools
-    capabilities: [code-repos]
-    benefit: Guessed.
-    starter_prompt: Do it.
-    permission_disclosure: Reads repos.
-    verified: true
-    popularity_rank: 2
-`;
-
-    // The message must name the entry, so a failing daemon start is actionable.
-    expect(() => parseCuratedCatalog(source)).toThrow(/com\.guessed\/mcp/);
-    expect(() => parseCuratedCatalog(source)).toThrow(CuratedCatalogError);
-  });
-
-  it('accepts an unpublished entry that does not claim to be verified', () => {
-    const [published, guessed] = parseCuratedCatalog(`
-entries:
-  - name: com.published/mcp
-    category: dev-tools
-    capabilities: [code-repos]
-    benefit: Real.
-    starter_prompt: Do it.
-    permission_disclosure: Reads repos.
-    verified: true
-    popularity_rank: 1
-unpublished:
-  - name: com.guessed/mcp
-    category: dev-tools
-    capabilities: [code-repos]
-    benefit: Guessed.
-    starter_prompt: Do it.
-    permission_disclosure: Reads repos.
-    verified: false
-    popularity_rank: 2
-`);
-
-    // Both lists flow downstream as one catalog; only the badge differs.
-    expect(published).toMatchObject({ name: 'com.published/mcp', verified: true });
-    expect(guessed).toMatchObject({ name: 'com.guessed/mcp', verified: false });
-  });
-
   it('enforces name and rank uniqueness across both lists, not within each', () => {
     const withUnpublished = (name: string, rank: number) => `
 entries:
@@ -151,7 +92,6 @@ entries:
     benefit: Real.
     starter_prompt: Do it.
     permission_disclosure: Reads repos.
-    verified: true
     popularity_rank: 1
 unpublished:
   - name: ${name}
@@ -160,7 +100,6 @@ unpublished:
     benefit: Guessed.
     starter_prompt: Do it.
     permission_disclosure: Reads repos.
-    verified: false
     popularity_rank: ${rank}
 `;
 
@@ -224,21 +163,19 @@ describe('loadCuratedCatalog', () => {
     );
   });
 
-  it('never claims verified on an entry the registry does not publish', async () => {
-    // The invariant that makes the badge mean something.
-    // `parseCuratedCatalog` enforces it, so loading the real file at all proves
-    // it holds — this pins the split so a future edit that moved every entry
-    // into `entries:` to dodge the rule would be visible.
+  it('keeps the provenance split recording a real distinction', async () => {
+    // Which list an entry sits under is the only record of whether its `name` is
+    // one the registry publishes or one Agor inferred, and parsing throws that
+    // away. Nothing downstream can catch a curator filing an inferred name under
+    // `entries:`, so what is checkable is that the split has not collapsed to a
+    // formality every entry falls on one side of.
     const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
     const document = loadYaml(source) as {
-      entries: Array<{ verified?: boolean }>;
-      unpublished: Array<{ verified?: boolean }>;
+      entries: unknown[];
+      unpublished: unknown[];
     };
 
-    expect(document.unpublished.length).toBeGreaterThan(0);
-    expect(document.unpublished.every((entry) => entry.verified !== true)).toBe(true);
-    expect(document.entries.every((entry) => entry.verified === true)).toBe(true);
-    // A badge that is true on every row is a filter that matches everything.
+    expect(document.entries.length).toBeGreaterThan(0);
     expect(
       document.unpublished.length / (document.entries.length + document.unpublished.length)
     ).toBeGreaterThan(0.2);

@@ -78,7 +78,6 @@ function matches(entry: MCPCatalogEntry, filters: MCPCatalogFilters): boolean {
     return false;
   }
 
-  if (filters.verified !== undefined && entry.verified !== filters.verified) return false;
   if (filters.has_remote !== undefined && entry.has_remote !== filters.has_remote) return false;
   if (filters.auth_type && entry.auth_type !== filters.auth_type) return false;
   if (filters.auth_types && !filters.auth_types.includes(entry.auth_type)) return false;
@@ -101,8 +100,6 @@ function comparatorFor(
 
   if (sort === 'name') return byName;
 
-  // `relevance` has no scoring of its own, and hand-assigned rank is a better
-  // default than file order, so it shares the `popularity` ordering.
   return (a, b) => {
     // An entry nobody ranked sorts after every ranked one rather than ahead of
     // rank 1, which is where an absent value would land compared numerically.
@@ -112,14 +109,9 @@ function comparatorFor(
   };
 }
 
-/** One page of a catalog read, and how many entries matched in total. */
-export interface CatalogPage {
-  data: MCPCatalogEntry[];
-  total: number;
-}
-
 /**
- * Filter, order, and page the catalog.
+ * Filter, order, and page the catalog, and say how many entries matched in
+ * total.
  *
  * The returned array is freshly built on every call, so a caller may reorder or
  * splice it without reaching the held catalog; the entries inside it are the
@@ -128,7 +120,7 @@ export interface CatalogPage {
 export function queryCatalog(
   entries: readonly MCPCatalogEntry[],
   filters: MCPCatalogFilters = {}
-): CatalogPage {
+): { data: MCPCatalogEntry[]; total: number } {
   const matched = entries.filter((entry) => matches(entry, filters));
   matched.sort(comparatorFor(filters.sort));
 

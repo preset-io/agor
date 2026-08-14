@@ -4,15 +4,5 @@
  */
 
 export { type AuthProbeOptions, probeRemoteAuthType } from './auth-probe';
-export {
-  type CatalogPage,
-  findCatalogEntry,
-  loadCatalog,
-  queryCatalog,
-} from './catalog';
-export {
-  CuratedCatalogError,
-  curatedCatalogPath,
-  loadCuratedCatalog,
-  parseCuratedCatalog,
-} from './curated-loader';
+export { findCatalogEntry, loadCatalog, queryCatalog } from './catalog';
+export { CuratedCatalogError, loadCuratedCatalog } from './curated-loader';

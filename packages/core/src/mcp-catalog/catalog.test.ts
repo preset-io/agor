@@ -11,7 +11,6 @@ function entry(overrides: Partial<MCPCatalogEntry> & { name: string }): MCPCatal
     starter_prompt: 'Do the thing.',
     permission_disclosure: 'Reads a thing.',
     has_remote: true,
-    verified: false,
     auth_type: 'unknown',
     ...overrides,
   };
@@ -25,7 +24,6 @@ const ENTRIES: MCPCatalogEntry[] = [
     description: 'Reads the logs.',
     category: 'observability',
     capabilities: ['logs', 'metrics'],
-    verified: true,
   }),
   entry({ name: 'com.bravo/mcp', has_remote: false, auth_type: 'unknown' }),
 ];
@@ -49,12 +47,6 @@ describe('queryCatalog ordering', () => {
       'com.mike/mcp',
       'com.zulu/mcp',
     ]);
-  });
-
-  it('gives relevance the same order as popularity, having no scoring of its own', () => {
-    expect(queryCatalog(ENTRIES, { sort: 'relevance' }).data).toEqual(
-      queryCatalog(ENTRIES, { sort: 'popularity' }).data
-    );
   });
 
   it('is a total order, so paging cannot repeat or skip an entry', () => {
@@ -86,9 +78,8 @@ describe('queryCatalog filters', () => {
     expect(names({ capability: 'log' })).toEqual([]);
   });
 
-  it('narrows by category, verified, and endpoint presence', () => {
+  it('narrows by category and endpoint presence', () => {
     expect(names({ category: 'observability' })).toEqual(['com.mike/mcp']);
-    expect(names({ verified: true })).toEqual(['com.mike/mcp']);
     expect(names({ has_remote: false })).toEqual(['com.bravo/mcp']);
   });
 
