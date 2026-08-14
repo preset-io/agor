@@ -1,3 +1,5 @@
+import type { TerminalAllocatedEvent } from '@agor/core/types';
+
 /**
  * Server-only capability attached to a Feathers Socket.IO connection.
  *
@@ -9,15 +11,9 @@
  */
 export const TERMINAL_REQUEST_JOIN_CHANNEL = Symbol('agor.terminal-request-join-channel');
 
-export interface TerminalRequestAllocation {
-  userId: string;
-  terminalId: string;
-  branchId: string;
-}
-
 export interface TerminalRequestConnection {
   [TERMINAL_REQUEST_JOIN_CHANNEL]?: (
     channel: string,
-    allocation: TerminalRequestAllocation
+    allocation: TerminalAllocatedEvent
   ) => Promise<boolean>;
 }

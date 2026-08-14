@@ -64,8 +64,9 @@ const checks = [
       // terminal service additionally receives a server-only connection
       // capability that joins its authenticated requesting socket to a room
       // derived from trusted tenant/user/terminal identity before executor
-      // startup; clients cannot supply that room or capability.
-      'apps/agor-daemon/src/setup/socketio.ts': 16,
+      // startup, then removes that room if authentication changes while the
+      // join is pending; clients cannot supply that room or capability.
+      'apps/agor-daemon/src/setup/socketio.ts': 17,
     },
   },
 

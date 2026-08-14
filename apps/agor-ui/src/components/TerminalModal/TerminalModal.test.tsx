@@ -2,6 +2,11 @@ import type { AgorClient, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const terminalMock = vi.hoisted(() => ({
+  lines: [] as string[],
+  clearCalls: 0,
+}));
+
 // xterm touches canvas/DOM internals jsdom can't render; the modal's
 // reconnect/ready plumbing doesn't depend on real terminal output.
 vi.mock('@xterm/xterm', () => ({
@@ -12,9 +17,16 @@ vi.mock('@xterm/xterm', () => ({
     loadAddon() {}
     onData() {}
     onResize() {}
-    write() {}
-    writeln() {}
-    clear() {}
+    write(value: string) {
+      terminalMock.lines.push(value);
+    }
+    writeln(value: string) {
+      terminalMock.lines.push(value);
+    }
+    clear() {
+      terminalMock.clearCalls += 1;
+      terminalMock.lines.length = 0;
+    }
     dispose() {}
   },
 }));
@@ -72,10 +84,13 @@ const memberUser = { user_id: ALICE, role: 'member' } as unknown as User;
 // array each render would thrash the effect (tear down + re-attach) and reset
 // transient state under test.
 const NO_COMMANDS: string[] = [];
+const FAILURE_TEST_COMMANDS = ['echo should-not-run'];
 
 describe('TerminalModal reconnect + readiness', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    terminalMock.lines.length = 0;
+    terminalMock.clearCalls = 0;
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -184,7 +199,7 @@ describe('TerminalModal reconnect + readiness', () => {
         client={makeClient(socket, create)}
         user={memberUser}
         branchId={BRANCH}
-        initialCommands={NO_COMMANDS}
+        initialCommands={FAILURE_TEST_COMMANDS}
       />
     );
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
@@ -206,6 +221,7 @@ describe('TerminalModal reconnect + readiness', () => {
       });
     });
     expect(await screen.findByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+    expect(terminalMock.lines.join('\n')).toContain('Web terminal PTY support is unavailable');
 
     await act(async () => {
       resolveCreate({
@@ -218,5 +234,10 @@ describe('TerminalModal reconnect + readiness', () => {
       });
       await Promise.resolve();
     });
+    expect(terminalMock.clearCalls).toBe(0);
+    expect(terminalMock.lines.join('\n')).toContain('Web terminal PTY support is unavailable');
+    expect(socket.emitted.some(({ event }) => event === 'terminal:resize')).toBe(false);
+    expect(socket.emitted.some(({ event }) => event === 'terminal:input')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
   });
 });

@@ -23,6 +23,7 @@
 
 import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
+import type { BranchID, UserID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import {
@@ -60,8 +61,8 @@ interface FakeSocket {
   handlers: Map<string, (...args: any[]) => any>;
   on(event: string, fn: (...args: any[]) => any): void;
   emit(event: string, data: unknown): void;
-  join(channel: string): void;
-  leave(channel: string): void;
+  join(channel: string): void | Promise<void>;
+  leave(channel: string): void | Promise<void>;
   broadcast: {
     emit: (event: string, data: unknown) => void;
     to: (channel: string) => { emit: (event: string, data: unknown) => void };
@@ -259,6 +260,7 @@ function connect(io: FakeIO, socket: FakeSocket) {
 it('binds a server-only terminal subscription capability to the Feathers connection', async () => {
   const { io } = buildHarness();
   const socket = makeSocket('terminal-requester', io);
+  asUser(socket, ALICE);
   connect(io, socket);
 
   const join = socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL];
@@ -270,10 +272,134 @@ it('binds a server-only terminal subscription capability to the Feathers connect
   await expect(join?.(terminalChannel(), allocation)).resolves.toBe(true);
   expect(socket.joined).toContain(terminalChannel());
   expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
+  await expect(join?.(terminalChannel(ALICE, TERMINAL, 'other-tenant'), allocation)).resolves.toBe(
+    false
+  );
+  await expect(join?.(terminalChannel(), { ...allocation, userId: BOB })).resolves.toBe(false);
+  expect(socket.joined).not.toContain(terminalChannel(ALICE, TERMINAL, 'other-tenant'));
 
   socket.connected = false;
   await expect(join?.(terminalChannel(ALICE, 'other-terminal'), allocation)).resolves.toBe(false);
   expect(socket.joined).not.toContain(terminalChannel(ALICE, 'other-terminal'));
+});
+
+it('does not bind a terminal subscription capability to an anonymous socket', () => {
+  const { io } = buildHarness();
+  const socket = makeSocket('anonymous-terminal-requester', io);
+  connect(io, socket);
+
+  expect(socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeUndefined();
+});
+
+it('revokes a captured terminal subscription capability on logout', async () => {
+  const { app, io } = buildHarness();
+  const socket = makeSocket('logout-terminal-requester', io);
+  asUser(socket, ALICE);
+  connect(io, socket);
+  const connection = socket.feathers;
+  const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  expect(capturedJoin).toBeTypeOf('function');
+
+  (app as any).eventHandlers.get('logout')?.({}, { connection });
+
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+  await expect(capturedJoin?.(terminalChannel(), allocation)).resolves.toBe(false);
+  expect(socket.joined).not.toContain(terminalChannel());
+  expect(connection?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeUndefined();
+});
+
+it('revokes the previous user and tenant capability on authentication replacement', async () => {
+  const { app, io } = buildHarness({
+    multiTenancy: {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default' as never,
+      auth_claim: 'tenant_id',
+    },
+  });
+  const socket = makeSocket('replacement-terminal-requester', io);
+  socket.feathers = { user: { user_id: ALICE } };
+  socket.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+  connect(io, socket);
+  const connection = socket.feathers;
+  const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+
+  connection!.user = { user_id: BOB };
+  (app as any).eventHandlers.get('login')?.(
+    { user: { user_id: BOB } },
+    {
+      connection,
+      params: { authentication: { payload: { tenant_id: 'tenant-b' } } },
+    }
+  );
+
+  await expect(
+    capturedJoin?.(terminalChannel(ALICE, TERMINAL, 'tenant-a'), {
+      userId: ALICE,
+      terminalId: TERMINAL,
+      branchId: BRANCH,
+    })
+  ).resolves.toBe(false);
+  const replacementJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  expect(replacementJoin).toBeTypeOf('function');
+  await expect(
+    replacementJoin?.(terminalChannel(BOB, TERMINAL, 'tenant-b'), {
+      userId: BOB,
+      terminalId: TERMINAL,
+      branchId: BRANCH,
+    })
+  ).resolves.toBe(true);
+  expect(socket.joined).not.toContain(terminalChannel(ALICE, TERMINAL, 'tenant-a'));
+  expect(socket.joined).toContain(terminalChannel(BOB, TERMINAL, 'tenant-b'));
+});
+
+it('removes a terminal room when authentication changes while its join is pending', async () => {
+  const { app, io } = buildHarness({
+    multiTenancy: {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default' as never,
+      auth_claim: 'tenant_id',
+    },
+  });
+  const socket = makeSocket('pending-terminal-requester', io);
+  socket.feathers = { user: { user_id: ALICE } };
+  socket.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+  connect(io, socket);
+  const connection = socket.feathers;
+  const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  const channel = terminalChannel(ALICE, TERMINAL, 'tenant-a');
+  let releaseJoin!: () => void;
+  const joinGate = new Promise<void>((resolve) => {
+    releaseJoin = resolve;
+  });
+  const normalJoin = socket.join.bind(socket);
+  socket.join = async (candidate) => {
+    if (candidate === channel) await joinGate;
+    await normalJoin(candidate);
+  };
+
+  const pending = capturedJoin?.(channel, {
+    userId: ALICE,
+    terminalId: TERMINAL,
+    branchId: BRANCH,
+  });
+  await Promise.resolve();
+  connection!.user = { user_id: BOB };
+  (app as any).eventHandlers.get('login')?.(
+    { user: { user_id: BOB } },
+    {
+      connection,
+      params: { authentication: { payload: { tenant_id: 'tenant-b' } } },
+    }
+  );
+  releaseJoin();
+
+  await expect(pending).resolves.toBe(false);
+  expect(socket.joined).not.toContain(channel);
+  expect(socket.left).toContain(channel);
+  expect(socket.received).not.toContainEqual({
+    event: 'terminal:allocated',
+    data: expect.objectContaining({ userId: ALICE }),
+  });
 });
 
 function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
@@ -286,10 +412,10 @@ function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
 }
 
 // Identity helpers — keep all strings UUID-shaped enough for log slicing.
-const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111';
-const BOB = '22222222-bbbb-bbbb-bbbb-222222222222';
+const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111' as UserID;
+const BOB = '22222222-bbbb-bbbb-bbbb-222222222222' as UserID;
 const TERMINAL = '33333333-cccc-cccc-cccc-333333333333';
-const BRANCH = '44444444-dddd-dddd-dddd-444444444444';
+const BRANCH = '44444444-dddd-dddd-dddd-444444444444' as BranchID;
 
 function terminalChannel(userId = ALICE, terminalId = TERMINAL, tenantId = 'default') {
   return `tenant/${tenantId}/user/${userId}/terminal/${terminalId}`;
@@ -486,7 +612,7 @@ describe('Socket.IO lifecycle logging', () => {
     });
     const socket = makeSocket('alice-sock');
     connect(io, socket);
-    const connection = {};
+    const connection = { user: { user_id: ALICE } };
     socket.feathers = connection;
     (app as any).eventHandlers.get('login')?.(
       { user: { user_id: ALICE } },

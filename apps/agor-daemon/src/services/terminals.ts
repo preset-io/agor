@@ -21,7 +21,13 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
-import type { AuthenticatedParams, Branch, BranchID, UserID } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  Branch,
+  BranchID,
+  TerminalAllocatedEvent,
+  UserID,
+} from '@agor/core/types';
 import {
   resolveUnixUserForImpersonation,
   type UnixUserMode,
@@ -30,7 +36,6 @@ import {
 } from '@agor/core/unix';
 import {
   TERMINAL_REQUEST_JOIN_CHANNEL,
-  type TerminalRequestAllocation,
   type TerminalRequestConnection,
 } from '../terminal-socket-connection.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
@@ -102,7 +107,7 @@ export function terminalChannelName(tenantId: string, userId: string, terminalId
   return `tenant/${tenantId}/user/${userId}/terminal/${terminalId}`;
 }
 
-function terminalRequestAllocation(terminal: TerminalAttachment): TerminalRequestAllocation {
+function terminalRequestAllocation(terminal: TerminalAttachment): TerminalAllocatedEvent {
   return {
     userId: terminal.userId,
     terminalId: terminal.terminalId,
@@ -248,10 +253,7 @@ export class TerminalsService {
     data: CreateTerminalData;
     config: AgorConfig;
     scopeKey: string;
-    joinRequestingSocket: (
-      channel: string,
-      allocation: TerminalRequestAllocation
-    ) => Promise<boolean>;
+    joinRequestingSocket: (channel: string, allocation: TerminalAllocatedEvent) => Promise<boolean>;
   }): Promise<TerminalAttachment> {
     const { tenantId, userId, branch, data, config, scopeKey, joinRequestingSocket } = args;
     const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
