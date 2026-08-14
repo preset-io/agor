@@ -10,7 +10,11 @@ import { sanitizeDbError } from '../sanitize-error';
 import { messages as messagesTable } from '../schema';
 import { runWithTenantDatabaseScope } from '../tenant-scope';
 import { BranchRepository } from './branches';
-import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
+import {
+  MESSAGE_CONTENT_OMITTED,
+  type MessageParentIntegrityError,
+  MessagesRepository,
+} from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { UsersRepository } from './users';
@@ -220,6 +224,64 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         skip: 0,
       });
       expect(page).toMatchObject({ total: 0, data: [] });
+    });
+  });
+
+  it('rejects cross-tenant Session parents for taskless single and bulk creates', async () => {
+    const tenantA = `messages-parent-a-${generateId()}`;
+    const tenantB = `messages-parent-b-${generateId()}`;
+    let tenantBSessionId!: Message['session_id'];
+
+    await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      const repo = await new RepoRepository(scoped).create({
+        slug: `messages-parent-${generateId()}`,
+        name: 'Messages parent',
+        repo_type: 'remote',
+        remote_url: 'https://example.invalid/messages-parent.git',
+        local_path: `/tmp/messages-parent-${generateId()}`,
+        default_branch: 'main',
+      });
+      const branch = await new BranchRepository(scoped).create({
+        repo_id: repo.repo_id,
+        name: 'tenant-b',
+        path: `/tmp/messages-parent-${generateId()}`,
+        ref: 'main',
+        branch_unique_id: Math.floor(Math.random() * 1_000_000),
+        created_by: generateId() as UUID,
+      });
+      tenantBSessionId = (
+        await new SessionRepository(scoped).create({
+          branch_id: branch.branch_id,
+          title: 'tenant-b',
+          created_by: generateId() as UUID,
+        })
+      ).session_id;
+    });
+
+    const foreignMessage = (): Message => ({
+      message_id: generateId(),
+      session_id: tenantBSessionId,
+      type: 'assistant',
+      role: MessageRole.ASSISTANT,
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content_preview: 'must not cross tenants',
+      content: 'must not cross tenants',
+    });
+    await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+      const repository = new MessagesRepository(scoped);
+      await expect(repository.create(foreignMessage())).rejects.toMatchObject({
+        reason: 'session_tenant_mismatch',
+      } satisfies Partial<MessageParentIntegrityError>);
+      await expect(repository.createMany([foreignMessage()])).rejects.toMatchObject({
+        reason: 'session_tenant_mismatch',
+      } satisfies Partial<MessageParentIntegrityError>);
+    });
+
+    await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      await expect(
+        new MessagesRepository(scoped).findPage({ sessionId: tenantBSessionId, limit: 10 })
+      ).resolves.toMatchObject({ total: 0, data: [] });
     });
   });
 });

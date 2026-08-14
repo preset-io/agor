@@ -189,6 +189,17 @@ describe('MessagesRepository.create', () => {
     ).rejects.toThrow('task_id must belong to the Message Session');
   });
 
+  dbTest('rejects a taskless Message whose parent Session does not exist', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    await expect(
+      messages.create(
+        createMessageData({
+          session_id: '99999999-9999-7999-8999-999999999999' as SessionID,
+        })
+      )
+    ).rejects.toThrow('session_id must belong to the current tenant');
+  });
+
   dbTest('should store all JSON fields (content, tool_uses, metadata)', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);
@@ -285,6 +296,17 @@ describe('MessagesRepository.createMany', () => {
       ])
     ).rejects.toThrow('task_id must belong to the Message Session');
     await expect(messages.findBySessionId(messageSessionId)).resolves.toEqual([]);
+  });
+
+  dbTest('rejects a bulk row whose parent Session does not exist', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    await expect(
+      messages.createMany([
+        createMessageData({
+          session_id: '99999999-9999-7999-8999-999999999999' as SessionID,
+        }),
+      ])
+    ).rejects.toThrow('session_id must belong to the current tenant');
   });
 });
 

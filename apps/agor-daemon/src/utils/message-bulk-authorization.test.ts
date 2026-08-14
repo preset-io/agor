@@ -68,6 +68,19 @@ describe('authorizeMessageBulkCreate', () => {
     ).rejects.toBeInstanceOf(NotFound);
   });
 
+  it('still validates tenant ownership when branch RBAC is disabled', async () => {
+    const deps = dependencies({ session: null });
+    deps.branchRbacEnabled = false;
+    await expect(
+      authorizeMessageBulkCreate(
+        [message()],
+        { provider: 'rest', user: { user_id: 'owner-user', role: 'member' } } as never,
+        deps
+      )
+    ).rejects.toBeInstanceOf(NotFound);
+    expect(deps.sessionsRepository.findById).toHaveBeenCalledWith('session-private');
+  });
+
   it('requires one bounded Session transcript per request', async () => {
     const deps = dependencies();
     await expect(

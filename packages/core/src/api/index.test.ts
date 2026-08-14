@@ -726,6 +726,54 @@ describe('createClient', () => {
       });
     });
 
+    it('continues keyset hydration when the server clamps below the client page limit', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      findMock
+        .mockResolvedValueOnce({
+          total: 3,
+          limit: 1,
+          skip: 0,
+          data: [{ message_id: 'm3' }],
+        })
+        .mockResolvedValueOnce({
+          total: 3,
+          limit: 1,
+          skip: 0,
+          data: [{ message_id: 'm1', task_id: 't1', index: 0 }],
+        })
+        .mockResolvedValueOnce({
+          total: 2,
+          limit: 1,
+          skip: 0,
+          data: [{ message_id: 'm2', task_id: 't1', index: 1 }],
+        })
+        .mockResolvedValueOnce({
+          total: 1,
+          limit: 1,
+          skip: 0,
+          data: [{ message_id: 'm3', task_id: 't1', index: 2 }],
+        });
+
+      await expect(
+        messagesService.findAll({ query: { task_id: 't1', $sort: { index: 1 } } })
+      ).resolves.toEqual([
+        { message_id: 'm1', task_id: 't1', index: 0 },
+        { message_id: 'm2', task_id: 't1', index: 1 },
+        { message_id: 'm3', task_id: 't1', index: 2 },
+      ]);
+      expect(findMock).toHaveBeenCalledTimes(4);
+      expect(findMock).toHaveBeenNthCalledWith(4, {
+        query: {
+          task_id: 't1',
+          message_id: { $gt: 'm2', $lte: 'm3' },
+          $sort: { message_id: 1 },
+          $limit: 1000,
+        },
+      });
+    });
+
     // Executor lifecycle callbacks use explicitly registered custom methods.
     // server-side via `app.use(path, service, { methods })`, but the Feathers Socket.io
     // client only wires standard CRUD at construction time. Without an explicit

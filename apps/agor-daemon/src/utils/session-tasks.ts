@@ -15,7 +15,11 @@ import type { Paginated, Params, SessionID, Task } from '@agor/core/types';
 import { EXECUTING_TASK_STATUSES } from '@agor/core/types';
 
 function recencyKey(t: Task): number {
-  return new Date(t.started_at || t.created_at).getTime();
+  // Keep selection and comparison on the same indexed, non-null ordering key.
+  // `started_at` is nullable and is not part of the public Task sort contract;
+  // mixing it in after LIMIT 1 could discard the row this comparator calls
+  // newest. created_at + task_id is deterministic across both dialects.
+  return new Date(t.created_at).getTime();
 }
 
 async function findMostRecentTaskForSession(

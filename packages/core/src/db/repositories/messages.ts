@@ -31,7 +31,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { type MessageInsert, type MessageRow, messages, tasks } from '../schema';
+import { type MessageInsert, type MessageRow, messages, sessions, tasks } from '../schema';
 import { visibleSessionReferenceAccessExists } from './branch-access';
 
 export const MESSAGE_CONTENT_OMITTED =
@@ -52,15 +52,18 @@ export type MessageFindPageOptions = {
   skip?: number;
 };
 
-export class MessageTaskIntegrityError extends Error {
+export class MessageParentIntegrityError extends Error {
   constructor(
-    readonly reason: 'task_session_mismatch' | 'task_already_assigned',
+    readonly reason: 'session_tenant_mismatch' | 'task_session_mismatch' | 'task_already_assigned',
     message: string
   ) {
     super(message);
-    this.name = 'MessageTaskIntegrityError';
+    this.name = 'MessageParentIntegrityError';
   }
 }
+
+/** @deprecated Use MessageParentIntegrityError; retained for internal API compatibility. */
+export { MessageParentIntegrityError as MessageTaskIntegrityError };
 
 function omittedMessageData(reason: JsonSanitizationError['category']): MessageInsert['data'] {
   return {
@@ -157,9 +160,29 @@ export class MessagesRepository {
       .where(eq(tasks.task_id, taskId))
       .one();
     if (!target || target.session_id !== sessionId) {
-      throw new MessageTaskIntegrityError(
+      throw new MessageParentIntegrityError(
         'task_session_mismatch',
         'task_id must belong to the Message Session'
+      );
+    }
+  }
+
+  /**
+   * Messages derive tenant ownership from their Session. PostgreSQL's legacy
+   * FK references only the globally unique session_id, so an RLS-visible
+   * parent lookup is the repository-level tenant fence for every create.
+   * Locking the parent keeps validation and insertion atomic with deletion.
+   */
+  private async assertSessionBelongsToTenant(db: Database, sessionId: SessionID): Promise<void> {
+    await lockRowForUpdate(db, this.db, sessions, eq(sessions.session_id, sessionId));
+    const parent = await select(db, { session_id: sessions.session_id })
+      .from(sessions)
+      .where(eq(sessions.session_id, sessionId))
+      .one();
+    if (!parent) {
+      throw new MessageParentIntegrityError(
+        'session_tenant_mismatch',
+        'session_id must belong to the current tenant'
       );
     }
   }
@@ -169,16 +192,14 @@ export class MessagesRepository {
    */
   async create(message: Message): Promise<Message> {
     const row = this.messageToRow(message);
-    if (!message.task_id) {
-      const inserted = await insert(this.db, messages).values(row).returning().one();
-      return this.rowToMessage(inserted);
-    }
-
     return this.runMetadataMutation(() =>
       runDatabaseTransaction(
         this.db,
         async (tx) => {
-          await this.assertTaskBelongsToSession(tx, message.task_id as TaskID, message.session_id);
+          await this.assertSessionBelongsToTenant(tx, message.session_id);
+          if (message.task_id) {
+            await this.assertTaskBelongsToSession(tx, message.task_id, message.session_id);
+          }
           const inserted = await insert(tx, messages).values(row).returning().one();
           return this.rowToMessage(inserted);
         },
@@ -192,12 +213,14 @@ export class MessagesRepository {
    */
   async createMany(messageList: Message[]): Promise<Message[]> {
     const rows = messageList.map((m) => this.messageToRow(m));
+    const sessionIds = new Set<SessionID>();
     const taskLinks = new Map<string, SessionID>();
     for (const message of messageList) {
+      sessionIds.add(message.session_id);
       if (!message.task_id) continue;
       const previousSessionId = taskLinks.get(message.task_id);
       if (previousSessionId && previousSessionId !== message.session_id) {
-        throw new MessageTaskIntegrityError(
+        throw new MessageParentIntegrityError(
           'task_session_mismatch',
           'task_id must belong to the Message Session'
         );
@@ -205,15 +228,13 @@ export class MessagesRepository {
       taskLinks.set(message.task_id, message.session_id);
     }
 
-    if (taskLinks.size === 0) {
-      const inserted = await insert(this.db, messages).values(rows).returning().all();
-      return inserted.map((r: MessageRow) => this.rowToMessage(r));
-    }
-
     return this.runMetadataMutation(() =>
       runDatabaseTransaction(
         this.db,
         async (tx) => {
+          for (const sessionId of [...sessionIds].sort()) {
+            await this.assertSessionBelongsToTenant(tx, sessionId);
+          }
           // A deterministic lock order prevents two import batches from
           // deadlocking when they reference the same Tasks in opposite order.
           for (const [taskId, sessionId] of [...taskLinks].sort(([a], [b]) => a.localeCompare(b))) {
@@ -448,7 +469,7 @@ export class MessagesRepository {
   async update(messageId: string, updates: Partial<Message>): Promise<Message> {
     const hasTaskAssignment = Object.hasOwn(updates, 'task_id');
     if (hasTaskAssignment && typeof updates.task_id !== 'string') {
-      throw new MessageTaskIntegrityError(
+      throw new MessageParentIntegrityError(
         'task_already_assigned',
         'Message task_id cannot be cleared'
       );
@@ -524,13 +545,13 @@ export class MessagesRepository {
             current.task_id &&
             current.task_id !== updates.task_id
           ) {
-            throw new MessageTaskIntegrityError(
+            throw new MessageParentIntegrityError(
               'task_already_assigned',
               'Message task_id cannot be reassigned'
             );
           }
           if (hasTaskAssignment && updates.task_id) {
-            throw new MessageTaskIntegrityError(
+            throw new MessageParentIntegrityError(
               'task_session_mismatch',
               'task_id must belong to the Message Session'
             );

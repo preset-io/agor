@@ -978,7 +978,11 @@ async function findAllAtIdHighWater(
       after = id;
       rows.push(row);
     }
-    if (after === through || page.length < pageLimit) break;
+    // Do not infer exhaustion from the requested limit. An older/more
+    // conservative daemon may clamp the page below this client's compiled-in
+    // ceiling. The immutable boundary (or an actually empty page) is the only
+    // version-skew-safe completion signal for this keyset walk.
+    if (after === through) break;
   }
 
   return sortHydratedRows(path, rows);

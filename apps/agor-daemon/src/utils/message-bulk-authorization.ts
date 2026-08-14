@@ -39,6 +39,14 @@ export async function authorizeMessageBulkCreate(
     throw new BadRequest('All Messages in a bulk request must belong to one Session');
   }
 
+  const sessionId = [...sessionIds][0] as SessionID;
+  // Tenant ownership is not RBAC. Always resolve the derived parent inside
+  // the trusted tenant scope, even when branch authorization is disabled or
+  // the caller is an internal/executor identity. The repository repeats this
+  // invariant so normal create and every internal call are covered too.
+  const session = await deps.sessionsRepository.findById(sessionId);
+  if (!session) throw new NotFound('Session not found');
+
   // Match the normal Message create hook: trusted internal calls and scoped
   // executor service accounts are not subject to branch RBAC. The executor
   // scope guard still validates every batch row before this handler runs.
@@ -49,9 +57,6 @@ export async function authorizeMessageBulkCreate(
   const userId = params.user?.user_id as UUID | undefined;
   if (!userId) throw new Forbidden('Authentication required to create messages');
 
-  const sessionId = [...sessionIds][0] as SessionID;
-  const session = await deps.sessionsRepository.findById(sessionId);
-  if (!session) throw new NotFound('Session not found');
   const branch = await deps.branchRepository.findById(session.branch_id);
   if (!branch) throw new NotFound('Branch not found');
 

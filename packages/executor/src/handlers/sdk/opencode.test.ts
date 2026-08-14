@@ -87,7 +87,7 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
     },
     tasks: { patch: vi.fn(async () => ({})) },
     messages: {
-      find: vi.fn(async () => ({ total: 0 })),
+      find: vi.fn(async () => ({ total: 0, limit: 1, skip: 0, data: [] })),
       create: vi.fn(async () => ({})),
     },
   };

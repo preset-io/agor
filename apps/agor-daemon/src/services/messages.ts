@@ -7,8 +7,8 @@
 
 import { MESSAGE_PAGINATION, PAGINATION } from '@agor/core/config';
 import {
+  MessageParentIntegrityError,
   MessagesRepository,
-  MessageTaskIntegrityError,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
@@ -242,7 +242,7 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     try {
       return await super.create(data, params);
     } catch (error) {
-      if (error instanceof MessageTaskIntegrityError) throw new BadRequest(error.message);
+      if (error instanceof MessageParentIntegrityError) throw new BadRequest(error.message);
       throw error;
     }
   }
@@ -273,7 +273,7 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     try {
       return await super.patch(id, data, params);
     } catch (error) {
-      if (error instanceof MessageTaskIntegrityError) throw new BadRequest(error.message);
+      if (error instanceof MessageParentIntegrityError) throw new BadRequest(error.message);
       throw error;
     }
   }
@@ -382,7 +382,7 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     try {
       return await this.messagesRepo.createMany(messages);
     } catch (error) {
-      if (error instanceof MessageTaskIntegrityError) throw new BadRequest(error.message);
+      if (error instanceof MessageParentIntegrityError) throw new BadRequest(error.message);
       throw error;
     }
   }

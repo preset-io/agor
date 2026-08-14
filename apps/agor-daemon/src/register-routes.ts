@@ -859,7 +859,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionsRepository,
           branchRepository,
         });
-        return messagesService.createMany(messages);
+        const created = await messagesService.createMany(messages);
+        for (const message of created) {
+          emitServiceEvent(app, {
+            path: 'messages',
+            event: 'created',
+            data: message,
+            params,
+            id: message.message_id,
+          });
+        }
+        return created;
       },
     },
     {
