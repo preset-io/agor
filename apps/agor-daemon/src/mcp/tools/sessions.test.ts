@@ -885,6 +885,13 @@ describe('agor_sessions_create', () => {
           sessionCreates.push(data);
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
+        // null inspects the calling session to decide cross-branch provenance;
+        // here the caller shares the target branch, so it stays fully unlinked.
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
         patch: async (...args: unknown[]) => {
           patchCalls.push(args);
           return {};
@@ -967,6 +974,184 @@ describe('agor_sessions_create', () => {
       callback_enabled: true,
       callback_session_id: 'sess-caller',
     });
+  });
+
+  // Provenance (who created the child) is the CALLING session, not the callback
+  // target (where completion is routed). Caller A creates the child and routes
+  // callbacks to a different session B: the remote_create source must be A,
+  // while the callback endpoint records B.
+  it('attributes remote_create provenance to the caller, not the callback target', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        // The caller (sess-A) lives in a different branch than the target.
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-caller',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-A' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+      parentSessionId: null,
+      callbackSessionId: 'sess-B',
+    });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toMatchObject({
+      source_session_id: 'sess-A', // the creator, NOT sess-B
+      target_session_id: 'sess-new',
+      relationship_type: 'remote_create',
+      callback_session_id: 'sess-B', // routing endpoint
+    });
+  });
+
+  // With no calling-session context there is no creator to attribute, so no
+  // provenance edge is written even when an explicit cross-branch callback
+  // target is supplied. Completion routing (callback_config) is still recorded.
+  it('records no remote_create relationship when there is no calling session', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1' }, // no sessionId
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+      callbackSessionId: 'sess-B',
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    // Routing is still set up so completion is delivered...
+    expect(created.callback_config).toMatchObject({
+      enabled: true,
+      callback_session_id: 'sess-B',
+    });
+    // ...but there is no creator, so no provenance edge.
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toBeUndefined();
+  });
+
+  // parentSessionId: null with a same-branch callback target is an intentional
+  // unlinked root: no genealogy parent AND no cross-branch provenance edge.
+  it('records no remote_create relationship for a same-branch callback target', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch }, // branch_id 'wt-1'
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1', // caller shares the target branch
+          genealogy: { children: [] },
+        }),
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+      parentSessionId: null,
+      enableCallback: true,
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.genealogy.parent_session_id).toBeUndefined();
+    expect(patchCalls).toHaveLength(0);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toBeUndefined();
+  });
+
+  // A same-branch genealogy parent with an explicit cross-branch callback
+  // target: the creator is local (genealogy handles it), so no remote_create
+  // edge is written — the callback target is routing only.
+  it('records no remote_create relationship when the caller shares the branch but routes callbacks cross-branch', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch }, // branch_id 'wt-1'
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1', // caller shares the target branch → genealogy parent
+          genealogy: { children: [] },
+        }),
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+      callbackSessionId: 'sess-B', // cross-branch routing target
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    // Same-branch genealogy parent is established (omitted parentSessionId).
+    expect(created.genealogy.parent_session_id).toBe('sess-caller');
+    expect(patchCalls).toHaveLength(1);
+    // No remote provenance edge — the creator is local.
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toBeUndefined();
   });
 
   it('does not auto-link to the calling session when creating in a different branch', async () => {
