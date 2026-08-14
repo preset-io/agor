@@ -21,11 +21,30 @@
  * ```
  */
 
-import { CheckOutlined, CloseCircleOutlined, CopyOutlined } from '@ant-design/icons';
-import { App, Space, theme } from 'antd';
+import { CheckOutlined, CloseCircleOutlined, CloseOutlined, CopyOutlined } from '@ant-design/icons';
+import { App, Button, Space } from 'antd';
 import type { ArgsProps, ConfigOptions, MessageInstance } from 'antd/es/message/interface';
 import React, { useCallback, useMemo } from 'react';
 import { copyToClipboard } from './clipboard';
+
+const VISUALLY_HIDDEN_STYLE: React.CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+};
+
+let nextErrorMessageKey = 0;
+
+function createErrorMessageKey(): string {
+  nextErrorMessageKey += 1;
+  return `agor-error-message-${nextErrorMessageKey}`;
+}
 
 /**
  * Message content wrapper with copy-to-clipboard functionality.
@@ -37,10 +56,18 @@ import { copyToClipboard } from './clipboard';
 interface MessageContentProps {
   children: React.ReactNode;
   textContent: string;
+  kind?: 'error' | 'message';
+  onDismiss?: () => void;
+  returnFocusTo?: HTMLElement | null;
 }
 
-const MessageContent: React.FC<MessageContentProps> = ({ children, textContent }) => {
-  const { token } = theme.useToken();
+const MessageContent: React.FC<MessageContentProps> = ({
+  children,
+  textContent,
+  kind = 'message',
+  onDismiss,
+  returnFocusTo,
+}) => {
   const [copyState, setCopyState] = React.useState<'idle' | 'copied' | 'failed'>('idle');
   const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -50,7 +77,7 @@ const MessageContent: React.FC<MessageContentProps> = ({ children, textContent }
     };
   }, []);
 
-  const handleCopy = async (e: React.MouseEvent) => {
+  const handleCopy = async (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     const ok = await copyToClipboard(textContent);
     setCopyState(ok ? 'copied' : 'failed');
@@ -58,42 +85,48 @@ const MessageContent: React.FC<MessageContentProps> = ({ children, textContent }
     timeoutRef.current = setTimeout(() => setCopyState('idle'), 1500);
   };
 
-  const iconStyle: React.CSSProperties = {
-    cursor: 'pointer',
-    marginLeft: token.marginSM,
-    transition: 'opacity 0.2s',
-    fontSize: token.fontSizeSM,
+  const handleDismiss = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+
+    // Dismissing a focused alert should not strand focus on document.body.
+    // Prefer an adjacent persistent error, then return to the control that was
+    // focused when this error appeared. Errors resolved by a keyed update do
+    // not move focus.
+    const dismissButtons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-agor-error-dismiss]')
+    );
+    const currentIndex = dismissButtons.indexOf(e.currentTarget);
+    const nextFocusTarget =
+      dismissButtons[currentIndex + 1] ?? dismissButtons[currentIndex - 1] ?? returnFocusTo;
+
+    onDismiss?.();
+    queueMicrotask(() => {
+      if (nextFocusTarget?.isConnected) {
+        nextFocusTarget.focus({ preventScroll: true });
+      }
+    });
   };
 
-  let icon: React.ReactNode;
+  let copyIcon: React.ReactNode;
+  let copyLabel: string;
+  let copyAccessibleLabel: string;
+  let statusText = '';
   if (copyState === 'copied') {
-    icon = (
-      <CheckOutlined
-        style={{ ...iconStyle, color: token.colorSuccess, opacity: 1 }}
-        title="Copied!"
-      />
-    );
+    copyIcon = <CheckOutlined />;
+    copyLabel = 'Copied';
+    copyAccessibleLabel = kind === 'error' ? 'Copied error message' : 'Copied message';
+    statusText =
+      kind === 'error' ? 'Error message copied to clipboard.' : 'Message copied to clipboard.';
   } else if (copyState === 'failed') {
-    icon = (
-      <CloseCircleOutlined
-        style={{ ...iconStyle, color: token.colorError, opacity: 1 }}
-        title="Copy failed"
-      />
-    );
+    copyIcon = <CloseCircleOutlined />;
+    copyLabel = 'Copy failed';
+    copyAccessibleLabel =
+      kind === 'error' ? 'Copy failed for error message' : 'Copy failed for message';
+    statusText = `Could not copy ${kind} message.`;
   } else {
-    icon = (
-      <CopyOutlined
-        onClick={handleCopy}
-        style={{ ...iconStyle, opacity: 0.65 }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.opacity = '1';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.opacity = '0.65';
-        }}
-        title="Copy to clipboard"
-      />
-    );
+    copyIcon = <CopyOutlined />;
+    copyLabel = 'Copy';
+    copyAccessibleLabel = kind === 'error' ? 'Copy error message' : 'Copy message';
   }
 
   return (
@@ -105,8 +138,33 @@ const MessageContent: React.FC<MessageContentProps> = ({ children, textContent }
         width: '100%',
       }}
     >
-      <span style={{ flex: 1 }}>{children}</span>
-      {icon}
+      <span style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{children}</span>
+      <Space size="small">
+        <Button
+          type="text"
+          size="small"
+          icon={copyIcon}
+          aria-label={copyAccessibleLabel}
+          onClick={handleCopy}
+        >
+          {copyLabel}
+        </Button>
+        {onDismiss && (
+          <Button
+            type="text"
+            size="small"
+            icon={<CloseOutlined />}
+            aria-label="Dismiss error message"
+            data-agor-error-dismiss
+            onClick={handleDismiss}
+          >
+            Dismiss
+          </Button>
+        )}
+      </Space>
+      <output aria-live="polite" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>
+        {statusText}
+      </output>
     </Space>
   );
 };
@@ -121,16 +179,23 @@ function extractTextContent(content: React.ReactNode): string {
   if (typeof content === 'number') {
     return String(content);
   }
+  if (typeof content === 'bigint') {
+    return String(content);
+  }
   if (React.isValidElement<{ children?: React.ReactNode }>(content)) {
     // Try to extract text from React elements
-    if (content.props.children) {
+    if (content.props.children !== undefined && content.props.children !== null) {
       return extractTextContent(content.props.children);
     }
   }
   if (Array.isArray(content)) {
     return content.map(extractTextContent).join(' ');
   }
-  return String(content);
+  return '';
+}
+
+function extractVisibleTextContent(content: React.ReactNode): string {
+  return extractTextContent(content).replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -156,7 +221,9 @@ export function useThemedMessage() {
     (content: React.ReactNode, options?: ThemedMessageOptions) =>
       message.success({
         content: (
-          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+          <MessageContent textContent={extractVisibleTextContent(content)}>
+            {content}
+          </MessageContent>
         ),
         duration: options?.duration ?? 3,
         key: options?.key,
@@ -165,17 +232,42 @@ export function useThemedMessage() {
     [message]
   );
 
-  // Errors get a longer default duration so users have time to read + copy.
+  // Errors persist until the user dismisses them or a keyed update replaces
+  // them. Callers can still opt into a finite duration explicitly.
   const showError = useCallback(
-    (content: React.ReactNode, options?: ThemedMessageOptions) =>
-      message.error({
+    (content: React.ReactNode, options?: ThemedMessageOptions) => {
+      const key = options?.key ?? createErrorMessageKey();
+      const returnFocusTo =
+        typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      let closed = false;
+      const handleClose = () => {
+        if (closed) return;
+        closed = true;
+        options?.onClose?.();
+      };
+      const handleDismiss = () => {
+        handleClose();
+        message.destroy(key);
+      };
+
+      return message.error({
         content: (
-          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+          <MessageContent
+            textContent={extractVisibleTextContent(content)}
+            kind="error"
+            onDismiss={handleDismiss}
+            returnFocusTo={returnFocusTo}
+          >
+            {content}
+          </MessageContent>
         ),
-        duration: options?.duration ?? 6,
-        key: options?.key,
-        onClose: options?.onClose,
-      }),
+        duration: options?.duration ?? 0,
+        key,
+        onClose: handleClose,
+      });
+    },
     [message]
   );
 
@@ -183,7 +275,9 @@ export function useThemedMessage() {
     (content: React.ReactNode, options?: ThemedMessageOptions) =>
       message.warning({
         content: (
-          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+          <MessageContent textContent={extractVisibleTextContent(content)}>
+            {content}
+          </MessageContent>
         ),
         duration: options?.duration ?? 4,
         key: options?.key,
@@ -196,7 +290,9 @@ export function useThemedMessage() {
     (content: React.ReactNode, options?: ThemedMessageOptions) =>
       message.info({
         content: (
-          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+          <MessageContent textContent={extractVisibleTextContent(content)}>
+            {content}
+          </MessageContent>
         ),
         duration: options?.duration ?? 3,
         key: options?.key,
@@ -211,7 +307,9 @@ export function useThemedMessage() {
     (content: React.ReactNode, options?: ThemedMessageOptions) =>
       message.loading({
         content: (
-          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+          <MessageContent textContent={extractVisibleTextContent(content)}>
+            {content}
+          </MessageContent>
         ),
         duration: options?.duration ?? 0,
         key: options?.key,

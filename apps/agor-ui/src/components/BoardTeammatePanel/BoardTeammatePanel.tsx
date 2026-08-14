@@ -11,7 +11,6 @@ import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
-  App as AntApp,
   Badge,
   Button,
   Empty,
@@ -35,6 +34,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { mapToArray } from '../../utils/mapHelpers';
+import { useThemedMessage } from '../../utils/message';
 import { BranchSessionSections } from '../BranchCard';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardBranchList, BoardSessionList } from '../BranchListDrawer';
@@ -139,7 +139,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   client,
 }) => {
   const { token } = theme.useToken();
-  const { message } = AntApp.useApp();
+  const { showError, showSuccess } = useThemedMessage();
   // Subscribe to entity maps by slice from the store: each selector only wakes
   // this panel when its own slice changes.
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
@@ -334,9 +334,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
         boardId: board.board_id,
         branchId: selectedTeammateId,
       });
-      message.success('Teammate assigned');
+      showSuccess('Teammate assigned');
     } catch (error) {
-      message.error(
+      showError(
         `Failed to assign teammate: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
