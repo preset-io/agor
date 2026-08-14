@@ -417,14 +417,22 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       if (!currentRow) throw new EntityNotFoundError('Repo', id);
       const current = this.rowToRepo(currentRow);
 
-      if (current.filesystem_status === 'deleting') {
+      if (
+        current.filesystem_status !== existing.filesystem_status ||
+        (current.filesystem_operation_id ?? null) !== (existing.filesystem_operation_id ?? null)
+      ) {
         throw new RepoFilesystemLifecycleConflictError(
           current.repo_id as RepoID,
           current.filesystem_status,
           current.filesystem_operation_id,
-          `Repository ${current.repo_id} deletion is already in progress`
+          `Repository ${current.repo_id} filesystem lifecycle changed before deletion could be reserved`
         );
       }
+
+      // A repeated authorized delete may replace an abandoned generation.
+      // Exact-root cleanup is idempotent, and every executor/final metadata
+      // write is fenced by this operation ID, so the prior owner becomes
+      // stale without being able to commit lifecycle state.
       if (current.clone_status === 'cloning') {
         throw new RepoFilesystemLifecycleConflictError(
           current.repo_id as RepoID,

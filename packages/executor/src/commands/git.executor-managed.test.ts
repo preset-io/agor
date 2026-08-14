@@ -779,6 +779,52 @@ describe('managed executor git/fs commands', () => {
     });
   });
 
+  it.each(['org/intermediate/../agor', 'org/./agor', '../agor'])(
+    'refuses an unsafe persisted repository slug before branch deletion: %s',
+    async (slug) => {
+      const patchedBranches: Array<Record<string, unknown>> = [];
+      createClient({
+        repo: { repo_id: repoId, slug },
+        branch: {
+          branch_id: branchId,
+          repo_id: repoId,
+          name: 'feature',
+          path: '/safe/worktrees/org/agor/feature',
+          storage_mode: 'clone',
+          filesystem_status: 'deleting',
+        },
+        patchedBranches,
+      });
+
+      const result = await handleGitBranchRemove(
+        {
+          command: 'git.branch.remove',
+          sessionToken: 'jwt',
+          params: {
+            branchId,
+            filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
+            branchPath: '/safe/worktrees/org/agor/feature',
+            branchesRoot: '/safe/worktrees',
+            storageMode: 'clone',
+            privilegedFilesystemDelete: true,
+            deleteDbRecord: false,
+          },
+        },
+        {}
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        error: { message: expect.stringContaining('safety check') },
+      });
+      expect(mocks.deleteBranchDirectory).not.toHaveBeenCalled();
+      expect(patchedBranches).toContainEqual({
+        filesystem_status: 'delete_failed',
+        error_message: expect.stringContaining('safety check'),
+      });
+    }
+  );
+
   it('does not delete or report failure for a superseded deletion generation', async () => {
     const patchedBranches: Array<Record<string, unknown>> = [];
     createClient({

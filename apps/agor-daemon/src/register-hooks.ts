@@ -1772,12 +1772,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
         protectExternalBranchManagedWrites,
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
         protectExternalBranchManagedWrites,
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         ...(branchRbacEnabled

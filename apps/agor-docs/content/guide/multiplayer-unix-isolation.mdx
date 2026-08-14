@@ -224,6 +224,11 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
 - Reinstall the shipped sudoers file after upgrading. Strict and insulated
   branch deletion needs its exact-root `rm` rules; without them,
   the branch is retained with a retryable `delete_failed` filesystem status.
+  The rules cover both current two-segment repository slugs and supported
+  legacy one-segment repository layouts.
+- If a daemon or executor exits after reserving `deleting`, repeat the same
+  authorized delete. Agor assigns a new operation generation; any prior
+  executor becomes stale and cannot publish state or remove metadata.
 - The file includes extensive comments and troubleshooting tips
 - Read the full file before deploying to production
 

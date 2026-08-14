@@ -107,18 +107,24 @@ agor ALL=(root) NOPASSWD: /usr/bin/rm ^-f /home/[^/[:space:]]+/agor/worktrees/[^
 # argv-style (no shell), and verifies absence afterward. Sudoers wildcards in
 # command arguments also match slashes and whitespace, so these MUST remain
 # anchored POSIX EREs (sudo 1.9.10+) rather than `/worktrees/*`. Each expression
-# accepts exactly <repo-owner>/<repo-name>/<branch-name> and no second operand.
-# Keep the argv flags in sync with packages/git/src/index.ts.
-agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /home/[^/[:space:]]+/[.]agor/worktrees/[^/[:space:]]+/[^/[:space:]]+/[^/[:space:]]+$
-agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /home/[^/[:space:]]+/agor/worktrees/[^/[:space:]]+/[^/[:space:]]+/[^/[:space:]]+$
+# accepts either the current <repo-owner>/<repo-name>/<branch-name> layout or
+# the supported legacy <repo-name>/<branch-name> layout, and no second operand.
+# The TypeScript boundary additionally proves unique metadata ownership before
+# selecting either exact root. Keep argv flags in sync with packages/git/src/index.ts.
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /home/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[.]agor/worktrees/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[a-z0-9-]+$
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /home/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/agor/worktrees/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[a-z0-9-]+$
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /home/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[.]agor/worktrees/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[a-z0-9-]+$
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /home/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/agor/worktrees/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[a-z0-9-]+$
 
 # Optional: /var/agor for shared worktree storage
 agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /var/agor/*
-agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /var/agor/worktrees/[^/[:space:]]+/[^/[:space:]]+/[^/[:space:]]+$
-agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /var/agor/tenants/[^/[:space:]]+/worktrees/[^/[:space:]]+/[^/[:space:]]+/[^/[:space:]]+$
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /var/agor/worktrees/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[a-z0-9-]+$
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /var/agor/tenants/[A-Za-z0-9_-]+/worktrees/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[a-z0-9-]+$
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /var/agor/worktrees/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[a-z0-9-]+$
+agor ALL=(root) NOPASSWD: /usr/bin/rm ^-rf --one-file-system --preserve-root=all -- /var/agor/tenants/[A-Za-z0-9_-]+/worktrees/([A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)/[a-z0-9-]+$
 
 # ============================================================================
 # FILE CONTENT - Writing Config Files (SCOPED TO AGOR PATHS)

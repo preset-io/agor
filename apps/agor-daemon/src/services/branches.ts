@@ -276,6 +276,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
   }
 
+  /**
+   * A repeated authorized delete supersedes an abandoned deleting generation.
+   * Filesystem deletion is exact-root and idempotent; generation CAS prevents
+   * the prior executor from publishing stale state or removing metadata.
+   */
+  private assertCanReserveFilesystemDeletion(branch: Branch): void {
+    if (branch.filesystem_status === 'creating') {
+      throw new Conflict('Branch filesystem creation is still in progress; retry later');
+    }
+  }
+
   private branchFilesystemDeletePayload(
     branch: Branch,
     sessionToken: string,
@@ -366,7 +377,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   private async markBranchDeleting(branch: Branch, params?: BranchParams): Promise<Branch> {
-    this.assertFilesystemLifecycleIdle(branch);
+    this.assertCanReserveFilesystemDeletion(branch);
     const operationId = this.newFilesystemOperationId();
     const patched = await this.withTenantDatabase(params, () =>
       this.patch(
@@ -1603,7 +1614,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     if (!expectedFilesystemLifecycle) {
-      this.assertFilesystemLifecycleIdle(branch);
+      if (deleteFromFilesystem) this.assertCanReserveFilesystemDeletion(branch);
+      else this.assertFilesystemLifecycleIdle(branch);
       expectedFilesystemLifecycle = this.filesystemLifecycleExpectation(branch);
     }
 
@@ -1611,7 +1623,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // requested. Keeping the row is what makes a failure visible and retryable.
     if (deleteFromFilesystem) {
       console.log(`🗑️  Removing branch filesystem before metadata: ${branch.path}`);
-      this.assertFilesystemLifecycleIdle(branch);
+      this.assertCanReserveFilesystemDeletion(branch);
       const deletingBranch = await this.markBranchDeleting(branch, params);
       const deletion = await this.runBranchFilesystemDelete(deletingBranch, params);
       if (!deletion.success) {
@@ -1711,7 +1723,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     consumeBranchArchiveDeleteAuthorization(params, id, options.metadataAction);
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    this.assertFilesystemLifecycleIdle(branch);
+    if (filesystemAction === 'deleted') this.assertCanReserveFilesystemDeletion(branch);
+    else this.assertFilesystemLifecycleIdle(branch);
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
     // Stop environment if running

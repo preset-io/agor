@@ -49,7 +49,7 @@ describe('privileged branch deletion sudoers contract', () => {
     const source = readFileSync(sudoersPath, 'utf8');
     expect(source).not.toMatch(/^agor .*\/usr\/bin\/rm (?!\^).*\*/m);
     const rules = parsedPrivilegedDeleteRules();
-    if (existsSync('/usr/bin/cvtsudoers')) expect(rules).toHaveLength(4);
+    if (existsSync('/usr/bin/cvtsudoers')) expect(rules).toHaveLength(8);
   });
 
   it('allows one exact branch root and denies extra operands or broader paths', () => {
@@ -63,19 +63,26 @@ describe('privileged branch deletion sudoers contract', () => {
 
     for (const valid of [
       '/home/agorpg/.agor/worktrees/preset-io/agor/fix-delete',
+      '/home/agorpg/.agor/worktrees/agor/fix-delete',
       '/home/max/agor/worktrees/preset-io/agor/fix-delete',
+      '/home/max/agor/worktrees/agor/fix-delete',
       '/var/agor/worktrees/preset-io/agor/fix-delete',
+      '/var/agor/worktrees/agor/fix-delete',
       '/var/agor/tenants/tenant-a/worktrees/preset-io/agor/fix-delete',
+      '/var/agor/tenants/tenant-a/worktrees/agor/fix-delete',
     ]) {
       expect(matches(valid), valid).toBe(true);
     }
 
     for (const invalid of [
       '/var/agor/worktrees/preset-io/agor/fix-delete /etc',
-      '/var/agor/worktrees/preset-io/agor',
+      '/var/agor/worktrees/preset-io',
       '/var/agor/worktrees/preset-io/agor/fix-delete/nested',
       '/var/agor/worktrees/preset-io/agor/fix delete',
       '/var/agor/worktrees/preset-io/agor/../other',
+      '/var/agor/worktrees/org/../other',
+      '/var/agor/worktrees/../other',
+      '/home/../.agor/worktrees/agor/fix-delete',
       '/var/agor/repos/preset-io/agor/fix-delete',
       '/etc',
     ]) {

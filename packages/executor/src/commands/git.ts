@@ -1566,6 +1566,9 @@ export async function handleGitBranchRemove(
       throw new Error('Safety check failed: Branch name is not a single managed path segment');
     }
     const persistedRepo = await client.service('repos').get(persistedBranch.repo_id);
+    if (!isValidManagedRepoSlug(persistedRepo.slug)) {
+      throw new Error('Safety check failed: Repository slug is not a managed filesystem identity');
+    }
     const canonicalBranchPath = await canonicalFilesystemIdentity(branchPath);
     const tenantBranches = await fetchAllBranchesForRepo(client);
     for (const candidate of tenantBranches) {

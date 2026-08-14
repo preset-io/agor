@@ -1,9 +1,13 @@
 import type { Server } from 'node:http';
 import { type AgorClient, type BranchesExecutorService, createClient } from '@agor/core/api';
 import { feathers, feathersExpress, socketio } from '@agor/core/feathers';
-import type { HookContext } from '@agor/core/types';
+import type { BranchID, HookContext } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  protectExternalBranchManagedWrites,
+  protectServerManagedUnixGroupWrites,
+} from '../register-hooks';
 import { requireMinimumRole } from '../utils/authorization';
 import { executorServiceCapabilityGuard } from './executor-runtime-scope';
 
@@ -174,5 +178,88 @@ describe('executor service capability Socket transport', () => {
     await expect(client.service('users').getGitEnvironment({ userId: 'user-2' })).rejects.toThrow(
       /not valid/i
     );
+  });
+
+  it('accepts only the exact branch canonical Unix-group stamp over Socket transport', async () => {
+    const branchId = '019ffe00-0000-7000-8000-000000000001' as BranchID;
+    const otherBranchId = '019ffe00-0000-7000-9000-000000000002' as BranchID;
+    const branchGroup = 'agor_wt_019ffe000000700080000000';
+    const otherBranchGroup = 'agor_wt_019ffe000000700090000000';
+    const legacyBranchGroup = 'agor_wt_019ffe00';
+    let unixGroup: string | null = null;
+    const app = feathersExpress(feathers());
+    app.configure(socketio());
+    app.on('connection', (connection: Record<string, unknown>) => {
+      connection.user = {
+        user_id: 'executor-service',
+        role: 'service',
+        _isServiceAccount: true,
+      };
+      connection.authentication = {
+        payload: {
+          type: 'service',
+          sub: 'executor-service',
+          purpose: 'executor-service',
+          role: 'service',
+          command: 'unix.sync-branch',
+          branch_id: branchId,
+        },
+      };
+    });
+
+    app.use('branches', {
+      async get(id: string) {
+        return { branch_id: id, unix_group: id === branchId ? unixGroup : null };
+      },
+      async patch(id: string, data: { unix_group?: string }) {
+        if (id === branchId && data.unix_group) unixGroup = data.unix_group;
+        return { branch_id: id, unix_group: data.unix_group };
+      },
+    });
+    app.service('branches').hooks({
+      before: {
+        all: [executorServiceCapabilityGuard() as (context: HookContext) => Promise<HookContext>],
+        patch: [
+          requireMinimumRole(ROLES.MEMBER, 'patch branches'),
+          protectExternalBranchManagedWrites,
+          protectServerManagedUnixGroupWrites('branch'),
+        ],
+      },
+    } as never);
+
+    server = await new Promise<Server>((resolve) => {
+      const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
+    client = createClient(`http://127.0.0.1:${address.port}`, true, {
+      reconnectionAttempts: 0,
+    });
+    await waitForSocketConnect(client);
+    const executorBranches = client.service('branches') as unknown as BranchesExecutorService;
+
+    await expect(
+      executorBranches.patch(branchId, {
+        unix_group: legacyBranchGroup,
+      })
+    ).rejects.toThrow(/canonical group/i);
+    await expect(
+      executorBranches.patch(branchId, {
+        unix_group: otherBranchGroup,
+      })
+    ).rejects.toThrow(/canonical group|invalid persisted unix group/i);
+    await expect(
+      executorBranches.patch(otherBranchId, {
+        unix_group: otherBranchGroup,
+      })
+    ).rejects.toThrow(/not valid/i);
+    await expect(
+      executorBranches.patch(branchId, {
+        unix_group: branchGroup,
+      })
+    ).resolves.toMatchObject({
+      branch_id: branchId,
+      unix_group: branchGroup,
+    });
   });
 });

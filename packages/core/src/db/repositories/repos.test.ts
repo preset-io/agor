@@ -464,6 +464,16 @@ describe('RepoRepository.findById', () => {
       filesystem_operation_id: operationId,
     });
 
+    // A daemon loss after reservation leaves no live owner. A repeated
+    // authorized delete takes over with a fresh generation, making the prior
+    // executor stale while preserving exact-root idempotence.
+    const takeoverOperationId = generateId() as RepoFilesystemOperationID;
+    const reclaimed = await repo.claimFilesystemDeletion(created.repo_id, takeoverOperationId);
+    expect(reclaimed).toMatchObject({
+      filesystem_status: 'deleting',
+      filesystem_operation_id: takeoverOperationId,
+    });
+
     await expect(
       repo.update(
         created.repo_id,
@@ -471,7 +481,7 @@ describe('RepoRepository.findById', () => {
         {
           expectedFilesystemLifecycle: {
             filesystemStatuses: ['deleting'],
-            operationId: generateId() as RepoFilesystemOperationID,
+            operationId,
           },
         }
       )
