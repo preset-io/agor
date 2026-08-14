@@ -56,6 +56,7 @@ import type {
   BranchArchiveOrDeleteOptions,
   HookContext,
   MCPMemberPolicy,
+  MCPMemberPolicySetting,
   Message,
   MessageID,
   MessageSource,
@@ -4099,7 +4100,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/mcp-member-policy',
     {
-      async find(params: RouteParams) {
+      async find(params: RouteParams): Promise<MCPMemberPolicySetting> {
         const policy = await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId());
         // The policy alone does not answer "may I add one?" — the role floor
         // beneath it does too. Answering here keeps a client from rebuilding
@@ -4110,17 +4111,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           can_configure: canConfigureMcpServers(params.user?.role, policy),
         };
       },
-      async patch(_id: unknown, data: { policy: MCPMemberPolicy }, params: RouteParams) {
+      async patch(
+        _id: unknown,
+        data: { policy: MCPMemberPolicy },
+        params: RouteParams
+      ): Promise<MCPMemberPolicySetting> {
         if (!MCP_MEMBER_POLICIES.includes(data?.policy)) {
           throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
         }
         await setMcpMemberPolicy(db, data.policy, getCurrentTenantId(), params.user?.user_id);
-        return { policy: data.policy };
+        return {
+          policy: data.policy,
+          can_configure: canConfigureMcpServers(params.user?.role, data.policy),
+        };
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
-      find: { role: ROLES.MEMBER, action: 'read the MCP member policy' },
+      // Readable by any authenticated caller, because what it answers is
+      // partly about the caller: `can_configure` is their own capability, and
+      // the role floor means the interesting answer is the one a below-member
+      // caller gets. Gating this at member would leave that answer unreachable
+      // by the only people it refuses, who would then be shown a control that
+      // fails instead of a reason it is off.
+      find: { role: ROLES.VIEWER, action: 'read the MCP member policy' },
       patch: { role: ROLES.ADMIN, action: 'change the MCP member policy' },
     },
     requireAuth

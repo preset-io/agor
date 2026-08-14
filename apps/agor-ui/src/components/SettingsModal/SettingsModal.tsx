@@ -201,11 +201,16 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const { token } = theme.useToken();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
-  // Role gate — MCP Servers and Gateway Channels are global admin-managed
+  // Role gate — Agentic Tools and Gateway Channels are global admin-managed
   // configuration (credentials, webhook URLs, env vars). The daemon enforces
   // ADMIN role on writes for both services (see register-hooks.ts); hiding
   // the menu entries here avoids showing members a tab where every action
   // would 403.
+  //
+  // The MCP Servers tab is offered to everyone. What a member may do there is
+  // the tenant's `mcp_member_policy`, which members may read precisely so a
+  // refusal is legible to the person it refuses; the tab shows them that
+  // policy and the servers they can already use.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Menu items for left sidebar navigation
@@ -280,15 +285,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                 },
               ]
             : []),
-          ...(isAdmin
-            ? [
-                {
-                  key: 'mcp',
-                  label: 'MCP Servers',
-                  icon: <ApiOutlined />,
-                },
-              ]
-            : []),
+          {
+            key: 'mcp',
+            label: 'MCP Servers',
+            icon: <ApiOutlined />,
+          },
           ...(isAdmin
             ? [
                 {
@@ -422,6 +423,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           <MCPServersTable
             mcpServerById={mcpServerById}
             client={client}
+            userById={userById}
+            currentUser={currentUser}
             onCreate={onCreateMCPServer}
             onDelete={onDeleteMCPServer}
           />

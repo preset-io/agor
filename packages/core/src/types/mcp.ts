@@ -54,6 +54,26 @@ export interface MCPOAuthRefreshResult {
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
 export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
+
+/**
+ * Safe diagnostics for a failed OAuth Dynamic Client Registration attempt.
+ *
+ * This closed shape classifies recovery without carrying provider response
+ * text, credentials, or OAuth protocol secrets across the process boundary.
+ */
+export interface MCPOAuthDCRDiagnostic {
+  stage: 'dcr_endpoint_discovery' | 'dcr_registration';
+  http_status?: number;
+  registration_endpoint_source?: 'metadata' | 'legacy_fallback';
+}
+
+export interface MCPOAuthStartFailure {
+  success: false;
+  error: string;
+  diagnostic?: MCPOAuthDCRDiagnostic;
+  redirect_uri?: string;
+}
+
 export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2] as const;
 export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
 
@@ -99,6 +119,16 @@ export interface MCPOAuthPendingFlowSealedMaterial {
 /**
  * What a non-admin member may do with MCP server configuration, tenant-wide.
  *
+ * "Configuration" is the caller-supplied surface — the fields somebody submits
+ * to create, update, or delete a server. Capability refresh is not on it:
+ * `mcp-servers/discover` opens the server's own transport and writes back the
+ * `tools` / `resources` / `prompts` that endpoint reported, which is nobody's
+ * submission. It answers to its own owner-or-admin rule
+ * (`denyDiscoverOfAnotherUsersServer`) instead, so that a member who may no
+ * longer configure servers can still refresh one that is already running in
+ * their sessions — revoking refresh would leave the stale tool list the agent
+ * actually sees, not stop the server being used.
+ *
  * - `use_existing_only` — members attach servers an admin already configured;
  *   they create nothing. The default, and the only behaviour that existed
  *   before private servers.
@@ -123,17 +153,41 @@ export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
 export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
 
 /**
+ * The payload of the `mcp-member-policy` endpoint, read and written.
+ *
+ * A wrapper rather than the bare value so the setting can gain a field — who
+ * last changed it, whether a per-user override applies — without every caller
+ * changing shape.
+ */
+export interface MCPMemberPolicySetting {
+  policy: MCPMemberPolicy;
+  /**
+   * Whether this caller may configure servers at all — role floor and policy
+   * together, answered by the daemon so a client greys out its control instead
+   * of rebuilding the rule. Advisory: the write path is what authorizes.
+   */
+  can_configure: boolean;
+}
+
+/**
  * MCP transport types
  */
-export type MCPTransport = 'stdio' | 'http' | 'sse';
+export const MCP_TRANSPORTS = ['stdio', 'http', 'sse'] as const;
+
+export type MCPTransport = (typeof MCP_TRANSPORTS)[number];
 
 /**
  * MCP server scope levels. Orthogonal to ownership: `scope` says how a server
  * reaches a session, `owner_user_id` says whose sessions it may reach.
  * - global: in every session's effective set without being attached
  * - session: only in the sessions it is attached to, via the junction table
+ *
+ * `mcp_member_policy` is the one place the two are not free of each other: see
+ * `mayMemberUseMCPScope` in `@agor/core/mcp/member-policy`.
  */
-export type MCPScope = 'global' | 'session';
+export const MCP_SCOPES = ['global', 'session'] as const;
+
+export type MCPScope = (typeof MCP_SCOPES)[number];
 
 /**
  * Where a server's configuration came from.

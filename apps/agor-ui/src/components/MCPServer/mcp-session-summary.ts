@@ -33,8 +33,10 @@ export function summarizeSessionMcpServers(
   const attachedCount = serverIds.length;
   const healthyCount = Math.max(0, attachedCount - missingCount - needsAuthCount);
   const problemCount = missingCount + needsAuthCount;
+  // Unauthorized servers are a blocker the user must fix (their tools silently
+  // fail), so they read as an error — not a soft warning — like missing records.
   const tone: SessionMcpSummary['tone'] =
-    missingCount > 0 ? 'error' : needsAuthCount > 0 ? 'warning' : 'default';
+    missingCount > 0 || needsAuthCount > 0 ? 'error' : 'default';
 
   return {
     attachedCount,

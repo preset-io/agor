@@ -27,6 +27,7 @@ import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-resp
 // Removed import of calculateModelContextWindowUsage - inlined instead
 import type { TokenUsage } from '../../types/token-usage.js';
 import {
+  type Message,
   type MessageID,
   MessageRole,
   type MessageSource,
@@ -101,6 +102,45 @@ function buildRateLimitContentBlock(
       isUsingOverage: event.isUsingOverage,
     },
   ];
+}
+
+type ClassifiedProviderFailureKind = Extract<
+  NonNullable<Message['metadata']>['error_kind'],
+  'missing_credential' | 'provider_credit_exhausted'
+>;
+
+function getClassifiedProviderFailureKind(
+  message: Message | null | undefined
+): ClassifiedProviderFailureKind | undefined {
+  const kind = message?.metadata?.error_kind;
+  return kind === 'missing_credential' || kind === 'provider_credit_exhausted' ? kind : undefined;
+}
+
+function buildProviderFailureContent(
+  subtype: string,
+  errors: string[]
+): Array<{ type: string; text?: string }> {
+  return [
+    { type: 'text', text: `Agent SDK error (${subtype}): ` },
+    ...errors.flatMap((error, index) => [
+      { type: 'text', text: error },
+      ...(index < errors.length - 1 ? [{ type: 'text', text: '\n' }] : []),
+    ]),
+  ];
+}
+
+function sanitizeClassifiedClaudeResponse(
+  response: import('@agor/core/sdk').SDKResultMessage | undefined,
+  kind: ClassifiedProviderFailureKind | undefined
+): unknown {
+  if (!response || !kind) return response;
+
+  // Provider result/error bodies can contain secrets. Accounting fields remain
+  // useful after removing only the body-bearing result fields.
+  const sanitized = { ...response } as Record<string, unknown>;
+  delete sanitized.result;
+  delete sanitized.errors;
+  return sanitized;
 }
 
 /**
@@ -234,7 +274,7 @@ export class ClaudeTool implements ITool {
     contextWindowLimit?: number;
     model?: string;
     modelUsage?: unknown;
-    rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
+    rawSdkResponse?: unknown;
     /** Raw SDK context usage snapshot from getContextUsage() — authoritative source */
     rawContextUsage?: import('@agor/core/sdk').SDKControlGetContextUsageResponse;
     wasStopped?: boolean;
@@ -316,6 +356,8 @@ export class ClaudeTool implements ITool {
     let wasStopped = false;
     let hadError = false;
     let errorDetails: string[] | undefined;
+    let errorSubtype: string | undefined;
+    let classifiedProviderFailureKind: ClassifiedProviderFailureKind | undefined;
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
@@ -639,32 +681,28 @@ export class ClaudeTool implements ITool {
           };
           if (sdkResult.subtype && sdkResult.subtype !== 'success') {
             hadError = true;
+            errorSubtype = sdkResult.subtype;
             errorDetails = sdkResult.errors;
-            console.error(
-              `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, errors=${JSON.stringify(sdkResult.errors)}`
-            );
 
             // Create a system message with the error details so it's visible in the conversation UI
             if (this.messagesService && sdkResult.errors?.length) {
-              const errorText = sdkResult.errors.join('\n');
               const errorMessageId = generateId() as MessageID;
-              await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
-                await createSystemMessage(
-                  sessionId,
-                  errorMessageId,
-                  [
-                    {
-                      type: 'text',
-                      text: `Agent SDK error (${sdkResult.subtype}): ${errorText}`,
-                    },
-                  ],
-                  taskId,
-                  nextIndex++,
-                  resolvedModel,
-                  this.messagesService!
-                );
-                return true;
-              });
+              const persisted = await withFeathersSessionGuard(
+                sessionId,
+                this.sessionsRepo,
+                async () =>
+                  createSystemMessage(
+                    sessionId,
+                    errorMessageId,
+                    buildProviderFailureContent(sdkResult.subtype!, sdkResult.errors!),
+                    taskId,
+                    nextIndex++,
+                    resolvedModel,
+                    this.messagesService!,
+                    { is_provider_failure_result: true }
+                  )
+              );
+              classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
             }
           }
         }
@@ -761,7 +799,7 @@ export class ClaudeTool implements ITool {
 
           // Create assistant message with session guard (handles deleted sessions gracefully)
           const created = await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
-            await createAssistantMessage(
+            const persisted = await createAssistantMessage(
               sessionId,
               assistantMessageId,
               safeAssistantContent,
@@ -775,7 +813,8 @@ export class ClaudeTool implements ITool {
               tokenUsage,
               completeEvent.isSynthesizedResult
             );
-            return true;
+            classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
+            return persisted;
           });
 
           if (created) {
@@ -845,6 +884,18 @@ export class ClaudeTool implements ITool {
       }
     }
 
+    if (hadError) {
+      if (classifiedProviderFailureKind) {
+        console.error(
+          `[claude-code] SDK result classified: subtype=${errorSubtype ?? 'unknown'} kind=${classifiedProviderFailureKind}`
+        );
+      } else {
+        console.error(
+          `[claude-code] SDK result indicates error: subtype=${errorSubtype ?? 'unknown'}, errors=${JSON.stringify(errorDetails)}`
+        );
+      }
+    }
+
     return {
       userMessageId: userMessage.message_id,
       assistantMessageIds,
@@ -855,11 +906,14 @@ export class ClaudeTool implements ITool {
       contextWindowLimit,
       model: resolvedModel,
       modelUsage,
-      rawSdkResponse,
+      rawSdkResponse: sanitizeClassifiedClaudeResponse(
+        rawSdkResponse,
+        classifiedProviderFailureKind
+      ),
       rawContextUsage,
       wasStopped,
       hadError,
-      errorDetails,
+      errorDetails: classifiedProviderFailureKind ? undefined : errorDetails,
     };
   }
 
@@ -932,7 +986,7 @@ export class ClaudeTool implements ITool {
     contextWindowLimit?: number;
     model?: string;
     modelUsage?: unknown;
-    rawSdkResponse?: import('@agor/core/sdk').SDKResultMessage;
+    rawSdkResponse?: unknown;
     /** Raw SDK context usage snapshot from getContextUsage() — authoritative source */
     rawContextUsage?: import('@agor/core/sdk').SDKControlGetContextUsageResponse;
     wasStopped?: boolean;
@@ -981,6 +1035,8 @@ export class ClaudeTool implements ITool {
     let wasStopped = false;
     let hadError = false;
     let errorDetails: string[] | undefined;
+    let errorSubtype: string | undefined;
+    let classifiedProviderFailureKind: ClassifiedProviderFailureKind | undefined;
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
@@ -1070,32 +1126,28 @@ export class ClaudeTool implements ITool {
           };
           if (sdkResult.subtype && sdkResult.subtype !== 'success') {
             hadError = true;
+            errorSubtype = sdkResult.subtype;
             errorDetails = sdkResult.errors;
-            console.error(
-              `[claude-code] SDK result indicates error: subtype=${sdkResult.subtype}, errors=${JSON.stringify(sdkResult.errors)}`
-            );
 
             // Create a system message with the error details so it's visible in the conversation UI
             if (this.messagesService && sdkResult.errors?.length) {
-              const errorText = sdkResult.errors.join('\n');
               const errorMessageId = generateId() as MessageID;
-              await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
-                await createSystemMessage(
-                  sessionId,
-                  errorMessageId,
-                  [
-                    {
-                      type: 'text',
-                      text: `Agent SDK error (${sdkResult.subtype}): ${errorText}`,
-                    },
-                  ],
-                  taskId,
-                  nextIndex++,
-                  resolvedModel,
-                  this.messagesService!
-                );
-                return true;
-              });
+              const persisted = await withFeathersSessionGuard(
+                sessionId,
+                this.sessionsRepo,
+                async () =>
+                  createSystemMessage(
+                    sessionId,
+                    errorMessageId,
+                    buildProviderFailureContent(sdkResult.subtype!, sdkResult.errors!),
+                    taskId,
+                    nextIndex++,
+                    resolvedModel,
+                    this.messagesService!,
+                    { is_provider_failure_result: true }
+                  )
+              );
+              classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
             }
           }
         }
@@ -1133,7 +1185,7 @@ export class ClaudeTool implements ITool {
         // Create message with session guard (handles deleted sessions gracefully)
         const created = await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
           if (completeEvent.role === MessageRole.ASSISTANT) {
-            await createAssistantMessage(
+            const persisted = await createAssistantMessage(
               sessionId,
               messageId,
               completeEvent.content,
@@ -1147,6 +1199,7 @@ export class ClaudeTool implements ITool {
               tokenUsage,
               completeEvent.isSynthesizedResult
             );
+            classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
             return true;
           } else if (completeEvent.role === MessageRole.SYSTEM) {
             // Handle system messages (compaction, etc.)
@@ -1180,6 +1233,18 @@ export class ClaudeTool implements ITool {
       }
     }
 
+    if (hadError) {
+      if (classifiedProviderFailureKind) {
+        console.error(
+          `[claude-code] SDK result classified: subtype=${errorSubtype ?? 'unknown'} kind=${classifiedProviderFailureKind}`
+        );
+      } else {
+        console.error(
+          `[claude-code] SDK result indicates error: subtype=${errorSubtype ?? 'unknown'}, errors=${JSON.stringify(errorDetails)}`
+        );
+      }
+    }
+
     return {
       userMessageId: userMessage.message_id,
       assistantMessageIds,
@@ -1190,11 +1255,14 @@ export class ClaudeTool implements ITool {
       contextWindowLimit,
       model: resolvedModel,
       modelUsage,
-      rawSdkResponse,
+      rawSdkResponse: sanitizeClassifiedClaudeResponse(
+        rawSdkResponse,
+        classifiedProviderFailureKind
+      ),
       rawContextUsage,
       wasStopped,
       hadError,
-      errorDetails,
+      errorDetails: classifiedProviderFailureKind ? undefined : errorDetails,
     };
   }
 

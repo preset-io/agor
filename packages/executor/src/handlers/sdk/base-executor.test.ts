@@ -269,6 +269,87 @@ describe('executeToolTask credential preflight', () => {
   });
 });
 
+describe('executeToolTask provider-failure settlement', () => {
+  it('patches a classified Claude result with sanitized raw response and accounting', async () => {
+    const secret = 'provider-secret-body';
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const safeRawResponse = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      duration_ms: 42,
+      duration_api_ms: 31,
+      is_error: true,
+      num_turns: 1,
+      stop_reason: null,
+      total_cost_usd: 0.12,
+      usage: { input_tokens: 10, output_tokens: 4 },
+      modelUsage: {
+        'claude-sonnet-4-6': {
+          inputTokens: 10,
+          outputTokens: 4,
+          contextWindow: 200_000,
+        },
+      },
+      permission_denials: [],
+    };
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: 'daemon-key',
+              source: 'user',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') return { create: vi.fn(), patch: vi.fn() };
+        if (name === '/tasks/streaming') return { create: vi.fn() };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const createTool = vi.fn(() => ({
+      executePromptWithStreaming: vi.fn().mockResolvedValue({
+        userMessageId: 'user-1',
+        assistantMessageIds: [],
+        hadError: true,
+        errorDetails: undefined,
+        rawSdkResponse: safeRawResponse,
+      }),
+    }));
+
+    try {
+      await executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController: new AbortController(),
+        apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+        toolName: 'claude-code',
+        createTool,
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    const patch = taskPatch.mock.calls[0]?.[1];
+    expect(patch).toMatchObject({
+      status: 'failed',
+      raw_sdk_response: safeRawResponse,
+      normalized_sdk_response: {
+        tokenUsage: { inputTokens: 10, outputTokens: 4 },
+        durationMs: 42,
+        costUsd: 0.12,
+      },
+    });
+    expect(JSON.stringify(patch)).not.toContain(secret);
+  });
+});
+
 describe('installProviderConnection', () => {
   // Regression tests for the 2026-07-13 incident: the pre-install strip was
   // tool-agnostic and deleted user-configured env vars (GITHUB_TOKEN in
