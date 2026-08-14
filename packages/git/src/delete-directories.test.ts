@@ -235,7 +235,9 @@ describe('managed directory deletion roots', () => {
     await expect(
       deleteBranchDirectory(branchPath, branchesRoot, {
         expectedRelativePath: path.join('org', 'repo', 'mounted-feature'),
-        mountInfo: sameDeviceBindMountInfo,
+        mountInspection: {
+          linuxMountInfo: sameDeviceBindMountInfo,
+        },
       })
     ).rejects.toThrow(/contains a filesystem mount/i);
     await expect(fs.readFile(path.join(nestedMount, 'must-survive.txt'), 'utf8')).resolves.toBe(
@@ -252,7 +254,9 @@ describe('managed directory deletion roots', () => {
     await expect(
       deleteRepoDirectory(repoPath, reposRoot, {
         expectedRelativePath: 'org/mounted-repo',
-        mountInfo: `512 31 8:1 /cache ${nestedMount} rw,relatime - ext4 /dev/sda1 rw\n`,
+        mountInspection: {
+          linuxMountInfo: `512 31 8:1 /cache ${nestedMount} rw,relatime - ext4 /dev/sda1 rw\n`,
+        },
       })
     ).rejects.toThrow(/contains a filesystem mount/i);
     await expect(fs.readFile(path.join(nestedMount, 'must-survive.txt'), 'utf8')).resolves.toBe(
@@ -264,11 +268,18 @@ describe('managed directory deletion roots', () => {
     const target = path.join(branchesRoot, 'org', 'repo', 'feature with space');
     const mountPoint = path.join(target, 'same device bind');
     await expect(
-      assertNoManagedRootMounts(
-        target,
-        `99 1 8:1 / ${mountPoint.replaceAll(' ', '\\040')} rw - ext4 /dev/sda1 rw\n`
-      )
+      assertNoManagedRootMounts(target, {
+        linuxMountInfo: `99 1 8:1 / ${mountPoint.replaceAll(' ', '\\040')} rw - ext4 /dev/sda1 rw\n`,
+      })
     ).rejects.toThrow(/filesystem mount/i);
+  });
+
+  it('fails closed when mount inspection is unsupported', async () => {
+    await expect(
+      assertNoManagedRootMounts(path.join(branchesRoot, 'org', 'repo', 'feature'), {
+        platform: 'freebsd',
+      })
+    ).rejects.toThrow(/unavailable on this platform/i);
   });
 });
 

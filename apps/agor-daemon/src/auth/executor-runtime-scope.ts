@@ -10,9 +10,12 @@ import type {
 } from '@agor/core/types';
 import {
   BRANCH_ARCHIVE_LIFECYCLE_FIELDS,
+  BRANCH_DELETION_EXECUTOR_PATCH_FIELDS,
   BRANCH_FILESYSTEM_LIFECYCLE_FIELDS,
   BRANCH_IMMUTABLE_FIELDS,
+  BRANCH_MATERIALIZATION_EXECUTOR_PATCH_FIELDS,
   BRANCH_SERVER_MANAGED_FIELDS,
+  BRANCH_UNIX_SYNC_EXECUTOR_PATCH_FIELDS,
   isExecutorServiceTokenPayload,
 } from '@agor/core/types';
 import {
@@ -97,6 +100,18 @@ function isBranchExecutorServicePayload(value: unknown): value is BranchExecutor
   return isExecutorServiceTokenPayload(payload) && typeof payload.branch_id === 'string';
 }
 
+function isBranchDeletionExecutorSessionPayload(
+  value: ExecutorSessionTokenPayload | null,
+  branchId: string
+): value is ExecutorSessionTokenPayload & { filesystem_operation_id: string } {
+  return Boolean(
+    value?.branch_id === branchId &&
+      value.task_id === undefined &&
+      typeof value.filesystem_operation_id === 'string' &&
+      (value.session_id === 'branch-delete' || value.session_id === 'branch-remove')
+  );
+}
+
 export type BranchFilesystemLifecycleCapability =
   | { kind: 'create'; operationId: string }
   | { kind: 'delete'; operationId: string; metadataRemovalAllowed: boolean };
@@ -107,13 +122,7 @@ export function getBranchFilesystemLifecycleCapability(
 ): BranchFilesystemLifecycleCapability | null {
   const context = { params } as HookContext;
   const executorPayload = scopedPayload(context);
-  if (
-    executorPayload?.branch_id === branchId &&
-    executorPayload.task_id === undefined &&
-    typeof executorPayload.filesystem_operation_id === 'string' &&
-    (executorPayload.session_id === 'branch-delete' ||
-      executorPayload.session_id === 'branch-remove')
-  ) {
+  if (isBranchDeletionExecutorSessionPayload(executorPayload, branchId)) {
     return {
       kind: 'delete',
       operationId: executorPayload.filesystem_operation_id,
@@ -158,6 +167,12 @@ export function isBranchFilesystemLifecycleExecutorRequest(
 /** Whether an executor service credential may stamp this branch's Unix group. */
 export function isBranchUnixGroupExecutorRequest(context: HookContext, branchId: string): boolean {
   const payload = (context.params as AuthenticatedParams).authentication?.payload;
+  if (!isExecutorServiceTokenPayload(payload)) return false;
+  if (payload.command === 'unix.sync-board') {
+    // Board scope requires a branch lookup, which the global capability guard
+    // performs before setting this request-local authorization marker.
+    return hasAuthorizedExecutorServiceCapability(context.params);
+  }
   return (
     isBranchExecutorServicePayload(payload) &&
     payload.branch_id === branchId &&
@@ -221,6 +236,31 @@ export function validateBranchExternalManagedWrite(
   if (forbiddenServerManagedField) {
     throw new BadRequest(`Branch field '${forbiddenServerManagedField}' is managed by the daemon`);
   }
+
+  // Even fields ordinarily editable by a branch owner are outside an
+  // operation token's authority. Keep this final so more specific immutable
+  // and lifecycle diagnostics above remain useful to operators.
+  const servicePayload = params.authentication?.payload;
+  if (
+    isExecutorServiceTokenPayload(servicePayload) &&
+    !branchServicePatchMatchesCapability(
+      servicePayload,
+      branchId,
+      data as Record<string, unknown>,
+      hasAuthorizedExecutorServiceCapability(params)
+    )
+  ) {
+    throw new Forbidden(
+      `Executor service capability '${servicePayload.command}' cannot patch this branch`
+    );
+  }
+  const executorPayload = scopedPayload({ params } as HookContext);
+  if (
+    isBranchDeletionExecutorSessionPayload(executorPayload, branchId) &&
+    !patchUsesOnlyFields(data as Record<string, unknown>, BRANCH_DELETION_EXECUTOR_PATCH_FIELDS)
+  ) {
+    throw new Forbidden('Branch deletion credential cannot patch client-managed branch fields');
+  }
 }
 
 /** Whether this request carries a validated executor-session scope. */
@@ -244,6 +284,47 @@ function expectMatch(claim: string, value: unknown, label: string): void {
 
 function setIfAbsent(target: Record<string, unknown>, key: string, value: string): void {
   if (target[key] === undefined || target[key] === null) target[key] = value;
+}
+
+function patchUsesOnlyFields(
+  data: Record<string, unknown> | null,
+  allowedFields: readonly PropertyKey[]
+): boolean {
+  if (!data) return false;
+  const fields = Object.keys(data);
+  return fields.length > 0 && fields.every((field) => allowedFields.includes(field));
+}
+
+/** Shared field/resource contract for every externally transported branch patch. */
+function branchServicePatchMatchesCapability(
+  payload: ExecutorServiceTokenPayload,
+  branchId: string,
+  data: Record<string, unknown>,
+  boardScopeAuthorized = false
+): boolean {
+  if (payload.command === 'git.branch.add') {
+    return (
+      payloadAllowsBranch(payload, branchId) &&
+      patchUsesOnlyFields(data, BRANCH_MATERIALIZATION_EXECUTOR_PATCH_FIELDS)
+    );
+  }
+  if (payload.command === 'git.branch.remove') {
+    return (
+      payloadAllowsBranch(payload, branchId) &&
+      patchUsesOnlyFields(data, BRANCH_DELETION_EXECUTOR_PATCH_FIELDS)
+    );
+  }
+  if (payload.command === 'unix.sync-branch') {
+    return (
+      payloadAllowsBranch(payload, branchId) &&
+      patchUsesOnlyFields(data, BRANCH_UNIX_SYNC_EXECUTOR_PATCH_FIELDS)
+    );
+  }
+  return (
+    payload.command === 'unix.sync-board' &&
+    boardScopeAuthorized &&
+    patchUsesOnlyFields(data, BRANCH_UNIX_SYNC_EXECUTOR_PATCH_FIELDS)
+  );
 }
 
 function normalizePath(path: string | undefined): string {
@@ -377,15 +458,15 @@ async function executorServiceRequestIsAllowed(
       return false;
     }
     if (context.method === 'patch') {
-      if (
-        payload.command !== 'git.branch.add' &&
-        payload.command !== 'git.branch.remove' &&
-        payload.command !== 'unix.sync-branch' &&
-        payload.command !== 'unix.sync-board'
-      ) {
-        return false;
+      if (payload.command === 'unix.sync-board') {
+        return branchServicePatchMatchesCapability(
+          payload,
+          id,
+          data ?? {},
+          await branchMatchesServiceScope(context, payload, id)
+        );
       }
-      return branchMatchesServiceScope(context, payload, id);
+      return branchServicePatchMatchesCapability(payload, id, data ?? {});
     }
     return false;
   }

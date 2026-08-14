@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { type AgorClient, createClient } from '@agor/core/api';
+import { type AgorClient, type BranchesExecutorService, createClient } from '@agor/core/api';
 import { feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
@@ -55,7 +55,10 @@ describe('executor service capability Socket transport', () => {
         return [{ branch_id: 'branch-1' }, { branch_id: 'branch-2' }];
       },
       async get(id: string) {
-        return { branch_id: id, repo_id: id === 'branch-1' ? 'repo-1' : 'repo-2' };
+        return { branch_id: id, repo_id: 'repo-1' };
+      },
+      async patch(id: string, data: Record<string, unknown>) {
+        return { branch_id: id, repo_id: 'repo-1', ...data };
       },
     });
     app.use('repos', {
@@ -76,6 +79,7 @@ describe('executor service capability Socket transport', () => {
         before: {
           find: [requireMinimumRole(ROLES.MEMBER, `read ${path}`)],
           get: [requireMinimumRole(ROLES.MEMBER, `read ${path}`)],
+          patch: [requireMinimumRole(ROLES.MEMBER, `patch ${path}`)],
           all: [executorServiceCapabilityGuard() as (context: HookContext) => Promise<HookContext>],
         },
       } as never);
@@ -98,6 +102,20 @@ describe('executor service capability Socket transport', () => {
     });
     await expect(client.service('repos').get('repo-2')).rejects.toThrow(/not valid/i);
     await expect(client.service('boards').find()).rejects.toThrow(/not valid/i);
+
+    const executorBranches = client.service('branches') as unknown as BranchesExecutorService;
+    await expect(
+      executorBranches.patch('branch-1', { filesystem_status: 'deleted' })
+    ).resolves.toMatchObject({ branch_id: 'branch-1', filesystem_status: 'deleted' });
+    await expect(
+      executorBranches.patch('branch-2', { filesystem_status: 'deleted' })
+    ).rejects.toThrow(/not valid/i);
+    await expect(
+      executorBranches.patch('branch-1', {
+        filesystem_status: 'deleted',
+        notes: 'forged',
+      } as never)
+    ).rejects.toThrow(/not valid/i);
   });
 
   it('binds credential RPC over Socket transport to the signed clone user', async () => {

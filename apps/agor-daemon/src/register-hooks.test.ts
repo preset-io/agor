@@ -142,12 +142,34 @@ describe('protectExternalBranchManagedWrites', () => {
     expect(protectExternalBranchManagedWrites(hook)).toBe(hook);
   });
 
+  it('does not let a branch deletion credential patch client-managed fields', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'deleted', notes: 'forged' },
+          { provider: 'socketio', executorBranchId: 'branch-attacker' }
+        )
+      )
+    ).toThrow(/deletion credential/i);
+  });
+
   it('allows branch creation lifecycle state from its scoped service executor', () => {
     const hook = context(
       { filesystem_status: 'ready', error_message: undefined },
       { provider: 'socketio', serviceBranchId: 'branch-attacker' }
     );
     expect(protectExternalBranchManagedWrites(hook)).toBe(hook);
+  });
+
+  it('does not let a branch creation service credential patch client-managed fields', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'ready', notes: 'forged' },
+          { provider: 'socketio', serviceBranchId: 'branch-attacker' }
+        )
+      )
+    ).toThrow(/cannot patch this branch/i);
   });
 
   it('rejects lifecycle credentials on whole-row update even when the generation is current', () => {

@@ -113,22 +113,46 @@ export type BranchClientPatch = Omit<
   [K in BranchClientNullableField]?: Branch[K] | null;
 };
 
-/** Privileged branch fields reported by filesystem lifecycle executors. */
-export type BranchExecutorPatch = Partial<
-  Pick<
-    Branch,
-    | 'filesystem_status'
-    | 'error_message'
-    | 'unix_group'
-    | 'start_command'
-    | 'stop_command'
-    | 'nuke_command'
-    | 'health_check_url'
-    | 'app_url'
-    | 'logs_command'
-    | 'environment_variant'
-  >
+/** Fields an exact-branch materialization credential may report. */
+export const BRANCH_MATERIALIZATION_EXECUTOR_PATCH_FIELDS = [
+  'filesystem_status',
+  'error_message',
+  'unix_group',
+  'start_command',
+  'stop_command',
+  'nuke_command',
+  'health_check_url',
+  'app_url',
+  'logs_command',
+  'environment_variant',
+] as const satisfies readonly (keyof Branch)[];
+
+/** Fields an exact-branch deletion credential may report. */
+export const BRANCH_DELETION_EXECUTOR_PATCH_FIELDS = [
+  'filesystem_status',
+  'error_message',
+] as const satisfies readonly (keyof Branch)[];
+
+/** Fields a branch Unix-permission synchronization credential may report. */
+export const BRANCH_UNIX_SYNC_EXECUTOR_PATCH_FIELDS = [
+  'unix_group',
+] as const satisfies readonly (keyof Branch)[];
+
+export type BranchMaterializationExecutorPatch = Partial<
+  Pick<Branch, (typeof BRANCH_MATERIALIZATION_EXECUTOR_PATCH_FIELDS)[number]>
 >;
+export type BranchDeletionExecutorPatch = Partial<
+  Pick<Branch, (typeof BRANCH_DELETION_EXECUTOR_PATCH_FIELDS)[number]>
+>;
+export type BranchUnixSyncExecutorPatch = Partial<
+  Pick<Branch, (typeof BRANCH_UNIX_SYNC_EXECUTOR_PATCH_FIELDS)[number]>
+>;
+
+/** Privileged branch patch shapes accepted by the executor-only client surface. */
+export type BranchExecutorPatch =
+  | BranchMaterializationExecutorPatch
+  | BranchDeletionExecutorPatch
+  | BranchUnixSyncExecutorPatch;
 
 /** Shared input for the dedicated `POST /repos/:id/branches` route service. */
 export interface RepoBranchCreateRequest {

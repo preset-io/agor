@@ -1792,7 +1792,7 @@ export async function getGitState(repoPath: string): Promise<string> {
 export async function deleteRepoDirectory(
   repoPath: string,
   allowedReposDir: string,
-  options: { expectedRelativePath: string; mountInfo?: string }
+  options: { expectedRelativePath: string; mountInspection?: ManagedMountInspectionOptions }
 ): Promise<void> {
   const { lstat, realpath, rm, stat } = await import('node:fs/promises');
   const { dirname, isAbsolute, relative, resolve, sep } = await import('node:path');
@@ -1836,7 +1836,7 @@ export async function deleteRepoDirectory(
   if (targetInfo.dev !== parentInfo.dev) {
     throw new Error('Safety check failed: Repository root is a filesystem mount point');
   }
-  await assertNoManagedRootMounts(resolvedTarget, options.mountInfo);
+  await assertNoManagedRootMounts(resolvedTarget, options.mountInspection);
 
   await rm(resolvedTarget, { recursive: true, force: true });
   try {
@@ -1867,8 +1867,8 @@ export async function deleteBranchDirectory(
     privileged?: boolean;
     /** Test seam; production callers use the built-in sudo runner. */
     privilegedDelete?: (target: string) => Promise<void>;
-    /** Test seam for Linux mount-table validation. */
-    mountInfo?: string;
+    /** Optional platform/table seam for mount-aware deletion validation. */
+    mountInspection?: ManagedMountInspectionOptions;
   }
 ): Promise<void> {
   const { lstat, realpath, rm, stat } = await import('node:fs/promises');
@@ -1927,7 +1927,7 @@ export async function deleteBranchDirectory(
   if (targetInfo.dev !== parentInfo.dev) {
     throw new Error('Safety check failed: Branch root is a filesystem mount point');
   }
-  await assertNoManagedRootMounts(resolvedTarget, options.mountInfo);
+  await assertNoManagedRootMounts(resolvedTarget, options.mountInspection);
 
   if (options.privileged) {
     const privilegedDelete = options.privilegedDelete ?? deleteBranchDirectoryWithSudo;
@@ -1955,31 +1955,63 @@ function decodeMountInfoPath(value: string): string {
   );
 }
 
+export interface ManagedMountInspectionOptions {
+  /** Test seam; production inspection always uses the current platform. */
+  platform?: NodeJS.Platform;
+  /** Test seam for deterministic Linux mountinfo fixtures. */
+  linuxMountInfo?: string;
+}
+
+async function loadLinuxMountInfo(options: ManagedMountInspectionOptions): Promise<string> {
+  const platform = options.platform ?? process.platform;
+  if (platform !== 'linux') {
+    throw new Error('Safety check failed: Mount inspection is unavailable on this platform');
+  }
+  if (options.linuxMountInfo !== undefined) return options.linuxMountInfo;
+
+  try {
+    const { readFile } = await import('node:fs/promises');
+    return await readFile('/proc/self/mountinfo', 'utf8');
+  } catch {
+    throw new Error('Safety check failed: Unable to inspect filesystem mounts');
+  }
+}
+
+function mountPointsFromLinuxMountInfo(mountInfo: string): string[] {
+  const mountPoints: string[] = [];
+  for (const line of mountInfo.split('\n')) {
+    if (!line.trim()) continue;
+    const fields = line.trim().split(/\s+/);
+    const rawMountPoint = fields[4];
+    if (rawMountPoint) mountPoints.push(decodeMountInfoPath(rawMountPoint));
+  }
+  if (mountPoints.length === 0) {
+    throw new Error('Safety check failed: Unable to inspect filesystem mounts');
+  }
+  return mountPoints;
+}
+
 /**
  * Refuse a managed deletion root that is itself a mount or contains one.
  *
  * `rm --one-file-system` compares device IDs and therefore cannot protect a
  * same-device bind mount. Linux mountinfo lists mount identities directly, so
  * checking mount points closes that gap before either privileged or ordinary
- * recursive deletion starts. An attacker capable of racing mount-table changes
- * already has host mount authority; `--one-file-system` remains the second
- * fence for ordinary cross-device mounts.
+ * recursive deletion starts. Other platforms and unreadable mount tables fail
+ * closed rather than falling back to unsafe recursive deletion. An attacker
+ * capable of racing mount-table changes already has host mount authority;
+ * `--one-file-system` remains the second fence for ordinary cross-device mounts.
  */
 export async function assertNoManagedRootMounts(
   target: string,
-  suppliedMountInfo?: string
+  options: ManagedMountInspectionOptions = {}
 ): Promise<void> {
-  if (process.platform !== 'linux' && suppliedMountInfo === undefined) return;
-  const { readFile } = await import('node:fs/promises');
   const { isAbsolute, relative, resolve, sep } = await import('node:path');
-  const mountInfo = suppliedMountInfo ?? (await readFile('/proc/self/mountinfo', 'utf8'));
+  const mountInfo = await loadLinuxMountInfo(options);
   const resolvedTarget = resolve(target);
 
-  for (const line of mountInfo.split('\n')) {
-    if (!line) continue;
-    const fields = line.split(' ');
-    if (fields.length < 6) continue;
-    const mountPoint = resolve(decodeMountInfoPath(fields[4]));
+  for (const mountPointValue of mountPointsFromLinuxMountInfo(mountInfo)) {
+    const mountPoint = resolve(mountPointValue);
     const fromTarget = relative(resolvedTarget, mountPoint);
     const isTargetOrDescendant =
       fromTarget === '' ||

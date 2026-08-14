@@ -9,6 +9,7 @@ import {
   isBranchFilesystemLifecycleExecutorRequest,
   requireExecutorRuntimeToken,
   scopeExecutorRuntimeAuth,
+  validateBranchExternalManagedWrite,
 } from './executor-runtime-scope';
 
 function serviceCtx(
@@ -167,6 +168,117 @@ describe('executor service command capabilities', () => {
         )
       )
     ).rejects.toThrow(/not valid/i);
+  });
+
+  it('binds branch lifecycle patches to the exact signed branch', async () => {
+    const guard = executorServiceCapabilityGuard();
+    const claims = {
+      branch_id: 'branch-1',
+      repo_id: 'repo-1',
+      filesystem_operation_id: 'operation-1',
+    };
+
+    await expect(
+      guard(
+        serviceCtx(
+          'git.branch.remove',
+          {
+            path: 'branches',
+            method: 'patch',
+            id: 'branch-1',
+            data: { filesystem_status: 'deleted' },
+          },
+          claims
+        )
+      )
+    ).resolves.toBeDefined();
+    await expect(
+      guard(
+        serviceCtx(
+          'git.branch.remove',
+          {
+            path: 'branches',
+            method: 'patch',
+            id: 'branch-2',
+            data: { filesystem_status: 'deleted' },
+          },
+          claims
+        )
+      )
+    ).rejects.toThrow(/not valid/i);
+  });
+
+  it('applies command-specific branch patch field allowlists', async () => {
+    const guard = executorServiceCapabilityGuard();
+    const claims = { branch_id: 'branch-1', repo_id: 'repo-1' };
+
+    await expect(
+      guard(
+        serviceCtx(
+          'git.branch.add',
+          {
+            path: 'branches',
+            method: 'patch',
+            id: 'branch-1',
+            data: { filesystem_status: 'ready', start_command: 'pnpm dev' },
+          },
+          claims
+        )
+      )
+    ).resolves.toBeDefined();
+    await expect(
+      guard(
+        serviceCtx(
+          'git.branch.remove',
+          {
+            path: 'branches',
+            method: 'patch',
+            id: 'branch-1',
+            data: { filesystem_status: 'deleted', notes: 'forged' },
+          },
+          claims
+        )
+      )
+    ).rejects.toThrow(/not valid/i);
+    await expect(
+      guard(
+        serviceCtx(
+          'unix.sync-branch',
+          {
+            path: 'branches',
+            method: 'patch',
+            id: 'branch-1',
+            data: { unix_group: 'agor_wt_example', board_id: 'board-2' },
+          },
+          claims
+        )
+      )
+    ).rejects.toThrow(/not valid/i);
+  });
+
+  it('allows board-scoped Unix-group stamping only after branch membership is verified', async () => {
+    const context = serviceCtx(
+      'unix.sync-board',
+      {
+        path: 'branches',
+        method: 'patch',
+        id: 'branch-1',
+        data: { unix_group: 'agor_wt_example' },
+        app: {
+          service: () => ({
+            get: async () => ({ branch_id: 'branch-1', board_id: 'board-1' }),
+          }),
+        },
+      },
+      { board_id: 'board-1' }
+    );
+
+    await expect(executorServiceCapabilityGuard()(context)).resolves.toBe(context);
+    expect(() =>
+      validateBranchExternalManagedWrite(context.params, 'branch-1', {
+        unix_group: 'agor_wt_example',
+      })
+    ).not.toThrow();
   });
 
   it('rejects unscoped and unknown full service tokens', async () => {
