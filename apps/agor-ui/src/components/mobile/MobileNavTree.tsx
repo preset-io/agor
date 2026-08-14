@@ -1,5 +1,5 @@
 import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
-import { CommentOutlined, DownOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CommentOutlined, DownOutlined } from '@ant-design/icons';
 import { Badge, Button, Collapse, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -35,6 +35,12 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   const handleCommentsClick = (boardId: string, e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent board collapse toggle
     navigate(`/m/comments/${boardId}`);
+    onNavigate?.();
+  };
+
+  const handleBoardClick = (boardId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigate(`/m/board/${boardId}`);
     onNavigate?.();
   };
 
@@ -108,6 +114,13 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                   count={boardBranches.length}
                   style={{ backgroundColor: token.colorPrimaryBg }}
                   showZero
+                />
+                <Button
+                  type="text"
+                  aria-label={`Open ${board.name} board`}
+                  icon={<AppstoreOutlined style={{ fontSize: 18 }} />}
+                  onClick={(e) => handleBoardClick(board.board_id, e)}
+                  style={{ padding: '6px 10px', height: 'auto' }}
                 />
                 <Badge
                   count={activeComments}

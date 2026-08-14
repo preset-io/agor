@@ -13,6 +13,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { BrandMark } from '../BrandMark';
+import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileHeader } from './MobileHeader';
 import { MobileNavTree } from './MobileNavTree';
@@ -109,6 +110,19 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 </Text>
               </Content>
             </>
+          }
+        />
+
+        <Route
+          path="/board/:boardId"
+          element={
+            <MobileBoardPage
+              boardById={boardById}
+              branchById={branchById}
+              repoById={repoById}
+              sessionsByBranch={sessionsByBranch}
+              onMenuClick={() => setDrawerOpen(true)}
+            />
           }
         />
 
