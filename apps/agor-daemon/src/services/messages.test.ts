@@ -20,7 +20,11 @@ import { TaskRepository } from '../../../../packages/core/src/db/repositories/ta
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
 import { ServiceJWTStrategy } from '../auth/service-jwt-strategy';
-import { scopeFindToAccessibleSessionsSql } from '../utils/branch-authorization';
+import { rejectMessageMultiCreate } from '../hooks/reject-message-multi-create';
+import {
+  resolveSessionContext,
+  scopeFindToAccessibleSessionsSql,
+} from '../utils/branch-authorization';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './messages';
 import { createUsersService } from './users';
 
@@ -232,6 +236,31 @@ describe('MessagesService.create boundary', () => {
       await expect(new MessagesRepository(db).findBySessionId(sessionId)).resolves.toEqual([]);
     }
   );
+
+  dbTest('rejects arrays before branch RBAC tries to resolve a Session', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const app = feathers();
+    app.use('messages', createMessagesService(db), {
+      methods: [...MESSAGES_SERVICE_TRANSPORT_METHODS],
+    });
+    app.service('messages').hooks({
+      before: {
+        // This is the ordering used when branch RBAC is enabled. Without the
+        // first hook, resolveSessionContext sees an array and reports a 500.
+        create: [rejectMessageMultiCreate, resolveSessionContext()],
+      },
+    });
+
+    await expect(
+      app.service('messages').create([message(sessionId, 0), message(sessionId, 1)], {
+        provider: 'rest',
+      })
+    ).rejects.toMatchObject({
+      code: 400,
+      message: 'Bulk Message create must use /messages/bulk',
+    });
+    await expect(new MessagesRepository(db).findBySessionId(sessionId)).resolves.toEqual([]);
+  });
 });
 
 describe('MessagesService.patch boundary', () => {

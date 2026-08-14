@@ -25,6 +25,7 @@ import {
   type UUID,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { assertSingleMessageCreatePayload } from '../hooks/reject-message-multi-create.js';
 
 /**
  * Public Message transport surface. Full replacement and raw bulk insertion
@@ -241,9 +242,7 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     data: Partial<Message> | Partial<Message>[],
     params?: MessageParams
   ): Promise<Message | Message[]> {
-    if (Array.isArray(data)) {
-      throw new BadRequest('Bulk Message create must use /messages/bulk');
-    }
+    assertSingleMessageCreatePayload(data);
     try {
       return await super.create(data, params);
     } catch (error) {
