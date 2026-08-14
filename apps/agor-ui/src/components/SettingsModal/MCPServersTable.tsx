@@ -50,7 +50,7 @@ import {
   explainManageRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
-import { MCPMemberPolicyCard } from './MCPMemberPolicyCard';
+import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface MCPServersTableProps {
@@ -594,7 +594,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   return (
     <div>
-      <MCPMemberPolicyCard
+      <MCPMemberPolicySetting
         policy={memberPolicy.policy}
         loading={memberPolicy.loading}
         saving={memberPolicy.saving}

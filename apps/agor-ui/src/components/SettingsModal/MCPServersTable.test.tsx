@@ -108,11 +108,20 @@ function renderTable(options: {
 
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
+/** Open the admin's folded policy options, which sit behind a Change control. */
+const expandPolicy = () => fireEvent.click(screen.getByRole('button', { name: 'Change' }));
+
 describe('MCPServersTable member policy', () => {
   it('lets an admin read the policy in plain language and change it', async () => {
     const { find, patch } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
 
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    // Folded, the value in force is the whole of what the admin is shown.
+    expect(screen.getByText('Use existing servers only')).toBeVisible();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+
+    expandPolicy();
 
     expect(screen.getByText(/One setting for the whole workspace, not per user/i)).toBeVisible();
     const inForce = policyRadio(/Use existing servers only/);
@@ -125,6 +134,10 @@ describe('MCPServersTable member policy', () => {
     fireEvent.click(policyRadio(/Members can add shared servers/));
 
     await waitFor(() => expect(patch).toHaveBeenCalledWith(null, { policy: 'allow_crud' }));
+    // The header follows the value it was changed to, not the one it opened on.
+    await waitFor(() =>
+      expect(screen.getAllByText('Members can add shared servers').length).toBeGreaterThan(1)
+    );
   });
 
   it('shows a member the policy read-only, with the reason adding is refused', async () => {
@@ -132,12 +145,11 @@ describe('MCPServersTable member policy', () => {
 
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    expect(policyRadio(/Use existing servers only/)).toBeDisabled();
-    expect(policyRadio(/Members can add shared servers/)).toBeDisabled();
+    // A choice a member does not have is stated, not rendered as a control.
+    expect(screen.getByText(/Use existing servers only/)).toBeVisible();
     expect(screen.getByText(/Only an admin can change it/i)).toBeVisible();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
-
-    fireEvent.click(policyRadio(/Members can add shared servers/));
     expect(patch).not.toHaveBeenCalled();
   });
 
@@ -218,7 +230,28 @@ describe('MCPServersTable member policy', () => {
     // The workspace may well allow adding; the daemon was simply unreachable.
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
     expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
-    expect(policyRadio(/Use existing servers only/)).not.toBeChecked();
+    // The restrictive value the UI falls back to is not a policy to state.
+    expect(screen.queryByText(/Use existing servers only/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Only an admin can change it/i)).not.toBeInTheDocument();
+  });
+
+  it('withholds from an admin whose policy read failed, and names no value', async () => {
+    // Distinct from an answer that arrived without `can_configure`: nothing
+    // arrived, so the admin clause has nothing to stand on either.
+    renderTable({
+      policy: 'allow_crud',
+      currentUser: ADMIN,
+      findError: new Error('Network request failed'),
+    });
+
+    await waitFor(() => expect(screen.getByText('Network request failed')).toBeInTheDocument());
+
+    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
+    expect(screen.queryByText('Members can add shared servers')).not.toBeInTheDocument();
+
+    // The options stay reachable; none of them is presented as the one in force.
+    expandPolicy();
+    expect(policyRadio(/Members can add shared servers/)).not.toBeChecked();
   });
 
   it('holds the edit form to the transports a member may switch to', async () => {
@@ -287,6 +320,7 @@ describe('MCPServersTable member policy', () => {
     });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
+    expandPolicy();
     fireEvent.click(policyRadio(/Members can add shared servers/));
     await waitFor(() => expect(patch).toHaveBeenCalled());
 
