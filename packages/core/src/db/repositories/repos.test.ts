@@ -458,20 +458,26 @@ describe('RepoRepository.findById', () => {
       clone_status: 'ready',
     });
     const operationId = generateId() as RepoFilesystemOperationID;
-    const claimed = await repo.claimFilesystemDeletion(created.repo_id, operationId);
+    const claimed = await repo.claimFilesystemDeletion(created.repo_id, operationId, 'deleted');
     expect(claimed).toMatchObject({
       filesystem_status: 'deleting',
       filesystem_operation_id: operationId,
+      filesystem_operation_action: 'deleted',
     });
 
     // A daemon loss after reservation leaves no live owner. A repeated
     // authorized delete takes over with a fresh generation, making the prior
     // executor stale while preserving exact-root idempotence.
     const takeoverOperationId = generateId() as RepoFilesystemOperationID;
-    const reclaimed = await repo.claimFilesystemDeletion(created.repo_id, takeoverOperationId);
+    const reclaimed = await repo.claimFilesystemDeletion(
+      created.repo_id,
+      takeoverOperationId,
+      'deleted'
+    );
     expect(reclaimed).toMatchObject({
       filesystem_status: 'deleting',
       filesystem_operation_id: takeoverOperationId,
+      filesystem_operation_action: 'deleted',
     });
 
     await expect(
@@ -486,6 +492,57 @@ describe('RepoRepository.findById', () => {
         }
       )
     ).rejects.toBeInstanceOf(RepoFilesystemLifecycleConflictError);
+  });
+
+  dbTest('rejects a keep-files takeover after filesystem deletion preflight', async ({ db }) => {
+    const repository = new RepoRepository(db);
+    const created = await repository.create({
+      ...createRepoData({ slug: 'org/action-fence' }),
+      clone_status: 'ready',
+    });
+    const deletingOperationId = generateId() as RepoFilesystemOperationID;
+    const preflight = await repository.claimFilesystemDeletion(
+      created.repo_id,
+      deletingOperationId,
+      'deleted'
+    );
+    expect(preflight).toMatchObject({
+      filesystem_status: 'deleting',
+      filesystem_operation_id: deletingOperationId,
+      filesystem_operation_action: 'deleted',
+    });
+
+    // Model the old executor having passed its preflight read. A metadata-only
+    // retry must not replace that generation while it can still remove files.
+    await expect(
+      repository.claimFilesystemDeletion(
+        created.repo_id,
+        generateId() as RepoFilesystemOperationID,
+        'preserved'
+      )
+    ).rejects.toThrow(/different filesystem action/i);
+    await expect(repository.findById(created.repo_id)).resolves.toMatchObject({
+      filesystem_operation_id: deletingOperationId,
+      filesystem_operation_action: 'deleted',
+    });
+
+    await repository.update(
+      created.repo_id,
+      { filesystem_status: 'delete_failed' },
+      {
+        expectedFilesystemLifecycle: {
+          filesystemStatuses: ['deleting'],
+          operationId: deletingOperationId,
+        },
+      }
+    );
+    await expect(
+      repository.claimFilesystemDeletion(
+        created.repo_id,
+        generateId() as RepoFilesystemOperationID,
+        'preserved'
+      )
+    ).rejects.toThrow(/different filesystem action/i);
   });
 
   dbTest('quarantines legacy prefix-conflicting rows from destructive deletion', async ({ db }) => {
@@ -515,7 +572,11 @@ describe('RepoRepository.findById', () => {
       .run();
 
     await expect(
-      repository.claimFilesystemDeletion(legacy.repo_id, generateId() as RepoFilesystemOperationID)
+      repository.claimFilesystemDeletion(
+        legacy.repo_id,
+        generateId() as RepoFilesystemOperationID,
+        'deleted'
+      )
     ).rejects.toBeInstanceOf(RepoFilesystemNamespaceConflictError);
     await expect(repository.findById(legacy.repo_id)).resolves.toMatchObject({
       filesystem_status: undefined,
@@ -529,7 +590,11 @@ describe('RepoRepository.findById', () => {
       clone_status: 'cloning',
     });
     await expect(
-      repo.claimFilesystemDeletion(created.repo_id, generateId() as RepoFilesystemOperationID)
+      repo.claimFilesystemDeletion(
+        created.repo_id,
+        generateId() as RepoFilesystemOperationID,
+        'deleted'
+      )
     ).rejects.toBeInstanceOf(RepoFilesystemLifecycleConflictError);
   });
 
@@ -549,7 +614,11 @@ describe('RepoRepository.findById', () => {
       filesystem_status: 'creating',
     });
     await expect(
-      repo.claimFilesystemDeletion(created.repo_id, generateId() as RepoFilesystemOperationID)
+      repo.claimFilesystemDeletion(
+        created.repo_id,
+        generateId() as RepoFilesystemOperationID,
+        'deleted'
+      )
     ).rejects.toBeInstanceOf(RepoFilesystemLifecycleConflictError);
   });
 });

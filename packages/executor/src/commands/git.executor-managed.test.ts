@@ -108,6 +108,7 @@ const deleteRoots = {
 const repoDeleteLifecycle = {
   filesystem_status: 'deleting',
   filesystem_operation_id: repoDeleteOperationId,
+  filesystem_operation_action: 'deleted',
 };
 
 function createClient(records: {
@@ -1142,6 +1143,31 @@ describe('managed executor git/fs commands', () => {
         repo_type: 'remote',
         local_path: '/safe/repos/org/repo',
         filesystem_operation_id: '550e8400-e29b-41d4-a716-446655440099',
+      },
+      branches: [],
+    });
+
+    const result = await handleGitRepoDelete(
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: expect.stringMatching(/canonical managed identity/i) },
+    });
+    expect(mocks.deleteRepoDirectory).not.toHaveBeenCalled();
+  });
+
+  it('refuses git.repo.delete for a keep-files repository generation', async () => {
+    createClient({
+      repo: {
+        ...repoDeleteLifecycle,
+        repo_id: repoId,
+        slug: 'org/repo',
+        repo_type: 'remote',
+        local_path: '/safe/repos/org/repo',
+        filesystem_operation_action: 'preserved',
       },
       branches: [],
     });

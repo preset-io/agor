@@ -113,13 +113,18 @@ export function extractSlugFromUrl(url: string): RepoSlug {
  *
  * Shared across repo-reference validation and config resource schemas.
  */
-export const REPO_SLUG_PATTERN = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
+const REPO_SLUG_SEGMENT_SOURCE = '(?=[a-zA-Z0-9._-]*[a-zA-Z0-9_-])[a-zA-Z0-9._-]+';
+
+/** One filesystem-safe repository namespace segment; all-dot names are excluded. */
+export const REPO_SLUG_SEGMENT_PATTERN = new RegExp(`^${REPO_SLUG_SEGMENT_SOURCE}$`);
+
+/** Current two-segment repository slug contract. */
+export const REPO_SLUG_PATTERN = new RegExp(
+  `^${REPO_SLUG_SEGMENT_SOURCE}/${REPO_SLUG_SEGMENT_SOURCE}$`
+);
 
 export function isValidSlug(slug: string): boolean {
-  if (!REPO_SLUG_PATTERN.test(slug)) return false;
-  // Dot path segments are syntactically accepted by the character class but
-  // are not filesystem names. Reject them before a slug reaches path.join().
-  return slug.split('/').every((segment) => segment !== '.' && segment !== '..');
+  return REPO_SLUG_PATTERN.test(slug);
 }
 
 /**
@@ -135,9 +140,7 @@ export function isValidManagedRepoSlug(slug: unknown): slug is string {
   return (
     segments.length >= 1 &&
     segments.length <= 2 &&
-    segments.every(
-      (segment) => segment !== '.' && segment !== '..' && /^[a-zA-Z0-9._-]+$/.test(segment)
-    )
+    segments.every((segment) => REPO_SLUG_SEGMENT_PATTERN.test(segment))
   );
 }
 

@@ -129,7 +129,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
         const claimed = await new RepoRepository(scoped).claimFilesystemDeletion(
           repo.repo_id,
-          operationId
+          operationId,
+          'deleted'
         );
         expect(claimed).toMatchObject({
           filesystem_status: 'deleting',
@@ -221,7 +222,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const deletion = runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
         new RepoRepository(scoped).claimFilesystemDeletion(
           repo.repo_id,
-          generateId() as RepoFilesystemOperationID
+          generateId() as RepoFilesystemOperationID,
+          'deleted'
         )
       );
       const deletionState = await Promise.race([
@@ -273,7 +275,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
         new RepoRepository(scoped).claimFilesystemDeletion(
           repo.repo_id,
-          generateId() as RepoFilesystemOperationID
+          generateId() as RepoFilesystemOperationID,
+          'deleted'
         )
       );
 

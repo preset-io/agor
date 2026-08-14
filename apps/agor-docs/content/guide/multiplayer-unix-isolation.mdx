@@ -228,7 +228,9 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
   legacy one-segment repository layouts.
 - If a daemon or executor exits after reserving `deleting`, repeat the same
   authorized delete. Agor assigns a new operation generation; any prior
-  executor becomes stale and cannot publish state or remove metadata.
+  executor becomes stale and cannot publish state or remove metadata. A
+  repository retry must keep the original keep-files/delete-files choice while
+  that deletion lifecycle remains on the row.
 - The file includes extensive comments and troubleshooting tips
 - Read the full file before deploying to production
 

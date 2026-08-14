@@ -606,7 +606,8 @@ export async function handleGitRepoDelete(
       repo.repo_type !== 'remote' ||
       !isValidManagedRepoSlug(repo.slug) ||
       repo.filesystem_status !== 'deleting' ||
-      repo.filesystem_operation_id !== payload.params.filesystemOperationId
+      repo.filesystem_operation_id !== payload.params.filesystemOperationId ||
+      repo.filesystem_operation_action !== 'deleted'
     ) {
       throw new Error(`SAFETY CHECK FAILED: Repo ${repoId} has no canonical managed identity`);
     }

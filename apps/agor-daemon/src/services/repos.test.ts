@@ -375,11 +375,12 @@ describe('ReposService.remove branch inventory', () => {
     let claimedRepo: Record<string, unknown> = repo;
     repositoryMocks.claimRepoFilesystemDeletion
       .mockReset()
-      .mockImplementation((_id, operationId) => {
+      .mockImplementation((_id, operationId, filesystemAction) => {
         claimedRepo = {
           ...repo,
           filesystem_status: 'deleting',
           filesystem_operation_id: operationId,
+          filesystem_operation_action: filesystemAction,
         };
         return claimedRepo;
       });
@@ -420,6 +421,11 @@ describe('ReposService.remove branch inventory', () => {
     }
 
     expect(branchService.find).not.toHaveBeenCalled();
+    expect(repositoryMocks.claimRepoFilesystemDeletion).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.any(String),
+      'preserved'
+    );
     expect(repositoryMocks.findAllBranchesByRepoId).toHaveBeenNthCalledWith(1, repo.repo_id);
     expect(repositoryMocks.findAllBranchesByRepoId).toHaveBeenNthCalledWith(2, repo.repo_id);
     expect(repositoryMocks.lockRepoForBranchInventory).toHaveBeenCalledWith(repo.repo_id);
@@ -440,11 +446,12 @@ describe('ReposService.remove branch inventory', () => {
     let claimedRepo: Record<string, unknown> = repo;
     repositoryMocks.claimRepoFilesystemDeletion
       .mockReset()
-      .mockImplementation((_id, operationId) => {
+      .mockImplementation((_id, operationId, filesystemAction) => {
         claimedRepo = {
           ...repo,
           filesystem_status: 'deleting',
           filesystem_operation_id: operationId,
+          filesystem_operation_action: filesystemAction,
         };
         return claimedRepo;
       });
@@ -499,6 +506,11 @@ describe('ReposService.remove branch inventory', () => {
         }),
       }),
       expect.any(Object)
+    );
+    expect(repositoryMocks.claimRepoFilesystemDeletion).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.any(String),
+      'deleted'
     );
     expect(repositoryMocks.updateRepo).toHaveBeenCalledWith(
       repo.repo_id,

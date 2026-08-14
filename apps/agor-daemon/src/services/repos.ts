@@ -53,6 +53,7 @@ import type {
   RepoBranchCreateRequest,
   RepoClientPatch,
   RepoEnvironment,
+  RepoFilesystemDeleteAction,
   RepoFilesystemOperationID,
   RepoID,
   RepoSlug,
@@ -100,11 +101,12 @@ function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: strin
       .replace(/[^a-z0-9._-]+/g, '-')
       .replace(/^-+|-+$/g, '');
 
-    if (!sanitized) {
+    const slug = `local/${sanitized}`;
+    if (!sanitized || !isValidSlug(slug)) {
       throw new Error('Could not derive a valid slug from local repository name');
     }
 
-    return `local/${sanitized}` as RepoSlug;
+    return slug as RepoSlug;
   };
 
   if (remoteUrl && isValidGitUrl(remoteUrl)) {
@@ -1168,13 +1170,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   async remove(id: string, params?: RepoParams): Promise<Repo> {
     const cleanup = params?.query?.cleanup === true;
     const requestedRepo = await this.get(id, params);
+    const filesystemAction: RepoFilesystemDeleteAction =
+      cleanup && requestedRepo.repo_type === 'remote' ? 'deleted' : 'preserved';
     const filesystemOperationId = generateId() as RepoFilesystemOperationID;
 
     let repo: Repo;
     try {
       repo = await this.repoRepo.claimFilesystemDeletion(
         requestedRepo.repo_id,
-        filesystemOperationId
+        filesystemOperationId,
+        filesystemAction
       );
     } catch (error) {
       if (
@@ -1300,7 +1305,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         const lockedRepo = await this.repoRepo.lockForBranchInventory(repo.repo_id);
         if (
           lockedRepo.filesystem_status !== 'deleting' ||
-          lockedRepo.filesystem_operation_id !== filesystemOperationId
+          lockedRepo.filesystem_operation_id !== filesystemOperationId ||
+          lockedRepo.filesystem_operation_action !== filesystemAction
         ) {
           throw new RepoFilesystemLifecycleConflictError(
             lockedRepo.repo_id as RepoID,

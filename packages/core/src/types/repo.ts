@@ -158,6 +158,9 @@ export interface Repo {
   /** UUIDv7 generation fencing one repository deletion attempt. */
   filesystem_operation_id?: RepoFilesystemOperationID;
 
+  /** Filesystem intent owned by the current repository deletion generation. */
+  filesystem_operation_action?: RepoFilesystemDeleteAction;
+
   /** Sanitized durable failure for the current repository deletion attempt. */
   filesystem_error?: string;
 
@@ -193,6 +196,7 @@ export const REPO_SERVER_MANAGED_FIELDS = [
   'clone_error',
   'filesystem_status',
   'filesystem_operation_id',
+  'filesystem_operation_action',
   'filesystem_error',
   'last_updated',
 ] as const satisfies readonly (keyof Repo)[];
@@ -221,9 +225,14 @@ export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
 export const REPO_FILESYSTEM_STATUSES = ['deleting', 'delete_failed'] as const;
 export type RepoFilesystemStatus = (typeof REPO_FILESYSTEM_STATUSES)[number];
 
+/** Filesystem effect selected before a repository deletion is reserved. */
+export const REPO_FILESYSTEM_DELETE_ACTIONS = ['preserved', 'deleted'] as const;
+export type RepoFilesystemDeleteAction = (typeof REPO_FILESYSTEM_DELETE_ACTIONS)[number];
+
 export const REPO_FILESYSTEM_LIFECYCLE_FIELDS = [
   'filesystem_status',
   'filesystem_operation_id',
+  'filesystem_operation_action',
   'filesystem_error',
 ] as const satisfies readonly (keyof Repo)[];
 

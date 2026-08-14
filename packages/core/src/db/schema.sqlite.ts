@@ -626,6 +626,7 @@ export const repos = sqliteTable(
         };
         filesystem_status?: 'deleting' | 'delete_failed';
         filesystem_operation_id?: string;
+        filesystem_operation_action?: 'preserved' | 'deleted';
         filesystem_error?: string;
         // v2 environment config — source of truth. Named variants + optional
         // deployment-local template_overrides. See RepoEnvironment in

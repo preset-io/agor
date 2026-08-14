@@ -8,6 +8,7 @@ import type {
   Repo,
   RepoEnvironment,
   RepoEnvironmentConfigV1,
+  RepoFilesystemDeleteAction,
   RepoFilesystemLifecycleExpectation,
   RepoFilesystemOperationID,
   RepoFilesystemStatus,
@@ -208,6 +209,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         filesystem_operation_id: data.filesystem_operation_id as
           | RepoFilesystemOperationID
           | undefined,
+        filesystem_operation_action: data.filesystem_operation_action,
         filesystem_error: data.filesystem_error,
       },
       row
@@ -268,6 +270,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         clone_error: repo.clone_error || undefined,
         filesystem_status: repo.filesystem_status,
         filesystem_operation_id: repo.filesystem_operation_id,
+        filesystem_operation_action: repo.filesystem_operation_action,
         filesystem_error: repo.filesystem_error,
       },
     };
@@ -403,7 +406,11 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    * inserts, and the in-transaction branch-state check refuses to race an
    * executor that is still materializing or deleting a child root.
    */
-  async claimFilesystemDeletion(id: string, operationId: RepoFilesystemOperationID): Promise<Repo> {
+  async claimFilesystemDeletion(
+    id: string,
+    operationId: RepoFilesystemOperationID,
+    filesystemAction: RepoFilesystemDeleteAction
+  ): Promise<Repo> {
     const existing = await this.findById(id);
     if (!existing) throw new EntityNotFoundError('Repo', id);
 
@@ -419,13 +426,27 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
 
       if (
         current.filesystem_status !== existing.filesystem_status ||
-        (current.filesystem_operation_id ?? null) !== (existing.filesystem_operation_id ?? null)
+        (current.filesystem_operation_id ?? null) !== (existing.filesystem_operation_id ?? null) ||
+        (current.filesystem_operation_action ?? null) !==
+          (existing.filesystem_operation_action ?? null)
       ) {
         throw new RepoFilesystemLifecycleConflictError(
           current.repo_id as RepoID,
           current.filesystem_status,
           current.filesystem_operation_id,
           `Repository ${current.repo_id} filesystem lifecycle changed before deletion could be reserved`
+        );
+      }
+
+      if (
+        current.filesystem_status !== undefined &&
+        current.filesystem_operation_action !== filesystemAction
+      ) {
+        throw new RepoFilesystemLifecycleConflictError(
+          current.repo_id as RepoID,
+          current.filesystem_status,
+          current.filesystem_operation_id,
+          `Repository ${current.repo_id} deletion lifecycle already owns a different filesystem action`
         );
       }
 
@@ -469,6 +490,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       const merged = deepMerge(current, {
         filesystem_status: 'deleting' as const,
         filesystem_operation_id: operationId,
+        filesystem_operation_action: filesystemAction,
       });
       delete merged.filesystem_error;
       const insertData = this.repoToInsert(merged);

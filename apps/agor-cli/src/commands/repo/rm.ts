@@ -1,7 +1,7 @@
 /**
  * `agor repo rm <id>` - Remove a registered repository
  *
- * Removes the repository from the database (does not delete files).
+ * Removes a repository through the daemon-managed lifecycle boundary.
  */
 
 import type { Repo } from '@agor-live/client';
@@ -113,12 +113,8 @@ export default class RepoRm extends BaseCommand {
         }
       }
 
-      // Delete from database
-      await reposService.remove(repo.repo_id);
-
-      this.log(`${chalk.green('✓')} Repository removed from database`);
-
-      // Ask about deleting local files (unless --delete-files flag was passed)
+      // Resolve filesystem intent before reserving deletion. The daemon owns
+      // metadata/filesystem ordering and must receive exactly one request.
       let deleteFiles = flags['delete-files'];
 
       if (!deleteFiles && !flags.force) {
@@ -143,22 +139,11 @@ export default class RepoRm extends BaseCommand {
         deleteFiles = false;
       }
 
+      await reposService.remove(repo.repo_id, { query: { cleanup: deleteFiles } });
+      this.log(`${chalk.green('✓')} Repository removed from database`);
+
       if (deleteFiles) {
-        // Import fs dynamically
-        const fs = await import('node:fs/promises');
-
-        // Delete main repo
-        try {
-          await fs.rm(repo.local_path, { recursive: true, force: true });
-          this.log(`${chalk.green('✓')} Main repo deleted: ${chalk.dim(repo.local_path)}`);
-        } catch (error) {
-          this.warn(
-            `Failed to delete main repo: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-
-        // TODO: Query branches table separately and delete associated branch directories
-        // For now, branches cascade delete in database but files remain
+        this.log(`${chalk.green('✓')} Managed repository and branch files deleted`);
       } else {
         this.log(chalk.dim('Local files preserved:'));
         this.log(chalk.dim('  Main repo: ') + repo.local_path);
