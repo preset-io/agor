@@ -43,7 +43,7 @@ const checks = [
       'apps/agor-daemon/src/register-services.ts': 5,
       // HA fork/spawn now use the tenant-aware Feathers event helper instead
       // of raw global Socket.IO broadcasts.
-      'apps/agor-daemon/src/register-routes.ts': 6,
+      'apps/agor-daemon/src/register-routes.ts': 4,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
@@ -58,10 +58,14 @@ const checks = [
       // Includes the centralized tenant-channel eviction helper used on
       // logout/live authentication replacement.
       'apps/agor-daemon/src/utils/realtime-publish.ts': 10,
-      // Raw Socket.IO presence/user rooms are deliberately centralized here.
-      // Every join/leave/broadcast is tenant-namespaced, including logout
-      // cleanup, and cross-tenant negative tests cover same user/board IDs.
-      'apps/agor-daemon/src/setup/socketio.ts': 15,
+      // Raw Socket.IO presence/user/terminal rooms are deliberately centralized
+      // here. Every join/leave/broadcast is tenant-namespaced, including logout
+      // cleanup, and cross-tenant negative tests cover same user/board IDs. The
+      // terminal service additionally receives a server-only connection
+      // capability that joins its authenticated requesting socket to a room
+      // derived from trusted tenant/user/terminal identity before executor
+      // startup; clients cannot supply that room or capability.
+      'apps/agor-daemon/src/setup/socketio.ts': 16,
     },
   },
 

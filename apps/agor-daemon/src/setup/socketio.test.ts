@@ -31,6 +31,7 @@ import {
   tenantUserChannelName,
 } from '../realtime/routing';
 import type { TerminalAttachmentIdentity } from '../services/terminals';
+import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection';
 import { executorTaskChannelName } from '../utils/realtime-publish';
 import {
   configureChannels,
@@ -58,6 +59,7 @@ interface FakeSocket {
   received: Array<{ event: string; data: unknown }>;
   handlers: Map<string, (...args: any[]) => any>;
   on(event: string, fn: (...args: any[]) => any): void;
+  emit(event: string, data: unknown): void;
   join(channel: string): void;
   leave(channel: string): void;
   broadcast: {
@@ -105,6 +107,9 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
     handlers,
     on(event, fn) {
       handlers.set(event, fn);
+    },
+    emit(event, data) {
+      this.received.push({ event, data });
     },
     join(channel) {
       this.joined.add(channel);
@@ -250,6 +255,26 @@ function connect(io: FakeIO, socket: FakeSocket) {
   io.sockets.sockets.set(socket.id, socket);
   io.connectionHandler?.(socket);
 }
+
+it('binds a server-only terminal subscription capability to the Feathers connection', async () => {
+  const { io } = buildHarness();
+  const socket = makeSocket('terminal-requester', io);
+  connect(io, socket);
+
+  const join = socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  expect(join).toBeTypeOf('function');
+  expect(
+    Object.getOwnPropertyDescriptor(socket.feathers, TERMINAL_REQUEST_JOIN_CHANNEL)?.enumerable
+  ).toBe(false);
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+  await expect(join?.(terminalChannel(), allocation)).resolves.toBe(true);
+  expect(socket.joined).toContain(terminalChannel());
+  expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
+
+  socket.connected = false;
+  await expect(join?.(terminalChannel(ALICE, 'other-terminal'), allocation)).resolves.toBe(false);
+  expect(socket.joined).not.toContain(terminalChannel(ALICE, 'other-terminal'));
+});
 
 function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
   browser.handlers.get('join')?.(terminalChannel());
@@ -471,6 +496,7 @@ describe('Socket.IO lifecycle logging', () => {
     expect(socket.joined).toContain(tenantChannelName('tenant-a'));
     expect(socket.joined).toContain(tenantUserChannelName('tenant-a', ALICE));
     expect([...socket.joined]).not.toContain(`user:${ALICE}`);
+    expect(socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeTypeOf('function');
   });
 
   it('uses the same single authentication signal for handshake-authenticated users', async () => {

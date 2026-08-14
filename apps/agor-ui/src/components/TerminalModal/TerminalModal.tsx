@@ -146,12 +146,22 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         socket.off('terminal:exit', handleChannelExit);
         socket.off('terminal:ready', handleChannelReady);
         socket.off('terminal:error', handleChannelError);
+        socket.off('terminal:allocated', handleTerminalAllocated);
         socket.off('connect', handleReconnect);
         socket.off('disconnect', handleDisconnect);
         if (currentChannel) {
           socket.emit('leave', currentChannel);
         }
       }
+    };
+
+    const handleTerminalAllocated = (payload: {
+      userId: string;
+      terminalId: string;
+      branchId: string;
+    }) => {
+      if (payload.userId !== user?.user_id || payload.branchId !== branchId) return;
+      currentTerminalId = payload.terminalId;
     };
 
     // Channel-based event handlers
@@ -296,6 +306,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     socket.on('terminal:exit', handleChannelExit);
     socket.on('terminal:ready', handleChannelReady);
     socket.on('terminal:error', handleChannelError);
+    socket.on('terminal:allocated', handleTerminalAllocated);
 
     terminal.onData((data) => {
       if (!currentTerminalId) return;

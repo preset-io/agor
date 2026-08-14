@@ -146,11 +146,8 @@ jobs:
           set -euo pipefail
           ROOT="$RUNNER_TEMP/plain-install"
           mkdir -p "$ROOT/home"
-          (
-            ulimit -n 256
-            npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
-              --no-fund --no-audit "$CLIENT" "$LIVE"
-          )
+          npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit "$CLIENT" "$LIVE"
           PACKAGE_ROOT="$ROOT/prefix/lib/node_modules/agor-live"
           for package in agentic-tool-opencode agentic-tools core git; do
             test -d "$PACKAGE_ROOT/node_modules/@agor/$package"

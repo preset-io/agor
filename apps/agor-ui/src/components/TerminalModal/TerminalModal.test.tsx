@@ -26,6 +26,7 @@ import { TerminalModal } from './TerminalModal';
 
 const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111';
 const TERMINAL = '33333333-cccc-cccc-cccc-333333333333';
+const BRANCH = '44444444-dddd-dddd-dddd-444444444444';
 const CHANNEL = `tenant/default/user/${ALICE}/terminal/${TERMINAL}`;
 
 interface FakeSocket {
@@ -165,5 +166,57 @@ describe('TerminalModal reconnect + readiness', () => {
     });
     await Promise.resolve();
     expect(screen.getByText(/Reconnecting/)).toBeInTheDocument();
+  });
+
+  it('handles an executor failure before terminal creation returns', async () => {
+    const socket = makeFakeSocket();
+    let resolveCreate!: (value: unknown) => void;
+    const create = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        })
+    );
+    render(
+      <TerminalModal
+        open
+        onClose={() => {}}
+        client={makeClient(socket, create)}
+        user={memberUser}
+        branchId={BRANCH}
+        initialCommands={NO_COMMANDS}
+      />
+    );
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+
+    // The daemon subscribes this socket and assigns the trusted terminal ID
+    // before starting the executor, so an immediate optional-runtime failure
+    // is actionable even while the create response is still delayed.
+    await act(async () => {
+      socket.trigger('terminal:allocated', {
+        userId: ALICE,
+        terminalId: TERMINAL,
+        branchId: BRANCH,
+      });
+      socket.trigger('terminal:error', {
+        userId: ALICE,
+        terminalId: TERMINAL,
+        message:
+          'Web terminal PTY support is unavailable. See https://agor.live/guide/extended-install#optional-web-terminal-runtime',
+      });
+    });
+    expect(await screen.findByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveCreate({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        channel: CHANNEL,
+        sessionName: 'agor-x',
+        isNew: true,
+        ready: false,
+      });
+      await Promise.resolve();
+    });
   });
 });

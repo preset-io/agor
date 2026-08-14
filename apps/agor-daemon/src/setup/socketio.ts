@@ -43,6 +43,11 @@ import {
 } from '../realtime/routing.js';
 import type { TerminalAttachmentIdentity } from '../services/terminals.js';
 import {
+  TERMINAL_REQUEST_JOIN_CHANNEL,
+  type TerminalRequestAllocation,
+  type TerminalRequestConnection,
+} from '../terminal-socket-connection.js';
+import {
   executorTaskChannelName,
   joinExecutorTaskChannel,
   leaveAllExecutorTaskChannels,
@@ -93,6 +98,30 @@ interface FeathersSocket extends Socket {
     tenant?: TenantContext;
   };
   handshake: Socket['handshake'] & { headers?: Record<string, string | string[] | undefined> };
+}
+
+/**
+ * Give services a narrow, server-only way to subscribe the socket that owns a
+ * Feathers request. The service derives the room from trusted tenant/user/id
+ * state; clients never receive or invoke this capability directly.
+ */
+function bindTerminalRequestJoin(socket: FeathersSocket): void {
+  if (!socket.feathers) socket.feathers = {};
+  const connection = socket.feathers as NonNullable<FeathersSocket['feathers']> &
+    TerminalRequestConnection;
+  Object.defineProperty(connection, TERMINAL_REQUEST_JOIN_CHANNEL, {
+    configurable: true,
+    enumerable: false,
+    value: async (channel: string, allocation: TerminalRequestAllocation) => {
+      if (!socket.connected) return false;
+      await socket.join(channel);
+      if (!socket.connected || !socket.rooms.has(channel)) return false;
+      // Establish the terminal identity in the browser before the executor can
+      // emit output/readiness on its separate connection.
+      socket.emit('terminal:allocated', allocation);
+      return true;
+    },
+  });
 }
 
 export interface SocketIOOptions {
@@ -545,7 +574,9 @@ export function createSocketIOConfig(
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
       activeConnections++;
-      const user = (socket as FeathersSocket).feathers?.user;
+      const feathersSocket = socket as FeathersSocket;
+      bindTerminalRequestJoin(feathersSocket);
+      const user = feathersSocket.feathers?.user;
       console.debug(
         `🔌 Socket.io connection established: ${socket.id} (auth: ${user ? 'handshake' : 'anonymous'}, user: ${user ? shortId(user.user_id) : 'unknown'}, total: ${activeConnections})`
       );
@@ -1219,6 +1250,9 @@ export function createSocketIOConfig(
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
           const fs = socket as FeathersSocket & { tenant?: TenantContext };
+          // Defensive rebind for transports/auth adapters that replace the
+          // Feathers connection object during post-connect authentication.
+          bindTerminalRequestJoin(fs);
           const isService =
             result.user?._isServiceAccount === true || isTerminalExecutorIdentity(result.user);
           const isTerminalExecutor = isTerminalExecutorIdentity(result.user);
