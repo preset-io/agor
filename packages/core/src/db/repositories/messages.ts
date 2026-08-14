@@ -446,11 +446,6 @@ export class MessagesRepository {
    * Update message (used by FeathersJS service adapter)
    */
   async update(messageId: string, updates: Partial<Message>): Promise<Message> {
-    const existing = await this.findById(messageId as MessageID);
-    if (!existing) {
-      throw new Error(`Message ${messageId} not found`);
-    }
-
     const hasTaskAssignment = Object.hasOwn(updates, 'task_id');
     if (hasTaskAssignment && typeof updates.task_id !== 'string') {
       throw new MessageTaskIntegrityError(
@@ -459,74 +454,92 @@ export class MessagesRepository {
       );
     }
 
-    // Identity, Session membership, transcript ordering, and semantic kind are
-    // immutable at the repository boundary. Public callers are constrained by
-    // the same MessagePatch DTO; preserving them here prevents a trusted
-    // daemon caller from accidentally bypassing that contract.
-    const updated = {
-      ...existing,
-      ...updates,
-      message_id: existing.message_id,
-      session_id: existing.session_id,
-      index: existing.index,
-      timestamp: existing.timestamp,
-      type: existing.type,
-      role: existing.role,
-    };
-    const row = this.messageToRow(updated);
-    const { created_at: _createdAt, ...mutableRow } = row;
+    return this.runMetadataMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          // PATCH reconstructs the JSON data column from the current logical
+          // Message. Lock before reading it so concurrent patches to distinct
+          // mutable fields cannot overwrite one another with stale data.
+          await lockRowForUpdate(tx, this.db, messages, eq(messages.message_id, messageId));
+          const existingRow = await select(tx)
+            .from(messages)
+            .where(eq(messages.message_id, messageId))
+            .one();
+          if (!existingRow) throw new Error(`Message ${messageId} not found`);
+          const existing = this.rowToMessage(existingRow);
 
-    const conditions: SQL[] = [eq(messages.message_id, messageId)];
-    if (hasTaskAssignment && updates.task_id) {
-      const targetTaskId = updates.task_id;
-      const matchingTaskInMessageSession = exists(
-        // Correlate the target Task to the Message row in the UPDATE. This is
-        // deliberately part of the write predicate, rather than a service
-        // read-before-write check, so a losing concurrent link cannot win by
-        // overwriting the first assignment.
-        // biome-ignore lint/suspicious/noExplicitAny: Cross-dialect Drizzle subquery typing.
-        (this.db as any)
-          .select({ _: sql`1` })
-          .from(tasks)
-          .where(and(eq(tasks.task_id, targetTaskId), eq(tasks.session_id, messages.session_id)))
-      );
-      conditions.push(
-        matchingTaskInMessageSession,
-        or(isNull(messages.task_id), eq(messages.task_id, targetTaskId)) as SQL
-      );
-    }
+          // Identity, Session membership, transcript ordering, and semantic
+          // kind are immutable at the repository boundary.
+          const updated = {
+            ...existing,
+            ...updates,
+            message_id: existing.message_id,
+            session_id: existing.session_id,
+            index: existing.index,
+            timestamp: existing.timestamp,
+            type: existing.type,
+            role: existing.role,
+          };
+          const row = this.messageToRow(updated);
+          const { created_at: _createdAt, ...mutableRow } = row;
 
-    const returned = await update(this.db, messages)
-      .set(mutableRow)
-      .where(and(...conditions))
-      .returning()
-      .all();
+          const conditions: SQL[] = [eq(messages.message_id, messageId)];
+          if (hasTaskAssignment && updates.task_id) {
+            const targetTaskId = updates.task_id;
+            const matchingTaskInMessageSession = exists(
+              // Correlate the target Task to the Message row in the UPDATE so
+              // the same-Session check and one-time assignment are one write.
+              // biome-ignore lint/suspicious/noExplicitAny: Cross-dialect Drizzle subquery typing.
+              (tx as any)
+                .select({ _: sql`1` })
+                .from(tasks)
+                .where(
+                  and(eq(tasks.task_id, targetTaskId), eq(tasks.session_id, messages.session_id))
+                )
+            );
+            conditions.push(
+              matchingTaskInMessageSession,
+              or(isNull(messages.task_id), eq(messages.task_id, targetTaskId)) as SQL
+            );
+          }
 
-    const result = returned[0];
-    if (!result) {
-      const current = await this.findById(messageId as MessageID);
-      if (!current) throw new Error(`Message ${messageId} not found`);
-      if (
-        hasTaskAssignment &&
-        updates.task_id &&
-        current.task_id &&
-        current.task_id !== updates.task_id
-      ) {
-        throw new MessageTaskIntegrityError(
-          'task_already_assigned',
-          'Message task_id cannot be reassigned'
-        );
-      }
-      if (hasTaskAssignment && updates.task_id) {
-        throw new MessageTaskIntegrityError(
-          'task_session_mismatch',
-          'task_id must belong to the Message Session'
-        );
-      }
-      throw new Error(`Message ${messageId} could not be updated`);
-    }
+          const returned = await update(tx, messages)
+            .set(mutableRow)
+            .where(and(...conditions))
+            .returning()
+            .all();
+          const result = returned[0];
+          if (result) return this.rowToMessage(result);
 
-    return this.rowToMessage(result);
+          const currentRow = await select(tx)
+            .from(messages)
+            .where(eq(messages.message_id, messageId))
+            .one();
+          if (!currentRow) throw new Error(`Message ${messageId} not found`);
+          const current = this.rowToMessage(currentRow);
+          if (
+            hasTaskAssignment &&
+            updates.task_id &&
+            current.task_id &&
+            current.task_id !== updates.task_id
+          ) {
+            throw new MessageTaskIntegrityError(
+              'task_already_assigned',
+              'Message task_id cannot be reassigned'
+            );
+          }
+          if (hasTaskAssignment && updates.task_id) {
+            throw new MessageTaskIntegrityError(
+              'task_session_mismatch',
+              'task_id must belong to the Message Session'
+            );
+          }
+          throw new Error(`Message ${messageId} could not be updated`);
+        },
+        { sqliteImmediate: true }
+      )
+    );
   }
 
   /**

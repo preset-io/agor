@@ -425,7 +425,7 @@ export interface TasksService extends AgorService<Task> {
 
 /** Public Message CRUD surface. Full replacement is daemon-internal. */
 export type MessagesService = Omit<AgorService<Message>, 'update' | 'patch'> & {
-  patch(id: string, data: MessagePatch, params?: Params): Promise<Message>;
+  patch(id: string, data: ClientInput<MessagePatch>, params?: Params): Promise<Message>;
 };
 
 /** Narrow transport contract for `POST /messages/bulk`. */
@@ -1011,6 +1011,11 @@ function extendFindAllOnService(service: AgorService<unknown>, rawPath: string):
 
     const allData = [...firstResult.data];
     const total = firstResult.total;
+    // Feathers `total` describes the whole matching query, not the tail that
+    // begins at `$skip`. Preserve the caller's offset semantics while still
+    // validating that every continuation page belongs to one stable walk.
+    const initialSkip = firstResult.skip;
+    const expectedRows = Math.max(0, total - initialSkip);
     let nextSkip = firstResult.skip + firstResult.data.length;
     const pageLimit =
       typeof firstResult.limit === 'number' && firstResult.limit > 0
@@ -1024,7 +1029,7 @@ function extendFindAllOnService(service: AgorService<unknown>, rawPath: string):
     const baseQuery =
       params?.query && typeof params.query === 'object' ? { ...params.query } : undefined;
 
-    while (allData.length < total) {
+    while (allData.length < expectedRows) {
       const nextParams: Params = {
         ...(params ?? {}),
         query: {
@@ -1050,7 +1055,7 @@ function extendFindAllOnService(service: AgorService<unknown>, rawPath: string):
       nextSkip = nextResult.skip + nextResult.data.length;
     }
 
-    if (allData.length !== total) {
+    if (allData.length !== expectedRows) {
       throw new Error('Paginated findAll() did not return the advertised total');
     }
 

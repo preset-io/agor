@@ -100,6 +100,8 @@ function assertClientWriteBoundaries(client: AgorClient): void {
   void client.service('messages').update('message-id', {});
   // @ts-expect-error public Message patch always targets one exact Message.
   void client.service('messages').patch(null, { content_preview: 'bulk patch' });
+  // Client inputs accept ordinary wire-format IDs; branded IDs stay internal.
+  void client.service('messages').patch('message-id', { task_id: 'task-id' });
   // @ts-expect-error bulk insertion is only available on /messages/bulk.
   void client.service('messages').createMany([]);
   // @ts-expect-error /messages/bulk is a narrow create-only endpoint.

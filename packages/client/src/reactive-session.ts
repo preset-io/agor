@@ -709,6 +709,7 @@ export class ReactiveSessionHandle {
       this.updateState((prev) => ({
         ...prev,
         session,
+        tasks: orderTasksBySession(prev.tasks, session.tasks),
         lastSyncedAt: new Date().toISOString(),
       }));
     };
@@ -736,7 +737,7 @@ export class ReactiveSessionHandle {
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
           ? prev.tasks
-          : sortTasksByCreatedAt([...prev.tasks, task]);
+          : orderTasksBySession([...prev.tasks, task], prev.session?.tasks);
         // Tasks can be born QUEUED (e.g. when the daemon auto-queues a prompt
         // because the session is busy) — track them in queuedTasks too.
         const queuedTasks =
@@ -777,7 +778,7 @@ export class ReactiveSessionHandle {
 
         return {
           ...prev,
-          tasks: sortTasksByCreatedAt(nextTasks),
+          tasks: orderTasksBySession(nextTasks, prev.session?.tasks),
           queuedTasks: nextQueuedTasks,
           lastSyncedAt: new Date().toISOString(),
         };
@@ -895,11 +896,7 @@ export class ReactiveSessionHandle {
           };
         }
 
-        const nextByTask = new Map(prev.messagesByTask);
-        const current = nextByTask.get(message.task_id) || [];
-        if (!current.some((m) => m.message_id === message.message_id)) {
-          nextByTask.set(message.task_id, sortMessagesByIndex([...current, message]));
-        }
+        const nextByTask = upsertMessageInTaskMap(prev.messagesByTask, message);
 
         return {
           ...prev,
@@ -915,14 +912,13 @@ export class ReactiveSessionHandle {
       if (!this.matchesSession(message.session_id) || !taskId) return;
       this.recordMessageMutation('upsert', message);
       this.updateState((prev) => {
-        const current = prev.messagesByTask.get(taskId);
-        if (!current) return prev;
-        const index = current.findIndex((m) => m.message_id === message.message_id);
-        if (index === -1) return prev;
-        const nextByTask = new Map(prev.messagesByTask);
-        const nextMessages = [...current];
-        nextMessages[index] = message;
-        nextByTask.set(taskId, nextMessages);
+        const shouldTrackMessages =
+          this.options.taskHydration === 'eager' || prev.loadedTaskIds.has(taskId);
+        if (!shouldTrackMessages) return prev;
+        // A supported one-time task_id patch links a previously unbucketed
+        // Message. Treat patches as upserts for hydrated Tasks rather than
+        // requiring a prior created event in that Task bucket.
+        const nextByTask = upsertMessageInTaskMap(prev.messagesByTask, message);
         return {
           ...prev,
           messagesByTask: nextByTask,
@@ -1775,6 +1771,29 @@ function sortMessagesByIndex(messages: Message[]): Message[] {
   return [...messages].sort(
     (a, b) => a.index - b.index || a.message_id.localeCompare(b.message_id)
   );
+}
+
+function upsertMessageInTaskMap(
+  messagesByTask: ReactiveMessagesByTask,
+  message: Message
+): ReactiveMessagesByTask {
+  if (!message.task_id) return messagesByTask;
+  const next = new Map(messagesByTask);
+
+  // Defensive uniqueness: task_id is one-time at the server boundary, but a
+  // reconnect can replay an older bucket before the linking patch arrives.
+  for (const [taskId, messages] of next) {
+    if (taskId === message.task_id) continue;
+    const filtered = messages.filter((candidate) => candidate.message_id !== message.message_id);
+    if (filtered.length !== messages.length) next.set(taskId, filtered);
+  }
+
+  const current = next.get(message.task_id) || [];
+  const index = current.findIndex((candidate) => candidate.message_id === message.message_id);
+  const updated = index === -1 ? [...current, message] : [...current];
+  if (index !== -1) updated[index] = message;
+  next.set(message.task_id, sortMessagesByIndex(updated));
+  return next;
 }
 
 function sortTasksByCreatedAt(tasks: Task[]): Task[] {

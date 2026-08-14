@@ -156,6 +156,7 @@ import {
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
 import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
+import { authorizeMessageBulkCreate } from './utils/message-bulk-authorization.js';
 import {
   buildPromptTaskMetadata,
   type InternalPromptTaskMetadataInput,
@@ -393,10 +394,10 @@ export function createUploadAuthMiddleware(input: {
 }
 
 export async function authorizeForceFailRoute(input: {
-  session: Pick<Session, 'branch_id'>;
+  session: Pick<Session, 'session_id' | 'branch_id'>;
   params: RouteParams;
   body: Record<string, unknown>;
-  findActiveTasks: () => Promise<readonly Task[]>;
+  findTask: (taskId: string) => Promise<Task | undefined>;
   isBranchOwner: (branchId: Session['branch_id'], userId: UUID) => Promise<boolean>;
 }): Promise<{ task: Task; confirmation: string; terminationRequestedAt: string }> {
   const userId = input.params.user?.user_id;
@@ -415,10 +416,14 @@ export async function authorizeForceFailRoute(input: {
   ) {
     throw new BadRequest('Force-fail requires the exact Task termination request.');
   }
-  const task = findMatchingUnverifiedTerminationTask(await input.findActiveTasks(), {
-    taskId: input.body.task_id,
-    terminationRequestedAt: input.body.termination_requested_at,
-  });
+  const candidate = await input.findTask(input.body.task_id);
+  const task =
+    candidate?.session_id === input.session.session_id
+      ? findMatchingUnverifiedTerminationTask([candidate], {
+          taskId: input.body.task_id,
+          terminationRequestedAt: input.body.termination_requested_at,
+        })
+      : undefined;
   if (!task) {
     throw new Conflict(
       'The Task termination state changed. Review the current Task before force-failing.'
@@ -848,7 +853,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: unknown, params: RouteParams) {
         assertExternalWidgetMessageCreateAllowed(data);
         assertExternalPermissionMessageCreateAllowed(data);
-        return messagesService.createMany(data as Message[]);
+        const messages = await authorizeMessageBulkCreate(data, params as AuthenticatedParams, {
+          branchRbacEnabled,
+          allowSuperadmin: superadminOpts.allowSuperadmin,
+          sessionsRepository,
+          branchRepository,
+        });
+        return messagesService.createMany(messages);
       },
     },
     {
@@ -2694,7 +2705,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 session,
                 params,
                 body,
-                findActiveTasks: () => findActiveTasksForSession(app, session.session_id, params),
+                findTask: async (taskId) => {
+                  try {
+                    return await app.service('tasks').get(taskId, params);
+                  } catch (error) {
+                    if ((error as { code?: number }).code === 404) return undefined;
+                    throw error;
+                  }
+                },
                 isBranchOwner: (branchId, userId) =>
                   stopRouteRepositories.branchRepo.isOwner(branchId, userId),
               });

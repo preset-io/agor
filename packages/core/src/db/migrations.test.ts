@@ -65,14 +65,18 @@ describe('Postgres migrations', () => {
       ].map(async (url) => JSON.parse(await readFile(url, 'utf8')) as { entries: JournalEntry[] })
     );
 
-    for (const [journal, expectedTag, expectedIndex] of [
-      [postgresJournal, '0082_github_install_state', 82],
-      [sqliteJournal, '0085_github_install_state', 85],
+    for (const [journal, expectedTag, expectedIndex, hydrationTag, hydrationIndex] of [
+      [postgresJournal, '0082_github_install_state', 82, '0083_transcript_hydration_keysets', 83],
+      [sqliteJournal, '0085_github_install_state', 85, '0086_transcript_hydration_keysets', 86],
     ] as const) {
-      const entry = journal.entries.at(-1);
-      const predecessor = journal.entries.at(-2);
+      const entry = journal.entries.find(({ tag }) => tag === expectedTag);
+      const predecessor = journal.entries.find(({ idx }) => idx === expectedIndex - 1);
       expect(entry).toMatchObject({ idx: expectedIndex, tag: expectedTag });
       expect(entry?.when).toBeGreaterThan(predecessor?.when ?? 0);
+
+      const hydrationEntry = journal.entries.at(-1);
+      expect(hydrationEntry).toMatchObject({ idx: hydrationIndex, tag: hydrationTag });
+      expect(hydrationEntry?.when).toBeGreaterThan(entry?.when ?? 0);
     }
   });
 

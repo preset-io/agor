@@ -665,6 +665,24 @@ describe('MessagesRepository.update', () => {
     expect(updated.metadata).toEqual({ model: 'claude-3' }); // Preserved
   });
 
+  dbTest('serializes patches so distinct mutable fields are not lost', async ({ db }) => {
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await repository.create(
+      createMessageData({ session_id: sessionId, content: 'before', metadata: { before: true } })
+    );
+
+    await Promise.all([
+      repository.update(created.message_id, { content: 'after' }),
+      repository.update(created.message_id, { metadata: { patched: true } }),
+    ]);
+
+    await expect(repository.findById(created.message_id)).resolves.toMatchObject({
+      content: 'after',
+      metadata: { patched: true },
+    });
+  });
+
   dbTest('sanitizes all JSON and preview fields on finalization update', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);

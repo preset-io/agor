@@ -278,6 +278,21 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
 });
 
 describe('ReactiveSessionHandle message snapshot reconciliation', () => {
+  it.each(['eager', 'lazy'] as const)(
+    '%s hydration upserts a Message when a live patch links it to a loaded Task',
+    async (taskHydration) => {
+      const task = makeTask('task-linked', TaskStatus.RUNNING);
+      const mock = createMockClient({ tasks: [task], messagesByTask: {} });
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration });
+      await handle.ready();
+
+      const linked = makeMessage(task.task_id, 7);
+      mock.emitServiceEvent('messages', 'patched', linked);
+
+      expect(handle.getTaskMessages(task.task_id)).toEqual([linked]);
+    }
+  );
+
   it.each([
     ['immediate', false],
     ['drained queue', true],
@@ -371,6 +386,29 @@ describe('ReactiveSessionHandle message snapshot reconciliation', () => {
 });
 
 describe('ReactiveSessionHandle Task snapshot reconciliation', () => {
+  it('reorders live Tasks when a Session patch supplies canonical Task IDs', async () => {
+    const first = makeTask('task-first', TaskStatus.COMPLETED);
+    const second = makeTask('task-second', TaskStatus.RUNNING);
+    const mock = createMockClient({
+      tasks: [first, second],
+      messagesByTask: {},
+      sessionTaskIds: [first.task_id, second.task_id],
+    });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, {
+      taskHydration: 'none',
+    });
+    await handle.ready();
+
+    mock.emitServiceEvent('sessions', 'patched', {
+      session_id: SESSION_ID,
+      tasks: [second.task_id, first.task_id],
+    } as Session);
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual([second.task_id, first.task_id]);
+
+    mock.emitServiceEvent('tasks', 'patched', { ...first, status: TaskStatus.FAILED });
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual([second.task_id, first.task_id]);
+  });
+
   it('reconciles a Session Task removal over the fetched snapshot', async () => {
     const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
     const mock = createMockClient(opts);

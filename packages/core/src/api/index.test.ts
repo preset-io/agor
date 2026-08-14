@@ -596,6 +596,34 @@ describe('createClient', () => {
       });
     });
 
+    it('should auto-paginate only the requested tail after a nonzero $skip', async () => {
+      const client = createClient();
+      const sessionsService = client.service('sessions');
+      const findMock = sessionsService.find as unknown as MockedFunction<any>;
+      findMock
+        .mockResolvedValueOnce({
+          total: 5,
+          limit: 2,
+          skip: 1,
+          data: [{ session_id: 's2' }, { session_id: 's3' }],
+        })
+        .mockResolvedValueOnce({
+          total: 5,
+          limit: 2,
+          skip: 3,
+          data: [{ session_id: 's4' }, { session_id: 's5' }],
+        });
+
+      await expect(sessionsService.findAll({ query: { $skip: 1, $limit: 2 } })).resolves.toEqual([
+        { session_id: 's2' },
+        { session_id: 's3' },
+        { session_id: 's4' },
+        { session_id: 's5' },
+      ]);
+      expect(findMock).toHaveBeenCalledTimes(2);
+      expect(findMock).toHaveBeenNthCalledWith(2, { query: { $skip: 3, $limit: 2 } });
+    });
+
     it('should preserve an exact Task filter while walking server-clamped pages', async () => {
       const client = createClient();
       const messagesService = client.service('messages');
