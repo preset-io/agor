@@ -1623,24 +1623,24 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [typedValidateQuery(repoQueryValidator), requireAuth],
       create: [
-        requireMinimumRole(ROLES.MEMBER, 'create repositories'),
+        requireMinimumRole(ROLES.ADMIN, 'create repositories'),
         protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       update: [
-        requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        requireMinimumRole(ROLES.ADMIN, 'update repositories'),
         protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       patch: [
-        requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        requireMinimumRole(ROLES.ADMIN, 'update repositories'),
         protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete repositories')],
+      remove: [requireMinimumRole(ROLES.ADMIN, 'delete repositories')],
     },
     after: {
       patch: [realignRepoOriginAfterPatchHook()],

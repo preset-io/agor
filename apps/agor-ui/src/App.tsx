@@ -510,6 +510,7 @@ function AppContent() {
   // Members reach the MCP settings tab without it, to read the policy that
   // governs them.
   const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const canManageRepositories = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
@@ -532,6 +533,11 @@ function AppContent() {
   // that could race the hook's one-shot clone effect.
   const handleCreateRepo = useCallback(
     async (data: CreateRepoRequest, options: CreateRepoOptions = {}) => {
+      if (!canManageRepositories) {
+        const message = 'Only workspace administrators can connect repositories.';
+        if (!options.silent || options.showErrors) showError(message);
+        throw new Error(message);
+      }
       if (!client) {
         showError('Not connected to daemon — cannot clone repository');
         return;
@@ -653,7 +659,7 @@ function AppContent() {
         throw error;
       }
     },
-    [client, showError, showLoading, showSuccess, showWarning]
+    [canManageRepositories, client, showError, showLoading, showSuccess, showWarning]
   );
 
   // Auto-clone the AI-teammate framework repo in the background while the user
@@ -678,7 +684,7 @@ function AppContent() {
     [handleCreateRepo]
   );
   useEnsureFrameworkRepo(frameworkRepoList, onboardingCreateRepo, {
-    enabled: onboardingWizardOpen,
+    enabled: onboardingWizardOpen && canManageRepositories,
   });
 
   // Trigger wizard when user is loaded and hasn't completed onboarding
@@ -768,33 +774,41 @@ function AppContent() {
     // for readiness with a HARD deadline before falling back to the warning, so
     // the common near-miss still yields a teammate. The wizard stays in its
     // loading state throughout, so a short wait reads as part of setup.
-    if (!readyFrameworkRepo && result.teammateName?.trim() && client) {
+    if (canManageRepositories && !readyFrameworkRepo && result.teammateName?.trim() && client) {
       readyFrameworkRepo = await waitForFrameworkRepoReady(client, 20_000);
     }
 
     let sessionId = result.sessionId;
-    const seeded = await seedOnboardingTeammate({
-      frameworkRepo: readyFrameworkRepo,
-      boardId: result.boardId,
-      teammateName: result.teammateName,
-      teammateEmoji: result.teammateEmoji,
-      agent: result.agent,
-      suggestedIntegrations: result.suggestedIntegrations,
-      user: {
-        name: currentUser.name,
-        email: currentUser.email,
-        // Prefer the wizard's authoritative selection; the persisted preference
-        // is an async save that a fast completion can outrun.
-        persona: result.persona ?? currentUser.preferences?.onboarding?.persona,
-      },
-      client,
-      repoById: agorStore.getState().repoById,
-      onCreateBranch: handleCreateBranch,
-      onUpdateBranch: (branchId, updates) =>
-        handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
-      onCreateSession: handleCreateSession,
-      onWarn: (message) => showWarning(message, { key: 'onboarding-teammate', duration: 8 }),
-    });
+    let seeded: { sessionId?: string } = {};
+    if (!readyFrameworkRepo && result.teammateName?.trim() && !canManageRepositories) {
+      showWarning(
+        'Your board is ready. Ask a workspace administrator to connect a repository before adding an AI teammate.',
+        { key: 'onboarding-teammate', duration: 8 }
+      );
+    } else {
+      seeded = await seedOnboardingTeammate({
+        frameworkRepo: readyFrameworkRepo,
+        boardId: result.boardId,
+        teammateName: result.teammateName,
+        teammateEmoji: result.teammateEmoji,
+        agent: result.agent,
+        suggestedIntegrations: result.suggestedIntegrations,
+        user: {
+          name: currentUser.name,
+          email: currentUser.email,
+          // Prefer the wizard's authoritative selection; the persisted preference
+          // is an async save that a fast completion can outrun.
+          persona: result.persona ?? currentUser.preferences?.onboarding?.persona,
+        },
+        client,
+        repoById: agorStore.getState().repoById,
+        onCreateBranch: handleCreateBranch,
+        onUpdateBranch: (branchId, updates) =>
+          handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
+        onCreateSession: handleCreateSession,
+        onWarn: (message) => showWarning(message, { key: 'onboarding-teammate', duration: 8 }),
+      });
+    }
     if (seeded.sessionId) sessionId = seeded.sessionId;
 
     // Always land the user on a board — never the homepage. Prefer the seeded
@@ -1325,6 +1339,10 @@ function AppContent() {
   };
 
   const handleCreateLocalRepo = async (data: CreateLocalRepoRequest) => {
+    if (!canManageRepositories) {
+      showError('Only workspace administrators can connect repositories.');
+      return;
+    }
     if (!client) {
       showError('Not connected to daemon — cannot add local repository');
       return;
@@ -1348,6 +1366,10 @@ function AppContent() {
   };
 
   const handleUpdateRepo = async (repoId: string, updates: Partial<Repo>) => {
+    if (!canManageRepositories) {
+      showError('Only workspace administrators can change repositories.');
+      return;
+    }
     if (!client) return;
     try {
       await client.service('repos').patch(repoId, updates);
@@ -1360,6 +1382,10 @@ function AppContent() {
   };
 
   const handleDeleteRepo = async (repoId: string, cleanup: boolean) => {
+    if (!canManageRepositories) {
+      showError('Only workspace administrators can remove repositories.');
+      return;
+    }
     if (!client) return;
     try {
       await client.service('repos').remove(repoId, {

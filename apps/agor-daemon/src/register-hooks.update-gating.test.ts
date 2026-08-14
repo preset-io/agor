@@ -208,16 +208,21 @@ const runCapturedHooks = async (
   captured: Map<string, CapturedHooks>,
   path: string,
   method: string,
-  role: string
+  role: string,
+  provider: 'rest' | 'socketio' = 'rest'
 ): Promise<HookContext> => {
   const hooks = captured.get(path)?.before;
   if (!hooks) throw new Error(`${path} registers no before hooks`);
   const context = {
     path,
     method,
-    id: method === 'get' ? '00000000-0000-7000-8000-000000000001' : undefined,
+    id:
+      method === 'get' || method === 'update' || method === 'patch' || method === 'remove'
+        ? '00000000-0000-7000-8000-000000000001'
+        : undefined,
+    data: {},
     params: {
-      provider: 'rest',
+      provider,
       query: {},
       user: { user_id: '00000000-0000-7000-8000-0000000000ff', role },
     },
@@ -260,9 +265,6 @@ describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) 
   }
 
   it.each([
-    ['repos', 'create'],
-    ['repos', 'patch'],
-    ['repos', 'remove'],
     ['branches', 'create'],
     ['branches', 'patch'],
     ['branches', 'remove'],
@@ -272,6 +274,28 @@ describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) 
     await expect(runCapturedHooks(captured, path, method, 'viewer')).rejects.toMatchObject({
       name: 'Forbidden',
     });
+  });
+
+  it.each(['rest', 'socketio'] as const)(
+    'requires admin+ for every repository write over %s',
+    async (provider) => {
+      for (const role of ['viewer', 'member']) {
+        for (const method of ['create', 'update', 'patch', 'remove']) {
+          await expect(
+            runCapturedHooks(captured, 'repos', method, role, provider)
+          ).rejects.toMatchObject({
+            name: 'Forbidden',
+            message: expect.stringContaining('admin access'),
+          });
+        }
+      }
+    }
+  );
+
+  it.each(['admin', 'superadmin'])('allows a %s to manage repositories', async (role) => {
+    for (const method of ['create', 'update', 'patch', 'remove']) {
+      await expect(runCapturedHooks(captured, 'repos', method, role)).resolves.toBeDefined();
+    }
   });
 });
 

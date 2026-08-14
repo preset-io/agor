@@ -1,8 +1,10 @@
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
 import type { Repo } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ReposServiceImpl } from '../../declarations.js';
+import { ensureMinimumRole } from '../../utils/authorization.js';
 import {
   mcpListLimit,
   mcpOffset,
@@ -85,7 +87,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
     'agor_repos_create_remote',
     {
       description:
-        'Clone a remote repository into Agor. Returns immediately with `{ status: "pending", ' +
+        'Admin only. Clone a remote repository into Agor. Returns immediately with `{ status: "pending", ' +
         'slug, repo_id }` while the clone runs in the background. Poll `agor_repos_get(repo_id)` ' +
         'until `clone_status` is `ready` (success) or `failed` (see `clone_error` for details). ' +
         'Private repos require the calling user to have `GITHUB_TOKEN` configured in ' +
@@ -114,6 +116,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      ensureMinimumRole(ctx.baseServiceParams, ROLES.ADMIN, 'clone repositories');
       const url = coerceString(args.url);
       if (!url) throw new Error('url is required');
       if (!isValidGitUrl(url)) throw new Error('url must be a valid git URL (https:// or git@)');
@@ -143,7 +146,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_repos_create_local',
     {
-      description: 'Register an existing local git repository with Agor',
+      description: 'Admin only. Register an existing local git repository with Agor',
       inputSchema: z.object({
         path: mcpRequiredString(
           'path',
@@ -156,6 +159,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      ensureMinimumRole(ctx.baseServiceParams, ROLES.ADMIN, 'add local repositories');
       const path = coerceString(args.path);
       if (!path) throw new Error('path is required');
       const slug = coerceString(args.slug);
@@ -174,7 +178,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
     'agor_repos_update',
     {
       description:
-        "Patch a repository's metadata (name, slug, repo_type, remote_url, default_branch). " +
+        "Admin only. Patch a repository's metadata (name, slug, repo_type, remote_url, default_branch). " +
         'Useful for correcting metadata after a `create_local` workaround — e.g. flipping ' +
         '`repo_type: "local" → "remote"` so the repo is treated as a managed clone. ' +
         'Note: changing `slug` updates the DB only; the on-disk directory at ' +
@@ -203,6 +207,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      ensureMinimumRole(ctx.baseServiceParams, ROLES.ADMIN, 'update repositories');
       const repoId = coerceString(args.repoId);
       if (!repoId) throw new Error('repoId is required');
 

@@ -1,3 +1,4 @@
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Dropdown, Layout, Modal, Segmented, Select, Space, Typography, theme } from 'antd';
@@ -68,25 +69,28 @@ const HomeOnboarding: React.FC<{
   // keeps archived sessions around for deep links, so `hasSessions` must
   // filter !archived (and scope to the current user when known); `.some`
   // exits the scan at the first match.
-  const { hasBoards, hasRepos, hasMcp, hasTeammates, hasSessions } = useStoreWithEqualityFn(
-    agorStore,
-    (state) => ({
-      hasBoards: state.boardById.size > 0,
-      hasRepos: state.repoById.size > 0,
-      hasMcp: state.mcpServerById.size > 0,
-      hasTeammates: state.userById.size > 1,
-      hasSessions: hasVisibleSession(state.sessionById, currentUserId),
-    }),
-    shallow
-  );
+  const { hasBoards, hasRepos, hasMcp, hasTeammates, hasSessions, currentUserRole } =
+    useStoreWithEqualityFn(
+      agorStore,
+      (state) => ({
+        hasBoards: state.boardById.size > 0,
+        hasRepos: state.repoById.size > 0,
+        hasMcp: state.mcpServerById.size > 0,
+        hasTeammates: state.userById.size > 1,
+        hasSessions: hasVisibleSession(state.sessionById, currentUserId),
+        currentUserRole: currentUserId ? state.userById.get(currentUserId)?.role : undefined,
+      }),
+      shallow
+    );
+  const canManageRepositories = hasMinimumRole(currentUserRole, ROLES.ADMIN);
 
   const steps = useMemo(() => {
     return [
       {
         id: 'repo',
-        label: 'Connect a repository',
+        label: canManageRepositories ? 'Connect a repository' : 'Repository access',
         done: hasRepos,
-        cta: 'Connect →',
+        cta: canManageRepositories ? 'Connect →' : 'View →',
         onClick: () => onOpenSettings('repos'),
       },
       {
@@ -119,6 +123,7 @@ const HomeOnboarding: React.FC<{
       },
     ];
   }, [
+    canManageRepositories,
     hasBoards,
     hasRepos,
     hasMcp,

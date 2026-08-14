@@ -1,7 +1,7 @@
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
+import { Alert, Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
@@ -11,6 +11,7 @@ import { Tag } from '../Tag';
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;
+  isAdmin: boolean;
   onCreate?: (data: CreateRepoRequest) => void;
   onCreateLocal?: (data: CreateLocalRepoRequest) => void;
   onUpdate?: (repoId: string, updates: Partial<Repo>) => void;
@@ -19,6 +20,7 @@ interface ReposTableProps {
 
 export const ReposTable: React.FC<ReposTableProps> = ({
   repoById,
+  isAdmin,
   onCreate,
   onCreateLocal,
   onUpdate,
@@ -150,7 +152,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         }}
       >
         <Typography.Text type="secondary">
-          Connect remote or local git repositories for your sessions.
+          Repositories available to workspace branches and sessions.
         </Typography.Text>
         <Space>
           <Input
@@ -160,11 +162,23 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 340 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>
-            New Repository
-          </Button>
+          {isAdmin && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>
+              New Repository
+            </Button>
+          )}
         </Space>
       </div>
+
+      {!isAdmin && (
+        <Alert
+          type="info"
+          showIcon
+          title="Repositories are managed by workspace administrators"
+          description="You can use repositories that are already connected. Ask a workspace administrator to connect or change a repository."
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       {repos.length === 0 && (
         <div
@@ -177,9 +191,9 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         >
           <Empty description="No repositories yet">
             <Typography.Text type="secondary">
-              Click "New Repository" to clone a remote repo or switch to "Local" mode to link an
-              existing clone. You can also run <code>agor repo add-local &lt;path&gt;</code> from
-              the CLI.
+              {isAdmin
+                ? 'Use "New Repository" to clone a remote repository or link an existing local clone.'
+                : 'Ask a workspace administrator to connect a repository.'}
             </Typography.Text>
           </Empty>
         </div>
@@ -208,21 +222,25 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                   </Space>
                 }
                 extra={
-                  <Space>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => handleOpenEditModal(repo)}
-                    />
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<DeleteOutlined />}
-                      danger
-                      onClick={() => handleOpenDeleteModal(repo)}
-                    />
-                  </Space>
+                  isAdmin ? (
+                    <Space>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        aria-label={`Edit ${repo.name}`}
+                        onClick={() => handleOpenEditModal(repo)}
+                      />
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<DeleteOutlined />}
+                        aria-label={`Delete ${repo.name}`}
+                        danger
+                        onClick={() => handleOpenDeleteModal(repo)}
+                      />
+                    </Space>
+                  ) : undefined
                 }
               >
                 {/* Repo metadata */}
@@ -278,7 +296,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       {/* Create/Edit Repository Modal */}
       <Modal
         title={modalTitle}
-        open={repoModalOpen}
+        open={isAdmin && repoModalOpen}
         onOk={handleSaveRepo}
         onCancel={handleCancelModal}
         okText={modalOkText}
@@ -296,7 +314,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       {/* Delete Repository Modal */}
       <Modal
         title="Delete Repository"
-        open={deleteModalOpen}
+        open={isAdmin && deleteModalOpen}
         onCancel={() => {
           setDeleteModalOpen(false);
           setRepoToDelete(null);

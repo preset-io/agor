@@ -51,13 +51,13 @@ const userRepo = makeRepo({
   name: 'user-repo',
 });
 
-function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> = {}) {
+function renderDialog(
+  props: Partial<React.ComponentProps<typeof CreateDialog>> = {},
+  repos: Repo[] = [frameworkRepo, userRepo]
+) {
   // CreateDialog reads entity maps from the store, so seed the repos there
   // rather than passing them as props.
-  const repoById = new Map<string, Repo>([
-    [frameworkRepo.repo_id, frameworkRepo],
-    [userRepo.repo_id, userRepo],
-  ]);
+  const repoById = new Map<string, Repo>(repos.map((repo) => [repo.repo_id, repo]));
   agorStore.setState({ ...EMPTY_MAPS, repoById });
 
   return render(
@@ -95,6 +95,45 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
       'true'
     );
     expect(screen.getByRole('button', { name: /Create AI teammate/i })).toBeDisabled();
+  });
+
+  it.each(['viewer', 'member'] as const)(
+    'hides repository creation and does not auto-clone for a %s',
+    async (role) => {
+      const onCreateRepo = vi.fn();
+      renderDialog(
+        {
+          defaultTab: 'repository',
+          currentUser: { user_id: `${role}-1`, role } as never,
+          onCreateRepo,
+        },
+        []
+      );
+
+      expect(await screen.findByRole('tab', { name: /Teammate/i }, ASYNC)).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      expect(screen.queryByRole('tab', { name: /Repository/i })).not.toBeInTheDocument();
+      expect(
+        screen.getByText(/Ask a workspace administrator to connect a repository/i)
+      ).toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onCreateRepo).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['admin', 'superadmin'] as const)('shows repository creation to a %s', async (role) => {
+    renderDialog({
+      defaultTab: 'repository',
+      currentUser: { user_id: `${role}-1`, role } as never,
+    });
+
+    expect(await screen.findByRole('tab', { name: /Repository/i }, ASYNC)).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    expect(screen.getByRole('button', { name: /Add Repository/i })).toBeDisabled();
   });
 
   it('enables Create AI teammate once Name is typed', async () => {

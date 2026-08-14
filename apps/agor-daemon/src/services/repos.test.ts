@@ -1,5 +1,5 @@
 import type { Application } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReposService } from './repos';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -21,6 +21,7 @@ vi.mock('@agor/core/config', async (importOriginal) => {
 
 const repositoryMocks = vi.hoisted(() => ({
   deleteRepo: vi.fn(),
+  findRepoBySlug: vi.fn(),
   findAllBranchesByRepoId: vi.fn(),
   lockRepoForBranchInventory: vi.fn(),
 }));
@@ -45,7 +46,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
         findAll: vi.fn(async () => []),
         update: vi.fn(),
         delete: repositoryMocks.deleteRepo,
-        findBySlug: vi.fn(),
+        findBySlug: repositoryMocks.findRepoBySlug,
         lockForBranchInventory: repositoryMocks.lockRepoForBranchInventory,
       };
     }),
@@ -56,6 +57,7 @@ const executorMocks = vi.hoisted(() => ({
   runExecutorCommand: vi.fn(),
   spawnExecutorFireAndForget: vi.fn(),
 }));
+
 vi.mock('../utils/spawn-executor.js', () => {
   return {
     runExecutorCommand: executorMocks.runExecutorCommand,
@@ -76,6 +78,14 @@ vi.mock('../utils/git-impersonation.js', () => ({
   resolveGitImpersonationForUser: impersonationMocks.resolveGitImpersonationForUser,
 }));
 
+beforeEach(() => {
+  repositoryMocks.findRepoBySlug.mockReset();
+  executorMocks.runExecutorCommand.mockReset();
+  executorMocks.spawnExecutorFireAndForget.mockReset();
+  impersonationMocks.resolveExecutorReadAsUser.mockClear();
+  impersonationMocks.resolveGitImpersonationForUser.mockClear();
+});
+
 describe('ReposService.addLocalRepository executor boundary', () => {
   it('persists sanitized executor metadata with an explicit slug and no remote URL', async () => {
     executorMocks.runExecutorCommand.mockResolvedValueOnce({
@@ -94,7 +104,8 @@ describe('ReposService.addLocalRepository executor boundary', () => {
     } as never);
 
     await service.addLocalRepository({ path: '/submitted/repo', slug: 'local/repo' }, {
-      user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+      provider: 'rest',
+      user: { user_id: '550e8400-e29b-41d4-a716-446655440000', role: 'admin' },
     } as never);
 
     expect(executorMocks.runExecutorCommand).toHaveBeenCalledWith(
@@ -220,7 +231,8 @@ describe('ReposService.cloneRepository Git lifecycle identity', () => {
     } as never);
 
     await service.cloneRepository({ url: 'https://github.com/preset-io/agor-teammate.git' }, {
-      user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
+      provider: 'mcp',
+      user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role: 'superadmin' },
     } as never);
 
     expect(impersonationMocks.resolveGitImpersonationForUser).toHaveBeenCalledOnce();
@@ -272,6 +284,8 @@ describe('ReposService.remove branch inventory', () => {
 
     try {
       await service.remove(repo.repo_id, {
+        provider: 'socketio',
+        user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role: 'admin' },
         tenant: { tenant_id: 'tenant-a', source: 'explicit' },
       } as never);
     } finally {
@@ -287,5 +301,95 @@ describe('ReposService.remove branch inventory', () => {
     );
     expect(branchService.removeMetadataWithRealtime).toHaveBeenCalledTimes(10_001);
     expect(repositoryMocks.deleteRepo).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ReposService repository administrator boundary', () => {
+  const memberParams = {
+    provider: 'mcp',
+    user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role: 'member' },
+    tenant: { tenant_id: 'tenant-a', source: 'auth' },
+  } as const;
+  const memberRestParams = { ...memberParams, provider: 'rest' } as const;
+  const memberSocketParams = { ...memberParams, provider: 'socketio' } as const;
+
+  it('denies custom mutations before validation, lookup, filesystem inspection, or dispatch', async () => {
+    const app = {
+      get: vi.fn(() => ({})),
+      service: vi.fn(() => {
+        throw new Error('service lookup must not run');
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    const get = vi.spyOn(service, 'get');
+    const create = vi.spyOn(service, 'create');
+
+    const attempts = [
+      () => service.cloneRepository({ url: 'https://github.com/org/repo.git' }, memberRestParams),
+      () => service.addLocalRepository({ path: '/host/private/repo' }, memberSocketParams),
+      () => service.updateMetadata('existing-repo', { name: 'changed' }, memberParams),
+      () => service.importFromAgorYml('existing-repo', { branch_id: 'branch-a' }, memberParams),
+      () => service.exportToAgorYml('existing-repo', { branch_id: 'branch-a' }, memberParams),
+      () => service.remove('existing-repo', { ...memberParams, query: { cleanup: true } }),
+    ];
+
+    for (const attempt of attempts) {
+      await expect(attempt()).rejects.toMatchObject({
+        name: 'Forbidden',
+        message: expect.stringContaining('admin access'),
+      });
+    }
+
+    expect(get).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(repositoryMocks.findRepoBySlug).not.toHaveBeenCalled();
+    expect(executorMocks.runExecutorCommand).not.toHaveBeenCalled();
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+    expect(app.service).not.toHaveBeenCalled();
+  });
+
+  it('returns the same denial before lookup for existing, missing, and foreign-tenant targets', async () => {
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+    const get = vi.spyOn(service, 'get');
+    const messages: string[] = [];
+
+    for (const id of ['existing-in-tenant-a', 'missing-in-tenant-a', 'belongs-to-tenant-b']) {
+      try {
+        await service.updateMetadata(id, { name: 'changed' }, memberParams);
+      } catch (error) {
+        messages.push((error as Error).message);
+      }
+    }
+
+    expect(messages).toEqual([
+      'You need admin access to update repositories',
+      'You need admin access to update repositories',
+      'You need admin access to update repositories',
+    ]);
+    expect(get).not.toHaveBeenCalled();
+    expect(repositoryMocks.findRepoBySlug).not.toHaveBeenCalled();
+  });
+
+  it('preserves trusted internal and executor lifecycle writes', async () => {
+    const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    const superCreate = vi.spyOn(Object.getPrototypeOf(ReposService.prototype), 'create');
+
+    // Direct daemon calls have no provider and scoped executor identities carry
+    // the service-account flag; both are intentionally outside tenant-user RBAC.
+    await service.create({ name: 'internal' } as never);
+    await service.create(
+      { name: 'executor' } as never,
+      {
+        provider: 'rest',
+        user: { role: 'viewer', _isServiceAccount: true },
+      } as never
+    );
+
+    expect(superCreate).toHaveBeenCalledTimes(2);
+    superCreate.mockRestore();
   });
 });

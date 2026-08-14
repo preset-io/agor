@@ -47,9 +47,11 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
+import { ensureMinimumRole } from '../utils/authorization.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
@@ -136,6 +138,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: Partial<Repo> | Partial<Repo>[],
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
+    ensureMinimumRole(params, ROLES.ADMIN, 'create repositories');
     const rows = Array.isArray(data) ? data : [data];
     if (
       resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth' &&
@@ -153,6 +156,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: Partial<Repo>,
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
+    ensureMinimumRole(params, ROLES.ADMIN, 'update repositories');
     if (
       data.repo_type === 'local' &&
       resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
@@ -203,6 +207,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { url: string; slug?: string; name?: string; default_branch?: string },
     params?: RepoParams
   ): Promise<CloneRepositoryResult> {
+    // Custom methods are called directly by MCP and service composition, so
+    // authorize before validation, tenant lookups, tombstone cleanup, or any
+    // executor/filesystem side effect. Internal daemon calls and scoped
+    // executor service accounts retain the trusted bypass in ensureMinimumRole.
+    ensureMinimumRole(params, ROLES.ADMIN, 'clone repositories');
     const remoteUrl = stripGitUrlCredentials(data.url);
     if (remoteUrl !== data.url) {
       console.warn(
@@ -434,6 +443,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     },
     params?: RepoParams
   ): Promise<Repo> {
+    ensureMinimumRole(params, ROLES.ADMIN, 'update repositories');
     const cleanPatch: Partial<Repo> = {};
     if (patch.name !== undefined) cleanPatch.name = patch.name;
 
@@ -512,6 +522,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { path: string; slug?: string },
     params?: RepoParams
   ): Promise<Repo> {
+    ensureMinimumRole(params, ROLES.ADMIN, 'add local repositories');
     if (resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth') {
       throw new BadRequest(
         'Local repository registration is unavailable in hosted multi-tenant mode.'
@@ -1036,6 +1047,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { branch_id: string },
     params?: RepoParams
   ): Promise<Repo> {
+    ensureMinimumRole(params, ROLES.ADMIN, 'import environment config from .agor.yml');
     if (!data?.branch_id) {
       throw new Error('branch_id is required to import .agor.yml');
     }
@@ -1104,6 +1116,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { branch_id: string },
     params?: RepoParams
   ): Promise<{ path: string }> {
+    ensureMinimumRole(params, ROLES.ADMIN, 'export .agor.yml');
     if (!data?.branch_id) {
       throw new Error('branch_id is required to export .agor.yml');
     }
@@ -1151,6 +1164,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * - If cleanup=false: Delete database only (filesystem preserved)
    */
   async remove(id: string, params?: RepoParams): Promise<Repo> {
+    ensureMinimumRole(params, ROLES.ADMIN, 'delete repositories');
     const repo = await this.get(id, params);
     const cleanup = params?.query?.cleanup === true;
 

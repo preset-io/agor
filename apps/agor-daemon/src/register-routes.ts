@@ -3187,7 +3187,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      create: { role: ROLES.MEMBER, action: 'add local repositories' },
+      create: { role: ROLES.ADMIN, action: 'add local repositories' },
     },
     requireAuth
   );
@@ -3204,7 +3204,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      create: { role: ROLES.MEMBER, action: 'clone repositories' },
+      create: { role: ROLES.ADMIN, action: 'clone repositories' },
     },
     requireAuth
   );

@@ -5,6 +5,7 @@ import type {
   CreateRepoRequest,
   User,
 } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   AppstoreOutlined,
   BranchesOutlined,
@@ -66,7 +67,8 @@ const ACTION_LABELS: Record<ActiveTab, string> = {
   repository: 'Add Repository',
 };
 
-const normalizeTab = (tab: CreateDialogTab): ActiveTab => tab;
+const normalizeTab = (tab: CreateDialogTab, canManageRepositories: boolean): ActiveTab =>
+  tab === 'repository' && !canManageRepositories ? 'teammate' : tab;
 
 export interface CreateDialogProps {
   open: boolean;
@@ -118,7 +120,10 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const repoById = useAgorStore(selectRepoById);
   const boardById = useAgorStore(selectBoardById);
   const mcpServerById = useAgorStore(selectMcpServerById);
-  const [activeTab, setActiveTab] = useState<ActiveTab>(() => normalizeTab(defaultTab));
+  const canManageRepositories = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() =>
+    normalizeTab(defaultTab, canManageRepositories)
+  );
   // Validity is tracked per tab so a sibling tab's empty-form state (or a
   // deferred validity push from its init effect) can't clobber the active
   // tab's submit button.
@@ -137,14 +142,14 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   // Sync active tab when opening, reset form state when closing
   useEffect(() => {
     if (open) {
-      setActiveTab(normalizeTab(defaultTab));
+      setActiveTab(normalizeTab(defaultTab, canManageRepositories));
     } else {
       setValidByTab(INITIAL_VALIDITY);
       setIsSubmitting(false);
       setSubmitStatus(null);
       setSubmitError(null);
     }
-  }, [open, defaultTab]);
+  }, [open, defaultTab, canManageRepositories]);
 
   const setTabValid = useCallback((tab: ActiveTab, valid: boolean) => {
     setValidByTab((prev) => (prev[tab] === valid ? prev : { ...prev, [tab]: valid }));
@@ -191,6 +196,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           break;
         }
         case 'repository': {
+          if (!canManageRepositories) break;
           const result = await repoFormRef.current?.();
           if (result) {
             if (result.mode === 'local' && result.local) {
@@ -251,6 +257,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             availableAgents={availableAgents}
             mcpServerById={mcpServerById}
             currentUser={currentUser}
+            canManageRepositories={canManageRepositories}
             client={client}
           />
         </div>
@@ -304,26 +311,30 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
         </div>
       ),
     },
-    {
-      key: 'repository',
-      label: (
-        <span>
-          <FolderOutlined style={{ marginRight: 8 }} />
-          Repository
-        </span>
-      ),
-      children: (
-        <div>
-          <Alert
-            type="info"
-            showIcon
-            description={PURPOSE_TEXT.repository}
-            style={{ marginBottom: 16 }}
-          />
-          <RepoTab onValidityChange={handleRepositoryValid} formRef={repoFormRef} />
-        </div>
-      ),
-    },
+    ...(canManageRepositories
+      ? [
+          {
+            key: 'repository',
+            label: (
+              <span>
+                <FolderOutlined style={{ marginRight: 8 }} />
+                Repository
+              </span>
+            ),
+            children: (
+              <div>
+                <Alert
+                  type="info"
+                  showIcon
+                  description={PURPOSE_TEXT.repository}
+                  style={{ marginBottom: 16 }}
+                />
+                <RepoTab onValidityChange={handleRepositoryValid} formRef={repoFormRef} />
+              </div>
+            ),
+          },
+        ]
+      : []),
   ];
 
   return (

@@ -9,6 +9,7 @@ export interface TeammateFormFieldsProps {
   repos: Repo[];
   frameworkRepo: Repo | undefined;
   isCloning?: boolean;
+  canManageRepositories: boolean;
   onDisplayNameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   customRepoSelected: boolean;
   onCustomRepoChange: (selected: boolean) => void;
@@ -28,6 +29,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
   repos,
   frameworkRepo,
   isCloning,
+  canManageRepositories,
   onDisplayNameChange,
   customRepoSelected,
   onCustomRepoChange,
@@ -95,6 +97,20 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               Cloning preset-io/agor-teammate. This usually takes 10-30 seconds.
             </Typography.Text>
+          }
+        />
+      )}
+
+      {!frameworkRepo && !isCloning && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          title="A repository is required for an AI teammate"
+          description={
+            canManageRepositories
+              ? 'Connect a repository, then return here to create the teammate.'
+              : 'Ask a workspace administrator to connect a repository, then return here.'
           }
         />
       )}

@@ -53,6 +53,7 @@ export interface TeammateTabProps {
   availableAgents: AgenticToolOption[];
   mcpServerById?: Map<string, MCPServer>;
   currentUser?: User | null;
+  canManageRepositories: boolean;
   client?: AgorClient | null;
 }
 
@@ -64,10 +65,13 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   availableAgents,
   mcpServerById = new Map(),
   currentUser,
+  canManageRepositories,
   client,
 }) => {
   const repos = Array.from(repoById.values());
-  const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo);
+  const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo, {
+    enabled: canManageRepositories,
+  });
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
 
   const {
@@ -176,6 +180,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         repos={repos}
         frameworkRepo={frameworkRepo}
         isCloning={isCloning}
+        canManageRepositories={canManageRepositories}
         onDisplayNameChange={handleDisplayNameChange}
         customRepoSelected={customRepoSelected}
         onCustomRepoChange={setCustomRepoSelected}
