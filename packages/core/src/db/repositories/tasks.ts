@@ -238,6 +238,7 @@ export interface TaskFindPageOptions {
   createdAt?: Date;
   visibleToUserId?: UUID;
   sort?: Record<string, 1 | -1>;
+  selectTaskIdOnly?: boolean;
   limit?: number;
   skip?: number;
 }
@@ -578,7 +579,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * share the same tenant/RBAC predicate, and only returned rows hydrate their
    * potentially large JSON payloads.
    */
-  async findPage(opts: TaskFindPageOptions = {}): Promise<{ data: Task[]; total: number }> {
+  async findPage(
+    opts: TaskFindPageOptions = {}
+  ): Promise<{ data: Partial<Task>[]; total: number }> {
     if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
 
     const conditions: SQL[] = [];
@@ -600,7 +603,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     if (whereClause) countQuery = countQuery.where(whereClause);
     const countRow = await countQuery.one();
 
-    let dataQuery = select(this.db).from(tasks);
+    let dataQuery = select(
+      this.db,
+      opts.selectTaskIdOnly ? { task_id: tasks.task_id } : undefined
+    ).from(tasks);
     if (whereClause) dataQuery = dataQuery.where(whereClause);
     const sortColumns = {
       task_id: tasks.task_id,
@@ -623,7 +629,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
     const rows = await dataQuery.all();
     return {
-      data: rows.map((row: TaskRow) => this.rowToTask(row)),
+      data: opts.selectTaskIdOnly
+        ? rows.map((row) => ({ task_id: (row as Pick<TaskRow, 'task_id'>).task_id as TaskID }))
+        : rows.map((row) => this.rowToTask(row as TaskRow)),
       total: Number(countRow?.count ?? 0),
     };
   }

@@ -785,6 +785,18 @@ describe('TaskRepository.findPage', () => {
       )
     ).toBe(true);
   });
+
+  dbTest('projects only task_id for hydration membership verification', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, full_prompt: 'large Task payload' })
+    );
+
+    await expect(
+      taskRepo.findPage({ sessionId, selectTaskIdOnly: true, limit: 10 })
+    ).resolves.toEqual({ total: 1, data: [{ task_id: task.task_id }] });
+  });
 });
 
 // ============================================================================

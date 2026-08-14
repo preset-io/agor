@@ -226,6 +226,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       limit,
       skip,
       sort,
+      selectTaskIdOnly:
+        Array.isArray(query.$select) &&
+        query.$select.length === 1 &&
+        query.$select[0] === 'task_id',
     };
     const sessionId = query.session_id;
     if (skip > PAGINATION.MAX_LIMIT && typeof sessionId !== 'string') {
@@ -268,7 +272,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       total: page.total,
       limit,
       skip,
-      data: this.selectFields(page.data, query.$select) as Task[],
+      data: pageOptions.selectTaskIdOnly
+        ? (page.data as Task[])
+        : (this.selectFields(page.data as Task[], query.$select) as Task[]),
     };
   }
 
