@@ -426,6 +426,35 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   // Get current user's emoji
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
 
+  // Missing-credential failure — show the Connect-AI panel, not the raw error.
+  if (
+    isSystem &&
+    message.metadata?.error_kind === 'missing_credential' &&
+    isAgenticToolName(message.metadata?.tool)
+  ) {
+    return (
+      <MissingCredentialPanel
+        tool={message.metadata.tool}
+        client={client}
+        onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+      />
+    );
+  }
+
+  // Provider credit/quota failure — show recovery actions, not the raw result.
+  if (
+    isSystem &&
+    message.metadata?.error_kind === 'provider_credit_exhausted' &&
+    isAgenticToolName(message.metadata?.tool)
+  ) {
+    return (
+      <ProviderBillingRecoveryPanel
+        tool={message.metadata.tool}
+        onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+      />
+    );
+  }
+
   // Skip rendering if message has no content
   if (!message.content || (typeof message.content === 'string' && message.content.trim() === '')) {
     return null;
@@ -496,35 +525,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         </div>
         <MarkdownRenderer content={markdownContent} />
       </div>
-    );
-  }
-
-  // Missing-credential failure — show the Connect-AI panel, not the raw error.
-  if (
-    isSystem &&
-    message.metadata?.error_kind === 'missing_credential' &&
-    isAgenticToolName(message.metadata?.tool)
-  ) {
-    return (
-      <MissingCredentialPanel
-        tool={message.metadata.tool}
-        client={client}
-        onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-      />
-    );
-  }
-
-  // Provider credit/quota failure — show recovery actions, not the raw result.
-  if (
-    isSystem &&
-    message.metadata?.error_kind === 'provider_credit_exhausted' &&
-    isAgenticToolName(message.metadata?.tool)
-  ) {
-    return (
-      <ProviderBillingRecoveryPanel
-        tool={message.metadata.tool}
-        onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-      />
     );
   }
 

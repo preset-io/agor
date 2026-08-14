@@ -496,7 +496,7 @@ describe('protectExternalProviderFailureMetadata', () => {
   });
 
   it('allows external content patches to ordinary messages', async () => {
-    const context = makeContext({ content: 'edited' });
+    const context = makeContext({ content: 'edited', content_preview: 'edited preview' });
     context.method = 'patch';
     context.id = 'message-1';
 
@@ -504,7 +504,7 @@ describe('protectExternalProviderFailureMetadata', () => {
     const patchProtect = protectExternalProviderFailureMetadata(loadMessage);
 
     await expect(patchProtect(context)).resolves.toBe(context);
-    expect(loadMessage).not.toHaveBeenCalled();
+    expect(loadMessage).toHaveBeenCalledWith('message-1');
   });
 
   it('rejects forged recovery metadata in bulk payloads', () => {

@@ -60,7 +60,13 @@ export function assertExternalProviderFailureMetadataAllowed(data: unknown): voi
 function changesProviderFailureOwnedFields(data: unknown): boolean {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
   const record = data as Record<string, unknown>;
-  return 'metadata' in record || 'type' in record || 'role' in record;
+  return (
+    'metadata' in record ||
+    'type' in record ||
+    'role' in record ||
+    'content' in record ||
+    'content_preview' in record
+  );
 }
 
 /**

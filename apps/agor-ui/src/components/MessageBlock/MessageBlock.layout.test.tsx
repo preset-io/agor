@@ -50,4 +50,28 @@ describe('MessageBlock layout', () => {
     expect(onOpenSettings).toHaveBeenCalledWith('claude-code');
     expect(screen.queryByText(/credit balance is too low/i)).not.toBeInTheDocument();
   });
+
+  it.each([
+    ['missing_credential', /couldn't verify your Claude Code connection/i],
+    ['provider_credit_exhausted', /needs available credit or quota/i],
+  ] as const)('renders %s recovery for empty content', async (errorKind, recoveryText) => {
+    const message = {
+      message_id: `empty-${errorKind}`,
+      session_id: 'session-1',
+      type: 'system',
+      role: 'system',
+      index: 2,
+      timestamp: '2026-07-23T00:00:00.000Z',
+      content: '',
+      content_preview: '',
+      metadata: {
+        error_kind: errorKind,
+        tool: 'claude-code',
+      },
+    } as unknown as Message;
+
+    render(<MessageBlock message={message} />);
+
+    expect(await screen.findByText(recoveryText)).toBeVisible();
+  });
 });

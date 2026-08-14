@@ -15,6 +15,17 @@ function classifiedMessage(): Message {
   } as Message;
 }
 
+function ordinaryMessage(): Message {
+  return {
+    ...classifiedMessage(),
+    type: 'assistant',
+    role: MessageRole.ASSISTANT,
+    content: 'existing content',
+    content_preview: 'existing preview',
+    metadata: {},
+  };
+}
+
 function captureMessageHooks(existing: Message) {
   const captured: Partial<Record<'all' | 'create' | 'patch' | 'update', RegisteredHook[]>> = {};
   const findByIdForScopeCheck = vi.fn().mockResolvedValue(existing);
@@ -102,6 +113,8 @@ describe('registered provider failure message boundary', () => {
     ['changing the classified tool', { metadata: { tool: 'codex' } }],
     ['changing the message type', { type: 'assistant' }],
     ['changing the message role', { role: 'assistant' }],
+    ['clearing content', { content: '' }],
+    ['clearing content preview', { content_preview: '' }],
   ])('rejects an external patch that attempts %s', async (_label, data) => {
     const { captured, findByIdForScopeCheck } = captureMessageHooks(classifiedMessage());
 
@@ -112,13 +125,15 @@ describe('registered provider failure message boundary', () => {
   });
 
   it('keeps ordinary external message patches available', async () => {
-    const { captured } = captureMessageHooks(classifiedMessage());
+    const { captured, findByIdForScopeCheck } = captureMessageHooks(ordinaryMessage());
 
     await expect(
       runRegisteredMessageHooks([...(captured.all ?? []), ...(captured.patch ?? [])], 'patch', {
         content: 'edited',
+        content_preview: 'edited preview',
       })
     ).resolves.toBeDefined();
+    expect(findByIdForScopeCheck).toHaveBeenCalledWith('message-1');
   });
 
   it('keeps external whole-row replacement blocked by the registered message boundary', async () => {
