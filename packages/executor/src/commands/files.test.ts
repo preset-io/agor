@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { browseBranchFiles, readBranchFile } from './files.js';
+import { browseBranchFiles, MAX_INLINE_READ_BYTES, readBranchFile } from './files.js';
 
 describe('branch file commands', () => {
   it('browses files while excluding ignored directories and symlinks', async () => {
@@ -47,5 +47,24 @@ describe('branch file commands', () => {
 
     await expect(readBranchFile(root, '../secret.txt')).rejects.toThrow(/path escapes branch/i);
     await expect(readBranchFile(root, 'escape.txt')).rejects.toThrow(/path escapes branch/i);
+  });
+
+  // Regression for #2128: the inline read used to base64 a whole large file
+  // into its JSON result, which then died against the Socket.IO frame cap and
+  // left big files unreadable. Bulk bytes belong on branch.files.download.
+  it('refuses to inline a file above the read cap and names the streaming path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-files-'));
+    await writeFile(join(root, 'huge.bin'), Buffer.alloc(MAX_INLINE_READ_BYTES + 1));
+
+    await expect(readBranchFile(root, 'huge.bin')).rejects.toThrow(/branch\.files\.download/);
+  });
+
+  it('still inlines a file exactly at the read cap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-files-'));
+    await writeFile(join(root, 'edge.bin'), Buffer.alloc(MAX_INLINE_READ_BYTES));
+
+    await expect(readBranchFile(root, 'edge.bin')).resolves.toMatchObject({
+      size: MAX_INLINE_READ_BYTES,
+    });
   });
 });

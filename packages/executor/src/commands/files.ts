@@ -1,8 +1,10 @@
+import { createReadStream } from 'node:fs';
 import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises';
-import { extname, join, relative, sep } from 'node:path';
+import { basename, extname, join, relative, sep } from 'node:path';
 import type { FileDetail, FileListItem } from '@agor/core/types';
 import type {
   BranchFilesBrowsePayload,
+  BranchFilesDownloadPayload,
   BranchFilesReadPayload,
   BranchFilesystemStatusPayload,
   ExecutorResult,
@@ -18,6 +20,11 @@ import type { CommandOptions } from './index.js';
 
 const MAX_FILES = 50000;
 const MAX_PREVIEW_SIZE = 1024 * 1024;
+/**
+ * Hard ceiling on what `branch.files.read` may embed in its JSON result.
+ * Anything above this must go through `branch.files.download`, which streams.
+ */
+export const MAX_INLINE_READ_BYTES = MAX_PREVIEW_SIZE;
 const MAX_TITLE_READ_BYTES = 4096;
 const EXCLUDED_DIRECTORIES = new Set([
   'node_modules',
@@ -189,6 +196,15 @@ export async function readBranchFile(
   const stats = await lstat(requestedPath);
   if (stats.isSymbolicLink()) throw new Error('Access denied: symlinks not allowed');
   if (!stats.isFile()) throw new Error('Requested path is not a file');
+  // `branch.files.read` travels back as JSON on the executor's stdout sentinel
+  // and then over Socket.IO, which caps frames at SOCKET_IO_MAX_BUFFER_SIZE_BYTES.
+  // Inlining a whole large file here is what made big files unreadable; bulk
+  // bytes belong on the `branch.files.download` stream instead.
+  if (stats.size > MAX_INLINE_READ_BYTES) {
+    throw new Error(
+      `File is too large to inline (${stats.size} bytes > ${MAX_INLINE_READ_BYTES}); use branch.files.download`
+    );
+  }
   const isText = isTextFile(filePath, stats.size);
   const buffer = await readFile(requestedPath);
   const content = buffer.toString(isText ? 'utf-8' : 'base64');
@@ -293,5 +309,82 @@ export async function handleBranchFilesRead(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { success: false, error: { code: 'BRANCH_FILES_READ_FAILED', message } };
+  }
+}
+
+/**
+ * Stream a branch file to the daemon's download rendezvous as raw bytes.
+ *
+ * The executor keeps sole filesystem access — the daemon never opens the
+ * branch checkout — while the bytes bypass the JSON result entirely, so file
+ * size is bounded only by the daemon's authorized `maxBytes` rather than by
+ * the Socket.IO frame limit.
+ */
+export async function handleBranchFilesDownload(
+  payload: BranchFilesDownloadPayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  if (options.dryRun) return { success: true, data: { dryRun: true, command: payload.command } };
+  const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
+  let client: AgorClient | null = null;
+  try {
+    client = await createExecutorClient(daemonUrl, payload.sessionToken);
+    const branch = await resolveExecutorBranch(client, payload.params.branchId);
+    const root = await realpath(branch.path);
+    const relativePath = normalizedRelativePath(payload.params.filePath);
+    const { absolute } = await resolvePathInsideBranch(root, relativePath, { mustExist: true });
+
+    // Same confinement contract as the inline read: no symlink escapes, no
+    // directories or devices, and never more bytes than the daemon authorized.
+    const stats = await lstat(absolute);
+    if (stats.isSymbolicLink()) throw new Error('Access denied: symlinks not allowed');
+    if (!stats.isFile()) throw new Error('Requested path is not a file');
+    if (stats.size > payload.params.maxBytes) {
+      throw new Error(
+        `File exceeds the ${payload.params.maxBytes}-byte download limit: ${relativePath} (${stats.size} bytes)`
+      );
+    }
+
+    const response = await fetch(
+      `${daemonUrl}/executor/files/downloads/${payload.params.downloadRef}/content`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${payload.sessionToken}`,
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(stats.size),
+          'X-Agor-Filename': encodeURIComponent(basename(relativePath)),
+          'X-Agor-Mime-Type': getMimeType(relativePath),
+        },
+        body: createReadStream(absolute) as never,
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' }
+    );
+    if (!response.ok) {
+      throw new Error(`Download transfer failed with HTTP ${response.status}`);
+    }
+    return { success: true, data: { path: relativePath, size: stats.size } };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const permissionDenied =
+      error instanceof Error &&
+      'code' in error &&
+      ((error as NodeJS.ErrnoException).code === 'EACCES' ||
+        (error as NodeJS.ErrnoException).code === 'EPERM');
+    return {
+      success: false,
+      error: {
+        code: 'BRANCH_FILES_DOWNLOAD_FAILED',
+        message: permissionDenied
+          ? 'Branch filesystem permissions denied this download for the requesting user'
+          : message,
+      },
+    };
+  } finally {
+    try {
+      client?.io.disconnect();
+    } catch {
+      // Ignore disconnect errors.
+    }
   }
 }

@@ -1,6 +1,8 @@
 import type { AgorClient, Branch, FileDetail, FileListItem } from '@agor-live/client';
 import { Alert, Space } from 'antd';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { getDaemonUrl } from '../../../config/daemon';
+import { getAuthHeaders } from '../../../utils/authHeaders';
 import { useThemedMessage } from '../../../utils/message';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';
 import type { FileItem } from '../../FileCollection/FileCollection';
@@ -8,6 +10,23 @@ import { FileCollection } from '../../FileCollection/FileCollection';
 import { MarkdownModal } from '../../MarkdownModal/MarkdownModal';
 
 const MAX_FILES = 50000;
+
+function branchFileDownloadUrl(branchId: string, path: string): string {
+  const base = getDaemonUrl().replace(/\/$/, '');
+  return `${base}/branches/${encodeURIComponent(branchId)}/files/download?path=${encodeURIComponent(path)}`;
+}
+
+/** Surface the daemon's reason (missing file, too large, denied) instead of a generic failure. */
+async function describeDownloadFailure(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { message?: unknown; error?: unknown };
+    const detail = typeof body.message === 'string' ? body.message : body.error;
+    if (typeof detail === 'string' && detail) return detail;
+  } catch {
+    // Non-JSON error body; fall through to the status text.
+  }
+  return `Download failed (HTTP ${response.status})`;
+}
 
 interface FilesTabProps {
   branch: Branch;
@@ -60,41 +79,22 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
     fetchFiles();
   }, [client, branch.branch_id]);
 
-  // Download file (handles both UTF-8 text and base64 binary)
+  // Download over the streamed HTTP data plane. The `file` service inlines
+  // content in its JSON result, so it is capped at the Socket.IO frame size and
+  // cannot carry large files; this route streams the bytes instead.
   const downloadFile = useCallback(
     async (file: FileItem) => {
-      const currentClient = clientRef.current;
-      if (!currentClient) return;
-
       try {
         showLoading('Downloading file...', { key: 'download' });
 
-        const detail = (await currentClient.service('file').get(file.path, {
-          query: { branch_id: branchIdRef.current },
-        })) as FileDetail;
-
-        // Decode content based on encoding
-        let blob: Blob;
-        const mimeType = 'mimeType' in file ? file.mimeType : undefined;
-
-        if (detail.encoding === 'base64') {
-          // Binary file: decode base64 to binary
-          const binaryString = atob(detail.content);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          blob = new Blob([bytes], {
-            type: mimeType || 'application/octet-stream',
-          });
-        } else {
-          // Text file: use UTF-8 string directly
-          blob = new Blob([detail.content], {
-            type: mimeType || 'text/plain',
-          });
+        const response = await fetch(branchFileDownloadUrl(branchIdRef.current, file.path), {
+          headers: getAuthHeaders(),
+        });
+        if (!response.ok) {
+          throw new Error(await describeDownloadFailure(response));
         }
 
-        const url = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(await response.blob());
         const a = document.createElement('a');
         a.href = url;
         a.download = file.path.split('/').pop() || 'download';
@@ -106,7 +106,9 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
         showSuccess('Downloaded!', { key: 'download' });
       } catch (err) {
         console.error('Failed to download file:', err);
-        showError('Failed to download file', { key: 'download' });
+        showError(err instanceof Error ? err.message : 'Failed to download file', {
+          key: 'download',
+        });
       }
     },
     [showLoading, showSuccess, showError]

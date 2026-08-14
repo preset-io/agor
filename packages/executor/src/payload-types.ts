@@ -417,6 +417,30 @@ export const BranchFilesReadPayloadSchema = BasePayloadSchema.extend({
 
 export type BranchFilesReadPayload = z.infer<typeof BranchFilesReadPayloadSchema>;
 
+/**
+ * Stream one branch file to the daemon's download rendezvous.
+ *
+ * Distinct from `branch.files.read` on purpose: `read` returns a bounded
+ * preview inside the JSON result, while `download` keeps file bytes out of
+ * stdout entirely and POSTs them to the daemon as a raw octet-stream. That is
+ * what lets arbitrarily large files through the Socket.IO `maxHttpBufferSize`
+ * ceiling without giving the daemon its own filesystem access.
+ */
+export const BranchFilesDownloadPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.files.download'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    filePath: z.string().min(1),
+    /** Single-use handle for the daemon-side transfer awaiting these bytes. */
+    downloadRef: z.string().regex(/^dl_[0-9a-f-]{36}$/),
+    /** Refuse before opening anything larger than the daemon authorized. */
+    maxBytes: z.number().int().positive(),
+  }),
+});
+
+export type BranchFilesDownloadPayload = z.infer<typeof BranchFilesDownloadPayloadSchema>;
+
 export const BranchFilesystemStatusPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('branch.filesystem.status'),
   sessionToken: z.string(),
@@ -819,6 +843,7 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   BranchFilesListPayloadSchema,
   BranchFilesBrowsePayloadSchema,
   BranchFilesReadPayloadSchema,
+  BranchFilesDownloadPayloadSchema,
   BranchFilesystemStatusPayloadSchema,
   BranchArtifactPublishPayloadSchema,
   BranchArtifactLandPayloadSchema,
@@ -895,6 +920,7 @@ export function getSupportedCommands(): string[] {
     'branch.files.list',
     'branch.files.browse',
     'branch.files.read',
+    'branch.files.download',
     'branch.filesystem.status',
     'branch.artifact.publish',
     'branch.artifact.land',
