@@ -98,6 +98,11 @@ interface SyncResult {
   errors: string[];
 }
 
+/** Whether this DB view can prove facts about the host-global Unix namespace. */
+export function canVerifyGlobalUnixState(databaseUrl: string): boolean {
+  return databaseUrl.startsWith('file:');
+}
+
 export default class SyncUnix extends Command {
   static override description =
     'Sync Unix users and groups with database (admin only). Creates missing users and fixes group memberships. NOTE: This command does NOT sync passwords - password hashes are one-way and cannot be converted to Unix passwords. Passwords are only synced in real-time during user creation or password updates via the web API.';
@@ -261,8 +266,16 @@ export default class SyncUnix extends Command {
         resolvedDatabaseUrl.startsWith('file:') || /^[a-z][a-z0-9+.-]*:/i.test(resolvedDatabaseUrl)
           ? resolvedDatabaseUrl
           : `file:${resolvedDatabaseUrl}`;
+      const hasGlobalUnixStateView = canVerifyGlobalUnixState(databaseUrl);
 
-      if (databaseUrl.startsWith('file:')) {
+      if ((cleanupGroups || cleanupUsers) && !hasGlobalUnixStateView) {
+        this.error(
+          'sync-unix cleanup supports only the host-local SQLite database. ' +
+            'Unix users and groups are system-global, so a PostgreSQL/RLS or remote database view cannot prove that another tenant or host is not still using them.'
+        );
+      }
+
+      if (hasGlobalUnixStateView) {
         const dbPath = databaseUrl.slice('file:'.length);
         if (!existsSync(dbPath)) {
           this.error(`Database not found: ${dbPath}`);
@@ -1284,6 +1297,12 @@ export default class SyncUnix extends Command {
 
       if (targetBranchId) {
         this.log(chalk.gray('   ⊘ Skipping membership pruning phase (--branch-id mode)\n'));
+      } else if (!hasGlobalUnixStateView) {
+        this.log(
+          chalk.yellow(
+            '   ⊘ Skipping membership pruning: a PostgreSQL/RLS or remote database view cannot prove global Unix group membership\n'
+          )
+        );
       } else {
         this.log(chalk.cyan.bold('\n━━━ Prune Stale Group Memberships ━━━\n'));
 
