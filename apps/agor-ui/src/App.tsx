@@ -797,20 +797,22 @@ function AppContent() {
     });
     if (seeded.sessionId) sessionId = seeded.sessionId;
 
-    // Navigate to the user's board + session, or to the boards list if they
-    // skipped. Use the centralized path builders — the old
-    // `/b/<board>/<session>/` shape was removed when we flattened entity URLs.
+    // Always land the user on a board — never the homepage. Prefer the seeded
+    // session, then the board the wizard created, then the user's main board,
+    // then any existing board. With the workspace step now required a board
+    // always exists, so the later fallbacks are belt-and-suspenders. Use the
+    // centralized path builders — the old `/b/<board>/<session>/` shape was
+    // removed when we flattened entity URLs.
+    const boardById = agorStore.getState().boardById;
+    const mainBoardId = currentUser.preferences?.mainBoardId;
+    const targetBoardId =
+      result.boardId ||
+      (mainBoardId && boardById.has(mainBoardId) ? mainBoardId : undefined) ||
+      boardById.keys().next().value;
     if (sessionId) {
       navigate(sessionPath(sessionId as SessionID));
-    } else if (result.boardId) {
-      navigate(
-        boardPath(
-          result.boardId as BoardID,
-          agorStore.getState().boardById.get(result.boardId)?.slug
-        )
-      );
-    } else {
-      navigate('/');
+    } else if (targetBoardId) {
+      navigate(boardPath(targetBoardId as BoardID, boardById.get(targetBoardId)?.slug));
     }
 
     // Close the wizard only now that creation + navigation are done, so the

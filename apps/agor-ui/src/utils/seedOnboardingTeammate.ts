@@ -13,7 +13,11 @@ export interface SeedOnboardingTeammateInput {
   boardId: string;
   teammateName?: string;
   teammateEmoji?: string;
-  /** Agent chosen in the LLM step; defaults to claude-code. */
+  /**
+   * Agent chosen in the LLM step. `null`/`undefined` means the user skipped that
+   * step and has no credentials, so no bootstrap session is started — see the
+   * skip handling in `seedOnboardingTeammate`.
+   */
   agent?: AgenticToolName | null;
   /** Persona-tailored MCP integration names to suggest in the onboarding prompt. */
   suggestedIntegrations?: string[];
@@ -36,6 +40,10 @@ export interface SeedOnboardingTeammateInput {
  * session creation throws, it surfaces a non-fatal warning and resolves without
  * a session so the caller can still finish onboarding on the board. Returns the
  * onboarding session id when one was created.
+ *
+ * Skipping the LLM step is a supported outcome, not a failure: the teammate's
+ * workspace is still created, but no session is started, so the caller lands the
+ * user on their board rather than in a conversation that cannot run.
  */
 export async function seedOnboardingTeammate(
   input: SeedOnboardingTeammateInput
@@ -75,13 +83,24 @@ export async function seedOnboardingTeammate(
       return {};
     }
 
+    // No agent means the LLM step was skipped: there is no configured model to
+    // run on. Silently defaulting to claude-code here would open a session whose
+    // very first turn fails on missing credentials, so stop at the workspace and
+    // tell the user what to do instead.
+    if (!input.agent) {
+      input.onWarn(
+        `${teammateName}'s workspace is ready. Connect an AI model in Settings - AI & Agents to start your first session.`
+      );
+      return {};
+    }
+
     const sessionId = await startTeammateBootstrapSession({
       client: input.client,
       branchId: branch.branch_id,
       boardId: branch.board_id || input.boardId,
       sessionConfig: {
         branch_id: branch.branch_id,
-        agent: input.agent ?? 'claude-code',
+        agent: input.agent,
         title: buildTeammateOnboardingSessionTitle({
           displayName: teammateName,
           emoji: input.teammateEmoji,

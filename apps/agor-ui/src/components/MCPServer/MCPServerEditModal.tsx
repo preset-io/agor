@@ -203,8 +203,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     }
   };
 
-  const handleSave = async () => {
-    if (!server || !client) return;
+  const saveFormValues = async (): Promise<boolean> => {
+    if (!server || !client) return false;
 
     try {
       await form.validateFields();
@@ -232,13 +232,24 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       updates.auth = buildAuthFromValues(values, { preserveAbsentDcrMode });
 
       await client.service('mcp-servers').patch(server.mcp_server_id, updates);
-
-      showSuccess('MCP server updated successfully');
-      closeAndReset();
+      return true;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to update server';
       showError(errorMessage);
+      return false;
     }
+  };
+
+  const handleSave = async () => {
+    if (await saveFormValues()) {
+      showSuccess('MCP server updated successfully');
+      closeAndReset();
+    }
+  };
+
+  const prepareOAuthStart = async (): Promise<string | null> => {
+    if (!(await saveFormValues())) return null;
+    return server?.mcp_server_id ?? null;
   };
 
   return (
@@ -273,6 +284,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
           onTestConnection={handleTestConnection}
           testing={testing}
           testResult={testResult}
+          onPrepareOAuthStart={prepareOAuthStart}
         />
       </Form>
     </Modal>

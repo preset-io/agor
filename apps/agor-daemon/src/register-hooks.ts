@@ -114,7 +114,10 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { rejectInConstrainedHa } from './ha-support.js';
-import { classifyMissingCredentialFailure } from './hooks/classify-missing-credential.js';
+import {
+  classifyMissingCredentialFailure,
+  protectExternalProviderFailureMetadata,
+} from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
@@ -1162,6 +1165,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const protectWidgetMessageWrites = protectExternalWidgetMessageWrites((messageId) =>
     messagesService.findByIdForScopeCheck(messageId as MessageID)
   );
+  const protectProviderFailureMetadata = protectExternalProviderFailureMetadata((messageId) =>
+    messagesService.findByIdForScopeCheck(messageId as MessageID)
+  );
   const protectPermissionMessageWrites = protectExternalPermissionMessageWrites((messageId) =>
     messagesService.findByIdForScopeCheck(messageId as MessageID)
   );
@@ -1187,12 +1193,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create messages'),
+        protectProviderFailureMetadata,
         protectWidgetMessageWrites,
         protectPermissionMessageWrites,
         ...promptWriteGuards,
-        // Detect "no credential resolved for this session's provider"
-        // structurally, never by matching raw provider error text. Drives the
-        // Connect-AI empty state instead of a raw "/login" message.
+        // Reclassify executor-scoped credential and narrow provider-credit
+        // failures structurally, never by matching arbitrary provider text.
         classifyMissingCredentialFailure(
           db,
           taskRepository,
@@ -1200,9 +1206,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           AGENTIC_TOOL_DISPLAY_NAMES
         ),
       ],
-      update: [protectWidgetMessageWrites, protectPermissionMessageWrites],
+      update: [
+        protectProviderFailureMetadata,
+        protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
+      ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),
+        protectProviderFailureMetadata,
         ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),

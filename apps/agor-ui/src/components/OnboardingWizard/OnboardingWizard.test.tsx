@@ -77,6 +77,7 @@ function renderWizard(
 
   const boardsService = {
     create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+    patch: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
   };
   const client = {
     io: { on: vi.fn(), off: vi.fn() },
@@ -156,7 +157,7 @@ describe('OnboardingWizard', () => {
     expect(screen.queryByText('Back')).not.toBeInTheDocument();
 
     clickButton('I write code');
-    clickButton(/this is me/i);
+    clickButton(/^continue →/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     await waitFor(() => {
@@ -334,7 +335,7 @@ describe('OnboardingWizard', () => {
     const { boardsService } = renderWizard({ initialStep: 'workspace', onUpdateUser });
 
     expect(screen.getByText('Name your AI teammate')).toBeInTheDocument();
-    // The teammate name is empty by default — the user names their teammate.
+    // The name is prefilled with a sensible default; the user renames it here.
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
 
     clickButton(/^continue →/i);
@@ -352,24 +353,25 @@ describe('OnboardingWizard', () => {
         })
       );
     });
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
   });
 
-  it("workspace step renders the concept tags at the bottom, below the Board's AI tool helper", () => {
+  it('workspace step renders the concept tags below the teammate-name field', () => {
     renderWizard({ initialStep: 'workspace' });
 
-    const aiTool = screen.getByText("Board's AI tool");
+    const nameLabel = screen.getByText('Teammate name');
     const branchTag = screen.getByText('Branch');
     const sessionTag = screen.getByText('Session');
     expect(branchTag).toBeInTheDocument();
     expect(sessionTag).toBeInTheDocument();
-    // Tags moved below the name field + AI-tool helper (Fix 2).
+    // The "Board's AI tool" helper was removed — the tool is chosen in the prior step.
+    expect(screen.queryByText("Board's AI tool")).not.toBeInTheDocument();
     expect(
-      aiTool.compareDocumentPosition(branchTag) & Node.DOCUMENT_POSITION_FOLLOWING
+      nameLabel.compareDocumentPosition(branchTag) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 
-  it('workspace step skips board creation when the user already has one', async () => {
+  it('keeps the teammate name editable and never renames a pre-existing board', async () => {
     const boardById = new Map<string, Board>([['board-existing', makeBoard()]]);
     const { boardsService } = renderWizard({
       initialStep: 'workspace',
@@ -377,21 +379,26 @@ describe('OnboardingWizard', () => {
       user: makeUser({ preferences: { mainBoardId: 'board-existing' } } as Partial<User>),
     });
 
-    // Teammate-first: the name UI always renders; the existing board is only a
-    // muted caption, not a replacement for the name field.
-    expect(screen.getByLabelText('Teammate name')).toBeInTheDocument();
+    // The name editor is always shown — even when the user already has a board —
+    // so the teammate can be (re)named; the existing board is only a muted
+    // caption and is never touched.
+    const nameInput = screen.getByLabelText('Teammate name');
+    expect(nameInput).toBeInTheDocument();
     expect(screen.getByText(/join your existing board/i)).toHaveTextContent('Existing board');
+    fireEvent.change(nameInput, { target: { value: 'Ada' } });
 
-    clickButton(/keep going/i);
+    clickButton(/^continue →/i);
 
     expect(boardsService.create).not.toHaveBeenCalled();
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(boardsService.patch).not.toHaveBeenCalled();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
   });
 
   it('reuses existing board via server fetch when boardById store is empty (restart onboarding)', async () => {
     const serverBoard = makeBoard({ board_id: 'board-existing', name: 'My board' });
     const boardsService = {
       create: vi.fn(async () => ({ board_id: 'board-new', created_by: 'user-1' })),
+      patch: vi.fn(async () => serverBoard),
       get: vi.fn(async () => serverBoard),
     };
     const client = {
@@ -406,13 +413,16 @@ describe('OnboardingWizard', () => {
       // No boardById — store is empty (the bug scenario)
     });
 
+    // The pre-existing board is verified server-side but never renamed; the name
+    // editor stays available so the teammate can still be named.
     await waitFor(() => expect(boardsService.get).toHaveBeenCalledWith('board-existing'));
     expect(await screen.findByLabelText('Teammate name')).toBeInTheDocument();
     expect(screen.getByText(/join your existing board/i)).toHaveTextContent('My board');
 
-    clickButton(/keep going/i);
+    clickButton(/^continue →/i);
     expect(boardsService.create).not.toHaveBeenCalled();
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(boardsService.patch).not.toHaveBeenCalled();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
   });
 
   it('creates a new board when mainBoardId points to a deleted board', async () => {
@@ -445,12 +455,42 @@ describe('OnboardingWizard', () => {
     });
   });
 
+  it('going Back to the workspace step keeps the teammate name editable and renames the same board', async () => {
+    const onUpdateUser = vi.fn(async () => undefined);
+    const { boardsService } = renderWizard({ initialStep: 'workspace', onUpdateUser });
+
+    // Name the teammate and create the board.
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    clickButton(/^continue →/i);
+    await waitFor(() =>
+      expect(boardsService.create).toHaveBeenCalledWith({ name: 'Rusty', icon: '🤖' })
+    );
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
+
+    // Back to the workspace step — the name field is still editable (not replaced
+    // by a read-only card).
+    clickButton('Back');
+    const nameInput = await screen.findByLabelText('Teammate name');
+    expect(nameInput).toHaveValue('Rusty');
+    fireEvent.change(nameInput, { target: { value: 'Ada' } });
+    clickButton(/^continue →/i);
+
+    // Editing after a board was created patches the SAME board — no duplicate.
+    await waitFor(() =>
+      expect(boardsService.patch).toHaveBeenCalledWith('board-1', { name: 'Ada', icon: '🤖' })
+    );
+    expect(boardsService.create).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
+  });
+
   it('integrations step shows persona-tailored MCP recommendations', async () => {
     renderWizard({ initialStep: 'integrations' });
 
     // No persona chosen — falls back to the default rec set.
     expect(screen.getByText('Slack')).toBeInTheDocument();
     expect(screen.getByText('Notion')).toBeInTheDocument();
+    // Recommendations only: nothing is connected here; the AI teammate does it later.
+    expect(screen.getByText(/ask your AI teammate to help set them up/i)).toBeInTheDocument();
   });
 
   it('completes the full flow and calls onComplete with the created board', async () => {
@@ -472,13 +512,17 @@ describe('OnboardingWizard', () => {
     // workspace — name the teammate, which creates their board
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i);
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
 
     // integrations
-    clickButton(/connect when done/i);
+    clickButton(/^continue →/i);
 
-    // done
+    // done — with a model connected the app shell *does* seed a first session,
+    // so the summary is allowed to promise one. The skipped-LLM flow asserts
+    // the other half of this below.
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(screen.getByText(/start your first AI session/i)).toBeInTheDocument();
+    expect(screen.queryByText(/connect an ai model in settings whenever/i)).not.toBeInTheDocument();
     clickButton(/open my board/i);
 
     // The wizard emits the teammate naming details + selected agent so the app
@@ -503,40 +547,114 @@ describe('OnboardingWizard', () => {
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
-  it('lets the user skip every step without any confirmation dialog', async () => {
+  it('requires the workspace + tools steps but lets persona/llm skip, always yielding a board', async () => {
     const onComplete = vi.fn();
-    renderWizard({ onComplete });
+    const { boardsService } = renderWizard({ onComplete });
 
+    // persona and llm stay optional.
     expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
+    // Workspace is the step that creates the board + teammate, so it is required:
+    // no "Skip for now" affordance, and the name is prefilled so the user isn't
+    // blocked on an empty field.
     expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
-    clickButton(/skip for now/i);
+    expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Teammate name')).toHaveValue('Scout');
+    clickButton(/^continue →/i);
 
-    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
-    clickButton(/skip for now/i);
+    await waitFor(() =>
+      expect(boardsService.create).toHaveBeenCalledWith({ name: 'Scout', icon: '🤖' })
+    );
+
+    // Tools is purely informational recommendations — also non-skippable; the
+    // enabled "Continue →" is the only way forward.
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
+    expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
+    clickButton(/^continue →/i);
 
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
     // Final step is not skippable.
     expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
 
     clickButton(/open my board/i);
-    // Skipping the workspace step leaves the teammate unnamed — no teammateName
-    // is emitted, so the app shell skips teammate creation and just opens the board.
-    expect(onComplete).toHaveBeenCalledWith({
-      branchId: '',
-      sessionId: '',
-      boardId: '',
-      path: 'teammate',
-      teammateName: undefined,
-      teammateEmoji: '🤖',
-      agent: null,
-      suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
-      persona: null,
-    });
+    // A board was created from the (required) workspace step, so completion
+    // always carries a board destination — the app shell never falls back to the
+    // homepage.
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    const result = onComplete.mock.calls[0][0] as { boardId: string; teammateName?: string };
+    expect(result.boardId).toBe('board-1');
+    expect(result.teammateName).toBe('Scout');
+  });
+
+  it('skipping the LLM step finishes onto the board with no agent to bootstrap a session', async () => {
+    const onComplete = vi.fn();
+    const { boardsService } = renderWizard({ onComplete });
+
+    // persona — skipped.
+    clickButton(/skip for now/i);
+
+    // llm — highlight a provider but never connect it, then skip. Selecting a
+    // card alone must not survive as "there is a model to run on".
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    clickButton('Claude');
+    expect(screen.getByLabelText('Anthropic API key')).toBeInTheDocument();
+    clickButton(/skip for now/i);
+
+    // workspace is still required, so a board is created either way.
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    clickButton(/^continue →/i);
+    await waitFor(() => expect(boardsService.create).toHaveBeenCalledTimes(1));
+
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
+    clickButton(/^continue →/i);
+
+    // The summary must not claim a connected AI, and must not promise a first
+    // session that will never be started.
+    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(screen.getByText(/connect an ai model in settings whenever/i)).toBeInTheDocument();
+    expect(screen.getByText('Add in Settings - AI & Agents')).toBeInTheDocument();
+
+    clickButton(/open my board/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    const result = onComplete.mock.calls[0][0] as {
+      agent: string | null;
+      boardId: string;
+      sessionId: string;
+    };
+    // A null agent is what tells the completion handler to seed the workspace
+    // and land on the board rather than open a credential-less claude-code
+    // session (see seedOnboardingTeammate).
+    expect(result.agent).toBeNull();
+    expect(result.boardId).toBe('board-1');
+    expect(result.sessionId).toBe('');
+  });
+
+  it('final checklist names the teammate, gated on the board that was created', () => {
+    renderWizard({ initialStep: 'done' });
+
+    // Deliberate copy call: the app shell seeds the teammate immediately after
+    // this step resolves, so the checklist says "Teammate ready" rather than
+    // the drier claim the wizard could strictly back on its own.
+    expect(screen.getByText('Teammate ready')).toBeInTheDocument();
+    expect(screen.queryByText('Workspace ready')).not.toBeInTheDocument();
+  });
+
+  it('explains the failure instead of no-oping when the required workspace step has no client', async () => {
+    renderWizard({ initialStep: 'workspace', client: null });
+
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    clickButton(/^continue →/i);
+
+    // The workspace step is required and has no Skip, so a silent early return
+    // would leave the user on a dead button with no explanation.
+    expect(await screen.findByText(/can't reach the server right now/i)).toBeInTheDocument();
+    expect(screen.getByText('Name your AI teammate')).toBeInTheDocument();
+    expect(screen.queryByText('Recommended tools')).not.toBeInTheDocument();
   });
 
   it('shows a loading state on the final step while onComplete is in flight', async () => {
@@ -567,7 +685,7 @@ describe('OnboardingWizard', () => {
     renderWizard();
 
     clickButton('I write code');
-    clickButton(/this is me/i);
+    clickButton(/^continue →/i);
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
 
     clickButton('Back');

@@ -112,6 +112,7 @@ import {
   publicHealthDb,
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
+import { assertExternalProviderFailureMetadataAllowed } from './hooks/classify-missing-credential.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import {
   deliverPermissionDecision,
@@ -243,6 +244,19 @@ export interface RouteParams extends Params {
   user?: User;
   /** Trusted internal callback request, populated by MCP tooling only. */
   _taskCompletionCallback?: NonNullable<TaskMetadata['completion_callback']>;
+}
+
+export function createMessagesBulkRouteService(
+  messagesService: Pick<MessagesServiceImpl, 'createMany'>
+) {
+  return {
+    async create(data: unknown, _params: RouteParams) {
+      assertExternalProviderFailureMetadataAllowed(data);
+      assertExternalWidgetMessageCreateAllowed(data);
+      assertExternalPermissionMessageCreateAllowed(data);
+      return messagesService.createMany(data as Message[]);
+    },
+  };
 }
 
 /** Compatibility tombstone retained for stale Claude CLI restart clients. */
@@ -845,13 +859,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerAuthenticatedRoute(
     app,
     '/messages/bulk',
-    {
-      async create(data: unknown, params: RouteParams) {
-        assertExternalWidgetMessageCreateAllowed(data);
-        assertExternalPermissionMessageCreateAllowed(data);
-        return messagesService.createMany(data as Message[]);
-      },
-    },
+    createMessagesBulkRouteService(messagesService),
     {
       create: { role: ROLES.MEMBER, action: 'create messages' },
     },

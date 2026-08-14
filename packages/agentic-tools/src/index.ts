@@ -23,6 +23,7 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     apiKeyName: 'ANTHROPIC_API_KEY',
     authentication: 'api-key',
     keyCreationUrl: 'https://platform.claude.com/settings/keys',
+    billingUrl: 'https://platform.claude.com/settings/billing',
     capabilities: {
       supportsSessionFork: true,
       supportsChildSpawn: true,
@@ -126,6 +127,14 @@ export const AGENTIC_TOOL_KEY_CREATION_URL = Object.freeze(
   Object.fromEntries(
     Object.values(AGENTIC_TOOL_INTEGRATIONS).flatMap((integration) =>
       integration.keyCreationUrl ? [[integration.name, integration.keyCreationUrl]] : []
+    )
+  ) as Partial<Record<AgenticToolName, string>>
+);
+
+export const AGENTIC_TOOL_BILLING_URL = Object.freeze(
+  Object.fromEntries(
+    Object.values(AGENTIC_TOOL_INTEGRATIONS).flatMap((integration) =>
+      integration.billingUrl ? [[integration.name, integration.billingUrl]] : []
     )
   ) as Partial<Record<AgenticToolName, string>>
 );
