@@ -1,5 +1,5 @@
 // src/types/branch.ts
-import type { BoardID, BranchID, UUID } from './id';
+import type { BoardID, BranchFilesystemOperationID, BranchID, UUID } from './id';
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
 
@@ -48,6 +48,16 @@ export const BRANCH_FILESYSTEM_IDENTITY_FIELDS = [
 ] as const satisfies readonly (keyof Branch)[];
 export type BranchFilesystemIdentityField = (typeof BRANCH_FILESYSTEM_IDENTITY_FIELDS)[number];
 
+/** Creation identity that must never change after a branch row is inserted. */
+export const BRANCH_IMMUTABLE_FIELDS = [
+  ...BRANCH_FILESYSTEM_IDENTITY_FIELDS,
+  'branch_id',
+  'created_at',
+  'created_by',
+  'branch_unique_id',
+] as const satisfies readonly (keyof Branch)[];
+export type BranchImmutableField = (typeof BRANCH_IMMUTABLE_FIELDS)[number];
+
 /** Archive metadata written only by daemon-owned archive/unarchive workflows. */
 export const BRANCH_ARCHIVE_LIFECYCLE_FIELDS = [
   'archived',
@@ -56,17 +66,58 @@ export const BRANCH_ARCHIVE_LIFECYCLE_FIELDS = [
 ] as const satisfies readonly (keyof Branch)[];
 export type BranchArchiveLifecycleField = (typeof BRANCH_ARCHIVE_LIFECYCLE_FIELDS)[number];
 
-/** Filesystem lifecycle fields a branch-scoped executor may report. */
+/** Filesystem lifecycle fields; only terminal status/error may be executor-reported. */
 export const BRANCH_FILESYSTEM_LIFECYCLE_FIELDS = [
   'filesystem_status',
+  'filesystem_operation_id',
   'error_message',
 ] as const satisfies readonly (keyof Branch)[];
 export type BranchFilesystemLifecycleField = (typeof BRANCH_FILESYSTEM_LIFECYCLE_FIELDS)[number];
 
+/** Fields written only by daemon workflows or narrowly scoped executors. */
+export const BRANCH_SERVER_MANAGED_FIELDS = [
+  'updated_at',
+  'url',
+  'unix_group',
+  'environment_instance',
+] as const satisfies readonly (keyof Branch)[];
+export type BranchServerManagedField = (typeof BRANCH_SERVER_MANAGED_FIELDS)[number];
+
 /** Fields accepted from ordinary external branch patch callers. */
+export const BRANCH_CLIENT_NULLABLE_FIELDS = [
+  'board_id',
+  'issue_url',
+  'pull_request_url',
+  'notes',
+] as const satisfies readonly (keyof Branch)[];
+export type BranchClientNullableField = (typeof BRANCH_CLIENT_NULLABLE_FIELDS)[number];
+
 export type BranchClientPatch = Omit<
   Partial<Branch>,
-  BranchFilesystemIdentityField | BranchArchiveLifecycleField | BranchFilesystemLifecycleField
+  | BranchImmutableField
+  | BranchArchiveLifecycleField
+  | BranchFilesystemLifecycleField
+  | BranchServerManagedField
+  | BranchClientNullableField
+> & {
+  [K in BranchClientNullableField]?: Branch[K] | null;
+};
+
+/** Privileged branch fields reported by filesystem lifecycle executors. */
+export type BranchExecutorPatch = Partial<
+  Pick<
+    Branch,
+    | 'filesystem_status'
+    | 'error_message'
+    | 'unix_group'
+    | 'start_command'
+    | 'stop_command'
+    | 'nuke_command'
+    | 'health_check_url'
+    | 'app_url'
+    | 'logs_command'
+    | 'environment_variant'
+  >
 >;
 
 /** Shared request shape used by UI, REST, Socket, and MCP deletion paths. */
@@ -421,6 +472,13 @@ export interface Branch {
    * Note: null/undefined means 'ready' for backward compatibility
    */
   filesystem_status?: BranchFilesystemStatus;
+
+  /**
+   * UUIDv7 generation for the current or most recent filesystem operation.
+   * Every materialize/delete executor credential is bound to this value so a
+   * stale process cannot mutate a newer lifecycle or act on its directory.
+   */
+  filesystem_operation_id?: BranchFilesystemOperationID;
 
   /**
    * Error message when filesystem_status is 'failed' or 'delete_failed'

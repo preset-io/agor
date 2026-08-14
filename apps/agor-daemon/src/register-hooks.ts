@@ -87,9 +87,6 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
-  BRANCH_ARCHIVE_LIFECYCLE_FIELDS,
-  BRANCH_FILESYSTEM_IDENTITY_FIELDS,
-  BRANCH_FILESYSTEM_LIFECYCLE_FIELDS,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
@@ -107,9 +104,9 @@ import {
 } from '@agor/core/unix';
 import {
   executorRuntimeScopeGuard,
-  isBranchFilesystemLifecycleExecutorRequest,
   isTaskScopedExecutorRequest,
   requireExecutorRuntimeToken,
+  validateBranchExternalManagedPatch,
 } from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
@@ -372,30 +369,8 @@ export function protectExternalBranchManagedWrites(context: HookContext): HookCo
     throw new BadRequest('Branch writes require an object payload');
   }
 
-  const fields = Object.keys(context.data as Record<string, unknown>);
-  const identityField = BRANCH_FILESYSTEM_IDENTITY_FIELDS.find((field) => fields.includes(field));
-  if (identityField) {
-    throw new BadRequest(
-      `Branch field '${identityField}' is assigned at creation and is immutable`
-    );
-  }
-
-  const archiveField = BRANCH_ARCHIVE_LIFECYCLE_FIELDS.find((field) => fields.includes(field));
-  if (archiveField) {
-    throw new BadRequest(
-      `Branch field '${archiveField}' is managed by archive lifecycle operations`
-    );
-  }
-
-  const filesystemField = BRANCH_FILESYSTEM_LIFECYCLE_FIELDS.find((field) =>
-    fields.includes(field)
-  );
   const branchId = String(context.id ?? (context.data as Record<string, unknown>).branch_id ?? '');
-  if (filesystemField && !isBranchFilesystemLifecycleExecutorRequest(context, branchId)) {
-    throw new BadRequest(
-      `Branch field '${filesystemField}' is managed by branch-scoped filesystem lifecycle operations`
-    );
-  }
+  validateBranchExternalManagedPatch(context.params, branchId, context.data as Partial<Branch>);
   return context;
 }
 

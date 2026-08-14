@@ -28,6 +28,7 @@ import {
 import {
   BranchRepository,
   getCurrentTenantId,
+  generateId,
   RepoRepository,
   runWithTenantDatabaseTransaction,
   shortId,
@@ -39,6 +40,7 @@ import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/
 import type {
   AuthenticatedParams,
   Branch,
+  BranchFilesystemOperationID,
   BranchStorageMode,
   CloneRepositoryResult,
   QueryParams,
@@ -767,6 +769,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 2. Initialize Unix groups (if unix_user_mode needs filesystem isolation)
     // 3. Render environment templates with full context including GID
     // 4. Patch branch to 'ready' with rendered templates
+    const filesystemOperationId = generateId() as BranchFilesystemOperationID;
     const branch = (await branchesService.create(
       {
         repo_id: repo.repo_id,
@@ -778,6 +781,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         new_branch: data.createBranch ?? false,
         branch_unique_id: branchUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor
+        filesystem_operation_id: filesystemOperationId,
         // Environment templates will be rendered by executor after Unix group creation
         // RBAC fields are intentionally omitted at creation: new branches
         // always align with their board defaults. Overrides are a deliberate
@@ -914,7 +918,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     try {
       const sessionToken = generateScopedServiceToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
+        {
+          command: 'git.branch.add',
+          branch_id: branch.branch_id,
+          repo_id: repo.repo_id,
+          filesystem_operation_id: filesystemOperationId,
+        }
       );
 
       // Unix group initialization is a filesystem concern controlled by
@@ -937,6 +946,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           params: {
             branchId: branch.branch_id,
             repoId: repo.repo_id,
+            filesystemOperationId,
             userId: userId as string | undefined,
             // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
@@ -962,6 +972,33 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         '[ReposService.createBranch] Failed to spawn executor:',
         error instanceof Error ? error.message : String(error)
       );
+      try {
+        const failedBranch = await branchRepo.update(
+          branch.branch_id,
+          {
+            filesystem_status: 'failed',
+            error_message: 'Failed to start branch filesystem creation.',
+          },
+          {
+            expectedFilesystemLifecycle: {
+              archived: false,
+              filesystemStatuses: ['creating'],
+              operationId: filesystemOperationId,
+            },
+          }
+        );
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'patched',
+          data: failedBranch,
+          params,
+          id: failedBranch.branch_id,
+        });
+      } catch {
+        console.error(
+          `[ReposService.createBranch ${data.name}] Failed to persist filesystem creation failure`
+        );
+      }
     }
 
     // Return immediately with 'creating' status - UI will see updates via WebSocket

@@ -21,9 +21,11 @@ import {
 } from '@agor/core/config';
 import {
   BoardRepository,
-  BranchFilesystemStatusConflictError,
+  BranchFilesystemLifecycleConflictError,
+  type BranchFilesystemLifecycleExpectation,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
   runWithTenantDatabaseScope,
@@ -55,6 +57,7 @@ import type {
   BranchArchiveOrDeleteOptions,
   BranchArchiveOrDeleteResult,
   BranchEnvironmentUpdate,
+  BranchFilesystemOperationID,
   BranchID,
   KnowledgeNamespace,
   QueryParams,
@@ -64,7 +67,7 @@ import type {
 } from '@agor/core/types';
 import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
-  BRANCH_FILESYSTEM_IDENTITY_FIELDS,
+  BRANCH_IMMUTABLE_FIELDS,
   getTeammateConfig,
   isBranchArchiveOrDeleteOptions,
   isTeammate,
@@ -78,6 +81,10 @@ import {
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import {
+  getBranchFilesystemLifecycleCapability,
+  validateBranchExternalManagedPatch,
+} from '../auth/executor-runtime-scope.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
@@ -123,9 +130,11 @@ type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
 // Symbols cannot cross a Feathers transport. This keeps the repository CAS
 // precondition available to daemon-owned workflows without adding a
 // client-forgeable query or service argument.
-const BRANCH_PATCH_REJECT_FILESYSTEM_STATUSES = Symbol('branchPatchRejectFilesystemStatuses');
+const BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE = Symbol('branchPatchExpectedFilesystemLifecycle');
+const BRANCH_REMOVE_EXPECT_FILESYSTEM_LIFECYCLE = Symbol('branchRemoveExpectedFilesystemLifecycle');
 type InternalBranchPatchParams = BranchParams & {
-  [BRANCH_PATCH_REJECT_FILESYSTEM_STATUSES]?: readonly NonNullable<Branch['filesystem_status']>[];
+  [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]?: BranchFilesystemLifecycleExpectation;
+  [BRANCH_REMOVE_EXPECT_FILESYSTEM_LIFECYCLE]?: BranchFilesystemLifecycleExpectation;
 };
 
 // The sudo rm helper has its own 10-minute resource bound. Leave a minute for
@@ -224,6 +233,26 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return runWithTenantDatabaseScope(this.db, tenantId, work);
   }
 
+  private filesystemLifecycleExpectation(branch: Branch): BranchFilesystemLifecycleExpectation {
+    return {
+      archived: Boolean(branch.archived),
+      filesystemStatuses: [branch.filesystem_status],
+      operationId: branch.filesystem_operation_id ?? null,
+    };
+  }
+
+  private newFilesystemOperationId(): BranchFilesystemOperationID {
+    return generateId() as BranchFilesystemOperationID;
+  }
+
+  private assertFilesystemLifecycleIdle(branch: Branch): void {
+    if (branch.filesystem_status === 'creating' || branch.filesystem_status === 'deleting') {
+      throw new Conflict(
+        `Branch filesystem ${branch.filesystem_status === 'creating' ? 'creation' : 'deletion'} is still in progress; retry later`
+      );
+    }
+  }
+
   private branchFilesystemDeletePayload(
     branch: Branch,
     sessionToken: string,
@@ -237,6 +266,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       daemonUrl: getDaemonUrl(),
       params: {
         branchId: branch.branch_id,
+        filesystemOperationId: branch.filesystem_operation_id,
         branchPath: branch.path,
         branchesRoot: getBranchesDir(tenantId),
         deleteDbRecord: false,
@@ -256,6 +286,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params: BranchParams | undefined,
     tokenType: 'branch-delete' | 'branch-remove'
   ): Promise<string> {
+    if (!branch.filesystem_operation_id) {
+      throw new Error('Branch filesystem deletion has no operation generation');
+    }
     const tokenService = (
       this.app as unknown as {
         sessionTokenService?: import('../services/session-token-service').SessionTokenService;
@@ -265,6 +298,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return this.withTenantDatabase(params, () =>
       tokenService.generateToken(tokenType, userId, {
         branchId: branch.branch_id,
+        filesystemOperationId: branch.filesystem_operation_id,
         maxUses: -1,
       })
     );
@@ -279,7 +313,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const current = await this.withTenantDatabase(params, () =>
         this.get(branch.branch_id, params)
       );
-      if (current.filesystem_status === 'delete_failed') return;
+      if (
+        current.filesystem_status === 'delete_failed' &&
+        current.filesystem_operation_id === branch.filesystem_operation_id
+      ) {
+        return;
+      }
       const patched = await this.withTenantDatabase(params, () =>
         this.patch(
           branch.branch_id,
@@ -287,7 +326,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             filesystem_status: 'delete_failed',
             error_message: message.slice(0, 500),
           },
-          { ...params, provider: undefined }
+          {
+            ...params,
+            provider: undefined,
+            [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]: {
+              filesystemStatuses: ['deleting'],
+              operationId: branch.filesystem_operation_id ?? null,
+            },
+          } as InternalBranchPatchParams
         )
       );
       emitServiceEvent(this.app, {
@@ -306,11 +352,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   private async markBranchDeleting(branch: Branch, params?: BranchParams): Promise<Branch> {
+    this.assertFilesystemLifecycleIdle(branch);
+    const operationId = this.newFilesystemOperationId();
     const patched = await this.withTenantDatabase(params, () =>
       this.patch(
         branch.branch_id,
-        { filesystem_status: 'deleting' },
-        { ...params, provider: undefined }
+        { filesystem_status: 'deleting', filesystem_operation_id: operationId },
+        {
+          ...params,
+          provider: undefined,
+          [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]: this.filesystemLifecycleExpectation(branch),
+        } as InternalBranchPatchParams
       )
     );
     emitServiceEvent(this.app, {
@@ -1242,7 +1294,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<BranchWithZoneAndSessions> {
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
-    for (const field of BRANCH_FILESYSTEM_IDENTITY_FIELDS) {
+    validateBranchExternalManagedPatch(params ?? ({} as BranchParams), id, data);
+    for (const field of BRANCH_IMMUTABLE_FIELDS) {
       if (Object.hasOwn(data, field) && !isDeepStrictEqual(data[field], currentBranch[field])) {
         throw new BadRequest(`Branch field '${field}' is immutable after creation`);
       }
@@ -1269,14 +1322,33 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // workflows can attach a symbol-only precondition that is checked after
     // the repository has acquired its PostgreSQL row lock (and inside the
     // SQLite transaction), closing check-then-update races.
-    const rejectFilesystemStatuses = (params as InternalBranchPatchParams | undefined)?.[
-      BRANCH_PATCH_REJECT_FILESYSTEM_STATUSES
+    let expectedFilesystemLifecycle = (params as InternalBranchPatchParams | undefined)?.[
+      BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE
     ];
-    const updatedBranch = (
-      rejectFilesystemStatuses
-        ? await this.branchRepo.update(id, data, { rejectFilesystemStatuses })
-        : await super.patch(id, data, params)
-    ) as Branch;
+    if (params?.provider) {
+      const capability = getBranchFilesystemLifecycleCapability(params, id);
+      if (capability) {
+        expectedFilesystemLifecycle = {
+          ...(capability.kind === 'create' ? { archived: false } : {}),
+          filesystemStatuses: [capability.kind === 'create' ? 'creating' : 'deleting'],
+          operationId: capability.operationId as BranchFilesystemOperationID,
+        };
+      }
+    }
+
+    let updatedBranch: Branch;
+    try {
+      updatedBranch = (
+        expectedFilesystemLifecycle
+          ? await this.branchRepo.update(id, data, { expectedFilesystemLifecycle })
+          : await super.patch(id, data, params)
+      ) as Branch;
+    } catch (error) {
+      if (error instanceof BranchFilesystemLifecycleConflictError) {
+        throw new Conflict('Branch filesystem lifecycle changed; retry the operation');
+      }
+      throw error;
+    }
     await this.maintainPrimaryTeammateAfterPatch(currentBranch, updatedBranch, params);
 
     // Handle board_objects changes if board_id changed
@@ -1341,6 +1413,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   async update(id: BranchID, data: Partial<Branch>, params?: BranchParams): Promise<Branch> {
     const currentBranch = await super.get(id, params);
+    validateBranchExternalManagedPatch(params ?? ({} as BranchParams), id, data);
+    for (const field of BRANCH_IMMUTABLE_FIELDS) {
+      if (Object.hasOwn(data, field) && !isDeepStrictEqual(data[field], currentBranch[field])) {
+        throw new BadRequest(`Branch field '${field}' is immutable after creation`);
+      }
+    }
     await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
     this.assertTeammateKindIsStable(currentBranch, data);
     if (
@@ -1498,18 +1576,38 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async remove(id: BranchID, params?: BranchParams): Promise<Branch> {
     const { deleteFromFilesystem } = params?.query || {};
+    let expectedFilesystemLifecycle = (params as InternalBranchPatchParams | undefined)?.[
+      BRANCH_REMOVE_EXPECT_FILESYSTEM_LIFECYCLE
+    ];
+    const externalLifecycleCapability = params?.provider
+      ? getBranchFilesystemLifecycleCapability(params, id)
+      : null;
+    if (externalLifecycleCapability?.kind === 'delete') {
+      if (!externalLifecycleCapability.metadataRemovalAllowed) {
+        throw new Forbidden('This filesystem executor cannot remove branch metadata');
+      }
+      expectedFilesystemLifecycle = {
+        filesystemStatuses: ['deleted'],
+        operationId: externalLifecycleCapability.operationId as BranchFilesystemOperationID,
+      };
+    }
 
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    if (!expectedFilesystemLifecycle) {
+      this.assertFilesystemLifecycleIdle(branch);
+      expectedFilesystemLifecycle = this.filesystemLifecycleExpectation(branch);
+    }
 
     // Filesystem cleanup is a precondition of metadata deletion when explicitly
     // requested. Keeping the row is what makes a failure visible and retryable.
     if (deleteFromFilesystem) {
       console.log(`🗑️  Removing branch filesystem before metadata: ${branch.path}`);
       const userId = (params as AuthenticatedParams).user!.user_id as UserID;
-      await this.markBranchDeleting(branch, params);
+      this.assertFilesystemLifecycleIdle(branch);
+      const deletingBranch = await this.markBranchDeleting(branch, params);
       const deletion = await this.runBranchFilesystemDelete(
-        branch,
+        deletingBranch,
         userId,
         params,
         'branch-remove'
@@ -1519,12 +1617,24 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           `${deletion.error?.message || GENERIC_BRANCH_DELETE_FAILURE} Branch metadata was retained.`
         );
       }
+      expectedFilesystemLifecycle = {
+        archived: Boolean(deletingBranch.archived),
+        filesystemStatuses: ['deleted'],
+        operationId: deletingBranch.filesystem_operation_id ?? null,
+      };
     }
 
     // CASCADE will clean up related comments automatically. This happens only
     // after a requested filesystem deletion has been verified by the executor.
-    const result = await super.remove(id, params);
-    return result as Branch;
+    try {
+      await this.branchRepo.delete(id, { expectedFilesystemLifecycle });
+      return branch;
+    } catch (error) {
+      if (error instanceof BranchFilesystemLifecycleConflictError) {
+        throw new Conflict('Branch filesystem lifecycle changed; metadata was retained');
+      }
+      throw error;
+    }
   }
 
   /**
@@ -1535,7 +1645,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * registered `remove` wrapper and its filesystem/Unix hooks; it is not listed
    * in the service's transport methods.
    */
-  async removeMetadataWithRealtime(id: BranchID, params?: BranchParams): Promise<Branch> {
+  async removeMetadataWithRealtime(
+    id: BranchID,
+    params?: BranchParams,
+    expectedFilesystemLifecycle?: BranchFilesystemLifecycleExpectation
+  ): Promise<Branch> {
     const removalParams = params ?? ({} as BranchParams);
     return this.withTenantDatabase(removalParams, async () => {
       const branch = (await super.get(id, removalParams)) as Branch;
@@ -1545,10 +1659,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         branchId: branch.branch_id,
       });
 
-      // Feathers replaces registered standard methods with event-producing
-      // wrappers. The adapter call performs only the metadata deletion; the
-      // explicit event below is the single authoritative tombstone.
-      const removedBranch = (await super.remove(branch.branch_id, removalParams)) as Branch;
+      // Keep the visibility snapshot and conditional metadata delete in this
+      // tenant transaction. The explicit event below is the single
+      // authoritative tombstone for this internal path.
+      if (expectedFilesystemLifecycle) {
+        await this.branchRepo.delete(branch.branch_id, { expectedFilesystemLifecycle });
+      } else {
+        await this.branchRepo.delete(branch.branch_id);
+      }
+      const removedBranch = branch;
       emitServiceEvent(this.app, {
         path: 'branches',
         event: 'removed',
@@ -1590,6 +1709,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     consumeBranchArchiveDeleteAuthorization(params, id, options.metadataAction);
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    this.assertFilesystemLifecycleIdle(branch);
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
     // Stop environment if running
@@ -1669,7 +1789,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Archive: Soft delete branch and cascade to sessions
       console.log(`📦 Archiving branch: ${branch.name} (filesystem: ${filesystemAction})`);
 
-      // Update branch
+      const filesystemOperationId =
+        filesystemAction === 'deleted'
+          ? this.newFilesystemOperationId()
+          : branch.filesystem_operation_id;
+
+      // Reserve the archive transition atomically. A full filesystem deletion
+      // receives a fresh generation before its executor is spawned.
       const archivedBranch = await this.withTenantDatabase(params, () =>
         this.patch(
           id,
@@ -1678,10 +1804,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             archived_at: new Date().toISOString(),
             archived_by: currentUserId,
             filesystem_status: filesystemAction === 'deleted' ? 'deleting' : filesystemAction,
+            ...(filesystemAction === 'deleted'
+              ? { filesystem_operation_id: filesystemOperationId }
+              : {}),
             // Preserve board_id + board_object placement so unarchive can restore in-place
             updated_at: new Date().toISOString(),
           },
-          { ...params, provider: undefined }
+          {
+            ...params,
+            provider: undefined,
+            [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]: this.filesystemLifecycleExpectation(branch),
+          } as InternalBranchPatchParams
         )
       );
 
@@ -1695,6 +1828,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         params,
         id: archivedBranch.branch_id,
       });
+
+      if (filesystemAction === 'deleted') {
+        // Once `deleting` is persisted, start the owner immediately so an
+        // unrelated session-archive failure cannot strand the lifecycle lock.
+        await this.spawnBranchFilesystemDelete(
+          archivedBranch as Branch,
+          (userId ?? currentUserId) as UserID,
+          params
+        );
+      }
 
       // Archive all sessions in this branch
       // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
@@ -1718,25 +1861,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
 
-      if (filesystemAction === 'deleted') {
-        // Archival itself is complete and visible immediately. The executor
-        // owns the asynchronous deleting -> deleted/delete_failed transition.
-        await this.spawnBranchFilesystemDelete(
-          { ...branch, ...archivedBranch } as Branch,
-          (userId ?? currentUserId) as UserID,
-          params
-        );
-      }
-
       return archivedBranch;
     } else {
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
       console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
 
+      let deletingBranch: Branch | undefined;
       if (filesystemAction === 'deleted') {
-        await this.markBranchDeleting(branch, params);
+        deletingBranch = await this.markBranchDeleting(branch, params);
         const deletion = await this.runBranchFilesystemDelete(
-          branch,
+          deletingBranch,
           (userId ?? currentUserId) as UserID,
           params,
           'branch-delete'
@@ -1748,7 +1882,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         }
       }
 
-      await this.removeMetadataWithRealtime(id, params);
+      // This custom workflow already applied the selected filesystem action.
+      // Do not let an unrelated query-string flag override `preserved` or
+      // trigger a second deletion when the route composes the remove method.
+      const expectedFilesystemLifecycle: BranchFilesystemLifecycleExpectation =
+        filesystemAction === 'deleted'
+          ? {
+              archived: Boolean(branch.archived),
+              filesystemStatuses: ['deleted'],
+              operationId: deletingBranch?.filesystem_operation_id ?? null,
+            }
+          : this.filesystemLifecycleExpectation(branch);
+      await this.removeMetadataWithRealtime(id, params, expectedFilesystemLifecycle);
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
       return { deleted: true, branch_id: id };
@@ -1776,21 +1921,24 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!branch.archived) {
       throw new Error(`Branch ${branch.name} is not archived`);
     }
-    if (branch.filesystem_status === 'deleting') {
-      throw new Conflict('Branch filesystem deletion is still in progress; retry unarchive later');
-    }
+    this.assertFilesystemLifecycleIdle(branch);
 
     console.log(`📦 Unarchiving branch: ${branch.name}`);
 
     const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
     const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : branch.board_id;
 
-    // Update branch - clear archive metadata
+    const filesystemOperationId = this.newFilesystemOperationId();
+
+    // Atomically claim this unarchive/materialization generation before doing
+    // any asynchronous filesystem probe. This serializes concurrent
+    // unarchives and prevents deletion from starting while the probe runs.
     const patchData: Partial<Branch> = {
       archived: false,
       archived_at: undefined,
       archived_by: undefined,
-      filesystem_status: undefined,
+      filesystem_status: 'creating',
+      filesystem_operation_id: filesystemOperationId,
       error_message: undefined,
       updated_at: new Date().toISOString(),
     };
@@ -1798,23 +1946,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       patchData.board_id = options?.boardId;
     }
 
-    let unarchivedBranch: BranchWithZoneAndSessions;
-    try {
-      unarchivedBranch = await this.withTenantDatabase(params, () =>
-        this.patch(id, patchData, {
-          ...params,
-          provider: undefined,
-          [BRANCH_PATCH_REJECT_FILESYSTEM_STATUSES]: ['deleting'],
-        } as InternalBranchPatchParams)
-      );
-    } catch (error) {
-      if (error instanceof BranchFilesystemStatusConflictError) {
-        throw new Conflict(
-          'Branch filesystem deletion is still in progress; retry unarchive later'
-        );
-      }
-      throw error;
-    }
+    let unarchivedBranch = await this.withTenantDatabase(params, () =>
+      this.patch(id, patchData, {
+        ...params,
+        provider: undefined,
+        [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]: this.filesystemLifecycleExpectation(branch),
+      } as InternalBranchPatchParams)
+    );
     emitServiceEvent(this.app, {
       path: 'branches',
       event: 'patched',
@@ -1845,6 +1983,31 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     );
     if (!statusResult.success) {
+      unarchivedBranch = await this.withTenantDatabase(params, () =>
+        this.patch(
+          id,
+          {
+            filesystem_status: 'failed',
+            error_message: 'Failed to inspect the branch filesystem during restore.',
+          },
+          {
+            ...params,
+            provider: undefined,
+            [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]: {
+              archived: false,
+              filesystemStatuses: ['creating'],
+              operationId: filesystemOperationId,
+            },
+          } as InternalBranchPatchParams
+        )
+      );
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: unarchivedBranch,
+        params,
+        id: unarchivedBranch.branch_id,
+      });
       throw new Error(
         `Failed to inspect branch filesystem before unarchive: ${statusResult.error?.message ?? 'unknown executor error'}`
       );
@@ -1854,13 +2017,27 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       typeof statusResult.data === 'object' &&
       (statusResult.data as { exists?: unknown }).exists === true;
 
-    if (!branchPathExists) {
-      console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
-
-      // Set filesystem_status to 'creating' while we rebuild
-      await this.withTenantDatabase(params, () =>
-        this.patch(id, { filesystem_status: 'creating' }, { ...params, provider: undefined })
+    if (branchPathExists) {
+      unarchivedBranch = await this.withTenantDatabase(params, () =>
+        this.patch(id, { filesystem_status: 'ready' }, {
+          ...params,
+          provider: undefined,
+          [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]: {
+            archived: false,
+            filesystemStatuses: ['creating'],
+            operationId: filesystemOperationId,
+          },
+        } as InternalBranchPatchParams)
       );
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: unarchivedBranch,
+        params,
+        id: unarchivedBranch.branch_id,
+      });
+    } else {
+      console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
 
       // Look up repo to get local_path
       const reposService = this.app.service('repos');
@@ -1882,13 +2059,24 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           `Cannot unarchive clone-mode branch '${branch.name}' for repo '${repo.slug}': ` +
           `repo has no remote_url. The clone source URL is unknown.`;
         console.error(`⚠️  ${errMsg}`);
-        await this.withTenantDatabase(params, () =>
-          this.patch(
-            id,
-            { filesystem_status: 'failed', error_message: errMsg },
-            { ...params, provider: undefined }
-          )
+        unarchivedBranch = await this.withTenantDatabase(params, () =>
+          this.patch(id, { filesystem_status: 'failed', error_message: errMsg }, {
+            ...params,
+            provider: undefined,
+            [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]: {
+              archived: false,
+              filesystemStatuses: ['creating'],
+              operationId: filesystemOperationId,
+            },
+          } as InternalBranchPatchParams)
         );
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'patched',
+          data: unarchivedBranch,
+          params,
+          id: unarchivedBranch.branch_id,
+        });
         return unarchivedBranch;
       }
 
@@ -1898,7 +2086,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // is performed by a non-admin user.
         const sessionToken = generateScopedServiceToken(
           this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
+          {
+            command: 'git.branch.add',
+            branch_id: branch.branch_id,
+            repo_id: repo.repo_id,
+            filesystem_operation_id: filesystemOperationId,
+          }
         );
         spawnExecutor(
           {
@@ -1908,6 +2101,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             params: {
               branchId: branch.branch_id,
               repoId: repo.repo_id,
+              filesystemOperationId,
               // Use restore mode: checks if branch exists on remote via ls-remote,
               // checks out existing branch if found, otherwise creates new branch from base_ref.
               // This is safe because it only creates a new branch when ls-remote confirms
@@ -1934,13 +2128,28 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
         // Mark as failed so the UI can show the error state
         const errMsg = error instanceof Error ? error.message : String(error);
-        await this.withTenantDatabase(params, () =>
+        unarchivedBranch = await this.withTenantDatabase(params, () =>
           this.patch(
             id,
             { filesystem_status: 'failed', error_message: `Failed to spawn executor: ${errMsg}` },
-            { ...params, provider: undefined }
+            {
+              ...params,
+              provider: undefined,
+              [BRANCH_PATCH_EXPECT_FILESYSTEM_LIFECYCLE]: {
+                archived: false,
+                filesystemStatuses: ['creating'],
+                operationId: filesystemOperationId,
+              },
+            } as InternalBranchPatchParams
           )
         );
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'patched',
+          data: unarchivedBranch,
+          params,
+          id: unarchivedBranch.branch_id,
+        });
       }
     }
 

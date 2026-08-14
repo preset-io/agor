@@ -4,7 +4,13 @@
  * Tests for type-safe CRUD operations on branches with short ID support.
  */
 
-import type { BoardID, BranchID, BranchStorageMode, UUID } from '@agor/core/types';
+import type {
+  BoardID,
+  BranchFilesystemOperationID,
+  BranchID,
+  BranchStorageMode,
+  UUID,
+} from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
 import { boards } from '../schema';
@@ -770,6 +776,59 @@ describe('BranchRepository.findByRepoAndName', () => {
 // ============================================================================
 
 describe('BranchRepository.update', () => {
+  dbTest('preserves execution identity fields across direct repository updates', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create({
+      ...createBranchData({ repo_id: repo.repo_id }),
+      created_by: generateId() as UUID,
+      branch_unique_id: 7301,
+    });
+
+    const updated = await branchRepo.update(branch.branch_id, {
+      created_by: generateId() as UUID,
+      branch_unique_id: 999_999,
+    });
+
+    expect(updated.created_by).toBe(branch.created_by);
+    expect(updated.branch_unique_id).toBe(7301);
+  });
+
+  dbTest('rejects a stale filesystem operation generation', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const currentOperationId = generateId() as BranchFilesystemOperationID;
+    const branch = await branchRepo.create({
+      ...createBranchData({ repo_id: repo.repo_id }),
+      archived: false,
+      filesystem_status: 'creating',
+      filesystem_operation_id: currentOperationId,
+    });
+
+    await expect(
+      branchRepo.update(
+        branch.branch_id,
+        { filesystem_status: 'ready' },
+        {
+          expectedFilesystemLifecycle: {
+            archived: false,
+            filesystemStatuses: ['creating'],
+            operationId: generateId() as BranchFilesystemOperationID,
+          },
+        }
+      )
+    ).rejects.toMatchObject({
+      name: 'BranchFilesystemLifecycleConflictError',
+      currentOperationId,
+    });
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      filesystem_status: 'creating',
+      filesystem_operation_id: currentOperationId,
+    });
+  });
+
   dbTest(
     'atomically rejects a forbidden filesystem status before unarchive writes',
     async ({ db }) => {
@@ -787,10 +846,16 @@ describe('BranchRepository.update', () => {
         branchRepo.update(
           branch.branch_id,
           { archived: false, filesystem_status: undefined },
-          { rejectFilesystemStatuses: ['deleting'] }
+          {
+            expectedFilesystemLifecycle: {
+              archived: true,
+              filesystemStatuses: ['delete_failed'],
+              operationId: null,
+            },
+          }
         )
       ).rejects.toMatchObject({
-        name: 'BranchFilesystemStatusConflictError',
+        name: 'BranchFilesystemLifecycleConflictError',
         branchId: branch.branch_id,
         currentStatus: 'deleting',
       });
@@ -1047,6 +1112,43 @@ describe('BranchRepository.update', () => {
     await expect(wtRepo.update('99999999', { notes: 'Updated' })).rejects.toThrow(
       EntityNotFoundError
     );
+  });
+});
+
+describe('BranchRepository.delete lifecycle precondition', () => {
+  dbTest('retains metadata when the filesystem generation changed', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const currentOperationId = generateId() as BranchFilesystemOperationID;
+    const branch = await branchRepo.create({
+      ...createBranchData({ repo_id: repo.repo_id }),
+      archived: true,
+      filesystem_status: 'deleted',
+      filesystem_operation_id: currentOperationId,
+    });
+
+    await expect(
+      branchRepo.delete(branch.branch_id, {
+        expectedFilesystemLifecycle: {
+          archived: true,
+          filesystemStatuses: ['deleted'],
+          operationId: generateId() as BranchFilesystemOperationID,
+        },
+      })
+    ).rejects.toMatchObject({ name: 'BranchFilesystemLifecycleConflictError' });
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      filesystem_operation_id: currentOperationId,
+    });
+
+    await branchRepo.delete(branch.branch_id, {
+      expectedFilesystemLifecycle: {
+        archived: true,
+        filesystemStatuses: ['deleted'],
+        operationId: currentOperationId,
+      },
+    });
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toBeNull();
   });
 });
 

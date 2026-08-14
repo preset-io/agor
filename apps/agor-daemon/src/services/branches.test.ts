@@ -1,6 +1,6 @@
 import {
   BoardRepository,
-  BranchFilesystemStatusConflictError,
+  BranchFilesystemLifecycleConflictError,
   BranchRepository,
   type Database,
   GroupRepository,
@@ -111,7 +111,11 @@ function createPatchHarness(opts: {
   const branchId = opts.current.branch_id as BranchID;
   const repository = {
     findById: vi.fn(async () => opts.current),
-    update: vi.fn(async () => opts.updated),
+    update: vi.fn(async (_id: string, data: Record<string, unknown>) => ({
+      ...opts.current,
+      ...opts.updated,
+      ...data,
+    })),
     create: vi.fn(),
     findAll: vi.fn(async () => []),
     delete: vi.fn(),
@@ -133,7 +137,10 @@ function createPatchHarness(opts: {
   const service = new BranchesService(createTenantScopeTestDb() as never, app);
   (service as unknown as { repository: typeof repository }).repository = repository;
   (service as unknown as { boardRepo: typeof boardRepo }).boardRepo = boardRepo;
-  (service as unknown as { branchRepo: { enrichWithZoneInfo: typeof vi.fn } }).branchRepo = {
+  (
+    service as unknown as { branchRepo: typeof repository & { enrichWithZoneInfo: typeof vi.fn } }
+  ).branchRepo = {
+    ...repository,
     enrichWithZoneInfo: vi.fn(async (branch) => branch),
   } as never;
   vi.spyOn(service as never, 'computeDefaultBoardPositionForBranch').mockResolvedValue({
@@ -918,6 +925,34 @@ describe('BranchesService.patch primary teammate invariants', () => {
     expect(repository.update).not.toHaveBeenCalled();
   });
 
+  it('cannot repoint same-tenant execution identity to another user', async () => {
+    const branchId = 'branch-attacker' as BranchID;
+    const { service, repository } = createPatchHarness({
+      current: {
+        branch_id: branchId,
+        repo_id: 'repo-1',
+        name: 'attacker',
+        ref: 'attacker',
+        path: '/tenant-a/worktrees/org/repo/attacker',
+        new_branch: true,
+        storage_mode: 'clone',
+        created_by: 'user-attacker',
+        branch_unique_id: 42,
+      },
+      updated: {},
+    });
+
+    await expect(
+      service.patch(branchId, { created_by: 'user-victim' as UUID }, {
+        provider: 'rest',
+        user: { user_id: 'user-attacker' },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never)
+    ).rejects.toThrow(/created_by.*immutable/i);
+
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
   it('clears the old primary and sets the new board primary when a teammate moves boards', async () => {
     const boardA = 'board-a' as BoardID;
     const boardB = 'board-b' as BoardID;
@@ -1166,7 +1201,8 @@ describe('BranchesService.unarchive', () => {
         archived: false,
         archived_at: undefined,
         archived_by: undefined,
-        filesystem_status: undefined,
+        filesystem_status: 'creating',
+        filesystem_operation_id: expect.any(String),
         error_message: undefined,
       }),
       expect.objectContaining({ provider: undefined })
@@ -1265,10 +1301,10 @@ describe('BranchesService.unarchive', () => {
       storage_mode: 'clone',
     } as never);
     vi.spyOn(service, 'patch').mockRejectedValue(
-      new BranchFilesystemStatusConflictError(branchId, 'deleting')
+      new BranchFilesystemLifecycleConflictError(branchId, 'deleting', true, undefined)
     );
 
-    await expect(service.unarchive(branchId)).rejects.toThrow(/still in progress/i);
+    await expect(service.unarchive(branchId)).rejects.toThrow(/changed concurrently/i);
     expect(mockedRunExecutorCommand).not.toHaveBeenCalled();
   });
 });
@@ -1565,7 +1601,12 @@ describe('BranchesService.archiveOrDelete', () => {
       } as never)
     ).rejects.toThrow(/metadata was retained/i);
 
-    expect(patches).toContainEqual({ filesystem_status: 'deleting' });
+    expect(patches).toContainEqual(
+      expect.objectContaining({
+        filesystem_status: 'deleting',
+        filesystem_operation_id: expect.any(String),
+      })
+    );
     expect(patches).toContainEqual({
       filesystem_status: 'delete_failed',
       error_message: expect.stringContaining('sudoers'),
@@ -1590,10 +1631,13 @@ describe('BranchesService.archiveOrDelete', () => {
       new_branch: true,
       environment_instance: { status: 'stopped' },
     } as never);
-    const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue({
-      branch_id: branchId,
-      filesystem_status: 'deleting',
-    } as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockImplementation(
+      async (_id, data) =>
+        ({
+          branch_id: branchId,
+          ...(data as Record<string, unknown>),
+        }) as never
+    );
     const removeSpy = vi
       .spyOn(service, 'remove')
       .mockResolvedValue({ branch_id: branchId } as never);
@@ -1613,7 +1657,10 @@ describe('BranchesService.archiveOrDelete', () => {
 
     expect(patchSpy).toHaveBeenCalledWith(
       branchId,
-      { filesystem_status: 'deleting' },
+      expect.objectContaining({
+        filesystem_status: 'deleting',
+        filesystem_operation_id: expect.any(String),
+      }),
       expect.anything()
     );
     expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
@@ -1659,6 +1706,65 @@ describe('BranchesService.archiveOrDelete', () => {
 });
 
 describe('BranchesService.remove filesystem precondition', () => {
+  it('does not delete metadata while another filesystem lifecycle owns the branch', async () => {
+    const branchId = 'wt-remove-during-creation' as BranchID;
+    const current = {
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'WT Remove During Creation',
+      ref: 'feature',
+      path: '/safe/worktrees/repo/feature',
+      archived: false,
+      filesystem_status: 'creating',
+      filesystem_operation_id: '019ffe00-0000-7000-8000-000000000099',
+      environment_instance: { status: 'stopped' },
+    };
+    const { service, repository } = createPatchHarness({ current, updated: current });
+
+    await expect(
+      service.remove(branchId, {
+        user: { user_id: 'user-1' },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never)
+    ).rejects.toThrow(/creation is still in progress/i);
+    expect(repository.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not let an archive-cleanup executor remove retained metadata', async () => {
+    const branchId = 'wt-archive-cleanup-token' as BranchID;
+    const operationId = '019ffe00-0000-7000-8000-000000000099';
+    const current = {
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'WT Archive Cleanup Token',
+      ref: 'feature',
+      path: '/safe/worktrees/repo/feature',
+      archived: true,
+      filesystem_status: 'deleted',
+      filesystem_operation_id: operationId,
+      environment_instance: { status: 'stopped' },
+    };
+    const { service, repository } = createPatchHarness({ current, updated: current });
+
+    await expect(
+      service.remove(branchId, {
+        provider: 'socketio',
+        authentication: {
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            session_id: 'branch-delete',
+            branch_id: branchId,
+            filesystem_operation_id: operationId,
+          },
+        },
+        user: { user_id: 'user-1' },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never)
+    ).rejects.toThrow(/cannot remove branch metadata/i);
+    expect(repository.delete).not.toHaveBeenCalled();
+  });
+
   it('retains the row when an explicit REST/socket filesystem delete fails', async () => {
     const branchId = 'wt-remove-delete-failure' as BranchID;
     const current = {
@@ -1692,7 +1798,8 @@ describe('BranchesService.remove filesystem precondition', () => {
 
     expect(repository.update).toHaveBeenCalledWith(
       branchId,
-      expect.objectContaining({ filesystem_status: 'deleting' })
+      expect.objectContaining({ filesystem_status: 'deleting' }),
+      expect.objectContaining({ expectedFilesystemLifecycle: expect.any(Object) })
     );
     expect(repository.delete).not.toHaveBeenCalled();
   });

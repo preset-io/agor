@@ -11,6 +11,7 @@ export type ExecutorSessionTokenPayload = JwtPayload & {
   sessionId?: string;
   task_id?: string;
   branch_id?: string;
+  filesystem_operation_id?: string;
 };
 
 export function isExecutorSessionTokenPayload(

@@ -57,6 +57,7 @@ describe('protectExternalBranchManagedWrites', () => {
       executorTaskId?: string;
       serviceBranchId?: string;
       serviceCommand?: string;
+      omitFilesystemOperationId?: boolean;
     } = { provider: 'rest' }
   ) =>
     ({
@@ -76,6 +77,11 @@ describe('protectExternalBranchManagedWrites', () => {
                   session_id: options.executorSessionId ?? 'branch-delete',
                   ...(options.executorTaskId ? { task_id: options.executorTaskId } : {}),
                   branch_id: options.executorBranchId,
+                  ...(options.omitFilesystemOperationId
+                    ? {}
+                    : {
+                        filesystem_operation_id: '019ffe00-0000-7000-8000-000000000099',
+                      }),
                 },
               },
             }
@@ -90,6 +96,11 @@ describe('protectExternalBranchManagedWrites', () => {
                   role: 'service',
                   command: options.serviceCommand ?? 'git.branch.add',
                   branch_id: options.serviceBranchId,
+                  ...(options.omitFilesystemOperationId
+                    ? {}
+                    : {
+                        filesystem_operation_id: '019ffe00-0000-7000-8000-000000000099',
+                      }),
                 },
               },
             }
@@ -97,16 +108,22 @@ describe('protectExternalBranchManagedWrites', () => {
       },
     }) as HookContext;
 
-  it.each(['path', 'storage_mode', 'ref', 'new_branch'])(
-    'rejects external mutation of destructive identity field %s',
-    (field) => {
-      expect(() =>
-        protectExternalBranchManagedWrites(
-          context({ [field]: field === 'path' ? '/tenant-a/worktrees/org/repo/victim' : 'forged' })
-        )
-      ).toThrow(/immutable/);
-    }
-  );
+  it.each([
+    'branch_id',
+    'created_at',
+    'path',
+    'storage_mode',
+    'ref',
+    'new_branch',
+    'created_by',
+    'branch_unique_id',
+  ])('rejects external mutation of destructive identity field %s', (field) => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context({ [field]: field === 'path' ? '/tenant-a/worktrees/org/repo/victim' : 'forged' })
+      )
+    ).toThrow(/immutable/);
+  });
 
   it('rejects lifecycle forgery by a normal branch owner', () => {
     expect(() =>
@@ -128,6 +145,73 @@ describe('protectExternalBranchManagedWrites', () => {
       { provider: 'socketio', serviceBranchId: 'branch-attacker' }
     );
     expect(protectExternalBranchManagedWrites(hook)).toBe(hook);
+  });
+
+  it('does not let a lifecycle executor smuggle the operation generation beside status', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          {
+            filesystem_status: 'ready',
+            filesystem_operation_id: '019ffe00-0000-7000-8000-000000000100',
+          },
+          { provider: 'socketio', serviceBranchId: 'branch-attacker' }
+        )
+      )
+    ).toThrow(/filesystem_operation_id/);
+  });
+
+  it('does not let a Unix-group executor smuggle another daemon-owned field', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { unix_group: 'agor_wt_valid', environment_instance: { status: 'running' } },
+          { provider: 'socketio', serviceBranchId: 'branch-attacker' }
+        )
+      )
+    ).toThrow(/environment_instance/);
+  });
+
+  it('rejects lifecycle executors without an operation generation', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'deleted' },
+          {
+            provider: 'socketio',
+            executorBranchId: 'branch-attacker',
+            omitFilesystemOperationId: true,
+          }
+        )
+      )
+    ).toThrow(/branch-scoped/);
+  });
+
+  it('restricts creation and deletion credentials to their terminal states', () => {
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'deleted' },
+          { provider: 'socketio', serviceBranchId: 'branch-attacker' }
+        )
+      )
+    ).toThrow(/lifecycle/);
+    expect(() =>
+      protectExternalBranchManagedWrites(
+        context(
+          { filesystem_status: 'ready' },
+          { provider: 'socketio', executorBranchId: 'branch-attacker' }
+        )
+      )
+    ).toThrow(/lifecycle/);
+  });
+
+  it('rejects client writes to daemon-owned runtime fields', () => {
+    for (const field of ['updated_at', 'url', 'unix_group', 'environment_instance'] as const) {
+      expect(() => protectExternalBranchManagedWrites(context({ [field]: 'forged' }))).toThrow(
+        /daemon/
+      );
+    }
   });
 
   it('rejects lifecycle state from an unrelated service command', () => {

@@ -2,12 +2,12 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
-import type { BranchID, TenantID } from '../types';
+import type { BranchFilesystemOperationID, BranchID, TenantID } from '../types';
 import { createDatabase, type Database } from './client';
 import { lockRowForUpdate, txAsDb, update } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import {
-  BranchFilesystemStatusConflictError,
+  BranchFilesystemLifecycleConflictError,
   BranchRepository,
   RepoRepository,
   UsersRepository,
@@ -97,11 +97,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         new BranchRepository(scoped).update(
           branch.branch_id,
           { archived: false, filesystem_status: undefined },
-          { rejectFilesystemStatuses: ['deleting'] }
+          {
+            expectedFilesystemLifecycle: {
+              archived: true,
+              filesystemStatuses: ['delete_failed'],
+              operationId: null,
+            },
+          }
         )
       );
       const unarchiveAssertion = expect(unarchiveTransition).rejects.toBeInstanceOf(
-        BranchFilesystemStatusConflictError
+        BranchFilesystemLifecycleConflictError
       );
 
       releaseDeletion();
@@ -113,6 +119,88 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           new BranchRepository(scoped).findById(branch.branch_id)
         )
       ).resolves.toMatchObject({ archived: true, filesystem_status: 'deleting' });
+    });
+
+    it('allows exactly one unarchive generation and rejects stale executor results', async () => {
+      const tenantId = `branch-unarchive-generation-${generateId()}` as TenantID;
+      const branch = await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        const user = await new UsersRepository(scoped).create({
+          email: `${generateId()}@example.com`,
+          name: 'Branch unarchive generation',
+        });
+        const repo = await new RepoRepository(scoped).create({
+          repo_id: generateId(),
+          slug: `branch-unarchive-generation-${generateId()}`,
+          name: 'Branch unarchive generation',
+          repo_type: 'remote',
+          remote_url: 'https://example.invalid/repo.git',
+          local_path: `/tmp/${generateId()}`,
+          default_branch: 'main',
+        });
+        return new BranchRepository(scoped).create({
+          branch_id: generateId() as BranchID,
+          repo_id: repo.repo_id,
+          name: `branch-unarchive-generation-${generateId()}`,
+          ref: 'main',
+          branch_unique_id: (Date.now() + 1) % 2_000_000_000,
+          path: `/tmp/${generateId()}`,
+          created_by: user.user_id,
+          archived: true,
+          filesystem_status: 'deleted',
+        });
+      });
+      const firstOperationId = generateId() as BranchFilesystemOperationID;
+      const secondOperationId = generateId() as BranchFilesystemOperationID;
+      const reserve = (db: Database, operationId: BranchFilesystemOperationID) =>
+        runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new BranchRepository(scoped).update(
+            branch.branch_id,
+            {
+              archived: false,
+              filesystem_status: 'creating',
+              filesystem_operation_id: operationId,
+            },
+            {
+              expectedFilesystemLifecycle: {
+                archived: true,
+                filesystemStatuses: ['deleted'],
+                operationId: null,
+              },
+            }
+          )
+        );
+
+      const reservations = await Promise.allSettled([
+        reserve(dbA, firstOperationId),
+        reserve(dbB, secondOperationId),
+      ]);
+      expect(reservations.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      const rejected = reservations.find((result) => result.status === 'rejected');
+      expect(rejected).toMatchObject({
+        status: 'rejected',
+        reason: expect.objectContaining({ name: 'BranchFilesystemLifecycleConflictError' }),
+      });
+
+      const winner = reservations.find((result) => result.status === 'fulfilled');
+      const winningOperationId =
+        winner?.status === 'fulfilled' ? winner.value.filesystem_operation_id : undefined;
+      const staleOperationId =
+        winningOperationId === firstOperationId ? secondOperationId : firstOperationId;
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new BranchRepository(scoped).update(
+            branch.branch_id,
+            { filesystem_status: 'ready' },
+            {
+              expectedFilesystemLifecycle: {
+                archived: false,
+                filesystemStatuses: ['creating'],
+                operationId: staleOperationId,
+              },
+            }
+          )
+        )
+      ).rejects.toBeInstanceOf(BranchFilesystemLifecycleConflictError);
     });
   }
 );

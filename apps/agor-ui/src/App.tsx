@@ -1433,9 +1433,7 @@ function AppContent() {
   ) => {
     if (!client) return;
     try {
-      // Cast to Partial<Branch> to satisfy Feathers type checking
-      // The backend MCP handler properly handles null values for clearing fields
-      await client.service('branches').patch(branchId, updates as Partial<Branch>);
+      await client.service('branches').patch(branchId, updates);
       if (!options.silent) showSuccess('Branch updated successfully!');
     } catch (error) {
       showError(

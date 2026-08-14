@@ -1,5 +1,11 @@
-import { Forbidden } from '@agor/core/feathers';
-import type { AuthenticatedParams, BranchID, HookContext, Params } from '@agor/core/types';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
+import type { AuthenticatedParams, Branch, BranchID, HookContext, Params } from '@agor/core/types';
+import {
+  BRANCH_ARCHIVE_LIFECYCLE_FIELDS,
+  BRANCH_FILESYSTEM_LIFECYCLE_FIELDS,
+  BRANCH_IMMUTABLE_FIELDS,
+  BRANCH_SERVER_MANAGED_FIELDS,
+} from '@agor/core/types';
 import {
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
@@ -53,28 +59,62 @@ export function isBranchScopedExecutorRequest(context: HookContext, branchId: st
   return scopedPayload(context)?.branch_id === branchId;
 }
 
-type BranchFilesystemLifecycleServicePayload = {
+type BranchExecutorServicePayload = {
   type: 'service';
   sub: 'executor-service';
   purpose: 'executor-service';
   role: 'service';
-  command: 'git.branch.add';
+  command: string;
   branch_id: string;
+  filesystem_operation_id?: string;
 };
 
-function isBranchFilesystemLifecycleServicePayload(
-  value: unknown
-): value is BranchFilesystemLifecycleServicePayload {
+function isBranchExecutorServicePayload(value: unknown): value is BranchExecutorServicePayload {
   if (!value || typeof value !== 'object') return false;
-  const payload = value as Partial<BranchFilesystemLifecycleServicePayload>;
+  const payload = value as Partial<BranchExecutorServicePayload>;
   return (
     payload.type === 'service' &&
     payload.sub === 'executor-service' &&
     payload.purpose === 'executor-service' &&
     payload.role === 'service' &&
-    payload.command === 'git.branch.add' &&
+    typeof payload.command === 'string' &&
     typeof payload.branch_id === 'string'
   );
+}
+
+export type BranchFilesystemLifecycleCapability =
+  | { kind: 'create'; operationId: string }
+  | { kind: 'delete'; operationId: string; metadataRemovalAllowed: boolean };
+
+export function getBranchFilesystemLifecycleCapability(
+  params: AuthenticatedParams,
+  branchId: string
+): BranchFilesystemLifecycleCapability | null {
+  const context = { params } as HookContext;
+  const executorPayload = scopedPayload(context);
+  if (
+    executorPayload?.branch_id === branchId &&
+    executorPayload.task_id === undefined &&
+    typeof executorPayload.filesystem_operation_id === 'string' &&
+    (executorPayload.session_id === 'branch-delete' ||
+      executorPayload.session_id === 'branch-remove')
+  ) {
+    return {
+      kind: 'delete',
+      operationId: executorPayload.filesystem_operation_id,
+      metadataRemovalAllowed: executorPayload.session_id === 'branch-remove',
+    };
+  }
+  const payload = params.authentication?.payload;
+  if (
+    isBranchExecutorServicePayload(payload) &&
+    payload.command === 'git.branch.add' &&
+    payload.branch_id === branchId &&
+    typeof payload.filesystem_operation_id === 'string'
+  ) {
+    return { kind: 'create', operationId: payload.filesystem_operation_id };
+  }
+  return null;
 }
 
 /**
@@ -87,17 +127,71 @@ export function isBranchFilesystemLifecycleExecutorRequest(
   context: HookContext,
   branchId: string
 ): boolean {
-  const executorPayload = scopedPayload(context);
-  if (
-    executorPayload?.branch_id === branchId &&
-    executorPayload.task_id === undefined &&
-    (executorPayload.session_id === 'branch-delete' ||
-      executorPayload.session_id === 'branch-remove')
-  ) {
-    return true;
-  }
+  return (
+    getBranchFilesystemLifecycleCapability(context.params as AuthenticatedParams, branchId) !== null
+  );
+}
+
+/** Whether an executor service credential may stamp this branch's Unix group. */
+export function isBranchUnixGroupExecutorRequest(context: HookContext, branchId: string): boolean {
   const payload = (context.params as AuthenticatedParams).authentication?.payload;
-  return isBranchFilesystemLifecycleServicePayload(payload) && payload.branch_id === branchId;
+  return (
+    isBranchExecutorServicePayload(payload) &&
+    payload.branch_id === branchId &&
+    (payload.command === 'git.branch.add' || payload.command === 'unix.sync-branch')
+  );
+}
+
+/** Canonical runtime boundary for every externally transported branch patch. */
+export function validateBranchExternalManagedPatch(
+  params: AuthenticatedParams,
+  branchId: string,
+  data: Partial<Branch>
+): void {
+  if (!params.provider) return;
+  const fields = Object.keys(data);
+  const immutableField = BRANCH_IMMUTABLE_FIELDS.find((field) => fields.includes(field));
+  if (immutableField) {
+    throw new BadRequest(
+      `Branch field '${immutableField}' is assigned at creation and is immutable`
+    );
+  }
+
+  const archiveField = BRANCH_ARCHIVE_LIFECYCLE_FIELDS.find((field) => fields.includes(field));
+  if (archiveField) {
+    throw new BadRequest(
+      `Branch field '${archiveField}' is managed by archive lifecycle operations`
+    );
+  }
+
+  const filesystemFields = BRANCH_FILESYSTEM_LIFECYCLE_FIELDS.filter((field) =>
+    fields.includes(field)
+  );
+  if (filesystemFields.length > 0) {
+    const capability = getBranchFilesystemLifecycleCapability(params, branchId);
+    const status = data.filesystem_status;
+    const statusAllowed =
+      status === undefined ||
+      (capability?.kind === 'create' && (status === 'ready' || status === 'failed')) ||
+      (capability?.kind === 'delete' && (status === 'deleted' || status === 'delete_failed'));
+    const forbiddenField = filesystemFields.find((field) => field === 'filesystem_operation_id');
+    if (!capability || forbiddenField || !statusAllowed) {
+      throw new BadRequest(
+        `Branch field '${forbiddenField ?? filesystemFields[0]}' is managed by branch-scoped filesystem lifecycle operations`
+      );
+    }
+  }
+
+  const serverManagedFields = BRANCH_SERVER_MANAGED_FIELDS.filter((field) =>
+    fields.includes(field)
+  );
+  const context = { params } as HookContext;
+  const forbiddenServerManagedField = serverManagedFields.find(
+    (field) => field !== 'unix_group' || !isBranchUnixGroupExecutorRequest(context, branchId)
+  );
+  if (forbiddenServerManagedField) {
+    throw new BadRequest(`Branch field '${forbiddenServerManagedField}' is managed by the daemon`);
+  }
 }
 
 /** Whether this request carries a validated executor-session scope. */

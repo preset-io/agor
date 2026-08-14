@@ -279,6 +279,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
     /** Branch ID (UUID) - DB record already exists with filesystem_status: 'creating' */
     branchId: z.string().uuid(),
 
+    /** UUID generation that owns this materialization attempt. */
+    filesystemOperationId: z.string().uuid(),
+
     /** Repo ID (UUID) */
     repoId: z.string().uuid(),
 
@@ -325,6 +328,9 @@ export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     /** Branch ID (UUID) - required for DB record deletion */
     branchId: z.string().uuid(),
+
+    /** UUID generation that owns this deletion attempt. */
+    filesystemOperationId: z.string().uuid(),
 
     /** Path to the branch to remove */
     branchPath: z.string(),

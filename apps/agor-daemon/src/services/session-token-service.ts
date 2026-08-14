@@ -224,7 +224,12 @@ export class SessionTokenService {
   async generateToken(
     sessionId: string,
     userId: string,
-    scope: { taskId?: string; branchId?: string; maxUses?: number } = {}
+    scope: {
+      taskId?: string;
+      branchId?: string;
+      filesystemOperationId?: string;
+      maxUses?: number;
+    } = {}
   ): Promise<string> {
     if (!this.jwtSecret) {
       throw new Error('SessionTokenService: JWT secret not set. Call setJwtSecret() first.');
@@ -249,6 +254,7 @@ export class SessionTokenService {
       session_id: sessionId,
       task_id: scope.taskId,
       branch_id: scope.branchId,
+      filesystem_operation_id: scope.filesystemOperationId,
       // Ensure two otherwise-identical issuances in the same second produce
       // distinct bearer credentials and authority rows.
       jti: randomUUID(),

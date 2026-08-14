@@ -4,7 +4,7 @@
  * Update issue URL, PR URL, notes, and other metadata fields.
  */
 
-import type { Branch } from '@agor-live/client';
+import type { BranchClientPatch } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -54,7 +54,7 @@ export default class BranchUpdate extends BaseCommand {
       const branchesService = client.service('branches');
 
       // Build update object
-      const updates: Partial<Branch> = {};
+      const updates: BranchClientPatch = {};
       if (flags.issue !== undefined) updates.issue_url = flags.issue;
       if (flags.pr !== undefined) updates.pull_request_url = flags.pr;
       if (flags.notes !== undefined) updates.notes = flags.notes;

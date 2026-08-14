@@ -52,6 +52,7 @@ describe('branch filesystem lifecycle executor scope', () => {
     service.setJwtSecret(secret);
     const token = await service.generateToken(kind, 'user-1', {
       branchId: 'branch-1',
+      filesystemOperationId: '019ffe00-0000-7000-8000-000000000099',
       maxUses: -1,
     });
     const decoded = jwt.decode(token) as Record<string, unknown>;
@@ -65,12 +66,42 @@ describe('branch filesystem lifecycle executor scope', () => {
     const token = createServiceToken(secret, '5m', {
       command: 'git.branch.add',
       branch_id: 'branch-1',
+      filesystem_operation_id: '019ffe00-0000-7000-8000-000000000099',
     });
     const decoded = jwt.decode(token) as Record<string, unknown>;
 
     expect(isBranchFilesystemLifecycleExecutorRequest(lifecycleCtx(decoded), 'branch-1')).toBe(
       true
     );
+  });
+
+  it('rejects lifecycle credentials that are not bound to an operation generation', async () => {
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: 1 },
+      { startCleanupTimer: false }
+    );
+    service.setJwtSecret(secret);
+    const deleteToken = await service.generateToken('branch-delete', 'user-1', {
+      branchId: 'branch-1',
+      maxUses: -1,
+    });
+    const createToken = createServiceToken(secret, '5m', {
+      command: 'git.branch.add',
+      branch_id: 'branch-1',
+    });
+
+    expect(
+      isBranchFilesystemLifecycleExecutorRequest(
+        lifecycleCtx(jwt.decode(deleteToken) as Record<string, unknown>),
+        'branch-1'
+      )
+    ).toBe(false);
+    expect(
+      isBranchFilesystemLifecycleExecutorRequest(
+        lifecycleCtx(jwt.decode(createToken) as Record<string, unknown>),
+        'branch-1'
+      )
+    ).toBe(false);
   });
 
   it('rejects an actual ordinary task token even on the same branch', async () => {

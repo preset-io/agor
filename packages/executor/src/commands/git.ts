@@ -64,7 +64,7 @@ import type {
   GitRepoRealignOriginPayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
-import { createExecutorClient } from '../services/feathers-client.js';
+import { createExecutorClient, getExecutorBranchesService } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 import {
   fixBranchGitDirPermissionsBasic,
@@ -1027,6 +1027,7 @@ export async function handleGitBranchAdd(
   }
 
   let client: AgorClient | null = null;
+  let lifecycleOwnershipVerified = false;
 
   try {
     // Connect to daemon
@@ -1037,11 +1038,19 @@ export async function handleGitBranchAdd(
     // Resolve filesystem-bearing repository metadata through the scoped
     // service token in this same executor. This makes authorization, trusted
     // path resolution, credential scrub, and materialization one operation.
-    const repo = await client.service('repos').get(payload.params.repoId);
     const branchRecord = await client.service('branches').get(branchId);
     if (branchRecord.repo_id !== payload.params.repoId) {
       throw new Error(`Branch ${branchId} does not belong to repository ${payload.params.repoId}`);
     }
+    if (
+      branchRecord.archived ||
+      branchRecord.filesystem_status !== 'creating' ||
+      branchRecord.filesystem_operation_id !== payload.params.filesystemOperationId
+    ) {
+      throw new BranchFilesystemOperationSupersededError('creation');
+    }
+    lifecycleOwnershipVerified = true;
+    const repo = await client.service('repos').get(payload.params.repoId);
 
     // Fetch per-user git credentials via Feathers RPC
     const env = await fetchUserGitEnvironment(client, payload.params.userId);
@@ -1219,7 +1228,7 @@ export async function handleGitBranchAdd(
     // Patch branch status to 'ready' (DB record was created by daemon with 'creating')
     if (branchId) {
       console.log(`[git.branch.add] Marking branch ${shortId(branchId)} as ready`);
-      await client.service('branches').patch(branchId, {
+      await getExecutorBranchesService(client).patch(branchId, {
         filesystem_status: 'ready',
         ...(unixGroup ? { unix_group: unixGroup } : {}),
         ...(renderedTemplates || {}),
@@ -1251,7 +1260,7 @@ export async function handleGitBranchAdd(
     const fallbackPath = resolvedBranchPath;
     let fallbackCreated = false;
     let fallbackPermissionsApplied = false;
-    if (fallbackPath) {
+    if (fallbackPath && lifecycleOwnershipVerified) {
       // Step 1: Ensure directory exists
       if (!existsSync(fallbackPath)) {
         try {
@@ -1306,9 +1315,9 @@ export async function handleGitBranchAdd(
     }
 
     // Try to mark branch as failed with error details (if we have a branchId and client)
-    if (branchId && client) {
+    if (branchId && client && lifecycleOwnershipVerified) {
       try {
-        await client.service('branches').patch(branchId, {
+        await getExecutorBranchesService(client).patch(branchId, {
           filesystem_status: 'failed',
           error_message: userMessage,
         });
@@ -1348,6 +1357,13 @@ export async function handleGitBranchAdd(
   }
 }
 
+class BranchFilesystemOperationSupersededError extends Error {
+  constructor(operation: 'creation' | 'deletion') {
+    super(`Branch filesystem ${operation} no longer owns the current lifecycle generation`);
+    this.name = 'BranchFilesystemOperationSupersededError';
+  }
+}
+
 /**
  * Handle git.branch.remove command
  *
@@ -1361,7 +1377,8 @@ export function sanitizeBranchDeletionError(error: unknown): string {
 
   if (
     normalized.includes('safety check failed') ||
-    normalized.includes('no longer matches the persisted branch')
+    normalized.includes('no longer matches the persisted branch') ||
+    normalized.includes('no longer owns the current lifecycle generation')
   ) {
     return 'Filesystem deletion was refused by a safety check. Review daemon diagnostics before retrying.';
   }
@@ -1415,6 +1432,12 @@ export async function handleGitBranchRemove(
     const branchPath = payload.params.branchPath;
     const branchesRoot = payload.params.branchesRoot;
     const persistedBranch = await client.service('branches').get(branchId);
+    if (
+      persistedBranch.filesystem_status !== 'deleting' ||
+      persistedBranch.filesystem_operation_id !== payload.params.filesystemOperationId
+    ) {
+      throw new BranchFilesystemOperationSupersededError('deletion');
+    }
     if (!persistedBranch.path || persistedBranch.path !== branchPath) {
       throw new Error('Deletion request no longer matches the persisted branch path');
     }
@@ -1606,7 +1629,7 @@ export async function handleGitBranchRemove(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
 
-    await client.service('branches').patch(branchId, {
+    await getExecutorBranchesService(client).patch(branchId, {
       filesystem_status: 'deleted',
     });
 
@@ -1638,9 +1661,9 @@ export async function handleGitBranchRemove(
     const userMessage = sanitizeBranchDeletionError(error);
     console.error('[git.branch.remove] Failed:', errorMessage);
 
-    if (client) {
+    if (client && !(error instanceof BranchFilesystemOperationSupersededError)) {
       try {
-        await client.service('branches').patch(payload.params.branchId, {
+        await getExecutorBranchesService(client).patch(payload.params.branchId, {
           filesystem_status: 'delete_failed',
           error_message: userMessage,
         });

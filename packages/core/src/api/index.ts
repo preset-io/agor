@@ -14,6 +14,7 @@ import type {
   BoardID,
   Branch,
   BranchArchiveOrDeleteOptions,
+  BranchClientPatch,
   BranchEnvironmentUpdate,
   BranchGroupGrantWithGroup,
   BranchID,
@@ -576,7 +577,13 @@ export interface UsersService extends AgorService<User> {
 /**
  * Branches service with environment management
  */
-export interface BranchesService extends AgorService<Branch> {
+export interface BranchesService
+  extends AgorService<
+    Branch,
+    CreatePayload<Branch>,
+    ClientInput<BranchClientPatch>,
+    ClientInput<BranchClientPatch> | null
+  > {
   /**
    * Create or repair the primary Knowledge namespace for a teammate branch.
    * API/UI-only; not exposed through teammate MCP config mutation tools.

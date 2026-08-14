@@ -343,7 +343,11 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
     params?: FeathersParams
   ): Promise<import('@agor/core/types').BranchArchiveOrDeleteResult>;
   /** Internal only; intentionally omitted from the branches transport methods. */
-  removeMetadataWithRealtime(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  removeMetadataWithRealtime(
+    id: BranchID,
+    params?: FeathersParams,
+    expectedFilesystemLifecycle?: import('@agor/core/db').BranchFilesystemLifecycleExpectation
+  ): Promise<Branch>;
   unarchive(
     id: BranchID,
     options?: { boardId?: import('@agor/core/types').BoardID },

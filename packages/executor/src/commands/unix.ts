@@ -44,7 +44,7 @@ import type {
   UnixSyncUserPayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
-import { createExecutorClient } from '../services/feathers-client.js';
+import { createExecutorClient, getExecutorBranchesService } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 
 const execAsync = promisify(exec);
@@ -475,6 +475,12 @@ export async function handleUnixSyncBranch(
         await runCommand(UnixGroupCommands.addUserToGroup(payload.params.daemonUser, groupName));
         console.log(`[unix.sync-branch] Added daemon user to branch group`);
       }
+    }
+
+    // Update branch record with group name
+    if (branch.unix_group !== groupName) {
+      await getExecutorBranchesService(client).patch(branchId, { unix_group: groupName });
+      console.log(`[unix.sync-branch] Updated branch record with unix_group`);
     }
 
     // Fetch and add all owners to branch group

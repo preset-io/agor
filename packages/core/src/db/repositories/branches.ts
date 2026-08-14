@@ -8,6 +8,7 @@ import type {
   AgenticToolName,
   BoardID,
   Branch,
+  BranchFilesystemOperationID,
   BranchFilesystemStatus,
   BranchFsAccessLevel,
   BranchID,
@@ -75,18 +76,54 @@ export interface BranchRepositoryUpdateOptions {
   preserveUpdatedAt?: boolean;
   /** Explicit lifecycle boundary, including starting -> starting retries. */
   invalidateEnvironmentObservation?: boolean;
-  /** Reject the update atomically when the locked row is in one of these states. */
-  rejectFilesystemStatuses?: readonly BranchFilesystemStatus[];
+  /** Compare against the row after its transaction lock is acquired. */
+  expectedFilesystemLifecycle?: BranchFilesystemLifecycleExpectation;
+}
+
+export interface BranchFilesystemLifecycleExpectation {
+  archived?: boolean;
+  filesystemStatuses?: readonly (BranchFilesystemStatus | undefined)[];
+  /** `null` means the row must not have an operation generation. */
+  operationId?: BranchFilesystemOperationID | null;
+}
+
+export interface BranchRepositoryDeleteOptions {
+  expectedFilesystemLifecycle?: BranchFilesystemLifecycleExpectation;
 }
 
 /** A lifecycle precondition changed before the repository acquired its row lock. */
-export class BranchFilesystemStatusConflictError extends RepositoryError {
+export class BranchFilesystemLifecycleConflictError extends RepositoryError {
   constructor(
     public readonly branchId: BranchID,
-    public readonly currentStatus: BranchFilesystemStatus
+    public readonly currentStatus: BranchFilesystemStatus | undefined,
+    public readonly currentArchived: boolean,
+    public readonly currentOperationId: BranchFilesystemOperationID | undefined
   ) {
-    super(`Branch ${branchId} filesystem status is ${currentStatus}`);
-    this.name = 'BranchFilesystemStatusConflictError';
+    super(`Branch ${branchId} filesystem lifecycle changed concurrently`);
+    this.name = 'BranchFilesystemLifecycleConflictError';
+  }
+}
+
+function assertExpectedFilesystemLifecycle(
+  current: Branch,
+  expected: BranchFilesystemLifecycleExpectation | undefined
+): void {
+  if (!expected) return;
+  const archivedMismatch =
+    expected.archived !== undefined && Boolean(current.archived) !== expected.archived;
+  const statusMismatch =
+    expected.filesystemStatuses !== undefined &&
+    !expected.filesystemStatuses.includes(current.filesystem_status);
+  const operationMismatch =
+    expected.operationId !== undefined &&
+    (current.filesystem_operation_id ?? null) !== expected.operationId;
+  if (archivedMismatch || statusMismatch || operationMismatch) {
+    throw new BranchFilesystemLifecycleConflictError(
+      current.branch_id,
+      current.filesystem_status,
+      Boolean(current.archived),
+      current.filesystem_operation_id
+    );
   }
 }
 
@@ -178,6 +215,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         storage_mode: row.storage_mode ?? 'worktree',
         clone_depth: row.clone_depth ?? undefined,
         ...row.data,
+        filesystem_operation_id: row.data.filesystem_operation_id as
+          | BranchFilesystemOperationID
+          | undefined,
         url,
       },
       row
@@ -250,6 +290,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         custom_context: branch.custom_context,
         mcp_server_ids: branch.mcp_server_ids,
         dangerously_allow_session_sharing: branch.dangerously_allow_session_sharing,
+        filesystem_operation_id: branch.filesystem_operation_id,
       },
     };
   }
@@ -546,6 +587,34 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     return (rows as BranchRow[]).map((row) => this.rowToBranch(row, baseUrl));
   }
 
+  /** Resolve a branch ID, acquire its row lock, and re-read it in one transaction. */
+  private async withLockedBranch<T>(
+    id: string,
+    work: (transactionDb: Database, currentRow: BranchRow) => Promise<T>
+  ): Promise<T> {
+    // Short-ID resolution intentionally happens before the transaction. The
+    // exact UUID is then locked and re-read, so the callback never acts on the
+    // stale object returned by findById.
+    const existing = await this.findById(id);
+    if (!existing) throw new EntityNotFoundError('Branch', id);
+
+    return this.db.transaction(async (tx) => {
+      const transactionDb = txAsDb(tx);
+      await lockRowForUpdate(
+        transactionDb,
+        this.db,
+        branches,
+        eq(branches.branch_id, existing.branch_id)
+      );
+      const currentRow = await select(transactionDb)
+        .from(branches)
+        .where(eq(branches.branch_id, existing.branch_id))
+        .one();
+      if (!currentRow) throw new EntityNotFoundError('Branch', id);
+      return work(transactionDb, currentRow);
+    });
+  }
+
   /**
    * Update branch by ID (atomic with database-level transaction)
    *
@@ -557,42 +626,12 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     updates: Partial<Branch>,
     options?: BranchRepositoryUpdateOptions
   ): Promise<Branch> {
-    // STEP 1: Read current branch (outside transaction for short ID resolution)
-    const existing = await this.findById(id);
-    if (!existing) {
-      throw new EntityNotFoundError('Branch', id);
-    }
-
     const baseUrl = await getBaseUrl();
 
-    // Use transaction to make read-merge-write atomic
-    return await this.db.transaction(async (tx) => {
-      // Acquire row-level lock on PostgreSQL to prevent lost updates
-      await lockRowForUpdate(
-        txAsDb(tx),
-        this.db,
-        branches,
-        eq(branches.branch_id, existing.branch_id)
-      );
-
-      // STEP 2: Re-read within transaction to ensure we have latest data
-      const currentRow = await select(txAsDb(tx))
-        .from(branches)
-        .where(eq(branches.branch_id, existing.branch_id))
-        .one();
-
-      if (!currentRow) {
-        throw new EntityNotFoundError('Branch', id);
-      }
-
+    return this.withLockedBranch(id, async (transactionDb, currentRow) => {
       const current = this.rowToBranch(currentRow, baseUrl);
 
-      if (
-        current.filesystem_status !== undefined &&
-        options?.rejectFilesystemStatuses?.includes(current.filesystem_status)
-      ) {
-        throw new BranchFilesystemStatusConflictError(current.branch_id, current.filesystem_status);
-      }
+      assertExpectedFilesystemLifecycle(current, options?.expectedFilesystemLifecycle);
 
       // STEP 3: Deep merge updates into current branch (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context
@@ -601,6 +640,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         branch_id: current.branch_id, // Never change ID
         repo_id: current.repo_id, // Never change repo
         created_at: current.created_at, // Never change created timestamp
+        created_by: current.created_by, // Selects Unix identity and private environment
+        branch_unique_id: current.branch_unique_id, // Selects managed environment ports
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
       merged.unix_group = resolveBranchGroupUpdate(
@@ -665,7 +706,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         : {};
 
       // STEP 4: Write merged branch (within same transaction)
-      const row = await update(txAsDb(tx), branches)
+      const row = await update(transactionDb, branches)
         .set({ ...insertData, ...environmentCoordinationUpdate })
         .where(eq(branches.branch_id, current.branch_id))
         .returning()
@@ -678,13 +719,21 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   /**
    * Delete branch by ID
    */
-  async delete(id: string): Promise<void> {
-    const existing = await this.findById(id);
-    if (!existing) {
-      throw new EntityNotFoundError('Branch', id);
+  async delete(id: string, options?: BranchRepositoryDeleteOptions): Promise<void> {
+    if (!options?.expectedFilesystemLifecycle) {
+      const existing = await this.findById(id);
+      if (!existing) throw new EntityNotFoundError('Branch', id);
+      await deleteFrom(this.db, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+      return;
     }
 
-    await deleteFrom(this.db, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+    await this.withLockedBranch(id, async (transactionDb, currentRow) => {
+      const current = this.rowToBranch(currentRow);
+      assertExpectedFilesystemLifecycle(current, options.expectedFilesystemLifecycle);
+      await deleteFrom(transactionDb, branches)
+        .where(eq(branches.branch_id, current.branch_id))
+        .run();
+    });
   }
 
   /**

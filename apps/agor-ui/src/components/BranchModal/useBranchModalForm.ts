@@ -23,6 +23,7 @@ import type {
   BranchClientPatch,
   BranchGroupGrantWithGroup,
   BranchPermissionLevel,
+  ClientInput,
   EffectiveBranchAccess,
   Group,
   TeammateConfig,
@@ -32,15 +33,7 @@ import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /** Patchable subset of `Branch` writable from the modal form. */
-export type BranchUpdate = Omit<
-  BranchClientPatch,
-  'issue_url' | 'pull_request_url' | 'notes' | 'board_id'
-> & {
-  board_id?: string | null | undefined;
-  issue_url?: string | null | undefined;
-  pull_request_url?: string | null | undefined;
-  notes?: string | null | undefined;
-};
+export type BranchUpdate = ClientInput<BranchClientPatch>;
 
 /** Derive directly from Branch so the union stays in sync with core. */
 export type FsAccessLevel = NonNullable<Branch['others_fs_access']>;
@@ -566,7 +559,7 @@ export function useBranchModalForm({
         // it swallow the error and we'd report a false success. Runs BEFORE
         // the owner-remove pass so the current user (who may be losing
         // ownership) is still authorized to PATCH at this point.
-        await client.service('branches').patch(branch.branch_id, updates as Partial<Branch>);
+        await client.service('branches').patch(branch.branch_id, updates);
       }
 
       // 3. Upsert/remove branch group grants.

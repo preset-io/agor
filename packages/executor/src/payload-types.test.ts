@@ -320,6 +320,7 @@ describe('GitBranchAddPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
+        filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
       },
     };
@@ -336,6 +337,7 @@ describe('GitBranchAddPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
+        filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
         branch: 'untrusted',
         storageMode: 'worktree',
@@ -359,6 +361,7 @@ describe('GitBranchRemovePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
+        filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
         branchesRoot: '/data/agor/worktrees',
       },
@@ -377,6 +380,7 @@ describe('GitBranchRemovePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
+        filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
         branchesRoot: '/data/agor/worktrees',
         force: true,
@@ -548,6 +552,7 @@ describe('Type guards', () => {
       sessionToken: 'jwt',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
+        filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
       },
     };
@@ -561,6 +566,7 @@ describe('Type guards', () => {
       sessionToken: 'jwt',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
+        filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
         branchPath: '/data/branches/feature',
         branchesRoot: '/data/branches',
       },

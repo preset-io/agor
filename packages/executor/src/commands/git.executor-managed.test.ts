@@ -71,6 +71,8 @@ vi.mock('@agor/git', async () => {
 
 vi.mock('../services/feathers-client.js', () => ({
   createExecutorClient: mocks.createExecutorClient,
+  getExecutorBranchesService: (client: { service: (name: string) => unknown }) =>
+    client.service('branches'),
 }));
 
 vi.mock('./unix.js', async () => {
@@ -162,7 +164,15 @@ function createClient(records: {
           }
         );
         return {
-          get: vi.fn(async () => records.branch),
+          get: vi.fn(async () =>
+            records.branch
+              ? {
+                  filesystem_status: 'creating',
+                  filesystem_operation_id: '550e8400-e29b-41d4-a716-446655440099',
+                  ...records.branch,
+                }
+              : undefined
+          ),
           find,
           patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
             records.patchedBranches?.push(data);
@@ -279,6 +289,7 @@ describe('managed executor git/fs commands', () => {
         sessionToken: 'tenant-token',
         params: {
           branchId,
+          filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
           repoId,
           useReference: true,
         },
@@ -328,7 +339,13 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, initUnixGroup: true, daemonUser: 'agor' },
+        params: {
+          branchId,
+          filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
+          repoId,
+          initUnixGroup: true,
+          daemonUser: 'agor',
+        },
       },
       {}
     );
@@ -365,6 +382,7 @@ describe('managed executor git/fs commands', () => {
         sessionToken: 'other-tenant-token',
         params: {
           branchId,
+          filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
           repoId,
         },
       },
@@ -372,6 +390,45 @@ describe('managed executor git/fs commands', () => {
     );
     expect(result).toMatchObject({ success: false, error: { message: 'Not found' } });
     expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+  });
+
+  it('does not materialize or repair files for a superseded creation generation', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://example.com/repo.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'feature',
+        storage_mode: 'clone',
+        filesystem_status: 'creating',
+        filesystem_operation_id: '550e8400-e29b-41d4-a716-446655440098',
+      },
+      patchedBranches,
+    });
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: {
+          branchId,
+          filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
+          repoId,
+        },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({ success: false, error: { code: 'GIT_BRANCH_ADD_FAILED' } });
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+    expect(mocks.handleUnixSyncBranch).not.toHaveBeenCalled();
+    expect(patchedBranches).toEqual([]);
   });
 
   it('inspects local repository contents only inside the executor and returns sanitized metadata', async () => {
@@ -497,6 +554,7 @@ describe('managed executor git/fs commands', () => {
         branch_id: branchId,
         path: branchPath,
         storage_mode: 'clone',
+        filesystem_status: 'deleting',
       },
       patchedBranches,
     });
@@ -511,6 +569,7 @@ describe('managed executor git/fs commands', () => {
           sessionToken: 'jwt',
           params: {
             branchId,
+            filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
             branchPath,
             branchesRoot,
             storageMode: 'clone',
@@ -538,6 +597,7 @@ describe('managed executor git/fs commands', () => {
         branch_id: branchId,
         path: '/safe/worktrees/repo/persisted',
         storage_mode: 'clone',
+        filesystem_status: 'deleting',
       },
       patchedBranches,
     });
@@ -548,6 +608,7 @@ describe('managed executor git/fs commands', () => {
         sessionToken: 'jwt',
         params: {
           branchId,
+          filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
           branchPath: '/safe/worktrees/repo/from-payload',
           branchesRoot: '/safe/worktrees',
           storageMode: 'clone',
@@ -570,13 +631,52 @@ describe('managed executor git/fs commands', () => {
     expect(JSON.stringify(result)).not.toContain('/safe/worktrees/repo/from-payload');
   });
 
+  it('does not delete or report failure for a superseded deletion generation', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      branch: {
+        branch_id: branchId,
+        path: '/safe/worktrees/repo/feature',
+        storage_mode: 'clone',
+        filesystem_status: 'deleting',
+        filesystem_operation_id: '550e8400-e29b-41d4-a716-446655440098',
+      },
+      patchedBranches,
+    });
+
+    const result = await handleGitBranchRemove(
+      {
+        command: 'git.branch.remove',
+        sessionToken: 'jwt',
+        params: {
+          branchId,
+          filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
+          branchPath: '/safe/worktrees/repo/feature',
+          branchesRoot: '/safe/worktrees',
+          storageMode: 'clone',
+          deleteDbRecord: false,
+        },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({ success: false, error: { code: 'GIT_BRANCH_REMOVE_FAILED' } });
+    expect(mocks.deleteBranchDirectory).not.toHaveBeenCalled();
+    expect(patchedBranches).toEqual([]);
+  });
+
   it('persists delete_failed and never reports deleted when privileged removal fails', async () => {
     const branchesRoot = await mkdtemp(join(tmpdir(), 'agor-delete-failure-'));
     const branchPath = join(branchesRoot, 'repo', 'feature');
     await mkdir(branchPath, { recursive: true });
     const patchedBranches: Array<Record<string, unknown>> = [];
     createClient({
-      branch: { branch_id: branchId, path: branchPath, storage_mode: 'clone' },
+      branch: {
+        branch_id: branchId,
+        path: branchPath,
+        storage_mode: 'clone',
+        filesystem_status: 'deleting',
+      },
       patchedBranches,
     });
     mocks.deleteBranchDirectory.mockRejectedValueOnce(
@@ -590,6 +690,7 @@ describe('managed executor git/fs commands', () => {
           sessionToken: 'jwt',
           params: {
             branchId,
+            filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
             branchPath,
             branchesRoot,
             storageMode: 'clone',
@@ -640,6 +741,7 @@ describe('managed executor git/fs commands', () => {
           repo_id: repoId,
           path: branchPath,
           storage_mode: 'worktree',
+          filesystem_status: 'deleting',
         },
         patchedBranches,
       });
@@ -660,6 +762,7 @@ describe('managed executor git/fs commands', () => {
             sessionToken: 'jwt',
             params: {
               branchId,
+              filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
               branchPath,
               branchesRoot,
               storageMode: 'worktree',
@@ -702,6 +805,7 @@ describe('managed executor git/fs commands', () => {
         repo_id: repoId,
         path: branchPath,
         storage_mode: 'worktree',
+        filesystem_status: 'deleting',
       },
       patchedBranches,
     });
@@ -720,6 +824,7 @@ describe('managed executor git/fs commands', () => {
           sessionToken: 'jwt',
           params: {
             branchId,
+            filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
             branchPath,
             branchesRoot,
             storageMode: 'worktree',
@@ -760,6 +865,7 @@ describe('managed executor git/fs commands', () => {
         repo_id: repoId,
         path: branchPath,
         storage_mode: 'worktree',
+        filesystem_status: 'deleting',
       },
       patchedBranches,
     });
@@ -771,6 +877,7 @@ describe('managed executor git/fs commands', () => {
           sessionToken: 'jwt',
           params: {
             branchId,
+            filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
             branchPath,
             branchesRoot,
             storageMode: 'worktree',

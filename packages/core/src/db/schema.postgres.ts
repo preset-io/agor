@@ -824,6 +824,7 @@ export const branches = pgTable(
         pull_request_url?: string; // PR link
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed' or 'delete_failed'
+        filesystem_operation_id?: string; // UUIDv7 generation fencing filesystem executors
 
         // Environment instance (runtime state only, no variables)
         environment_instance?: {

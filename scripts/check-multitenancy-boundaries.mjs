@@ -175,6 +175,9 @@ const checks = [
       // to one pooled connection checkout and cannot leak after discovery.
       'packages/core/src/db/tenant-scope.ts': 2,
       'packages/core/src/db/repositories/branches.ts': 1,
+      // Deterministic PostgreSQL lifecycle race coverage holds an explicit row
+      // lock inside a tenant-scoped test transaction before releasing a CAS.
+      'packages/core/src/db/branch-filesystem-lifecycle.postgres.test.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
       'packages/core/src/db/repositories/repos.ts': 3,
       // Session updates and archive cascades use raw repository transactions until

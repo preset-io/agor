@@ -253,6 +253,7 @@ describe('executeCommand - git.branch.add', () => {
     sessionToken: 'jwt-token',
     params: {
       branchId: '550e8400-e29b-41d4-a716-446655440002',
+      filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
       repoId: '550e8400-e29b-41d4-a716-446655440003',
     },
   };
@@ -308,6 +309,7 @@ describe('executeCommand - git.branch.remove', () => {
     sessionToken: 'jwt-token',
     params: {
       branchId: '550e8400-e29b-41d4-a716-446655440002',
+      filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
       branchPath: '/data/agor/worktrees/repo/feature-x',
       branchesRoot: '/data/agor/worktrees',
     },
