@@ -108,6 +108,12 @@ function renderTable(options: {
 
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
+async function openCreateForm(): Promise<void> {
+  const addButton = screen.getByRole('button', { name: /New MCP Server/i });
+  await waitFor(() => expect(addButton).toBeEnabled());
+  fireEvent.click(addButton);
+}
+
 describe('MCPServersTable member policy', () => {
   it('lets an admin read the policy in plain language and change it', async () => {
     const { find, patch } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
@@ -161,7 +167,7 @@ describe('MCPServersTable member policy', () => {
     const { find } = renderTable({ policy: 'allow_crud', currentUser: MEMBER });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+    await openCreateForm();
 
     // stdio runs a command on the executor host, so it is admin-only: a member
     // must not be handed a form pre-filled towards a refusal. The form follows
@@ -175,7 +181,7 @@ describe('MCPServersTable member policy', () => {
     const { find } = renderTable({ policy: 'allow_private_only', currentUser: MEMBER });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+    await openCreateForm();
 
     // The endpoint refuses a member's `global` row under this policy, so the
     // form must not invite one.
@@ -190,7 +196,7 @@ describe('MCPServersTable member policy', () => {
     const { find } = renderTable({ policy: 'allow_private_only', currentUser: ADMIN });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+    await openCreateForm();
 
     const scope = await screen.findByLabelText('Scope');
     fireEvent.mouseDown(scope);
@@ -201,7 +207,7 @@ describe('MCPServersTable member policy', () => {
     const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+    await openCreateForm();
 
     expect(await screen.findByLabelText('Command')).toBeInTheDocument();
   });
