@@ -1279,7 +1279,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       // rows. The service composes this marker into an object-specific SQL
       // predicate: branch-bound rows require branch access; loose rows require
       // board visibility.
-      find: [...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : [])],
+      find: [
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+      ],
     },
   });
 
@@ -3092,7 +3094,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       find: [
-        ...(executionMode.appRbacEnabled ? [scopeScheduleQuery(scheduleRepository, superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled
+          ? [scopeScheduleQuery(scheduleRepository, superadminOpts)]
+          : []),
       ],
       get: [
         ...(executionMode.appRbacEnabled

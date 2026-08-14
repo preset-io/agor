@@ -265,7 +265,6 @@ function captureRegisteredMcpServerCreateHooks(
     app: app as unknown as RegisterHooksContext['app'],
     config: { database: { dialect: 'sqlite' } } as RegisterHooksContext['config'],
     jwtSecret: 'mcp-server-wiring-test-secret',
-    branchRbacEnabled: false,
     requireAuth: async (context) => context,
     superadminOpts: { allowSuperadmin: true },
     sessionsService: {} as RegisterHooksContext['sessionsService'],

@@ -794,9 +794,9 @@ describe('registered file service RBAC database preload', () => {
         config: {
           database: { dialect: 'postgresql' },
           multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-a' },
+          execution: { branch_rbac: true },
         } as RegisterHooksContext['config'],
         jwtSecret: 'registration-test-secret',
-        branchRbacEnabled: true,
         requireAuth: async (context) => context,
         superadminOpts: { allowSuperadmin: true },
         sessionsService: sessionsService as RegisterHooksContext['sessionsService'],
