@@ -422,12 +422,17 @@ describe('authorizeMcpServerWrite', () => {
  * a read-only account could configure a server, and under `allow_crud` an
  * unowned one that every session in the tenant can then reach.
  *
- * This is currently unreachable over HTTP for an unrelated reason — a viewer
- * cannot authenticate at all, because the local strategy reads the user back
- * through a `users.get` gated at member. That is a separate bug, and one that
- * will be fixed; it is not a gate this rule may lean on. So the check lives
- * here, where the decision is actually made, and the tests synthesize the
- * identity rather than logging in.
+ * This was unreachable over HTTP when the rule was written, for an unrelated
+ * reason: a viewer could not authenticate at all, because the local strategy
+ * read the user back through a `users.get` gated at member. #2322 fixed that,
+ * and removed the blanket member floor from several `all` chains in the same
+ * change — `mcp-servers` now carries only `[typedValidateQuery, requireAuth]`.
+ * So this rule became load-bearing over HTTP, which is exactly why it was
+ * written not to lean on the login gate.
+ *
+ * The tests here still synthesize the identity, because this is where the
+ * decision is made. That the decision is actually *reached* from a registered
+ * chain is covered by `register-hooks.viewer-mcp-floor.test.ts`.
  */
 describe('authorizeMcpServerWrite refuses below-member roles', () => {
   beforeEach(() => {
