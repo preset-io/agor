@@ -266,8 +266,8 @@ export class MessagesService extends DrizzleService<Message, MessageCreate, Mess
 
   /**
    * Find the exact SQL page for standard Feathers queries. Complete Task
-   * hydration is a client concern: `findAll({ task_id })` walks bounded
-   * Message-ID keyset pages rather than opening an unbounded transport route.
+   * hydration is a client concern: `findAll({ task_id })` walks and verifies
+   * bounded Message-ID keyset pages rather than opening an unbounded route.
    */
   async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
     const query = normalizeQuery((params?.query ?? {}) as Record<string, unknown>);

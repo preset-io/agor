@@ -196,7 +196,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   /**
    * Keep broad Task lists bounded in SQL. Exact Session hydration remains
-   * complete through the shared client's Task-ID high-water keyset loop.
+   * complete through the shared client's verified Task-ID keyset loop.
    */
   async find(params?: TaskParams): Promise<Task[] | Paginated<Task>> {
     const query = (params?.query ?? {}) as Query;

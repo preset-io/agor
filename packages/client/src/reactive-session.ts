@@ -407,10 +407,10 @@ export class ReactiveSessionHandle {
   }
 
   private async fetchMessagesAtHighWater(query: Record<string, unknown>): Promise<Message[]> {
-    // The shared client's exact-transcript findAll() contract walks an
-    // immutable Message-ID high-water mark with keyset pages. Completeness no
-    // longer depends on seeing the matching realtime event; the journal is
-    // retained by the caller until this snapshot is committed to state.
+    // The shared client's exact-transcript findAll() contract verifies
+    // multi-page Message-ID keyset walks against a second membership pass.
+    // Completeness no longer depends on seeing the matching realtime event;
+    // the journal is retained until the stable membership view is committed.
     return this.client.service('messages').findAll({
       query: { ...query, $limit: MESSAGE_PAGINATION.MAX_LIMIT },
     });
@@ -460,8 +460,9 @@ export class ReactiveSessionHandle {
   }
 
   private async fetchTasksAtHighWater(): Promise<Task[]> {
-    // Exact-Session findAll() is an ID high-water keyset scan in @agor/core.
-    // The surrounding bootstrap/resync journal stays open through commit.
+    // Exact-Session findAll() is a stable ID-membership keyset scan in
+    // @agor/core. The surrounding bootstrap/resync journal stays open through
+    // commit so mutable Task fields also reconcile with realtime delivery.
     return this.client.service('tasks').findAll({
       query: {
         session_id: this.sessionId,

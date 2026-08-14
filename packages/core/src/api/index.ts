@@ -925,13 +925,22 @@ function sortHydratedRows(path: string, rows: unknown[]): unknown[] {
   });
 }
 
-async function findAllAtIdHighWater(
+const MAX_HYDRATION_STABILITY_ATTEMPTS = 3;
+
+class HydrationMembershipChangedError extends Error {}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+async function scanAtIdHighWater(
   service: AgorService<unknown>,
   params: Params | undefined,
   path: string,
   idField: 'message_id' | 'task_id',
-  pageLimit: number
-): Promise<unknown[]> {
+  pageLimit: number,
+  idsOnly = false
+): Promise<{ rows: unknown[]; ids: string[] }> {
   const originalQuery =
     params?.query && typeof params.query === 'object'
       ? ({ ...params.query } as Record<string, unknown>)
@@ -943,9 +952,10 @@ async function findAllAtIdHighWater(
   delete baseQuery.$select;
   delete baseQuery[idField];
 
-  // Capture an immutable high-water key before walking the set. Later creates
-  // sort beyond this boundary; deletes cannot shift a keyset cursor and thus
-  // cannot make a pre-existing row get skipped as they do with OFFSET.
+  // Capture a traversal boundary. IDs are immutable but deliberately are not
+  // monotonic by commit time, so the caller verifies every multi-page walk
+  // against a second collection before accepting it as one stable membership
+  // view.
   const boundaryResult = await service.find({
     ...(params ?? {}),
     query: {
@@ -956,7 +966,7 @@ async function findAllAtIdHighWater(
     },
   });
   const boundaryData = normalizeFindResult(boundaryResult);
-  if (boundaryData.length === 0) return [];
+  if (boundaryData.length === 0) return { rows: [], ids: [] };
   const through = (boundaryData[0] as Record<string, unknown>)[idField];
   if (typeof through !== 'string') {
     throw new Error(`Cannot hydrate ${path}: boundary page omitted ${idField}`);
@@ -973,17 +983,22 @@ async function findAllAtIdHighWater(
         [idField]: cursor,
         $sort: { [idField]: 1 },
         $limit: pageLimit,
+        ...(idsOnly ? { $select: [idField] } : {}),
       },
     });
     const page = normalizeFindResult(pageResult);
     if (page.length === 0) {
-      throw new Error(`Cannot hydrate ${path}: keyset ended before ${idField} high-water mark`);
+      throw new HydrationMembershipChangedError(
+        `Cannot hydrate ${path}: keyset ended before ${idField} high-water mark`
+      );
     }
 
     for (const row of page) {
       const id = (row as Record<string, unknown>)[idField];
       if (typeof id !== 'string' || (after !== undefined && id <= after) || id > through) {
-        throw new Error(`Cannot hydrate ${path}: ${idField} keyset did not advance`);
+        throw new HydrationMembershipChangedError(
+          `Cannot hydrate ${path}: ${idField} keyset did not advance`
+        );
       }
       after = id;
       rows.push(row);
@@ -995,7 +1010,56 @@ async function findAllAtIdHighWater(
     if (after === through) break;
   }
 
-  return sortHydratedRows(path, rows);
+  return { rows, ids: rows.map((row) => String((row as Record<string, unknown>)[idField])) };
+}
+
+async function findAllAtStableIdMembership(
+  service: AgorService<unknown>,
+  params: Params | undefined,
+  path: string,
+  idField: 'message_id' | 'task_id',
+  pageLimit: number
+): Promise<unknown[]> {
+  const originalQuery =
+    params?.query && typeof params.query === 'object'
+      ? ({ ...params.query } as Record<string, unknown>)
+      : {};
+  const probeResult = await service.find({
+    ...(params ?? {}),
+    query: {
+      ...originalQuery,
+      $sort: { [idField]: 1 },
+      $limit: pageLimit,
+    },
+  });
+  const probe = normalizeFindResult(probeResult);
+  if (!isPaginatedResult(probeResult) || probe.length < probeResult.limit) {
+    return sortHydratedRows(path, probe);
+  }
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < MAX_HYDRATION_STABILITY_ATTEMPTS; attempt += 1) {
+    try {
+      const candidate = await scanAtIdHighWater(service, params, path, idField, pageLimit);
+      const verification = await scanAtIdHighWater(service, params, path, idField, pageLimit, true);
+      if (sameIds(candidate.ids, verification.ids)) {
+        return sortHydratedRows(path, candidate.rows);
+      }
+      lastError = new HydrationMembershipChangedError(
+        `Cannot hydrate ${path}: membership changed while keyset pages were being read`
+      );
+    } catch (error) {
+      if (!(error instanceof HydrationMembershipChangedError)) throw error;
+      lastError = error;
+    }
+  }
+
+  throw (
+    lastError ??
+    new HydrationMembershipChangedError(
+      `Cannot hydrate ${path}: membership did not stabilize after bounded retries`
+    )
+  );
 }
 
 function extendFindAllOnService(service: AgorService<unknown>, rawPath: string): void {
@@ -1015,7 +1079,7 @@ function extendFindAllOnService(service: AgorService<unknown>, rawPath: string):
         : {};
     const keyset = hydrationKeysetFor(path, query);
     if (keyset) {
-      return findAllAtIdHighWater(service, params, path, keyset.idField, keyset.pageLimit);
+      return findAllAtStableIdMembership(service, params, path, keyset.idField, keyset.pageLimit);
     }
 
     const firstResult = await service.find(params);
