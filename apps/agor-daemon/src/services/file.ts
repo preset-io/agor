@@ -7,7 +7,7 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, BadRequest } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   FileDetail,
@@ -49,10 +49,20 @@ function extractFile(data: unknown): FileDetail | null {
  * executor then 404s on a file literally named with a percent-encoded
  * slash. Socket.IO calls pass `id` as a plain value with no such encoding,
  * so only decode when the request actually came in over REST.
+ *
+ * `decodeURIComponent` throws a `URIError` on malformed percent-encoding
+ * (e.g. a lone `%` or an invalid escape like `%c3%28`) — an attacker- or
+ * client-controlled input reaching an authenticated request, not a server
+ * bug, so it's translated into a clean 400 instead of an uncaught 500.
  */
 export function resolveRestFilePath(id: Id, params?: FileParams): string {
   const raw = id.toString();
-  return params?.provider === 'rest' ? decodeURIComponent(raw) : raw;
+  if (params?.provider !== 'rest') return raw;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new BadRequest('Invalid file path encoding');
+  }
 }
 
 export class FileService

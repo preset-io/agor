@@ -1,4 +1,5 @@
 import { getCurrentTenantDatabaseScope, runWithTenantContext } from '@agor/core/db';
+import { BadRequest } from '@agor/core/feathers';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../utils/spawn-executor.js';
 import { FileService, resolveRestFilePath } from './file.js';
@@ -20,6 +21,17 @@ describe('resolveRestFilePath', () => {
 
   it('round-trips a root-level filename with no path separators', () => {
     expect(resolveRestFilePath('README.md', { provider: 'rest' } as never)).toBe('README.md');
+  });
+
+  it('raises a clean BadRequest instead of an uncaught URIError on malformed REST percent-encoding', () => {
+    expect(() => resolveRestFilePath('%c3%28', { provider: 'rest' } as never)).toThrow(BadRequest);
+    expect(() => resolveRestFilePath('%', { provider: 'rest' } as never)).toThrow(BadRequest);
+  });
+
+  it('never throws for malformed percent-sequences arriving over a non-REST provider', () => {
+    // Socket.IO/internal callers never percent-encode, so a literal '%c3%28'
+    // filename is passed through untouched rather than rejected.
+    expect(resolveRestFilePath('%c3%28', { provider: 'socketio' } as never)).toBe('%c3%28');
   });
 });
 
