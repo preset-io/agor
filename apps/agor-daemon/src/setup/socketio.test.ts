@@ -449,6 +449,39 @@ it('does not let a stale join remove the replacement generation from the same ro
   expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
 });
 
+it('does not let a failed concurrent join remove a successful same-generation claim', async () => {
+  const { io } = buildHarness();
+  const socket = makeSocket('concurrent-terminal-requester', io);
+  asUser(socket, ALICE);
+  connect(io, socket);
+  const join = socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  const channel = terminalChannel();
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+  let releaseFailedJoin!: () => void;
+  const failedJoinGate = new Promise<void>((resolve) => {
+    releaseFailedJoin = resolve;
+  });
+  const normalJoin = socket.join.bind(socket);
+  let terminalJoinCount = 0;
+  socket.join = async (candidate) => {
+    if (candidate === channel && terminalJoinCount++ === 0) {
+      await failedJoinGate;
+      throw new Error('first join failed');
+    }
+    await normalJoin(candidate);
+  };
+
+  const failedAttempt = join?.(channel, allocation);
+  await Promise.resolve();
+  await expect(join?.(channel, allocation)).resolves.toBe(true);
+
+  releaseFailedJoin();
+  await expect(failedAttempt).resolves.toBe(false);
+  expect(socket.joined).toContain(channel);
+  expect(socket.left).not.toContain(channel);
+  expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
+});
+
 function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
   browser.handlers.get('join')?.(terminalChannel());
   const executor = makeSocket('exec-sock', io);

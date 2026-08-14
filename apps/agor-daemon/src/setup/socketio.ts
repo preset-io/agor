@@ -391,7 +391,12 @@ export function createSocketIOConfig(
     // A stale async join may finish after a replacement generation has joined
     // the same room. Track the latest claimant so stale cleanup cannot remove
     // the newer valid subscription.
-    const terminalRoomClaimGenerations = new WeakMap<Socket, Map<string, number>>();
+    interface TerminalRoomClaim {
+      authGeneration: number;
+      attemptToken: number;
+    }
+    const terminalRoomClaims = new WeakMap<Socket, Map<string, TerminalRoomClaim>>();
+    let nextTerminalRoomClaimToken = 0;
 
     const invalidateTerminalRequestJoin = (socket: FeathersSocket): void => {
       terminalAuthGenerations.set(socket, (terminalAuthGenerations.get(socket) ?? 0) + 1);
@@ -458,12 +463,23 @@ export function createSocketIOConfig(
         enumerable: false,
         value: async (channel: string, allocation: TerminalAllocatedEvent) => {
           if (!isCurrentAllocation(channel, allocation)) return false;
-          let roomClaims = terminalRoomClaimGenerations.get(socket);
+          let roomClaims = terminalRoomClaims.get(socket);
           if (!roomClaims) {
             roomClaims = new Map();
-            terminalRoomClaimGenerations.set(socket, roomClaims);
+            terminalRoomClaims.set(socket, roomClaims);
           }
-          roomClaims.set(channel, boundGeneration);
+          const claim: TerminalRoomClaim = {
+            authGeneration: boundGeneration,
+            attemptToken: ++nextTerminalRoomClaimToken,
+          };
+          roomClaims.set(channel, claim);
+          const ownsCurrentClaim = (): boolean => {
+            const current = roomClaims.get(channel);
+            return (
+              current?.authGeneration === claim.authGeneration &&
+              current.attemptToken === claim.attemptToken
+            );
+          };
           let joined = false;
           try {
             await socket.join(channel);
@@ -471,15 +487,12 @@ export function createSocketIOConfig(
           } catch {
             // Fall through to the same best-effort cleanup as auth revocation.
           }
-          if (
-            !joined ||
-            !isCurrentAllocation(channel, allocation) ||
-            roomClaims.get(channel) !== boundGeneration
-          ) {
+          if (!joined || !isCurrentAllocation(channel, allocation) || !ownsCurrentClaim()) {
             const currentClaim = roomClaims.get(channel);
-            // A newer generation may already own this same qualified room. In
-            // that case the stale join must not remove its valid membership.
-            if (currentClaim === boundGeneration || currentClaim === undefined) {
+            // A newer auth generation or concurrent attempt may already own
+            // this same qualified room. Stale cleanup must not remove its
+            // valid membership.
+            if (ownsCurrentClaim() || currentClaim === undefined) {
               roomClaims.delete(channel);
               await socket.leave(channel);
             }
@@ -1141,7 +1154,7 @@ export function createSocketIOConfig(
           }
         }
         console.log(`🖥️  Socket ${socket.id} leaving channel: ${channel}`);
-        terminalRoomClaimGenerations.get(socket)?.delete(channel);
+        terminalRoomClaims.get(socket)?.delete(channel);
         socket.leave(channel);
       });
 
