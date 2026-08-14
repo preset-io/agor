@@ -281,6 +281,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
         <Table
           dataSource={teammates}
           columns={columns}
+          scroll={{ x: 720 }}
           rowKey="branch_id"
           pagination={{ defaultPageSize: 10 }}
           size="small"

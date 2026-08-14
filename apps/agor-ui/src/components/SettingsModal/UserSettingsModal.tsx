@@ -45,6 +45,7 @@ import {
   ConfigProvider,
   Divider,
   Drawer,
+  Flex,
   Form,
   Grid,
   Input,
@@ -2183,7 +2184,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       <Drawer
         open={open}
         onClose={handleClose}
-        title={siderTitle}
+        title={null}
+        closable={false}
         placement="bottom"
         size="94dvh"
         footer={<Space style={{ width: '100%', justifyContent: 'flex-end' }}>{footer}</Space>}
@@ -2192,13 +2194,25 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         {hiddenForms}
         <ConfigProvider theme={scopedTheme}>
           <Layout style={{ height: '100%', background: token.colorBgContainer }}>
-            <div
+            <Flex
+              vertical
+              gap={token.marginSM}
               style={{
-                padding: token.paddingSM,
+                padding: `${token.paddingSM}px ${token.paddingMD}px`,
                 borderBottom: `1px solid ${token.colorBorderSecondary}`,
                 background: token.colorBgElevated,
+                flex: '0 0 auto',
               }}
             >
+              <Flex align="center" justify="space-between" gap={token.marginSM}>
+                <div style={{ minWidth: 0 }}>{siderTitle}</div>
+                <Button
+                  type="text"
+                  icon={<CloseOutlined />}
+                  aria-label="Close user settings"
+                  onClick={handleClose}
+                />
+              </Flex>
               <Select
                 aria-label="User settings section"
                 showSearch
@@ -2210,9 +2224,19 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 style={{ width: '100%' }}
                 size="large"
               />
-            </div>
-            <Content style={{ padding: '20px 16px 32px', overflow: 'auto', minWidth: 0 }}>
-              {renderContent()}
+            </Flex>
+            <Content
+              style={{
+                padding: `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`,
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                minWidth: 0,
+                width: '100%',
+                maxWidth: '100%',
+                boxSizing: 'border-box',
+              }}
+            >
+              <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderContent()}</div>
             </Content>
           </Layout>
         </ConfigProvider>

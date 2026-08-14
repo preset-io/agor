@@ -462,12 +462,13 @@ export const CardsTable: React.FC<CardsTableProps> = ({
                   placeholder="Search title, board, zone, or data"
                   value={cardSearchTerm}
                   onChange={(event) => setCardSearchTerm(event.target.value)}
-                  style={{ width: 300 }}
+                  style={{ width: 'min(100%, 300px)' }}
                 />
               </div>
               <Table
                 dataSource={cardsForType}
                 columns={cardColumns}
+                scroll={{ x: 720 }}
                 rowKey="card_id"
                 size="small"
                 pagination={{ defaultPageSize: 20, hideOnSinglePage: true }}

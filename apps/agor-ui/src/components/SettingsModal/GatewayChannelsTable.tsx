@@ -3798,7 +3798,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             placeholder="Search name, type, target branch, key, or config"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 360 }}
+            style={{ width: 'min(100%, 360px)' }}
           />
           <Button
             type="primary"
@@ -3856,6 +3856,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         <Table
           dataSource={channels}
           columns={columns}
+          scroll={{ x: 1050 }}
           rowKey="id"
           pagination={{ defaultPageSize: 10, showSizeChanger: true }}
           size="small"

@@ -194,7 +194,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             placeholder="Search name, slug, description, or members"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 320 }}
+            style={{ width: 'min(100%, 320px)' }}
           />
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
             New Group
@@ -233,7 +233,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             render: (_: unknown, group: Group) => (
               <Select
                 mode="multiple"
-                style={{ minWidth: 320 }}
+                style={{ width: '100%', minWidth: 0 }}
                 value={membershipsByGroup.get(group.group_id) || []}
                 options={userOptions}
                 {...searchableSelectProps}
@@ -264,6 +264,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             ),
           },
         ]}
+        scroll={{ x: 700 }}
       />
 
       <Modal title="Create Group" open={createOpen} onOk={createGroup} onCancel={closeCreateModal}>

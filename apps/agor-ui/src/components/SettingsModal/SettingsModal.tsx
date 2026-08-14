@@ -31,7 +31,7 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Drawer, Grid, Layout, Menu, Modal, Select, theme } from 'antd';
+import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Select, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -500,7 +500,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   if (compact) {
     return (
       <Drawer
-        title="Workspace settings"
+        title={null}
+        closable={false}
         placement="bottom"
         size="94dvh"
         open={open}
@@ -508,13 +509,27 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         styles={{ body: { padding: 0, overflow: 'hidden' } }}
       >
         <Layout style={{ height: '100%', background: token.colorBgContainer }}>
-          <div
+          <Flex
+            vertical
+            gap={token.marginSM}
             style={{
-              padding: '12px 16px',
+              padding: `${token.paddingSM}px ${token.paddingMD}px`,
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
               background: token.colorBgElevated,
+              flex: '0 0 auto',
             }}
           >
+            <Flex align="center" justify="space-between" gap={token.marginSM}>
+              <Typography.Title level={5} style={{ margin: 0, minWidth: 0 }}>
+                Workspace settings
+              </Typography.Title>
+              <Button
+                type="text"
+                icon={<CloseOutlined />}
+                aria-label="Close workspace settings"
+                onClick={onClose}
+              />
+            </Flex>
             <Select
               aria-label="Settings section"
               value={activeTab}
@@ -523,9 +538,19 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
               style={{ width: '100%' }}
               size="large"
             />
-          </div>
-          <Content style={{ padding: '20px 16px 32px', overflow: 'auto', minWidth: 0 }}>
-            {renderContent()}
+          </Flex>
+          <Content
+            style={{
+              padding: `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              minWidth: 0,
+              width: '100%',
+              maxWidth: '100%',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderContent()}</div>
           </Content>
         </Layout>
         <BranchModal

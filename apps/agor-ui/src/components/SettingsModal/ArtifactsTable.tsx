@@ -297,7 +297,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
           placeholder="Search name, description, template, branch, or board"
           value={searchTerm}
           onChange={(event) => setSearchTerm(event.target.value)}
-          style={{ width: 360 }}
+          style={{ width: 'min(100%, 360px)' }}
         />
       </div>
 

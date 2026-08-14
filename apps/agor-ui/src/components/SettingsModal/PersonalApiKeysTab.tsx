@@ -162,7 +162,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
           placeholder="Search name, prefix, or dates"
           value={searchTerm}
           onChange={(event) => setSearchTerm(event.target.value)}
-          style={{ width: 300 }}
+          style={{ width: 'min(100%, 300px)' }}
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
           Create New Key
@@ -172,6 +172,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
       <Table
         dataSource={filteredKeys}
         columns={columns}
+        scroll={{ x: 560 }}
         rowKey="id"
         loading={loading}
         pagination={false}
