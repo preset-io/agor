@@ -634,13 +634,14 @@ describe('OnboardingWizard', () => {
     expect(result.sessionId).toBe('');
   });
 
-  it('final checklist reports the workspace it created, not a teammate it has not seeded yet', () => {
+  it('final checklist names the teammate, gated on the board that was created', () => {
     renderWizard({ initialStep: 'done' });
 
-    expect(screen.getByText('Workspace ready')).toBeInTheDocument();
-    // The teammate is seeded by the app shell *after* this step resolves, so
-    // the wizard has nothing to tick off here.
-    expect(screen.queryByText('Teammate ready')).not.toBeInTheDocument();
+    // Deliberate copy call: the app shell seeds the teammate immediately after
+    // this step resolves, so the checklist says "Teammate ready" rather than
+    // the drier claim the wizard could strictly back on its own.
+    expect(screen.getByText('Teammate ready')).toBeInTheDocument();
+    expect(screen.queryByText('Workspace ready')).not.toBeInTheDocument();
   });
 
   it('explains the failure instead of no-oping when the required workspace step has no client', async () => {

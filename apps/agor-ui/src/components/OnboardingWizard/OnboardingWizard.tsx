@@ -1756,14 +1756,13 @@ export function OnboardingWizard({
 
   const renderDone = () => {
     const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
-    // What the wizard has actually done by this point is create/confirm the
-    // board. The teammate itself is seeded by the app shell *after* the user
-    // clicks through, so claiming "Teammate ready" here would be a lie the
-    // checklist can't back up. "Workspace ready" is the warm version of the
-    // same true claim — the place to work exists, whoever ends up in it —
-    // and matches the word the skip path already uses ("<name>'s workspace
-    // is ready", seedOnboardingTeammate).
-    const workspaceReady = hasExistingBoard;
+    // The checklist sits under "You're ready to build.", the one place in the
+    // wizard that should sound like a welcome, so it names the teammate. The
+    // wizard itself has only created/confirmed the board here — the teammate is
+    // seeded by the app shell right after this step resolves, best-effort — but
+    // the friendlier word is the deliberate call. The board still gates it:
+    // without one there is nowhere to seed a teammate into.
+    const teammateReady = hasExistingBoard;
 
     return (
       <div style={{ textAlign: 'center', padding: '8px 0' }}>
@@ -1869,8 +1868,8 @@ export function OnboardingWizard({
               hint: 'Add in Settings - AI & Agents',
             },
             {
-              label: 'Workspace ready',
-              done: workspaceReady,
+              label: 'Teammate ready',
+              done: teammateReady,
               hint: 'Create a board anytime from the sidebar',
             },
             {
