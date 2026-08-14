@@ -298,8 +298,9 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
 export interface MessagesServiceImpl
   extends Service<
     Message,
-    import('@agor/core/types').MessageCreate | import('@agor/core/types').MessagePatch,
-    FeathersParams
+    import('@agor/core/types').MessageCreate,
+    FeathersParams,
+    import('@agor/core/types').MessagePatch
   > {
   findByIdForScopeCheck(messageId: import('@agor/core/types').MessageID): Promise<Message | null>;
 }

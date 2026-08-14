@@ -99,11 +99,108 @@
             "type": "string"
           },
           "content": {
-            "oneOf": [{ "type": "string" }, { "type": "array", "items": {} }, { "type": "object" }]
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object"
+              }
+            ]
           },
           "tool_uses": {
             "type": "array",
-            "items": { "type": "object" }
+            "items": {
+              "type": "object"
+            }
+          },
+          "parent_tool_use_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "messagesCreate": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "type",
+          "role",
+          "index",
+          "timestamp",
+          "content_preview",
+          "content"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "file-history-snapshot",
+              "permission_request",
+              "input_request",
+              "daemon_restart",
+              "daemon_crash",
+              "widget_request"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": ["user", "assistant", "system"]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "content_preview": {
+            "type": "string"
+          },
+          "content": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object"
+              }
+            ]
+          },
+          "tool_uses": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
           },
           "parent_tool_use_id": {
             "type": "string",
@@ -119,12 +216,24 @@
         "type": "object",
         "required": ["total", "limit", "skip", "data"],
         "properties": {
-          "total": { "type": "integer", "minimum": 0 },
-          "limit": { "type": "integer", "minimum": 0, "maximum": 1000 },
-          "skip": { "type": "integer", "minimum": 0 },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "skip": {
+            "type": "integer",
+            "minimum": 0
+          },
           "data": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/messages" }
+            "items": {
+              "$ref": "#/components/schemas/messages"
+            }
           }
         }
       },
@@ -1428,7 +1537,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/messages"
+                "$ref": "#/components/schemas/messagesCreate"
               }
             }
           }
