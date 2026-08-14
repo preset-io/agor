@@ -1,4 +1,4 @@
-import type { AgorClient, MCPServer } from '@agor-live/client';
+import type { AgorClient, MCPServer, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Button } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,6 +50,13 @@ vi.mock('../MCPServer', () => ({
 
 import { MCPServersTable } from './MCPServersTable';
 
+const ADMIN = {
+  user_id: 'user-admin',
+  email: 'admin@agor.live',
+  name: 'Ada Admin',
+  role: 'admin',
+} as User;
+
 describe('MCPServersTable OAuth creation', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -60,18 +67,32 @@ describe('MCPServersTable OAuth creation', () => {
       .mockResolvedValueOnce({ mcp_server_id: 'server-2' } as MCPServer);
     const patch = vi.fn().mockResolvedValue({});
     const client = {
-      service: vi.fn().mockReturnValue({ create, patch }),
+      service: vi.fn((path: string) =>
+        path === 'mcp-member-policy'
+          ? {
+              find: vi.fn().mockResolvedValue({
+                policy: 'use_existing_only',
+                can_configure: true,
+              }),
+            }
+          : { create, patch }
+      ),
     } as unknown as AgorClient;
 
     render(
       <MCPServersTable
         mcpServerById={new Map()}
         client={client}
+        userById={new Map([[ADMIN.user_id, ADMIN]])}
+        currentUser={ADMIN}
         onCreate={vi.fn()}
         onDelete={vi.fn()}
       />
     );
 
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /New MCP Server/ })).toBeEnabled()
+    );
     fireEvent.click(screen.getByRole('button', { name: /New MCP Server/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Configure OAuth' }));
     fireEvent.click(screen.getByRole('button', { name: 'Prepare OAuth' }));

@@ -38,12 +38,14 @@ function paramsFor(userId: UserID, role: string): AuthenticatedParams {
 }
 
 function serverOwnedBy(
-  owner?: UserID
-): Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport'> {
+  owner?: UserID,
+  scope: MCPServer['scope'] = 'session'
+): Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport' | 'scope'> {
   return {
     mcp_server_id: 'server-1' as MCPServer['mcp_server_id'],
     owner_user_id: owner,
     transport: 'http',
+    scope,
   };
 }
 
@@ -95,7 +97,7 @@ describe('authorizeMcpServerWrite', () => {
     expect(resolveMcpMemberPolicy).not.toHaveBeenCalled();
   });
 
-  it('stamps the creator as owner under allow_private_only', async () => {
+  it('stamps the creator as owner and the session reach under allow_private_only', async () => {
     resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
 
     await expect(
@@ -103,7 +105,7 @@ describe('authorizeMcpServerWrite', () => {
         method: 'create',
         data: remoteCreate,
       })
-    ).resolves.toEqual({ owner_user_id: ALICE });
+    ).resolves.toEqual({ owner_user_id: ALICE, scope: 'session' });
   });
 
   it('refuses to create a server owned by someone else', async () => {
@@ -122,9 +124,14 @@ describe('authorizeMcpServerWrite', () => {
   // does not expose the field at all — so if silence meant "shared", the
   // ordinary path on a branch about private servers would publish to the whole
   // tenant, credentials included.
-  it.each(['allow_private_only', 'allow_crud'] as const)(
+  it.each([
+    // `allow_private_only` fixes the reach as well as the owner; `allow_crud`
+    // leaves reach to the caller.
+    ['allow_private_only', { owner_user_id: ALICE, scope: 'session' }],
+    ['allow_crud', { owner_user_id: ALICE }],
+  ] as const)(
     'gives a member their own server when they say nothing about ownership, under %s',
-    async (policy) => {
+    async (policy, decision) => {
       resolveMcpMemberPolicy.mockResolvedValue(policy);
 
       await expect(
@@ -132,7 +139,7 @@ describe('authorizeMcpServerWrite', () => {
           method: 'create',
           data: remoteCreate,
         })
-      ).resolves.toEqual({ owner_user_id: ALICE });
+      ).resolves.toEqual(decision);
     }
   );
 
@@ -190,7 +197,7 @@ describe('authorizeMcpServerWrite', () => {
         method: 'create',
         data: remoteCreate,
       })
-    ).resolves.toEqual({ owner_user_id: ALICE });
+    ).resolves.toEqual({ owner_user_id: ALICE, scope: 'session' });
   });
 
   // The marketplace refusal is answered about installing an entry, not about
@@ -353,7 +360,11 @@ describe('authorizeMcpServerWrite', () => {
 
     await expect(
       authorizeMcpServerWrite(db, installParams, { method: 'create', data: remoteCreate })
-    ).resolves.toEqual({ owner_user_id: ALICE, catalog_entry_name: 'com.linear/linear' });
+    ).resolves.toEqual({
+      owner_user_id: ALICE,
+      scope: 'session',
+      catalog_entry_name: 'com.linear/linear',
+    });
   });
 
   it.each([

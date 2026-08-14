@@ -116,16 +116,20 @@ describe('resolveDeploymentConfig', () => {
     [haConfig, { ...secrets, AGOR_JWT_SECRET: undefined }, 'AGOR_JWT_SECRET'],
     [haConfig, { ...secrets, AGOR_MASTER_SECRET: undefined }, 'AGOR_MASTER_SECRET'],
     [haConfig, { ...secrets, AGOR_ADMIN_PASSWORD: undefined }, 'AGOR_ADMIN_PASSWORD'],
-    [
-      {
-        ...haConfig,
-        execution: { allow_web_terminal: true, managed_envs_execution_mode: 'webhook-only' },
-      },
-      secrets,
-      'allow_web_terminal',
-    ],
   ] as const)('fails unsafe HA config: %s', (config, env, message) => {
     expect(() => resolveDeploymentConfig(config, env)).toThrow(message);
+  });
+
+  it('allows owner-local ephemeral terminals in shared-local HA', () => {
+    expect(() =>
+      resolveDeploymentConfig(
+        {
+          ...haConfig,
+          execution: { ...haConfig.execution, allow_web_terminal: true },
+        },
+        secrets
+      )
+    ).not.toThrow();
   });
 
   it('does not require a local admin password when external launch owns bootstrap', () => {

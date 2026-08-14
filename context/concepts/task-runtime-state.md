@@ -151,7 +151,9 @@ an explicit mapping-review point.
   launcher exit or delay may not prove that remote work was not created. A
   durable observation marker removes that ambiguous dispatch from subsequent
   deadline scans so it cannot hot-loop or starve other candidates.
-- Connected active tasks heartbeat every 10 seconds by default.
+- Connected active tasks heartbeat every 10 seconds by default. A scoped
+  executor continues heartbeat and pulse telemetry while `stopping` until its
+  provider cleanup returns and it reports quiescence.
 - The default stale threshold is at least 30 seconds and at least three
   heartbeat intervals.
 - A stale heartbeat requests containment using the expected status and
@@ -169,7 +171,11 @@ an explicit mapping-review point.
   rejects any later stale-coordinator settlement.
 - A replacement daemon resumes an existing durable `stopping` request after
   the prior claim expires. Durable unverified containment is excluded from
-  rediscovery and remains owner/admin-guarded.
+  rediscovery and remains owner/admin-guarded unless a first, correctly
+  task/request-fenced executor quiescence report arrives later. That new
+  evidence clears the old guard exactly once and makes the same termination
+  epoch reconcilable; a repeated failed containment writes a fresh guard that a
+  duplicate acknowledgement cannot clear.
 
 ### Executor SDK watchdog
 
@@ -222,13 +228,31 @@ Containment then depends on execution mode:
 | Templated/remote executor | The scoped executor's fenced quiescence report, because the daemon cannot inspect a process group on another host.                                                                          |
 | OpenCode provider work    | Local process absence is insufficient to prove server-side work stopped, so termination can remain unverified.                                                                              |
 
+Local cooperative shutdown gives the wrapper 250 ms to disappear before
+signaling. In strict mode the target-user process may exit just before its
+root-owned `sudo` wrapper, so a target-user PGID probe can transiently return
+`EPERM`. The grace applies to both `present` and `unverified` probes; only an
+explicit later `absent` result verifies termination. Persistent uncertainty
+still fails closed. Templated/remote executors get a 15 second cooperative
+window because the daemon has no local signal fallback.
+
+After provider cleanup returns, the executor makes bounded, idempotent retries
+to report its exact Task/request-fenced quiescence fact. A failed write is
+followed by a bounded durable Task read so a lost response after commit does
+not strand an already-quiesced runtime. The executor logs the first outage and
+one final exhaustion event rather than every retry. Provider cleanup that is
+still running after 15 seconds emits one warning but is not falsely reported as
+quiescent.
+
 Verified user Stop settles as `stopped`; verified health/startup/heartbeat
 containment settles as `failed`. If absence cannot be verified, the task stays
 `stopping`, the session stays non-promptable, and an authorized owner/admin must
-explicitly force-fail it. A daemon restart can logically release orphaned work
-as `stopped`, but records that termination was not verified. This last release
-exists only in explicit `standalone` compatibility mode; shared PostgreSQL
-startup never treats another replica's work as orphaned.
+explicitly force-fail it by typing `STOP`. Force-fail changes durable status to
+`failed`; it does not prove or guarantee process termination. A daemon restart
+can logically release orphaned work as `stopped`, but records that termination
+was not verified. This last release exists only in explicit `standalone`
+compatibility mode; shared PostgreSQL startup never treats another replica's
+work as orphaned.
 
 An abrupt local-launcher-daemon loss is not absence proof. If its execution
 substrate survives the launcher and callbacks route to the fleet, the detached

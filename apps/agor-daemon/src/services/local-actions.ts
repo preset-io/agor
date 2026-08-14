@@ -16,6 +16,7 @@ export interface LocalActionRequest {
   dryRun?: boolean;
   verbose?: boolean;
 }
+export type ResolvePersistedBranchGroup = (branchId: string, params?: Params) => Promise<string>;
 function stringParam(params: Record<string, unknown>, key: string): string {
   const value = params[key];
   if (typeof value !== 'string' || !value.trim())
@@ -28,16 +29,22 @@ function homeBase(params: Record<string, unknown>): string | undefined {
     throw new BadRequest(`homeBase must be the managed Agor home base: ${AGOR_HOME_BASE}`);
   return AGOR_HOME_BASE;
 }
-export function createLocalActionsService(host: DaemonHostOperations) {
+export function createLocalActionsService(
+  host: DaemonHostOperations,
+  resolvePersistedBranchGroup: ResolvePersistedBranchGroup
+) {
   return {
     async create(data: LocalActionRequest, _params?: Params): Promise<DaemonHostOperationResult> {
       const p = data.params ?? {};
       const options = { dryRun: data.dryRun === true, verbose: data.verbose === true };
       switch (data.action) {
         case 'unix.group.createBranch':
+          // Resolve through the tenant-scoped DB row before crossing the host
+          // capability boundary. The host action must never derive a group
+          // name from a UUID.
           return host.identity.createBranchGroup({
             ...options,
-            branchId: stringParam(p, 'branchId'),
+            group: await resolvePersistedBranchGroup(stringParam(p, 'branchId'), _params),
           });
         case 'unix.group.deleteBranch':
           return host.identity.deleteBranchGroup({ ...options, group: stringParam(p, 'group') });

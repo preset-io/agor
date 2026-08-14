@@ -1140,44 +1140,69 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         callbackConfig.callback_mode = args.callbackMode ?? 'persistent';
       }
 
-      // Determine the parent session to link to in the genealogy.
+      // Determine the parent session to link to in the genealogy, and — for a
+      // cross-branch create — the source of the durable `remote_create`
+      // provenance edge.
       //
       // `parent_session_id` is the canonical branch-local session tree used by
-      // fork/spawn UI and recursive delete semantics. A session created in a
-      // different target branch is remote provenance/callback state, not a
-      // tree child of the caller. Keep the implicit convenience branch-local:
-      // - explicit string: resolve (supports short IDs), require same branch, and use
-      // - explicit null: opt out — create a root session with no parent
-      // - undefined (omitted): auto-link to the calling session only when the
-      //   calling session lives in the same branch as the new session
+      // fork/spawn UI and recursive delete semantics. `remote_create` is a
+      // separate, cross-branch *provenance* edge (rendered as a surrogate under
+      // the creator in the SessionTree). Provenance answers "which session
+      // created this child" — it is ALWAYS the calling session, never the
+      // callback target (that only answers "where should completion be
+      // delivered", i.e. routing). Keep the two concerns distinct:
+      // - explicit string: resolve (supports short IDs), require same branch,
+      //   use as the genealogy parent.
+      // - explicit null: opt out of *genealogy* only. This is orthogonal to
+      //   provenance: a cross-branch calling session is still recorded as the
+      //   remote creator below, so an "unlinked root session" that a remote
+      //   orchestrator spun up still surfaces under that orchestrator.
+      // - undefined (omitted): auto-link to the calling session as the
+      //   genealogy parent only when it shares the new session's branch.
+      // In every case, a calling session in a *different* branch is the remote
+      // creator and gets a `remote_create` edge. With no calling session there
+      // is no creator to attribute, so no provenance edge is written (the child
+      // still carries callback_config, so completion is still delivered).
       let resolvedParentSessionId: string | undefined;
       let parentSessionForPatch: Session | undefined;
       let skippedAutoParentDueToBranchMismatch = false;
       let remoteRelationshipSourceSessionId: string | undefined;
       let remoteRelationshipSourceBranchId: string | undefined;
 
-      if (args.parentSessionId !== undefined) {
-        if (args.parentSessionId !== null) {
-          resolvedParentSessionId = await resolveSessionId(ctx, args.parentSessionId);
-          parentSessionForPatch = (await ctx.app
-            .service('sessions')
-            .get(resolvedParentSessionId, ctx.baseServiceParams)) as Session;
+      // Decision 1 — genealogy: resolve an EXPLICIT parent (same-branch only).
+      // Implicit same-branch genealogy is handled in decision 2.
+      if (args.parentSessionId !== undefined && args.parentSessionId !== null) {
+        resolvedParentSessionId = await resolveSessionId(ctx, args.parentSessionId);
+        parentSessionForPatch = (await ctx.app
+          .service('sessions')
+          .get(resolvedParentSessionId, ctx.baseServiceParams)) as Session;
 
-          if (parentSessionForPatch.branch_id !== branch.branch_id) {
-            throw new Error(
-              `parentSessionId must reference a session in the target branch (${shortId(branch.branch_id)}). ` +
-                'For cross-branch completion routing, use enableCallback/callbackSessionId instead of genealogy.'
-            );
-          }
+        if (parentSessionForPatch.branch_id !== branch.branch_id) {
+          throw new Error(
+            `parentSessionId must reference a session in the target branch (${shortId(branch.branch_id)}). ` +
+              'For cross-branch completion routing, use enableCallback/callbackSessionId instead of genealogy.'
+          );
         }
-      } else if (ctx.sessionId) {
+      }
+
+      // Decision 2 — inspect the calling session, independently of genealogy.
+      // A cross-branch caller is the remote creator and ALWAYS gets a
+      // `remote_create` edge (it can coexist with an explicit same-branch
+      // genealogy parent). A same-branch caller becomes the implicit genealogy
+      // parent only when `parentSessionId` was omitted (an explicit parent
+      // wins; `null` opts out).
+      if (ctx.sessionId) {
         const callingSession = (await ctx.app
           .service('sessions')
           .get(ctx.sessionId, ctx.baseServiceParams)) as Session;
 
         if (callingSession.branch_id === branch.branch_id) {
-          resolvedParentSessionId = callingSession.session_id;
-          parentSessionForPatch = callingSession;
+          if (args.parentSessionId === undefined && !resolvedParentSessionId) {
+            resolvedParentSessionId = callingSession.session_id;
+            parentSessionForPatch = callingSession;
+          }
+          // parentSessionId: null in the same branch → intentionally unlinked;
+          // no genealogy parent and no cross-branch provenance.
         } else {
           skippedAutoParentDueToBranchMismatch = true;
           remoteRelationshipSourceSessionId = callingSession.session_id;
@@ -1612,7 +1637,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_stop',
     {
       description:
-        'Stop a running session. Kills the executor process and sets the session to idle. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input).',
+        'Request that a running session stop. The session becomes idle only after Agor verifies executor quiescence or process absence; otherwise it remains guarded in stopping. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input).',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId('sessionId', 'Session', 'Session ID to stop (UUIDv7 or short ID)'),

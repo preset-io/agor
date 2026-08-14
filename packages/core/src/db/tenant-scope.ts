@@ -3,6 +3,7 @@ import type { TenantID } from '../types/tenant';
 import {
   runWithoutTenantDatabaseScope,
   type SystemDatabaseCapability,
+  type TenantDatabaseScope,
   tenantContextScope,
   tenantDatabaseScope,
 } from './tenant-context';
@@ -29,7 +30,7 @@ import type {
   TenantScopeAwareDatabase,
   TenantScopedDatabase,
 } from './client';
-import { isPostgresDatabase } from './database-wrapper';
+import { isPostgresDatabase, runDatabaseTransaction } from './database-wrapper';
 
 const tenantScopedProxyTargets = new WeakMap<object, RawDatabase | Database>();
 const tenantScopedProxyOptions = new WeakMap<object, TenantScopedDatabaseProxyOptions>();
@@ -108,6 +109,89 @@ export function createTenantScopedDatabaseProxy(
   return proxy;
 }
 
+interface TenantCommitCallbacks {
+  postCommit: Array<() => Promise<void>>;
+  afterCommit: Array<() => Promise<void> | void>;
+}
+
+function createTenantCommitCallbacks(): TenantCommitCallbacks {
+  return { postCommit: [], afterCommit: [] };
+}
+
+function resolveTenantBoundary(
+  tenantId: TenantID | string | undefined,
+  boundary: 'scope' | 'transaction'
+): {
+  existingScope: TenantDatabaseScope | undefined;
+  effectiveTenantId: TenantID | string | undefined;
+} {
+  const operationTenantId = tenantContextScope.getStore()?.tenantId;
+  if (tenantId && operationTenantId && tenantId !== operationTenantId) {
+    throw new Error(
+      `Cannot enter tenant database ${boundary} ${tenantId} from active tenant context ${operationTenantId}`
+    );
+  }
+
+  const existingScope = tenantDatabaseScope.getStore();
+  const effectiveTenantId =
+    tenantId ??
+    operationTenantId ??
+    (existingScope?.kind === 'tenant' ? existingScope.tenantId : undefined);
+
+  if (
+    existingScope?.kind === 'tenant' &&
+    effectiveTenantId &&
+    existingScope.tenantId &&
+    effectiveTenantId !== existingScope.tenantId
+  ) {
+    throw new Error(
+      `Cannot enter tenant ${boundary} ${effectiveTenantId} from active tenant scope ${existingScope.tenantId}`
+    );
+  }
+
+  return { existingScope, effectiveTenantId };
+}
+
+async function configurePostgresTenantScope(
+  scopedDb: Database,
+  baseDb: Database,
+  tenantId: TenantID | string | undefined
+): Promise<void> {
+  if (!isPostgresDatabase(baseDb) || !tenantId) return;
+  await (scopedDb as unknown as { execute(query: unknown): Promise<unknown> }).execute(
+    sql`SELECT set_config('agor.tenant_id', ${tenantId}, true)`
+  );
+}
+
+function enterOwnedTenantDatabaseScope<T>(
+  scopedDb: Database,
+  tenantId: TenantID | string | undefined,
+  transactionActive: boolean,
+  callbacks: TenantCommitCallbacks,
+  work: (db: TenantScopedDatabase) => Promise<T>
+): Promise<T> {
+  return tenantDatabaseScope.run(
+    {
+      db: scopedDb,
+      kind: 'tenant',
+      tenantId,
+      transactionActive,
+      postCommitCallbacks: callbacks.postCommit,
+      afterCommitCallbacks: callbacks.afterCommit,
+    },
+    () => work(scopedDb as TenantScopedDatabase)
+  );
+}
+
+async function drainTenantCommitCallbacks(
+  baseDb: Database,
+  tenantId: TenantID | string | undefined,
+  callbacks: TenantCommitCallbacks
+): Promise<void> {
+  await drainTenantDatabasePostCommitCallbacks(baseDb, tenantId, callbacks.postCommit);
+  await drainAfterTenantDatabaseCommitCallbacks(callbacks.afterCommit);
+}
+
 /**
  * Run work inside a tenant-scoped database context. On Postgres this opens a
  * transaction and sets `agor.tenant_id` transaction-locally for RLS policies.
@@ -118,14 +202,7 @@ export async function runWithTenantDatabaseScope<T>(
   tenantId: TenantID | string | undefined,
   work: (db: TenantScopedDatabase) => Promise<T>
 ): Promise<T> {
-  const operationTenantId = tenantContextScope.getStore()?.tenantId;
-  if (tenantId && operationTenantId && tenantId !== operationTenantId) {
-    throw new Error(
-      `Cannot enter tenant database scope ${tenantId} from active tenant context ${operationTenantId}`
-    );
-  }
-  const effectiveTenantId = tenantId ?? operationTenantId;
-  const existingScope = tenantDatabaseScope.getStore();
+  const { existingScope, effectiveTenantId } = resolveTenantBoundary(tenantId, 'scope');
   if (existingScope) {
     if (existingScope.kind === 'system') {
       if (effectiveTenantId) {
@@ -135,56 +212,77 @@ export async function runWithTenantDatabaseScope<T>(
       }
       return work(existingScope.db as TenantScopedDatabase);
     }
-    if (
-      effectiveTenantId &&
-      existingScope.tenantId &&
-      effectiveTenantId !== existingScope.tenantId
-    ) {
-      throw new Error(
-        `Cannot enter tenant scope ${effectiveTenantId} from active tenant scope ${existingScope.tenantId}`
-      );
-    }
     return work(existingScope.db as TenantScopedDatabase);
   }
 
   const baseDb = unwrapTenantScopedDatabaseProxy(db);
-  const postCommitCallbacks: Array<() => Promise<void>> = [];
-  const afterCommitCallbacks: Array<() => Promise<void> | void> = [];
+  const callbacks = createTenantCommitCallbacks();
 
   if (!isPostgresDatabase(baseDb) || !effectiveTenantId) {
-    const result = await tenantDatabaseScope.run(
-      {
-        db: baseDb,
-        kind: 'tenant',
-        tenantId: effectiveTenantId,
-        postCommitCallbacks,
-        afterCommitCallbacks,
-      },
-      () => work(baseDb as TenantScopedDatabase)
+    const result = await enterOwnedTenantDatabaseScope(
+      baseDb,
+      effectiveTenantId,
+      false,
+      callbacks,
+      work
     );
-    await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
-    await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
+    await drainTenantCommitCallbacks(baseDb, effectiveTenantId, callbacks);
     return result;
   }
 
   const result = await baseDb.transaction(async (tx) => {
     const scopedDb = tx as unknown as Database;
-    await (scopedDb as unknown as { execute(query: unknown): Promise<unknown> }).execute(
-      sql`SELECT set_config('agor.tenant_id', ${effectiveTenantId}, true)`
-    );
-    return tenantDatabaseScope.run(
-      {
-        db: scopedDb,
-        kind: 'tenant',
-        tenantId: effectiveTenantId,
-        postCommitCallbacks,
-        afterCommitCallbacks,
-      },
-      () => work(scopedDb as TenantScopedDatabase)
-    );
+    await configurePostgresTenantScope(scopedDb, baseDb, effectiveTenantId);
+    return enterOwnedTenantDatabaseScope(scopedDb, effectiveTenantId, true, callbacks, work);
   });
-  await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
-  await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
+  await drainTenantCommitCallbacks(baseDb, effectiveTenantId, callbacks);
+  return result;
+}
+
+/**
+ * Run one short tenant-owned metadata unit in a native database transaction on
+ * both supported dialects.
+ *
+ * Normal SQLite request scopes intentionally carry identity only, because a
+ * whole Feathers request can include slow network/process work. Callers use
+ * this narrower primitive for metadata phases that must commit atomically. If
+ * a PostgreSQL request already owns a transaction, the work joins it. Queued
+ * realtime/deferred callbacks drain only after the native transaction commits.
+ */
+export async function runWithTenantDatabaseTransaction<T>(
+  db: TenantScopeAwareDatabase | RawDatabase | Database,
+  tenantId: TenantID | string | undefined,
+  work: (db: TenantScopedDatabase) => Promise<T>
+): Promise<T> {
+  const { existingScope, effectiveTenantId } = resolveTenantBoundary(tenantId, 'transaction');
+  if (existingScope?.kind === 'system') {
+    if (effectiveTenantId) {
+      throw new Error(
+        `Cannot enter tenant transaction ${effectiveTenantId} from active system database scope (${existingScope.systemReason})`
+      );
+    }
+    throw new Error('Cannot enter a tenant transaction from an active system database scope');
+  }
+  if (existingScope?.kind === 'tenant' && existingScope.transactionActive) {
+    return work(existingScope.db as TenantScopedDatabase);
+  }
+
+  const baseDb = unwrapTenantScopedDatabaseProxy(db);
+  const callbacks = createTenantCommitCallbacks();
+  const execute = () =>
+    runDatabaseTransaction(
+      baseDb,
+      async (tx) => {
+        await configurePostgresTenantScope(tx, baseDb, effectiveTenantId);
+        return enterOwnedTenantDatabaseScope(tx, effectiveTenantId, true, callbacks, work);
+      },
+      { sqliteImmediate: true }
+    );
+
+  // SQLite requests normally have an identity-only DB scope. Temporarily leave
+  // it so the repository proxy targets the new native transaction handle.
+  const result = existingScope ? await runWithoutTenantDatabaseScope(execute) : await execute();
+  await drainTenantCommitCallbacks(baseDb, effectiveTenantId, callbacks);
   return result;
 }
 

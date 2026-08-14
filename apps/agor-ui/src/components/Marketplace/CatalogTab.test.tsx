@@ -94,6 +94,33 @@ function renderTab({ connected = true }: { connected?: boolean } = {}) {
   );
 }
 
+/**
+ * A card, found by the label its accessible name is computed from.
+ *
+ * `*ByRole` resolves a role for every element in the tree and calls
+ * `getComputedStyle` on each to decide whether it is exposed. Against the
+ * ~340KB of CSS antd injects into jsdom that is 300-700ms over a freshly
+ * mounted subtree, and `findBy` allows 1000ms in total — so two polls exhaust
+ * the wait even though the card has been in the DOM since ~60ms, and the
+ * assertion turns on how loaded the runner is rather than on the component.
+ * `aria-label` is the attribute that name is computed from, and costs ~3ms.
+ *
+ * The role itself is asserted in `renders a card per entry`, once, off the
+ * polling path.
+ */
+const findCard = (title: string) => screen.findByLabelText(`Open ${title}`);
+const queryCard = (title: string) => screen.queryByLabelText(`Open ${title}`);
+
+/**
+ * The open drawer. The disclosure is the one block it always renders, so it is
+ * the cheap thing to wait on; the `dialog` role is then resolved once rather
+ * than on every poll.
+ */
+async function findDrawer() {
+  await screen.findByText('What this can access');
+  return within(screen.getByRole('dialog'));
+}
+
 beforeEach(() => {
   catalogQueries = [];
   catalogRows = [DEEPWIKI, LINEAR];
@@ -112,7 +139,11 @@ beforeEach(() => {
 describe('catalog browsing', () => {
   it('renders a card per entry', async () => {
     renderTab();
-    expect(await screen.findByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    await findCard('DeepWiki');
+    // The one place the role itself is the claim, so the one place that pays
+    // for resolving it — and off the polling path, where the cost is a single
+    // query rather than one per attempt.
+    expect(screen.getByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open Linear' })).toBeInTheDocument();
   });
 
@@ -157,15 +188,13 @@ describe('catalog browsing', () => {
     );
     expect(catalogQueries).toHaveLength(0);
 
-    await act(async () => {
-      rerender(
-        <MemoryRouter>
-          <CatalogTab client={client} connected={true} />
-        </MemoryRouter>
-      );
-    });
+    rerender(
+      <MemoryRouter>
+        <CatalogTab client={client} connected={true} />
+      </MemoryRouter>
+    );
 
-    expect(screen.getByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    expect(await findCard('DeepWiki')).toBeInTheDocument();
   });
 
   it('renders a failed read as a failure, not as an empty catalog', async () => {
@@ -185,7 +214,7 @@ describe('catalog browsing', () => {
     catalogFindError = null;
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
-    expect(await screen.findByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    expect(await findCard('DeepWiki')).toBeInTheDocument();
     expect(screen.queryByText('Could not load the catalog')).not.toBeInTheDocument();
   });
 
@@ -204,7 +233,7 @@ describe('catalog browsing', () => {
 
   it('still blames the filters when the filters are to blame', async () => {
     renderTab();
-    await screen.findByRole('button', { name: 'Open DeepWiki' });
+    await findCard('DeepWiki');
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
       target: { value: 'nothing-matches-this' },
@@ -222,12 +251,12 @@ describe('catalog browsing', () => {
     catalogRows = [DEEPWIKI, LINEAR];
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
 
-    expect(await screen.findByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    expect(await findCard('DeepWiki')).toBeInTheDocument();
   });
 
   it('pushes filters and page bounds to the server rather than filtering in the browser', async () => {
     renderTab();
-    await screen.findByRole('button', { name: 'Open DeepWiki' });
+    await findCard('DeepWiki');
 
     const listQuery = catalogQueries.find((query) => query.$limit === 24);
     expect(listQuery).toMatchObject({ sort: 'popularity', $limit: 24, $skip: 0 });
@@ -235,7 +264,7 @@ describe('catalog browsing', () => {
 
   it('hides the match count until something is actually filtering (REQ-CAT-3)', async () => {
     renderTab();
-    await screen.findByRole('button', { name: 'Open DeepWiki' });
+    await findCard('DeepWiki');
     expect(screen.queryByText(/servers match/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('switch', { name: /Reviewed by Preset/i }));
@@ -252,12 +281,12 @@ describe('catalog browsing', () => {
       { ...LINEAR, probed_auth_type: 'unknown' },
     ];
     renderTab();
-    await screen.findByRole('button', { name: 'Open DeepWiki' });
+    await findCard('DeepWiki');
 
     fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
 
     expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    expect(queryCard('DeepWiki')).toBeInTheDocument();
     expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
   });
 
@@ -267,14 +296,12 @@ describe('catalog browsing', () => {
       { ...LINEAR, probed_auth_type: 'oauth' },
     ];
     renderTab();
-    await screen.findByRole('button', { name: 'Open Linear' });
+    await findCard('Linear');
 
     fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
 
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Open Linear' })).not.toBeInTheDocument()
-    );
-    expect(screen.getByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
+    expect(queryCard('DeepWiki')).toBeInTheDocument();
     expect(catalogQueries.at(-1)?.probed_auth_types).toEqual(['none', 'unknown']);
   });
 
@@ -282,7 +309,7 @@ describe('catalog browsing', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       renderTab();
-      await screen.findByRole('button', { name: 'Open DeepWiki' });
+      await findCard('DeepWiki');
       const before = catalogQueries.length;
 
       const input = screen.getByRole('textbox', { name: 'Search MCP servers' });
@@ -303,8 +330,8 @@ describe('catalog browsing', () => {
 describe('connect', () => {
   async function openDrawer() {
     renderTab();
-    fireEvent.click(await screen.findByRole('button', { name: 'Open DeepWiki' }));
-    return within(await screen.findByRole('dialog'));
+    fireEvent.click(await findCard('DeepWiki'));
+    return findDrawer();
   }
 
   it('shows the access disclosure expanded and blocks connect until it is acknowledged', async () => {
@@ -329,8 +356,8 @@ describe('connect', () => {
   it('offers no connect control for an entry that discloses nothing', async () => {
     catalogRows = [{ ...DEEPWIKI, permission_disclosure: '' }];
     renderTab();
-    fireEvent.click(await screen.findByRole('button', { name: 'Open DeepWiki' }));
-    const drawer = within(await screen.findByRole('dialog'));
+    fireEvent.click(await findCard('DeepWiki'));
+    const drawer = await findDrawer();
 
     expect(drawer.getByText(/has not stated what it can access/)).toBeVisible();
     expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
@@ -338,10 +365,11 @@ describe('connect', () => {
 
   it('connects by catalog key alone and lands in the new session with the prompt loaded', async () => {
     const drawer = await openDrawer();
+    const connect = drawer.getByRole('button', { name: /Connect/ });
     fireEvent.click(drawer.getByRole('checkbox'));
-    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeEnabled());
+    await waitFor(() => expect(connect).toBeEnabled());
 
-    fireEvent.click(drawer.getByRole('button', { name: /Connect/ }));
+    fireEvent.click(connect);
 
     await waitFor(() => expect(connectCalls).toHaveLength(1));
     expect(connectCalls[0]).toEqual({
@@ -364,10 +392,11 @@ describe('connect', () => {
       throw new Error('DeepWiki requires authentication, which is not supported yet');
     };
     const drawer = await openDrawer();
+    const connect = drawer.getByRole('button', { name: /Connect/ });
     fireEvent.click(drawer.getByRole('checkbox'));
-    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeEnabled());
+    await waitFor(() => expect(connect).toBeEnabled());
 
-    fireEvent.click(drawer.getByRole('button', { name: /Connect/ }));
+    fireEvent.click(connect);
 
     expect(await drawer.findByText(/requires authentication/)).toBeVisible();
     expect(mockNavigate).not.toHaveBeenCalled();
@@ -376,8 +405,8 @@ describe('connect', () => {
   it('offers no connect control for an entry that has not been reviewed', async () => {
     catalogRows = [{ ...DEEPWIKI, curated: false }];
     renderTab();
-    fireEvent.click(await screen.findByRole('button', { name: 'Open DeepWiki' }));
-    const drawer = within(await screen.findByRole('dialog'));
+    fireEvent.click(await findCard('DeepWiki'));
+    const drawer = await findDrawer();
 
     expect(drawer.getByText(/Only servers reviewed by Preset/)).toBeVisible();
     expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();

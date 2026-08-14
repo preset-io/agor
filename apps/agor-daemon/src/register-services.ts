@@ -45,7 +45,7 @@ import {
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   OAuthFlowContext,
   OAuthTokenResponse,
@@ -53,6 +53,7 @@ import type {
 import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type {
   AuthenticatedParams,
+  BranchID,
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
@@ -68,7 +69,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { hasMinimumRole, isMCPOAuthGrantBindingVersion, ROLES, TaskStatus } from '@agor/core/types';
-import type { UnixUserMode } from '@agor/core/unix';
+import { resolveBranchGroupName, type UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
 import type {
@@ -191,6 +192,7 @@ import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { escapeHtml } from './utils/html.js';
+import { persistDiscoveredMCPCapabilities } from './utils/mcp-discovered-capabilities.js';
 import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
@@ -613,7 +615,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // registration is intentionally absent rather than forwarding privileged
   // work through an impersonated executor.
   if (shouldRegisterLocalHostOperations(config)) {
-    app.use('/admin/local-actions', createLocalActionsService(createLocalDaemonHostOperations()));
+    app.use(
+      '/admin/local-actions',
+      createLocalActionsService(createLocalDaemonHostOperations(), async (branchId, params) => {
+        const branch = await app.service('branches').get(branchId, params);
+        if (!branch.unix_group) {
+          throw new BadRequest(
+            `Branch ${branchId} has no persisted unix_group; run agor local sync-unix --branch-id ${branchId}`
+          );
+        }
+        return resolveBranchGroupName(branchId as BranchID, branch.unix_group);
+      })
+    );
   }
 
   app.use(
@@ -3509,7 +3522,6 @@ async function registerMCPServices(
           '@agor/core/tools/mcp/http-headers'
         );
         const tenantId = tenantIdFromParams(params);
-        const mcpServerRepo = new MCPServerRepository(db);
 
         const validateUrl = (url: string): { valid: boolean; error?: string } => {
           try {
@@ -3891,7 +3903,7 @@ async function registerMCPServices(
           ])) as PromptsResult;
 
           if (serverId) {
-            await mcpServerRepo.update(serverId, {
+            await persistDiscoveredMCPCapabilities(db, tenantId, serverId as MCPServerID, {
               tools: toolsResult.tools.map((t) => ({
                 name: t.name,
                 description: t.description || '',

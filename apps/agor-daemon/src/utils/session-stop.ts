@@ -68,6 +68,19 @@ export async function stopSessionPreserveQueue(
 ): Promise<StopSessionResult> {
   const session = await deps.sessionsService.get(sessionId, params);
 
+  // Stop is idempotent across retries and the per-session turn lock. A
+  // concurrent caller can observe the first caller's already-committed idle
+  // projection; report the requested postcondition instead of a false failure.
+  if (session.status === SessionStatus.IDLE) {
+    const queuedTasks = await deps.taskRepo.findQueued(sessionId);
+    return {
+      success: true,
+      status: SessionStatus.IDLE,
+      reason: 'Session is already idle',
+      queuedTasksPreserved: queuedTasks.length,
+    };
+  }
+
   if (!isSessionExecuting(session)) {
     return {
       success: false,

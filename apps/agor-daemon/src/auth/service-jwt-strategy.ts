@@ -143,6 +143,9 @@ export class ServiceJWTStrategy extends JWTStrategy {
           branch_id?: string;
           purpose?: string;
           terminal_user_id?: string;
+          terminal_id?: string;
+          terminal_branch_id?: string;
+          terminal_owner_boot_id?: string;
         })
       | undefined;
 
@@ -169,6 +172,9 @@ export class ServiceJWTStrategy extends JWTStrategy {
             role: 'terminal-executor',
             _isTerminalExecutor: true,
             terminal_user_id: terminalUserId,
+            terminal_id: payload.terminal_id,
+            terminal_branch_id: payload.terminal_branch_id,
+            terminal_owner_boot_id: payload.terminal_owner_boot_id,
           },
         };
       }

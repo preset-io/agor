@@ -3,6 +3,31 @@ import type { BoardID, BranchID, UUID } from './id';
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
 
+export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
+export type BranchMetadataAction = (typeof BRANCH_METADATA_ACTIONS)[number];
+
+export const BRANCH_FILESYSTEM_ACTIONS = ['preserved', 'cleaned', 'deleted'] as const;
+export type BranchFilesystemAction = (typeof BRANCH_FILESYSTEM_ACTIONS)[number];
+
+/** Canonical request contract for the hooked branch archive/delete boundary. */
+export interface BranchArchiveOrDeleteOptions {
+  metadataAction: BranchMetadataAction;
+  filesystemAction: BranchFilesystemAction;
+}
+
+export function isBranchArchiveOrDeleteOptions(
+  value: unknown
+): value is BranchArchiveOrDeleteOptions {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const options = value as Record<string, unknown>;
+  return (
+    BRANCH_METADATA_ACTIONS.some((candidate) => candidate === options.metadataAction) &&
+    BRANCH_FILESYSTEM_ACTIONS.some((candidate) => candidate === options.filesystemAction)
+  );
+}
+
+export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };
+
 /**
  * Git branch - First-class entity for isolated development contexts
  *
@@ -340,7 +365,8 @@ export interface Branch {
   /**
    * Unix group for this branch (if Unix modes enabled)
    *
-   * Format: 'agor_wt_<short-id>'
+   * Format: 'agor_wt_<canonical-24-char-short-id>'; legacy persisted rows may
+   * retain the older 8-character form until explicitly migrated.
    * Owners are added to this group for filesystem access.
    */
   unix_group?: string;

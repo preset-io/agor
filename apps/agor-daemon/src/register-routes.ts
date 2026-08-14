@@ -56,8 +56,10 @@ import {
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
+  BranchArchiveOrDeleteOptions,
   HookContext,
   MCPMemberPolicy,
+  MCPMemberPolicySetting,
   Message,
   MessageID,
   MessageSource,
@@ -74,6 +76,7 @@ import type {
 } from '@agor/core/types';
 import {
   hasMinimumRole,
+  isBranchArchiveOrDeleteOptions,
   isTaskPendingDispatch,
   MCP_MEMBER_POLICIES,
   MessageRole,
@@ -125,6 +128,7 @@ import {
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
@@ -137,6 +141,7 @@ import {
   registerAuthenticatedRoute as registerAuthenticatedRouteBase,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
 import {
   cacheBranchAccess,
   checkSessionOwnerOrAdmin,
@@ -316,9 +321,16 @@ export async function authorizeTaskTerminalRoute(input: {
   return internalParams;
 }
 
-export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | undefined {
+export function findMatchingUnverifiedTerminationTask(
+  tasks: readonly Task[],
+  expected: { taskId: string; terminationRequestedAt: string }
+): Task | undefined {
   return tasks.find(
-    (task) => task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
+    (task) =>
+      task.task_id === expected.taskId &&
+      task.status === TaskStatus.STOPPING &&
+      task.sdk_failure?.termination === 'unverified' &&
+      task.termination_request?.requested_at === expected.terminationRequestedAt
   );
 }
 
@@ -378,6 +390,45 @@ export function createUploadAuthMiddleware(input: {
       console.error('❌ [Upload Auth] Authentication failed:', error);
       res.status(401).json({ error: 'Authentication required' });
     }
+  };
+}
+
+export async function authorizeForceFailRoute(input: {
+  session: Pick<Session, 'branch_id'>;
+  params: RouteParams;
+  body: Record<string, unknown>;
+  findActiveTasks: () => Promise<readonly Task[]>;
+  isBranchOwner: (branchId: Session['branch_id'], userId: UUID) => Promise<boolean>;
+}): Promise<{ task: Task; confirmation: string; terminationRequestedAt: string }> {
+  const userId = input.params.user?.user_id;
+  const isAdmin = hasMinimumRole(input.params.user?.role, ROLES.ADMIN);
+  const isOwner =
+    !isAdmin && !!userId && (await input.isBranchOwner(input.session.branch_id, userId as UUID));
+  if (!isAdmin && !isOwner) {
+    throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
+  }
+  if (typeof input.body.confirmation !== 'string') {
+    throw new BadRequest('Type STOP to confirm force-fail.');
+  }
+  if (
+    typeof input.body.task_id !== 'string' ||
+    typeof input.body.termination_requested_at !== 'string'
+  ) {
+    throw new BadRequest('Force-fail requires the exact Task termination request.');
+  }
+  const task = findMatchingUnverifiedTerminationTask(await input.findActiveTasks(), {
+    taskId: input.body.task_id,
+    terminationRequestedAt: input.body.termination_requested_at,
+  });
+  if (!task) {
+    throw new Conflict(
+      'The Task termination state changed. Review the current Task before force-failing.'
+    );
+  }
+  return {
+    task,
+    confirmation: input.body.confirmation,
+    terminationRequestedAt: input.body.termination_requested_at,
   };
 }
 
@@ -2638,29 +2689,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         };
         if (body.force_unverified === true) {
           const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
-            const { session, activeTasks } = await inCurrentTenantDatabaseScope(async () => {
+            const target = await inCurrentTenantDatabaseScope(async () => {
               const session = await app.service('sessions').get(id, params);
-              const activeTasks = await findActiveTasksForSession(app, session.session_id, params);
-              return { session, activeTasks };
+              return authorizeForceFailRoute({
+                session,
+                params,
+                body,
+                findActiveTasks: () => findActiveTasksForSession(app, session.session_id, params),
+                isBranchOwner: (branchId, userId) =>
+                  stopRouteRepositories.branchRepo.isOwner(branchId, userId),
+              });
             });
-            const task = findUnverifiedTerminationTask(activeTasks);
-            if (!task) throw new BadRequest('Session has no unverified Task to force-fail.');
-            const taskId = task.task_id;
-            const userId = params.user?.user_id;
-            const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
-            const isOwner =
-              !!userId &&
-              (await stopRouteRepositories.branchRepo.isOwner(session.branch_id, userId as UUID));
-            if (!isAdmin && !isOwner) {
-              throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
-            }
-            if (typeof body.confirmation !== 'string') {
-              throw new BadRequest(`Type ${shortId(taskId)} to confirm force-fail.`);
-            }
             const failedTask = await forceFailUnverifiedTask({
               app,
-              taskId,
-              confirmation: body.confirmation,
+              taskId: target.task.task_id,
+              terminationRequestedAt: target.terminationRequestedAt,
+              confirmation: target.confirmation,
               params,
             });
             return {
@@ -3488,10 +3532,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
       if (!id) throw new Error('Branch ID required');
-      const options = data as {
-        metadataAction: 'archive' | 'delete';
-        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-      };
+      if (!isBranchArchiveOrDeleteOptions(data)) {
+        throw new BadRequest('Invalid branch archive/delete options');
+      }
+      const options: BranchArchiveOrDeleteOptions = data;
       return branchesService.archiveOrDelete(
         id as import('@agor/core/types').BranchID,
         options,
@@ -3506,32 +3550,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'archive or delete branches'),
-        inTenantDatabaseScope(async (context: HookContext) => {
-          const id = context.params.route?.id;
-          if (!id) throw new Error('Branch ID required');
-
-          const branch = await branchRepository.findById(id);
-          if (!branch) {
-            throw new Forbidden(`Branch not found: ${id}`);
-          }
-
-          await cacheBranchAccess(context.params, branchRepository, branch);
-
-          return context;
-        }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'archive or delete branches', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to archive/delete branches'
-                );
-              }
-              return context;
-            },
+        inTenantDatabaseScope((context: HookContext) =>
+          authorizeBranchArchiveDelete(context, {
+            branchRepository,
+            branchRbacEnabled,
+            superadminOpts,
+          })
+        ),
       ],
     },
   });
@@ -4123,7 +4148,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/mcp-member-policy',
     {
-      async find(params: RouteParams) {
+      async find(params: RouteParams): Promise<MCPMemberPolicySetting> {
         const policy = await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId());
         // The policy alone does not answer "may I add one?" — the role floor
         // beneath it does too. Answering here keeps a client from rebuilding
@@ -4134,17 +4159,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           can_configure: canConfigureMcpServers(params.user?.role, policy),
         };
       },
-      async patch(_id: unknown, data: { policy: MCPMemberPolicy }, params: RouteParams) {
+      async patch(
+        _id: unknown,
+        data: { policy: MCPMemberPolicy },
+        params: RouteParams
+      ): Promise<MCPMemberPolicySetting> {
         if (!MCP_MEMBER_POLICIES.includes(data?.policy)) {
           throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
         }
         await setMcpMemberPolicy(db, data.policy, getCurrentTenantId(), params.user?.user_id);
-        return { policy: data.policy };
+        return {
+          policy: data.policy,
+          can_configure: canConfigureMcpServers(params.user?.role, data.policy),
+        };
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
-      find: { role: ROLES.MEMBER, action: 'read the MCP member policy' },
+      // Readable by any authenticated caller, because what it answers is
+      // partly about the caller: `can_configure` is their own capability, and
+      // the role floor means the interesting answer is the one a below-member
+      // caller gets. Gating this at member would leave that answer unreachable
+      // by the only people it refuses, who would then be shown a control that
+      // fails instead of a reason it is off.
+      find: { role: ROLES.VIEWER, action: 'read the MCP member policy' },
       patch: { role: ROLES.ADMIN, action: 'change the MCP member policy' },
     },
     requireAuth
@@ -4338,7 +4376,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Server-side gate in register-hooks.ts is the source of truth; this
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
-          webTerminal: config.execution?.allow_web_terminal !== false,
+          webTerminal: resolveWebTerminalCapability({ config, deployment }).enabled,
+          webTerminalCapability: resolveWebTerminalCapability({ config, deployment }),
           // How managed environment lifecycle fields execute. In
           // webhook-only mode the UI/MCP may still show env controls, but
           // non-URL rendered commands are rejected server-side.

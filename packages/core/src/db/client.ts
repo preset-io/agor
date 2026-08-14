@@ -5,6 +5,8 @@
  * Supports both SQLite (LibSQL) and PostgreSQL.
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { Client, Config } from '@libsql/client';
 import { createClient } from '@libsql/client';
 import type { LibSQLDatabase } from 'drizzle-orm/libsql';
@@ -13,6 +15,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { loadConfigSync } from '../config/config-manager';
+import type { AgorConfig } from '../config/types';
 import { sanitizeDbError } from './sanitize-error';
 import * as postgresSchema from './schema.postgres';
 
@@ -342,6 +345,66 @@ export type SystemDatabase = Database & { readonly [systemDatabaseBrand]: 'syste
  */
 export const DEFAULT_DB_PATH = 'file:~/.agor/agor.db';
 
+export interface DatabaseUrlResolutionOptions {
+  /** Already-loaded config, allowing sudo/local callers to choose the correct home. */
+  config?: Pick<AgorConfig, 'database'>;
+  /** Environment override source (defaults to process.env). */
+  env?: NodeJS.ProcessEnv;
+  /** Home used to expand `~` in local database paths. */
+  homeDir?: string;
+}
+
+function expandDatabasePathForHome(value: string, homeDir: string): string {
+  if (value.startsWith('file:~/')) return `file:${join(homeDir, value.slice(7))}`;
+  if (value.startsWith('~/')) return join(homeDir, value.slice(2));
+  return value;
+}
+
+/** Resolve the effective database URL from an explicit config/environment view. */
+export function resolveDatabaseUrl(options: DatabaseUrlResolutionOptions = {}): string {
+  const env = options.env ?? process.env;
+  const homeDir = options.homeDir ?? homedir();
+
+  if (env.AGOR_DB_DIALECT === 'postgresql') {
+    return env.DATABASE_URL || 'postgresql://localhost:5432/agor';
+  }
+  if (env.AGOR_DB_PATH) {
+    return expandDatabasePathForHome(env.AGOR_DB_PATH, homeDir);
+  }
+  if (env.DATABASE_URL) {
+    return expandDatabasePathForHome(env.DATABASE_URL, homeDir);
+  }
+
+  const dbConfig = options.config?.database;
+  if (dbConfig) {
+    const inferredDialect = dbConfig.postgresql?.url
+      ? detectDialectFromUrl(dbConfig.postgresql.url)
+      : null;
+    const dialect = dbConfig.dialect ?? inferredDialect ?? 'sqlite';
+
+    if (dialect === 'postgresql') {
+      if (dbConfig.postgresql?.url) return dbConfig.postgresql.url;
+      if (dbConfig.postgresql?.host) {
+        const pg = dbConfig.postgresql;
+        const user = encodeURIComponent(pg.user || 'postgres');
+        const password = pg.password ? `:${encodeURIComponent(pg.password)}` : '';
+        const port = pg.port || 5432;
+        const database = pg.database || 'agor';
+        return `postgresql://${user}${password}@${pg.host}:${port}/${database}`;
+      }
+      return 'postgresql://localhost:5432/agor';
+    }
+
+    if (dbConfig.sqlite?.path) {
+      const sqlitePath = dbConfig.sqlite.path;
+      const prefixed = sqlitePath.startsWith('file:') ? sqlitePath : `file:${sqlitePath}`;
+      return expandDatabasePathForHome(prefixed, homeDir);
+    }
+  }
+
+  return expandDatabasePathForHome(DEFAULT_DB_PATH, homeDir);
+}
+
 /**
  * Resolve database URL from environment and config
  *
@@ -355,53 +418,13 @@ export const DEFAULT_DB_PATH = 'file:~/.agor/agor.db';
  * @returns Database URL string
  */
 export function getDatabaseUrl(): string {
-  // Environment variables take highest priority
-  if (process.env.AGOR_DB_DIALECT === 'postgresql') {
-    return process.env.DATABASE_URL || 'postgresql://localhost:5432/agor';
-  }
-  if (process.env.AGOR_DB_PATH) {
-    return expandPath(process.env.AGOR_DB_PATH);
-  }
-  if (process.env.DATABASE_URL) {
-    return process.env.DATABASE_URL;
-  }
-
-  // Fall back to config.yaml
+  let config: AgorConfig | undefined;
   try {
-    const config = loadConfigSync();
-    const dbConfig = config.database;
-
-    if (dbConfig) {
-      const dialect = dbConfig.dialect || getDatabaseDialect();
-
-      if (dialect === 'postgresql') {
-        // Build URL from individual params or use url directly
-        if (dbConfig.postgresql?.url) {
-          return dbConfig.postgresql.url;
-        }
-        if (dbConfig.postgresql?.host) {
-          const pg = dbConfig.postgresql;
-          const user = encodeURIComponent(pg.user || 'postgres');
-          const password = pg.password ? `:${encodeURIComponent(pg.password)}` : '';
-          const host = pg.host;
-          const port = pg.port || 5432;
-          const database = pg.database || 'agor';
-          return `postgresql://${user}${password}@${host}:${port}/${database}`;
-        }
-      }
-
-      if (dialect === 'sqlite' && dbConfig.sqlite?.path) {
-        const sqlitePath = dbConfig.sqlite.path;
-        // Ensure file: prefix for consistency
-        const prefixed = sqlitePath.startsWith('file:') ? sqlitePath : `file:${sqlitePath}`;
-        return expandPath(prefixed);
-      }
-    }
+    config = loadConfigSync();
   } catch {
-    // Config not available — fall through to default
+    // Config not available — resolve from environment/defaults.
   }
-
-  return expandPath(DEFAULT_DB_PATH);
+  return resolveDatabaseUrl({ config });
 }
 
 /**

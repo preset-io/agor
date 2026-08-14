@@ -24,6 +24,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
+import type { BranchID } from '@agor/core/types';
 import { diagnoseGit } from '@agor/git';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
@@ -913,7 +914,6 @@ export async function handleGitClone(
  * @param client - Feathers client
  * @param branchId - Branch ID
  * @param repoId - Repo ID
- * @param unixGroup - Unix group name (to look up GID), undefined if RBAC disabled
  * @param configuredHostIp - Host IP override from daemon-resolved config (config.daemon.host_ip_address)
  * @returns Rendered template fields
  */
@@ -921,7 +921,6 @@ async function renderEnvironmentTemplates(
   client: AgorClient,
   branchId: string,
   repoId: string,
-  unixGroup: string | undefined,
   configuredHostIp: string | undefined
 ): Promise<{
   start_command?: string;
@@ -934,7 +933,7 @@ async function renderEnvironmentTemplates(
 }> {
   // Import dependencies dynamically
   const { renderBranchSnapshot } = await import('@agor/core/environment/render-snapshot');
-  const { getGidFromGroupName } = await import('@agor/core/unix');
+  const { getGidFromGroupName, resolveBranchGroupName } = await import('@agor/core/unix');
   const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
 
   // Fetch branch and repo from database
@@ -948,7 +947,9 @@ async function renderEnvironmentTemplates(
   }
 
   // Look up GID from Unix group (only if group was created)
-  const unixGid = unixGroup ? getGidFromGroupName(unixGroup) : undefined;
+  const unixGid = branch.unix_group
+    ? getGidFromGroupName(resolveBranchGroupName(branchId as BranchID, branch.unix_group))
+    : undefined;
 
   // Resolve host IP for {{host.ip_address}} (frozen into rendered commands).
   // Override comes from daemon-resolved config slice; autodetected fallback
@@ -1202,7 +1203,6 @@ export async function handleGitBranchAdd(
           client,
           branchId,
           repoId,
-          unixGroup,
           payload.resolvedConfig?.daemon?.host_ip_address
         );
         console.log(`[git.branch.add] Templates rendered successfully`);

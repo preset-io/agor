@@ -51,6 +51,32 @@ describe('markStoppedSessionPromptableNoDrain', () => {
 });
 
 describe('stopSessionPreserveQueue', () => {
+  it('treats an already-idle session as an idempotent successful Stop', async () => {
+    const findQueued = vi.fn().mockResolvedValue([{ task_id: 'queued-task' }]);
+    const requestTermination = vi.fn();
+    await expect(
+      stopSessionPreserveQueue(
+        {
+          app: {} as never,
+          taskRepo: { findQueued } as never,
+          sessionsService: {
+            get: vi.fn().mockResolvedValue({ status: 'idle' }),
+            patch: vi.fn(),
+          } as never,
+          requestTermination: requestTermination as never,
+        },
+        'session-idle' as never
+      )
+    ).resolves.toEqual({
+      success: true,
+      status: 'idle',
+      reason: 'Session is already idle',
+      queuedTasksPreserved: 1,
+    });
+    expect(findQueued).toHaveBeenCalledWith('session-idle');
+    expect(requestTermination).not.toHaveBeenCalled();
+  });
+
   it('rejects process control for a historical removed-runtime session', async () => {
     const task = {
       task_id: 'task-cli',

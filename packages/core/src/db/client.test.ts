@@ -14,6 +14,7 @@ import {
   DatabaseConnectionError,
   type DbConfig,
   DEFAULT_DB_PATH,
+  resolveDatabaseUrl,
 } from './client';
 
 // Mock @libsql/client to avoid actual database connections
@@ -360,6 +361,48 @@ describe('createLocalDatabase', () => {
         syncInterval: expect.anything(),
       })
     );
+  });
+});
+
+describe('resolveDatabaseUrl', () => {
+  it('honors a PostgreSQL URL selected in config', () => {
+    expect(
+      resolveDatabaseUrl({
+        env: {},
+        config: {
+          database: {
+            dialect: 'postgresql',
+            postgresql: { url: 'postgresql://db.example/agor' },
+          },
+        },
+      })
+    ).toBe('postgresql://db.example/agor');
+  });
+
+  it('does not fall back to SQLite when config selects PostgreSQL without a URL', () => {
+    expect(resolveDatabaseUrl({ env: {}, config: { database: { dialect: 'postgresql' } } })).toBe(
+      'postgresql://localhost:5432/agor'
+    );
+  });
+
+  it('honors and expands the configured SQLite path using the explicit operator home', () => {
+    expect(
+      resolveDatabaseUrl({
+        env: {},
+        homeDir: '/home/operator',
+        config: { database: { dialect: 'sqlite', sqlite: { path: '~/.agor/custom.db' } } },
+      })
+    ).toBe('file:/home/operator/.agor/custom.db');
+  });
+
+  it('keeps environment database overrides ahead of config', () => {
+    expect(
+      resolveDatabaseUrl({
+        env: { AGOR_DB_PATH: 'file:~/.agor/override.db' },
+        homeDir: '/home/operator',
+        config: { database: { dialect: 'postgresql' } },
+      })
+    ).toBe('file:/home/operator/.agor/override.db');
   });
 });
 

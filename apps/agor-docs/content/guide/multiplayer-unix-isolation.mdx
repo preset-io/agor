@@ -279,8 +279,8 @@ execution:
 Default behavior (flag unset or `true`):
 
 - Any authenticated user with role `member` or higher can open a terminal.
-- Branch-level permissions still apply. Opening a terminal tab against a
-  branch requires at least `session` permission on that branch (when
+- Branch-level permissions still apply. Opening a branch-scoped terminal
+  requires at least `session` permission on that branch (when
   `branch_rbac` is on).
 
 When set to `false`:
@@ -303,6 +303,18 @@ When set to `false`:
 > For any deployment where you do not trust all members with daemon-level
 > access, either run in `insulated`/`strict` mode or set
 > `allow_web_terminal: false`.
+
+The terminal cwd and effective Unix identity are always derived server-side
+from the authorized branch and authenticated user. Each branch has a separate
+terminal runtime attachment; opening another branch never asks one shell to
+switch across daemon-visible worktrees. Daemon/runtime loss is shown as a
+disconnect and requires explicit reconnect. Zellij persistence, when available
+on the same runtime, is separate from Agor transport persistence. Agor stores
+bounded Zellij resurrection state in the effective Unix user's home, scoped by
+tenant, user, and branch. `simple` and `insulated` modes intentionally share
+that Unix home; `strict` mode and delegated per-user runtimes provide separate
+homes. Resurrection can restore layout, cwd, viewport, and bounded scrollback,
+but not live process identity or in-memory shell state.
 
 ### 5. Observability Setup
 
@@ -350,7 +362,7 @@ When RBAC is enabled (`branch_rbac: true`):
 
 Each branch gets OS-level protection:
 
-1. **Unix Group** - Dedicated group `agor_wt_<short-id>`
+1. **Unix Group** - Dedicated group `agor_wt_<24-character-short-id>`
 2. **Filesystem Permissions** - Directory owned by group with proper mode
 3. **Group Membership** - Branch owners added to group
 4. **Home Symlinks** - Owners get `~/agor/worktrees/<name>` → branch path
@@ -359,16 +371,16 @@ Each branch gets OS-level protection:
 
 ```bash
 # Branch created
-$ ls -la /var/agor/worktrees/wt-abc123/
-drwxrwx--- alice agor_wt_abc123 my-project/
+$ ls -la /var/agor/worktrees/wt-019ffd3d2cef79d1a1c64073/
+drwxrwx--- alice agor_wt_019ffd3d2cef79d1a1c64073 my-project/
 
 # Alice's home
 $ ls -la ~/agor/worktrees/
-lrwxrwxrwx alice alice my-project-abc123 -> /var/agor/worktrees/wt-abc123/my-project
+lrwxrwxrwx alice alice my-project-019ffd3d -> /var/agor/worktrees/wt-019ffd3d2cef79d1a1c64073/my-project
 
 # Bob added as owner
-$ getent group agor_wt_abc123
-agor_wt_abc123:x:1050:alice,bob
+$ getent group agor_wt_019ffd3d2cef79d1a1c64073
+agor_wt_019ffd3d2cef79d1a1c64073:x:1050:alice,bob
 ```
 
 ### Permission Levels
@@ -414,6 +426,35 @@ Agor defines three permission levels per branch:
 ---
 
 ## Troubleshooting
+
+### Migrating legacy 8-character groups
+
+New branch and repo groups use collision-safe 24-character short IDs. Existing
+8-character names remain supported and normal sync never renames a persisted
+group automatically.
+
+For an existing `strict` or `insulated` installation, first preview and then
+migrate only real legacy collision cohorts (recommended):
+
+```bash
+sudo agor local fix-group-uuids --only-dups --dry-run
+sudo agor local fix-group-uuids --only-dups
+```
+
+An optional full migration handles every legacy branch and repo group and
+removes system-only legacy groups after proving that no database row or managed
+filesystem root still uses them:
+
+```bash
+sudo agor local fix-group-uuids --dry-run
+sudo agor local fix-group-uuids
+```
+
+The command reconstructs membership from current database authorization,
+verifies managed paths before switching each row, and is safe to rerun after an
+interruption. It intentionally supports only the host-local single-tenant
+SQLite database: system-global Unix groups cannot be safely reconciled from a
+tenant-limited PostgreSQL/RLS view.
 
 ### Daemon Can't Create Users
 

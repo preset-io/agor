@@ -11,21 +11,87 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { toShortId } from '../lib/ids.js';
+import { SHORT_ID_LENGTH, shortId, toShortId } from '../lib/ids.js';
 import type { BranchID, RepoID, UUID } from '../types/index.js';
 import { UNIX_NAME_SHORT_ID_LENGTH } from './short-id-naming.js';
+
+const CANONICAL_GROUP_SHORT_ID_LENGTH = SHORT_ID_LENGTH;
+const LEGACY_GROUP_SHORT_ID_LENGTH = UNIX_NAME_SHORT_ID_LENGTH;
+
+const branchGroupPattern = new RegExp(
+  `^agor_wt_([0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}|[0-9a-f]{${CANONICAL_GROUP_SHORT_ID_LENGTH}})$`
+);
+const repoGroupPattern = new RegExp(
+  `^agor_rp_([0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}|[0-9a-f]{${CANONICAL_GROUP_SHORT_ID_LENGTH}})$`
+);
+const legacyBranchGroupPattern = new RegExp(`^agor_wt_[0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}$`);
+const legacyRepoGroupPattern = new RegExp(`^agor_rp_[0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}$`);
+const safeUnixGroupPattern = /^[a-z_][a-z0-9_-]{0,31}$/;
+
+/** Reject shell-unsafe Unix group names before constructing privileged commands. */
+export function assertSafeUnixGroupName(groupName: string): string {
+  if (!safeUnixGroupPattern.test(groupName)) {
+    throw new Error(`Unsafe Unix group name: ${JSON.stringify(groupName)}`);
+  }
+  return groupName;
+}
 
 /**
  * Generate Unix group name for a branch
  *
  * Format: agor_wt_<short-id>
- * Example: agor_wt_03b62447
+ * Example: agor_wt_019ffd3d2cef79d1a1c64073
  *
  * @param branchId - Full branch UUID
- * @returns Unix group name (e.g., 'agor_wt_03b62447')
+ * @returns Unix group name containing Agor's canonical collision-safe short ID
  */
 export function generateBranchGroupName(branchId: BranchID): string {
-  return `agor_wt_${toShortId(branchId as UUID, UNIX_NAME_SHORT_ID_LENGTH)}`;
+  return `agor_wt_${shortId(branchId as UUID)}`;
+}
+
+/** Return the group name used by Agor versions that truncated UUIDs to 8 chars. */
+export function generateLegacyBranchGroupName(branchId: BranchID): string {
+  return `agor_wt_${toShortId(branchId as UUID, LEGACY_GROUP_SHORT_ID_LENGTH)}`;
+}
+
+/** Require a persisted branch group to belong to the row that stamped it. */
+export function assertBranchGroupNameMatchesId(branchId: BranchID, groupName: string): string {
+  if (
+    groupName !== generateBranchGroupName(branchId) &&
+    groupName !== generateLegacyBranchGroupName(branchId)
+  ) {
+    throw new Error(`Invalid persisted Unix group for branch ${branchId}: ${groupName}`);
+  }
+  return groupName;
+}
+
+/**
+ * Validate and return a branch's persisted Unix group.
+ *
+ * This deliberately does not accept an absent value. Callers that initialize
+ * a row must generate and persist the canonical name first, then re-read it
+ * through this function before touching system-global Unix state.
+ */
+export function resolveBranchGroupName(branchId: BranchID, persistedGroup: string): string {
+  return assertBranchGroupNameMatchesId(branchId, persistedGroup);
+}
+
+/** Preserve an existing branch stamp while validating a requested repository update. */
+export function resolveBranchGroupUpdate(
+  branchId: BranchID,
+  currentGroup: string | null | undefined,
+  requestedGroup: string | null | undefined
+): string | undefined {
+  if (currentGroup != null) {
+    const validatedCurrent = assertBranchGroupNameMatchesId(branchId, currentGroup);
+    if (requestedGroup !== undefined && requestedGroup !== validatedCurrent) {
+      throw new Error(`Persisted Unix group for branch ${branchId} is authoritative`);
+    }
+    return validatedCurrent;
+  }
+  return requestedGroup == null
+    ? undefined
+    : assertBranchGroupNameMatchesId(branchId, requestedGroup);
 }
 
 /**
@@ -34,10 +100,10 @@ export function generateBranchGroupName(branchId: BranchID): string {
  * Extracts the short ID from a group name like 'agor_wt_03b62447'
  *
  * @param groupName - Unix group name
- * @returns Short branch ID (8 chars) or null if invalid format
+ * @returns Legacy or canonical short branch ID, or null if invalid
  */
 export function parseBranchGroupName(groupName: string): string | null {
-  const match = groupName.match(/^agor_wt_([0-9a-f]{8})$/);
+  const match = groupName.match(branchGroupPattern);
   return match ? match[1] : null;
 }
 
@@ -48,7 +114,12 @@ export function parseBranchGroupName(groupName: string): string | null {
  * @returns true if valid branch group name
  */
 export function isValidBranchGroupName(groupName: string): boolean {
-  return /^agor_wt_[0-9a-f]{8}$/.test(groupName);
+  return branchGroupPattern.test(groupName);
+}
+
+/** Whether a branch group uses the legacy collision-prone 8-character form. */
+export function isLegacyBranchGroupName(groupName: string): boolean {
+  return legacyBranchGroupPattern.test(groupName);
 }
 
 // ============================================================
@@ -59,16 +130,53 @@ export function isValidBranchGroupName(groupName: string): boolean {
  * Generate Unix group name for a repo
  *
  * Format: agor_rp_<short-id>
- * Example: agor_rp_03b62447
+ * Example: agor_rp_019ffd3d2cef79d1a1c64073
  *
  * This group controls access to repo Unix-group-managed paths:
  * repo-root traversal and the shared .git/ directory.
  *
  * @param repoId - Full repo UUID
- * @returns Unix group name (e.g., 'agor_rp_03b62447')
+ * @returns Unix group name containing Agor's canonical collision-safe short ID
  */
 export function generateRepoGroupName(repoId: RepoID): string {
-  return `agor_rp_${toShortId(repoId as UUID, UNIX_NAME_SHORT_ID_LENGTH)}`;
+  return `agor_rp_${shortId(repoId as UUID)}`;
+}
+
+/** Return the group name used by Agor versions that truncated UUIDs to 8 chars. */
+export function generateLegacyRepoGroupName(repoId: RepoID): string {
+  return `agor_rp_${toShortId(repoId as UUID, LEGACY_GROUP_SHORT_ID_LENGTH)}`;
+}
+
+/** Require a persisted repo group to belong to the row that stamped it. */
+export function assertRepoGroupNameMatchesId(repoId: RepoID, groupName: string): string {
+  if (
+    groupName !== generateRepoGroupName(repoId) &&
+    groupName !== generateLegacyRepoGroupName(repoId)
+  ) {
+    throw new Error(`Invalid persisted Unix group for repo ${repoId}: ${groupName}`);
+  }
+  return groupName;
+}
+
+/** See {@link resolveBranchGroupName}; repo access follows the same persistence rule. */
+export function resolveRepoGroupName(repoId: RepoID, persistedGroup: string): string {
+  return assertRepoGroupNameMatchesId(repoId, persistedGroup);
+}
+
+/** Preserve an existing repo stamp while validating a requested repository update. */
+export function resolveRepoGroupUpdate(
+  repoId: RepoID,
+  currentGroup: string | null | undefined,
+  requestedGroup: string | null | undefined
+): string | undefined {
+  if (currentGroup != null) {
+    const validatedCurrent = assertRepoGroupNameMatchesId(repoId, currentGroup);
+    if (requestedGroup !== undefined && requestedGroup !== validatedCurrent) {
+      throw new Error(`Persisted Unix group for repo ${repoId} is authoritative`);
+    }
+    return validatedCurrent;
+  }
+  return requestedGroup == null ? undefined : assertRepoGroupNameMatchesId(repoId, requestedGroup);
 }
 
 /**
@@ -77,10 +185,10 @@ export function generateRepoGroupName(repoId: RepoID): string {
  * Extracts the short ID from a group name like 'agor_rp_03b62447'
  *
  * @param groupName - Unix group name
- * @returns Short repo ID (8 chars) or null if invalid format
+ * @returns Legacy or canonical short repo ID, or null if invalid
  */
 export function parseRepoGroupName(groupName: string): string | null {
-  const match = groupName.match(/^agor_rp_([0-9a-f]{8})$/);
+  const match = groupName.match(repoGroupPattern);
   return match ? match[1] : null;
 }
 
@@ -91,7 +199,17 @@ export function parseRepoGroupName(groupName: string): string | null {
  * @returns true if valid repo group name
  */
 export function isValidRepoGroupName(groupName: string): boolean {
-  return /^agor_rp_[0-9a-f]{8}$/.test(groupName);
+  return repoGroupPattern.test(groupName);
+}
+
+/** Whether a repo group uses the legacy collision-prone 8-character form. */
+export function isLegacyRepoGroupName(groupName: string): boolean {
+  return legacyRepoGroupPattern.test(groupName);
+}
+
+/** Legacy branch/repo groups are never safe for context-limited automatic cleanup. */
+export function isLegacyManagedGroupName(groupName: string): boolean {
+  return isLegacyBranchGroupName(groupName) || isLegacyRepoGroupName(groupName);
 }
 
 /**
@@ -119,7 +237,7 @@ export const UnixGroupCommands = {
    * @param groupName - Name of the group to create
    * @returns Command string with sudo
    */
-  createGroup: (groupName: string) => `sudo -n groupadd ${groupName}`,
+  createGroup: (groupName: string) => `sudo -n groupadd ${assertSafeUnixGroupName(groupName)}`,
 
   /**
    * Delete a Unix group
@@ -127,7 +245,7 @@ export const UnixGroupCommands = {
    * @param groupName - Name of the group to delete
    * @returns Command string with sudo
    */
-  deleteGroup: (groupName: string) => `sudo -n groupdel ${groupName}`,
+  deleteGroup: (groupName: string) => `sudo -n groupdel ${assertSafeUnixGroupName(groupName)}`,
 
   /**
    * Add user to a Unix group
@@ -137,7 +255,7 @@ export const UnixGroupCommands = {
    * @returns Command string with sudo
    */
   addUserToGroup: (username: string, groupName: string) =>
-    `sudo -n usermod -aG ${groupName} ${username}`,
+    `sudo -n usermod -aG ${assertSafeUnixGroupName(groupName)} ${username}`,
 
   /**
    * Remove user from a Unix group
@@ -147,7 +265,7 @@ export const UnixGroupCommands = {
    * @returns Command string with sudo
    */
   removeUserFromGroup: (username: string, groupName: string) =>
-    `sudo -n gpasswd -d ${username} ${groupName}`,
+    `sudo -n gpasswd -d ${username} ${assertSafeUnixGroupName(groupName)}`,
 
   /**
    * Check if a group exists (read-only, no sudo needed)
@@ -155,7 +273,8 @@ export const UnixGroupCommands = {
    * @param groupName - Group name to check
    * @returns Command string (exits 0 if exists, 1 if not)
    */
-  groupExists: (groupName: string) => `getent group ${groupName} > /dev/null`,
+  groupExists: (groupName: string) =>
+    `getent group ${assertSafeUnixGroupName(groupName)} > /dev/null`,
 
   /**
    * Check if a user is in a group (read-only, no sudo needed)
@@ -165,7 +284,7 @@ export const UnixGroupCommands = {
    * @returns Command string (exits 0 if member, 1 if not)
    */
   isUserInGroup: (username: string, groupName: string) =>
-    `id -nG ${username} | grep -qw ${groupName}`,
+    `id -nG ${username} | grep -qw ${assertSafeUnixGroupName(groupName)}`,
 
   /**
    * List all members of a group (read-only, no sudo needed)
@@ -173,7 +292,8 @@ export const UnixGroupCommands = {
    * @param groupName - Group name
    * @returns Command string (outputs comma-separated usernames)
    */
-  listGroupMembers: (groupName: string) => `getent group ${groupName} | cut -d: -f4`,
+  listGroupMembers: (groupName: string) =>
+    `getent group ${assertSafeUnixGroupName(groupName)} | cut -d: -f4`,
 
   /**
    * Set directory group ownership and permissions
@@ -197,6 +317,7 @@ export const UnixGroupCommands = {
    * @returns Array of command strings with sudo to execute sequentially
    */
   setDirectoryGroup: (path: string, groupName: string, permissions: string): string[] => {
+    assertSafeUnixGroupName(groupName);
     // Determine "others" ACL based on permissions mode
     // 2770 = no others, 2775 = others r-X, 2777 = others rwX
     // Using capital X means: execute only on directories, not files
@@ -250,6 +371,7 @@ export const UnixGroupCommands = {
    * @returns Array of command strings with sudo to execute sequentially
    */
   setDirectoryGroupShallow: (path: string, groupName: string, permissions: string): string[] => {
+    assertSafeUnixGroupName(groupName);
     const othersDigit = permissions.charAt(3);
     let othersAcl: string;
     switch (othersDigit) {
@@ -270,6 +392,30 @@ export const UnixGroupCommands = {
       `sudo -n setfacl -m ${othersAcl} "${path}"`,
       `sudo -n setfacl -m m::rwX "${path}"`,
       `sudo -n chmod g+s "${path}"`,
+    ];
+  },
+
+  /**
+   * Remove access and default ACL entries for a superseded group.
+   *
+   * Used only by the explicit legacy group migration after the replacement
+   * ACL has been installed. `setfacl -x` is idempotent when the entry is
+   * already absent, so interrupted reruns converge.
+   */
+  removeDirectoryGroupAcl: (path: string, groupName: string): string[] => {
+    assertSafeUnixGroupName(groupName);
+    return [
+      `sudo -n setfacl -R -x g:${groupName} "${path}"`,
+      `sudo -n setfacl -R -d -x g:${groupName} "${path}"`,
+    ];
+  },
+
+  /** Non-recursive counterpart used for the managed repo root. */
+  removeDirectoryGroupAclShallow: (path: string, groupName: string): string[] => {
+    assertSafeUnixGroupName(groupName);
+    return [
+      `sudo -n setfacl -x g:${groupName} "${path}"`,
+      `sudo -n setfacl -d -x g:${groupName} "${path}"`,
     ];
   },
 

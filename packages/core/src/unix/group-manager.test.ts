@@ -9,14 +9,22 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { BranchID } from '../types/index.js';
+import type { BranchID, RepoID } from '../types/index.js';
 import {
   AGOR_USERS_GROUP,
   BranchPermissionModes,
   generateBranchGroupName,
+  generateLegacyBranchGroupName,
+  generateRepoGroupName,
   getBranchPermissionMode,
   isValidBranchGroupName,
+  isValidRepoGroupName,
   parseBranchGroupName,
+  parseRepoGroupName,
+  resolveBranchGroupName,
+  resolveBranchGroupUpdate,
+  resolveRepoGroupName,
+  resolveRepoGroupUpdate,
   UnixGroupCommands,
 } from './group-manager.js';
 
@@ -29,19 +37,74 @@ describe('group-manager', () => {
     it('generates group name from UUID with agor_wt_ prefix', () => {
       const branchId = '01234567-89ab-cdef-0123-456789abcdef' as BranchID;
       const groupName = generateBranchGroupName(branchId);
-      expect(groupName).toBe('agor_wt_01234567');
+      expect(groupName).toBe('agor_wt_0123456789abcdef01234567');
     });
 
-    it('uses first 8 chars of UUID as short ID', () => {
+    it('uses the canonical 24-character short ID', () => {
       const branchId = 'abcdef01-2345-6789-abcd-ef0123456789' as BranchID;
       const groupName = generateBranchGroupName(branchId);
-      expect(groupName).toBe('agor_wt_abcdef01');
+      expect(groupName).toBe('agor_wt_abcdef0123456789abcdef01');
     });
 
     it('handles UUIDv7 format correctly', () => {
       const branchId = '019377a4-5c3b-7def-8abc-123456789abc' as BranchID;
       const groupName = generateBranchGroupName(branchId);
-      expect(groupName).toBe('agor_wt_019377a4');
+      expect(groupName).toBe('agor_wt_019377a45c3b7def8abc1234');
+    });
+
+    it('does not collide for UUIDv7 IDs with the same timestamp prefix', () => {
+      const first = '019ffd3d-2cef-79d1-a1c6-407300000001' as BranchID;
+      const second = '019ffd3d-2cef-7abc-b2d7-518400000002' as BranchID;
+
+      expect(generateLegacyBranchGroupName(first)).toBe(generateLegacyBranchGroupName(second));
+      expect(generateBranchGroupName(first)).not.toBe(generateBranchGroupName(second));
+      expect(generateBranchGroupName(first)).toBe('agor_wt_019ffd3d2cef79d1a1c64073');
+      expect(generateRepoGroupName(first as unknown as RepoID)).not.toBe(
+        generateRepoGroupName(second as unknown as RepoID)
+      );
+    });
+  });
+
+  describe('persisted group names', () => {
+    const branchId = '019ffd3d-2cef-79d1-a1c6-407300000001' as BranchID;
+    const repoId = '019ffd3d-2cef-79d1-a1c6-407300000002' as RepoID;
+
+    it('keeps matching legacy and canonical stamped values authoritative', () => {
+      expect(resolveBranchGroupName(branchId, 'agor_wt_019ffd3d')).toBe('agor_wt_019ffd3d');
+      expect(resolveRepoGroupName(repoId, generateRepoGroupName(repoId))).toBe(
+        generateRepoGroupName(repoId)
+      );
+    });
+
+    it('requires callers to persist a generated value before resolving it', () => {
+      expect(() => resolveBranchGroupName(branchId, null as unknown as string)).toThrow(
+        'Invalid persisted Unix group'
+      );
+      expect(() => resolveRepoGroupName(repoId, undefined as unknown as string)).toThrow(
+        'Invalid persisted Unix group'
+      );
+    });
+
+    it('fails closed for empty, custom, or wrong-row persisted values', () => {
+      expect(() => resolveBranchGroupName(branchId, '')).toThrow('Invalid persisted Unix group');
+      expect(() => resolveRepoGroupName(repoId, 'operator_managed')).toThrow(
+        'Invalid persisted Unix group'
+      );
+      expect(() => resolveBranchGroupName(branchId, 'agor_wt_019ffd3d2cef79d1a1c64074')).toThrow(
+        'Invalid persisted Unix group'
+      );
+    });
+
+    it('never clears or changes an existing repository stamp', () => {
+      expect(resolveBranchGroupUpdate(branchId, 'agor_wt_019ffd3d', undefined)).toBe(
+        'agor_wt_019ffd3d'
+      );
+      expect(() => resolveBranchGroupUpdate(branchId, 'agor_wt_019ffd3d', null)).toThrow(
+        'authoritative'
+      );
+      expect(() =>
+        resolveRepoGroupUpdate(repoId, generateRepoGroupName(repoId), 'agor_rp_019ffd3d')
+      ).toThrow('authoritative');
     });
   });
 
@@ -53,6 +116,9 @@ describe('group-manager', () => {
     it('extracts short ID from valid branch group name', () => {
       expect(parseBranchGroupName('agor_wt_01234567')).toBe('01234567');
       expect(parseBranchGroupName('agor_wt_abcdef01')).toBe('abcdef01');
+      expect(parseBranchGroupName('agor_wt_019ffd3d2cef79d1a1c64073')).toBe(
+        '019ffd3d2cef79d1a1c64073'
+      );
     });
 
     it('returns null for non-branch group names', () => {
@@ -64,7 +130,7 @@ describe('group-manager', () => {
     it('returns null for invalid branch group formats', () => {
       expect(parseBranchGroupName('agor_wt_')).toBeNull(); // too short
       expect(parseBranchGroupName('agor_wt_1234567')).toBeNull(); // 7 chars
-      expect(parseBranchGroupName('agor_wt_123456789')).toBeNull(); // 9 chars
+      expect(parseBranchGroupName('agor_wt_123456789')).toBeNull(); // unsupported length
       expect(parseBranchGroupName('agor_wt_ABCDEF01')).toBeNull(); // uppercase
       expect(parseBranchGroupName('agor_wt_1234567g')).toBeNull(); // invalid hex
     });
@@ -84,6 +150,7 @@ describe('group-manager', () => {
       expect(isValidBranchGroupName('agor_wt_abcdef01')).toBe(true);
       expect(isValidBranchGroupName('agor_wt_00000000')).toBe(true);
       expect(isValidBranchGroupName('agor_wt_ffffffff')).toBe(true);
+      expect(isValidBranchGroupName('agor_wt_019ffd3d2cef79d1a1c64073')).toBe(true);
     });
 
     it('returns false for invalid formats', () => {
@@ -92,6 +159,17 @@ describe('group-manager', () => {
       expect(isValidBranchGroupName('agor_wt_123456789')).toBe(false); // 9 chars
       expect(isValidBranchGroupName('agor_01234567')).toBe(false); // missing wt_
       expect(isValidBranchGroupName('wt_01234567')).toBe(false); // missing agor_
+    });
+  });
+
+  describe('repo group compatibility', () => {
+    it('accepts and parses legacy and canonical repo group names', () => {
+      expect(isValidRepoGroupName('agor_rp_019ffd3d')).toBe(true);
+      expect(isValidRepoGroupName('agor_rp_019ffd3d2cef79d1a1c64073')).toBe(true);
+      expect(parseRepoGroupName('agor_rp_019ffd3d')).toBe('019ffd3d');
+      expect(parseRepoGroupName('agor_rp_019ffd3d2cef79d1a1c64073')).toBe(
+        '019ffd3d2cef79d1a1c64073'
+      );
     });
   });
 
@@ -152,6 +230,15 @@ describe('group-manager', () => {
   // =========================================================================
 
   describe('UnixGroupCommands', () => {
+    it('rejects shell metacharacters in group names', () => {
+      expect(() => UnixGroupCommands.deleteGroup('agor_wt_safe; groupdel wheel')).toThrow(
+        'Unsafe Unix group name'
+      );
+      expect(() =>
+        UnixGroupCommands.setDirectoryGroup('/data/project', '$(touch pwned)', '2775')
+      ).toThrow('Unsafe Unix group name');
+    });
+
     describe('createGroup', () => {
       it('generates groupadd command', () => {
         expect(UnixGroupCommands.createGroup('agor_wt_01234567')).toBe(

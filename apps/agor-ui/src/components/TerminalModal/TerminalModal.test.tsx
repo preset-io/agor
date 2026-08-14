@@ -1,5 +1,5 @@
 import type { AgorClient, User } from '@agor-live/client';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // xterm touches canvas/DOM internals jsdom can't render; the modal's
@@ -25,6 +25,8 @@ vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 import { TerminalModal } from './TerminalModal';
 
 const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111';
+const TERMINAL = '33333333-cccc-cccc-cccc-333333333333';
+const CHANNEL = `tenant/default/user/${ALICE}/terminal/${TERMINAL}`;
 
 interface FakeSocket {
   connected: boolean;
@@ -57,9 +59,10 @@ function makeFakeSocket(): FakeSocket {
 }
 
 function makeClient(socket: FakeSocket, create: ReturnType<typeof vi.fn>) {
+  const remove = vi.fn().mockResolvedValue({ closed: true });
   return {
     io: socket,
-    service: vi.fn(() => ({ create })),
+    service: vi.fn(() => ({ create, remove })),
   } as unknown as AgorClient;
 }
 
@@ -77,11 +80,12 @@ describe('TerminalModal reconnect + readiness', () => {
     vi.restoreAllMocks();
   });
 
-  it('connects on the ready ack and re-attaches on reconnect', async () => {
+  it('requires explicit reconnect after transport loss', async () => {
     const socket = makeFakeSocket();
     const create = vi.fn().mockResolvedValue({
       userId: ALICE,
-      channel: `user/${ALICE}/terminal`,
+      terminalId: TERMINAL,
+      channel: CHANNEL,
       sessionName: 'agor-x',
       isNew: true,
       ready: false,
@@ -100,15 +104,23 @@ describe('TerminalModal reconnect + readiness', () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
 
     // Cold path: not connected until the executor acks readiness.
-    socket.trigger('terminal:ready', { userId: ALICE });
+    await act(async () => {
+      socket.trigger('terminal:ready', { userId: ALICE, terminalId: TERMINAL });
+    });
 
     // A blip drops the socket → reconnecting; reconnect re-issues create.
-    socket.connected = false;
-    socket.trigger('disconnect', 'transport close');
-    expect(await screen.findByText(/Reconnecting/)).toBeInTheDocument();
+    await act(async () => {
+      socket.connected = false;
+      socket.trigger('disconnect', 'transport close');
+    });
+    expect(await screen.findByText(/Disconnected/)).toBeInTheDocument();
 
-    socket.connected = true;
-    socket.trigger('connect');
+    await act(async () => {
+      socket.connected = true;
+      socket.trigger('connect');
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
   });
 
@@ -132,17 +144,21 @@ describe('TerminalModal reconnect + readiness', () => {
     );
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
 
-    socket.connected = false;
-    socket.trigger('disconnect', 'transport close');
-    socket.connected = true;
-    socket.trigger('connect');
+    await act(async () => {
+      socket.connected = false;
+      socket.trigger('disconnect', 'transport close');
+      socket.connected = true;
+      socket.trigger('connect');
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/Reconnecting/)).toBeInTheDocument();
 
     // Stale first attach resolves late → must be dropped (superseded generation).
     deferreds[0]?.({
       userId: ALICE,
-      channel: `user/${ALICE}/terminal`,
+      terminalId: TERMINAL,
+      channel: CHANNEL,
       sessionName: 'agor-x',
       isNew: true,
       ready: true,

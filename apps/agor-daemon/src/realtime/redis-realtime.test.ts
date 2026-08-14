@@ -1,8 +1,11 @@
 import type { ResolvedRedisSettings } from '@agor/core/config';
+import {
+  isRealtimeRelayEnvelope,
+  REALTIME_RELAY_EVENT,
+  REALTIME_RELAY_VERSION,
+} from '@agor/core/realtime';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  FEATHERS_RELAY_EVENT,
-  isRealtimeRelayEnvelope,
   RedisRealtimeRuntime,
   redisAdapterKey,
   redisRealtimeClientOptions,
@@ -22,7 +25,7 @@ describe('isRealtimeRelayEnvelope', () => {
   it('accepts the minimal versioned tenant envelope', () => {
     expect(
       isRealtimeRelayEnvelope({
-        version: 1,
+        version: REALTIME_RELAY_VERSION,
         tenantId: 'tenant-a',
         path: 'boards',
         event: 'patched',
@@ -31,13 +34,30 @@ describe('isRealtimeRelayEnvelope', () => {
     ).toBe(true);
   });
 
+  it('accepts a bounded authorization snapshot only for a branch removal', () => {
+    expect(
+      isRealtimeRelayEnvelope({
+        version: REALTIME_RELAY_VERSION,
+        tenantId: 'tenant-a',
+        path: 'branches',
+        event: 'removed',
+        data: { branch_id: 'branch-a' },
+        branchRemovalVisibility: {
+          branchId: 'branch-a',
+          mode: 'explicitUsers',
+          userIds: ['user-a'],
+        },
+      })
+    ).toBe(true);
+  });
+
   it.each([
     null,
-    { version: 2, tenantId: 'tenant-a', path: 'boards', event: 'patched', data: {} },
-    { version: 1, tenantId: '', path: 'boards', event: 'patched', data: {} },
-    { version: 1, tenantId: 'tenant-a', path: '', event: 'patched', data: {} },
+    { version: 1, tenantId: 'tenant-a', path: 'boards', event: 'patched', data: {} },
+    { version: REALTIME_RELAY_VERSION, tenantId: '', path: 'boards', event: 'patched', data: {} },
+    { version: REALTIME_RELAY_VERSION, tenantId: 'tenant-a', path: '', event: 'patched', data: {} },
     {
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'boards',
       event: 'patched',
@@ -45,11 +65,42 @@ describe('isRealtimeRelayEnvelope', () => {
       data: {},
     },
     {
-      version: 1,
+      version: REALTIME_RELAY_VERSION,
       tenantId: 'tenant-a',
       path: 'boards',
       event: 'patched',
       data: 'x'.repeat(512 * 1024 + 1),
+    },
+    {
+      version: REALTIME_RELAY_VERSION,
+      tenantId: 'tenant-a',
+      path: 'branches',
+      event: 'removed',
+      data: { branch_id: 'branch-a' },
+    },
+    {
+      version: REALTIME_RELAY_VERSION,
+      tenantId: 'tenant-a',
+      path: 'branches',
+      event: 'patched',
+      data: { branch_id: 'branch-a' },
+      branchRemovalVisibility: {
+        branchId: 'branch-a',
+        mode: 'explicitUsers',
+        userIds: ['user-a'],
+      },
+    },
+    {
+      version: REALTIME_RELAY_VERSION,
+      tenantId: 'tenant-a',
+      path: 'branches',
+      event: 'removed',
+      data: { branch_id: 'branch-a' },
+      branchRemovalVisibility: {
+        branchId: 'branch-a',
+        mode: 'explicitUsers',
+        userIds: [42],
+      },
     },
   ])('rejects malformed/unversioned Redis input', (value) => {
     expect(isRealtimeRelayEnvelope(value)).toBe(false);
@@ -77,7 +128,7 @@ it('listens for server-side Feathers relays on the adapter root namespace', asyn
   let listener: ((value: unknown) => void) | undefined;
   const namespace = {
     on: vi.fn((event: string, handler: (value: unknown) => void) => {
-      if (event === FEATHERS_RELAY_EVENT) listener = handler;
+      if (event === REALTIME_RELAY_EVENT) listener = handler;
     }),
   };
   const runtime = new RedisRealtimeRuntime(settings, { instanceId: 'daemon-b', bootId: 'boot-b' });
@@ -85,7 +136,7 @@ it('listens for server-side Feathers relays on the adapter root namespace', asyn
   const handler = vi.fn();
   runtime.setRelayHandler(handler);
   const envelope = {
-    version: 1 as const,
+    version: REALTIME_RELAY_VERSION,
     tenantId: 'tenant-a',
     path: 'boards',
     event: 'created',
@@ -95,6 +146,6 @@ it('listens for server-side Feathers relays on the adapter root namespace', asyn
   listener?.(envelope);
   await Promise.resolve();
 
-  expect(namespace.on).toHaveBeenCalledWith(FEATHERS_RELAY_EVENT, expect.any(Function));
+  expect(namespace.on).toHaveBeenCalledWith(REALTIME_RELAY_EVENT, expect.any(Function));
   expect(handler).toHaveBeenCalledWith(envelope);
 });

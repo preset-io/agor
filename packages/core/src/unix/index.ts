@@ -12,6 +12,8 @@ export * from './command-executor.js';
 export * from './environment-command-deny-list.js';
 // Branch group management
 export * from './group-manager.js';
+// Explicit legacy group-name migration (never used by normal sync)
+export * from './group-uuid-migration.js';
 // ID lookup utilities
 export * from './id-lookups.js';
 // Central command execution as another user (preferred API)

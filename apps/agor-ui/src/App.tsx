@@ -6,6 +6,7 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -504,9 +505,10 @@ function AppContent() {
   const integrationsHydrated = useAgorStore(
     (s) => s.mcpServersHydrated && s.gatewayChannelsHydrated
   );
-  // Whether this user can actually reach the MCP settings tab. Mirrors the tab's
-  // own gate in SettingsModal (`mcpEnabled && isAdmin`), so the "Connect tools"
-  // banner is never a dead-end for users who can't open it.
+  // The "Connect tools" banner asks for workspace-wide setup — MCP servers and
+  // Slack/GitHub channels — so it is offered to the role that can complete it.
+  // Members reach the MCP settings tab without it, to read the policy that
+  // governs them.
   const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Keep the global ErrorBoundary's crash context populated so a render
@@ -1386,10 +1388,7 @@ function AppContent() {
 
   const handleArchiveOrDeleteBranch = async (
     branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
+    options: BranchArchiveOrDeleteOptions
   ) => {
     if (!client) {
       throw new Error('Not connected to daemon');

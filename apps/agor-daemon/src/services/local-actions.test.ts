@@ -20,7 +20,10 @@ function host(): DaemonHostOperations {
 describe('local daemon host operations service', () => {
   it('validates and delegates identity operations with dry-run options', async () => {
     const operations = host();
-    const service = createLocalActionsService(operations);
+    const service = createLocalActionsService(
+      operations,
+      vi.fn(async () => 'agor_wt_019ffd3d')
+    );
     await expect(
       service.create({
         action: 'unix.group.addUser',
@@ -43,7 +46,10 @@ describe('local daemon host operations service', () => {
     'git.remoteCredentials.scrubManaged',
   ])('rejects removed maintenance action %s', async (action) => {
     const operations = host();
-    const service = createLocalActionsService(operations);
+    const service = createLocalActionsService(
+      operations,
+      vi.fn(async () => 'agor_wt_019ffd3d')
+    );
     await expect(
       service.create({
         action: action as never,
@@ -55,6 +61,29 @@ describe('local daemon host operations service', () => {
         },
       })
     ).rejects.toThrow(/Unsupported local action/);
+  });
+
+  it('resolves a persisted branch group before crossing the host boundary', async () => {
+    const operations = host();
+    const resolvePersistedGroup = vi.fn(async () => 'agor_wt_019ffd3d');
+    const service = createLocalActionsService(operations, resolvePersistedGroup);
+
+    await service.create(
+      {
+        action: 'unix.group.createBranch',
+        params: { branchId: '019ffd3d-2cef-79d1-a1c6-407300000001' },
+      },
+      { provider: 'rest' }
+    );
+
+    expect(resolvePersistedGroup).toHaveBeenCalledWith('019ffd3d-2cef-79d1-a1c6-407300000001', {
+      provider: 'rest',
+    });
+    expect(operations.identity.createBranchGroup).toHaveBeenCalledWith({
+      group: 'agor_wt_019ffd3d',
+      dryRun: false,
+      verbose: false,
+    });
   });
 
   it('does not register local host operations in hosted mode', () => {

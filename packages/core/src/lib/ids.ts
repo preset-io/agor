@@ -6,7 +6,7 @@
  *
  * Key concepts:
  * - Full UUIDs stored in database (36 chars)
- * - Short IDs displayed to users — always 20 hex chars via `shortId(id)`.
+ * - Short IDs displayed to users — always 24 hex chars via `shortId(id)`.
  *   See `SHORT_ID_LENGTH` in `../types/id` for the collision math.
  * - Git-style collision resolution on user input (expand prefix when
  *   ambiguous) — handled centrally by `resolveByShortIdPrefix` in

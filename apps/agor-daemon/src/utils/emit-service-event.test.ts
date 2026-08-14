@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { tenantDatabaseScope } from '@agor/core/db';
+import { runWithTenantDatabaseScope } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { describe, expect, it, vi } from 'vitest';
 import { emitServiceEvent } from './emit-service-event';
@@ -68,9 +68,9 @@ describe('emitServiceEvent', () => {
   it('snapshots the ambient tenant for asynchronous publication', async () => {
     const emit = vi.fn();
     const { app } = makeApp(emit);
-    const db = {} as never;
+    const db = { run: vi.fn() } as never;
 
-    await tenantDatabaseScope.run({ db, kind: 'tenant', tenantId: 'tenant-a' }, async () => {
+    await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
       emitServiceEvent(app, { path: 'branches', event: 'patched', data: { id: 'b1' } });
     });
 
@@ -81,9 +81,9 @@ describe('emitServiceEvent', () => {
 
   it('rejects an explicit tenant that conflicts with the ambient scope', async () => {
     const { app } = makeApp(vi.fn());
-    const db = {} as never;
+    const db = { run: vi.fn() } as never;
 
-    await tenantDatabaseScope.run({ db, kind: 'tenant', tenantId: 'tenant-a' }, async () => {
+    await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
       expect(() =>
         emitServiceEvent(app, {
           path: 'branches',

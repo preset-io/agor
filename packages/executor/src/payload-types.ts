@@ -877,7 +877,7 @@ export type UnixSyncUserPayload = z.infer<typeof UnixSyncUserPayloadSchema>;
  * Zellij attach payload - attach to or create Zellij session
  *
  * This spawns a PTY, runs zellij attach, and streams I/O over Feathers channels.
- * One executor per user - handles all tabs for that user.
+ * One executor per process-local, branch-scoped terminal attachment.
  */
 export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('zellij.attach'),
@@ -888,6 +888,12 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     /** User ID (for channel: user/${userId}/terminal) */
     userId: z.string().uuid(),
+
+    /** Opaque process-local attachment id returned to the browser. */
+    terminalId: z.string().uuid(),
+
+    /** Tenant/user/terminal-qualified owner-local Socket.IO room. */
+    channel: z.string().min(1),
 
     /** Zellij session name (e.g., "agor-max") */
     sessionName: z.string(),

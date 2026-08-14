@@ -22,6 +22,12 @@
       "import": "./dist/types/index.js",
       "require": "./dist/types/index.cjs"
     },
+    "./realtime": {
+      "source": "./src/realtime/index.ts",
+      "types": "./dist/realtime/index.d.ts",
+      "import": "./dist/realtime/index.js",
+      "require": "./dist/realtime/index.cjs"
+    },
     "./executor-protocol": {
       "source": "./src/executor-protocol.ts",
       "types": "./dist/executor-protocol.d.ts",
@@ -369,6 +375,12 @@
       "types": "./dist/mcp/index.d.ts",
       "import": "./dist/mcp/index.js",
       "require": "./dist/mcp/index.cjs"
+    },
+    "./mcp/member-policy": {
+      "source": "./src/mcp/member-policy.ts",
+      "types": "./dist/mcp/member-policy.d.ts",
+      "import": "./dist/mcp/member-policy.js",
+      "require": "./dist/mcp/member-policy.cjs"
     },
     "./gateway": {
       "source": "./src/gateway/index.ts",

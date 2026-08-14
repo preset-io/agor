@@ -4,8 +4,8 @@
  * One function answers it for every write — the `mcp-servers` service hooks and
  * the marketplace connect endpoint both go through {@link authorizeMcpServerWrite}
  * — so the tenant's `mcp_member_policy`, the remote-transport restriction, and
- * the private-server ownership rule are decided in a single place instead of
- * being re-derived per entry point.
+ * the ownership and reach a private server is held to are decided in a single
+ * place instead of being re-derived per entry point.
  *
  * Using a server is a separate question with a separate answer: see
  * `isMCPServerUsableInSession` in `@agor/core/mcp`, enforced where a server is
@@ -23,10 +23,19 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
-import { isMCPServerUsableBy } from '@agor/core/mcp';
+import {
+  isAtLeastMemberRole,
+  isMCPServerUsableBy,
+  MEMBER_PRIVATE_MCP_SCOPE,
+  mayMemberManageMCPServer,
+  mayMemberUseMCPScope,
+  mayMemberUseMCPTransport,
+  mayMemberWriteMCPServers,
+} from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   MCPMemberPolicy,
+  MCPScope,
   MCPServer,
   MCPTransport,
   UserID,
@@ -38,10 +47,11 @@ export type McpServerWriteMethod = 'create' | 'update' | 'patch' | 'remove';
 export interface McpServerWriteRequest {
   method: McpServerWriteMethod;
   /** The row being changed or deleted; absent on create. */
-  existing?: Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport'>;
+  existing?: Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport' | 'scope'>;
   /** The submitted payload; absent on remove. */
   data?: {
     transport?: MCPTransport;
+    scope?: MCPScope;
     owner_user_id?: UserID | string | null;
     catalog_entry_name?: string;
   };
@@ -50,6 +60,8 @@ export interface McpServerWriteRequest {
 export interface McpServerWriteDecision {
   /** The owner to persist, for a create the caller is not free to choose. */
   owner_user_id?: UserID;
+  /** The scope to persist, for a create whose policy fixes it. */
+  scope?: MCPScope;
   /** The catalog provenance to persist, which only the install path may name. */
   catalog_entry_name?: string;
 }
@@ -132,14 +144,9 @@ function resolveCatalogInstall(
   return { entry_name: entryName, owner_user_id: userId };
 }
 
-/**
- * A `stdio` server is a command line the executor process runs on its host.
- * Letting members configure one turns "may register an MCP server" into "may
- * run any binary as the executor user", which is not the grant either
- * permissive policy value is meant to hand out. Admins keep it.
- */
+/** Admins keep `stdio`; see {@link mayMemberUseMCPTransport} for why members do not. */
 function assertRemoteTransport(transport: MCPTransport | undefined): void {
-  if (transport === 'stdio') {
+  if (!mayMemberUseMCPTransport(transport)) {
     throw new Forbidden(
       'Only admins can configure stdio MCP servers; members can configure remote (http/sse) servers'
     );
@@ -158,38 +165,38 @@ function assertRemoteTransport(transport: MCPTransport | undefined): void {
  * configuring servers under `allow_private_only`, and under `allow_crud` an
  * unowned one that every session in the tenant can then reach.
  *
- * Decided on the raw role rather than a normalized one. `normalizeRole` answers
- * MEMBER for an absent or empty value, so `hasMinimumRole(user.role, MEMBER)`
- * on its own would admit precisely the caller with no role to speak of. An
- * unrecognized role ranks 0 and is refused for the same reason: a role this
- * code does not know is not one it may assume is privileged.
+ * The rule itself is {@link isAtLeastMemberRole}, which a client asks too — a
+ * floor enforced here and re-derived there is the arrangement that lost it.
  */
-function isAtLeastMember(role: unknown): boolean {
-  const named = typeof role === 'string' && role.length > 0;
-  return named && hasMinimumRole(role, ROLES.MEMBER);
-}
-
 function assertAtLeastMember(role: unknown): void {
-  if (!isAtLeastMember(role)) {
+  if (!isAtLeastMemberRole(role)) {
     throw new Forbidden('You need member access to configure MCP servers');
   }
 }
 
 /**
- * Whether this role and policy together permit configuring a server at all.
- *
- * The same decision {@link authorizeMcpServerWrite} makes, minus the per-request
- * detail, so a client can grey out a control instead of discovering the refusal
- * by being refused. It is exported so callers read the rule rather than
- * reconstructing it from `isAdmin` and a policy value — reducing role to a
- * boolean is what let the role floor go missing here in the first place.
- *
- * Advisory only. Nothing is authorized by this function; the write path decides.
+ * Whether this role and policy together permit configuring a server at all,
+ * for the endpoint that answers it to clients. The decision is
+ * {@link canConfigureMCPServers}; nothing is authorized by reading it.
  */
-export function canConfigureMcpServers(role: unknown, policy: MCPMemberPolicy): boolean {
-  if (typeof role === 'string' && hasMinimumRole(role, ROLES.ADMIN)) return true;
-  if (!isAtLeastMember(role)) return false;
-  return policy !== 'use_existing_only';
+export { canConfigureMCPServers as canConfigureMcpServers } from '@agor/core/mcp';
+
+/**
+ * A member widening their own server's reach, which is what
+ * `allow_private_only` withholds. Only a change is refused: a payload that
+ * restates the scope already stored — which is what every edit form sends —
+ * has widened nothing.
+ */
+function assertScopeUnchangedOrAllowed(
+  policy: MCPMemberPolicy,
+  requested: MCPScope | undefined,
+  stored: MCPScope
+): void {
+  if (requested === undefined || requested === stored) return;
+  if (mayMemberUseMCPScope(policy, requested)) return;
+  throw new Forbidden(
+    "This MCP server's reach cannot be widened to the whole workspace; your organization allows members private servers, which reach the sessions they are attached to"
+  );
 }
 
 /**
@@ -208,7 +215,7 @@ export function canConfigureMcpServers(role: unknown, policy: MCPMemberPolicy): 
  * permitting arbitrary configuration does not exist yet.
  */
 function assertPolicyAllowsWrite(policy: MCPMemberPolicy, isCatalogInstall: boolean): void {
-  if (policy !== 'use_existing_only') return;
+  if (mayMemberWriteMCPServers(policy)) return;
   throw new Forbidden(
     isCatalogInstall
       ? 'Your organization does not allow members to add MCP servers, so this entry cannot be installed; ask an admin to add it'
@@ -314,7 +321,10 @@ async function decidePolicyAndOwnership(
           'Your organization only allows members their own private MCP servers, so this one cannot be shared with the workspace'
         );
       }
-      return { owner_user_id: userId };
+      // The reach this policy fixes is taken rather than asked for: `global` is
+      // what several clients put in a payload by default, not something a
+      // person chose, so it is decided here the way ownership is.
+      return { owner_user_id: userId, scope: MEMBER_PRIVATE_MCP_SCOPE };
     }
 
     return publishing ? {} : { owner_user_id: userId };
@@ -325,18 +335,17 @@ async function decidePolicyAndOwnership(
     throw new Forbidden('MCP server not found');
   }
 
-  if (existing.owner_user_id) {
-    if (existing.owner_user_id !== userId) {
-      throw new Forbidden("You cannot modify another user's private MCP server");
-    }
-  } else if (policy === 'allow_private_only') {
+  if (!mayMemberManageMCPServer(existing, policy, userId)) {
     throw new Forbidden(
-      'Your organization only allows members to manage their own private MCP servers'
+      existing.owner_user_id
+        ? "You cannot modify another user's private MCP server"
+        : 'Your organization only allows members to manage their own private MCP servers'
     );
   }
 
   if (request.method !== 'remove') {
     assertRemoteTransport(request.data?.transport ?? existing.transport);
+    assertScopeUnchangedOrAllowed(policy, request.data?.scope, existing.scope);
   }
 
   return {};
@@ -371,6 +380,9 @@ export function createMcpServerWriteAuthorizationHook(
       });
       if (decision.owner_user_id !== undefined && data) {
         data.owner_user_id = decision.owner_user_id;
+      }
+      if (decision.scope !== undefined && data) {
+        data.scope = decision.scope;
       }
       if (decision.catalog_entry_name !== undefined && data) {
         data.catalog_entry_name = decision.catalog_entry_name;
