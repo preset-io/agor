@@ -463,7 +463,7 @@
   },
   "dependencies": {
     "@agor/git": "workspace:*",
-    "@anthropic-ai/sdk": "^0.109.0",
+    "@anthropic-ai/sdk": "^0.116.0",
     "@feathersjs/authentication": "^5.0.46",
     "@feathersjs/authentication-client": "^5.0.46",
     "@feathersjs/authentication-local": "^5.0.46",
@@ -493,12 +493,12 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.197",
-    "@google/gemini-cli-core": "^0.40.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.228",
+    "@google/gemini-cli-core": "^0.55.1",
     "@google/genai": "^1.43.0",
     "@octokit/auth-app": "^8.3.0",
     "@octokit/rest": "^22.0.1",
-    "@openai/codex-sdk": "^0.144.0",
+    "@openai/codex-sdk": "^0.147.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",

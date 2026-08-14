@@ -31,7 +31,7 @@
     "@agor/core": "workspace:*",
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "compression": "^1.8.1",
@@ -49,8 +49,8 @@
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.197",
-    "@anthropic-ai/sdk": "^0.109.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.228",
+    "@anthropic-ai/sdk": "^0.116.0",
     "@aws-sdk/client-s3": "^3.1106.0",
     "@aws-sdk/lib-storage": "^3.1106.0",
     "@cursor/sdk": "^1.0.26",
