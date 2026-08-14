@@ -368,12 +368,19 @@ it('removes a terminal room when authentication changes while its join is pendin
   const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
   const channel = terminalChannel(ALICE, TERMINAL, 'tenant-a');
   let releaseJoin!: () => void;
+  let markJoinStarted!: () => void;
   const joinGate = new Promise<void>((resolve) => {
     releaseJoin = resolve;
   });
+  const joinStarted = new Promise<void>((resolve) => {
+    markJoinStarted = resolve;
+  });
   const normalJoin = socket.join.bind(socket);
   socket.join = async (candidate) => {
-    if (candidate === channel) await joinGate;
+    if (candidate === channel) {
+      markJoinStarted();
+      await joinGate;
+    }
     await normalJoin(candidate);
   };
 
@@ -382,7 +389,7 @@ it('removes a terminal room when authentication changes while its join is pendin
     terminalId: TERMINAL,
     branchId: BRANCH,
   });
-  await Promise.resolve();
+  await joinStarted;
   connection!.user = { user_id: BOB };
   (app as any).eventHandlers.get('login')?.(
     { user: { user_id: BOB } },
@@ -419,18 +426,25 @@ it('does not let a stale join remove the replacement generation from the same ro
   const channel = terminalChannel(ALICE, TERMINAL, 'tenant-a');
   const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
   let releaseStaleJoin!: () => void;
+  let markStaleJoinStarted!: () => void;
   const staleJoinGate = new Promise<void>((resolve) => {
     releaseStaleJoin = resolve;
+  });
+  const staleJoinStarted = new Promise<void>((resolve) => {
+    markStaleJoinStarted = resolve;
   });
   const normalJoin = socket.join.bind(socket);
   let terminalJoinCount = 0;
   socket.join = async (candidate) => {
-    if (candidate === channel && terminalJoinCount++ === 0) await staleJoinGate;
+    if (candidate === channel && terminalJoinCount++ === 0) {
+      markStaleJoinStarted();
+      await staleJoinGate;
+    }
     await normalJoin(candidate);
   };
 
   const staleResult = staleJoin?.(channel, allocation);
-  await Promise.resolve();
+  await staleJoinStarted;
   (app as any).eventHandlers.get('login')?.(
     { user: { user_id: ALICE } },
     {
@@ -440,12 +454,12 @@ it('does not let a stale join remove the replacement generation from the same ro
   );
   const replacementJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
   expect(replacementJoin).not.toBe(staleJoin);
-  await expect(replacementJoin?.(channel, allocation)).resolves.toBe(true);
+  const replacementResult = replacementJoin?.(channel, allocation);
 
   releaseStaleJoin();
   await expect(staleResult).resolves.toBe(false);
+  await expect(replacementResult).resolves.toBe(true);
   expect(socket.joined).toContain(channel);
-  expect(socket.left).not.toContain(channel);
   expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
 });
 
@@ -458,13 +472,18 @@ it('does not let a failed concurrent join remove a successful same-generation cl
   const channel = terminalChannel();
   const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
   let releaseFailedJoin!: () => void;
+  let markFailedJoinStarted!: () => void;
   const failedJoinGate = new Promise<void>((resolve) => {
     releaseFailedJoin = resolve;
+  });
+  const failedJoinStarted = new Promise<void>((resolve) => {
+    markFailedJoinStarted = resolve;
   });
   const normalJoin = socket.join.bind(socket);
   let terminalJoinCount = 0;
   socket.join = async (candidate) => {
     if (candidate === channel && terminalJoinCount++ === 0) {
+      markFailedJoinStarted();
       await failedJoinGate;
       throw new Error('first join failed');
     }
@@ -472,14 +491,36 @@ it('does not let a failed concurrent join remove a successful same-generation cl
   };
 
   const failedAttempt = join?.(channel, allocation);
-  await Promise.resolve();
-  await expect(join?.(channel, allocation)).resolves.toBe(true);
+  await failedJoinStarted;
+  const successfulAttempt = join?.(channel, allocation);
 
   releaseFailedJoin();
   await expect(failedAttempt).resolves.toBe(false);
+  await expect(successfulAttempt).resolves.toBe(true);
+  expect(socket.joined).toContain(channel);
+  expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
+});
+
+it('does not retry or remove an already-established authorized membership', async () => {
+  const { io } = buildHarness();
+  const socket = makeSocket('redundant-terminal-requester', io);
+  asUser(socket, ALICE);
+  connect(io, socket);
+  const join = socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  const channel = terminalChannel();
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+
+  await expect(join?.(channel, allocation)).resolves.toBe(true);
+  let redundantLowLevelJoins = 0;
+  socket.join = async () => {
+    redundantLowLevelJoins += 1;
+    throw new Error('redundant join should not run');
+  };
+
+  await expect(join?.(channel, allocation)).resolves.toBe(true);
+  expect(redundantLowLevelJoins).toBe(0);
   expect(socket.joined).toContain(channel);
   expect(socket.left).not.toContain(channel);
-  expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
 });
 
 function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {

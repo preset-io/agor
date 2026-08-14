@@ -65,8 +65,9 @@ const checks = [
       // capability that joins its authenticated requesting socket to a room
       // derived from trusted tenant/user/terminal identity before executor
       // startup, then removes that room if authentication changes while the
-      // join is pending (without evicting a newer valid auth generation or
-      // concurrent join claim); clients cannot supply that room or capability.
+      // join is pending. Same-room operations are serialized so stale/failed
+      // cleanup cannot evict another valid subscription; clients cannot supply
+      // that room or capability.
       'apps/agor-daemon/src/setup/socketio.ts': 17,
     },
   },
