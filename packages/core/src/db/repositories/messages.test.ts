@@ -475,6 +475,34 @@ describe('MessagesRepository.findPage', () => {
         .map((message) => message.message_id)
     );
   });
+
+  dbTest('projects selected fields in the repository page query', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await messages.create(
+      createMessageData({
+        session_id: sessionId,
+        content: 'large payload that an ID-only hydration pass must not decode',
+      })
+    );
+
+    const idsOnly = await messages.findPage({
+      sessionId,
+      select: ['message_id'],
+      limit: 10,
+    });
+    expect(idsOnly).toEqual({ total: 1, data: [{ message_id: created.message_id }] });
+
+    const contentOnly = await messages.findPage({
+      sessionId,
+      select: ['message_id', 'content'],
+      limit: 10,
+    });
+    expect(contentOnly).toEqual({
+      total: 1,
+      data: [{ message_id: created.message_id, content: created.content }],
+    });
+  });
 });
 
 // ============================================================================

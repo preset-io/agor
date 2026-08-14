@@ -285,6 +285,7 @@ export class MessagesService extends DrizzleService<Message, MessageCreate, Mess
       limit: actualLimit,
       skip,
       sort: query.$sort,
+      select: query.$select as (keyof Message)[] | undefined,
     };
 
     const messageId = query.message_id;
@@ -324,7 +325,7 @@ export class MessagesService extends DrizzleService<Message, MessageCreate, Mess
       total: page.total,
       limit: actualLimit,
       skip,
-      data: this.selectFields(page.data, query.$select) as Message[],
+      data: page.data as Message[],
     };
   }
 

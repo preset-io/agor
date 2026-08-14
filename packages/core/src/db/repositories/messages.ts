@@ -36,6 +36,7 @@ export type MessageFindPageOptions = {
   role?: Message['role'];
   visibleToUserId?: UUID;
   sort?: Record<string, 1 | -1>;
+  select?: readonly (keyof Message)[];
   limit?: number;
   skip?: number;
 };
@@ -96,6 +97,63 @@ export class MessagesRepository {
       parent_tool_use_id: row.parent_tool_use_id || undefined,
       metadata: (row.data as { metadata?: Message['metadata'] }).metadata,
     };
+  }
+
+  /** Decode only fields selected by the SQL projection. */
+  private projectedRowToMessage(
+    row: Partial<MessageRow>,
+    fields: readonly (keyof Message)[]
+  ): Partial<Message> {
+    const message: Partial<Message> = {};
+    const data = row.data as
+      | {
+          content?: Message['content'];
+          tool_uses?: Message['tool_uses'];
+          metadata?: Message['metadata'];
+        }
+      | undefined;
+    for (const field of fields) {
+      switch (field) {
+        case 'message_id':
+          if (row.message_id !== undefined) message.message_id = row.message_id as MessageID;
+          break;
+        case 'session_id':
+          if (row.session_id !== undefined) message.session_id = row.session_id as SessionID;
+          break;
+        case 'task_id':
+          message.task_id = row.task_id ? (row.task_id as TaskID) : undefined;
+          break;
+        case 'type':
+          if (row.type !== undefined) message.type = row.type;
+          break;
+        case 'role':
+          if (row.role !== undefined) message.role = row.role as Message['role'];
+          break;
+        case 'index':
+          if (row.index !== undefined) message.index = row.index;
+          break;
+        case 'timestamp':
+          if (row.timestamp !== undefined)
+            message.timestamp = new Date(row.timestamp).toISOString();
+          break;
+        case 'content_preview':
+          message.content_preview = row.content_preview || '';
+          break;
+        case 'content':
+          if (data && 'content' in data) message.content = data.content;
+          break;
+        case 'tool_uses':
+          message.tool_uses = data?.tool_uses;
+          break;
+        case 'parent_tool_use_id':
+          message.parent_tool_use_id = row.parent_tool_use_id || undefined;
+          break;
+        case 'metadata':
+          message.metadata = data?.metadata;
+          break;
+      }
+    }
+    return message;
   }
 
   /**
@@ -300,7 +358,9 @@ export class MessagesRepository {
    * data queries so Feathers pagination never counts rows that the page cannot
    * return, and only the requested page's JSON rows are hydrated.
    */
-  async findPage(opts: MessageFindPageOptions = {}): Promise<{ data: Message[]; total: number }> {
+  async findPage(
+    opts: MessageFindPageOptions = {}
+  ): Promise<{ data: Partial<Message>[]; total: number }> {
     if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
 
     const conditions: SQL[] = [];
@@ -324,7 +384,31 @@ export class MessagesRepository {
     const countRow = await countQuery.one();
     const total = Number(countRow?.count ?? 0);
 
-    let dataQuery = select(this.db).from(messages);
+    const selectedFields = opts.select?.length ? opts.select : undefined;
+    const physicalColumns = {
+      message_id: messages.message_id,
+      session_id: messages.session_id,
+      task_id: messages.task_id,
+      type: messages.type,
+      role: messages.role,
+      index: messages.index,
+      timestamp: messages.timestamp,
+      content_preview: messages.content_preview,
+      parent_tool_use_id: messages.parent_tool_use_id,
+    } as const;
+    const projection: Record<string, unknown> | undefined = selectedFields
+      ? Object.fromEntries(
+          selectedFields.flatMap((field) => {
+            if (field === 'content' || field === 'tool_uses' || field === 'metadata') {
+              return [['data', messages.data]];
+            }
+            const column = physicalColumns[field as keyof typeof physicalColumns];
+            return column ? [[field, column]] : [];
+          })
+        )
+      : undefined;
+
+    let dataQuery = select(this.db, projection).from(messages);
     if (whereClause) dataQuery = dataQuery.where(whereClause);
 
     const sortColumns = {
@@ -349,7 +433,12 @@ export class MessagesRepository {
     if (opts.skip) dataQuery = dataQuery.offset(opts.skip);
 
     const rows = await dataQuery.all();
-    return { data: rows.map((row: MessageRow) => this.rowToMessage(row)), total };
+    return {
+      data: selectedFields
+        ? rows.map((row) => this.projectedRowToMessage(row as Partial<MessageRow>, selectedFields))
+        : rows.map((row) => this.rowToMessage(row as MessageRow)),
+      total,
+    };
   }
 
   /**
