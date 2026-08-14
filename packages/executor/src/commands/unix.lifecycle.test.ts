@@ -19,14 +19,17 @@ import { handleUnixSyncBranch } from './unix.js';
 const branchId = '019fc9dc-1dc5-7e69-b060-785569277230';
 const repoId = '019fc9dc-2a17-7384-bfa7-d8b327614088';
 
-function makeClient(storageMode: 'worktree' | 'clone' = 'worktree') {
+function makeClient(
+  storageMode: 'worktree' | 'clone' = 'worktree',
+  branchGroup = 'agor_wt_existing'
+) {
   const branch = {
     branch_id: branchId,
     repo_id: repoId,
     path: '/tenant/worktrees/repo/feature',
     storage_mode: storageMode,
     others_fs_access: 'none',
-    unix_group: 'agor_wt_existing',
+    unix_group: branchGroup,
   };
   const repo = {
     repo_id: repoId,
@@ -93,6 +96,53 @@ describe('handleUnixSyncBranch lifecycle permissions', () => {
     expect(result.success).toBe(true);
     expect(mocks.exec).not.toHaveBeenCalledWith(
       expect.stringContaining('/.git/worktrees/feature'),
+      expect.any(Function)
+    );
+  });
+
+  it('uses persisted group names without regenerating or silently migrating them', async () => {
+    mocks.createExecutorClient.mockResolvedValue(makeClient('clone'));
+
+    const result = await handleUnixSyncBranch(
+      {
+        command: 'unix.sync-branch',
+        daemonUrl: 'http://daemon.test',
+        sessionToken: 'tenant-scoped-token',
+        params: { branchId, daemonUser: 'agor-daemon' },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({ success: true, data: { groupName: 'agor_wt_existing' } });
+    expect(mocks.exec).toHaveBeenCalledWith(
+      expect.stringContaining('chgrp -R agor_wt_existing "/tenant/worktrees/repo/feature"'),
+      expect.any(Function)
+    );
+    expect(mocks.exec).not.toHaveBeenCalledWith(
+      expect.stringContaining('agor_wt_019fc9dc1dc57e69b0607855'),
+      expect.any(Function)
+    );
+  });
+
+  it('retains legacy groups during tenant-scoped lifecycle cleanup', async () => {
+    mocks.createExecutorClient.mockResolvedValue(makeClient('clone', 'agor_wt_019fc9dc'));
+
+    const result = await handleUnixSyncBranch(
+      {
+        command: 'unix.sync-branch',
+        daemonUrl: 'http://daemon.test',
+        sessionToken: 'tenant-scoped-token',
+        params: { branchId, daemonUser: 'agor-daemon', delete: true },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      data: { deleted: false, retainedLegacyGroup: true },
+    });
+    expect(mocks.exec).not.toHaveBeenCalledWith(
+      expect.stringContaining('groupdel agor_wt_019fc9dc'),
       expect.any(Function)
     );
   });

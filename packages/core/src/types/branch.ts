@@ -340,7 +340,8 @@ export interface Branch {
   /**
    * Unix group for this branch (if Unix modes enabled)
    *
-   * Format: 'agor_wt_<short-id>'
+   * Format: 'agor_wt_<canonical-24-char-short-id>'; legacy persisted rows may
+   * retain the older 8-character form until explicitly migrated.
    * Owners are added to this group for filesystem access.
    */
   unix_group?: string;

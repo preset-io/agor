@@ -28,11 +28,13 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '@agor/core/config';
 import {
+  and,
   branches,
   branchOwners,
   createDatabase,
   eq,
   inArray,
+  isNull,
   repos,
   select,
   shortId,
@@ -44,8 +46,6 @@ import {
   AGOR_USERS_GROUP,
   CommandError,
   createAdminExecutor,
-  generateBranchGroupName,
-  generateRepoGroupName,
   getBranchDirectoryAction,
   getBranchPermissionMode,
   getBranchSymlinkPath,
@@ -53,11 +53,14 @@ import {
   getUserBranchesDir,
   getUserGroups,
   groupExists,
+  isLegacyManagedGroupName,
   isUserInGroup,
   listAgorUsers,
   listBranchGroups,
   listRepoGroups,
   REPO_GIT_PERMISSION_MODE,
+  resolveBranchGroupName,
+  resolveRepoGroupName,
   SymlinkCommands,
   UnixGroupCommands,
   UnixUserCommands,
@@ -386,8 +389,7 @@ export default class SyncUnix extends Command {
             data: { local_path?: string } | null;
           };
 
-          const expectedGroup =
-            rawRepo.unix_group || generateRepoGroupName(rawRepo.repo_id as RepoID);
+          const expectedGroup = resolveRepoGroupName(rawRepo.repo_id as RepoID, rawRepo.unix_group);
           const dbNeedsBackfill = rawRepo.unix_group === null;
           const groupMissingOnSystem = !groupExists(expectedGroup);
           const repoPath = rawRepo.data?.local_path;
@@ -453,8 +455,17 @@ export default class SyncUnix extends Command {
               try {
                 await update(db, repos)
                   .set({ unix_group: expectedGroup })
-                  .where(eq(repos.repo_id, rawRepo.repo_id))
+                  .where(and(eq(repos.repo_id, rawRepo.repo_id), isNull(repos.unix_group)))
                   .run();
+                const stampedRepo = await select(db, { unix_group: repos.unix_group })
+                  .from(repos)
+                  .where(eq(repos.repo_id, rawRepo.repo_id))
+                  .one();
+                if (stampedRepo?.unix_group !== expectedGroup) {
+                  throw new Error(
+                    `unix_group was stamped concurrently as ${stampedRepo?.unix_group ?? '<missing>'}; preserved authoritative value`
+                  );
+                }
                 reposBackfilled++;
                 this.log(chalk.green(`   ✓ Backfilled unix_group in database`));
               } catch (error) {
@@ -641,8 +652,7 @@ export default class SyncUnix extends Command {
             // Build expected groups from owned branches
             for (const wt of ownedBranches) {
               // Use existing unix_group or generate from branch_id
-              const expectedGroup =
-                wt.unix_group || generateBranchGroupName(wt.branch_id as BranchID);
+              const expectedGroup = resolveBranchGroupName(wt.branch_id as BranchID, wt.unix_group);
               result.groups.expected.push(expectedGroup);
 
               const isInGroup = result.groups.actual.includes(expectedGroup);
@@ -712,8 +722,10 @@ export default class SyncUnix extends Command {
               repoIdsSeen.add(wt.repo_id);
 
               // Get repo group (from prefetched map or generate)
-              const repoGroup =
-                repoGroupMap.get(wt.repo_id) || generateRepoGroupName(wt.repo_id as RepoID);
+              const repoGroup = resolveRepoGroupName(
+                wt.repo_id as RepoID,
+                repoGroupMap.get(wt.repo_id)
+              );
               result.groups.expected.push(repoGroup);
 
               const isInRepoGroup = result.groups.actual.includes(repoGroup);
@@ -823,8 +835,10 @@ export default class SyncUnix extends Command {
             data: { path?: string } | null;
           };
 
-          const expectedGroup =
-            rawWt.unix_group || generateBranchGroupName(rawWt.branch_id as BranchID);
+          const expectedGroup = resolveBranchGroupName(
+            rawWt.branch_id as BranchID,
+            rawWt.unix_group
+          );
           const dbNeedsBackfill = rawWt.unix_group === null;
           const groupMissingOnSystem = !groupExists(expectedGroup);
 
@@ -902,8 +916,17 @@ export default class SyncUnix extends Command {
               try {
                 await update(db, branches)
                   .set({ unix_group: expectedGroup })
-                  .where(eq(branches.branch_id, rawWt.branch_id))
+                  .where(and(eq(branches.branch_id, rawWt.branch_id), isNull(branches.unix_group)))
                   .run();
+                const stampedBranch = await select(db, { unix_group: branches.unix_group })
+                  .from(branches)
+                  .where(eq(branches.branch_id, rawWt.branch_id))
+                  .one();
+                if (stampedBranch?.unix_group !== expectedGroup) {
+                  throw new Error(
+                    `unix_group was stamped concurrently as ${stampedBranch?.unix_group ?? '<missing>'}; preserved authoritative value`
+                  );
+                }
                 branchesBackfilled++;
                 this.log(chalk.green(`   ✓ Backfilled unix_group in database`));
               } catch (error) {
@@ -993,6 +1016,14 @@ export default class SyncUnix extends Command {
           if (action === 'cleanup') {
             // Archived+deleted: remove Unix group cruft
             const wtGroup = rawBranch.unix_group;
+            if (isLegacyManagedGroupName(wtGroup)) {
+              this.log(
+                chalk.yellow(
+                  `   ⊘ ${rawBranch.name}: retaining shared-capable legacy group ${wtGroup}; use agor local fix-group-uuids`
+                )
+              );
+              continue;
+            }
             if (groupExists(wtGroup)) {
               this.log(
                 chalk.yellow(
@@ -1499,9 +1530,8 @@ export default class SyncUnix extends Command {
         // Get all branch groups that should exist (from DB)
         const allBranches = await select(db).from(branches).all();
         const expectedGroups = new Set(
-          allBranches.map(
-            (wt: { branch_id: string; unix_group: string | null }) =>
-              wt.unix_group || generateBranchGroupName(wt.branch_id as BranchID)
+          allBranches.map((wt: { branch_id: string; unix_group: string | null }) =>
+            resolveBranchGroupName(wt.branch_id as BranchID, wt.unix_group)
           )
         );
 
@@ -1522,6 +1552,14 @@ export default class SyncUnix extends Command {
           this.log(chalk.yellow(`   Found ${staleGroups.length} stale group(s) to remove:\n`));
 
           for (const groupName of staleGroups) {
+            if (isLegacyManagedGroupName(groupName)) {
+              this.log(
+                chalk.yellow(
+                  `   ⊘ Retaining legacy group ${groupName}; use agor local fix-group-uuids for globally verified cleanup`
+                )
+              );
+              continue;
+            }
             this.log(chalk.yellow(`   → Deleting group ${groupName}...`));
             if (await execCmd(UnixGroupCommands.deleteGroup(groupName))) {
               groupsDeleted++;
@@ -1540,9 +1578,8 @@ export default class SyncUnix extends Command {
         // Get all repo groups that should exist (from DB)
         const allReposForCleanup = await select(db).from(repos).all();
         const expectedRepoGroups = new Set(
-          allReposForCleanup.map(
-            (r: { repo_id: string; unix_group: string | null }) =>
-              r.unix_group || generateRepoGroupName(r.repo_id as RepoID)
+          allReposForCleanup.map((r: { repo_id: string; unix_group: string | null }) =>
+            resolveRepoGroupName(r.repo_id as RepoID, r.unix_group)
           )
         );
 
@@ -1565,6 +1602,14 @@ export default class SyncUnix extends Command {
           );
 
           for (const groupName of staleRepoGroups) {
+            if (isLegacyManagedGroupName(groupName)) {
+              this.log(
+                chalk.yellow(
+                  `   ⊘ Retaining legacy group ${groupName}; use agor local fix-group-uuids for globally verified cleanup`
+                )
+              );
+              continue;
+            }
             this.log(chalk.yellow(`   → Deleting group ${groupName}...`));
             if (await execCmd(UnixGroupCommands.deleteGroup(groupName))) {
               groupsDeleted++;

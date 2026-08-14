@@ -2,6 +2,7 @@ import type { BranchID } from '../types/index.js';
 import { createAdminExecutor } from '../unix/command-executor.js';
 import {
   generateBranchGroupName,
+  isLegacyManagedGroupName,
   isValidBranchGroupName,
   UnixGroupCommands,
 } from '../unix/group-manager.js';
@@ -40,6 +41,13 @@ export async function deleteBranchGroupAction(params: DeleteBranchGroupParams): 
   const reporter = getReporter(params);
   const executor = createAdminExecutor({ 'dry-run': !!params.dryRun, verbose: !!params.verbose });
   if (params.dryRun) reporter.log('🔍 Dry run mode - no changes will be made\n');
+
+  if (isLegacyManagedGroupName(params.group)) {
+    throw new Error(
+      `Refusing to delete legacy group ${params.group} without global database and filesystem verification. ` +
+        'Run agor local fix-group-uuids instead.'
+    );
+  }
 
   const groupExists = await executor.check(UnixGroupCommands.groupExists(params.group));
   if (!groupExists) {

@@ -11,21 +11,51 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { toShortId } from '../lib/ids.js';
+import { SHORT_ID_LENGTH, shortId, toShortId } from '../lib/ids.js';
 import type { BranchID, RepoID, UUID } from '../types/index.js';
 import { UNIX_NAME_SHORT_ID_LENGTH } from './short-id-naming.js';
+
+const CANONICAL_GROUP_SHORT_ID_LENGTH = SHORT_ID_LENGTH;
+const LEGACY_GROUP_SHORT_ID_LENGTH = UNIX_NAME_SHORT_ID_LENGTH;
+
+const branchGroupPattern = new RegExp(
+  `^agor_wt_([0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}|[0-9a-f]{${CANONICAL_GROUP_SHORT_ID_LENGTH}})$`
+);
+const repoGroupPattern = new RegExp(
+  `^agor_rp_([0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}|[0-9a-f]{${CANONICAL_GROUP_SHORT_ID_LENGTH}})$`
+);
+const legacyBranchGroupPattern = new RegExp(`^agor_wt_[0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}$`);
+const legacyRepoGroupPattern = new RegExp(`^agor_rp_[0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}$`);
 
 /**
  * Generate Unix group name for a branch
  *
  * Format: agor_wt_<short-id>
- * Example: agor_wt_03b62447
+ * Example: agor_wt_019ffd3d2cef79d1a1c64073
  *
  * @param branchId - Full branch UUID
- * @returns Unix group name (e.g., 'agor_wt_03b62447')
+ * @returns Unix group name containing Agor's canonical collision-safe short ID
  */
 export function generateBranchGroupName(branchId: BranchID): string {
-  return `agor_wt_${toShortId(branchId as UUID, UNIX_NAME_SHORT_ID_LENGTH)}`;
+  return `agor_wt_${shortId(branchId as UUID)}`;
+}
+
+/** Return the group name used by Agor versions that truncated UUIDs to 8 chars. */
+export function generateLegacyBranchGroupName(branchId: BranchID): string {
+  return `agor_wt_${toShortId(branchId as UUID, LEGACY_GROUP_SHORT_ID_LENGTH)}`;
+}
+
+/**
+ * Resolve the group a normal sync must use.
+ *
+ * A stamped value is authoritative, including a legacy 8-character name.
+ * Generation is reserved exclusively for rows where `unix_group` is absent.
+ */
+export function resolveBranchGroupName(
+  branchId: BranchID,
+  persistedGroup: string | null | undefined
+): string {
+  return persistedGroup ?? generateBranchGroupName(branchId);
 }
 
 /**
@@ -34,10 +64,10 @@ export function generateBranchGroupName(branchId: BranchID): string {
  * Extracts the short ID from a group name like 'agor_wt_03b62447'
  *
  * @param groupName - Unix group name
- * @returns Short branch ID (8 chars) or null if invalid format
+ * @returns Legacy or canonical short branch ID, or null if invalid
  */
 export function parseBranchGroupName(groupName: string): string | null {
-  const match = groupName.match(/^agor_wt_([0-9a-f]{8})$/);
+  const match = groupName.match(branchGroupPattern);
   return match ? match[1] : null;
 }
 
@@ -48,7 +78,12 @@ export function parseBranchGroupName(groupName: string): string | null {
  * @returns true if valid branch group name
  */
 export function isValidBranchGroupName(groupName: string): boolean {
-  return /^agor_wt_[0-9a-f]{8}$/.test(groupName);
+  return branchGroupPattern.test(groupName);
+}
+
+/** Whether a branch group uses the legacy collision-prone 8-character form. */
+export function isLegacyBranchGroupName(groupName: string): boolean {
+  return legacyBranchGroupPattern.test(groupName);
 }
 
 // ============================================================
@@ -59,16 +94,29 @@ export function isValidBranchGroupName(groupName: string): boolean {
  * Generate Unix group name for a repo
  *
  * Format: agor_rp_<short-id>
- * Example: agor_rp_03b62447
+ * Example: agor_rp_019ffd3d2cef79d1a1c64073
  *
  * This group controls access to repo Unix-group-managed paths:
  * repo-root traversal and the shared .git/ directory.
  *
  * @param repoId - Full repo UUID
- * @returns Unix group name (e.g., 'agor_rp_03b62447')
+ * @returns Unix group name containing Agor's canonical collision-safe short ID
  */
 export function generateRepoGroupName(repoId: RepoID): string {
-  return `agor_rp_${toShortId(repoId as UUID, UNIX_NAME_SHORT_ID_LENGTH)}`;
+  return `agor_rp_${shortId(repoId as UUID)}`;
+}
+
+/** Return the group name used by Agor versions that truncated UUIDs to 8 chars. */
+export function generateLegacyRepoGroupName(repoId: RepoID): string {
+  return `agor_rp_${toShortId(repoId as UUID, LEGACY_GROUP_SHORT_ID_LENGTH)}`;
+}
+
+/** See {@link resolveBranchGroupName}; repo sync follows the same persistence rule. */
+export function resolveRepoGroupName(
+  repoId: RepoID,
+  persistedGroup: string | null | undefined
+): string {
+  return persistedGroup ?? generateRepoGroupName(repoId);
 }
 
 /**
@@ -77,10 +125,10 @@ export function generateRepoGroupName(repoId: RepoID): string {
  * Extracts the short ID from a group name like 'agor_rp_03b62447'
  *
  * @param groupName - Unix group name
- * @returns Short repo ID (8 chars) or null if invalid format
+ * @returns Legacy or canonical short repo ID, or null if invalid
  */
 export function parseRepoGroupName(groupName: string): string | null {
-  const match = groupName.match(/^agor_rp_([0-9a-f]{8})$/);
+  const match = groupName.match(repoGroupPattern);
   return match ? match[1] : null;
 }
 
@@ -91,7 +139,17 @@ export function parseRepoGroupName(groupName: string): string | null {
  * @returns true if valid repo group name
  */
 export function isValidRepoGroupName(groupName: string): boolean {
-  return /^agor_rp_[0-9a-f]{8}$/.test(groupName);
+  return repoGroupPattern.test(groupName);
+}
+
+/** Whether a repo group uses the legacy collision-prone 8-character form. */
+export function isLegacyRepoGroupName(groupName: string): boolean {
+  return legacyRepoGroupPattern.test(groupName);
+}
+
+/** Legacy branch/repo groups are never safe for context-limited automatic cleanup. */
+export function isLegacyManagedGroupName(groupName: string): boolean {
+  return isLegacyBranchGroupName(groupName) || isLegacyRepoGroupName(groupName);
 }
 
 /**
@@ -272,6 +330,24 @@ export const UnixGroupCommands = {
       `sudo -n chmod g+s "${path}"`,
     ];
   },
+
+  /**
+   * Remove access and default ACL entries for a superseded group.
+   *
+   * Used only by the explicit legacy group migration after the replacement
+   * ACL has been installed. `setfacl -x` is idempotent when the entry is
+   * already absent, so interrupted reruns converge.
+   */
+  removeDirectoryGroupAcl: (path: string, groupName: string): string[] => [
+    `sudo -n setfacl -R -x g:${groupName} "${path}"`,
+    `sudo -n setfacl -R -d -x g:${groupName} "${path}"`,
+  ],
+
+  /** Non-recursive counterpart used for the managed repo root. */
+  removeDirectoryGroupAclShallow: (path: string, groupName: string): string[] => [
+    `sudo -n setfacl -x g:${groupName} "${path}"`,
+    `sudo -n setfacl -d -x g:${groupName} "${path}"`,
+  ],
 
   /**
    * Set explicit user ACL on a directory (recursive with defaults)

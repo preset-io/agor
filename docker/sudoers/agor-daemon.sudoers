@@ -66,7 +66,7 @@ agor ALL=(ALL) NOPASSWD: /usr/sbin/chpasswd
 # ============================================================================
 # GROUP MANAGEMENT - Worktree Isolation
 # ============================================================================
-# Each worktree gets a Unix group (agor_wt_<short-id>).
+# Each worktree gets a Unix group (agor_wt_<24-character-short-id>).
 # Users with 'all' permission are added to the group.
 # Filesystem permissions on the worktree directory enforce access.
 

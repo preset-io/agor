@@ -34,7 +34,7 @@ shortId('01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f')
 
 Repositories (`cards`, `users`, `mcp-servers`, `board-comments`, `card-types`, `branches`, `tasks`, `sessions`, `boards`, `repos`) all delegate to it — never write a new resolver inline.
 
-**Don't roll your own truncation.** `scripts/check-no-ad-hoc-shortid.mjs` greps for `xxxId.substring(0, N)` / `.slice(0, N)` / `.replace(/-/g, '').slice(0, N)` patterns and fails CI. Use `shortId(id)` for display, `toShortId(id, length)` for the rare documented non-canonical case (e.g. Unix-name 8-char carve-out in `unix/short-id-naming.ts`). Pragma escape hatch: `// shortid-guard:ignore <reason>` on the offending line or the line above.
+**Don't roll your own truncation.** `scripts/check-no-ad-hoc-shortid.mjs` greps for `xxxId.substring(0, N)` / `.slice(0, N)` / `.replace(/-/g, '').slice(0, N)` patterns and fails CI. Use `shortId(id)` for display and for new branch/repo Unix group names. `toShortId(id, length)` is reserved for documented compatibility cases such as Unix usernames and legacy group detection in `unix/short-id-naming.ts`. Pragma escape hatch: `// shortid-guard:ignore <reason>` on the offending line or the line above.
 
 ## Branded types
 

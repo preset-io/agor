@@ -21,10 +21,12 @@ import type { CommandExecutor } from './command-executor.js';
 import { NoOpExecutor } from './command-executor.js';
 import {
   AGOR_USERS_GROUP,
-  generateBranchGroupName,
-  generateRepoGroupName,
   getBranchPermissionMode,
+  isLegacyBranchGroupName,
+  isLegacyRepoGroupName,
   REPO_GIT_PERMISSION_MODE,
+  resolveBranchGroupName,
+  resolveRepoGroupName,
   UnixGroupCommands,
 } from './group-manager.js';
 import { getBranchSymlinkPath, SymlinkCommands } from './symlink-manager.js';
@@ -243,7 +245,13 @@ export class UnixIntegrationService {
    * @returns Group name created
    */
   async createBranchGroup(branchId: BranchID): Promise<string> {
-    const groupName = generateBranchGroupName(branchId);
+    // A persisted name is authoritative. In particular, do not silently move
+    // legacy 8-character groups during normal lifecycle reconciliation.
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch) {
+      throw new Error(`Branch not found: ${branchId}`);
+    }
+    let groupName = resolveBranchGroupName(branchId, branch.unix_group);
 
     console.log(`[UnixIntegration] Creating group ${groupName} for branch ${shortId(branchId)}`);
 
@@ -255,13 +263,21 @@ export class UnixIntegrationService {
       await this.executor.exec(UnixGroupCommands.createGroup(groupName));
     }
 
-    // Fetch current branch to get existing data and path
-    const branch = await this.branchRepo.findById(branchId);
-
-    // Update branch record with group name (using repository)
-    await this.branchRepo.update(branchId, {
-      unix_group: groupName,
-    });
+    // Stamp only an absent field. Existing values, including legacy names,
+    // are never regenerated or implicitly migrated by normal sync.
+    if (branch.unix_group == null) {
+      const latestBranch = await this.branchRepo.findById(branchId);
+      if (latestBranch?.unix_group != null) {
+        groupName = latestBranch.unix_group;
+        if (!(await this.executor.check(UnixGroupCommands.groupExists(groupName)))) {
+          await this.executor.exec(UnixGroupCommands.createGroup(groupName));
+        }
+      } else {
+        await this.branchRepo.update(branchId, {
+          unix_group: groupName,
+        });
+      }
+    }
 
     // Apply group ownership and permissions to branch directory
     if (branch?.path) {
@@ -307,6 +323,16 @@ export class UnixIntegrationService {
     const branch = await this.branchRepo.findById(branchId);
     if (!branch?.unix_group) {
       console.log(`[UnixIntegration] No Unix group for branch ${shortId(branchId)}`);
+      return;
+    }
+
+    // Legacy short names may be shared by multiple UUIDv7 rows (and even by
+    // rows hidden behind another tenant's RLS scope). Only the global,
+    // verification-heavy local migration command may remove them.
+    if (isLegacyBranchGroupName(branch.unix_group)) {
+      console.log(
+        `[UnixIntegration] Retaining legacy group ${branch.unix_group}; run agor local fix-group-uuids for verified cleanup`
+      );
       return;
     }
 
@@ -485,7 +511,13 @@ export class UnixIntegrationService {
    * @returns Group name created
    */
   async createRepoGroup(repoId: RepoID): Promise<string> {
-    const groupName = generateRepoGroupName(repoId);
+    // A persisted name is authoritative. In particular, do not silently move
+    // legacy 8-character groups during normal lifecycle reconciliation.
+    const repo = await this.repoRepo.findById(repoId);
+    if (!repo) {
+      throw new Error(`Repo not found: ${repoId}`);
+    }
+    let groupName = resolveRepoGroupName(repoId, repo.unix_group);
 
     console.log(`[UnixIntegration] Creating repo group ${groupName} for repo ${shortId(repoId)}`);
 
@@ -497,15 +529,25 @@ export class UnixIntegrationService {
       await this.executor.exec(UnixGroupCommands.createGroup(groupName));
     }
 
-    // Update repo record with group name
-    await this.repoRepo.update(repoId, {
-      unix_group: groupName,
-    });
+    // Stamp only an absent field. Existing values, including legacy names,
+    // are never regenerated or implicitly migrated by normal sync.
+    if (repo.unix_group == null) {
+      const latestRepo = await this.repoRepo.findById(repoId);
+      if (latestRepo?.unix_group != null) {
+        groupName = latestRepo.unix_group;
+        if (!(await this.executor.check(UnixGroupCommands.groupExists(groupName)))) {
+          await this.executor.exec(UnixGroupCommands.createGroup(groupName));
+        }
+      } else {
+        await this.repoRepo.update(repoId, {
+          unix_group: groupName,
+        });
+      }
+    }
 
     // Apply group ownership and permissions to repo Unix-group-managed paths:
     // - repo root (non-recursive, traversal)
     // - `.git` (recursive, shared git objects/refs + branch metadata)
-    const repo = await this.repoRepo.findById(repoId);
     if (repo?.local_path) {
       await this.setRepoPermissions(repoId, repo.local_path);
     }
@@ -550,6 +592,15 @@ export class UnixIntegrationService {
     const repo = await this.repoRepo.findById(repoId);
     if (!repo?.unix_group) {
       console.log(`[UnixIntegration] No Unix group for repo ${shortId(repoId)}`);
+      return;
+    }
+
+    // See deleteBranchGroup(): tenant-scoped lifecycle work cannot prove a
+    // system-global legacy group is unshared.
+    if (isLegacyRepoGroupName(repo.unix_group)) {
+      console.log(
+        `[UnixIntegration] Retaining legacy repo group ${repo.unix_group}; run agor local fix-group-uuids for verified cleanup`
+      );
       return;
     }
 
