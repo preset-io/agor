@@ -157,13 +157,16 @@ describe('catalog browsing', () => {
     );
     expect(catalogQueries).toHaveLength(0);
 
-    rerender(
-      <MemoryRouter>
-        <CatalogTab client={client} connected={true} />
-      </MemoryRouter>
-    );
+    await act(async () => {
+      rerender(
+        <MemoryRouter>
+          <CatalogTab client={client} connected={true} />
+        </MemoryRouter>
+      );
+      await Promise.resolve();
+    });
 
-    expect(await screen.findByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
   });
 
   it('renders a failed read as a failure, not as an empty catalog', async () => {
