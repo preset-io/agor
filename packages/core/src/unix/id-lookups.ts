@@ -6,6 +6,7 @@
 
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
+import { assertSafeUnixGroupName } from './group-manager.js';
 
 /**
  * Get GID (group ID) from Unix group name
@@ -22,6 +23,8 @@ export function getGidFromGroupName(groupName: string | undefined | null): numbe
   if (!groupName) {
     return undefined;
   }
+
+  assertSafeUnixGroupName(groupName);
 
   try {
     // Try getent first (Linux, some BSD)

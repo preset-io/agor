@@ -60,6 +60,7 @@ import {
 } from '@agor/core/types';
 import {
   getGidFromGroupName,
+  resolveBranchGroupName,
   resolveUnixUserForImpersonation,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
@@ -2557,7 +2558,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Resolve host IP + unix GID (matches executor's renderEnvironmentTemplates).
     const config = this.app.get('config');
     const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
-    const unixGid = branch.unix_group ? getGidFromGroupName(branch.unix_group) : undefined;
+    const unixGid = branch.unix_group
+      ? getGidFromGroupName(resolveBranchGroupName(branch.branch_id as BranchID, branch.unix_group))
+      : undefined;
 
     const snapshot = renderBranchSnapshot(
       { slug: repo.slug, environment: env },

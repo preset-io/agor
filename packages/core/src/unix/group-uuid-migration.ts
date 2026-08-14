@@ -110,6 +110,15 @@ export function planUnixGroupUuidMigration(
 
   const candidateGroups = new Set<string>(currentLegacyRefs.keys());
 
+  // Full mode also owns cleanup of system-only legacy groups left behind by
+  // deleted rows or an interrupted migration. The runner still performs the
+  // same global DB and managed-root verification before deleting one.
+  if (!options.onlyDuplicates) {
+    for (const groupName of systemGroups) {
+      if (kindForLegacyGroup(groupName)) candidateGroups.add(groupName);
+    }
+  }
+
   // A predecessor that is still on the OS but whose rows already contain the
   // canonical name represents an interrupted run after CAS and before cleanup.
   for (const [legacyGroup, cohort] of derivedCohorts) {

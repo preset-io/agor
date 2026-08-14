@@ -33,13 +33,28 @@ describe('planUnixGroupUuidMigration', () => {
   });
 
   it('plans every legacy group in full mode', () => {
-    const plan = planUnixGroupUuidMigration(resources, { onlyDuplicates: false });
+    const orphanGroup = 'agor_rp_deadbeef';
+    const plan = planUnixGroupUuidMigration(resources, {
+      onlyDuplicates: false,
+      existingSystemGroups: [orphanGroup],
+    });
 
     expect(plan.map((cohort) => cohort.legacyGroup)).toEqual([
+      orphanGroup,
       singletonGroup,
       legacyCollisionGroup,
     ]);
     expect(plan.reduce((count, cohort) => count + cohort.resources.length, 0)).toBe(3);
+    expect(plan[0].resources).toEqual([]);
+  });
+
+  it('does not treat a system-only legacy group as a duplicate cohort', () => {
+    const plan = planUnixGroupUuidMigration(resources, {
+      onlyDuplicates: true,
+      existingSystemGroups: ['agor_rp_deadbeef'],
+    });
+
+    expect(plan.map((cohort) => cohort.legacyGroup)).toEqual([legacyCollisionGroup]);
   });
 
   it('retains a partially migrated collision cohort for resumed planning', () => {
@@ -176,5 +191,25 @@ describe('runUnixGroupUuidMigration', () => {
       },
     ]);
     expect(state.systemGroups.has(legacyGroup)).toBe(true);
+  });
+
+  it('deletes a system-only legacy group only after global verification', async () => {
+    const orphanGroup = 'agor_rp_deadbeef';
+    const state: FakeState = {
+      rows: new Map(),
+      systemGroups: new Set([orphanGroup]),
+      pathGroups: new Map(),
+      members: new Map([[orphanGroup, new Set(['stale-user'])]]),
+    };
+    const plan = planUnixGroupUuidMigration([], {
+      onlyDuplicates: false,
+      existingSystemGroups: state.systemGroups,
+    });
+
+    const result = await runUnixGroupUuidMigration(plan, adapterFor(state));
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.groupsDeleted).toBe(1);
+    expect(state.systemGroups.has(orphanGroup)).toBe(false);
   });
 });

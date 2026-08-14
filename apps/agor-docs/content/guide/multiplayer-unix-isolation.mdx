@@ -429,7 +429,9 @@ sudo agor local fix-group-uuids --only-dups --dry-run
 sudo agor local fix-group-uuids --only-dups
 ```
 
-An optional full migration handles every legacy branch and repo group:
+An optional full migration handles every legacy branch and repo group and
+removes system-only legacy groups after proving that no database row or managed
+filesystem root still uses them:
 
 ```bash
 sudo agor local fix-group-uuids --dry-run

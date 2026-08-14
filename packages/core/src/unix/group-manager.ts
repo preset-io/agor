@@ -26,6 +26,15 @@ const repoGroupPattern = new RegExp(
 );
 const legacyBranchGroupPattern = new RegExp(`^agor_wt_[0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}$`);
 const legacyRepoGroupPattern = new RegExp(`^agor_rp_[0-9a-f]{${LEGACY_GROUP_SHORT_ID_LENGTH}}$`);
+const safeUnixGroupPattern = /^[a-z_][a-z0-9_-]{0,31}$/;
+
+/** Reject shell-unsafe Unix group names before constructing privileged commands. */
+export function assertSafeUnixGroupName(groupName: string): string {
+  if (!safeUnixGroupPattern.test(groupName)) {
+    throw new Error(`Unsafe Unix group name: ${JSON.stringify(groupName)}`);
+  }
+  return groupName;
+}
 
 /**
  * Generate Unix group name for a branch
@@ -45,6 +54,17 @@ export function generateLegacyBranchGroupName(branchId: BranchID): string {
   return `agor_wt_${toShortId(branchId as UUID, LEGACY_GROUP_SHORT_ID_LENGTH)}`;
 }
 
+/** Require a persisted branch group to belong to the row that stamped it. */
+export function assertBranchGroupNameMatchesId(branchId: BranchID, groupName: string): string {
+  if (
+    groupName !== generateBranchGroupName(branchId) &&
+    groupName !== generateLegacyBranchGroupName(branchId)
+  ) {
+    throw new Error(`Invalid persisted Unix group for branch ${branchId}: ${groupName}`);
+  }
+  return groupName;
+}
+
 /**
  * Resolve the group a normal sync must use.
  *
@@ -55,7 +75,27 @@ export function resolveBranchGroupName(
   branchId: BranchID,
   persistedGroup: string | null | undefined
 ): string {
-  return persistedGroup ?? generateBranchGroupName(branchId);
+  return persistedGroup == null
+    ? generateBranchGroupName(branchId)
+    : assertBranchGroupNameMatchesId(branchId, persistedGroup);
+}
+
+/** Preserve an existing branch stamp while validating a requested repository update. */
+export function resolveBranchGroupUpdate(
+  branchId: BranchID,
+  currentGroup: string | null | undefined,
+  requestedGroup: string | null | undefined
+): string | undefined {
+  if (currentGroup != null) {
+    const validatedCurrent = assertBranchGroupNameMatchesId(branchId, currentGroup);
+    if (requestedGroup !== undefined && requestedGroup !== validatedCurrent) {
+      throw new Error(`Persisted Unix group for branch ${branchId} is authoritative`);
+    }
+    return validatedCurrent;
+  }
+  return requestedGroup == null
+    ? undefined
+    : assertBranchGroupNameMatchesId(branchId, requestedGroup);
 }
 
 /**
@@ -111,12 +151,41 @@ export function generateLegacyRepoGroupName(repoId: RepoID): string {
   return `agor_rp_${toShortId(repoId as UUID, LEGACY_GROUP_SHORT_ID_LENGTH)}`;
 }
 
+/** Require a persisted repo group to belong to the row that stamped it. */
+export function assertRepoGroupNameMatchesId(repoId: RepoID, groupName: string): string {
+  if (
+    groupName !== generateRepoGroupName(repoId) &&
+    groupName !== generateLegacyRepoGroupName(repoId)
+  ) {
+    throw new Error(`Invalid persisted Unix group for repo ${repoId}: ${groupName}`);
+  }
+  return groupName;
+}
+
 /** See {@link resolveBranchGroupName}; repo sync follows the same persistence rule. */
 export function resolveRepoGroupName(
   repoId: RepoID,
   persistedGroup: string | null | undefined
 ): string {
-  return persistedGroup ?? generateRepoGroupName(repoId);
+  return persistedGroup == null
+    ? generateRepoGroupName(repoId)
+    : assertRepoGroupNameMatchesId(repoId, persistedGroup);
+}
+
+/** Preserve an existing repo stamp while validating a requested repository update. */
+export function resolveRepoGroupUpdate(
+  repoId: RepoID,
+  currentGroup: string | null | undefined,
+  requestedGroup: string | null | undefined
+): string | undefined {
+  if (currentGroup != null) {
+    const validatedCurrent = assertRepoGroupNameMatchesId(repoId, currentGroup);
+    if (requestedGroup !== undefined && requestedGroup !== validatedCurrent) {
+      throw new Error(`Persisted Unix group for repo ${repoId} is authoritative`);
+    }
+    return validatedCurrent;
+  }
+  return requestedGroup == null ? undefined : assertRepoGroupNameMatchesId(repoId, requestedGroup);
 }
 
 /**
@@ -177,7 +246,7 @@ export const UnixGroupCommands = {
    * @param groupName - Name of the group to create
    * @returns Command string with sudo
    */
-  createGroup: (groupName: string) => `sudo -n groupadd ${groupName}`,
+  createGroup: (groupName: string) => `sudo -n groupadd ${assertSafeUnixGroupName(groupName)}`,
 
   /**
    * Delete a Unix group
@@ -185,7 +254,7 @@ export const UnixGroupCommands = {
    * @param groupName - Name of the group to delete
    * @returns Command string with sudo
    */
-  deleteGroup: (groupName: string) => `sudo -n groupdel ${groupName}`,
+  deleteGroup: (groupName: string) => `sudo -n groupdel ${assertSafeUnixGroupName(groupName)}`,
 
   /**
    * Add user to a Unix group
@@ -195,7 +264,7 @@ export const UnixGroupCommands = {
    * @returns Command string with sudo
    */
   addUserToGroup: (username: string, groupName: string) =>
-    `sudo -n usermod -aG ${groupName} ${username}`,
+    `sudo -n usermod -aG ${assertSafeUnixGroupName(groupName)} ${username}`,
 
   /**
    * Remove user from a Unix group
@@ -205,7 +274,7 @@ export const UnixGroupCommands = {
    * @returns Command string with sudo
    */
   removeUserFromGroup: (username: string, groupName: string) =>
-    `sudo -n gpasswd -d ${username} ${groupName}`,
+    `sudo -n gpasswd -d ${username} ${assertSafeUnixGroupName(groupName)}`,
 
   /**
    * Check if a group exists (read-only, no sudo needed)
@@ -213,7 +282,8 @@ export const UnixGroupCommands = {
    * @param groupName - Group name to check
    * @returns Command string (exits 0 if exists, 1 if not)
    */
-  groupExists: (groupName: string) => `getent group ${groupName} > /dev/null`,
+  groupExists: (groupName: string) =>
+    `getent group ${assertSafeUnixGroupName(groupName)} > /dev/null`,
 
   /**
    * Check if a user is in a group (read-only, no sudo needed)
@@ -223,7 +293,7 @@ export const UnixGroupCommands = {
    * @returns Command string (exits 0 if member, 1 if not)
    */
   isUserInGroup: (username: string, groupName: string) =>
-    `id -nG ${username} | grep -qw ${groupName}`,
+    `id -nG ${username} | grep -qw ${assertSafeUnixGroupName(groupName)}`,
 
   /**
    * List all members of a group (read-only, no sudo needed)
@@ -231,7 +301,8 @@ export const UnixGroupCommands = {
    * @param groupName - Group name
    * @returns Command string (outputs comma-separated usernames)
    */
-  listGroupMembers: (groupName: string) => `getent group ${groupName} | cut -d: -f4`,
+  listGroupMembers: (groupName: string) =>
+    `getent group ${assertSafeUnixGroupName(groupName)} | cut -d: -f4`,
 
   /**
    * Set directory group ownership and permissions
@@ -255,6 +326,7 @@ export const UnixGroupCommands = {
    * @returns Array of command strings with sudo to execute sequentially
    */
   setDirectoryGroup: (path: string, groupName: string, permissions: string): string[] => {
+    assertSafeUnixGroupName(groupName);
     // Determine "others" ACL based on permissions mode
     // 2770 = no others, 2775 = others r-X, 2777 = others rwX
     // Using capital X means: execute only on directories, not files
@@ -308,6 +380,7 @@ export const UnixGroupCommands = {
    * @returns Array of command strings with sudo to execute sequentially
    */
   setDirectoryGroupShallow: (path: string, groupName: string, permissions: string): string[] => {
+    assertSafeUnixGroupName(groupName);
     const othersDigit = permissions.charAt(3);
     let othersAcl: string;
     switch (othersDigit) {
@@ -338,16 +411,22 @@ export const UnixGroupCommands = {
    * ACL has been installed. `setfacl -x` is idempotent when the entry is
    * already absent, so interrupted reruns converge.
    */
-  removeDirectoryGroupAcl: (path: string, groupName: string): string[] => [
-    `sudo -n setfacl -R -x g:${groupName} "${path}"`,
-    `sudo -n setfacl -R -d -x g:${groupName} "${path}"`,
-  ],
+  removeDirectoryGroupAcl: (path: string, groupName: string): string[] => {
+    assertSafeUnixGroupName(groupName);
+    return [
+      `sudo -n setfacl -R -x g:${groupName} "${path}"`,
+      `sudo -n setfacl -R -d -x g:${groupName} "${path}"`,
+    ];
+  },
 
   /** Non-recursive counterpart used for the managed repo root. */
-  removeDirectoryGroupAclShallow: (path: string, groupName: string): string[] => [
-    `sudo -n setfacl -x g:${groupName} "${path}"`,
-    `sudo -n setfacl -d -x g:${groupName} "${path}"`,
-  ],
+  removeDirectoryGroupAclShallow: (path: string, groupName: string): string[] => {
+    assertSafeUnixGroupName(groupName);
+    return [
+      `sudo -n setfacl -x g:${groupName} "${path}"`,
+      `sudo -n setfacl -d -x g:${groupName} "${path}"`,
+    ];
+  },
 
   /**
    * Set explicit user ACL on a directory (recursive with defaults)

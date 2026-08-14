@@ -10,6 +10,7 @@ import {
   createDatabase,
   eq,
   repos,
+  resolveDatabaseUrl,
   select,
   sessions,
   shortId,
@@ -77,10 +78,6 @@ function invokingAgorHome(): string {
   return join(homedir(), '.agor');
 }
 
-function defaultLocalDatabaseUrl(agorHome: string): string {
-  return `file:${join(agorHome, 'agor.db')}`;
-}
-
 export default class FixGroupUuids extends Command {
   static override description =
     'Explicitly migrate legacy 8-character branch/repo Unix groups to collision-safe names';
@@ -120,7 +117,20 @@ export default class FixGroupUuids extends Command {
     }
 
     const agorHome = invokingAgorHome();
-    const databaseUrl = process.env.DATABASE_URL || defaultLocalDatabaseUrl(agorHome);
+    const configPath = join(agorHome, 'config.yaml');
+    if (!existsSync(configPath)) {
+      this.error(`Config not found: ${configPath}`);
+    }
+    const config = await loadConfigFromFile(configPath);
+    const resolvedDatabaseUrl = resolveDatabaseUrl({
+      config,
+      env: process.env,
+      homeDir: join(agorHome, '..'),
+    });
+    const databaseUrl =
+      resolvedDatabaseUrl.startsWith('file:') || /^[a-z][a-z0-9+.-]*:/i.test(resolvedDatabaseUrl)
+        ? resolvedDatabaseUrl
+        : `file:${resolvedDatabaseUrl}`;
     if (
       process.env.AGOR_DB_DIALECT === 'postgresql' ||
       /^(?:postgres(?:ql)?|pg):\/\//.test(databaseUrl) ||
@@ -141,11 +151,6 @@ export default class FixGroupUuids extends Command {
     }
 
     const db = createDatabase({ dialect: 'sqlite', url: `file:${databasePath}` });
-    const configPath = join(agorHome, 'config.yaml');
-    if (!existsSync(configPath)) {
-      this.error(`Config not found: ${configPath}`);
-    }
-    const config = await loadConfigFromFile(configPath);
     const daemonUser = config.daemon?.unix_user;
     if (!daemonUser || !isValidUnixUsername(daemonUser)) {
       this.error(

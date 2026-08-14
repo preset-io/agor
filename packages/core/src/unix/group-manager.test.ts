@@ -22,7 +22,9 @@ import {
   parseBranchGroupName,
   parseRepoGroupName,
   resolveBranchGroupName,
+  resolveBranchGroupUpdate,
   resolveRepoGroupName,
+  resolveRepoGroupUpdate,
   UnixGroupCommands,
 } from './group-manager.js';
 
@@ -67,15 +69,38 @@ describe('group-manager', () => {
     const branchId = '019ffd3d-2cef-79d1-a1c6-407300000001' as BranchID;
     const repoId = '019ffd3d-2cef-79d1-a1c6-407300000002' as RepoID;
 
-    it('keeps legacy and custom stamped values authoritative', () => {
+    it('keeps matching legacy and canonical stamped values authoritative', () => {
       expect(resolveBranchGroupName(branchId, 'agor_wt_019ffd3d')).toBe('agor_wt_019ffd3d');
-      expect(resolveRepoGroupName(repoId, 'operator_managed')).toBe('operator_managed');
+      expect(resolveRepoGroupName(repoId, generateRepoGroupName(repoId))).toBe(
+        generateRepoGroupName(repoId)
+      );
     });
 
     it('generates only when the field is absent', () => {
       expect(resolveBranchGroupName(branchId, null)).toBe(generateBranchGroupName(branchId));
       expect(resolveRepoGroupName(repoId, undefined)).toBe(generateRepoGroupName(repoId));
-      expect(resolveBranchGroupName(branchId, '')).toBe('');
+    });
+
+    it('fails closed for empty, custom, or wrong-row persisted values', () => {
+      expect(() => resolveBranchGroupName(branchId, '')).toThrow('Invalid persisted Unix group');
+      expect(() => resolveRepoGroupName(repoId, 'operator_managed')).toThrow(
+        'Invalid persisted Unix group'
+      );
+      expect(() => resolveBranchGroupName(branchId, 'agor_wt_019ffd3d2cef79d1a1c64074')).toThrow(
+        'Invalid persisted Unix group'
+      );
+    });
+
+    it('never clears or changes an existing repository stamp', () => {
+      expect(resolveBranchGroupUpdate(branchId, 'agor_wt_019ffd3d', undefined)).toBe(
+        'agor_wt_019ffd3d'
+      );
+      expect(() => resolveBranchGroupUpdate(branchId, 'agor_wt_019ffd3d', null)).toThrow(
+        'authoritative'
+      );
+      expect(() =>
+        resolveRepoGroupUpdate(repoId, generateRepoGroupName(repoId), 'agor_rp_019ffd3d')
+      ).toThrow('authoritative');
     });
   });
 
@@ -201,6 +226,15 @@ describe('group-manager', () => {
   // =========================================================================
 
   describe('UnixGroupCommands', () => {
+    it('rejects shell metacharacters in group names', () => {
+      expect(() => UnixGroupCommands.deleteGroup('agor_wt_safe; groupdel wheel')).toThrow(
+        'Unsafe Unix group name'
+      );
+      expect(() =>
+        UnixGroupCommands.setDirectoryGroup('/data/project', '$(touch pwned)', '2775')
+      ).toThrow('Unsafe Unix group name');
+    });
+
     describe('createGroup', () => {
       it('generates groupadd command', () => {
         expect(UnixGroupCommands.createGroup('agor_wt_01234567')).toBe(

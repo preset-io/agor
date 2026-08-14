@@ -80,6 +80,7 @@ import type {
   MessageID,
   Paginated,
   Params,
+  RepoID,
   Session,
   Task,
   User,
@@ -95,6 +96,12 @@ import {
   SCHEDULE_PATCH_WRITE_FIELDS,
   TaskStatus,
 } from '@agor/core/types';
+import {
+  generateBranchGroupName,
+  generateRepoGroupName,
+  resolveBranchGroupName,
+  resolveRepoGroupName,
+} from '@agor/core/unix';
 import {
   executorRuntimeScopeGuard,
   isTaskScopedExecutorRequest,
@@ -602,6 +609,72 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   }
 
   return context;
+}
+
+type ManagedUnixGroupKind = 'branch' | 'repo';
+
+/**
+ * Keep `unix_group` server-owned and validate every trusted write.
+ *
+ * Executor service accounts may perform the one normal transport write: stamp
+ * the canonical group on a row whose field is still absent. Explicit legacy
+ * migration writes directly through the local database after global checks.
+ */
+export function protectServerManagedUnixGroupWrites(kind: ManagedUnixGroupKind) {
+  return async (context: HookContext): Promise<HookContext> => {
+    const data =
+      context.data && typeof context.data === 'object' && !Array.isArray(context.data)
+        ? (context.data as Record<string, unknown>)
+        : undefined;
+    if (!data || !Object.hasOwn(data, 'unix_group')) return context;
+
+    const value = data.unix_group;
+    const id =
+      typeof context.id === 'string'
+        ? context.id
+        : typeof data[`${kind}_id`] === 'string'
+          ? (data[`${kind}_id`] as string)
+          : undefined;
+
+    if (value !== null && value !== undefined) {
+      if (typeof value !== 'string' || !id) {
+        throw new BadRequest(`A valid ${kind} id is required to validate unix_group`);
+      }
+      if (kind === 'branch') {
+        resolveBranchGroupName(id as BranchID, value);
+      } else {
+        resolveRepoGroupName(id as RepoID, value);
+      }
+    }
+
+    if (!context.params.provider) return context;
+    if (!context.params.user?._isServiceAccount) {
+      throw new Forbidden('unix_group is server-managed');
+    }
+
+    // A transported executor may only stamp an absent field with the row's
+    // canonical name. It cannot clear, rename, or migrate an existing stamp.
+    if (context.method !== 'patch' || !id || typeof value !== 'string') {
+      throw new Forbidden('Executor unix_group writes must stamp one existing row');
+    }
+    const canonical =
+      kind === 'branch'
+        ? generateBranchGroupName(id as BranchID)
+        : generateRepoGroupName(id as RepoID);
+    if (value !== canonical) {
+      throw new Forbidden('Executor unix_group writes must use the canonical group name');
+    }
+
+    const existing = (await context.service.get(id, {
+      ...context.params,
+      provider: undefined,
+    })) as { unix_group?: string | null };
+    if (existing.unix_group != null && existing.unix_group !== value) {
+      throw new Forbidden('Persisted unix_group is authoritative and cannot be changed');
+    }
+
+    return context;
+  };
 }
 
 /** Run an identity-only service's database-reading before hooks in one short unit of work. */
@@ -1475,16 +1548,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(repoQueryValidator), requireAuth],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
@@ -1513,17 +1589,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create branches'),
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         injectCreatedBy(),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         ...(branchRbacEnabled

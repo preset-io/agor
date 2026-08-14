@@ -24,6 +24,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
+import type { BranchID } from '@agor/core/types';
 import { diagnoseGit } from '@agor/git';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
@@ -934,7 +935,7 @@ async function renderEnvironmentTemplates(
 }> {
   // Import dependencies dynamically
   const { renderBranchSnapshot } = await import('@agor/core/environment/render-snapshot');
-  const { getGidFromGroupName } = await import('@agor/core/unix');
+  const { getGidFromGroupName, resolveBranchGroupName } = await import('@agor/core/unix');
   const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
 
   // Fetch branch and repo from database
@@ -948,7 +949,9 @@ async function renderEnvironmentTemplates(
   }
 
   // Look up GID from Unix group (only if group was created)
-  const unixGid = unixGroup ? getGidFromGroupName(unixGroup) : undefined;
+  const unixGid = unixGroup
+    ? getGidFromGroupName(resolveBranchGroupName(branchId as BranchID, unixGroup))
+    : undefined;
 
   // Resolve host IP for {{host.ip_address}} (frozen into rendered commands).
   // Override comes from daemon-resolved config slice; autodetected fallback

@@ -996,6 +996,10 @@ export default class SyncUnix extends Command {
           };
 
           const branchPath = rawBranch.data?.path;
+          const branchGroup = resolveBranchGroupName(
+            rawBranch.branch_id as BranchID,
+            rawBranch.unix_group
+          );
 
           // Skip branches without a path in the data blob
           if (!branchPath) {
@@ -1015,7 +1019,7 @@ export default class SyncUnix extends Command {
 
           if (action === 'cleanup') {
             // Archived+deleted: remove Unix group cruft
-            const wtGroup = rawBranch.unix_group;
+            const wtGroup = branchGroup;
             if (isLegacyManagedGroupName(wtGroup)) {
               this.log(
                 chalk.yellow(
@@ -1120,7 +1124,7 @@ export default class SyncUnix extends Command {
 
           this.log(chalk.bold(`📁 ${rawBranch.name}`));
           this.log(chalk.gray(`   branch_id: ${shortId(rawBranch.branch_id)}`));
-          this.log(chalk.gray(`   unix_group: ${rawBranch.unix_group}`));
+          this.log(chalk.gray(`   unix_group: ${branchGroup}`));
           this.log(chalk.gray(`   path: ${branchPath}`));
           if (rawBranch.archived) {
             this.log(
@@ -1239,7 +1243,7 @@ export default class SyncUnix extends Command {
 
           const permCmds = UnixGroupCommands.setDirectoryGroup(
             branchPath,
-            rawBranch.unix_group,
+            branchGroup,
             permissionMode
           );
           if (await execAllCmds(permCmds)) {
@@ -1302,7 +1306,10 @@ export default class SyncUnix extends Command {
           for (const wt of allWtForPrune) {
             const raw = wt as { branch_id: string; unix_group: string | null };
             if (raw.unix_group) {
-              wtGroupMap.set(raw.branch_id, raw.unix_group);
+              wtGroupMap.set(
+                raw.branch_id,
+                resolveBranchGroupName(raw.branch_id as BranchID, raw.unix_group)
+              );
             }
           }
 

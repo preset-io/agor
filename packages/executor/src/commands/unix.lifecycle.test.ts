@@ -21,7 +21,7 @@ const repoId = '019fc9dc-2a17-7384-bfa7-d8b327614088';
 
 function makeClient(
   storageMode: 'worktree' | 'clone' = 'worktree',
-  branchGroup = 'agor_wt_existing'
+  branchGroup = 'agor_wt_019fc9dc'
 ) {
   const branch = {
     branch_id: branchId,
@@ -34,7 +34,7 @@ function makeClient(
   const repo = {
     repo_id: repoId,
     local_path: '/tenant/repos/repo',
-    unix_group: 'agor_repo_existing',
+    unix_group: 'agor_rp_019fc9dc',
   };
 
   return {
@@ -113,9 +113,9 @@ describe('handleUnixSyncBranch lifecycle permissions', () => {
       {}
     );
 
-    expect(result).toMatchObject({ success: true, data: { groupName: 'agor_wt_existing' } });
+    expect(result).toMatchObject({ success: true, data: { groupName: 'agor_wt_019fc9dc' } });
     expect(mocks.exec).toHaveBeenCalledWith(
-      expect.stringContaining('chgrp -R agor_wt_existing "/tenant/worktrees/repo/feature"'),
+      expect.stringContaining('chgrp -R agor_wt_019fc9dc "/tenant/worktrees/repo/feature"'),
       expect.any(Function)
     );
     expect(mocks.exec).not.toHaveBeenCalledWith(
