@@ -1,41 +1,41 @@
-# Curated MCP catalog overlay.
+# The MCP catalog.
 #
-# The official MCP registry gives the catalog breadth and stable identity. It
-# has no notion of category, popularity, or what a server is actually good for,
-# so this file supplies that layer and is joined onto the mirror by `name`.
-# Curation lives here rather than in an admin UI so every change is reviewed in
-# a pull request and rolls back like code.
+# This file is the catalog. The marketplace offers exactly what is listed here
+# and nothing else, so an entry added is a server users can find and an entry
+# removed is one they can no longer install. It lives in the repository rather
+# than in an admin UI so every change is reviewed in a pull request and rolls
+# back like code.
 #
-# `name` is the reverse-DNS registry identity, and it is also the join key onto
-# the mirrored registry row. Entries are split by whether that name is something
-# the registry confirms or something Agor inferred:
+# `name` is the reverse-DNS identity, unique across both lists, and it is what
+# an installed server records — so renaming an entry orphans every install of
+# it. Entries are split by whether that name is something the MCP registry
+# confirms or something Agor inferred:
 #
 #   entries:      the registry publishes a server under exactly this name.
 #   unpublished:  the vendor runs a public MCP endpoint but has not published to
 #                 the registry, so the name is Agor's reverse-DNS guess.
 #
-# `verified` is a user-facing trust badge and backs the marketplace's
-# "verified only" filter, so it has to mean something narrower than "we like
-# this one": Agor vouches that this name identifies the vendor's own server. It
-# can only be true under `entries:`, because only there has anything confirmed
-# the name-to-vendor mapping. The loader enforces that rather than trusting the
-# file to stay honest as entries are added. It does not mean the vendor endorses
-# Agor.
+# `verified` is a user-facing trust badge, so it has to mean something narrower
+# than "we like this one": Agor vouches that this name identifies the vendor's
+# own server. It can only be true under `entries:`, because only there has
+# anything confirmed the name-to-vendor mapping. The loader enforces that rather
+# than trusting the file to stay honest as entries are added. It does not mean
+# the vendor endorses Agor.
 #
-# `remote_url` and `transport` are recorded for every entry with a public remote,
-# including ones the registry already carries. That makes a fresh install
-# connectable before the first multi-minute registry sync finishes and keeps the
-# catalog usable if the registry is unreachable. Ingestion overwrites both fields
-# from the registry whenever it publishes them, so the registry stays
-# authoritative wherever it has an opinion.
+# `auth_type` is what the endpoint asks of a client: `none`, `oauth`, or
+# `credentials`. It decides what the marketplace tells a user before they press
+# Connect, and it lets an entry that needs an account be refused without a
+# request. It is not what authorises the install — connecting probes the
+# endpoint itself, because this file records what was true when it was last
+# edited and a vendor can add authentication at any time. Omit the key where
+# nobody has established the answer: absence reads as "not stated", and an entry
+# that says nothing is still offered and still checked at connect time. A wrong
+# `none` is the one costly mistake, so leave it out rather than guess.
 #
 # `popularity_rank` is hand-assigned, informed by relative install volume on
 # Smithery. Smithery's raw counts are deliberately not stored or displayed: they
 # measure traffic through Smithery, not installs, and presenting them as Agor's
 # number would be wrong.
-#
-# Every `remote_url` here was reached with an unauthenticated `initialize` at
-# time of writing.
 
 # Entries the registry publishes under exactly this `name`.
 entries:
@@ -50,6 +50,7 @@ entries:
     popularity_rank: 1
     remote_url: https://api.githubcopilot.com/mcp/
     transport: streamable-http
+    auth_type: oauth
 
   - name: app.linear/linear
     category: dev-tools
@@ -62,6 +63,7 @@ entries:
     popularity_rank: 2
     remote_url: https://mcp.linear.app/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.atlassian/atlassian-mcp-server
     category: dev-tools
@@ -74,6 +76,7 @@ entries:
     popularity_rank: 6
     remote_url: https://mcp.atlassian.com/v1/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.gitlab/mcp
     category: dev-tools
@@ -86,6 +89,7 @@ entries:
     popularity_rank: 7
     remote_url: https://gitlab.com/api/v4/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.figma.mcp/mcp
     category: dev-tools
@@ -98,6 +102,7 @@ entries:
     popularity_rank: 8
     remote_url: https://mcp.figma.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.vercel/vercel-mcp
     category: dev-tools
@@ -110,6 +115,7 @@ entries:
     popularity_rank: 9
     remote_url: https://mcp.vercel.com
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.auth0/mcp
     category: dev-tools
@@ -133,6 +139,7 @@ entries:
 
     remote_url: https://mcp.wix.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.supabase/mcp
     category: data-storage
@@ -145,6 +152,7 @@ entries:
     popularity_rank: 11
     remote_url: https://mcp.supabase.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: io.prisma/mcp
     category: data-storage
@@ -157,6 +165,7 @@ entries:
     popularity_rank: 18
     remote_url: https://mcp.prisma.io/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.airtable/mcp
     category: data-storage
@@ -169,6 +178,7 @@ entries:
     popularity_rank: 25
     remote_url: https://mcp.airtable.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: io.github.ClickHouse/mcp-clickhouse
     category: data-storage
@@ -191,6 +201,7 @@ entries:
     popularity_rank: 21
     remote_url: https://huggingface.co/mcp
     transport: streamable-http
+    auth_type: none
 
   - name: io.sanity.www/mcp
     category: data-storage
@@ -203,6 +214,7 @@ entries:
     popularity_rank: 45
     remote_url: https://mcp.sanity.io/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.notion/mcp
     category: productivity
@@ -215,6 +227,7 @@ entries:
     popularity_rank: 12
     remote_url: https://mcp.notion.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.monday/monday.com
     category: productivity
@@ -227,6 +240,7 @@ entries:
     popularity_rank: 33
     remote_url: https://mcp.monday.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.zapier/mcp
     category: productivity
@@ -239,6 +253,7 @@ entries:
     popularity_rank: 20
     remote_url: https://mcp.zapier.com/api/v1/connect
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.stripe/mcp
     category: productivity
@@ -251,6 +266,7 @@ entries:
     popularity_rank: 17
     remote_url: https://mcp.stripe.com
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.paypal.mcp/mcp
     category: productivity
@@ -263,6 +279,7 @@ entries:
     popularity_rank: 41
     remote_url: https://mcp.paypal.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.webflow/mcp
     category: productivity
@@ -276,6 +293,7 @@ entries:
 
     remote_url: https://mcp.webflow.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: io.github.grafana/mcp-grafana
     category: observability
@@ -288,6 +306,7 @@ entries:
     popularity_rank: 23
     remote_url: https://mcp.grafana.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.newrelic/mcp-server
     category: observability
@@ -300,6 +319,7 @@ entries:
     popularity_rank: 29
     remote_url: https://mcp.newrelic.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: io.honeycomb/mcp
     category: observability
@@ -312,6 +332,7 @@ entries:
     popularity_rank: 32
     remote_url: https://mcp.honeycomb.io/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: io.github.PostHog/mcp
     category: observability
@@ -324,6 +345,7 @@ entries:
     popularity_rank: 28
     remote_url: https://mcp.posthog.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.amplitude/mcp-server
     category: observability
@@ -336,6 +358,7 @@ entries:
     popularity_rank: 47
     remote_url: https://mcp.amplitude.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: io.globalping/mcp
     category: observability
@@ -348,6 +371,7 @@ entries:
     popularity_rank: 48
     remote_url: https://mcp.globalping.dev/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: ai.exa/exa
     category: search
@@ -360,6 +384,7 @@ entries:
     popularity_rank: 15
     remote_url: https://mcp.exa.ai/mcp
     transport: streamable-http
+    auth_type: none
 
   - name: com.apify/apify-mcp-server
     category: search
@@ -372,6 +397,7 @@ entries:
     popularity_rank: 49
     remote_url: https://mcp.apify.com/
     transport: streamable-http
+    auth_type: oauth
 
 # Servers whose vendor runs a public MCP endpoint but has not published to the
 # registry. Their `name` is the reverse-DNS form of a domain the vendor owns —
@@ -393,6 +419,7 @@ unpublished:
     popularity_rank: 3
     remote_url: https://mcp.sentry.dev/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.context7/mcp
     category: dev-tools
@@ -405,6 +432,7 @@ unpublished:
     popularity_rank: 4
     remote_url: https://mcp.context7.com/mcp
     transport: streamable-http
+    auth_type: none
 
   - name: com.deepwiki/mcp
     category: dev-tools
@@ -417,6 +445,7 @@ unpublished:
     popularity_rank: 5
     remote_url: https://mcp.deepwiki.com/mcp
     transport: streamable-http
+    auth_type: none
 
   - name: com.cloudflare/mcp
     category: dev-tools
@@ -429,6 +458,7 @@ unpublished:
     popularity_rank: 10
     remote_url: https://mcp.cloudflare.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.semgrep/mcp
     category: dev-tools
@@ -441,6 +471,7 @@ unpublished:
     popularity_rank: 24
     remote_url: https://mcp.semgrep.ai/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.buildkite/mcp
     category: dev-tools
@@ -453,6 +484,7 @@ unpublished:
     popularity_rank: 31
     remote_url: https://mcp.buildkite.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.mongodb/mcp
     category: data-storage
@@ -465,6 +497,7 @@ unpublished:
     popularity_rank: 16
     remote_url: https://mcp.mongodb.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: tech.neon/mcp
     category: data-storage
@@ -477,6 +510,7 @@ unpublished:
     popularity_rank: 19
     remote_url: https://mcp.neon.tech/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.dropbox/mcp
     category: data-storage
@@ -489,6 +523,7 @@ unpublished:
     popularity_rank: 34
     remote_url: https://mcp.dropbox.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.box/mcp
     category: data-storage
@@ -501,6 +536,7 @@ unpublished:
     popularity_rank: 40
     remote_url: https://mcp.box.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.asana/mcp
     category: productivity
@@ -513,6 +549,7 @@ unpublished:
     popularity_rank: 22
     remote_url: https://mcp.asana.com/sse
     transport: sse
+    auth_type: oauth
 
   - name: com.clickup/mcp
     category: productivity
@@ -525,6 +562,7 @@ unpublished:
     popularity_rank: 36
     remote_url: https://mcp.clickup.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.squareup/mcp
     category: productivity
@@ -537,6 +575,7 @@ unpublished:
     popularity_rank: 43
     remote_url: https://mcp.squareup.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.hubspot/mcp
     category: productivity
@@ -549,6 +588,7 @@ unpublished:
     popularity_rank: 27
     remote_url: https://mcp.hubspot.com/anthropic
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.intercom/mcp
     category: productivity
@@ -561,6 +601,7 @@ unpublished:
     popularity_rank: 35
     remote_url: https://mcp.intercom.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.canva/mcp
     category: productivity
@@ -573,6 +614,7 @@ unpublished:
     popularity_rank: 42
     remote_url: https://mcp.canva.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.slack/mcp
     category: messaging
@@ -585,6 +627,7 @@ unpublished:
     popularity_rank: 13
     remote_url: https://mcp.slack.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.resend/mcp
     category: messaging
@@ -598,6 +641,7 @@ unpublished:
 
     remote_url: https://mcp.resend.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.datadoghq/mcp
     category: observability
@@ -610,6 +654,7 @@ unpublished:
     popularity_rank: 14
     remote_url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
     transport: streamable-http
+    auth_type: credentials
 
   - name: com.pagerduty/mcp
     category: observability
@@ -622,6 +667,7 @@ unpublished:
     popularity_rank: 46
     remote_url: https://mcp.pagerduty.com/mcp
     transport: streamable-http
+    auth_type: oauth
 
   - name: com.firecrawl/mcp
     category: search
@@ -634,6 +680,7 @@ unpublished:
     popularity_rank: 26
     remote_url: https://mcp.firecrawl.dev/mcp
     transport: streamable-http
+    auth_type: none
 
   - name: com.kagi/mcp
     category: search
@@ -646,3 +693,4 @@ unpublished:
     popularity_rank: 50
     remote_url: https://mcp.kagi.com/mcp
     transport: streamable-http
+    auth_type: oauth

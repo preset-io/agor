@@ -345,12 +345,10 @@ export interface MCPServer {
   /**
    * The catalog entry this server was installed from, if any.
    *
-   * Stamped as the entry's reverse-DNS registry name, which is the catalog's
-   * unique join key and the only identifier that outlives a row. A registry
-   * withdrawal followed by a republication deletes the entry and re-creates it
-   * under a fresh `catalog_entry_id`, so an id would dangle on the one event
-   * ingestion performs routinely, while the name still resolves to the entry
-   * for the same server.
+   * Stamped as the entry's reverse-DNS catalog name, which is what the entry is
+   * unique on. Every other field of an entry can be rewritten without the
+   * install ceasing to be an install of it, so the name is the only thing worth
+   * recording here — and renaming an entry is what orphans one.
    */
   catalog_entry_name?: string;
   enabled: boolean;

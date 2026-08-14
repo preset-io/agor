@@ -1,12 +1,10 @@
 /**
  * Paged reads of `/mcp-catalog`.
  *
- * The catalog is a global table that grows to thousands of registry rows, and
- * every predicate, the ordering and the page bounds already resolve in SQL. So
- * this fetches one page at a time and never holds the result set — it is
- * deliberately not hydrated into the workspace store, which models a
- * fully-loaded tenant-scoped collection kept live by socket events. The catalog
- * has no writers a browser can observe and nothing to keep live.
+ * The catalog is deliberately not hydrated into the workspace store, which
+ * models a fully-loaded tenant-scoped collection kept live by socket events.
+ * This has no writers a browser can observe and nothing to keep live, so it
+ * fetches one page at a time and holds only what it renders.
  *
  * Reads wait for `ready`. The client object exists from the moment the socket
  * is being built, well before it has connected and authenticated, so a surface
@@ -16,7 +14,7 @@
 import type { MCPCatalogCategory, MCPCatalogEntry, MCPCatalogSort } from '@agor/core/types';
 import type { AgorClient, FindResult } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CONNECTABLE_PROBE_VERDICTS } from './catalogPresentation';
+import { CONNECTABLE_AUTH_TYPES } from './catalogPresentation';
 
 /** The catalog service always paginates; an array is only a defensive fallback. */
 function asPage(result: FindResult<MCPCatalogEntry>): { data: MCPCatalogEntry[]; total: number } {
@@ -31,18 +29,13 @@ export interface CatalogFilterState {
   search: string;
   category?: MCPCatalogCategory;
   capability?: string;
-  reviewedOnly: boolean;
   connectableOnly: boolean;
   sort: MCPCatalogSort;
 }
 
 export function isFilterActive(filters: CatalogFilterState): boolean {
   return Boolean(
-    filters.search.trim() ||
-      filters.category ||
-      filters.capability ||
-      filters.reviewedOnly ||
-      filters.connectableOnly
+    filters.search.trim() || filters.category || filters.capability || filters.connectableOnly
   );
 }
 
@@ -73,8 +66,7 @@ function buildQuery(filters: CatalogFilterState, page: number): Record<string, u
     ...(search ? { search } : {}),
     ...(filters.category ? { category: filters.category } : {}),
     ...(filters.capability ? { capability: filters.capability } : {}),
-    ...(filters.reviewedOnly ? { curated: true } : {}),
-    ...(filters.connectableOnly ? { probed_auth_types: CONNECTABLE_PROBE_VERDICTS } : {}),
+    ...(filters.connectableOnly ? { auth_types: CONNECTABLE_AUTH_TYPES } : {}),
     sort: filters.sort,
     $limit: CATALOG_PAGE_SIZE,
     $skip: (page - 1) * CATALOG_PAGE_SIZE,
@@ -98,7 +90,7 @@ export function useCatalogSearch(
   // search. Only the newest request may write state.
   const requestSeq = useRef(0);
 
-  const { search, category, capability, reviewedOnly, connectableOnly, sort } = filters;
+  const { search, category, capability, connectableOnly, sort } = filters;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: retryToken is a manual re-run trigger, not a value the effect reads
   useEffect(() => {
@@ -113,10 +105,7 @@ export function useCatalogSearch(
     let cancelled = false;
     setStatus('loading');
 
-    const query = buildQuery(
-      { search, category, capability, reviewedOnly, connectableOnly, sort },
-      page
-    );
+    const query = buildQuery({ search, category, capability, connectableOnly, sort }, page);
     client
       .service('mcp-catalog')
       .find({ query })
@@ -139,21 +128,10 @@ export function useCatalogSearch(
     return () => {
       cancelled = true;
     };
-  }, [
-    client,
-    ready,
-    search,
-    category,
-    capability,
-    reviewedOnly,
-    connectableOnly,
-    sort,
-    page,
-    retryToken,
-  ]);
+  }, [client, ready, search, category, capability, connectableOnly, sort, page, retryToken]);
 
-  // The unfiltered size is the M in "N of M". It changes only when ingestion
-  // runs, so it is read once rather than alongside every filtered page. A
+  // The unfiltered size is the M in "N of M". It cannot change while the page
+  // is open, so it is read once rather than alongside every filtered page. A
   // failure here only costs the count, never the grid.
   // biome-ignore lint/correctness/useExhaustiveDependencies: retryToken is a manual re-run trigger, not a value the effect reads
   useEffect(() => {

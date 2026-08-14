@@ -1,33 +1,20 @@
 // MCP catalog types
 //
-// The catalog is a browsable index of MCP servers users can connect. It is a
-// curated overlay joined onto a mirror of the official MCP registry: the
-// registry supplies breadth and reverse-DNS identity, `curated.yaml` supplies
-// the presentation metadata the registry has no concept of (category,
-// capabilities, benefit copy, starter prompt, permission disclosure).
+// The catalog is a browsable index of MCP servers users can connect. Its
+// contents are `curated.yaml`, a file checked into this repository: every entry
+// is reviewed, versioned, and rolled back like any other change, and the
+// catalog offers exactly what that file names.
 //
-// The catalog holds no tenant data — every field originates from a public HTTP
-// registry or from a file checked into this repository — so the table is
-// deliberately global. See `packages/core/src/db/tenant-deletion-manifest.ts`.
+// Nothing here originates with a tenant, a user, or a request. An entry is
+// authored text plus the transport details needed to dial the server.
 
 import type { AgenticToolName } from './agentic-tool';
-import type { UUID } from './id';
 import type { MCPServer } from './mcp';
 import type { Session } from './session';
 
 /**
- * MCP catalog entry ID (branded UUID).
- *
- * Row identity, not server identity. A row deleted and re-created — which a
- * registry withdrawal followed by a republication does — gets a fresh
- * `generateId()`, so anything outside this table that needs to point at a
- * catalog entry must reference `name`, the registry's stable natural key.
- */
-export type MCPCatalogEntryID = UUID & { readonly __brand: 'MCPCatalogEntryID' };
-
-/**
  * Curation categories. Deliberately a small closed set: the point of the
- * overlay is that a user can scan six shelves, not five hundred tags.
+ * catalog is that a user can scan six shelves, not five hundred tags.
  */
 export const MCP_CATALOG_CATEGORIES = [
   'dev-tools',
@@ -95,22 +82,48 @@ export const MCP_CATALOG_CAPABILITIES = [
 export type MCPCatalogCapability = (typeof MCP_CATALOG_CAPABILITIES)[number];
 
 /**
+ * What an entry states about the credentials its endpoint requires.
+ *
+ * Each value picks a different connect affordance, which is why "needs a key"
+ * and "needs a browser flow" are distinct rather than both collapsing into one
+ * "needs auth":
+ *
+ * - `none`        — an unauthenticated JSON-RPC `initialize` handshake is
+ *                   accepted; connect can proceed.
+ * - `oauth`       — the endpoint answers 401 with an OAuth challenge.
+ * - `credentials` — the endpoint answers 401/403 with a non-OAuth challenge,
+ *                   so it wants an API key.
+ * - `unknown`     — `curated.yaml` does not state one.
+ *
+ * Nothing but `none` may be read as "this server is open", and `none` is a
+ * claim about a third party's endpoint that a checked-in file cannot keep
+ * current on its own. It decides what the marketplace renders and lets connect
+ * refuse an entry without a round trip; it never stands in for the check
+ * connect makes before it installs anything. See {@link MCP_CATALOG_AUTH_TYPES}
+ * against {@link MCPCatalogProbedAuthType}.
+ */
+export const MCP_CATALOG_AUTH_TYPES = ['none', 'oauth', 'credentials', 'unknown'] as const;
+
+export type MCPCatalogAuthType = (typeof MCP_CATALOG_AUTH_TYPES)[number];
+
+/**
+ * The subset an entry may state for itself.
+ *
+ * `unknown` is absent from this list because it is what omitting the key means,
+ * not something to write. An entry claiming to be un-stated would be a
+ * different way of spelling silence.
+ */
+export const MCP_CATALOG_AUTHORED_AUTH_TYPES = ['none', 'oauth', 'credentials'] as const;
+
+export type MCPCatalogAuthoredAuthType = (typeof MCP_CATALOG_AUTHORED_AUTH_TYPES)[number];
+
+/**
  * Result of an unauthenticated `initialize` probe against a remote MCP URL.
  *
- * The registry does not declare whether a server needs auth, so the connect UI
- * would otherwise have to discover it after the user clicks. Each value picks a
- * different connect affordance, which is why "needs a key" and "we could not
- * reach it" are distinct rather than both collapsing into `unknown`:
- *
- * - `none`        — an unauthenticated JSON-RPC `initialize` handshake
- *                   succeeded; connect directly. A 2xx alone does not qualify:
- *                   any web page can return one.
- * - `oauth`       — 401 with an OAuth challenge; run the browser flow.
- * - `credentials` — 401/403 with a non-OAuth challenge; ask for an API key.
- * - `unreachable` — the host did not answer, or answered 5xx.
- * - `unknown`     — never probed, or refused by the outbound-URL filter.
- *
- * Nothing but `none` may be read as "this server is open".
+ * A superset of {@link MCPCatalogAuthType}: a live request can also find that
+ * nothing answered, which is a statement about one moment and therefore
+ * something only a probe can report. An entry cannot carry this verdict — it
+ * exists to be acted on immediately, at the point of connecting.
  */
 export const MCP_CATALOG_PROBED_AUTH_TYPES = [
   'none',
@@ -125,132 +138,41 @@ export type MCPCatalogProbedAuthType = (typeof MCP_CATALOG_PROBED_AUTH_TYPES)[nu
 /** Transport a catalog entry can be connected over. */
 export type MCPCatalogTransport = 'streamable-http' | 'sse' | 'stdio';
 
-/** A remote endpoint as published by the registry. */
-export interface MCPCatalogRemote {
-  type: string;
-  url: string;
-}
-
-/** An installable package as published by the registry. */
-export interface MCPCatalogPackage {
-  registry_type: string;
-  identifier: string;
-  version?: string;
-  runtime_hint?: string;
-  transport_type?: string;
-}
-
-/**
- * What one writer published for the columns both writers can fill.
- *
- * Each side is kept verbatim so the effective row is derived rather than
- * accumulated. Storing only the winner plus a marker saying who won cannot
- * survive a withdrawal: when curation drops a field there is nothing left to
- * fall back to, and the registry will not rewrite it unless it happens to
- * republish. Everything outside this shape belongs to exactly one writer by
- * construction — `benefit` is only ever curated, `version` only ever mirrored.
- */
-export interface MCPCatalogSourceValues {
-  title?: string;
-  description?: string;
-  website_url?: string;
-  remote_url?: string;
-  transport?: MCPCatalogTransport;
-}
-
-/**
- * Everything about an entry that is neither filtered nor sorted, stored in the
- * row's JSON blob following the `mcp_servers` convention.
- */
-export interface MCPCatalogEntryData {
-  /** Every remote the registry publishes, not just the primary one. */
-  remotes?: MCPCatalogRemote[];
-  /** Every package the registry publishes. */
-  packages?: MCPCatalogPackage[];
-  /** Registry-supplied icon URLs (present on ~10% of entries). */
-  registry_icons?: string[];
-  /**
-   * Set once the registry mirror has written this row.
-   *
-   * Distinguishes a row the registry publishes from one that exists only
-   * because `curated.yaml` named it, which decides whether dropping the entry
-   * from that file should leave a row behind or remove it.
-   */
-  registry_mirrored?: boolean;
-  /** Curated capability tags in display order (also materialized for search). */
-  capabilities?: string[];
-  /** Registry `repository.source`, e.g. `github`. */
-  repository_source?: string;
-  /** Challenge scheme from a `credentials` probe verdict, e.g. `Basic`. */
-  probed_auth_scheme?: string;
-  /** What the registry last published for the shared columns. */
-  registry?: MCPCatalogSourceValues;
-  /** What `curated.yaml` last supplied for the shared columns. */
-  curation?: MCPCatalogSourceValues;
-  /**
-   * The URL the cached probe verdict describes.
-   *
-   * The verdict is about an endpoint, not about a row. When a republication or
-   * a curation edit moves `remote_url`, this is what makes the difference
-   * visible instead of leaving the new endpoint wearing the old one's answer.
-   */
-  probed_url?: string;
-}
-
 /**
  * A catalog entry as returned by the `/mcp-catalog` service.
+ *
+ * `name` is the identity. It is the reverse-DNS name the server is published
+ * under, it is unique across the file, and it is what an installed server
+ * records in `catalog_entry_name` — so it is also the key a caller connects by.
+ * There is no second identifier to keep in step with it.
  */
 export interface MCPCatalogEntry {
-  catalog_entry_id: MCPCatalogEntryID;
-  created_at: Date;
-  updated_at: Date;
-
-  /** Reverse-DNS registry identity, e.g. `io.github.github/github-mcp-server`. */
+  /** Reverse-DNS identity, e.g. `io.github.github/github-mcp-server`. */
   name: string;
-  version?: string;
-  /** `_meta["io.modelcontextprotocol.registry/official"].updatedAt`. */
-  registry_updated_at?: Date;
 
   title?: string;
   description?: string;
   website_url?: string;
-  repository_url?: string;
 
   transport?: MCPCatalogTransport;
-  /** Primary remote URL, materialized so the connect branch is a single read. */
   remote_url?: string;
+  /** Whether the entry names an endpoint that can be dialled over the network. */
   has_remote: boolean;
-  has_package: boolean;
 
-  // Curation overlay
-  curated: boolean;
-  category?: MCPCatalogCategory;
-  capabilities?: string[];
+  category: MCPCatalogCategory;
+  capabilities: string[];
   /** One-line "why you'd want this" copy. */
-  benefit?: string;
+  benefit: string;
   /** A prompt that demonstrates the server, offered after connecting. */
-  starter_prompt?: string;
+  starter_prompt: string;
   /** Plain-language statement of what connecting grants access to. */
-  permission_disclosure?: string;
+  permission_disclosure: string;
   icon_url?: string;
   verified: boolean;
-  /** 1 = most popular. Null for uncurated registry entries. */
+  /** 1 = most popular. Absent sorts last. */
   popularity_rank?: number;
 
-  // Auth probe
-  probed_auth_type: MCPCatalogProbedAuthType;
-  probed_at?: Date;
-  /** The endpoint the cached verdict describes. */
-  probed_url?: string;
-  /** Origin of the authorization server discovered during the probe. */
-  auth_server_origin?: string;
-
-  remotes?: MCPCatalogRemote[];
-  packages?: MCPCatalogPackage[];
-  registry_icons?: string[];
-  registry_status?: string;
-  repository_source?: string;
-  probed_auth_scheme?: string;
+  auth_type: MCPCatalogAuthType;
 }
 
 /**
@@ -271,15 +193,15 @@ const GENERIC_CATALOG_NAME_LABELS = new Set(['mcp', 'mcp-server', 'server', 'api
  *
  * Shared because both sides of the wire need this and disagreed: the catalog
  * UI derived the publisher while connect took the last path segment, so the
- * server name the agent saw was the word "mcp" for 38 of 50 curated entries.
- * One rule, two formattings — never two rules.
+ * server name the agent saw was the word "mcp" for 38 of 50 entries. One rule,
+ * two formattings — never two rules.
  *
- * The publisher is the identity only while what is connectable is curated.
- * `io.github.<user>/<repo>` inverts it — every server one GitHub user
- * publishes shares a publisher and differs only in the path — so the day
- * uncurated registry entries become installable, this needs a disambiguating
- * suffix rather than a special case. `curated-loader.test.ts` holds the
- * uniqueness invariant that would otherwise notice too late.
+ * The publisher identifies the server only while every name is hand-reviewed.
+ * `io.github.<user>/<repo>` inverts it — every server one GitHub user publishes
+ * shares a publisher and differs only in the path — so a catalog that ever
+ * admits names nobody vetted needs a disambiguating suffix rather than a
+ * special case. `curated-loader.test.ts` holds the uniqueness invariant that
+ * would otherwise notice too late.
  */
 function catalogPublisherSegment(name: string): string | undefined {
   const [domain = ''] = name.split('/');
@@ -293,12 +215,11 @@ function catalogPublisherSegment(name: string): string | undefined {
 /**
  * What to call a catalog entry on screen.
  *
- * A curated title wins. Otherwise the publisher stands in, because `title` is
- * the registry mirror's column and registry sync is off by default — rendering
- * `name` would label the whole catalog with reverse-DNS strings.
+ * A stated title wins. Otherwise the publisher stands in, because rendering
+ * `name` would label the catalog with reverse-DNS strings.
  *
  * It cannot recover casing: `com.deepwiki` reads "Deepwiki", not "DeepWiki".
- * Curated titles are the fix for that, not more derivation.
+ * Stating `title` is the fix for that, not more derivation.
  */
 export function catalogDisplayName(entry: Pick<MCPCatalogEntry, 'name' | 'title'>): string {
   const title = entry.title?.trim();
@@ -337,93 +258,48 @@ export function catalogServerSlug(name: string): string {
 }
 
 /** Sort keys the catalog service accepts. */
-export type MCPCatalogSort = 'popularity' | 'name' | 'recently_updated' | 'relevance';
+export type MCPCatalogSort = 'popularity' | 'name' | 'relevance';
 
 /**
- * Filters pushed into SQL by `MCPCatalogRepository.findAll`.
+ * Filters a catalog read narrows by.
  *
- * Every field here narrows the read before rows leave the database. The
- * service's `fetchData` seam maps the Feathers query onto this shape.
+ * The service's query maps onto this shape, and every field is applied over the
+ * loaded entries in memory. That is the whole catalog — a few dozen frozen
+ * objects held for the process's lifetime — so narrowing costs a pass over an
+ * array rather than a query.
  */
 export interface MCPCatalogFilters {
-  /** Exact row identity, so a caller holding an id can narrow in SQL. */
-  catalog_entry_id?: string;
   /** Case-insensitive substring match over name, title, and description. */
   search?: string;
   category?: MCPCatalogCategory;
   /** Matches entries carrying this capability tag. */
   capability?: string;
   verified?: boolean;
-  curated?: boolean;
   has_remote?: boolean;
-  probed_auth_type?: MCPCatalogProbedAuthType;
-  /** Exact registry lifecycle state. */
-  registry_status?: string;
+  auth_type?: MCPCatalogAuthType;
   /**
-   * Exclude rows whose registry lifecycle state matches, so the browse read can
-   * drop withdrawn servers without naming every state that is still live.
-   */
-  exclude_registry_status?: string;
-  /**
-   * Match any one of several probe verdicts.
+   * Match any one of several auth types.
    *
-   * "Not known to need an account" spans two verdicts — probed open, and never
-   * probed — and a single-value filter cannot say that. Callers that mean a set
+   * "Not known to need an account" spans two values — stated open, and not
+   * stated — and a single-value filter cannot say that. Callers that mean a set
    * pass one; the singular field stays for callers that mean exactly one.
    */
-  probed_auth_types?: MCPCatalogProbedAuthType[];
+  auth_types?: MCPCatalogAuthType[];
   names?: string[];
   sort?: MCPCatalogSort;
   limit?: number;
   offset?: number;
 }
 
-/** Fields the registry ingestion job owns. Curation fields are never touched. */
-export interface MCPCatalogRegistryUpsert {
-  name: string;
-  version?: string;
-  registry_updated_at?: Date;
-  title?: string;
-  description?: string;
-  website_url?: string;
-  repository_url?: string;
-  repository_source?: string;
-  transport?: MCPCatalogTransport;
-  remote_url?: string;
-  remotes?: MCPCatalogRemote[];
-  packages?: MCPCatalogPackage[];
-  registry_icons?: string[];
-  registry_status?: string;
-}
-
-/** Fields `curated.yaml` owns. Registry fields are only used as a fallback. */
-export interface MCPCatalogCurationUpsert {
-  name: string;
-  category: MCPCatalogCategory;
-  capabilities: MCPCatalogCapability[];
-  benefit: string;
-  starter_prompt: string;
-  permission_disclosure: string;
-  title?: string;
-  description?: string;
-  icon_url?: string;
-  website_url?: string;
-  verified: boolean;
-  popularity_rank?: number;
-  /** Used when the registry has not (yet) published the server. */
-  remote_url?: string;
-  transport?: MCPCatalogTransport;
-}
-
 /**
  * Request body of `POST /mcp-catalog/connect`.
  *
  * A catalog key and where the session should live, and nothing else. URL,
- * transport, and auth come from the catalog row server-side, so this cannot be
- * used to register an arbitrary server.
+ * transport, and auth come from the catalog entry server-side, so this cannot
+ * be used to register an arbitrary server.
  */
 export interface MCPCatalogConnectData {
-  /** Catalog entry UUID or its reverse-DNS registry name. */
+  /** The entry's reverse-DNS catalog name. */
   catalog_key: string;
   branch_id: string;
   agentic_tool: AgenticToolName;
@@ -436,7 +312,7 @@ export interface MCPCatalogConnectData {
    * the only place that rule lives: the endpoint would accept a connect from
    * any caller that never rendered it. Sending back the text — rather than a
    * bare `true` — means a client cannot satisfy the check without having had
-   * the disclosure in hand, and a stale one no longer matches the row.
+   * the disclosure in hand, and a stale one no longer matches the entry.
    *
    * It does not prove a human read the words. It proves the protocol ran.
    */
@@ -447,17 +323,17 @@ export interface MCPCatalogConnectData {
 export interface MCPCatalogConnectResult {
   mcp_server: MCPServer;
   session: Session;
-  /** The entry's curated demonstration prompt, for the new session's composer. */
+  /** The entry's demonstration prompt, for the new session's composer. */
   starter_prompt?: string;
   /** True when an existing install was reused rather than a second row created. */
   reused_existing_server: boolean;
 }
 
-/** Result of probing one entry, written back onto the row. */
+/** Result of probing one endpoint. */
 export interface MCPCatalogProbeResult {
   probed_auth_type: MCPCatalogProbedAuthType;
   probed_at: Date;
-  /** The endpoint this verdict describes. Stored so a moved URL is detectable. */
+  /** The endpoint this verdict describes. */
   probed_url: string;
   auth_server_origin?: string;
   /** Challenge scheme seen on a `credentials` verdict, e.g. `Basic`, `ApiKey`. */

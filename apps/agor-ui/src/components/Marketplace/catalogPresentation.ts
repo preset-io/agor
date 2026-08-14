@@ -7,9 +7,9 @@
  */
 
 import type {
+  MCPCatalogAuthType,
   MCPCatalogCategory,
   MCPCatalogEntry,
-  MCPCatalogProbedAuthType,
   MCPCatalogSort,
 } from '@agor/core/types';
 import { catalogDisplayName, MCP_CATALOG_CATEGORIES } from '@agor/core/types';
@@ -95,13 +95,11 @@ export function capabilityLabel(capability: string): string {
  * Sort options.
  *
  * The spec's "Most installs" default has no data source: nothing counts
- * installs, and the registry publishes no popularity signal. `popularity` is
- * the repository's curated-first, hand-assigned-rank ordering, so it is the
- * default and is labelled for what it actually is.
+ * installs. `popularity` is the catalog's hand-assigned-rank ordering, so it is
+ * the default and is labelled for what it actually is.
  */
 export const SORT_OPTIONS: Array<{ label: string; value: MCPCatalogSort }> = [
   { label: 'Sort: Recommended', value: 'popularity' },
-  { label: 'Sort: Recently updated', value: 'recently_updated' },
   { label: 'Sort: A–Z', value: 'name' },
 ];
 
@@ -119,11 +117,11 @@ export const entryTitle = catalogDisplayName;
 /**
  * What a user would find out by pressing Connect, said before they press it.
  *
- * Only the no-auth branch is wired, and most curated entries need an account —
- * so without this the default experience is accepting a disclosure and then
- * being refused. `unknown` is its own case rather than being folded into
- * either side: the endpoint probes on demand and may well succeed, but a
- * catalog that has never been probed cannot promise it will.
+ * Only the no-auth branch is wired, and most entries need an account — so
+ * without this the default experience is accepting a disclosure and then being
+ * refused. `unknown` is its own case rather than being folded into either side:
+ * connecting checks the endpoint and may well succeed, but an entry that does
+ * not say cannot promise it will.
  */
 export type ConnectReadiness = 'ready' | 'unchecked' | 'blocked';
 
@@ -136,11 +134,6 @@ export interface ConnectStatus {
 }
 
 const CONNECT_STATUSES = {
-  notReviewed: {
-    readiness: 'blocked',
-    label: 'Not reviewed',
-    detail: 'Only servers reviewed by Preset can be connected from the marketplace.',
-  },
   local: {
     readiness: 'blocked',
     label: 'Runs locally',
@@ -151,16 +144,6 @@ const CONNECT_STATUSES = {
     readiness: 'blocked',
     label: 'Needs an account',
     detail: 'This server needs an account. Signing in from the marketplace is not available yet.',
-  },
-  unreachable: {
-    readiness: 'blocked',
-    label: 'Unreachable',
-    detail: 'This server could not be reached the last time Agor checked.',
-  },
-  undisclosed: {
-    readiness: 'blocked',
-    label: 'No access statement',
-    detail: 'This server has not stated what it can access, so it cannot be connected yet.',
   },
   unchecked: {
     readiness: 'unchecked',
@@ -176,40 +159,33 @@ const CONNECT_STATUSES = {
 } as const satisfies Record<string, ConnectStatus>;
 
 /**
- * Probe verdicts that are not a refusal.
+ * Auth types that are not a refusal.
  *
- * The same rule the cards state: `none` is confirmed open, and `unknown` has
- * simply never been checked — connect probes it on demand and stops cleanly if
- * it turns out to need an account. Registry sync is off by default, so every
- * seeded row is `unknown`; a filter that demanded `none` could only ever return
- * nothing, while the card beside it called the entry connectable.
+ * The same rule the cards state: `none` is stated open, and `unknown` is simply
+ * unstated — connecting checks the endpoint and stops cleanly if it turns out
+ * to need an account. An entry that says nothing is worth offering, so a filter
+ * demanding `none` would hide entries the card beside it called connectable.
  *
  * Exported so the toolbar's filter and `connectStatus` cannot drift into
  * disagreeing about what "connectable" means.
  */
-export const CONNECTABLE_PROBE_VERDICTS: MCPCatalogProbedAuthType[] = ['none', 'unknown'];
+export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = ['none', 'unknown'];
 
 export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
-  if (!entry.curated) return CONNECT_STATUSES.notReviewed;
   if (!entry.has_remote || !entry.remote_url || entry.transport === 'stdio') {
     return CONNECT_STATUSES.local;
   }
-  if (entry.probed_auth_type === 'oauth' || entry.probed_auth_type === 'credentials') {
+  if (entry.auth_type === 'oauth' || entry.auth_type === 'credentials') {
     return CONNECT_STATUSES.needsAccount;
   }
-  if (entry.probed_auth_type === 'unreachable') return CONNECT_STATUSES.unreachable;
-  // Curation requires a disclosure, so this is unreachable today — but it is
-  // what keeps a curation gap from offering a connect that could only fail.
-  if (!entry.permission_disclosure?.trim()) return CONNECT_STATUSES.undisclosed;
-  if (entry.probed_auth_type !== 'none') return CONNECT_STATUSES.unchecked;
+  if (entry.auth_type !== 'none') return CONNECT_STATUSES.unchecked;
   return CONNECT_STATUSES.ready;
 }
 
 /** Whether the "connectable now" filter would keep this entry. */
 export function isConnectable(entry: MCPCatalogEntry): boolean {
   return (
-    connectStatus(entry).readiness !== 'blocked' &&
-    CONNECTABLE_PROBE_VERDICTS.includes(entry.probed_auth_type)
+    connectStatus(entry).readiness !== 'blocked' && CONNECTABLE_AUTH_TYPES.includes(entry.auth_type)
   );
 }
 

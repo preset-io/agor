@@ -145,25 +145,25 @@ describe('mcpServerQueryValidator', () => {
 });
 
 describe('mcpCatalogQueryValidator', () => {
-  it('preserves a set of probe verdicts, which one filter genuinely needs', async () => {
+  it('preserves a set of auth types, which one filter genuinely needs', async () => {
     const context = {
       params: {
-        query: { probed_auth_types: ['none', 'unknown'], curated: 'true', unknown: 'removed' },
+        query: { auth_types: ['none', 'unknown'], verified: 'true', unknown: 'removed' },
       },
     };
 
     await typedValidateQuery(mcpCatalogQueryValidator)(context);
 
     // `removeAdditional: 'all'` strips anything unlisted, so a filter the
-    // schema does not name reaches SQL as no filter at all.
+    // schema does not name arrives as no filter at all.
     expect(context.params.query).toEqual({
-      probed_auth_types: ['none', 'unknown'],
-      curated: true,
+      auth_types: ['none', 'unknown'],
+      verified: true,
     });
   });
 
-  it('refuses a probe verdict outside the closed set', async () => {
-    const context = { params: { query: { probed_auth_types: ['none', 'sudo'] } } };
+  it('refuses an auth type outside the closed set', async () => {
+    const context = { params: { query: { auth_types: ['none', 'sudo'] } } };
 
     await expect(typedValidateQuery(mcpCatalogQueryValidator)(context)).rejects.toThrow();
   });

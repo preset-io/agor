@@ -2181,8 +2181,8 @@ async function registerMCPServices(
   });
 
   // Read-only marketplace browse surface. Only find/get are exposed; the
-  // catalog's writers are the ingestion job and the curated.yaml seeder.
-  app.use('/mcp-catalog', createMCPCatalogService(db), { methods: ['find', 'get'] });
+  // catalog is a file in this repository and has no writers at runtime.
+  app.use('/mcp-catalog', createMCPCatalogService(), { methods: ['find', 'get'] });
 
   // JWT test endpoint
   app.use('/mcp-servers/test-jwt', {

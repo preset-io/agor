@@ -594,56 +594,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     }
   });
 
-  it('plans a deletion despite a global table with forced row security', async () => {
-    // `mcp_catalog_entries` forces row security for its ingestion-write policy
-    // while carrying no tenant_id. Live-catalog discovery selects on forced row
-    // security, so without the global-table exemption the audit refuses and
-    // every tenant deletion fails outright.
+  it('plans a deletion covering every table in the live catalogue', async () => {
+    // Nothing is declared global, so the audit has to reach the end with every
+    // discovered tenant-contract table in the plan. The guards for a table that
+    // is declared global are driven directly in
+    // `tenant-deletion-global-fk.test.ts`, which is the only place that shape
+    // can be built while GLOBAL_TABLES is empty.
     const plan = await deleteTenantData(db, `td-global-${generateId()}`, { dryRun: true });
 
-    // The audit ran to completion over the real catalogue...
     expect(plan.rowCounts.sessions).toBe(0);
-    // ...and the shared catalogue is not something a tenant deletion touches.
-    expect(Object.keys(plan.rowCounts)).not.toContain('mcp_catalog_entries');
-  });
-
-  it('refuses a global declaration for a table that is tenant-scoped after all', async () => {
-    // The exemption is a declaration, so it has to be verified. A table that
-    // holds tenant rows and is then declared global would skip the contract
-    // entirely and be left behind by every deletion.
-    const tableName = 'mcp_catalog_entries';
-    await executeRaw(
-      db,
-      sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN tenant_id text NOT NULL DEFAULT ''`
-    );
-    try {
-      await expect(
-        deleteTenantData(db, `td-badglobal-${generateId()}`, { dryRun: true })
-      ).rejects.toThrow(/declared global but has a tenant_id column/);
-    } finally {
-      await executeRaw(db, sql`ALTER TABLE ${sql.identifier(tableName)} DROP COLUMN tenant_id`);
-    }
-  });
-
-  it('refuses a global table whose foreign key reaches a tenant table', async () => {
-    // The reachable shape: both tables in `public`, which the hardened
-    // search_path renders unqualified.
-    await executeRaw(
-      db,
-      sql`ALTER TABLE "mcp_catalog_entries"
-            ADD COLUMN tdel_session_id varchar(36)
-            REFERENCES "sessions"(session_id)`
-    );
-    try {
-      await expect(deleteTenantData(db, `td-fk-${generateId()}`, { dryRun: true })).rejects.toThrow(
-        /declared global but references tenant-scoped public\.sessions/
-      );
-    } finally {
-      await executeRaw(
-        db,
-        sql`ALTER TABLE "mcp_catalog_entries" DROP COLUMN IF EXISTS tdel_session_id`
-      );
-    }
+    expect(Object.keys(plan.rowCounts).length).toBeGreaterThan(0);
   });
 
   it.skipIf(!postgresAdminUrl)('fails closed when live-catalog discovery is empty', async () => {

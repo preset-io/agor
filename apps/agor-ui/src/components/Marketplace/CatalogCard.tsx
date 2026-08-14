@@ -31,7 +31,7 @@ const VISIBLE_CAPABILITIES = 3;
 const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
   const { token } = theme.useToken();
   const title = entryTitle(entry);
-  const capabilities = entry.capabilities ?? [];
+  const capabilities = entry.capabilities;
   const overflow = capabilities.length - VISIBLE_CAPABILITIES;
   // Whether pressing Connect will get anywhere, on the card rather than after
   // the disclosure — most curated entries want an account the marketplace has
@@ -65,14 +65,12 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
               <Text strong ellipsis>
                 {title}
               </Text>
-              {entry.curated && (
-                <Tooltip title="Reviewed by Preset">
-                  <SafetyCertificateOutlined
-                    aria-label="Reviewed by Preset"
-                    style={{ color: token.colorPrimary }}
-                  />
-                </Tooltip>
-              )}
+              <Tooltip title="Reviewed by Preset">
+                <SafetyCertificateOutlined
+                  aria-label="Reviewed by Preset"
+                  style={{ color: token.colorPrimary }}
+                />
+              </Tooltip>
             </Space>
             <Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
               {entry.name}
@@ -81,11 +79,10 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
         </Flex>
 
         <Paragraph
-          type={entry.benefit ? undefined : 'secondary'}
           ellipsis={{ rows: 2 }}
           style={{ marginBottom: 0, minHeight: token.fontSize * 2 * token.lineHeight }}
         >
-          {entry.benefit ?? entry.description ?? 'No description published.'}
+          {entry.benefit}
         </Paragraph>
 
         <Space size={[token.marginXXS, token.marginXXS]} wrap>

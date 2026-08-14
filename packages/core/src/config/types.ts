@@ -1117,36 +1117,6 @@ export interface AgorDeploymentSettings {
 /**
  * Complete Agor configuration
  */
-/**
- * MCP marketplace catalog settings.
- *
- * The catalog mirrors the public MCP registry, which means the daemon makes
- * periodic outbound requests to a third party and, during the auth probe, to
- * arbitrary registry-published hosts. Air-gapped and network-restricted
- * installs need an off switch for that; the curated overlay shipped in the
- * repository still seeds, so the marketplace stays usable offline.
- */
-export interface AgorMCPCatalogSettings {
-  /**
-   * Mirror the public MCP registry into the catalog.
-   *
-   * Off by default: nothing renders the ~18,000 uncurated registry rows yet, so
-   * every install would make hundreds of outbound requests, four times a day,
-   * for data no user can see. The ~50 curated entries seed regardless. Turn
-   * this on when a UI exists that uses the breadth.
-   */
-  registry_sync_enabled?: boolean;
-
-  /** Hours between registry syncs (default: 6). */
-  sync_interval_hours?: number;
-
-  /** Entries auth-probed per sync (default: 40). Set 0 to disable probing. */
-  probe_budget?: number;
-
-  /** Advanced override for the registry base URL. Usually omitted. */
-  registry_url?: string;
-}
-
 export interface AgorConfig {
   /** Deployment-owned agentic-tool package selection. */
   agentic_tools?: AgorAgenticToolsSettings;
@@ -1189,9 +1159,6 @@ export interface AgorConfig {
 
   /** Upload storage and lifecycle policy. */
   uploads?: AgorUploadSettings;
-
-  /** MCP marketplace catalog ingestion settings. */
-  mcp_catalog?: AgorMCPCatalogSettings;
 }
 
 /**
@@ -1211,5 +1178,4 @@ export type ConfigKey =
   | `analytics.${keyof AgorAnalyticsSettings}`
   | `telemetry.${keyof AgorTelemetrySettings}`
   | `multi_tenancy.${keyof AgorMultiTenancySettings}`
-  | `uploads.${keyof AgorUploadSettings}`
-  | `mcp_catalog.${keyof AgorMCPCatalogSettings}`;
+  | `uploads.${keyof AgorUploadSettings}`;

@@ -33,10 +33,6 @@ import { DistributedHealthMonitor } from './services/distributed-health-monitor.
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
-import {
-  MCPCatalogIngestionWorker,
-  resolveMCPCatalogOptions,
-} from './services/mcp-catalog-ingestion.js';
 import { SchedulerService } from './services/scheduler.js';
 import { SessionQueueWorker } from './services/session-queue-worker.js';
 import { TaskRuntimeReconciler } from './services/task-runtime-reconciler.js';
@@ -788,17 +784,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
   app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
   console.log('🧠 Knowledge embedding indexer started');
 
-  // 8b. Start MCP catalog ingestion. The catalog is global, so this runs once
-  // per daemon regardless of tenancy mode; it enters an explicit system
-  // database scope rather than any tenant's.
-  const mcpCatalogIngestion = new MCPCatalogIngestionWorker(
-    db,
-    resolveMCPCatalogOptions(config.mcp_catalog)
-  );
-  mcpCatalogIngestion.start();
-  app.set('mcpCatalogIngestion', mcpCatalogIngestion);
-  console.log('📚 MCP catalog ingestion scheduled');
-
   // 9. Initialize gateway listeners. Static mode preserves the historical
   // tenant. Auth-resolved mode performs narrow global ID discovery, then
   // reloads and starts each channel under its immutable tenant identity.
@@ -869,9 +854,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
         console.log('🌐 Stopping gateway listeners...');
         await gatewayService.stopListeners();
       }
-
-      console.log('📚 Stopping MCP catalog ingestion...');
-      mcpCatalogIngestion.stop();
 
       // Stop scheduler
       if (schedulerService) {

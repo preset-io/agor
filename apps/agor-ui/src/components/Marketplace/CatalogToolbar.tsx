@@ -48,7 +48,6 @@ const CAPABILITY_OPTIONS = CAPABILITY_GROUPS.map((group) => ({
 export interface CatalogToolbarProps {
   category?: MCPCatalogCategory;
   capability?: string;
-  reviewedOnly: boolean;
   connectableOnly: boolean;
   sort: MCPCatalogSort;
   /** Debounced search term, for controlled resets (e.g. "clear filters"). */
@@ -56,7 +55,6 @@ export interface CatalogToolbarProps {
   onSearchChange: (value: string) => void;
   onCategoryChange: (value?: MCPCatalogCategory) => void;
   onCapabilityChange: (value?: string) => void;
-  onReviewedOnlyChange: (value: boolean) => void;
   onConnectableOnlyChange: (value: boolean) => void;
   onSortChange: (value: MCPCatalogSort) => void;
   /** `null` while the unfiltered catalog size is still unknown. */
@@ -66,14 +64,12 @@ export interface CatalogToolbarProps {
 const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   category,
   capability,
-  reviewedOnly,
   connectableOnly,
   sort,
   search,
   onSearchChange,
   onCategoryChange,
   onCapabilityChange,
-  onReviewedOnlyChange,
   onConnectableOnlyChange,
   onSortChange,
   matchSummary,
@@ -127,17 +123,6 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
               onChange={(value?: string) => onCapabilityChange(value || undefined)}
               options={CAPABILITY_OPTIONS}
             />
-          </Col>
-          <Col flex="none">
-            <Space size={token.marginXS}>
-              <Text type="secondary">Reviewed only</Text>
-              <Switch
-                size="small"
-                checked={reviewedOnly}
-                onChange={onReviewedOnlyChange}
-                aria-label="Show only servers reviewed by Preset"
-              />
-            </Space>
           </Col>
           <Col flex="none">
             <Space size={token.marginXS}>

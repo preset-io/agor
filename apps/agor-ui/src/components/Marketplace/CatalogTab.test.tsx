@@ -16,27 +16,22 @@ vi.mock('react-router-dom', async () => {
 const SESSION_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d6';
 
 const DEEPWIKI = {
-  catalog_entry_id: 'entry-deepwiki',
-  created_at: new Date(0),
-  updated_at: new Date(0),
   name: 'com.deepwiki/mcp',
   title: 'DeepWiki',
+  category: 'dev-tools',
   benefit: 'Ask questions about any public GitHub repository.',
   permission_disclosure: 'Reads public GitHub repository content only.',
   starter_prompt: 'Explain how authentication works in a repo I name.',
   capabilities: ['docs', 'code-search'],
   has_remote: true,
-  has_package: false,
-  curated: true,
   verified: false,
   remote_url: 'https://mcp.deepwiki.com/mcp',
   transport: 'streamable-http',
-  probed_auth_type: 'none',
+  auth_type: 'none',
 };
 
 const LINEAR = {
   ...DEEPWIKI,
-  catalog_entry_id: 'entry-linear',
   name: 'app.linear/linear',
   title: 'Linear',
   permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
@@ -56,14 +51,14 @@ function makeClient(): AgorClient {
         find: async ({ query }: { query: Record<string, unknown> }) => {
           catalogQueries.push(query);
           if (catalogFindError) throw catalogFindError;
-          const verdicts = query.probed_auth_types as string[] | undefined;
+          const authTypes = query.auth_types as string[] | undefined;
           const filtered = catalogRows
             .filter((row) =>
               typeof query.search === 'string'
                 ? row.name.toLowerCase().includes(String(query.search).toLowerCase())
                 : true
             )
-            .filter((row) => (verdicts ? verdicts.includes(row.probed_auth_type) : true));
+            .filter((row) => (authTypes ? authTypes.includes(row.auth_type) : true));
           return { total: filtered.length, limit: 24, skip: 0, data: filtered };
         },
       };
@@ -267,18 +262,18 @@ describe('catalog browsing', () => {
     await findCard('DeepWiki');
     expect(screen.queryByText(/servers match/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('switch', { name: /Reviewed by Preset/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
     expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
-    expect(catalogQueries.some((query) => query.curated === true)).toBe(true);
+    expect(catalogQueries.some((query) => Array.isArray(query.auth_types))).toBe(true);
   });
 
-  it('keeps unprobed servers when hiding account-only ones', async () => {
-    // A stock install has never run a registry sync, so every curated row is
-    // `unknown`. A filter that demanded `none` could only ever return nothing,
-    // while the cards beside it called those same entries connectable.
+  it('keeps servers with no stated auth when hiding account-only ones', async () => {
+    // An entry the file says nothing about is still worth offering: connecting
+    // checks the endpoint. A filter that demanded `none` would hide it while
+    // the card beside it called it connectable.
     catalogRows = [
-      { ...DEEPWIKI, probed_auth_type: 'unknown' },
-      { ...LINEAR, probed_auth_type: 'unknown' },
+      { ...DEEPWIKI, auth_type: 'unknown' },
+      { ...LINEAR, auth_type: 'unknown' },
     ];
     renderTab();
     await findCard('DeepWiki');
@@ -292,8 +287,8 @@ describe('catalog browsing', () => {
 
   it('drops servers known to need an account', async () => {
     catalogRows = [
-      { ...DEEPWIKI, probed_auth_type: 'unknown' },
-      { ...LINEAR, probed_auth_type: 'oauth' },
+      { ...DEEPWIKI, auth_type: 'unknown' },
+      { ...LINEAR, auth_type: 'oauth' },
     ];
     renderTab();
     await findCard('Linear');
@@ -302,7 +297,7 @@ describe('catalog browsing', () => {
 
     await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
     expect(queryCard('DeepWiki')).toBeInTheDocument();
-    expect(catalogQueries.at(-1)?.probed_auth_types).toEqual(['none', 'unknown']);
+    expect(catalogQueries.at(-1)?.auth_types).toEqual(['none', 'unknown']);
   });
 
   it('debounces search into one server-side query', async () => {
@@ -353,16 +348,6 @@ describe('connect', () => {
   // the AntD Form and its Selects twice; the drawer takes the entry as a prop
   // and states the same invariant in one mount.
 
-  it('offers no connect control for an entry that discloses nothing', async () => {
-    catalogRows = [{ ...DEEPWIKI, permission_disclosure: '' }];
-    renderTab();
-    fireEvent.click(await findCard('DeepWiki'));
-    const drawer = await findDrawer();
-
-    expect(drawer.getByText(/has not stated what it can access/)).toBeVisible();
-    expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
-  });
-
   it('connects by catalog key alone and lands in the new session with the prompt loaded', async () => {
     const drawer = await openDrawer();
     const connect = drawer.getByRole('button', { name: /Connect/ });
@@ -373,7 +358,7 @@ describe('connect', () => {
 
     await waitFor(() => expect(connectCalls).toHaveLength(1));
     expect(connectCalls[0]).toEqual({
-      catalog_key: 'entry-deepwiki',
+      catalog_key: 'com.deepwiki/mcp',
       branch_id: 'branch-1',
       agentic_tool: 'claude-code',
       // The exact text the drawer rendered, so the daemon can refuse a connect
@@ -402,13 +387,13 @@ describe('connect', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it('offers no connect control for an entry that has not been reviewed', async () => {
-    catalogRows = [{ ...DEEPWIKI, curated: false }];
+  it('offers no connect control for a server that runs locally', async () => {
+    catalogRows = [{ ...DEEPWIKI, has_remote: false, remote_url: undefined }];
     renderTab();
     fireEvent.click(await findCard('DeepWiki'));
     const drawer = await findDrawer();
 
-    expect(drawer.getByText(/Only servers reviewed by Preset/)).toBeVisible();
+    expect(drawer.getByText(/runs locally/)).toBeVisible();
     expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
     expect(drawer.queryByRole('checkbox')).not.toBeInTheDocument();
   });

@@ -183,6 +183,40 @@ unpublished:
   });
 });
 
+describe('auth_type', () => {
+  const withAuth = (line: string) =>
+    parseCuratedCatalog(`${VALID_ENTRY}${line ? `    ${line}\n` : ''}`)[0];
+
+  it('reads an omitted auth_type as unstated rather than as open', () => {
+    expect(withAuth('').auth_type).toBe('unknown');
+  });
+
+  it.each(['none', 'oauth', 'credentials'] as const)('carries a stated %s', (authType) => {
+    expect(withAuth(`auth_type: ${authType}`).auth_type).toBe(authType);
+  });
+
+  it('refuses a verdict only a live check could produce', () => {
+    // `unreachable` describes one moment, so a checked-in file cannot claim it.
+    expect(() => withAuth('auth_type: unreachable')).toThrow(CuratedCatalogError);
+  });
+
+  it('refuses an entry that spells its own absence', () => {
+    // Omitting the key is how an entry says nothing; a second spelling for it
+    // would let a reviewer read "unknown" as a decision somebody made.
+    expect(() => withAuth('auth_type: unknown')).toThrow(CuratedCatalogError);
+  });
+});
+
+describe('has_remote', () => {
+  it('is derived from the endpoint rather than stated alongside it', () => {
+    expect(parseCuratedCatalog(VALID_ENTRY)[0].has_remote).toBe(false);
+    const withRemote = parseCuratedCatalog(
+      `${VALID_ENTRY}    remote_url: https://mcp.example.com/mcp\n    transport: streamable-http\n`
+    );
+    expect(withRemote[0].has_remote).toBe(true);
+  });
+});
+
 describe('loadCuratedCatalog', () => {
   it('surfaces a missing file as a curation error rather than a raw ENOENT', async () => {
     await expect(loadCuratedCatalog('/nonexistent/curated.yaml')).rejects.toThrow(
@@ -191,10 +225,10 @@ describe('loadCuratedCatalog', () => {
   });
 
   it('never claims verified on an entry the registry does not publish', async () => {
-    // The invariant that makes the badge and the "verified only" filter mean
-    // something. `parseCuratedCatalog` enforces it, so loading the real file at
-    // all proves it holds — this pins the split so a future edit that moved
-    // every entry into `entries:` to dodge the rule would be visible.
+    // The invariant that makes the badge mean something.
+    // `parseCuratedCatalog` enforces it, so loading the real file at all proves
+    // it holds — this pins the split so a future edit that moved every entry
+    // into `entries:` to dodge the rule would be visible.
     const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
     const document = loadYaml(source) as {
       entries: Array<{ verified?: boolean }>;
@@ -257,10 +291,36 @@ describe('loadCuratedCatalog', () => {
       expect(entry.remote_url).toMatch(/^https:\/\//);
     }
 
-    // Most of the launch catalog must be connectable straight from the file, so
-    // a fresh install is usable before the first registry sync completes. The
-    // remainder are package-only servers with no remote to record.
+    // The catalog is a browse surface for servers users can connect, so most of
+    // it has to name an endpoint. The remainder are package-only servers with
+    // no remote to record, which the marketplace shows as running locally.
     const withRemote = entries.filter((entry) => entry.remote_url).length;
     expect(withRemote / entries.length).toBeGreaterThan(0.8);
+  });
+
+  it('states an auth type for every entry with an endpoint, and none without', async () => {
+    const entries = await loadCuratedCatalog();
+
+    for (const entry of entries) {
+      if (entry.remote_url) {
+        // An unstated endpoint still works — connecting checks it — but it
+        // makes the marketplace say "not checked yet" about a server somebody
+        // could have checked once, for everyone, in a pull request.
+        expect(entry.auth_type, `${entry.name} states no auth_type`).not.toBe('unknown');
+      } else {
+        // Nothing to dial, so there is nothing to state.
+        expect(entry.auth_type, `${entry.name} has no endpoint`).toBe('unknown');
+      }
+    }
+  });
+
+  it('offers at least a few servers that need no account at all', async () => {
+    const entries = await loadCuratedCatalog();
+
+    // Only the no-auth branch of connect is wired. A catalog where every
+    // endpoint needed an account would render a Connect button that could never
+    // succeed, so this is what keeps the marketplace demonstrably usable.
+    const open = entries.filter((entry) => entry.auth_type === 'none');
+    expect(open.length).toBeGreaterThanOrEqual(3);
   });
 });
