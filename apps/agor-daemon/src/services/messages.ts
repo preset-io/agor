@@ -229,7 +229,9 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
         default: MESSAGE_PAGINATION.DEFAULT_LIMIT,
         max: MESSAGE_PAGINATION.MAX_LIMIT,
       },
-      multi: ['create', 'remove'], // Allow bulk creates and removes
+      // Public multi-create has a separate cardinality/auth/realtime contract
+      // at /messages/bulk. Keep the ordinary CRUD endpoint single-record.
+      multi: ['remove'],
     });
 
     this.messagesRepo = messagesRepo;
@@ -239,6 +241,9 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     data: Partial<Message> | Partial<Message>[],
     params?: MessageParams
   ): Promise<Message | Message[]> {
+    if (Array.isArray(data)) {
+      throw new BadRequest('Bulk Message create must use /messages/bulk');
+    }
     try {
       return await super.create(data, params);
     } catch (error) {

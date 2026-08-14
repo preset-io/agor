@@ -326,6 +326,13 @@ export class ReactiveSessionHandle {
       const snapshot = await this.fetchTaskMessagesAtHighWater(taskId);
       let committed = snapshot;
       this.updateState((prev) => {
+        // A Task removal is journaled separately from Message mutations. Do
+        // not let an older transcript request recreate the removed Task's
+        // bucket after the realtime Task handler deleted it.
+        if (!prev.tasks.some((task) => task.task_id === taskId)) {
+          committed = [];
+          return prev;
+        }
         committed = this.reconcileMessageFetch(
           fetchToken,
           snapshot,

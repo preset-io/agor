@@ -355,6 +355,29 @@ describe('ReactiveSessionHandle message snapshot reconciliation', () => {
     expect(handle.getTaskMessages('task-1')).toEqual([]);
   });
 
+  it('does not recreate a Task message bucket when the Task is removed during load', async () => {
+    const task = makeTask('task-removed-during-load', TaskStatus.COMPLETED);
+    const stale = makeMessage(task.task_id, 0);
+    const opts: MockClientOptions = {
+      tasks: [task],
+      messagesByTask: { [task.task_id]: [stale] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    opts.deferTaskMessageFetch = task.task_id;
+    const loading = handle.loadTaskMessages(task.task_id);
+    await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalledTimes(2));
+    mock.emitServiceEvent('tasks', 'removed', task);
+    mock.releaseMessageFetch();
+
+    await expect(loading).resolves.toEqual([]);
+    expect(handle.state.tasks).toEqual([]);
+    expect(handle.state.messagesByTask.has(task.task_id)).toBe(false);
+    expect(handle.isTaskLoaded(task.task_id)).toBe(false);
+  });
+
   it('reconciles a removal over a large transcript snapshot before commit', async () => {
     const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
     const mock = createMockClient(opts);

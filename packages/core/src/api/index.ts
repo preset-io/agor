@@ -968,7 +968,9 @@ async function findAllAtIdHighWater(
       },
     });
     const page = normalizeFindResult(pageResult);
-    if (page.length === 0) break;
+    if (page.length === 0) {
+      throw new Error(`Cannot hydrate ${path}: keyset ended before ${idField} high-water mark`);
+    }
 
     for (const row of page) {
       const id = (row as Record<string, unknown>)[idField];

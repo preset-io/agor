@@ -221,6 +221,19 @@ describe('MessagesService.find pagination', () => {
   });
 });
 
+describe('MessagesService.create boundary', () => {
+  dbTest(
+    'rejects arrays on ordinary CRUD and directs callers to the bounded bulk route',
+    async ({ db }) => {
+      const sessionId = await createTestSession(db);
+      await expect(
+        createMessagesService(db).create([message(sessionId, 0), message(sessionId, 1)])
+      ).rejects.toThrow('Bulk Message create must use /messages/bulk');
+      await expect(new MessagesRepository(db).findBySessionId(sessionId)).resolves.toEqual([]);
+    }
+  );
+});
+
 describe('MessagesService.patch boundary', () => {
   dbTest('keeps identity/order immutable and validates one-time Task linkage', async ({ db }) => {
     const firstSessionId = await createTestSession(db);

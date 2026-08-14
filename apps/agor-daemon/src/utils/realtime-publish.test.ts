@@ -1202,6 +1202,27 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }, { user: admin }]);
   });
 
+  it('never treats a messages/bulk event for a private Session as tenant-global', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([{ user: allowed }, { user: denied }, service]);
+    const r = repos({
+      branch: branch('private-branch', 'none'),
+      session: session('private-session', 'private-branch'),
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { message_id: 'private-message', session_id: 'private-session' },
+      { path: 'messages/bulk', method: 'create', event: 'created' }
+    );
+
+    expect(channel.connections).toEqual([{ user: allowed }, service]);
+    expect(channel.connections).not.toContainEqual({ user: denied });
+  });
+
   it('delivers an archived branch tombstone only to tenant users who had view access', async () => {
     const allowed = user('allowed');
     const denied = user('denied');

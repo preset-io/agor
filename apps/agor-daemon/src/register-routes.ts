@@ -953,10 +953,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // These routes re-emit onto the `messages` / `tasks` services (which carry
-  // the real streaming payloads); their OWN default `created` event is just the
-  // `{ success: true }` ack and must never broadcast — one per chunk otherwise
-  // reaches every service-account socket. Publish it to no one.
+  // These routes re-emit canonical events onto the `messages` / `tasks`
+  // services. Their OWN default `created` event is either a duplicate bulk row
+  // or a `{ success: true }` streaming ack and must never broadcast. In
+  // particular, `messages/bulk.created` is not the canonical Message service
+  // event and must not create a second authorization surface.
+  app.service('/messages/bulk').publish(() => []);
   app.service('/messages/streaming').publish(() => []);
   app.service('/tasks/streaming').publish(() => []);
 

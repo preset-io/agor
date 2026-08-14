@@ -774,6 +774,30 @@ describe('createClient', () => {
       });
     });
 
+    it('fails closed when keyset hydration empties before its high-water mark', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      findMock
+        .mockResolvedValueOnce({
+          total: 2,
+          limit: 1,
+          skip: 0,
+          data: [{ message_id: 'm2' }],
+        })
+        .mockResolvedValueOnce({
+          total: 2,
+          limit: 1,
+          skip: 0,
+          data: [{ message_id: 'm1', task_id: 't1', index: 0 }],
+        })
+        .mockResolvedValueOnce({ total: 0, limit: 1, skip: 0, data: [] });
+
+      await expect(
+        messagesService.findAll({ query: { task_id: 't1', $sort: { index: 1 } } })
+      ).rejects.toThrow('keyset ended before message_id high-water mark');
+    });
+
     // Executor lifecycle callbacks use explicitly registered custom methods.
     // server-side via `app.use(path, service, { methods })`, but the Feathers Socket.io
     // client only wires standard CRUD at construction time. Without an explicit
