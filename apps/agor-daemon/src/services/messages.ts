@@ -5,8 +5,12 @@
  * Uses DrizzleService adapter with MessagesRepository.
  */
 
-import { MESSAGE_PAGINATION } from '@agor/core/config';
-import { MessagesRepository, TaskRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import { MESSAGE_PAGINATION, PAGINATION } from '@agor/core/config';
+import {
+  MessagesRepository,
+  MessageTaskIntegrityError,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import {
   MESSAGE_PATCH_FIELDS,
@@ -38,6 +42,12 @@ export const MESSAGES_SERVICE_TRANSPORT_METHODS = [
  * Message service params
  */
 export type MessageParams = QueryParams<{
+  message_id?:
+    | MessageID
+    | {
+        $gt?: MessageID;
+        $lte: MessageID;
+      };
   session_id?: SessionID;
   task_id?: TaskID;
   type?: Message['type'];
@@ -57,6 +67,7 @@ function parseNonNegativeInteger(value: unknown, field: '$limit' | '$skip'): num
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new BadRequest(`${field} must be a finite non-negative integer`);
   }
+
   return parsed;
 }
 
@@ -126,6 +137,22 @@ function normalizeQuery(rawQuery: Record<string, unknown>): Query {
   if (rawQuery.task_id !== undefined && typeof rawQuery.task_id !== 'string') {
     throw new BadRequest('task_id must be an ID');
   }
+  const messageId = rawQuery.message_id;
+  if (
+    messageId !== undefined &&
+    !(
+      typeof messageId === 'string' ||
+      (messageId !== null &&
+        typeof messageId === 'object' &&
+        !Array.isArray(messageId) &&
+        Object.keys(messageId).every((operator) => operator === '$gt' || operator === '$lte') &&
+        typeof (messageId as { $lte?: unknown }).$lte === 'string' &&
+        ((messageId as { $gt?: unknown }).$gt === undefined ||
+          typeof (messageId as { $gt?: unknown }).$gt === 'string'))
+    )
+  ) {
+    throw new BadRequest('message_id must be an ID or a bounded hydration cursor');
+  }
   if (rawQuery.type !== undefined && !MESSAGE_TYPES.has(rawQuery.type as Message['type'])) {
     throw new BadRequest('Unsupported Message type');
   }
@@ -136,6 +163,7 @@ function normalizeQuery(rawQuery: Record<string, unknown>): Query {
 }
 
 const MESSAGE_QUERY_FIELDS = new Set([
+  'message_id',
   'session_id',
   'task_id',
   'type',
@@ -191,7 +219,6 @@ const MESSAGE_PATCH_FIELD_SET = new Set<keyof MessagePatch>(MESSAGE_PATCH_FIELDS
  */
 export class MessagesService extends DrizzleService<Message, Partial<Message>, MessageParams> {
   private messagesRepo: MessagesRepository;
-  private taskRepo: TaskRepository;
 
   constructor(db: TenantScopeAwareDatabase) {
     const messagesRepo = new MessagesRepository(db);
@@ -206,7 +233,18 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     });
 
     this.messagesRepo = messagesRepo;
-    this.taskRepo = new TaskRepository(db);
+  }
+
+  async create(
+    data: Partial<Message> | Partial<Message>[],
+    params?: MessageParams
+  ): Promise<Message | Message[]> {
+    try {
+      return await super.create(data, params);
+    } catch (error) {
+      if (error instanceof MessageTaskIntegrityError) throw new BadRequest(error.message);
+      throw error;
+    }
   }
 
   /**
@@ -228,31 +266,22 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
       throw new BadRequest(`Message fields are immutable: ${unsupported.join(', ')}`);
     }
 
-    if (Object.hasOwn(data, 'task_id')) {
-      if (typeof data.task_id !== 'string') {
-        throw new BadRequest('task_id must be a Task ID');
-      }
-      const existing = await this.messagesRepo.findById(id as MessageID);
-      if (existing) {
-        if (existing.task_id && existing.task_id !== data.task_id) {
-          throw new BadRequest('Message task_id cannot be reassigned');
-        }
-        if (existing.task_id !== data.task_id) {
-          const targetTask = await this.taskRepo.findById(data.task_id);
-          if (!targetTask || targetTask.session_id !== existing.session_id) {
-            throw new BadRequest('task_id must belong to the Message Session');
-          }
-        }
-      }
+    if (Object.hasOwn(data, 'task_id') && typeof data.task_id !== 'string') {
+      throw new BadRequest('task_id must be a Task ID');
     }
 
-    return super.patch(id, data, params);
+    try {
+      return await super.patch(id, data, params);
+    } catch (error) {
+      if (error instanceof MessageTaskIntegrityError) throw new BadRequest(error.message);
+      throw error;
+    }
   }
 
   /**
    * Find the exact SQL page for standard Feathers queries. Complete Task
-   * hydration is a client concern: `findAll({ task_id })` walks these bounded
-   * pages rather than opening an unbounded transport route.
+   * hydration is a client concern: `findAll({ task_id })` walks bounded
+   * Message-ID keyset pages rather than opening an unbounded transport route.
    */
   async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
     const query = normalizeQuery((params?.query ?? {}) as Record<string, unknown>);
@@ -260,11 +289,32 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     const actualLimit = Math.min(limit, this.paginate?.max ?? 1000);
     const skip = query.$skip ?? 0;
     const sessionId = query.session_id;
+    const exactTranscript = typeof query.task_id === 'string' || typeof sessionId === 'string';
+    if (skip > PAGINATION.MAX_LIMIT && !exactTranscript) {
+      throw new BadRequest(
+        'Deep Message pagination requires an exact task_id or session_id filter'
+      );
+    }
     const pageOptions: Parameters<MessagesRepository['findPage']>[0] = {
       limit: actualLimit,
       skip,
       sort: query.$sort,
     };
+
+    const messageId = query.message_id;
+    if (typeof messageId === 'string') {
+      pageOptions.messageId = messageId as MessageID;
+    } else if (messageId && typeof messageId === 'object') {
+      if (!exactTranscript) {
+        throw new BadRequest(
+          'Message hydration cursors require an exact task_id or session_id filter'
+        );
+      }
+      if (typeof messageId.$gt === 'string') {
+        pageOptions.afterMessageId = messageId.$gt as MessageID;
+      }
+      pageOptions.throughMessageId = messageId.$lte as MessageID;
+    }
 
     if (typeof sessionId === 'string') {
       pageOptions.sessionId = sessionId as SessionID;
@@ -329,7 +379,12 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
    * Custom method: Bulk insert messages
    */
   async createMany(messages: Message[]): Promise<Message[]> {
-    return this.messagesRepo.createMany(messages);
+    try {
+      return await this.messagesRepo.createMany(messages);
+    } catch (error) {
+      if (error instanceof MessageTaskIntegrityError) throw new BadRequest(error.message);
+      throw error;
+    }
   }
 }
 

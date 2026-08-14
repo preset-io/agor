@@ -98,6 +98,8 @@ function assertClientWriteBoundaries(client: AgorClient): void {
   ]);
   // @ts-expect-error public Message CRUD does not expose full replacement.
   void client.service('messages').update('message-id', {});
+  // @ts-expect-error public Message patch always targets one exact Message.
+  void client.service('messages').patch(null, { content_preview: 'bulk patch' });
   // @ts-expect-error bulk insertion is only available on /messages/bulk.
   void client.service('messages').createMany([]);
   // @ts-expect-error /messages/bulk is a narrow create-only endpoint.

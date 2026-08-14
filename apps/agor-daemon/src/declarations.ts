@@ -296,9 +296,14 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
 /**
  * Messages service with custom methods (server-side implementation)
  */
-export interface MessagesServiceImpl extends Service<Message, Partial<Message>, FeathersParams> {
+export interface MessagesServiceImpl
+  extends Service<
+    Message,
+    import('@agor/core/types').MessageCreate | import('@agor/core/types').MessagePatch,
+    FeathersParams
+  > {
   findByIdForScopeCheck(messageId: import('@agor/core/types').MessageID): Promise<Message | null>;
-  createMany(data: Array<Partial<Message>>): Promise<Message[]>;
+  createMany(data: Array<import('@agor/core/types').MessageCreate>): Promise<Message[]>;
 }
 
 /**

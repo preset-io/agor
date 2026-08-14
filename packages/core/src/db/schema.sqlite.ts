@@ -363,6 +363,7 @@ export const tasks = sqliteTable(
   },
   (table) => ({
     sessionIdx: index('tasks_session_idx').on(table.session_id),
+    sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
@@ -510,6 +511,11 @@ export const messages = sqliteTable(
     // Indexes for efficient lookups
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
+    sessionMessageIdIdx: index('messages_session_message_id_idx').on(
+      table.session_id,
+      table.message_id
+    ),
+    taskMessageIdIdx: index('messages_task_message_id_idx').on(table.task_id, table.message_id),
     sessionIndexIdx: index('messages_session_index_idx').on(table.session_id, table.index),
     timestampIdx: index('messages_timestamp_idx').on(table.timestamp),
     sessionTimestampIdx: index('messages_session_timestamp_idx').on(

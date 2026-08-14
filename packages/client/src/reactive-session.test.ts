@@ -34,6 +34,8 @@ interface MockClientOptions {
   /** When true, `session-streams.create` blocks until releaseCreate() is called. */
   deferCreate?: boolean;
   deferTaskMessageFetch?: string;
+  deferSessionGet?: boolean;
+  sessionTaskIds?: string[];
 }
 
 function createMockClient(opts: MockClientOptions) {
@@ -82,6 +84,7 @@ function createMockClient(opts: MockClientOptions) {
 
   // Deferred create() resolvers (queue supports multiple in-flight creates).
   const createResolvers: Array<() => void> = [];
+  const sessionGetResolvers: Array<() => void> = [];
   const sessionStreams = {
     create: vi.fn(async () => {
       order.push('subscribe');
@@ -102,7 +105,13 @@ function createMockClient(opts: MockClientOptions) {
     sessions: {
       get: vi.fn(async () => {
         order.push('hydrate');
-        return { session_id: SESSION_ID } as Session;
+        if (opts.deferSessionGet) {
+          await new Promise<void>((resolve) => sessionGetResolvers.push(resolve));
+        }
+        return {
+          session_id: SESSION_ID,
+          tasks: opts.sessionTaskIds ?? opts.tasks.map((task) => task.task_id),
+        } as Session;
       }),
       ...listener('sessions'),
     },
@@ -154,6 +163,9 @@ function createMockClient(opts: MockClientOptions) {
     releaseCreate: releaseCreateFn,
     releaseMessageFetch: () => {
       for (const resolve of messageFetchResolvers.splice(0)) resolve();
+    },
+    releaseSessionGet: () => {
+      for (const resolve of sessionGetResolvers.splice(0)) resolve();
     },
   };
 }
@@ -208,6 +220,21 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
     expect(handle.isTaskLoaded('task-1')).toBe(false);
     expect(handle.isTaskLoaded('task-2')).toBe(false);
     expect(messageFindAll).not.toHaveBeenCalled();
+  });
+
+  it('preserves the canonical Task order stored on the Session', async () => {
+    const { handle } = await bootstrapHandle(
+      {
+        tasks: [tasks[0], tasks[1]],
+        sessionTaskIds: [tasks[1].task_id, tasks[0].task_id],
+        messagesByTask,
+      },
+      'none'
+    );
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual([
+      tasks[1].task_id,
+      tasks[0].task_id,
+    ]);
   });
 
   it('lazy: a failing latest-task fetch still resolves bootstrap (graceful degradation)', async () => {
@@ -313,7 +340,7 @@ describe('ReactiveSessionHandle message snapshot reconciliation', () => {
     expect(handle.getTaskMessages('task-1')).toEqual([]);
   });
 
-  it('restarts a potentially multi-page Task transcript after offset-shifting removal', async () => {
+  it('reconciles a removal over a large transcript snapshot before commit', async () => {
     const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
     const mock = createMockClient(opts);
     const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
@@ -322,10 +349,6 @@ describe('ReactiveSessionHandle message snapshot reconciliation', () => {
     mock.emitServiceEvent('tasks', 'created', task);
 
     const stale = Array.from({ length: 1000 }, (_, index) => makeMessage(task.task_id, index));
-    const current = Array.from({ length: 1000 }, (_, offset) =>
-      makeMessage(task.task_id, offset + 1)
-    );
-    opts.messagesByTask[task.task_id] = current;
     let releaseFirstPage!: () => void;
     mock.messageFindAll.mockImplementationOnce(
       () =>
@@ -340,15 +363,15 @@ describe('ReactiveSessionHandle message snapshot reconciliation', () => {
     releaseFirstPage();
     await loading;
 
-    expect(mock.messageFindAll).toHaveBeenCalledTimes(2);
+    expect(mock.messageFindAll).toHaveBeenCalledTimes(1);
     expect(handle.getTaskMessages(task.task_id).map((message) => message.index)).toEqual(
-      current.map((message) => message.index)
+      stale.slice(1).map((message) => message.index)
     );
   });
 });
 
 describe('ReactiveSessionHandle Task snapshot reconciliation', () => {
-  it('restarts a potentially multi-page Session Task fetch after removal', async () => {
+  it('reconciles a Session Task removal over the fetched snapshot', async () => {
     const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
     const mock = createMockClient(opts);
     const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
@@ -373,10 +396,28 @@ describe('ReactiveSessionHandle Task snapshot reconciliation', () => {
     releaseFirstPage();
     await resync;
 
-    expect(mock.taskFindAll).toHaveBeenCalledTimes(3); // bootstrap + stale pass + retry
+    expect(mock.taskFindAll).toHaveBeenCalledTimes(2); // bootstrap + resync
     expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
       current.map((task) => task.task_id)
     );
+  });
+
+  it('keeps the Task journal open until a slower bootstrap request commits', async () => {
+    const oldTask = makeTask('old', TaskStatus.COMPLETED);
+    const newTask = makeTask('new', TaskStatus.RUNNING);
+    const mock = createMockClient({
+      tasks: [oldTask],
+      messagesByTask: {},
+      deferSessionGet: true,
+    });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+
+    await vi.waitFor(() => expect(mock.taskFindAll).toHaveBeenCalledTimes(1));
+    mock.emitServiceEvent('tasks', 'created', newTask);
+    mock.releaseSessionGet();
+    await handle.ready();
+
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(['old', 'new']);
   });
 });
 
@@ -415,6 +456,37 @@ describe('ReactiveSessionHandle resync hydration parity', () => {
     expect(messageFindAll).toHaveBeenCalledWith({
       query: { task_id: 'task-4', $sort: { index: 1 }, $limit: 1000 },
     });
+  });
+
+  it('keeps one Message journal open across sequential Task refreshes', async () => {
+    const firstOld = makeMessage('task-1', 0);
+    const second = makeMessage('task-2', 0);
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.COMPLETED)],
+      messagesByTask: { 'task-1': [firstOld], 'task-2': [second] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+    await handle.loadTaskMessages('task-1');
+
+    mock.messageFindAll.mockClear();
+    opts.deferTaskMessageFetch = 'task-1';
+    const resync = handle.resync();
+    await vi.waitFor(() =>
+      expect(mock.messageFindAll).toHaveBeenCalledWith({
+        query: { task_id: 'task-1', $sort: { index: 1 }, $limit: 1000 },
+      })
+    );
+    const secondNew = makeMessage('task-2', 1);
+    mock.emitServiceEvent('messages', 'created', secondNew);
+    mock.releaseMessageFetch();
+    await resync;
+
+    expect(handle.getTaskMessages('task-2').map((message) => message.message_id)).toEqual([
+      second.message_id,
+      secondNew.message_id,
+    ]);
   });
 });
 

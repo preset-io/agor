@@ -605,13 +605,16 @@ describe('createClient', () => {
           total: 2,
           limit: 1,
           skip: 0,
-          data: [{ message_id: 'm1', task_id: 't1', index: 0 }],
+          data: [{ message_id: 'm2' }],
         })
         .mockResolvedValueOnce({
           total: 2,
-          limit: 1,
-          skip: 1,
-          data: [{ message_id: 'm2', task_id: 't1', index: 1 }],
+          limit: 1000,
+          skip: 0,
+          data: [
+            { message_id: 'm1', task_id: 't1', index: 0 },
+            { message_id: 'm2', task_id: 't1', index: 1 },
+          ],
         });
 
       await expect(
@@ -622,8 +625,76 @@ describe('createClient', () => {
         { message_id: 'm1', task_id: 't1', index: 0 },
         { message_id: 'm2', task_id: 't1', index: 1 },
       ]);
+      expect(findMock).toHaveBeenNthCalledWith(1, {
+        query: {
+          task_id: 't1',
+          $sort: { message_id: -1 },
+          $limit: 1,
+          $select: ['message_id'],
+        },
+      });
       expect(findMock).toHaveBeenNthCalledWith(2, {
-        query: { task_id: 't1', $sort: { index: 1 }, $limit: 1, $skip: 1 },
+        query: {
+          task_id: 't1',
+          message_id: { $lte: 'm2' },
+          $sort: { message_id: 1 },
+          $limit: 1000,
+        },
+      });
+    });
+
+    it('fails closed when an offset-paginated result changes between pages', async () => {
+      const client = createClient();
+      const sessionsService = client.service('sessions');
+      const findMock = sessionsService.find as unknown as MockedFunction<any>;
+      findMock
+        .mockResolvedValueOnce({
+          total: 3,
+          limit: 2,
+          skip: 0,
+          data: [{ session_id: 's1' }, { session_id: 's2' }],
+        })
+        .mockResolvedValueOnce({ total: 2, limit: 2, skip: 2, data: [] });
+
+      await expect(sessionsService.findAll()).rejects.toThrow(
+        'Paginated findAll() changed while pages were being read'
+      );
+    });
+
+    it('uses a high-water keyset rather than offsets for a multi-page transcript', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      const firstPage = Array.from({ length: 1000 }, (_, index) => ({
+        message_id: `m${String(index).padStart(4, '0')}`,
+        task_id: 't1',
+        index,
+      }));
+      const final = { message_id: 'm1000', task_id: 't1', index: 1000 };
+      findMock
+        .mockResolvedValueOnce({
+          total: 1001,
+          limit: 1,
+          skip: 0,
+          data: [{ message_id: final.message_id }],
+        })
+        .mockResolvedValueOnce({ total: 1001, limit: 1000, skip: 0, data: firstPage })
+        // This page models a deletion before the cursor: OFFSET would now
+        // shift, while message_id > m0999 still returns the final row.
+        .mockResolvedValueOnce({ total: 1, limit: 1000, skip: 0, data: [final] });
+
+      const results = await messagesService.findAll({
+        query: { task_id: 't1', $sort: { index: 1 } },
+      });
+      expect(results).toHaveLength(1001);
+      expect(results.at(-1)).toEqual(final);
+      expect(findMock).toHaveBeenNthCalledWith(3, {
+        query: {
+          task_id: 't1',
+          message_id: { $gt: 'm0999', $lte: 'm1000' },
+          $sort: { message_id: 1 },
+          $limit: 1000,
+        },
       });
     });
 

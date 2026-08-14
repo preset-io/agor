@@ -110,6 +110,12 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
 ] as const;
 
 export type TaskParams = QueryParams<{
+  task_id?:
+    | string
+    | {
+        $gt?: string;
+        $lte: string;
+      };
   session_id?: string;
   status?: Task['status'];
 }> &
@@ -190,7 +196,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   /**
    * Keep broad Task lists bounded in SQL. Exact Session hydration remains
-   * complete through the shared client's `findAll()` page loop.
+   * complete through the shared client's Task-ID high-water keyset loop.
    */
   async find(params?: TaskParams): Promise<Task[] | Paginated<Task>> {
     const query = (params?.query ?? {}) as Query;
@@ -225,7 +231,20 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (skip > PAGINATION.MAX_LIMIT && typeof sessionId !== 'string') {
       throw new BadRequest('Deep Task pagination requires an exact session_id filter');
     }
-    if (typeof query.task_id === 'string') pageOptions.taskId = query.task_id as TaskID;
+    if (typeof query.task_id === 'string') {
+      pageOptions.taskId = query.task_id as TaskID;
+    } else if (query.task_id && typeof query.task_id === 'object') {
+      if (typeof sessionId !== 'string') {
+        throw new BadRequest('Task hydration cursors require an exact session_id filter');
+      }
+      if (typeof query.task_id.$gt === 'string') {
+        pageOptions.afterTaskId = query.task_id.$gt as TaskID;
+      }
+      if (typeof query.task_id.$lte !== 'string') {
+        throw new BadRequest('Task hydration cursor requires a $lte boundary');
+      }
+      pageOptions.throughTaskId = query.task_id.$lte as TaskID;
+    }
     if (typeof sessionId === 'string') {
       pageOptions.sessionId = sessionId as SessionID;
     } else if (

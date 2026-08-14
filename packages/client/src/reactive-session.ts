@@ -175,6 +175,7 @@ export class ReactiveSessionHandle {
   private taskFetchTokenSequence = 0;
   private readonly taskFetches = new Map<number, number>();
   private readonly taskMutations: TaskMutation[] = [];
+  private sessionMutationSequence = 0;
 
   /**
    * The canonical (full-UUID) session id. When this handle was constructed with
@@ -320,20 +321,33 @@ export class ReactiveSessionHandle {
 
   async loadTaskMessages(taskId: string): Promise<Message[]> {
     this.assertNotDisposed();
-    const messages = await this.fetchTaskMessagesWithoutRealtimeGap(taskId);
-    this.updateState((prev) => {
-      const nextByTask = new Map(prev.messagesByTask);
-      nextByTask.set(taskId, sortMessagesByIndex(messages));
-      const nextLoaded = new Set(prev.loadedTaskIds);
-      nextLoaded.add(taskId);
-      return {
-        ...prev,
-        messagesByTask: nextByTask,
-        loadedTaskIds: nextLoaded,
-        lastSyncedAt: new Date().toISOString(),
-      };
-    });
-    return messages;
+    const fetchToken = this.beginMessageFetch();
+    try {
+      const snapshot = await this.fetchTaskMessagesAtHighWater(taskId);
+      let committed = snapshot;
+      this.updateState((prev) => {
+        committed = this.reconcileMessageFetch(
+          fetchToken,
+          snapshot,
+          (message) => message.task_id === taskId && this.matchesSession(message.session_id)
+        );
+        const nextByTask = new Map(prev.messagesByTask);
+        nextByTask.set(taskId, committed);
+        const nextLoaded = new Set(prev.loadedTaskIds);
+        nextLoaded.add(taskId);
+        return {
+          ...prev,
+          messagesByTask: nextByTask,
+          loadedTaskIds: nextLoaded,
+          lastSyncedAt: new Date().toISOString(),
+        };
+      });
+      this.cancelMessageFetch(fetchToken);
+      return committed;
+    } catch (error) {
+      this.cancelMessageFetch(fetchToken);
+      throw error;
+    }
   }
 
   private beginMessageFetch(): number {
@@ -349,20 +363,7 @@ export class ReactiveSessionHandle {
     }
   }
 
-  private hasMessageMutationSince(
-    fetchToken: number,
-    belongsToFetch: (message: Message) => boolean
-  ): boolean {
-    const fetchSequence = this.messageFetches.get(fetchToken);
-    return (
-      fetchSequence !== undefined &&
-      this.messageMutations.some(
-        (mutation) => mutation.sequence > fetchSequence && belongsToFetch(mutation.message)
-      )
-    );
-  }
-
-  private finishMessageFetch(
+  private reconcileMessageFetch(
     fetchToken: number,
     snapshot: Message[],
     belongsToFetch: (message: Message) => boolean
@@ -375,7 +376,6 @@ export class ReactiveSessionHandle {
       if (mutation.kind === 'remove') byId.delete(mutation.message.message_id);
       else byId.set(mutation.message.message_id, mutation.message);
     }
-    this.cancelMessageFetch(fetchToken);
     return sortMessagesByIndex([...byId.values()]);
   }
 
@@ -393,44 +393,18 @@ export class ReactiveSessionHandle {
     else if (firstNeeded > 0) this.messageMutations.splice(0, firstNeeded);
   }
 
-  private async fetchMessagesWithoutRealtimeGap(
-    query: Record<string, unknown>,
-    belongsToFetch: (message: Message) => boolean
-  ): Promise<Message[]> {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const fetchToken = this.beginMessageFetch();
-      try {
-        const snapshot = await this.client.service('messages').findAll({
-          query: { ...query, $limit: MESSAGE_PAGINATION.MAX_LIMIT },
-        });
-        // Offset pages can drift if a realtime mutation changes an earlier
-        // page while a later one is being read. A page-sized-or-larger result
-        // may have crossed that boundary, so retry from a fresh DB state. For
-        // smaller (single-page) snapshots, journal replay is sufficient.
-        const unstable =
-          snapshot.length >= MESSAGE_PAGINATION.MAX_LIMIT &&
-          this.hasMessageMutationSince(fetchToken, belongsToFetch);
-        if (unstable) {
-          this.cancelMessageFetch(fetchToken);
-          if (attempt === 2) {
-            throw new Error('Transcript kept changing during paginated hydration');
-          }
-          continue;
-        }
-        return this.finishMessageFetch(fetchToken, snapshot, belongsToFetch);
-      } catch (error) {
-        this.cancelMessageFetch(fetchToken);
-        throw error;
-      }
-    }
-    throw new Error('Transcript hydration retry budget exhausted');
+  private async fetchMessagesAtHighWater(query: Record<string, unknown>): Promise<Message[]> {
+    // The shared client's exact-transcript findAll() contract walks an
+    // immutable Message-ID high-water mark with keyset pages. Completeness no
+    // longer depends on seeing the matching realtime event; the journal is
+    // retained by the caller until this snapshot is committed to state.
+    return this.client.service('messages').findAll({
+      query: { ...query, $limit: MESSAGE_PAGINATION.MAX_LIMIT },
+    });
   }
 
-  private async fetchTaskMessagesWithoutRealtimeGap(taskId: string): Promise<Message[]> {
-    return this.fetchMessagesWithoutRealtimeGap(
-      { task_id: taskId, $sort: { index: 1 } },
-      (message) => message.task_id === taskId && this.matchesSession(message.session_id)
-    );
+  private async fetchTaskMessagesAtHighWater(taskId: string): Promise<Message[]> {
+    return this.fetchMessagesAtHighWater({ task_id: taskId, $sort: { index: 1 } });
   }
 
   private beginTaskFetch(): number {
@@ -460,7 +434,7 @@ export class ReactiveSessionHandle {
     else if (firstNeeded > 0) this.taskMutations.splice(0, firstNeeded);
   }
 
-  private finishTaskFetch(fetchToken: number, snapshot: Task[]): Task[] {
+  private reconcileTaskFetch(fetchToken: number, snapshot: Task[]): Task[] {
     const fetchSequence = this.taskFetches.get(fetchToken);
     if (fetchSequence === undefined) return sortTasksByCreatedAt(snapshot);
     const byId = new Map(snapshot.map((task) => [task.task_id, task]));
@@ -469,45 +443,26 @@ export class ReactiveSessionHandle {
       if (mutation.kind === 'remove') byId.delete(mutation.task.task_id);
       else byId.set(mutation.task.task_id, mutation.task);
     }
-    this.cancelTaskFetch(fetchToken);
     return sortTasksByCreatedAt([...byId.values()]);
   }
 
-  private async fetchTasksWithoutRealtimeGap(): Promise<Task[]> {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const fetchToken = this.beginTaskFetch();
-      try {
-        const snapshot = await this.client.service('tasks').findAll({
-          query: {
-            session_id: this.sessionId,
-            $sort: { created_at: 1, task_id: 1 },
-            $limit: PAGINATION.MAX_LIMIT,
-          },
-        });
-        const fetchSequence = this.taskFetches.get(fetchToken);
-        const unstable =
-          snapshot.length >= PAGINATION.MAX_LIMIT &&
-          fetchSequence !== undefined &&
-          this.taskMutations.some((mutation) => mutation.sequence > fetchSequence);
-        if (unstable) {
-          this.cancelTaskFetch(fetchToken);
-          if (attempt === 2) throw new Error('Tasks kept changing during paginated hydration');
-          continue;
-        }
-        return this.finishTaskFetch(fetchToken, snapshot);
-      } catch (error) {
-        this.cancelTaskFetch(fetchToken);
-        throw error;
-      }
-    }
-    throw new Error('Task hydration retry budget exhausted');
+  private async fetchTasksAtHighWater(): Promise<Task[]> {
+    // Exact-Session findAll() is an ID high-water keyset scan in @agor/core.
+    // The surrounding bootstrap/resync journal stays open through commit.
+    return this.client.service('tasks').findAll({
+      query: {
+        session_id: this.sessionId,
+        $sort: { created_at: 1, task_id: 1 },
+        $limit: PAGINATION.MAX_LIMIT,
+      },
+    });
   }
 
-  private async fetchSessionMessagesWithoutRealtimeGap(): Promise<Message[]> {
-    return this.fetchMessagesWithoutRealtimeGap(
-      { session_id: this.sessionId, $sort: { index: 1 } },
-      (message) => this.matchesSession(message.session_id)
-    );
+  private async fetchSessionMessagesAtHighWater(): Promise<Message[]> {
+    return this.fetchMessagesAtHighWater({
+      session_id: this.sessionId,
+      $sort: { index: 1 },
+    });
   }
 
   unloadTaskMessages(taskId: string): void {
@@ -564,11 +519,88 @@ export class ReactiveSessionHandle {
     return next;
   }
 
+  private commitBootstrapState(args: {
+    previous: ReactiveSessionState;
+    fetchedSession: Session;
+    sessionFetchSequence: number;
+    taskFetchToken: number;
+    taskSnapshot: Task[];
+    queueResult: QueueFindResult;
+    messageFetchToken: number | null;
+    eagerMessageSnapshot: Message[] | null;
+    lazyMessageSnapshot: { taskId: string; messages: Message[] } | null;
+  }): ReactiveSessionState {
+    const sessionChanged = this.sessionMutationSequence > args.sessionFetchSequence;
+    if (sessionChanged && args.previous.session === null && args.previous.terminal) {
+      return { ...args.previous, loading: false };
+    }
+    const session = sessionChanged ? args.previous.session : args.fetchedSession;
+    const reconciledTasks = this.reconcileTaskFetch(args.taskFetchToken, args.taskSnapshot);
+    const tasks = orderTasksBySession(reconciledTasks, session?.tasks);
+
+    let messagesByTask = new Map<string, Message[]>();
+    let loadedTaskIds = new Set<string>();
+    if (args.eagerMessageSnapshot) {
+      const messages =
+        args.messageFetchToken === null
+          ? args.eagerMessageSnapshot
+          : this.reconcileMessageFetch(
+              args.messageFetchToken,
+              args.eagerMessageSnapshot,
+              (message) => this.matchesSession(message.session_id)
+            );
+      messagesByTask = groupMessagesByTask(messages);
+      loadedTaskIds = new Set(messagesByTask.keys());
+    } else if (args.lazyMessageSnapshot) {
+      const { taskId, messages: snapshot } = args.lazyMessageSnapshot;
+      const messages =
+        args.messageFetchToken === null
+          ? snapshot
+          : this.reconcileMessageFetch(
+              args.messageFetchToken,
+              snapshot,
+              (message) => message.task_id === taskId && this.matchesSession(message.session_id)
+            );
+      messagesByTask.set(taskId, messages);
+      loadedTaskIds.add(taskId);
+    }
+
+    const liveTaskIds = new Set<string>(tasks.map((task) => task.task_id));
+    messagesByTask = new Map([...messagesByTask].filter(([taskId]) => liveTaskIds.has(taskId)));
+    loadedTaskIds = new Set([...loadedTaskIds].filter((taskId) => liveTaskIds.has(taskId)));
+
+    const queuedById = new Map(
+      (args.queueResult.data ?? []).map((task) => [task.task_id, task] as const)
+    );
+    for (const task of tasks) {
+      if (task.status === TaskStatus.QUEUED) queuedById.set(task.task_id, task);
+      else queuedById.delete(task.task_id);
+    }
+
+    return {
+      ...args.previous,
+      session,
+      tasks,
+      messagesByTask,
+      loadedTaskIds,
+      // Repair task_id on any stream initialized from a chunk that arrived
+      // before Tasks were hydrated (task_id was undefined then).
+      streamingMessages: restampStreamingTaskIds(args.previous.streamingMessages, tasks),
+      queuedTasks: sortTasksByQueuePosition([...queuedById.values()]),
+      loading: false,
+      error: null,
+      lastSyncedAt: new Date().toISOString(),
+    };
+  }
+
   private async bootstrap(): Promise<void> {
+    const taskFetchToken = this.beginTaskFetch();
+    const sessionFetchSequence = this.sessionMutationSequence;
+    let messageFetchToken: number | null = null;
     try {
-      const [session, tasks, queueResult] = await Promise.all([
+      const [session, taskSnapshot, queueResult] = await Promise.all([
         this.client.service('sessions').get(this.sessionId),
-        this.fetchTasksWithoutRealtimeGap(),
+        this.fetchTasksAtHighWater(),
         this.client
           .service(`/sessions/${this.sessionId}/tasks/queue`)
           .find()
@@ -579,13 +611,16 @@ export class ReactiveSessionHandle {
       // authoritative source for event matching.
       if (session?.session_id) this.canonicalSessionId = session.session_id;
 
-      let messagesByTask = new Map<string, Message[]>();
-      let loadedTaskIds = new Set<string>();
+      // Use journaled Tasks to choose the lazy target, but do not close the
+      // journal yet. It stays live through every slower bootstrap request and
+      // the final state commit below.
+      const provisionalTasks = this.reconcileTaskFetch(taskFetchToken, taskSnapshot);
+      let eagerMessageSnapshot: Message[] | null = null;
+      let lazyMessageSnapshot: { taskId: string; messages: Message[] } | null = null;
 
       if (this.options.taskHydration === 'eager') {
-        const allMessages = await this.fetchSessionMessagesWithoutRealtimeGap();
-        messagesByTask = groupMessagesByTask(allMessages);
-        loadedTaskIds = new Set(messagesByTask.keys());
+        messageFetchToken = this.beginMessageFetch();
+        eagerMessageSnapshot = await this.fetchSessionMessagesAtHighWater();
       } else if (this.options.taskHydration === 'lazy') {
         // The conversation view expands the latest non-queued task by default
         // and auto-scrolls to it. Hydrating that task's messages here — before
@@ -593,36 +628,39 @@ export class ReactiveSessionHandle {
         // guarantees the scroll target exists in the first render, instead of
         // landing on a header placeholder while TaskBlock lazy-loads the
         // messages afterward.
-        const latestTask = findLatestHydratableTask(tasks);
+        const latestTask = findLatestHydratableTask(provisionalTasks);
         if (latestTask) {
+          messageFetchToken = this.beginMessageFetch();
           try {
-            const latestMessages = await this.fetchTaskMessagesWithoutRealtimeGap(
-              latestTask.task_id
-            );
-            messagesByTask.set(latestTask.task_id, sortMessagesByIndex(latestMessages));
-            loadedTaskIds.add(latestTask.task_id);
+            const latestMessages = await this.fetchTaskMessagesAtHighWater(latestTask.task_id);
+            lazyMessageSnapshot = { taskId: latestTask.task_id, messages: latestMessages };
           } catch {
+            this.cancelMessageFetch(messageFetchToken);
+            messageFetchToken = null;
             // Non-fatal: leave the latest task unhydrated so the rest of
             // bootstrap still succeeds; TaskBlock will lazy-load it as before.
           }
         }
       }
 
-      this.updateState((prev) => ({
-        ...prev,
-        session,
-        tasks,
-        messagesByTask,
-        loadedTaskIds,
-        // Repair task_id on any stream initialized from a chunk that arrived
-        // before tasks were hydrated (task_id was undefined then).
-        streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
-        queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
-        loading: false,
-        error: null,
-        lastSyncedAt: new Date().toISOString(),
-      }));
+      this.updateState((prev) =>
+        this.commitBootstrapState({
+          previous: prev,
+          fetchedSession: session,
+          sessionFetchSequence,
+          taskFetchToken,
+          taskSnapshot,
+          queueResult: queueResult as QueueFindResult,
+          messageFetchToken,
+          eagerMessageSnapshot,
+          lazyMessageSnapshot,
+        })
+      );
+      this.cancelTaskFetch(taskFetchToken);
+      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
     } catch (error) {
+      this.cancelTaskFetch(taskFetchToken);
+      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
       // Mirror doResync()'s terminal classification — a 403/404 on the
       // initial mount is just as "doomed to retry" as on reconnect, and
       // without this the UI's auto-retry loop would keep poking a deleted/
@@ -667,6 +705,7 @@ export class ReactiveSessionHandle {
 
     const onSessionPatched = (session: Session) => {
       if (!this.matchesSession(session.session_id)) return;
+      this.sessionMutationSequence += 1;
       this.updateState((prev) => ({
         ...prev,
         session,
@@ -675,6 +714,7 @@ export class ReactiveSessionHandle {
     };
     const onSessionRemoved = (session: Session) => {
       if (!this.matchesSession(session.session_id)) return;
+      this.sessionMutationSequence += 1;
       this.updateState((prev) => ({
         ...prev,
         session: null,
@@ -1182,10 +1222,13 @@ export class ReactiveSessionHandle {
   }
 
   private async doResync(): Promise<void> {
+    const taskFetchToken = this.beginTaskFetch();
+    const sessionFetchSequence = this.sessionMutationSequence;
+    let messageFetchToken: number | null = null;
     try {
-      const [session, tasks, queueResult] = await Promise.all([
+      const [session, taskSnapshot, queueResult] = await Promise.all([
         this.client.service('sessions').get(this.sessionId),
-        this.fetchTasksWithoutRealtimeGap(),
+        this.fetchTasksAtHighWater(),
         this.client
           .service(`/sessions/${this.sessionId}/tasks/queue`)
           .find()
@@ -1195,46 +1238,104 @@ export class ReactiveSessionHandle {
       // The fetched row's id is canonical even when we asked by short id.
       if (session?.session_id) this.canonicalSessionId = session.session_id;
 
-      let messagesByTask = this.stateSnapshot.messagesByTask;
-      let loadedTaskIds = this.stateSnapshot.loadedTaskIds;
+      const provisionalTasks = this.reconcileTaskFetch(taskFetchToken, taskSnapshot);
+      let eagerMessageSnapshot: Message[] | null = null;
+      let lazyMessageSnapshots: Map<string, Message[]> | null = null;
 
       if (this.options.taskHydration === 'eager') {
-        const allMessages = await this.fetchSessionMessagesWithoutRealtimeGap();
-        messagesByTask = groupMessagesByTask(allMessages);
-        loadedTaskIds = new Set(messagesByTask.keys());
+        messageFetchToken = this.beginMessageFetch();
+        eagerMessageSnapshot = await this.fetchSessionMessagesAtHighWater();
       } else if (this.options.taskHydration === 'lazy') {
         // Preserve the bootstrap invariant across reconnect: the latest
         // (expanded / scroll-target) task must stay hydrated even if a new task
         // became the latest while disconnected, or bootstrap's hydration failed
         // and left loadedTaskIds empty.
-        const latestId = findLatestHydratableTask(tasks)?.task_id;
+        const latestId = findLatestHydratableTask(provisionalTasks)?.task_id;
         const toRefresh = new Set(this.stateSnapshot.loadedTaskIds);
         if (latestId) toRefresh.add(latestId);
         if (toRefresh.size > 0) {
-          const refreshedByTask = new Map<string, Message[]>();
+          messageFetchToken = this.beginMessageFetch();
+          lazyMessageSnapshots = new Map<string, Message[]>();
           for (const taskId of toRefresh) {
-            const taskMessages = await this.fetchTaskMessagesWithoutRealtimeGap(taskId);
-            refreshedByTask.set(taskId, sortMessagesByIndex(taskMessages));
+            const taskMessages = await this.fetchTaskMessagesAtHighWater(taskId);
+            lazyMessageSnapshots.set(taskId, taskMessages);
+          }
+        }
+      }
+
+      if (this.disposed) {
+        this.cancelTaskFetch(taskFetchToken);
+        if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
+        return;
+      }
+      this.updateState((prev) => {
+        const sessionChanged = this.sessionMutationSequence > sessionFetchSequence;
+        if (sessionChanged && prev.session === null && prev.terminal) return prev;
+        const committedSession = sessionChanged ? prev.session : session;
+        const tasks = orderTasksBySession(
+          this.reconcileTaskFetch(taskFetchToken, taskSnapshot),
+          committedSession?.tasks
+        );
+
+        let messagesByTask = prev.messagesByTask;
+        let loadedTaskIds = prev.loadedTaskIds;
+        if (eagerMessageSnapshot) {
+          const messages =
+            messageFetchToken === null
+              ? eagerMessageSnapshot
+              : this.reconcileMessageFetch(messageFetchToken, eagerMessageSnapshot, (message) =>
+                  this.matchesSession(message.session_id)
+                );
+          messagesByTask = groupMessagesByTask(messages);
+          loadedTaskIds = new Set(messagesByTask.keys());
+        } else if (lazyMessageSnapshots) {
+          const refreshedByTask = new Map<string, Message[]>();
+          for (const [taskId, snapshot] of lazyMessageSnapshots) {
+            refreshedByTask.set(
+              taskId,
+              messageFetchToken === null
+                ? sortMessagesByIndex(snapshot)
+                : this.reconcileMessageFetch(
+                    messageFetchToken,
+                    snapshot,
+                    (message) =>
+                      message.task_id === taskId && this.matchesSession(message.session_id)
+                  )
+            );
           }
           messagesByTask = refreshedByTask;
           loadedTaskIds = new Set(refreshedByTask.keys());
         }
-      }
 
-      if (this.disposed) return;
-      this.updateState((prev) => ({
-        ...prev,
-        session,
-        tasks,
-        queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
-        messagesByTask,
-        loadedTaskIds,
-        streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
-        error: null,
-        terminal: false,
-        lastSyncedAt: new Date().toISOString(),
-      }));
+        const liveTaskIds = new Set<string>(tasks.map((task) => task.task_id));
+        messagesByTask = new Map([...messagesByTask].filter(([taskId]) => liveTaskIds.has(taskId)));
+        loadedTaskIds = new Set([...loadedTaskIds].filter((taskId) => liveTaskIds.has(taskId)));
+        const queuedById = new Map(
+          ((queueResult as QueueFindResult).data ?? []).map((task) => [task.task_id, task] as const)
+        );
+        for (const task of tasks) {
+          if (task.status === TaskStatus.QUEUED) queuedById.set(task.task_id, task);
+          else queuedById.delete(task.task_id);
+        }
+
+        return {
+          ...prev,
+          session: committedSession,
+          tasks,
+          queuedTasks: sortTasksByQueuePosition([...queuedById.values()]),
+          messagesByTask,
+          loadedTaskIds,
+          streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
+          error: null,
+          terminal: false,
+          lastSyncedAt: new Date().toISOString(),
+        };
+      });
+      this.cancelTaskFetch(taskFetchToken);
+      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
     } catch (error) {
+      this.cancelTaskFetch(taskFetchToken);
+      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
       if (this.disposed) return;
       const status = errorStatusCode(error);
       // 403 (forbidden) and 404 (not found) mean this session is gone
@@ -1682,6 +1783,23 @@ function sortTasksByCreatedAt(tasks: Task[]): Task[] {
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime() ||
       a.task_id.localeCompare(b.task_id)
   );
+}
+
+function orderTasksBySession(tasks: Task[], taskIds?: readonly string[]): Task[] {
+  if (!taskIds || taskIds.length === 0) return sortTasksByCreatedAt(tasks);
+  const byId = new Map<string, Task>(tasks.map((task) => [task.task_id, task]));
+  const ordered: Task[] = [];
+  for (const taskId of taskIds) {
+    const task = byId.get(taskId);
+    if (!task) continue;
+    ordered.push(task);
+    byId.delete(taskId);
+  }
+  // A Task can become visible just before the Session.tasks append is observed.
+  // Keep it rather than dropping it; the next Session patch/resync supplies its
+  // canonical position.
+  ordered.push(...sortTasksByCreatedAt([...byId.values()]));
+  return ordered;
 }
 
 function sortTasksByQueuePosition(tasks: Task[]): Task[] {

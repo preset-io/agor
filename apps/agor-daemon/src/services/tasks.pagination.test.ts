@@ -94,4 +94,28 @@ describe('TasksService.find pagination', () => {
       service.find({ query: { $skip: PAGINATION.MAX_LIMIT + 1, $limit: 1 } })
     ).rejects.toThrow('Deep Task pagination requires an exact session_id filter');
   });
+
+  dbTest('walks exact Session Tasks with an immutable Task-ID keyset', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const repository = new TaskRepository(db);
+    const created = await Promise.all(
+      Array.from({ length: 3 }, (_, index) =>
+        repository.create({
+          session_id: sessionId,
+          full_prompt: `Task ${index}`,
+          created_by: generateId() as UUID,
+        })
+      )
+    );
+    const ids = created.map((task) => task.task_id).sort();
+    const result = (await createTasksService(db, feathers()).find({
+      query: {
+        session_id: sessionId,
+        task_id: { $gt: ids[0], $lte: ids[2] },
+        $sort: { task_id: 1 },
+        $limit: 10,
+      },
+    })) as Paginated<Task>;
+    expect(result.data.map((task) => task.task_id)).toEqual(ids.slice(1));
+  });
 });

@@ -135,7 +135,18 @@ const taskSortDirection = Type.Union([Type.Literal(1), Type.Literal(-1)]);
 export const taskQuerySchema = Type.Intersect(
   [
     Type.Object({
-      task_id: Type.Optional(CommonSchemas.uuid),
+      task_id: Type.Optional(
+        Type.Union([
+          CommonSchemas.uuid,
+          Type.Object(
+            {
+              $gt: Type.Optional(CommonSchemas.uuid),
+              $lte: CommonSchemas.uuid,
+            },
+            { additionalProperties: false }
+          ),
+        ])
+      ),
       session_id: Type.Optional(CommonSchemas.uuid),
       status: Type.Optional(
         Type.Union([
@@ -156,8 +167,8 @@ export const taskQuerySchema = Type.Intersect(
     }),
     Type.Object({
       $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
-      // Exact Session hydration may have to traverse beyond the first 10k
-      // Tasks. TasksService still rejects deep offsets on broad queries.
+      // Retained for compatible exact-Session callers. The shared client now
+      // hydrates Tasks with a Task-ID high-water keyset instead of OFFSET.
       $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
       $sort: Type.Optional(
         Type.Partial(
@@ -215,11 +226,24 @@ const messageSelectableFieldSchema = Type.Union(
 
 /**
  * Message list contract. `$limit` is accepted above the service ceiling so
- * Feathers can clamp it consistently; `$skip` must allow `findAll()` to walk a
- * Task containing more than the historical global 10k limit.
+ * Feathers can clamp it consistently. Exact hydration uses the bounded
+ * message_id range above; `$skip` remains for compatible exact-transcript
+ * callers, while MessagesService rejects broad deep offsets.
  */
 export const messageQuerySchema = Type.Object(
   {
+    message_id: Type.Optional(
+      Type.Union([
+        CommonSchemas.uuid,
+        Type.Object(
+          {
+            $gt: Type.Optional(CommonSchemas.uuid),
+            $lte: CommonSchemas.uuid,
+          },
+          { additionalProperties: false }
+        ),
+      ])
+    ),
     session_id: Type.Optional(
       Type.Union([
         CommonSchemas.uuid,
@@ -452,7 +476,7 @@ export const mcpCatalogQuerySchema = Type.Intersect(
  * Create validators for each schema
  */
 export const sessionQueryValidator = getValidator(sessionQuerySchema, queryValidator);
-export const taskQueryValidator = getValidator(taskQuerySchema, queryValidator);
+export const taskQueryValidator = getValidator(taskQuerySchema, strictQueryValidator);
 export const messageQueryValidator = getValidator(messageQuerySchema, strictQueryValidator);
 export const branchQueryValidator = getValidator(branchQuerySchema, queryValidator);
 export const boardQueryValidator = getValidator(boardQuerySchema, queryValidator);

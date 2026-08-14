@@ -6,7 +6,20 @@
  */
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import { and, asc, desc, eq, inArray, type SQL, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gt,
+  inArray,
+  isNull,
+  lte,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
 import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
 import type { Database } from '../client';
 import {
@@ -18,13 +31,16 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { type MessageInsert, type MessageRow, messages } from '../schema';
+import { type MessageInsert, type MessageRow, messages, tasks } from '../schema';
 import { visibleSessionReferenceAccessExists } from './branch-access';
 
 export const MESSAGE_CONTENT_OMITTED =
   '[Message content omitted: payload could not be safely persisted]';
 
 export type MessageFindPageOptions = {
+  messageId?: MessageID;
+  afterMessageId?: MessageID;
+  throughMessageId?: MessageID;
   sessionId?: SessionID;
   sessionIds?: SessionID[];
   taskId?: TaskID;
@@ -35,6 +51,16 @@ export type MessageFindPageOptions = {
   limit?: number;
   skip?: number;
 };
+
+export class MessageTaskIntegrityError extends Error {
+  constructor(
+    readonly reason: 'task_session_mismatch' | 'task_already_assigned',
+    message: string
+  ) {
+    super(message);
+    this.name = 'MessageTaskIntegrityError';
+  }
+}
 
 function omittedMessageData(reason: JsonSanitizationError['category']): MessageInsert['data'] {
   return {
@@ -120,13 +146,45 @@ export class MessagesRepository {
     };
   }
 
+  private async assertTaskBelongsToSession(
+    db: Database,
+    taskId: TaskID,
+    sessionId: SessionID
+  ): Promise<void> {
+    await lockRowForUpdate(db, this.db, tasks, eq(tasks.task_id, taskId));
+    const target = await select(db, { session_id: tasks.session_id })
+      .from(tasks)
+      .where(eq(tasks.task_id, taskId))
+      .one();
+    if (!target || target.session_id !== sessionId) {
+      throw new MessageTaskIntegrityError(
+        'task_session_mismatch',
+        'task_id must belong to the Message Session'
+      );
+    }
+  }
+
   /**
    * Create a single message
    */
   async create(message: Message): Promise<Message> {
     const row = this.messageToRow(message);
-    const inserted = await insert(this.db, messages).values(row).returning().one();
-    return this.rowToMessage(inserted);
+    if (!message.task_id) {
+      const inserted = await insert(this.db, messages).values(row).returning().one();
+      return this.rowToMessage(inserted);
+    }
+
+    return this.runMetadataMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await this.assertTaskBelongsToSession(tx, message.task_id as TaskID, message.session_id);
+          const inserted = await insert(tx, messages).values(row).returning().one();
+          return this.rowToMessage(inserted);
+        },
+        { sqliteImmediate: true }
+      )
+    );
   }
 
   /**
@@ -134,8 +192,39 @@ export class MessagesRepository {
    */
   async createMany(messageList: Message[]): Promise<Message[]> {
     const rows = messageList.map((m) => this.messageToRow(m));
-    const inserted = await insert(this.db, messages).values(rows).returning().all();
-    return inserted.map((r: MessageRow) => this.rowToMessage(r));
+    const taskLinks = new Map<string, SessionID>();
+    for (const message of messageList) {
+      if (!message.task_id) continue;
+      const previousSessionId = taskLinks.get(message.task_id);
+      if (previousSessionId && previousSessionId !== message.session_id) {
+        throw new MessageTaskIntegrityError(
+          'task_session_mismatch',
+          'task_id must belong to the Message Session'
+        );
+      }
+      taskLinks.set(message.task_id, message.session_id);
+    }
+
+    if (taskLinks.size === 0) {
+      const inserted = await insert(this.db, messages).values(rows).returning().all();
+      return inserted.map((r: MessageRow) => this.rowToMessage(r));
+    }
+
+    return this.runMetadataMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          // A deterministic lock order prevents two import batches from
+          // deadlocking when they reference the same Tasks in opposite order.
+          for (const [taskId, sessionId] of [...taskLinks].sort(([a], [b]) => a.localeCompare(b))) {
+            await this.assertTaskBelongsToSession(tx, taskId as TaskID, sessionId);
+          }
+          const inserted = await insert(tx, messages).values(rows).returning().all();
+          return inserted.map((row: MessageRow) => this.rowToMessage(row));
+        },
+        { sqliteImmediate: true }
+      )
+    );
   }
 
   /**
@@ -245,6 +334,9 @@ export class MessagesRepository {
     if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
 
     const conditions: SQL[] = [];
+    if (opts.messageId) conditions.push(eq(messages.message_id, opts.messageId));
+    if (opts.afterMessageId) conditions.push(gt(messages.message_id, opts.afterMessageId));
+    if (opts.throughMessageId) conditions.push(lte(messages.message_id, opts.throughMessageId));
     if (opts.sessionId) conditions.push(eq(messages.session_id, opts.sessionId));
     if (opts.sessionIds) conditions.push(inArray(messages.session_id, opts.sessionIds));
     if (opts.taskId) conditions.push(eq(messages.task_id, opts.taskId));
@@ -359,23 +451,80 @@ export class MessagesRepository {
       throw new Error(`Message ${messageId} not found`);
     }
 
-    // Creation identity and ordering are immutable at the repository update
-    // boundary. Public callers are constrained further by MessagesService's
-    // patch DTO; preserving these fields here also protects daemon-internal
-    // callers from accidentally rewriting the primary key or creation clock.
+    const hasTaskAssignment = Object.hasOwn(updates, 'task_id');
+    if (hasTaskAssignment && typeof updates.task_id !== 'string') {
+      throw new MessageTaskIntegrityError(
+        'task_already_assigned',
+        'Message task_id cannot be cleared'
+      );
+    }
+
+    // Identity, Session membership, transcript ordering, and semantic kind are
+    // immutable at the repository boundary. Public callers are constrained by
+    // the same MessagePatch DTO; preserving them here prevents a trusted
+    // daemon caller from accidentally bypassing that contract.
     const updated = {
       ...existing,
       ...updates,
       message_id: existing.message_id,
+      session_id: existing.session_id,
+      index: existing.index,
+      timestamp: existing.timestamp,
+      type: existing.type,
+      role: existing.role,
     };
     const row = this.messageToRow(updated);
     const { created_at: _createdAt, ...mutableRow } = row;
 
-    const result = await update(this.db, messages)
+    const conditions: SQL[] = [eq(messages.message_id, messageId)];
+    if (hasTaskAssignment && updates.task_id) {
+      const targetTaskId = updates.task_id;
+      const matchingTaskInMessageSession = exists(
+        // Correlate the target Task to the Message row in the UPDATE. This is
+        // deliberately part of the write predicate, rather than a service
+        // read-before-write check, so a losing concurrent link cannot win by
+        // overwriting the first assignment.
+        // biome-ignore lint/suspicious/noExplicitAny: Cross-dialect Drizzle subquery typing.
+        (this.db as any)
+          .select({ _: sql`1` })
+          .from(tasks)
+          .where(and(eq(tasks.task_id, targetTaskId), eq(tasks.session_id, messages.session_id)))
+      );
+      conditions.push(
+        matchingTaskInMessageSession,
+        or(isNull(messages.task_id), eq(messages.task_id, targetTaskId)) as SQL
+      );
+    }
+
+    const returned = await update(this.db, messages)
       .set(mutableRow)
-      .where(eq(messages.message_id, messageId))
+      .where(and(...conditions))
       .returning()
-      .one();
+      .all();
+
+    const result = returned[0];
+    if (!result) {
+      const current = await this.findById(messageId as MessageID);
+      if (!current) throw new Error(`Message ${messageId} not found`);
+      if (
+        hasTaskAssignment &&
+        updates.task_id &&
+        current.task_id &&
+        current.task_id !== updates.task_id
+      ) {
+        throw new MessageTaskIntegrityError(
+          'task_already_assigned',
+          'Message task_id cannot be reassigned'
+        );
+      }
+      if (hasTaskAssignment && updates.task_id) {
+        throw new MessageTaskIntegrityError(
+          'task_session_mismatch',
+          'task_id must belong to the Message Session'
+        );
+      }
+      throw new Error(`Message ${messageId} could not be updated`);
+    }
 
     return this.rowToMessage(result);
   }
@@ -384,13 +533,7 @@ export class MessagesRepository {
    * Update message task assignment
    */
   async assignToTask(messageId: MessageID, taskId: TaskID): Promise<Message> {
-    const updated = await update(this.db, messages)
-      .set({ task_id: taskId })
-      .where(eq(messages.message_id, messageId))
-      .returning()
-      .one();
-
-    return this.rowToMessage(updated);
+    return this.update(messageId, { task_id: taskId });
   }
 
   /**

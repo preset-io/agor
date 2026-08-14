@@ -178,6 +178,17 @@ describe('MessagesRepository.create', () => {
     expect(created.task_id).toBeUndefined();
   });
 
+  dbTest('rejects a Task from a different Session during create', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const messageSessionId = await createTestSession(db);
+    const taskSessionId = await createTestSession(db);
+    const taskId = await createTestTask(db, taskSessionId);
+
+    await expect(
+      messages.create(createMessageData({ session_id: messageSessionId, task_id: taskId }))
+    ).rejects.toThrow('task_id must belong to the Message Session');
+  });
+
   dbTest('should store all JSON fields (content, tool_uses, metadata)', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);
@@ -259,6 +270,21 @@ describe('MessagesRepository.createMany', () => {
     await expect(messages.createMany([])).rejects.toThrow(
       'values() must be called with at least one value'
     );
+  });
+
+  dbTest('rejects a cross-Session Task link atomically for a bulk create', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const messageSessionId = await createTestSession(db);
+    const taskSessionId = await createTestSession(db);
+    const taskId = await createTestTask(db, taskSessionId);
+
+    await expect(
+      messages.createMany([
+        createMessageData({ session_id: messageSessionId, index: 0 }),
+        createMessageData({ session_id: messageSessionId, task_id: taskId, index: 1 }),
+      ])
+    ).rejects.toThrow('task_id must belong to the Message Session');
+    await expect(messages.findBySessionId(messageSessionId)).resolves.toEqual([]);
   });
 });
 
@@ -612,7 +638,7 @@ describe('MessagesRepository.update', () => {
     expect(row?.created_at).toEqual(originalCreatedAt);
   });
 
-  dbTest('should update message fields and preserve unchanged fields', async ({ db }) => {
+  dbTest('updates mutable content while preserving immutable identity fields', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);
 
@@ -628,10 +654,13 @@ describe('MessagesRepository.update', () => {
     const updated = await messages.update(created.message_id, {
       content: 'Updated',
       role: MessageRole.ASSISTANT,
+      type: 'system',
+      index: 99,
     });
 
     expect(updated.content).toBe('Updated');
-    expect(updated.role).toBe(MessageRole.ASSISTANT);
+    expect(updated.role).toBe(MessageRole.USER);
+    expect(updated.type).toBe(data.type);
     expect(updated.index).toBe(5); // Preserved
     expect(updated.metadata).toEqual({ model: 'claude-3' }); // Preserved
   });
@@ -691,7 +720,7 @@ describe('MessagesRepository.update', () => {
 // ============================================================================
 
 describe('MessagesRepository.assignToTask', () => {
-  dbTest('should assign and reassign message to task', async ({ db }) => {
+  dbTest('assigns once and rejects reassignment', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);
     const taskId1 = await createTestTask(db, sessionId);
@@ -710,11 +739,31 @@ describe('MessagesRepository.assignToTask', () => {
     expect(updated1.task_id).toBe(taskId1);
     expect(updated1.content).toBe('Test content'); // Preserved
 
-    // Reassign to second task
-    const updated2 = await messages.assignToTask(created.message_id, taskId2);
-    expect(updated2.task_id).toBe(taskId2);
-    expect(updated2.index).toBe(5); // Preserved
-    expect(updated2.metadata).toEqual({ model: 'claude-3' }); // Preserved
+    await expect(messages.assignToTask(created.message_id, taskId2)).rejects.toThrow(
+      'Message task_id cannot be reassigned'
+    );
+    await expect(messages.assignToTask(created.message_id, taskId1)).resolves.toMatchObject({
+      task_id: taskId1,
+      index: 5,
+      metadata: { model: 'claude-3' },
+    });
+  });
+
+  dbTest('allows only one winner when two Task links race', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const taskId1 = await createTestTask(db, sessionId);
+    const taskId2 = await createTestTask(db, sessionId);
+    const created = await messages.create(createMessageData({ session_id: sessionId }));
+
+    const results = await Promise.allSettled([
+      messages.assignToTask(created.message_id, taskId1),
+      messages.assignToTask(created.message_id, taskId2),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const final = await messages.findById(created.message_id);
+    expect([taskId1, taskId2]).toContain(final?.task_id);
   });
 });
 

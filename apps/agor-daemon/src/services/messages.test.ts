@@ -155,8 +155,38 @@ describe('MessagesService.find pagination', () => {
           query: { session_id: sessionId, $sort: { content: 1 } },
         })
       ).rejects.toThrow('Unsupported $sort field');
+
+      await expect(createMessagesService(db).find({ query: { $skip: 10_001 } })).rejects.toThrow(
+        'Deep Message pagination requires an exact task_id or session_id filter'
+      );
+      await expect(
+        createMessagesService(db).find({ query: { session_id: sessionId, $skip: 10_001 } })
+      ).resolves.toMatchObject({ total: 32, data: [] });
     }
   );
+
+  dbTest('walks an exact transcript with an immutable Message-ID keyset', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const repository = new MessagesRepository(db);
+    const created = await repository.createMany([
+      message(sessionId, 0),
+      message(sessionId, 1),
+      message(sessionId, 2),
+    ]);
+    const ids = created.map((item) => item.message_id).sort();
+
+    const result = await createMessagesService(db).find({
+      query: {
+        session_id: sessionId,
+        message_id: { $gt: ids[0], $lte: ids[2] },
+        $sort: { message_id: 1 },
+        $limit: 10,
+      },
+    });
+    expect((result as { data: Message[] }).data.map((item) => item.message_id)).toEqual(
+      ids.slice(1)
+    );
+  });
 
   dbTest('composes session $in, task, type, and role predicates in SQL', async ({ db }) => {
     const firstSessionId = await createTestSession(db);
@@ -230,6 +260,22 @@ describe('MessagesService.patch boundary', () => {
     await expect(
       service.patch(created.message_id, { task_id: secondTask.task_id })
     ).rejects.toThrow('Message task_id cannot be reassigned');
+  });
+
+  dbTest('rejects a cross-Session Task link during create', async ({ db }) => {
+    const firstSessionId = await createTestSession(db);
+    const secondSessionId = await createTestSession(db);
+    const secondTask = await new TaskRepository(db).create({
+      session_id: secondSessionId,
+      full_prompt: 'second task',
+      created_by: generateId() as UUID,
+    });
+
+    await expect(
+      createMessagesService(db).create(
+        message(firstSessionId, 0, { task_id: secondTask.task_id as TaskID })
+      )
+    ).rejects.toThrow('task_id must belong to the Message Session');
   });
 });
 

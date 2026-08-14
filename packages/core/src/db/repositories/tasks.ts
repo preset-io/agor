@@ -230,6 +230,8 @@ export interface TaskRuntimeDiscoveryOptions {
 
 export interface TaskFindPageOptions {
   taskId?: TaskID;
+  afterTaskId?: TaskID;
+  throughTaskId?: TaskID;
   sessionId?: SessionID;
   sessionIds?: SessionID[];
   status?: Task['status'];
@@ -616,6 +618,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
     const conditions: SQL[] = [];
     if (opts.taskId) conditions.push(eq(tasks.task_id, opts.taskId));
+    if (opts.afterTaskId) conditions.push(gt(tasks.task_id, opts.afterTaskId));
+    if (opts.throughTaskId) conditions.push(lte(tasks.task_id, opts.throughTaskId));
     if (opts.sessionId) conditions.push(eq(tasks.session_id, opts.sessionId));
     if (opts.sessionIds) conditions.push(inArray(tasks.session_id, opts.sessionIds));
     if (opts.status) conditions.push(eq(tasks.status, opts.status));
