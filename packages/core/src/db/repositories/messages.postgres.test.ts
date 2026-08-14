@@ -47,7 +47,7 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
     expect(JSON.stringify(diagnostic)).not.toContain('secret');
   });
 
-  it('round-trips sanitized create, bulk create, update, and metadata mutation', async () => {
+  it('round-trips sanitized create, update, and metadata mutation', async () => {
     const actualNul = String.fromCharCode(0);
     const loneHighSurrogate = String.fromCharCode(0xd800);
     const loneLowSurrogate = String.fromCharCode(0xdc00);
@@ -91,8 +91,8 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         .where(eq(messagesTable.message_id, first.message_id))
         .one();
       expect(first.content).toBe('zip��😀');
-      const [second] = await repository.createMany([message(1, `bulk${loneLowSurrogate}`)]);
-      expect(second.content).toBe('bulk�');
+      const second = await repository.create(message(1, `second${loneLowSurrogate}`));
+      expect(second.content).toBe('second�');
       const finalized = await repository.update(first.message_id, {
         content: [
           {
@@ -227,7 +227,7 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
     });
   });
 
-  it('rejects cross-tenant Session parents for taskless single and bulk creates', async () => {
+  it('rejects a cross-tenant Session parent for a taskless create', async () => {
     const tenantA = `messages-parent-a-${generateId()}`;
     const tenantB = `messages-parent-b-${generateId()}`;
     let tenantBSessionId!: Message['session_id'];
@@ -271,9 +271,6 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
       const repository = new MessagesRepository(scoped);
       await expect(repository.create(foreignMessage())).rejects.toMatchObject({
-        reason: 'session_tenant_mismatch',
-      } satisfies Partial<MessageParentIntegrityError>);
-      await expect(repository.createMany([foreignMessage()])).rejects.toMatchObject({
         reason: 'session_tenant_mismatch',
       } satisfies Partial<MessageParentIntegrityError>);
     });

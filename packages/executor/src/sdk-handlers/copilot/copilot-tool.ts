@@ -8,7 +8,6 @@
  * - ✅ Session create/resume via CopilotClient
  * - ✅ MCP integration (stdio + HTTP transports)
  * - ✅ Permission mapping to onPermissionRequest callback
- * - ❌ Session import (deferred)
  * - ❌ Session fork (emulated via new sessions in Phase 2)
  */
 
@@ -110,7 +109,6 @@ export class CopilotTool implements ITool {
 
   getCapabilities(): ToolCapabilities {
     return {
-      supportsSessionImport: false,
       supportsSessionCreate: false, // Handled via executeTask
       supportsLiveExecution: true,
       supportsSessionFork: false, // Phase 2: emulated via new sessions

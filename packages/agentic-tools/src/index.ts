@@ -26,7 +26,6 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     capabilities: {
       supportsSessionFork: true,
       supportsChildSpawn: true,
-      supportsSessionImport: true,
       reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
       defaultReasoningEffort: 'high',
     },
@@ -40,7 +39,6 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     capabilities: {
       supportsSessionFork: true,
       supportsChildSpawn: true,
-      supportsSessionImport: false,
       reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     },
   }),
@@ -53,7 +51,6 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     capabilities: {
       supportsSessionFork: false,
       supportsChildSpawn: true,
-      supportsSessionImport: false,
     },
   }),
   opencode: defineIntegration(OPENCODE_INTEGRATION),
@@ -66,7 +63,6 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     capabilities: {
       supportsSessionFork: false,
       supportsChildSpawn: true,
-      supportsSessionImport: false,
     },
   }),
   cursor: defineIntegration({
@@ -78,7 +74,6 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     capabilities: {
       supportsSessionFork: false,
       supportsChildSpawn: true,
-      supportsSessionImport: false,
     },
   }),
 }) satisfies AgenticToolIntegrationRegistry;

@@ -391,9 +391,7 @@ export interface SessionsService
   getGenealogy(id: string, params?: Params): Promise<unknown>;
 }
 
-/**
- * Tasks service with bulk creation support
- */
+/** Tasks service with lifecycle methods. */
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
@@ -406,12 +404,6 @@ export interface TasksService extends AgorService<Task> {
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
-  /**
-   * Create multiple tasks in a single request
-   * Returns array of created tasks with IDs
-   */
-  createMany(data: Partial<Task>[]): Promise<Task[]>;
-
   /**
    * Mark a task as completed
    */
@@ -427,11 +419,6 @@ export interface TasksService extends AgorService<Task> {
 export type MessagesService = Omit<AgorService<Message>, 'update' | 'patch'> & {
   patch(id: string, data: ClientInput<MessagePatch>, params?: Params): Promise<Message>;
 };
-
-/** Narrow transport contract for `POST /messages/bulk`. */
-export interface MessagesBulkService {
-  create(data: CreatePayload<Message>[], params?: Params): Promise<Message[]>;
-}
 
 /**
  * Repos service with branch management
@@ -689,10 +676,6 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
   service(path: 'opencode-auth'): OpenCodeAuthService;
   service(path: 'opencode-models'): OpenCodeModelsService;
-
-  // Bulk operation endpoints
-  service(path: 'messages/bulk'): MessagesBulkService;
-  service(path: 'tasks/bulk'): TasksService;
 
   // Standard services (CRUD only)
   service(path: 'cards'): AgorService<CardWithType>;

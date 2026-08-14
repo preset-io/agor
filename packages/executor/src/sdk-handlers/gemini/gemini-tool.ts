@@ -96,7 +96,6 @@ export class GeminiTool implements ITool {
 
   getCapabilities(): ToolCapabilities {
     return {
-      supportsSessionImport: false, // ❌ Deferred until checkpoint format is documented
       supportsSessionCreate: false, // ❌ Not exposed (handled via executeTask)
       supportsLiveExecution: true, // ✅ Via @google/gemini-cli-core SDK
       supportsSessionFork: false,

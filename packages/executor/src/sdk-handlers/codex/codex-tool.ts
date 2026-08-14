@@ -128,7 +128,6 @@ export class CodexTool implements ITool {
 
   getCapabilities(): ToolCapabilities {
     return {
-      supportsSessionImport: false, // ❌ Deferred until we have real JSONL format
       supportsSessionCreate: false, // ❌ Not exposed (handled via executeTask)
       supportsLiveExecution: true, // ✅ Via Codex SDK
       supportsSessionFork: true,

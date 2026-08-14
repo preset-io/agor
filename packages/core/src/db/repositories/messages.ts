@@ -2,24 +2,11 @@
  * Messages Repository
  *
  * CRUD operations for conversation messages.
- * Supports bulk inserts for session loading and queries by session/task.
+ * Supports transcript queries by session and task.
  */
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  exists,
-  gt,
-  inArray,
-  isNull,
-  lte,
-  or,
-  type SQL,
-  sql,
-} from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
 import type { Database } from '../client';
 import {
@@ -54,16 +41,13 @@ export type MessageFindPageOptions = {
 
 export class MessageParentIntegrityError extends Error {
   constructor(
-    readonly reason: 'session_tenant_mismatch' | 'task_session_mismatch' | 'task_already_assigned',
+    readonly reason: 'session_tenant_mismatch' | 'task_session_mismatch',
     message: string
   ) {
     super(message);
     this.name = 'MessageParentIntegrityError';
   }
 }
-
-/** @deprecated Use MessageParentIntegrityError; retained for internal API compatibility. */
-export { MessageParentIntegrityError as MessageTaskIntegrityError };
 
 function omittedMessageData(reason: JsonSanitizationError['category']): MessageInsert['data'] {
   return {
@@ -202,46 +186,6 @@ export class MessagesRepository {
           }
           const inserted = await insert(tx, messages).values(row).returning().one();
           return this.rowToMessage(inserted);
-        },
-        { sqliteImmediate: true }
-      )
-    );
-  }
-
-  /**
-   * Bulk insert messages (optimized for session loading)
-   */
-  async createMany(messageList: Message[]): Promise<Message[]> {
-    const rows = messageList.map((m) => this.messageToRow(m));
-    const sessionIds = new Set<SessionID>();
-    const taskLinks = new Map<string, SessionID>();
-    for (const message of messageList) {
-      sessionIds.add(message.session_id);
-      if (!message.task_id) continue;
-      const previousSessionId = taskLinks.get(message.task_id);
-      if (previousSessionId && previousSessionId !== message.session_id) {
-        throw new MessageParentIntegrityError(
-          'task_session_mismatch',
-          'task_id must belong to the Message Session'
-        );
-      }
-      taskLinks.set(message.task_id, message.session_id);
-    }
-
-    return this.runMetadataMutation(() =>
-      runDatabaseTransaction(
-        this.db,
-        async (tx) => {
-          for (const sessionId of [...sessionIds].sort()) {
-            await this.assertSessionBelongsToTenant(tx, sessionId);
-          }
-          // A deterministic lock order prevents two import batches from
-          // deadlocking when they reference the same Tasks in opposite order.
-          for (const [taskId, sessionId] of [...taskLinks].sort(([a], [b]) => a.localeCompare(b))) {
-            await this.assertTaskBelongsToSession(tx, taskId as TaskID, sessionId);
-          }
-          const inserted = await insert(tx, messages).values(rows).returning().all();
-          return inserted.map((row: MessageRow) => this.rowToMessage(row));
         },
         { sqliteImmediate: true }
       )
@@ -467,14 +411,6 @@ export class MessagesRepository {
    * Update message (used by FeathersJS service adapter)
    */
   async update(messageId: string, updates: Partial<Message>): Promise<Message> {
-    const hasTaskAssignment = Object.hasOwn(updates, 'task_id');
-    if (hasTaskAssignment && typeof updates.task_id !== 'string') {
-      throw new MessageParentIntegrityError(
-        'task_already_assigned',
-        'Message task_id cannot be cleared'
-      );
-    }
-
     return this.runMetadataMutation(() =>
       runDatabaseTransaction(
         this.db,
@@ -497,6 +433,7 @@ export class MessagesRepository {
             ...updates,
             message_id: existing.message_id,
             session_id: existing.session_id,
+            task_id: existing.task_id,
             index: existing.index,
             timestamp: existing.timestamp,
             type: existing.type,
@@ -505,69 +442,17 @@ export class MessagesRepository {
           const row = this.messageToRow(updated);
           const { created_at: _createdAt, ...mutableRow } = row;
 
-          const conditions: SQL[] = [eq(messages.message_id, messageId)];
-          if (hasTaskAssignment && updates.task_id) {
-            const targetTaskId = updates.task_id;
-            const matchingTaskInMessageSession = exists(
-              // Correlate the target Task to the Message row in the UPDATE so
-              // the same-Session check and one-time assignment are one write.
-              // biome-ignore lint/suspicious/noExplicitAny: Cross-dialect Drizzle subquery typing.
-              (tx as any)
-                .select({ _: sql`1` })
-                .from(tasks)
-                .where(
-                  and(eq(tasks.task_id, targetTaskId), eq(tasks.session_id, messages.session_id))
-                )
-            );
-            conditions.push(
-              matchingTaskInMessageSession,
-              or(isNull(messages.task_id), eq(messages.task_id, targetTaskId)) as SQL
-            );
-          }
-
-          const returned = await update(tx, messages)
+          const result = await update(tx, messages)
             .set(mutableRow)
-            .where(and(...conditions))
-            .returning()
-            .all();
-          const result = returned[0];
-          if (result) return this.rowToMessage(result);
-
-          const currentRow = await select(tx)
-            .from(messages)
             .where(eq(messages.message_id, messageId))
+            .returning()
             .one();
-          if (!currentRow) throw new Error(`Message ${messageId} not found`);
-          const current = this.rowToMessage(currentRow);
-          if (
-            hasTaskAssignment &&
-            updates.task_id &&
-            current.task_id &&
-            current.task_id !== updates.task_id
-          ) {
-            throw new MessageParentIntegrityError(
-              'task_already_assigned',
-              'Message task_id cannot be reassigned'
-            );
-          }
-          if (hasTaskAssignment && updates.task_id) {
-            throw new MessageParentIntegrityError(
-              'task_session_mismatch',
-              'task_id must belong to the Message Session'
-            );
-          }
+          if (result) return this.rowToMessage(result);
           throw new Error(`Message ${messageId} could not be updated`);
         },
         { sqliteImmediate: true }
       )
     );
-  }
-
-  /**
-   * Update message task assignment
-   */
-  async assignToTask(messageId: MessageID, taskId: TaskID): Promise<Message> {
-    return this.update(messageId, { task_id: taskId });
   }
 
   /**

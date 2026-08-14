@@ -922,9 +922,6 @@ export class ReactiveSessionHandle {
         const shouldTrackMessages =
           this.options.taskHydration === 'eager' || prev.loadedTaskIds.has(taskId);
         if (!shouldTrackMessages) return prev;
-        // A supported one-time task_id patch links a previously unbucketed
-        // Message. Treat patches as upserts for hydrated Tasks rather than
-        // requiring a prior created event in that Task bucket.
         const nextByTask = upsertMessageInTaskMap(prev.messagesByTask, message);
         return {
           ...prev,
@@ -1786,14 +1783,6 @@ function upsertMessageInTaskMap(
 ): ReactiveMessagesByTask {
   if (!message.task_id) return messagesByTask;
   const next = new Map(messagesByTask);
-
-  // Defensive uniqueness: task_id is one-time at the server boundary, but a
-  // reconnect can replay an older bucket before the linking patch arrives.
-  for (const [taskId, messages] of next) {
-    if (taskId === message.task_id) continue;
-    const filtered = messages.filter((candidate) => candidate.message_id !== message.message_id);
-    if (filtered.length !== messages.length) next.set(taskId, filtered);
-  }
 
   const current = next.get(message.task_id) || [];
   const index = current.findIndex((candidate) => candidate.message_id === message.message_id);

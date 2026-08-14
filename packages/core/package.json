@@ -70,12 +70,6 @@
       "import": "./dist/api/index.js",
       "require": "./dist/api/index.cjs"
     },
-    "./claude": {
-      "source": "./src/claude/index.ts",
-      "types": "./dist/claude/index.d.ts",
-      "import": "./dist/claude/index.js",
-      "require": "./dist/claude/index.cjs"
-    },
     "./analytics": {
       "source": "./src/analytics/index.ts",
       "types": "./dist/analytics/index.d.ts",

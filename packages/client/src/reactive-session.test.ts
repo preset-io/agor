@@ -278,21 +278,6 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
 });
 
 describe('ReactiveSessionHandle message snapshot reconciliation', () => {
-  it.each(['eager', 'lazy'] as const)(
-    '%s hydration upserts a Message when a live patch links it to a loaded Task',
-    async (taskHydration) => {
-      const task = makeTask('task-linked', TaskStatus.RUNNING);
-      const mock = createMockClient({ tasks: [task], messagesByTask: {} });
-      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration });
-      await handle.ready();
-
-      const linked = makeMessage(task.task_id, 7);
-      mock.emitServiceEvent('messages', 'patched', linked);
-
-      expect(handle.getTaskMessages(task.task_id)).toEqual([linked]);
-    }
-  );
-
   it.each([
     ['immediate', false],
     ['drained queue', true],

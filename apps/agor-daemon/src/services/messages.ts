@@ -28,8 +28,7 @@ import { DrizzleService, type Query } from '../adapters/drizzle';
 import { assertSingleMessageCreatePayload } from '../hooks/reject-message-multi-create.js';
 
 /**
- * Public Message transport surface. Full replacement and raw bulk insertion
- * stay daemon-internal so they cannot bypass widget lifecycle hooks.
+ * Public Message transport surface. Full replacement is daemon-internal.
  */
 export const MESSAGES_SERVICE_TRANSPORT_METHODS = [
   'find',
@@ -230,8 +229,8 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
         default: MESSAGE_PAGINATION.DEFAULT_LIMIT,
         max: MESSAGE_PAGINATION.MAX_LIMIT,
       },
-      // Public multi-create has a separate cardinality/auth/realtime contract
-      // at /messages/bulk. Keep the ordinary CRUD endpoint single-record.
+      // Messages are created individually so authorization, tenant integrity,
+      // and realtime publication all share the canonical service boundary.
       multi: ['remove'],
     });
 
@@ -270,16 +269,7 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
       throw new BadRequest(`Message fields are immutable: ${unsupported.join(', ')}`);
     }
 
-    if (Object.hasOwn(data, 'task_id') && typeof data.task_id !== 'string') {
-      throw new BadRequest('task_id must be a Task ID');
-    }
-
-    try {
-      return await super.patch(id, data, params);
-    } catch (error) {
-      if (error instanceof MessageParentIntegrityError) throw new BadRequest(error.message);
-      throw error;
-    }
+    return super.patch(id, data, params);
   }
 
   /**
@@ -377,18 +367,6 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     endIndex: number
   ): Promise<Message[]> {
     return this.messagesRepo.findByRange(sessionId, startIndex, endIndex);
-  }
-
-  /**
-   * Custom method: Bulk insert messages
-   */
-  async createMany(messages: Message[]): Promise<Message[]> {
-    try {
-      return await this.messagesRepo.createMany(messages);
-    } catch (error) {
-      if (error instanceof MessageParentIntegrityError) throw new BadRequest(error.message);
-      throw error;
-    }
   }
 }
 

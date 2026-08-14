@@ -315,37 +315,6 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
   });
 
   describe('Task Endpoints - Authentication Required', () => {
-    it('POST /tasks/bulk requires an administrator', async () => {
-      const tasksBulkService = {
-        async create() {
-          return [];
-        },
-      };
-
-      app.use('/tasks/bulk', tasksBulkService);
-      app.service('/tasks/bulk').hooks({
-        before: {
-          create: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'import tasks')],
-        },
-      });
-
-      await expect(app.service('/tasks/bulk').create([], { provider: 'rest' })).rejects.toThrow();
-      await expect(
-        app.service('/tasks/bulk').create([], {
-          user: { user_id: 'member-1', email: 'member@example.com', role: ROLES.MEMBER },
-          authenticated: true,
-          provider: 'rest',
-        } as never)
-      ).rejects.toThrow();
-      await expect(
-        app.service('/tasks/bulk').create([], {
-          user: { user_id: 'admin-1', email: 'admin@example.com', role: ROLES.ADMIN },
-          authenticated: true,
-          provider: 'rest',
-        } as never)
-      ).resolves.toEqual([]);
-    });
-
     it('POST /tasks/:id/complete rejects unauthenticated requests', async () => {
       const tasksCompleteService = {
         async create() {

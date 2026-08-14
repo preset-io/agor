@@ -9330,43 +9330,6 @@
         }
       }
     },
-    "/messages/bulk": {
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/bulk"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["messages"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/bulk"
-              }
-            }
-          }
-        }
-      }
-    },
     "/messages/streaming": {
       "post": {
         "parameters": [],
@@ -10190,43 +10153,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/_id"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/tasks/bulk": {
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/bulk"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["tasks"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/bulk"
               }
             }
           }

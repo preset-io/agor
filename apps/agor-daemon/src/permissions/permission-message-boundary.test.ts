@@ -2,10 +2,7 @@ import { feathers } from '@agor/core/feathers';
 import type { HookContext, Message, MessageID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import {
-  assertExternalPermissionMessageCreateAllowed,
-  protectExternalPermissionMessageWrites,
-} from './permission-message-boundary.js';
+import { protectExternalPermissionMessageWrites } from './permission-message-boundary.js';
 
 const externalParams = { provider: 'rest' } as never;
 const executorParams = {
@@ -87,9 +84,6 @@ describe('external permission Message boundary', () => {
     const { rows, service } = makeTransportService([permission]);
 
     await expect(service.create(permission, externalParams)).rejects.toThrow(
-      'task-scoped executor'
-    );
-    expect(() => assertExternalPermissionMessageCreateAllowed([permission])).toThrow(
       'task-scoped executor'
     );
     await expect(

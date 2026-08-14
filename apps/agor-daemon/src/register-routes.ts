@@ -22,14 +22,11 @@ import {
   bindRepositoryToTenantUnitOfWork,
   generateId,
   getCurrentTenantId,
-  MCPServerRepository,
   MessagesRepository,
-  RepoRepository,
   resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
   ScheduleRepository,
-  SessionMCPServerRepository,
-  SessionRepository,
+  type SessionRepository,
   setMcpMemberPolicy,
   shortId,
   TaskRepository,
@@ -98,7 +95,6 @@ import { authTokenIssuedAtClaim } from './auth/token-invalidation.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
-  MessagesServiceImpl,
   ReposServiceImpl,
   SessionsServiceImpl,
   TasksServiceImpl,
@@ -116,7 +112,6 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
-import { assertExternalPermissionMessageCreateAllowed } from './permissions/permission-message-boundary.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import {
@@ -156,7 +151,6 @@ import {
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
 import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
-import { authorizeMessageBulkCreate } from './utils/message-bulk-authorization.js';
 import {
   buildPromptTaskMetadata,
   type InternalPromptTaskMetadataInput,
@@ -193,7 +187,6 @@ import {
   type StagedMulterFile,
 } from './utils/upload.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
-import { assertExternalWidgetMessageCreateAllowed } from './widgets/message-boundary.js';
 import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
@@ -291,7 +284,6 @@ export interface RegisterRoutesContext {
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
-  messagesService: MessagesServiceImpl;
   boardsService: BoardsServiceImpl | undefined;
   branchRepository: BranchRepository;
   usersRepository: UsersRepository;
@@ -459,7 +451,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     distributedWorkIdentity,
     deployment,
     sessionsService,
-    messagesService,
     boardsService,
     branchRepository,
     usersRepository: _usersRepository,
@@ -831,52 +822,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   // ============================================================================
-  // Initialize repositories and permission service
+  // Message streaming routes
   // ============================================================================
-
-  const _messagesRepo = new MessagesRepository(db);
-  const _sessionsRepo = new SessionRepository(db);
-  const _sessionMCPRepo = new SessionMCPServerRepository(db);
-  const _mcpServerRepo = new MCPServerRepository(db);
-  const _branchesRepo = new BranchRepository(db);
-  const _reposRepo = new RepoRepository(db);
-  const _tasksRepo = new TaskRepository(db);
-
-  // ============================================================================
-  // Messages bulk + streaming routes
-  // ============================================================================
-
-  registerAuthenticatedRoute(
-    app,
-    '/messages/bulk',
-    {
-      async create(data: unknown, params: RouteParams) {
-        assertExternalWidgetMessageCreateAllowed(data);
-        assertExternalPermissionMessageCreateAllowed(data);
-        const messages = await authorizeMessageBulkCreate(data, params as AuthenticatedParams, {
-          branchRbacEnabled,
-          allowSuperadmin: superadminOpts.allowSuperadmin,
-          sessionsRepository,
-          branchRepository,
-        });
-        const created = await messagesService.createMany(messages);
-        for (const message of created) {
-          emitServiceEvent(app, {
-            path: 'messages',
-            event: 'created',
-            data: message,
-            params,
-            id: message.message_id,
-          });
-        }
-        return created;
-      },
-    },
-    {
-      create: { role: ROLES.MEMBER, action: 'create messages' },
-    },
-    requireAuth
-  );
 
   registerAuthenticatedRoute(
     app,
@@ -954,11 +901,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // These routes re-emit canonical events onto the `messages` / `tasks`
-  // services. Their OWN default `created` event is either a duplicate bulk row
-  // or a `{ success: true }` streaming ack and must never broadcast. In
-  // particular, `messages/bulk.created` is not the canonical Message service
-  // event and must not create a second authorization surface.
-  app.service('/messages/bulk').publish(() => []);
+  // services. Their own `{ success: true }` acknowledgements must not
+  // broadcast as service events.
   app.service('/messages/streaming').publish(() => []);
   app.service('/tasks/streaming').publish(() => []);
 
@@ -1464,8 +1408,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
     // non-owner is prompting. The prompter identity comes from `task.created_by`
     // (NOT `params.user`): every persisted Task row requires `created_by`
-    // (`createPending` for the prompt/queue/callback paths, `create`/`createMany`
-    // for pre-created tasks run via `/tasks/:id/run`), so it survives the queue
+    // (`createPending` for the prompt/queue/callback paths and `create` for
+    // pre-created tasks run via `/tasks/:id/run`), so it survives the queue
     // / hook / drain hop intact. `params.user` can drop on hook-triggered drains
     // that don't carry `queued_by_user_id` and is therefore not authoritative.
     // See `./utils/build-prompter-prefix.ts` for the helper + tests.
@@ -3130,28 +3074,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
   // Tasks custom routes
   // ============================================================================
-
-  registerAuthenticatedRoute(
-    app,
-    '/tasks/bulk',
-    {
-      async create(data: unknown, params: RouteParams) {
-        if (!Array.isArray(data)) throw new BadRequest('Task import requires an array');
-        const createdBy = params.user?.user_id;
-        if (!createdBy) throw new NotAuthenticated('Authentication required to import tasks');
-        return tasksService.createMany(
-          (data as Partial<Task>[]).map((task) => ({
-            ...task,
-            created_by: createdBy as UUID,
-          }))
-        );
-      },
-    },
-    {
-      create: { role: ROLES.ADMIN, action: 'import tasks' },
-    },
-    requireAuth
-  );
 
   registerAuthenticatedRoute(
     app,

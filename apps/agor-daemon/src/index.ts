@@ -465,10 +465,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
   // Default to a 10MB JSON body. The previous 10MB pre-hardening default was
   // unbounded enough to allow trivial memory-pressure DoS, and a 1MB ceiling
-  // turned out to break legitimate flows (large prompts, /messages/bulk
-  // batches, oversized template payloads). 10MB is the balance: tight enough
-  // to bound a single attacker request, loose enough that real bulk-message
-  // payloads pass without per-route overrides. Multipart uploads bypass this
+  // turned out to break legitimate flows (large prompts and oversized
+  // template payloads). 10MB is the balance: tight enough to bound a single
+  // attacker request while allowing real prompts and templates. Multipart uploads bypass this
   // limit (multer parses the body itself) and are capped separately.
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -766,7 +765,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     distributedWorkIdentity,
     deployment,
     sessionsService: services.sessionsService,
-    messagesService: services.messagesService,
     boardsService: services.boardsService,
     branchRepository: services.branchRepository,
     usersRepository: services.usersRepository,

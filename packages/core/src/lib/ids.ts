@@ -80,9 +80,9 @@ export type IDPrefix = string;
  * Trade-off: we give up the library's strict sub-millisecond `seq`
  * ordering. Ms-resolution time-ordering on the timestamp prefix
  * (bytes 0–5) is preserved, so DB index locality and "ORDER BY id ASC ≈
- * insertion order at second resolution" still work. The one caller that
- * relied on sub-ms ordering (`TaskRepository.createMany`) now imposes
- * insertion order explicitly. Existing IDs in the DB are unaffected.
+ * insertion order at second resolution" still work. Callers that need a
+ * total order add an explicit stable tie-breaker. Existing IDs in the DB are
+ * unaffected.
  *
  * @returns A UUIDv7-shaped, RFC 9562 method-3 identifier.
  *

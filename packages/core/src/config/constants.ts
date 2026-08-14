@@ -90,21 +90,6 @@ export const WEBSOCKET = {
 export const SOCKET_IO_MAX_BUFFER_SIZE_BYTES = 1_000_000;
 
 /**
- * Database Constants
- */
-export const DATABASE = {
-  /**
-   * Batch size for bulk message inserts
-   */
-  MESSAGE_BATCH_SIZE: 100,
-
-  /**
-   * Batch size for bulk task inserts
-   */
-  TASK_BATCH_SIZE: 100,
-} as const;
-
-/**
  * Pagination Constants
  *
  * High limits to avoid silent truncation of results.

@@ -319,14 +319,10 @@ export type MessageCreate = Omit<Message, 'message_id'> & {
 /**
  * Fields that may change after a Message is created.
  *
- * Message identity, Session membership, transcript position, type/role, and
- * timestamps are deliberately immutable. `task_id` is retained for the
- * one-time linkage performed by legacy transcript imports; the service
- * verifies that the target Task belongs to the Message's existing Session and
- * refuses reassignment once a Task has been set.
+ * Message identity, Session/Task membership, transcript position, type/role,
+ * and timestamps are deliberately immutable.
  */
 export const MESSAGE_PATCH_FIELDS = [
-  'task_id',
   'content_preview',
   'content',
   'tool_uses',

@@ -175,16 +175,16 @@ describe('registerAuthenticatedRoute', () => {
 
     registerAuthenticatedRoute(
       app,
-      '/messages/bulk',
+      '/messages/streaming',
       { async create() {} },
-      { create: { role: ROLES.MEMBER, action: 'create messages' } },
+      { create: { role: ROLES.MEMBER, action: 'stream messages' } },
       requireAuth
     );
 
     const context = {
-      path: 'messages/bulk',
+      path: 'messages/streaming',
       method: 'create',
-      data: [{ task_id: 'other-task' }],
+      data: { event: 'streaming:start', data: { task_id: 'other-task' } },
       params: {
         provider: 'rest',
         user: { user_id: 'u1', email: 'a@b.c', role: ROLES.MEMBER },

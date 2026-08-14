@@ -171,7 +171,6 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
   autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;
-  createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,
     data: { git_state?: { sha_at_end?: string; commit_message?: string } },
@@ -303,7 +302,6 @@ export interface MessagesServiceImpl
     FeathersParams
   > {
   findByIdForScopeCheck(messageId: import('@agor/core/types').MessageID): Promise<Message | null>;
-  createMany(data: Array<import('@agor/core/types').MessageCreate>): Promise<Message[]>;
 }
 
 /**

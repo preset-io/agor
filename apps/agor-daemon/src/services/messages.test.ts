@@ -77,13 +77,23 @@ function message(
   };
 }
 
+async function createMessages(
+  repository: MessagesRepository,
+  messageList: Message[]
+): Promise<Message[]> {
+  const created: Message[] = [];
+  for (const item of messageList) created.push(await repository.create(item));
+  return created;
+}
+
 describe('MessagesService.find pagination', () => {
   dbTest(
     'pushes the public page limit into SQL instead of hydrating every match',
     async ({ db }) => {
       const sessionId = await createTestSession(db);
       const repository = new MessagesRepository(db);
-      await repository.createMany(
+      await createMessages(
+        repository,
         Array.from({ length: 32 }, (_, index) => message(sessionId, index))
       );
 
@@ -172,7 +182,7 @@ describe('MessagesService.find pagination', () => {
   dbTest('walks an exact transcript with an immutable Message-ID keyset', async ({ db }) => {
     const sessionId = await createTestSession(db);
     const repository = new MessagesRepository(db);
-    const created = await repository.createMany([
+    const created = await createMessages(repository, [
       message(sessionId, 0),
       message(sessionId, 1),
       message(sessionId, 2),
@@ -202,7 +212,7 @@ describe('MessagesService.find pagination', () => {
       created_by: generateId() as UUID,
     });
     const repository = new MessagesRepository(db);
-    await repository.createMany([
+    await createMessages(repository, [
       message(firstSessionId, 0, { task_id: task.task_id as TaskID }),
       message(firstSessionId, 1, { type: 'user', role: MessageRole.USER }),
       message(secondSessionId, 0),
@@ -226,16 +236,13 @@ describe('MessagesService.find pagination', () => {
 });
 
 describe('MessagesService.create boundary', () => {
-  dbTest(
-    'rejects arrays on ordinary CRUD and directs callers to the bounded bulk route',
-    async ({ db }) => {
-      const sessionId = await createTestSession(db);
-      await expect(
-        createMessagesService(db).create([message(sessionId, 0), message(sessionId, 1)])
-      ).rejects.toThrow('Bulk Message create must use /messages/bulk');
-      await expect(new MessagesRepository(db).findBySessionId(sessionId)).resolves.toEqual([]);
-    }
-  );
+  dbTest('rejects arrays on ordinary CRUD', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    await expect(
+      createMessagesService(db).create([message(sessionId, 0), message(sessionId, 1)])
+    ).rejects.toThrow('Bulk Message create is not supported');
+    await expect(new MessagesRepository(db).findBySessionId(sessionId)).resolves.toEqual([]);
+  });
 
   dbTest('rejects arrays before branch RBAC tries to resolve a Session', async ({ db }) => {
     const sessionId = await createTestSession(db);
@@ -257,27 +264,16 @@ describe('MessagesService.create boundary', () => {
       })
     ).rejects.toMatchObject({
       code: 400,
-      message: 'Bulk Message create must use /messages/bulk',
+      message: 'Bulk Message create is not supported',
     });
     await expect(new MessagesRepository(db).findBySessionId(sessionId)).resolves.toEqual([]);
   });
 });
 
 describe('MessagesService.patch boundary', () => {
-  dbTest('keeps identity/order immutable and validates one-time Task linkage', async ({ db }) => {
+  dbTest('keeps identity, ownership, and order immutable', async ({ db }) => {
     const firstSessionId = await createTestSession(db);
     const secondSessionId = await createTestSession(db);
-    const taskRepository = new TaskRepository(db);
-    const firstTask = await taskRepository.create({
-      session_id: firstSessionId,
-      full_prompt: 'first task',
-      created_by: generateId() as UUID,
-    });
-    const secondTask = await taskRepository.create({
-      session_id: secondSessionId,
-      full_prompt: 'second task',
-      created_by: generateId() as UUID,
-    });
     const repository = new MessagesRepository(db);
     const created = await repository.create(message(firstSessionId, 0));
     const service = createMessagesService(db);
@@ -289,19 +285,8 @@ describe('MessagesService.patch boundary', () => {
       'Message fields are immutable: index'
     );
     await expect(
-      service.patch(created.message_id, { task_id: secondTask.task_id })
-    ).rejects.toThrow('task_id must belong to the Message Session');
-
-    const linked = await service.patch(created.message_id, { task_id: firstTask.task_id });
-    expect(linked).toMatchObject({
-      message_id: created.message_id,
-      session_id: firstSessionId,
-      task_id: firstTask.task_id,
-      index: 0,
-    });
-    await expect(
-      service.patch(created.message_id, { task_id: secondTask.task_id })
-    ).rejects.toThrow('Message task_id cannot be reassigned');
+      service.patch(created.message_id, { task_id: generateId() as TaskID } as never)
+    ).rejects.toThrow('Message fields are immutable: task_id');
   });
 
   dbTest('rejects a cross-Session Task link during create', async ({ db }) => {
@@ -341,7 +326,7 @@ dbTest(
     });
     const repository = new MessagesRepository(db);
 
-    await repository.createMany([
+    await createMessages(repository, [
       message(accessibleSessionId, 0, { role: MessageRole.USER, type: 'user' }),
       message(accessibleSessionId, 1),
       message(accessibleSessionId, 2),
@@ -356,7 +341,10 @@ dbTest(
     const createdAtSortMessages = [3, 2, 1, 0].map((index) =>
       message(createdAtSortSessionId, index)
     );
-    await repository.createMany(createdAtSortMessages);
+    for (const item of createdAtSortMessages) {
+      await repository.create(item);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
 
     const app = feathersExpress(feathers());
     app.configure(rest());
@@ -486,7 +474,7 @@ dbTest(
       expect(createdAtPage).toMatchObject({ total: 4, limit: 2 });
       expect(createdAtPage.data.map((item) => item.message_id)).toEqual(
         [...createdAtSortMessages]
-          .sort((left, right) => left.message_id.localeCompare(right.message_id))
+          .reverse()
           .slice(0, 2)
           .map((item) => item.message_id)
       );

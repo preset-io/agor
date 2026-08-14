@@ -241,10 +241,6 @@ const ROUTE_BRANCH_ID_SCOPED_PATHS = new Set(['branches/:id/owners', 'branches/:
 const SESSION_ID_SCOPED_PATHS = new Set([
   'tasks',
   'messages',
-  // Defense in depth: the route suppresses its duplicate default event and
-  // emits canonical `messages.created` events, but a future publication
-  // regression must still remain branch-scoped rather than tenant-global.
-  'messages/bulk',
   'session-mcp-servers',
   'session-env-selections',
 ]);
