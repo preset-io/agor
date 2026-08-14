@@ -7,6 +7,7 @@ import { MobileNavTree } from './MobileNavTree';
 describe('MobileNavTree settings navigation', () => {
   it('exposes every desktop workspace settings subsection to admins', () => {
     const onOpenWorkspaceSettings = vi.fn();
+    const onNavigate = vi.fn();
     render(
       <MemoryRouter>
         <MobileNavTree
@@ -17,6 +18,7 @@ describe('MobileNavTree settings navigation', () => {
           currentUser={{ role: 'admin' } as User}
           onOpenWorkspaceSettings={onOpenWorkspaceSettings}
           onOpenUserSettings={vi.fn()}
+          onNavigate={onNavigate}
         />
       </MemoryRouter>
     );
@@ -40,5 +42,6 @@ describe('MobileNavTree settings navigation', () => {
     }
     fireEvent.click(screen.getByText('Gateway Channels'));
     expect(onOpenWorkspaceSettings).toHaveBeenCalledWith('gateway');
+    expect(onNavigate).toHaveBeenCalled();
   });
 });

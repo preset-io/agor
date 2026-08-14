@@ -334,7 +334,10 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
             window.open('https://agor.live/guide/getting-started', '_blank', 'noopener,noreferrer');
           else if (key === 'logout') onLogout?.();
           else if (key.startsWith('settings:')) openSettings(key.slice('settings:'.length));
-          if (!key.startsWith('settings:')) onNavigate?.();
+          // Close the navigation drawer for every destination. Workspace settings
+          // render in their own bottom sheet; leaving this drawer open keeps its
+          // mask above that sheet and makes the settings tap appear to do nothing.
+          onNavigate?.();
         }}
       />
     </div>

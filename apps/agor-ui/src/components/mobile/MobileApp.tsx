@@ -132,6 +132,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               cardById={cardById}
               artifactById={artifactById}
               onMenuClick={() => setDrawerOpen(true)}
+              onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
             />
           }
         />
