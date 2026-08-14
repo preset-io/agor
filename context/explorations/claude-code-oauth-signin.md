@@ -1,15 +1,12 @@
-# Claude Code OAuth Sign-In (design spike)
+# Claude Code OAuth Sign-In
 
-Status: **spike / draft** — design + daemon scaffold, not shipped. Auth code is
-sensitive; this doc exists so the design is reviewed before the flow is wired
-into production UI.
+Lets a user sign in with their Claude subscription (Pro/Max/Team/Enterprise) from
+the Agor UI — the same capability Agor ships for Codex via `/codex-auth/device` —
+instead of running `claude setup-token` on a machine with a browser and pasting a
+long-lived token into Agor. This documents the verified auth mechanism and the
+design rationale of the shipped feature.
 
-Goal: let a user sign in with their Claude subscription (Pro/Max/Team/Enterprise)
-from the Agor UI — the same capability we already ship for Codex via
-`/codex-auth/device` — instead of running `claude setup-token` on a machine with
-a browser and pasting a long-lived token into Agor.
-
-The Codex module is the template. Read it first:
+The Codex module is the template it mirrors:
 
 - `apps/agor-daemon/src/services/codex-device-auth.ts`
 - `apps/agor-daemon/src/services/codex-auth-shared.ts`
@@ -19,10 +16,10 @@ The Codex module is the template. Read it first:
 
 ---
 
-## VERIFIED vs ASSUMED
+## VERIFIED vs UNVERIFIED
 
-Everything below is split into what was independently verified and what is still
-an assumption a reviewer/implementer must confirm before shipping.
+Split into what was independently verified against the pinned Claude binary and
+what remains unconfirmed.
 
 ### VERIFIED
 
@@ -33,9 +30,7 @@ SDK no longer ships a `cli.js` — its `manifest.json` bundles the **native
 OAuth constants below were read by **byte-inspecting the native binary** (the
 installed v2.1.211, whose prod OAuth config is identical to 2.1.197's) at the
 file offsets cited, and cross-checked against Anthropic's official docs
-(<https://code.claude.com/docs/en/authentication>). The earlier `0.1.55 cli.js`
-figures in the first spike revision were from a stale worktree and are
-superseded here.
+(<https://code.claude.com/docs/en/authentication>).
 
 1. **There is NO device-authorization (RFC 8628) endpoint for Claude Code.**
    The claim "no device endpoint" was treated as something to disprove, not
@@ -50,8 +45,7 @@ superseded here.
 2. **Claude Code uses OAuth 2.0 authorization-code + PKCE (S256) with a
    paste-back code.** These are the PROD OAuth config object (`yol`) at binary
    offset ~237512852, plus the login authorize builder (~101457400) and token
-   exchange (~101464300). **All `TODO(verify)` placeholders in the scaffold are
-   now resolved to these values:**
+   exchange (~101464300). The values the service uses:
    - authorize URL (subscription / Claude Pro-Max):
      **`https://claude.com/cai/oauth/authorize`** (`yol.CLAUDE_AI_AUTHORIZE_URL`).
      The Console/API-billing login instead uses `yol.CONSOLE_AUTHORIZE_URL` =
@@ -99,9 +93,9 @@ superseded here.
    `expires_in` (seconds, e.g. `28800` = 8h), `access_token` (`sk-ant-oat01-`),
    `refresh_token` (`sk-ant-ort01-`), and `account`/`organization` objects.
 
-### STILL UNVERIFIED
+### UNVERIFIED
 
-- **`subscriptionType` field name in the token response.** The scaffold reads
+- **`subscriptionType` field name in the token response.** The service reads
   `subscription_type` opportunistically for a display hint; the response's exact
   field for plan tier wasn't isolated in the binary. It only affects a success
   hint, never auth. `expiresAt` in the written file is computed from
@@ -130,13 +124,13 @@ The 2026-07-15/16 field observation (a stale `.credentials.json` + a fresh
 pasted env token still 401'd) is therefore **not** "the file wins". It is more
 consistent with the fresh env token not actually reaching the SDK subprocess in
 that run, or that token itself being stale/expired — env-over-file rules out
-"the file shadowed a good env token". Crucially, **this does not gate Task 2**:
-whichever wins, the fix is to guarantee exactly one credential source per user.
+"the file shadowed a good env token". Either way, the fix is to guarantee exactly
+one credential source per user.
 
-**So the Task 2 guard IS necessary.** Because env out-ranks the file, injecting a
-`CLAUDE_CODE_OAUTH_TOKEN` for an OAuth-flow user would shadow the managed,
-refreshing `.credentials.json` — stranding the session on a non-renewable token
-(and 401'ing outright if that env token is stale). See "Task 2" below.
+Because env out-ranks the file, injecting a `CLAUDE_CODE_OAUTH_TOKEN` for an
+OAuth-flow user would shadow the managed, refreshing `.credentials.json` —
+stranding the session on a non-renewable token (and 401'ing outright if that env
+token is stale). See "Non-breaking credential handling" below.
 
 ---
 
@@ -186,7 +180,7 @@ sequenceDiagram
 
 ## Mapping onto the Codex module structure
 
-| Codex                                            | Claude equivalent (this spike)                                                        |
+| Codex                                            | Claude equivalent                                                                     |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------- |
 | `codex-device-auth.ts` service (`create`+`find`) | `claude-oauth.ts` service (two-call `create` + `find`)                                |
 | device usercode + daemon poll loop               | authorize URL + user paste-back (no poll)                                             |
@@ -224,11 +218,11 @@ real `.credentials.json` is still worth doing:
    env token _and_ leaving a conflicting on-disk file is the kind of split-brain
    that produces confusing 401s. Writing (and owning) the file gives one
    coherent, refreshable credential source — provided we don't also inject a
-   competing env token, which we don't (see Task 2).
+   competing env token, which we don't (see below).
 
 ---
 
-## Task 2: non-breaking credential handling (env token vs managed file)
+## Non-breaking credential handling (env token vs managed file)
 
 Constraint: existing accounts that authenticate via a pasted
 `CLAUDE_CODE_OAUTH_TOKEN` must keep working exactly as today; the new OAuth flow
@@ -263,12 +257,13 @@ Why this is correct and non-breaking:
   multitenancy, `config.ts` already rejects native subscription auth — the new
   branch inherits that guard for free.
 
-**Residual gap (the one case the resolver can't see):** a user who _both_ pasted
-a token earlier _and_ runs the new OAuth flow has `stored.CLAUDE_CODE_OAUTH_TOKEN`
-present, so the resolver would still inject it and shadow the fresh file. The fix
-is a one-source invariant: on OAuth success, clear the stored pasted token. This
-is marked as a `TODO` in `claude-oauth.ts#persist` rather than implemented in the
-spike (it requires mutating the encrypted `agentic_tools` blob).
+**One-source invariant:** a user who _both_ pasted a token earlier _and_ runs the
+OAuth flow would otherwise have `stored.CLAUDE_CODE_OAUTH_TOKEN` present, so the
+resolver would inject it and shadow the fresh file. `claude-oauth.ts#persist`
+therefore clears the stored pasted token on OAuth success (patches
+`agentic_tools['claude-code'].CLAUDE_CODE_OAUTH_TOKEN` to `null`) in the same
+users-service call that flips the method — so the managed file is the single
+source. `claude-auth/logout` clears it the same way on disconnect.
 
 ---
 
@@ -277,8 +272,10 @@ spike (it requires mutating the encrypted `agentic_tools` blob).
 Mirrors `codex.auth-file` exactly, so ownership and permissions hold in
 insulated/strict modes:
 
-- New executor command `claude.auth-file` (`write` / `delete`), handled by
-  `packages/executor/src/commands/claude-auth-file.ts`.
+- Executor command `claude.auth-file` (`inspect` / `write` / `delete`), handled by
+  `packages/executor/src/commands/claude-auth-file.ts`. `inspect` backs the
+  connection probe (confirms the file exists without returning token bytes);
+  `delete` backs `claude-auth/logout`.
 - `resolveClaudeCredentialsPath()` → `${CLAUDE_CONFIG_DIR || ~/.claude}/.credentials.json`.
 - Write is atomic and private: `mkdir 0700` → temp file `wx` `0600` →
   `chmod 0600` → `rename` → read-back verify.
@@ -318,47 +315,42 @@ agentic-tool resolver already keys on to select subscription auth for Claude.
   ownership holds in insulated/strict modes.
 - Multi-tenancy: `.credentials.json` is a tenant-owned, per-user derived
   resource. Identity resolution goes through `resolveCodexUnixIdentity`, which
-  already fails closed for hosted multi-tenant modes without a
-  `persistent-per-user` executor home. The same negative coverage the Codex
-  device flow has must be added here.
+  fails closed for hosted multi-tenant modes without a `persistent-per-user`
+  executor home; cross-tenant negative coverage mirrors the Codex device flow.
 
 ---
 
-## UI sketch (not built in this spike)
+## UI
 
-Mirror `CodexDeviceSignIn.tsx` (AntD only, design tokens, no raw CSS), a
-memoized self-contained pane, but with a paste-back step instead of a poll:
+Mirrors the Codex settings pane (AntD only, design tokens, no raw CSS), split
+across two components under `apps/agor-ui/src/components/ClaudeAuth/`:
 
-1. On mount, `create({})` → render `status.verificationUrl` as a `Typography.Link`
-   ("Open the Claude sign-in page →") plus a short instruction.
-2. Render an AntD `Input` + primary `Button` ("I've approved — paste my code")
-   for the `CODE#STATE` string. On submit call `create({ code })`.
-3. On `phase: 'success'` show the green check (reuse the Codex success block) and
-   fire `onVerified()`. On `expired`/`error` show an `Alert` with a "Start over"
-   button that re-runs `create({})`.
-
-Because there is no poll loop, the pane is simpler than Codex's: no 2s status
-polling, no countdown driven by a server code lifetime (optionally a local
-freshness countdown on our own `expiresAt`).
+- **`ClaudeAuthSettings.tsx`** — the management pane, mirroring
+  `CodexAuthSettings.tsx`. A view-only method selector with three tabs — **API
+  key**, **Sign in with Claude**, **Subscription token** — where selecting a tab
+  only changes which pane shows; the persisted method follows the credential
+  actually configured (saving a key / completing OAuth / saving a token /
+  disconnecting), never a mere tab switch. It runs a `check-auth`
+  (`validateNative: true`) probe for the connection banner (connected / login not
+  found / key not working) and offers a **Disconnect** (`claude-auth/logout`)
+  only while the persisted method is `subscription`; after disconnect it stays on
+  the sign-in view rather than jumping tabs. Wired into `UserSettingsModal` the
+  same way as `CodexAuthSettings`.
+- **`ClaudeOAuthSignIn.tsx`** — the paste-back pane the "Sign in with Claude" tab
+  renders: `create({})` surfaces `verificationUrl` as a link, an `Input` +
+  `Button` submits the `CODE#STATE` string via `create({ code })`, and
+  success/expired/error states render inline. No poll loop or server-code
+  countdown (unlike Codex's device pane).
 
 ---
 
-## Open questions
+## Follow-ups
 
-_Redirect/token hosts, scopes, content-type, and env-var precedence are now
-RESOLVED (see the VERIFIED and RESOLVED sections above)._
-
-1. **One-source invariant on re-onboarding**: clear a previously pasted
-   `CLAUDE_CODE_OAUTH_TOKEN` when the OAuth flow writes a managed file (the
-   `persist` `TODO`), so a leftover paste can't out-rank the fresh file.
-2. **`check-auth` / logout parity**: add a `claude.auth-file` `inspect` op and a
-   `/claude-auth/logout` mirroring Codex, so the connection banner and
-   disconnect work. Out of scope for this spike.
-3. **`resolveCodexUnixIdentity` rename**: it is now used by a non-Codex flow.
-   Rename to `resolveAgenticUnixIdentity` (and generalize its Codex-specific
-   error strings) in a follow-up; kept as-is here to avoid churn during review.
-4. **`subscriptionType` response field** (cosmetic; see STILL UNVERIFIED).
-5. **ToS / acceptable use** (see below).
+1. **`resolveCodexUnixIdentity` rename**: it is used by a non-Codex flow. Rename
+   to `resolveAgenticUnixIdentity` (and generalize its Codex-specific error
+   strings), left as a separate change to keep this diff focused.
+2. **`subscriptionType` response field** (cosmetic; see UNVERIFIED).
+3. **ToS / acceptable use** (see below).
 
 ---
 
@@ -380,7 +372,7 @@ this needs a human/legal skim before GA — it is not cleared here.**
   requires the strict per-user isolation guarantees (the
   `hasTenantSafeExecutorCredentialHome` gate). Do not enable this path in modes
   that can't guarantee per-user credential homes.
-- Recommendation: before shipping past spike, confirm with Anthropic (or via the
-  Claude Code terms) that daemon-driven `/login`-equivalent sign-in on the
-  user's behalf is acceptable, and keep API-key and pasted-token paths as
-  first-class alternatives.
+- Recommendation: before GA, confirm with Anthropic (or via the Claude Code
+  terms) that daemon-driven `/login`-equivalent sign-in on the user's behalf is
+  acceptable, and keep API-key and pasted-token paths as first-class
+  alternatives.

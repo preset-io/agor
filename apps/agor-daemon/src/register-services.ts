@@ -698,7 +698,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db));
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
-  // Claude subscription OAuth sign-in (SPIKE). Anthropic has no device endpoint,
+  // Claude subscription OAuth sign-in. Anthropic has no device endpoint,
   // so this is authorization-code + PKCE with a paste-back code: create({})
   // returns the authorize URL; create({code}) exchanges the pasted CODE#STATE and
   // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find

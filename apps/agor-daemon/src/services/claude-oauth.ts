@@ -1,5 +1,5 @@
 /**
- * Claude Subscription OAuth Sign-In Service (SPIKE — see draft PR)
+ * Claude Subscription OAuth Sign-In Service
  *
  * Drives Anthropic's Claude Code OAuth authorization natively from the daemon so
  * the onboarding wizard can sign a user into their Claude subscription without a
