@@ -140,7 +140,7 @@ describe('MarkdownRenderer', () => {
     anchorClick.mockRestore();
   });
 
-  it('renders internal branch-file links as authenticated preview and download actions', async () => {
+  it('downloads on the primary branch-file link click (one-click download, not preview)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -156,7 +156,12 @@ describe('MarkdownRenderer', () => {
         { status: 200 }
       )
     );
-    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    let clickedAnchor: HTMLAnchorElement | null = null;
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      clickedAnchor = this;
+    });
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal(
       'URL',
@@ -173,12 +178,15 @@ describe('MarkdownRenderer', () => {
       />
     );
 
+    // The primary labeled link — not the adjacent "Download" icon — must
+    // download directly, matching the one-click acceptance for QA evidence.
     fireEvent.click(await screen.findByRole('button', { name: 'screenshot.png' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(
       new RegExp(`/file/evidence%2Fscreenshot\\.png\\?branch_id=${branchId}$`)
     );
     expect(anchorClick).toHaveBeenCalledOnce();
+    expect(clickedAnchor?.download).toBe('screenshot.png');
     expect(screen.getByRole('button', { name: 'Download screenshot.png' })).toBeInTheDocument();
 
     anchorClick.mockRestore();

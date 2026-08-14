@@ -314,14 +314,22 @@ const INTERNAL_BRANCH_FILE_MARKDOWN_LINK = new RegExp(
   'g'
 );
 
-/** Shared preview/download controls for authenticated virtual-link attachments. */
+/**
+ * Shared preview/download controls for authenticated virtual-link
+ * attachments. `primaryAction` controls what clicking the labeled link
+ * itself does — uploads preview first (existing behavior); branch files
+ * download first, matching the one-click "click the link to download"
+ * acceptance for QA evidence. The adjacent icon button always downloads.
+ */
 function AttachmentControls({
   filename,
   fetchBlob,
+  primaryAction,
   children,
 }: {
   filename: string;
   fetchBlob: () => Promise<Blob>;
+  primaryAction: 'preview' | 'download';
   children: React.ReactNode;
 }) {
   const { showError } = useThemedMessage();
@@ -349,7 +357,7 @@ function AttachmentControls({
         size="small"
         icon={<PaperClipOutlined />}
         aria-label={filename}
-        onClick={() => void openAttachment(false)}
+        onClick={() => void openAttachment(primaryAction === 'download')}
         style={{ height: 'auto', paddingInline: 0 }}
       >
         {children}
@@ -386,7 +394,7 @@ function UploadAttachmentLink({
   };
 
   return (
-    <AttachmentControls filename={filename} fetchBlob={fetchBlob}>
+    <AttachmentControls filename={filename} fetchBlob={fetchBlob} primaryAction="preview">
       {children}
     </AttachmentControls>
   );
@@ -431,7 +439,7 @@ function BranchFileAttachmentLink({
   };
 
   return (
-    <AttachmentControls filename={filename} fetchBlob={fetchBlob}>
+    <AttachmentControls filename={filename} fetchBlob={fetchBlob} primaryAction="download">
       {children}
     </AttachmentControls>
   );

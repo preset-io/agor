@@ -40,6 +40,21 @@ function extractFile(data: unknown): FileDetail | null {
   return file && typeof file === 'object' ? (file as FileDetail) : null;
 }
 
+/**
+ * REST clients percent-encode the id (`@feathersjs/rest-client`:
+ * `encodeURIComponent(id)`), but the REST transport's route matcher
+ * (`@feathersjs/transport-commons` Router) splits the request path on
+ * literal `/` before any decoding happens — so a nested id's encoded slash
+ * (`evidence%2Fscreenshot.png`) reaches the service unchanged, and the
+ * executor then 404s on a file literally named with a percent-encoded
+ * slash. Socket.IO calls pass `id` as a plain value with no such encoding,
+ * so only decode when the request actually came in over REST.
+ */
+export function resolveRestFilePath(id: Id, params?: FileParams): string {
+  const raw = id.toString();
+  return params?.provider === 'rest' ? decodeURIComponent(raw) : raw;
+}
+
 export class FileService
   implements Pick<ServiceMethods<FileListItem | FileDetail>, 'find' | 'get' | 'setup' | 'teardown'>
 {
@@ -71,7 +86,7 @@ export class FileService
     const resolved = await this.resolveBranchRead(branchId, params);
 
     const result = await this.runCommand('branch.files.read', resolved.branchId, resolved.asUser, {
-      filePath: id.toString(),
+      filePath: resolveRestFilePath(id, params),
     });
     if (!result.success) {
       throw new Error(`Failed to read file: ${result.error?.message ?? 'unknown executor error'}`);
