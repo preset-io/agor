@@ -288,7 +288,7 @@ export class ClaudeTool implements ITool {
 
     // Hydrate only this Task while deriving the append position from one row.
     const [existingMessages, sessionNextIndex] = await Promise.all([
-      this.messagesRepo.findByTaskId(taskId),
+      taskId ? this.messagesRepo.findByTaskId(taskId) : Promise.resolve([]),
       this.messagesRepo.getNextIndexBySessionId(sessionId),
     ]);
     let nextIndex = sessionNextIndex;
@@ -986,7 +986,7 @@ export class ClaudeTool implements ITool {
 
     // Hydrate only this Task while deriving the append position from one row.
     const [existingMessages, sessionNextIndex] = await Promise.all([
-      this.messagesRepo.findByTaskId(taskId),
+      taskId ? this.messagesRepo.findByTaskId(taskId) : Promise.resolve([]),
       this.messagesRepo.getNextIndexBySessionId(sessionId),
     ]);
     let nextIndex = sessionNextIndex;
