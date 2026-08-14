@@ -35,7 +35,7 @@ vi.mock('../../db/feathers-repositories.js', () => ({
   createFeathersBackedRepositories: () => ({
     branches: { findById: mocks.branchFind },
     messages: {
-      findByTaskId: mocks.taskMessagesFind,
+      findInitialUserMessagesByTaskId: mocks.taskMessagesFind,
       getNextIndexBySessionId: mocks.nextMessageIndex,
     },
     messagesService: { create: mocks.messagesCreate },

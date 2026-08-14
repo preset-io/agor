@@ -6,7 +6,7 @@ import type {
   SessionPromptResult,
   Task,
 } from '@agor/core/client';
-import { TaskStatus } from '@agor/core/client';
+import { MESSAGE_PAGINATION, PAGINATION, TaskStatus } from '@agor/core/client';
 
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager';
 
@@ -92,6 +92,10 @@ type MessageMutation =
   | { sequence: number; kind: 'upsert'; message: Message }
   | { sequence: number; kind: 'remove'; message: Message };
 
+type TaskMutation =
+  | { sequence: number; kind: 'upsert'; task: Task }
+  | { sequence: number; kind: 'remove'; task: Task };
+
 interface QueueFindResult {
   data?: Task[];
 }
@@ -167,6 +171,10 @@ export class ReactiveSessionHandle {
   // message that was already observed live (or resurrect a removed one).
   private readonly messageFetches = new Map<number, number>();
   private readonly messageMutations: MessageMutation[] = [];
+  private taskMutationSequence = 0;
+  private taskFetchTokenSequence = 0;
+  private readonly taskFetches = new Map<number, number>();
+  private readonly taskMutations: TaskMutation[] = [];
 
   /**
    * The canonical (full-UUID) session id. When this handle was constructed with
@@ -341,6 +349,19 @@ export class ReactiveSessionHandle {
     }
   }
 
+  private hasMessageMutationSince(
+    fetchToken: number,
+    belongsToFetch: (message: Message) => boolean
+  ): boolean {
+    const fetchSequence = this.messageFetches.get(fetchToken);
+    return (
+      fetchSequence !== undefined &&
+      this.messageMutations.some(
+        (mutation) => mutation.sequence > fetchSequence && belongsToFetch(mutation.message)
+      )
+    );
+  }
+
   private finishMessageFetch(
     fetchToken: number,
     snapshot: Message[],
@@ -376,14 +397,33 @@ export class ReactiveSessionHandle {
     query: Record<string, unknown>,
     belongsToFetch: (message: Message) => boolean
   ): Promise<Message[]> {
-    const fetchSequence = this.beginMessageFetch();
-    try {
-      const snapshot = await this.client.service('messages').findAll({ query });
-      return this.finishMessageFetch(fetchSequence, snapshot, belongsToFetch);
-    } catch (error) {
-      this.cancelMessageFetch(fetchSequence);
-      throw error;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const fetchToken = this.beginMessageFetch();
+      try {
+        const snapshot = await this.client.service('messages').findAll({
+          query: { ...query, $limit: MESSAGE_PAGINATION.MAX_LIMIT },
+        });
+        // Offset pages can drift if a realtime mutation changes an earlier
+        // page while a later one is being read. A page-sized-or-larger result
+        // may have crossed that boundary, so retry from a fresh DB state. For
+        // smaller (single-page) snapshots, journal replay is sufficient.
+        const unstable =
+          snapshot.length >= MESSAGE_PAGINATION.MAX_LIMIT &&
+          this.hasMessageMutationSince(fetchToken, belongsToFetch);
+        if (unstable) {
+          this.cancelMessageFetch(fetchToken);
+          if (attempt === 2) {
+            throw new Error('Transcript kept changing during paginated hydration');
+          }
+          continue;
+        }
+        return this.finishMessageFetch(fetchToken, snapshot, belongsToFetch);
+      } catch (error) {
+        this.cancelMessageFetch(fetchToken);
+        throw error;
+      }
     }
+    throw new Error('Transcript hydration retry budget exhausted');
   }
 
   private async fetchTaskMessagesWithoutRealtimeGap(taskId: string): Promise<Message[]> {
@@ -391,6 +431,76 @@ export class ReactiveSessionHandle {
       { task_id: taskId, $sort: { index: 1 } },
       (message) => message.task_id === taskId && this.matchesSession(message.session_id)
     );
+  }
+
+  private beginTaskFetch(): number {
+    this.taskFetchTokenSequence += 1;
+    this.taskFetches.set(this.taskFetchTokenSequence, this.taskMutationSequence);
+    return this.taskFetchTokenSequence;
+  }
+
+  private recordTaskMutation(kind: 'upsert' | 'remove', task: Task): void {
+    this.taskMutationSequence += 1;
+    if (this.taskFetches.size > 0) {
+      this.taskMutations.push({ sequence: this.taskMutationSequence, kind, task });
+    }
+  }
+
+  private cancelTaskFetch(fetchToken: number): void {
+    this.taskFetches.delete(fetchToken);
+    if (this.taskFetches.size === 0) {
+      this.taskMutations.length = 0;
+      return;
+    }
+    const oldestActiveFetch = Math.min(...this.taskFetches.values());
+    const firstNeeded = this.taskMutations.findIndex(
+      (mutation) => mutation.sequence > oldestActiveFetch
+    );
+    if (firstNeeded === -1) this.taskMutations.length = 0;
+    else if (firstNeeded > 0) this.taskMutations.splice(0, firstNeeded);
+  }
+
+  private finishTaskFetch(fetchToken: number, snapshot: Task[]): Task[] {
+    const fetchSequence = this.taskFetches.get(fetchToken);
+    if (fetchSequence === undefined) return sortTasksByCreatedAt(snapshot);
+    const byId = new Map(snapshot.map((task) => [task.task_id, task]));
+    for (const mutation of this.taskMutations) {
+      if (mutation.sequence <= fetchSequence) continue;
+      if (mutation.kind === 'remove') byId.delete(mutation.task.task_id);
+      else byId.set(mutation.task.task_id, mutation.task);
+    }
+    this.cancelTaskFetch(fetchToken);
+    return sortTasksByCreatedAt([...byId.values()]);
+  }
+
+  private async fetchTasksWithoutRealtimeGap(): Promise<Task[]> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const fetchToken = this.beginTaskFetch();
+      try {
+        const snapshot = await this.client.service('tasks').findAll({
+          query: {
+            session_id: this.sessionId,
+            $sort: { created_at: 1, task_id: 1 },
+            $limit: PAGINATION.MAX_LIMIT,
+          },
+        });
+        const fetchSequence = this.taskFetches.get(fetchToken);
+        const unstable =
+          snapshot.length >= PAGINATION.MAX_LIMIT &&
+          fetchSequence !== undefined &&
+          this.taskMutations.some((mutation) => mutation.sequence > fetchSequence);
+        if (unstable) {
+          this.cancelTaskFetch(fetchToken);
+          if (attempt === 2) throw new Error('Tasks kept changing during paginated hydration');
+          continue;
+        }
+        return this.finishTaskFetch(fetchToken, snapshot);
+      } catch (error) {
+        this.cancelTaskFetch(fetchToken);
+        throw error;
+      }
+    }
+    throw new Error('Task hydration retry budget exhausted');
   }
 
   private async fetchSessionMessagesWithoutRealtimeGap(): Promise<Message[]> {
@@ -458,12 +568,7 @@ export class ReactiveSessionHandle {
     try {
       const [session, tasks, queueResult] = await Promise.all([
         this.client.service('sessions').get(this.sessionId),
-        this.client.service('tasks').findAll({
-          query: {
-            session_id: this.sessionId,
-            $sort: { created_at: 1 },
-          },
-        }),
+        this.fetchTasksWithoutRealtimeGap(),
         this.client
           .service(`/sessions/${this.sessionId}/tasks/queue`)
           .find()
@@ -587,10 +692,11 @@ export class ReactiveSessionHandle {
 
     const onTaskCreated = (task: Task) => {
       if (!this.matchesSession(task.session_id)) return;
+      this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
           ? prev.tasks
-          : [...prev.tasks, task];
+          : sortTasksByCreatedAt([...prev.tasks, task]);
         // Tasks can be born QUEUED (e.g. when the daemon auto-queues a prompt
         // because the session is busy) — track them in queuedTasks too.
         const queuedTasks =
@@ -607,6 +713,7 @@ export class ReactiveSessionHandle {
     };
     const onTaskPatched = (task: Task) => {
       if (!this.matchesSession(task.session_id)) return;
+      this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
         const nextTasks = index === -1 ? [...prev.tasks, task] : [...prev.tasks];
@@ -630,7 +737,7 @@ export class ReactiveSessionHandle {
 
         return {
           ...prev,
-          tasks: nextTasks,
+          tasks: sortTasksByCreatedAt(nextTasks),
           queuedTasks: nextQueuedTasks,
           lastSyncedAt: new Date().toISOString(),
         };
@@ -638,6 +745,7 @@ export class ReactiveSessionHandle {
     };
     const onTaskRemoved = (task: Task) => {
       if (!this.matchesSession(task.session_id)) return;
+      this.recordTaskMutation('remove', task);
       this.updateState((prev) => {
         const nextByTask = new Map(prev.messagesByTask);
         nextByTask.delete(task.task_id);
@@ -1077,12 +1185,7 @@ export class ReactiveSessionHandle {
     try {
       const [session, tasks, queueResult] = await Promise.all([
         this.client.service('sessions').get(this.sessionId),
-        this.client.service('tasks').findAll({
-          query: {
-            session_id: this.sessionId,
-            $sort: { created_at: 1 },
-          },
-        }),
+        this.fetchTasksWithoutRealtimeGap(),
         this.client
           .service(`/sessions/${this.sessionId}/tasks/queue`)
           .find()
@@ -1568,7 +1671,17 @@ function restampStreamingTaskIds(
 }
 
 function sortMessagesByIndex(messages: Message[]): Message[] {
-  return [...messages].sort((a, b) => a.index - b.index);
+  return [...messages].sort(
+    (a, b) => a.index - b.index || a.message_id.localeCompare(b.message_id)
+  );
+}
+
+function sortTasksByCreatedAt(tasks: Task[]): Task[] {
+  return [...tasks].sort(
+    (a, b) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime() ||
+      a.task_id.localeCompare(b.task_id)
+  );
 }
 
 function sortTasksByQueuePosition(tasks: Task[]): Task[] {

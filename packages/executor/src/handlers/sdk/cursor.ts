@@ -269,10 +269,11 @@ async function buildCursorMcpServers(args: {
   return count > 0 ? mcpServers : undefined;
 }
 
-async function getTaskMessages(client: AgorClient, taskId: TaskID): Promise<Message[]> {
-  return client.service('messages').findAll({
-    query: { task_id: taskId, $sort: { index: 1 } },
+async function getInitialUserMessages(client: AgorClient, taskId: TaskID): Promise<Message[]> {
+  const result = await client.service('messages').find({
+    query: { task_id: taskId, role: MessageRole.USER, $sort: { index: 1 }, $limit: 1 },
   });
+  return Array.isArray(result) ? result : result.data;
 }
 
 async function getNextMessageIndex(client: AgorClient, sessionId: SessionID): Promise<number> {
@@ -514,7 +515,7 @@ export async function executeCursorTask(params: {
       }
 
       const [existingMessages, sessionNextIndex] = await Promise.all([
-        getTaskMessages(client, taskId),
+        getInitialUserMessages(client, taskId),
         getNextMessageIndex(client, sessionId),
       ]);
       const userMessage = await createUserMessage({

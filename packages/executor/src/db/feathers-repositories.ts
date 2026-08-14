@@ -23,6 +23,7 @@ import type {
   TaskID,
   User,
 } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 
 /**
  * Messages Repository - proxies to 'messages' Feathers service
@@ -30,11 +31,17 @@ import type {
 export class FeathersMessagesRepository {
   constructor(private client: AgorClient) {}
 
-  /** Complete transcript for one Task, accumulated from bounded server pages. */
-  async findByTaskId(taskId: TaskID): Promise<Message[]> {
-    return this.client.service('messages').findAll({
-      query: { task_id: taskId, $sort: { index: 1 } },
+  /** The daemon may have pre-written the Task's prompt; fetch only that guard row. */
+  async findInitialUserMessagesByTaskId(taskId: TaskID): Promise<Message[]> {
+    const result = await this.client.service('messages').find({
+      query: {
+        task_id: taskId,
+        role: MessageRole.USER,
+        $sort: { index: 1 },
+        $limit: 1,
+      },
     });
+    return Array.isArray(result) ? result : result.data;
   }
 
   /**

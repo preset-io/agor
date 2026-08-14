@@ -56,6 +56,7 @@ function createMockClient(opts: MockClientOptions) {
     // Eager path: every message for the session.
     return Object.values(opts.messagesByTask).flat();
   });
+  const taskFindAll = vi.fn(async () => opts.tasks);
 
   // Capture service event handlers so tests can fire realtime events (e.g. a
   // streaming:chunk that arrives with no preceding streaming:start).
@@ -105,7 +106,7 @@ function createMockClient(opts: MockClientOptions) {
       }),
       ...listener('sessions'),
     },
-    tasks: { findAll: vi.fn(async () => opts.tasks), ...listener('tasks') },
+    tasks: { findAll: taskFindAll, ...listener('tasks') },
     messages: { findAll: messageFindAll, ...listener('messages') },
     'session-streams': sessionStreams,
   };
@@ -145,6 +146,7 @@ function createMockClient(opts: MockClientOptions) {
   return {
     client,
     messageFindAll,
+    taskFindAll,
     sessionStreams,
     fireIo,
     emitServiceEvent,
@@ -189,7 +191,7 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
     // Only the latest task's messages were fetched at bootstrap.
     expect(messageFindAll).toHaveBeenCalledTimes(1);
     expect(messageFindAll).toHaveBeenCalledWith({
-      query: { task_id: 'task-2', $sort: { index: 1 } },
+      query: { task_id: 'task-2', $sort: { index: 1 }, $limit: 1000 },
     });
   });
 
@@ -310,6 +312,72 @@ describe('ReactiveSessionHandle message snapshot reconciliation', () => {
 
     expect(handle.getTaskMessages('task-1')).toEqual([]);
   });
+
+  it('restarts a potentially multi-page Task transcript after offset-shifting removal', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+    const task = makeTask('large-task', TaskStatus.COMPLETED);
+    mock.emitServiceEvent('tasks', 'created', task);
+
+    const stale = Array.from({ length: 1000 }, (_, index) => makeMessage(task.task_id, index));
+    const current = Array.from({ length: 1000 }, (_, offset) =>
+      makeMessage(task.task_id, offset + 1)
+    );
+    opts.messagesByTask[task.task_id] = current;
+    let releaseFirstPage!: () => void;
+    mock.messageFindAll.mockImplementationOnce(
+      () =>
+        new Promise<Message[]>((resolve) => {
+          releaseFirstPage = () => resolve(stale);
+        })
+    );
+
+    const loading = handle.loadTaskMessages(task.task_id);
+    await vi.waitFor(() => expect(releaseFirstPage).toBeTypeOf('function'));
+    mock.emitServiceEvent('messages', 'removed', stale[0]);
+    releaseFirstPage();
+    await loading;
+
+    expect(mock.messageFindAll).toHaveBeenCalledTimes(2);
+    expect(handle.getTaskMessages(task.task_id).map((message) => message.index)).toEqual(
+      current.map((message) => message.index)
+    );
+  });
+});
+
+describe('ReactiveSessionHandle Task snapshot reconciliation', () => {
+  it('restarts a potentially multi-page Session Task fetch after removal', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+
+    const stale = Array.from({ length: 10_000 }, (_, index) =>
+      makeTask(`task-${String(index).padStart(5, '0')}`, TaskStatus.COMPLETED)
+    );
+    const current = stale.slice(1);
+    opts.tasks = current;
+    let releaseFirstPage!: () => void;
+    mock.taskFindAll.mockImplementationOnce(
+      () =>
+        new Promise<Task[]>((resolve) => {
+          releaseFirstPage = () => resolve(stale);
+        })
+    );
+
+    const resync = handle.resync();
+    await vi.waitFor(() => expect(releaseFirstPage).toBeTypeOf('function'));
+    mock.emitServiceEvent('tasks', 'removed', stale[0]);
+    releaseFirstPage();
+    await resync;
+
+    expect(mock.taskFindAll).toHaveBeenCalledTimes(3); // bootstrap + stale pass + retry
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      current.map((task) => task.task_id)
+    );
+  });
 });
 
 describe('ReactiveSessionHandle resync hydration parity', () => {
@@ -345,7 +413,7 @@ describe('ReactiveSessionHandle resync hydration parity', () => {
     expect(handle.isTaskLoaded('task-4')).toBe(true);
     expect(handle.getTaskMessages('task-4')).toHaveLength(1);
     expect(messageFindAll).toHaveBeenCalledWith({
-      query: { task_id: 'task-4', $sort: { index: 1 } },
+      query: { task_id: 'task-4', $sort: { index: 1 }, $limit: 1000 },
     });
   });
 });

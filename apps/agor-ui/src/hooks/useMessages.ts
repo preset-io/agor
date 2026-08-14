@@ -2,7 +2,12 @@
  * React hook for fetching and subscribing to messages for a session
  */
 
-import type { AgorClient, Message, SessionID } from '@agor-live/client';
+import {
+  type AgorClient,
+  MESSAGE_PAGINATION,
+  type Message,
+  type SessionID,
+} from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 
 interface UseMessagesResult {
@@ -44,6 +49,7 @@ export function useMessages(
           $sort: {
             index: 1, // Sort by index ascending
           },
+          $limit: MESSAGE_PAGINATION.MAX_LIMIT,
         },
       });
       setMessages(messagesList);

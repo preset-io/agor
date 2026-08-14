@@ -642,7 +642,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       }),
     };
     const messagesRepo = {
-      findByTaskId: vi.fn(async () => []),
+      findInitialUserMessagesByTaskId: vi.fn(async () => []),
       getNextIndexBySessionId: vi.fn(async (_sessionId: SessionID) => 0),
     };
     const sessionMCPServerRepo = {

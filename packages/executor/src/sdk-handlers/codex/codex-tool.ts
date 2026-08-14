@@ -194,7 +194,7 @@ export class CodexTool implements ITool {
 
     // Hydrate only this Task while deriving the append position from one row.
     const [existingMessages, sessionNextIndex] = await Promise.all([
-      taskId ? this.messagesRepo.findByTaskId(taskId) : Promise.resolve([]),
+      taskId ? this.messagesRepo.findInitialUserMessagesByTaskId(taskId) : Promise.resolve([]),
       this.messagesRepo.getNextIndexBySessionId(sessionId),
     ]);
     let nextIndex = sessionNextIndex;
@@ -702,7 +702,7 @@ export class CodexTool implements ITool {
 
     // Hydrate only this Task while deriving the append position from one row.
     const [existingMessages, sessionNextIndex] = await Promise.all([
-      taskId ? this.messagesRepo.findByTaskId(taskId) : Promise.resolve([]),
+      taskId ? this.messagesRepo.findInitialUserMessagesByTaskId(taskId) : Promise.resolve([]),
       this.messagesRepo.getNextIndexBySessionId(sessionId),
     ]);
     let nextIndex = sessionNextIndex;

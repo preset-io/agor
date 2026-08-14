@@ -9,16 +9,16 @@ import {
 } from './feathers-repositories';
 
 describe('FeathersMessagesRepository', () => {
-  it('accumulates the complete transcript for one exact Task', async () => {
-    const findAll = vi.fn().mockResolvedValue([]);
+  it('fetches only the first user row used by prompt idempotency', async () => {
+    const find = vi.fn().mockResolvedValue({ data: [] });
     const repo = new FeathersMessagesRepository({
-      service: () => ({ findAll }),
+      service: () => ({ find }),
     } as unknown as AgorClient);
 
-    await repo.findByTaskId('task-1' as TaskID);
+    await repo.findInitialUserMessagesByTaskId('task-1' as TaskID);
 
-    expect(findAll).toHaveBeenCalledWith({
-      query: { task_id: 'task-1', $sort: { index: 1 } },
+    expect(find).toHaveBeenCalledWith({
+      query: { task_id: 'task-1', role: 'user', $sort: { index: 1 }, $limit: 1 },
     });
   });
 

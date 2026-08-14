@@ -80,7 +80,7 @@ export async function executeOpenCodeTask(params: {
     if (!branch?.path) throw new Error('OpenCode requires an Agor branch working directory');
 
     const [messages, sessionNextIndex] = await Promise.all([
-      repos.messages.findByTaskId(taskId),
+      repos.messages.findInitialUserMessagesByTaskId(taskId),
       repos.messages.getNextIndexBySessionId(sessionId),
     ]);
     await createUserMessage(sessionId, prompt, taskId, sessionNextIndex, repos.messagesService, {
