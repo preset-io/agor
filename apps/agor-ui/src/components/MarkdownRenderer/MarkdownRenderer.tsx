@@ -16,6 +16,7 @@ import {
   decodeBranchFilePath,
   type FileDetail,
   UPLOAD_VIRTUAL_URL_PREFIX,
+  unescapeMarkdownLinkLabel,
 } from '@agor/core/types';
 import { DownloadOutlined, PaperClipOutlined } from '@ant-design/icons';
 import { Button, Tooltip, Typography, theme } from 'antd';
@@ -128,7 +129,10 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   text = text.replace(
     INTERNAL_BRANCH_FILE_MARKDOWN_LINK,
     (_, filename: string, branchId: string, encodedPath: string) =>
-      `<agor-branch-file branch_id="${escapeHtmlAttribute(branchId)}" path="${escapeHtmlAttribute(encodedPath)}" filename="${escapeHtmlAttribute(filename)}"></agor-branch-file>`
+      // buildBranchFileMarkdownLink() backslash-escapes `\`, `[`, `]` in the
+      // label so filenames containing them survive Markdown's own `[...]`
+      // boundary; recover the literal filename before HTML-escaping it.
+      `<agor-branch-file branch_id="${escapeHtmlAttribute(branchId)}" path="${escapeHtmlAttribute(encodedPath)}" filename="${escapeHtmlAttribute(unescapeMarkdownLinkLabel(filename))}"></agor-branch-file>`
   );
 
   // Detect dark mode from Ant Design token system
@@ -328,12 +332,16 @@ const BRANCH_ID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3
 const BRANCH_FILE_PATH_PATTERN = "[A-Za-z0-9%._~!*'-]{1,2000}";
 // buildBranchFileMarkdownLink() emits the real filename as the link label —
 // unlike uploads' fixed ASCII-only charset, evidence filenames routinely
-// include parens and Unicode (e.g. "before (final).png", "résumé.webm"), so
-// this only excludes what would break Markdown's own `[...]` bracket syntax
-// (a literal `]`) or span lines. Every capture is HTML-escaped before this
-// is interpolated into generated markup (see escapeHtmlAttribute above), so
+// include parens, Unicode, and even Markdown metacharacters like `[`/`]`
+// (e.g. "before (final).png", "résumé.webm", "screenshot [draft].png").
+// buildBranchFileMarkdownLink() backslash-escapes `\`, `[`, and `]` in the
+// label, so this pattern accepts either an escaped pair (`\\.` — backslash
+// plus the character it protects) or any other character that isn't the
+// unescaped `]` that would close the label or a newline. Every capture is
+// HTML-escaped (after unescapeMarkdownLinkLabel — see below) before this is
+// interpolated into generated markup (see escapeHtmlAttribute above), so
 // widening the charset here does not reopen attribute injection.
-const BRANCH_FILE_LABEL_PATTERN = '[^\\]\\n]{1,200}';
+const BRANCH_FILE_LABEL_PATTERN = /(?:\\.|[^\]\n\\]){1,200}/.source;
 const ESCAPED_BRANCH_FILE_VIRTUAL_URL_PREFIX = BRANCH_FILE_VIRTUAL_URL_PREFIX.replace(
   /[.*+?^${}()|[\]\\]/g,
   '\\$&'

@@ -300,6 +300,61 @@ describe('MarkdownRenderer', () => {
     anchorClick.mockRestore();
   });
 
+  it('renders a bracketed evidence filename from buildBranchFileMarkdownLink as an authenticated download control', async () => {
+    const filename = 'screenshot [draft].png';
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          path: `qa-evidence/${filename}`,
+          title: filename,
+          size: 3,
+          lastModified: new Date(0).toISOString(),
+          isText: false,
+          mimeType: 'image/png',
+          content: 'AAEC',
+          encoding: 'base64',
+        }),
+        { status: 200 }
+      )
+    );
+    let clickedAnchor: HTMLAnchorElement | null = null;
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      clickedAnchor = this;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, {
+        createObjectURL: vi.fn(() => 'blob:branch-file-preview'),
+        revokeObjectURL: vi.fn(),
+      })
+    );
+
+    const branchId = '0193f1a2-3b4c-7d5e-a8f3-9d2e1c4b5a6f' as Parameters<
+      typeof buildBranchFileMarkdownLink
+    >[0];
+    // Uses the real builder, not a hand-typed link — proves the label's '['
+    // and ']' survive buildBranchFileMarkdownLink's backslash-escaping and
+    // MarkdownRenderer's matching label grammar, instead of the label's own
+    // ']' prematurely closing the Markdown link boundary.
+    const markdownLink = buildBranchFileMarkdownLink(branchId, `qa-evidence/${filename}`);
+
+    render(<MarkdownRenderer content={markdownLink} />);
+
+    // Must become the authenticated control (a button) with the literal,
+    // unescaped filename — not a dead ordinary link, and not the raw
+    // backslash-escaped label text.
+    expect(screen.queryByRole('link', { name: filename })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: filename }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(anchorClick).toHaveBeenCalledOnce();
+    expect(clickedAnchor?.download).toBe(filename);
+
+    anchorClick.mockRestore();
+  });
+
   it('falls back to an ordinary link for a malformed branch-file URL instead of a privileged download', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

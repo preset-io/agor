@@ -40,6 +40,25 @@ export function decodeBranchFilePath(encoded: string): FilePath {
   return decodeURIComponent(encoded);
 }
 
+/**
+ * Escapes Markdown link-label metacharacters (`\`, `[`, `]`) so a filename
+ * containing them survives as literal text through the label's `[...]`
+ * boundary instead of prematurely closing it. Mirror of
+ * `unescapeMarkdownLinkLabel` below — keep both in sync.
+ */
+function escapeMarkdownLinkLabel(label: string): string {
+  return label.replace(/[\\[\]]/g, (char) => `\\${char}`);
+}
+
+/**
+ * Reverses `escapeMarkdownLinkLabel`: recovers the literal filename from a
+ * Markdown link label that may contain `\\`, `\[`, or `\]` escape
+ * sequences. Any other backslash sequence is left untouched.
+ */
+export function unescapeMarkdownLinkLabel(label: string): string {
+  return label.replace(/\\([\\[\]])/g, '$1');
+}
+
 /** Builds a closed virtual Markdown link naming an authenticated branch-file download. */
 export function buildBranchFileMarkdownLink(
   branchId: BranchID,
@@ -47,7 +66,7 @@ export function buildBranchFileMarkdownLink(
   displayName?: string
 ): string {
   const filename = displayName ?? path.split('/').pop() ?? path;
-  return `[${filename}](${BRANCH_FILE_VIRTUAL_URL_PREFIX}${branchId}/${encodeBranchFilePath(path)})`;
+  return `[${escapeMarkdownLinkLabel(filename)}](${BRANCH_FILE_VIRTUAL_URL_PREFIX}${branchId}/${encodeBranchFilePath(path)})`;
 }
 
 /**
