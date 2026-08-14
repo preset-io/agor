@@ -4,8 +4,11 @@ import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { useAgorStore } from '../../store/agorStore';
 import {
+  selectArtifactById,
   selectBoardById,
+  selectBoardObjectsByBoardId,
   selectBranchById,
+  selectCardById,
   selectCommentById,
   selectRepoById,
   selectSessionById,
@@ -54,6 +57,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const sessionById = useAgorStore(selectSessionById);
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const boardById = useAgorStore(selectBoardById);
+  const boardObjectsByBoardId = useAgorStore(selectBoardObjectsByBoardId);
+  const cardById = useAgorStore(selectCardById);
+  const artifactById = useAgorStore(selectArtifactById);
   const commentById = useAgorStore(selectCommentById);
   const repoById = useAgorStore(selectRepoById);
   const branchById = useAgorStore(selectBranchById);
@@ -121,6 +127,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               branchById={branchById}
               repoById={repoById}
               sessionsByBranch={sessionsByBranch}
+              boardObjectsByBoardId={boardObjectsByBoardId}
+              cardById={cardById}
+              artifactById={artifactById}
               onMenuClick={() => setDrawerOpen(true)}
             />
           }
