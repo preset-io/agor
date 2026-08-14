@@ -21,7 +21,7 @@ const repoId = '019fc9dc-2a17-7384-bfa7-d8b327614088';
 
 function makeClient(
   storageMode: 'worktree' | 'clone' = 'worktree',
-  branchGroup = 'agor_wt_019fc9dc'
+  branchGroup: string | null = 'agor_wt_019fc9dc'
 ) {
   const branch = {
     branch_id: branchId,
@@ -37,13 +37,18 @@ function makeClient(
     unix_group: 'agor_rp_019fc9dc',
   };
 
+  const branchPatch = vi.fn(async (_id: string, data: Record<string, unknown>) => {
+    Object.assign(branch, data);
+    return branch;
+  });
   return {
     io: { disconnect: vi.fn() },
     service: vi.fn((name: string) => ({
       get: vi.fn(async () => (name === 'branches' ? branch : repo)),
-      patch: vi.fn(async () => branch),
+      patch: name === 'branches' ? branchPatch : vi.fn(async () => repo),
       find: vi.fn(async () => []),
     })),
+    branchPatch,
   };
 }
 
@@ -121,6 +126,32 @@ describe('handleUnixSyncBranch lifecycle permissions', () => {
     expect(mocks.exec).not.toHaveBeenCalledWith(
       expect.stringContaining('agor_wt_019fc9dc1dc57e69b0607855'),
       expect.any(Function)
+    );
+  });
+
+  it('persists an absent group before any host group access', async () => {
+    const client = makeClient('clone', null);
+    mocks.createExecutorClient.mockResolvedValue(client);
+
+    const result = await handleUnixSyncBranch(
+      {
+        command: 'unix.sync-branch',
+        daemonUrl: 'http://daemon.test',
+        sessionToken: 'tenant-scoped-token',
+        params: { branchId, daemonUser: 'agor-daemon' },
+      },
+      {}
+    );
+
+    expect(client.branchPatch).toHaveBeenCalledWith(branchId, {
+      unix_group: 'agor_wt_019fc9dc1dc57e69b0607855',
+    });
+    expect(result).toMatchObject({
+      success: true,
+      data: { groupName: 'agor_wt_019fc9dc1dc57e69b0607855' },
+    });
+    expect(client.branchPatch.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.exec.mock.invocationCallOrder[0]
     );
   });
 

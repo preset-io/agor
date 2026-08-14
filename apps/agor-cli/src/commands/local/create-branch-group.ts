@@ -1,4 +1,3 @@
-import { createBranchGroupAction } from '@agor/core/local-actions';
 import { Command, Flags } from '@oclif/core';
 
 export default class CreateBranchGroup extends Command {
@@ -25,11 +24,11 @@ export default class CreateBranchGroup extends Command {
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(CreateBranchGroup);
-    await createBranchGroupAction({
-      branchId: flags['branch-id'],
-      dryRun: flags['dry-run'],
-      verbose: flags.verbose,
-      reporter: { log: (message) => this.log(message) },
-    });
+    // The DB-aware sync command owns absent-field stamping. Delegating avoids
+    // deriving a group from the UUID in this offline host-only command.
+    const args = ['--branch-id', flags['branch-id']];
+    if (flags['dry-run']) args.push('--dry-run');
+    if (flags.verbose) args.push('--verbose');
+    await this.config.runCommand('local:sync-unix', args);
   }
 }

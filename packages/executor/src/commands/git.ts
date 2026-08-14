@@ -914,7 +914,6 @@ export async function handleGitClone(
  * @param client - Feathers client
  * @param branchId - Branch ID
  * @param repoId - Repo ID
- * @param unixGroup - Unix group name (to look up GID), undefined if RBAC disabled
  * @param configuredHostIp - Host IP override from daemon-resolved config (config.daemon.host_ip_address)
  * @returns Rendered template fields
  */
@@ -922,7 +921,6 @@ async function renderEnvironmentTemplates(
   client: AgorClient,
   branchId: string,
   repoId: string,
-  unixGroup: string | undefined,
   configuredHostIp: string | undefined
 ): Promise<{
   start_command?: string;
@@ -949,8 +947,8 @@ async function renderEnvironmentTemplates(
   }
 
   // Look up GID from Unix group (only if group was created)
-  const unixGid = unixGroup
-    ? getGidFromGroupName(resolveBranchGroupName(branchId as BranchID, unixGroup))
+  const unixGid = branch.unix_group
+    ? getGidFromGroupName(resolveBranchGroupName(branchId as BranchID, branch.unix_group))
     : undefined;
 
   // Resolve host IP for {{host.ip_address}} (frozen into rendered commands).
@@ -1205,7 +1203,6 @@ export async function handleGitBranchAdd(
           client,
           branchId,
           repoId,
-          unixGroup,
           payload.resolvedConfig?.daemon?.host_ip_address
         );
         console.log(`[git.branch.add] Templates rendered successfully`);

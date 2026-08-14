@@ -66,18 +66,14 @@ export function assertBranchGroupNameMatchesId(branchId: BranchID, groupName: st
 }
 
 /**
- * Resolve the group a normal sync must use.
+ * Validate and return a branch's persisted Unix group.
  *
- * A stamped value is authoritative, including a legacy 8-character name.
- * Generation is reserved exclusively for rows where `unix_group` is absent.
+ * This deliberately does not accept an absent value. Callers that initialize
+ * a row must generate and persist the canonical name first, then re-read it
+ * through this function before touching system-global Unix state.
  */
-export function resolveBranchGroupName(
-  branchId: BranchID,
-  persistedGroup: string | null | undefined
-): string {
-  return persistedGroup == null
-    ? generateBranchGroupName(branchId)
-    : assertBranchGroupNameMatchesId(branchId, persistedGroup);
+export function resolveBranchGroupName(branchId: BranchID, persistedGroup: string): string {
+  return assertBranchGroupNameMatchesId(branchId, persistedGroup);
 }
 
 /** Preserve an existing branch stamp while validating a requested repository update. */
@@ -162,14 +158,9 @@ export function assertRepoGroupNameMatchesId(repoId: RepoID, groupName: string):
   return groupName;
 }
 
-/** See {@link resolveBranchGroupName}; repo sync follows the same persistence rule. */
-export function resolveRepoGroupName(
-  repoId: RepoID,
-  persistedGroup: string | null | undefined
-): string {
-  return persistedGroup == null
-    ? generateRepoGroupName(repoId)
-    : assertRepoGroupNameMatchesId(repoId, persistedGroup);
+/** See {@link resolveBranchGroupName}; repo access follows the same persistence rule. */
+export function resolveRepoGroupName(repoId: RepoID, persistedGroup: string): string {
+  return assertRepoGroupNameMatchesId(repoId, persistedGroup);
 }
 
 /** Preserve an existing repo stamp while validating a requested repository update. */

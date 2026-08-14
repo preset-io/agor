@@ -7,7 +7,7 @@ export interface DaemonHostOperationResult {
 }
 export interface DaemonHostIdentityOperations {
   createBranchGroup(
-    input: HostOperationOptions & { branchId: string }
+    input: HostOperationOptions & { group: string }
   ): Promise<DaemonHostOperationResult>;
   deleteBranchGroup(
     input: HostOperationOptions & { group: string }

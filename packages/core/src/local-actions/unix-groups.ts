@@ -1,7 +1,5 @@
-import type { BranchID } from '../types/index.js';
 import { createAdminExecutor } from '../unix/command-executor.js';
 import {
-  generateBranchGroupName,
   isLegacyManagedGroupName,
   isValidBranchGroupName,
   UnixGroupCommands,
@@ -9,7 +7,8 @@ import {
 import { getReporter, type LocalActionOptions } from './types.js';
 
 export interface CreateBranchGroupParams extends LocalActionOptions {
-  branchId: string;
+  /** Persisted, caller-resolved branch group. Never derive this from an ID here. */
+  group: string;
 }
 
 export async function createBranchGroupAction(params: CreateBranchGroupParams): Promise<void> {
@@ -18,7 +17,7 @@ export async function createBranchGroupAction(params: CreateBranchGroupParams): 
 
   if (params.dryRun) reporter.log('🔍 Dry run mode - no changes will be made\n');
 
-  const groupName = generateBranchGroupName(params.branchId as BranchID);
+  const groupName = params.group;
   if (!isValidBranchGroupName(groupName)) {
     throw new Error(`Invalid group name format: ${groupName}`);
   }

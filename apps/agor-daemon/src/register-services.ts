@@ -45,13 +45,14 @@ import {
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   OAuthFlowContext,
   OAuthTokenResponse,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type {
   AuthenticatedParams,
+  BranchID,
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
@@ -66,7 +67,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { hasMinimumRole, isMCPOAuthGrantBindingVersion, ROLES, TaskStatus } from '@agor/core/types';
-import type { UnixUserMode } from '@agor/core/unix';
+import { resolveBranchGroupName, type UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
 import type {
@@ -611,7 +612,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // registration is intentionally absent rather than forwarding privileged
   // work through an impersonated executor.
   if (shouldRegisterLocalHostOperations(config)) {
-    app.use('/admin/local-actions', createLocalActionsService(createLocalDaemonHostOperations()));
+    app.use(
+      '/admin/local-actions',
+      createLocalActionsService(createLocalDaemonHostOperations(), async (branchId, params) => {
+        const branch = await app.service('branches').get(branchId, params);
+        if (!branch.unix_group) {
+          throw new BadRequest(
+            `Branch ${branchId} has no persisted unix_group; run agor local sync-unix --branch-id ${branchId}`
+          );
+        }
+        return resolveBranchGroupName(branchId as BranchID, branch.unix_group);
+      })
+    );
   }
 
   app.use(

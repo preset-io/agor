@@ -21,6 +21,8 @@ import type { CommandExecutor } from './command-executor.js';
 import { NoOpExecutor } from './command-executor.js';
 import {
   AGOR_USERS_GROUP,
+  generateBranchGroupName,
+  generateRepoGroupName,
   getBranchPermissionMode,
   isLegacyBranchGroupName,
   isLegacyRepoGroupName,
@@ -247,11 +249,24 @@ export class UnixIntegrationService {
   async createBranchGroup(branchId: BranchID): Promise<string> {
     // A persisted name is authoritative. In particular, do not silently move
     // legacy 8-character groups during normal lifecycle reconciliation.
-    const branch = await this.branchRepo.findById(branchId);
+    let branch = await this.branchRepo.findById(branchId);
     if (!branch) {
       throw new Error(`Branch not found: ${branchId}`);
     }
-    let groupName = resolveBranchGroupName(branchId, branch.unix_group);
+
+    // Persist the canonical candidate before any system-global group or
+    // filesystem operation. A failed OS step is forward-recoverable because a
+    // rerun reads this same authoritative stamp.
+    if (branch.unix_group == null) {
+      await this.branchRepo.update(branchId, {
+        unix_group: generateBranchGroupName(branchId),
+      });
+      branch = await this.branchRepo.findById(branchId);
+    }
+    if (!branch?.unix_group) {
+      throw new Error(`Branch ${branchId} has no persisted Unix group after stamping`);
+    }
+    const groupName = resolveBranchGroupName(branchId, branch.unix_group);
 
     console.log(`[UnixIntegration] Creating group ${groupName} for branch ${shortId(branchId)}`);
 
@@ -261,22 +276,6 @@ export class UnixIntegrationService {
       console.log(`[UnixIntegration] Group ${groupName} already exists`);
     } else {
       await this.executor.exec(UnixGroupCommands.createGroup(groupName));
-    }
-
-    // Stamp only an absent field. Existing values, including legacy names,
-    // are never regenerated or implicitly migrated by normal sync.
-    if (branch.unix_group == null) {
-      const latestBranch = await this.branchRepo.findById(branchId);
-      if (latestBranch?.unix_group != null) {
-        groupName = resolveBranchGroupName(branchId, latestBranch.unix_group);
-        if (!(await this.executor.check(UnixGroupCommands.groupExists(groupName)))) {
-          await this.executor.exec(UnixGroupCommands.createGroup(groupName));
-        }
-      } else {
-        await this.branchRepo.update(branchId, {
-          unix_group: groupName,
-        });
-      }
     }
 
     // Apply group ownership and permissions to branch directory
@@ -509,11 +508,23 @@ export class UnixIntegrationService {
   async createRepoGroup(repoId: RepoID): Promise<string> {
     // A persisted name is authoritative. In particular, do not silently move
     // legacy 8-character groups during normal lifecycle reconciliation.
-    const repo = await this.repoRepo.findById(repoId);
+    let repo = await this.repoRepo.findById(repoId);
     if (!repo) {
       throw new Error(`Repo not found: ${repoId}`);
     }
-    let groupName = resolveRepoGroupName(repoId, repo.unix_group);
+
+    // See createBranchGroup(): persist first, then use only the re-read value
+    // for privileged operations.
+    if (repo.unix_group == null) {
+      await this.repoRepo.update(repoId, {
+        unix_group: generateRepoGroupName(repoId),
+      });
+      repo = await this.repoRepo.findById(repoId);
+    }
+    if (!repo?.unix_group) {
+      throw new Error(`Repo ${repoId} has no persisted Unix group after stamping`);
+    }
+    const groupName = resolveRepoGroupName(repoId, repo.unix_group);
 
     console.log(`[UnixIntegration] Creating repo group ${groupName} for repo ${shortId(repoId)}`);
 
@@ -523,22 +534,6 @@ export class UnixIntegrationService {
       console.log(`[UnixIntegration] Repo group ${groupName} already exists`);
     } else {
       await this.executor.exec(UnixGroupCommands.createGroup(groupName));
-    }
-
-    // Stamp only an absent field. Existing values, including legacy names,
-    // are never regenerated or implicitly migrated by normal sync.
-    if (repo.unix_group == null) {
-      const latestRepo = await this.repoRepo.findById(repoId);
-      if (latestRepo?.unix_group != null) {
-        groupName = resolveRepoGroupName(repoId, latestRepo.unix_group);
-        if (!(await this.executor.check(UnixGroupCommands.groupExists(groupName)))) {
-          await this.executor.exec(UnixGroupCommands.createGroup(groupName));
-        }
-      } else {
-        await this.repoRepo.update(repoId, {
-          unix_group: groupName,
-        });
-      }
     }
 
     // Apply group ownership and permissions to repo Unix-group-managed paths:

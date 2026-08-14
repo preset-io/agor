@@ -47,6 +47,8 @@ import {
   AGOR_USERS_GROUP,
   CommandError,
   createAdminExecutor,
+  generateBranchGroupName,
+  generateRepoGroupName,
   getBranchDirectoryAction,
   getBranchPermissionMode,
   getBranchSymlinkPath,
@@ -393,11 +395,50 @@ export default class SyncUnix extends Command {
             data: { local_path?: string } | null;
           };
 
-          const expectedGroup = resolveRepoGroupName(rawRepo.repo_id as RepoID, rawRepo.unix_group);
           const dbNeedsBackfill = rawRepo.unix_group === null;
-          const groupMissingOnSystem = !groupExists(expectedGroup);
+          let expectedGroup =
+            rawRepo.unix_group == null
+              ? generateRepoGroupName(rawRepo.repo_id as RepoID)
+              : resolveRepoGroupName(rawRepo.repo_id as RepoID, rawRepo.unix_group);
           const repoPath = rawRepo.data?.local_path;
           const pathUsable = repoPath ? existsSync(repoPath) : false;
+          let hadError = false;
+
+          // Persist before any system-global group or filesystem operation.
+          if (dbNeedsBackfill) {
+            if (dryRun) {
+              this.log(
+                chalk.gray(
+                  `   [dry-run] Would update database: SET unix_group = '${expectedGroup}' WHERE repo_id = '${rawRepo.repo_id}'`
+                )
+              );
+              reposBackfilled++;
+            } else {
+              try {
+                await update(db, repos)
+                  .set({ unix_group: expectedGroup })
+                  .where(and(eq(repos.repo_id, rawRepo.repo_id), isNull(repos.unix_group)))
+                  .run();
+                const stampedRepo = await select(db, { unix_group: repos.unix_group })
+                  .from(repos)
+                  .where(eq(repos.repo_id, rawRepo.repo_id))
+                  .one();
+                if (!stampedRepo?.unix_group) {
+                  throw new Error('unix_group remained absent after stamping');
+                }
+                expectedGroup = resolveRepoGroupName(
+                  rawRepo.repo_id as RepoID,
+                  stampedRepo.unix_group
+                );
+                reposBackfilled++;
+                this.log(chalk.green(`   ✓ Backfilled unix_group in database`));
+              } catch (error) {
+                syncErrors++;
+                hadError = true;
+                this.log(chalk.red(`   ✗ Failed to update database: ${error}`));
+              }
+            }
+          }
 
           this.log(chalk.bold(`📁 ${rawRepo.slug}`));
           this.log(chalk.gray(`   repo_id: ${shortId(rawRepo.repo_id)}`));
@@ -410,7 +451,12 @@ export default class SyncUnix extends Command {
             this.log(chalk.gray(`   repo path: <none in data.local_path>`));
           }
 
-          let hadError = false;
+          if (hadError) {
+            this.log('');
+            continue;
+          }
+
+          const groupMissingOnSystem = !groupExists(expectedGroup);
 
           // 1. Ensure Unix group exists on the system
           if (groupMissingOnSystem) {
@@ -446,41 +492,7 @@ export default class SyncUnix extends Command {
             }
           }
 
-          // 3. Backfill DB if unix_group was NULL
-          if (!hadError && dbNeedsBackfill) {
-            if (dryRun) {
-              this.log(
-                chalk.gray(
-                  `   [dry-run] Would update database: SET unix_group = '${expectedGroup}' WHERE repo_id = '${rawRepo.repo_id}'`
-                )
-              );
-              reposBackfilled++;
-            } else {
-              try {
-                await update(db, repos)
-                  .set({ unix_group: expectedGroup })
-                  .where(and(eq(repos.repo_id, rawRepo.repo_id), isNull(repos.unix_group)))
-                  .run();
-                const stampedRepo = await select(db, { unix_group: repos.unix_group })
-                  .from(repos)
-                  .where(eq(repos.repo_id, rawRepo.repo_id))
-                  .one();
-                if (stampedRepo?.unix_group !== expectedGroup) {
-                  throw new Error(
-                    `unix_group was stamped concurrently as ${stampedRepo?.unix_group ?? '<missing>'}; preserved authoritative value`
-                  );
-                }
-                reposBackfilled++;
-                this.log(chalk.green(`   ✓ Backfilled unix_group in database`));
-              } catch (error) {
-                syncErrors++;
-                hadError = true;
-                this.log(chalk.red(`   ✗ Failed to update database: ${error}`));
-              }
-            }
-          }
-
-          // 4. Apply permissions (idempotent; always run unless error)
+          // 3. Apply permissions (idempotent; always run unless error)
           if (!hadError) {
             if (!repoPath) {
               this.log(chalk.yellow(`   ⚠ No local_path in repo data, skipping permissions`));
@@ -530,6 +542,52 @@ export default class SyncUnix extends Command {
           this.log('');
         }
       }
+
+      // Stamp every active branch before any membership or filesystem phase
+      // can use its group. This is intentionally DB-first: if a later host
+      // operation fails, rerunning converges on the same persisted name.
+      const branchesForStamp = targetBranchId
+        ? await select(db).from(branches).where(eq(branches.branch_id, targetBranchId)).all()
+        : await select(db).from(branches).all();
+      const unstampedBranches = branchesForStamp.filter(
+        (row: { archived: boolean; filesystem_status: string | null; unix_group: string | null }) =>
+          row.unix_group == null && !(row.archived && row.filesystem_status === 'deleted')
+      ) as Array<{ branch_id: string; name: string; unix_group: null }>;
+
+      if (unstampedBranches.length > 0) {
+        this.log(chalk.cyan.bold('\n━━━ Stamp Branch Unix Groups ━━━\n'));
+      }
+      for (const branch of unstampedBranches) {
+        const candidate = generateBranchGroupName(branch.branch_id as BranchID);
+        if (dryRun) {
+          branchesBackfilled++;
+          this.log(
+            chalk.gray(`   [dry-run] ${branch.name}: would persist unix_group ${candidate}`)
+          );
+          continue;
+        }
+
+        try {
+          await update(db, branches)
+            .set({ unix_group: candidate })
+            .where(and(eq(branches.branch_id, branch.branch_id), isNull(branches.unix_group)))
+            .run();
+          const stampedBranch = await select(db, { unix_group: branches.unix_group })
+            .from(branches)
+            .where(eq(branches.branch_id, branch.branch_id))
+            .one();
+          if (!stampedBranch?.unix_group) {
+            throw new Error('unix_group remained absent after stamping');
+          }
+          resolveBranchGroupName(branch.branch_id as BranchID, stampedBranch.unix_group);
+          branchesBackfilled++;
+          this.log(chalk.green(`   ✓ ${branch.name}: persisted ${stampedBranch.unix_group}`));
+        } catch (error) {
+          syncErrors++;
+          this.log(chalk.red(`   ✗ ${branch.name}: failed to persist unix_group: ${error}`));
+        }
+      }
+      if (unstampedBranches.length > 0) this.log('');
 
       if (targetBranchId) {
         this.log(chalk.gray('   ⊘ Skipping user sync phase (--branch-id mode)\n'));
@@ -655,8 +713,18 @@ export default class SyncUnix extends Command {
 
             // Build expected groups from owned branches
             for (const wt of ownedBranches) {
-              // Use existing unix_group or generate from branch_id
-              const expectedGroup = resolveBranchGroupName(wt.branch_id as BranchID, wt.unix_group);
+              if (wt.unix_group == null && !dryRun) {
+                const message = `Branch ${wt.name} has no persisted unix_group; skipping host group access`;
+                result.errors.push(message);
+                this.log(chalk.red(`   ✗ ${message}`));
+                continue;
+              }
+              // A dry-run may plan an absent stamp, but every mutating run
+              // reaches this phase only after the DB-first stamping pass.
+              const expectedGroup =
+                wt.unix_group == null
+                  ? generateBranchGroupName(wt.branch_id as BranchID)
+                  : resolveBranchGroupName(wt.branch_id as BranchID, wt.unix_group);
               result.groups.expected.push(expectedGroup);
 
               const isInGroup = result.groups.actual.includes(expectedGroup);
@@ -725,11 +793,17 @@ export default class SyncUnix extends Command {
               if (repoIdsSeen.has(wt.repo_id)) continue;
               repoIdsSeen.add(wt.repo_id);
 
-              // Get repo group (from prefetched map or generate)
-              const repoGroup = resolveRepoGroupName(
-                wt.repo_id as RepoID,
-                repoGroupMap.get(wt.repo_id)
-              );
+              const persistedRepoGroup = repoGroupMap.get(wt.repo_id);
+              if (persistedRepoGroup == null && !dryRun) {
+                const message = `Repo ${shortId(wt.repo_id)} has no persisted unix_group; skipping host group access`;
+                result.errors.push(message);
+                this.log(chalk.red(`   ✗ ${message}`));
+                continue;
+              }
+              const repoGroup =
+                persistedRepoGroup == null
+                  ? generateRepoGroupName(wt.repo_id as RepoID)
+                  : resolveRepoGroupName(wt.repo_id as RepoID, persistedRepoGroup);
               result.groups.expected.push(repoGroup);
 
               const isInRepoGroup = result.groups.actual.includes(repoGroup);
@@ -806,7 +880,7 @@ export default class SyncUnix extends Command {
       //   1. Unix group exists on the system (creates if missing — covers
       //      fresh branches and DB-migration cruft).
       //   2. Daemon user is a member of the group.
-      //   3. unix_group is backfilled in the DB if NULL.
+      // Group names were persisted by the DB-first stamping phase above.
       //
       // Archived+deleted branches are left alone here; the Sync Branch
       // Permissions phase below handles their group cleanup.
@@ -839,11 +913,19 @@ export default class SyncUnix extends Command {
             data: { path?: string } | null;
           };
 
-          const expectedGroup = resolveBranchGroupName(
-            rawWt.branch_id as BranchID,
-            rawWt.unix_group
-          );
           const dbNeedsBackfill = rawWt.unix_group === null;
+          if (dbNeedsBackfill && !dryRun) {
+            this.log(
+              chalk.red(
+                `   ✗ ${rawWt.name}: unix_group is still absent; skipping host group access`
+              )
+            );
+            continue;
+          }
+          const expectedGroup =
+            rawWt.unix_group == null
+              ? generateBranchGroupName(rawWt.branch_id as BranchID)
+              : resolveBranchGroupName(rawWt.branch_id as BranchID, rawWt.unix_group);
           const groupMissingOnSystem = !groupExists(expectedGroup);
 
           // Skip logging for branches already in canonical state (quiet mode)
@@ -907,39 +989,6 @@ export default class SyncUnix extends Command {
             }
           }
 
-          // 3. Backfill DB if unix_group was NULL
-          if (!hadError && dbNeedsBackfill) {
-            if (dryRun) {
-              this.log(
-                chalk.gray(
-                  `   [dry-run] Would update database: SET unix_group = '${expectedGroup}' WHERE branch_id = '${rawWt.branch_id}'`
-                )
-              );
-              branchesBackfilled++;
-            } else {
-              try {
-                await update(db, branches)
-                  .set({ unix_group: expectedGroup })
-                  .where(and(eq(branches.branch_id, rawWt.branch_id), isNull(branches.unix_group)))
-                  .run();
-                const stampedBranch = await select(db, { unix_group: branches.unix_group })
-                  .from(branches)
-                  .where(eq(branches.branch_id, rawWt.branch_id))
-                  .one();
-                if (stampedBranch?.unix_group !== expectedGroup) {
-                  throw new Error(
-                    `unix_group was stamped concurrently as ${stampedBranch?.unix_group ?? '<missing>'}; preserved authoritative value`
-                  );
-                }
-                branchesBackfilled++;
-                this.log(chalk.green(`   ✓ Backfilled unix_group in database`));
-              } catch (error) {
-                syncErrors++;
-                this.log(chalk.red(`   ✗ Failed to update database: ${error}`));
-              }
-            }
-          }
-
           this.log('');
         }
 
@@ -957,7 +1006,7 @@ export default class SyncUnix extends Command {
 
       this.log(chalk.cyan.bold('\n━━━ Sync Branch Permissions ━━━\n'));
 
-      // Refresh from DB to pick up unix_group values backfilled in the phase above.
+      // Refresh from DB to use only persisted unix_group values.
       const allBranchesForSync = targetBranchId
         ? await select(db).from(branches).where(eq(branches.branch_id, targetBranchId)).all()
         : await select(db).from(branches).all();
@@ -1547,8 +1596,8 @@ export default class SyncUnix extends Command {
         // Get all branch groups that should exist (from DB)
         const allBranches = await select(db).from(branches).all();
         const expectedGroups = new Set(
-          allBranches.map((wt: { branch_id: string; unix_group: string | null }) =>
-            resolveBranchGroupName(wt.branch_id as BranchID, wt.unix_group)
+          allBranches.flatMap((wt: { branch_id: string; unix_group: string | null }) =>
+            wt.unix_group ? [resolveBranchGroupName(wt.branch_id as BranchID, wt.unix_group)] : []
           )
         );
 
@@ -1595,8 +1644,8 @@ export default class SyncUnix extends Command {
         // Get all repo groups that should exist (from DB)
         const allReposForCleanup = await select(db).from(repos).all();
         const expectedRepoGroups = new Set(
-          allReposForCleanup.map((r: { repo_id: string; unix_group: string | null }) =>
-            resolveRepoGroupName(r.repo_id as RepoID, r.unix_group)
+          allReposForCleanup.flatMap((r: { repo_id: string; unix_group: string | null }) =>
+            r.unix_group ? [resolveRepoGroupName(r.repo_id as RepoID, r.unix_group)] : []
           )
         );
 

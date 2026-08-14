@@ -76,9 +76,13 @@ describe('group-manager', () => {
       );
     });
 
-    it('generates only when the field is absent', () => {
-      expect(resolveBranchGroupName(branchId, null)).toBe(generateBranchGroupName(branchId));
-      expect(resolveRepoGroupName(repoId, undefined)).toBe(generateRepoGroupName(repoId));
+    it('requires callers to persist a generated value before resolving it', () => {
+      expect(() => resolveBranchGroupName(branchId, null as unknown as string)).toThrow(
+        'Invalid persisted Unix group'
+      );
+      expect(() => resolveRepoGroupName(repoId, undefined as unknown as string)).toThrow(
+        'Invalid persisted Unix group'
+      );
     });
 
     it('fails closed for empty, custom, or wrong-row persisted values', () => {

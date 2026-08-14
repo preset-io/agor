@@ -24,6 +24,8 @@ import type { BranchID, RepoID } from '@agor/core/types';
 import {
   AGOR_USERS_GROUP,
   assertChpasswdInputSafe,
+  generateBranchGroupName,
+  generateRepoGroupName,
   getBranchPermissionMode,
   isLegacyBranchGroupName,
   isLegacyRepoGroupName,
@@ -213,7 +215,7 @@ export async function handleUnixSyncRepo(
     }
 
     // Fetch repo details
-    const repo = await client.service('repos').get(repoId);
+    let repo = await client.service('repos').get(repoId);
     if (!repo.local_path) {
       return {
         success: false,
@@ -221,30 +223,31 @@ export async function handleUnixSyncRepo(
       };
     }
 
-    let groupName = resolveRepoGroupName(repoId as RepoID, repo.unix_group);
+    // Stamp before touching system-global Unix state. Re-read immediately
+    // before and after patching so a concurrently persisted value wins.
+    if (repo.unix_group == null) {
+      const latestRepo = await client.service('repos').get(repoId);
+      if (latestRepo.unix_group != null) {
+        repo = latestRepo;
+      } else {
+        await client.service('repos').patch(repoId, {
+          unix_group: generateRepoGroupName(repoId as RepoID),
+        });
+        repo = await client.service('repos').get(repoId);
+        console.log(`[unix.sync-repo] Stamped repo record with unix_group`);
+      }
+    }
+    if (!repo.unix_group) {
+      throw new Error(`Repo ${repoId} has no persisted Unix group after stamping`);
+    }
+    const groupName = resolveRepoGroupName(repoId as RepoID, repo.unix_group);
     console.log(`[unix.sync-repo] Syncing repo ${shortId(repoId)} with group ${groupName}`);
 
-    // Ensure group exists
+    // Ensure the persisted group exists
     const groupExists = await checkCommand(UnixGroupCommands.groupExists(groupName));
     if (!groupExists) {
       await runCommand(UnixGroupCommands.createGroup(groupName));
       console.log(`[unix.sync-repo] Created group ${groupName}`);
-    }
-
-    // Stamp only when absent. Re-read immediately before patching so a value
-    // persisted by another sync/admin wins and is adopted for all work below.
-    if (repo.unix_group == null) {
-      const latestRepo = await client.service('repos').get(repoId);
-      if (latestRepo.unix_group != null) {
-        groupName = resolveRepoGroupName(repoId as RepoID, latestRepo.unix_group);
-        if (!(await checkCommand(UnixGroupCommands.groupExists(groupName)))) {
-          await runCommand(UnixGroupCommands.createGroup(groupName));
-        }
-        console.log(`[unix.sync-repo] Adopted concurrently stamped group ${groupName}`);
-      } else {
-        await client.service('repos').patch(repoId, { unix_group: groupName });
-        console.log(`[unix.sync-repo] Stamped repo record with unix_group`);
-      }
     }
 
     // Initial clone setup owns the complete managed repo directory. Later
@@ -413,7 +416,7 @@ export async function handleUnixSyncBranch(
     }
 
     // Fetch branch details
-    const branch = await client.service('branches').get(branchId);
+    let branch = await client.service('branches').get(branchId);
     if (!branch.path) {
       return {
         success: false,
@@ -421,30 +424,31 @@ export async function handleUnixSyncBranch(
       };
     }
 
-    let groupName = resolveBranchGroupName(branchId as BranchID, branch.unix_group);
+    // Stamp before touching system-global Unix state. Re-read immediately
+    // before and after patching so a concurrently persisted value wins.
+    if (branch.unix_group == null) {
+      const latestBranch = await client.service('branches').get(branchId);
+      if (latestBranch.unix_group != null) {
+        branch = latestBranch;
+      } else {
+        await client.service('branches').patch(branchId, {
+          unix_group: generateBranchGroupName(branchId as BranchID),
+        });
+        branch = await client.service('branches').get(branchId);
+        console.log(`[unix.sync-branch] Stamped branch record with unix_group`);
+      }
+    }
+    if (!branch.unix_group) {
+      throw new Error(`Branch ${branchId} has no persisted Unix group after stamping`);
+    }
+    const groupName = resolveBranchGroupName(branchId as BranchID, branch.unix_group);
     console.log(`[unix.sync-branch] Syncing branch ${shortId(branchId)} with group ${groupName}`);
 
-    // Ensure group exists
+    // Ensure the persisted group exists
     const groupExists = await checkCommand(UnixGroupCommands.groupExists(groupName));
     if (!groupExists) {
       await runCommand(UnixGroupCommands.createGroup(groupName));
       console.log(`[unix.sync-branch] Created group ${groupName}`);
-    }
-
-    // Stamp only when absent. Re-read immediately before patching so a value
-    // persisted by another sync/admin wins and is adopted for all work below.
-    if (branch.unix_group == null) {
-      const latestBranch = await client.service('branches').get(branchId);
-      if (latestBranch.unix_group != null) {
-        groupName = resolveBranchGroupName(branchId as BranchID, latestBranch.unix_group);
-        if (!(await checkCommand(UnixGroupCommands.groupExists(groupName)))) {
-          await runCommand(UnixGroupCommands.createGroup(groupName));
-        }
-        console.log(`[unix.sync-branch] Adopted concurrently stamped group ${groupName}`);
-      } else {
-        await client.service('branches').patch(branchId, { unix_group: groupName });
-        console.log(`[unix.sync-branch] Stamped branch record with unix_group`);
-      }
     }
 
     // Set permissions on branch directory
