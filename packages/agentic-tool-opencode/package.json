@@ -61,7 +61,7 @@
     "@vitejs/plugin-react": "^6.0.3",
     "antd": "^6.5.3",
     "concurrently": "^9.2.1",
-    "jsdom": "^27.1.0",
+    "jsdom": "^30.0.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tsup": "^8.5.1",
