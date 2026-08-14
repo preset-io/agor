@@ -54,13 +54,14 @@ let branchCounter = 1;
 async function createSessionWithDeps(db: Database): Promise<UUID> {
   // Create repo
   const repoRepo = new RepoRepository(db);
+  const slug = `test-repo-${generateId()}`;
   const repo = await repoRepo.create({
     repo_id: generateId(),
-    slug: `test-repo-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    slug,
     name: 'Test Repo',
     repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/repo.git',
-    local_path: '/tmp/test',
+    local_path: `/tmp/${slug}`,
     default_branch: 'main',
   });
 
@@ -72,7 +73,7 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
     name: 'test-branch',
     ref: 'main',
     branch_unique_id: branchCounter++,
-    path: '/tmp/test/branch',
+    path: `/tmp/${slug}/branch`,
     created_by: 'test-user' as UUID,
   });
 

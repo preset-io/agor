@@ -32,6 +32,9 @@ export type GroupID = UUID & { readonly __entity: 'Group' };
 export type BranchFilesystemOperationID = UUID & {
   readonly __entity: 'BranchFilesystemOperation';
 };
+export type RepoFilesystemOperationID = UUID & {
+  readonly __entity: 'RepoFilesystemOperation';
+};
 
 /**
  * Short ID prefix (hex, no hyphens, length `SHORT_ID_LENGTH`).

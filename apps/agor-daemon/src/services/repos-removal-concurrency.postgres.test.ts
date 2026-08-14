@@ -8,7 +8,7 @@ import {
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
 } from '@agor/core/db';
-import type { BranchID, TenantID, UUID } from '@agor/core/types';
+import type { BranchID, RepoFilesystemOperationID, TenantID, UUID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -101,6 +101,52 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(insertionState).toBe('blocked');
       await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
         expect(await new RepoRepository(scoped).findById(repo.repo_id)).toBeNull();
+        expect(await new BranchRepository(scoped).findById(branchId)).toBeNull();
+      });
+    }, 10_000);
+
+    it('rejects branch insertion throughout the filesystem pre-delete window', async () => {
+      const tenantId = `repo-delete-reservation-${generateId()}` as TenantID;
+      const repo = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new RepoRepository(scoped).create({
+          repo_id: generateId() as UUID,
+          slug: `repo-delete-reservation-${generateId()}`,
+          name: 'Repository delete reservation',
+          repo_type: 'remote',
+          remote_url: 'https://example.invalid/repo-delete-reservation.git',
+          local_path: `/tmp/${generateId()}`,
+          default_branch: 'main',
+          clone_status: 'ready',
+        })
+      );
+      const operationId = generateId() as RepoFilesystemOperationID;
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        const claimed = await new RepoRepository(scoped).claimFilesystemDeletion(
+          repo.repo_id,
+          operationId
+        );
+        expect(claimed).toMatchObject({
+          filesystem_status: 'deleting',
+          filesystem_operation_id: operationId,
+        });
+      });
+
+      const branchId = generateId() as BranchID;
+      await expect(
+        runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+          new BranchRepository(scoped).create({
+            branch_id: branchId,
+            repo_id: repo.repo_id,
+            created_by: generateId() as UUID,
+            name: 'too-late',
+            ref: 'main',
+            branch_unique_id: 9_100_002,
+            path: `/tmp/${branchId}`,
+          })
+        )
+      ).rejects.toThrow(/repository deletion/);
+
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
         expect(await new BranchRepository(scoped).findById(branchId)).toBeNull();
       });
     }, 10_000);

@@ -4,15 +4,20 @@
  * Tests for type-safe CRUD operations on git repositories with short ID support.
  */
 
-import { REPO_IMMUTABLE_FIELDS, type UUID } from '@agor/core/types';
+import { REPO_IMMUTABLE_FIELDS, type RepoFilesystemOperationID, type UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
-import { select, update } from '../database-wrapper';
+import { insert, select, update } from '../database-wrapper';
 import { repos } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
-import { RepoRepository } from './repos';
+import { BranchRepository } from './branches';
+import {
+  RepoFilesystemLifecycleConflictError,
+  RepoFilesystemNamespaceConflictError,
+  RepoRepository,
+} from './repos';
 
 /**
  * Create test repo data
@@ -406,6 +411,136 @@ describe('RepoRepository.findById', () => {
       // prefix collides (which is exactly when the error fires).
       expect(ambiguousError.matches).toEqual(expect.arrayContaining([id1, id2]));
     }
+  });
+
+  dbTest('rejects equal and ancestor filesystem namespace owners', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    await repo.create(
+      createRepoData({ slug: 'legacy', local_path: '/home/user/.agor/repos/legacy' })
+    );
+
+    await expect(
+      repo.create(
+        createRepoData({
+          slug: 'legacy/child',
+          local_path: '/home/user/.agor/repos/legacy/child',
+        })
+      )
+    ).rejects.toThrow(/overlaps another metadata owner/);
+    await expect(
+      repo.create(
+        createRepoData({
+          slug: 'local/alias',
+          repo_type: 'local',
+          local_path: '/home/user/.agor/repos/legacy',
+        })
+      )
+    ).rejects.toThrow(/overlaps another metadata owner/);
+
+    await repo.create(
+      createRepoData({ slug: 'team', repo_type: 'local', local_path: '/srv/source/team' })
+    );
+    await expect(
+      repo.create(
+        createRepoData({
+          slug: 'team/project',
+          repo_type: 'local',
+          local_path: '/srv/unrelated/project',
+        })
+      )
+    ).rejects.toThrow(/overlaps another metadata owner/);
+  });
+
+  dbTest('reserves deletion and fences stale lifecycle writers', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const created = await repo.create({
+      ...createRepoData({ slug: 'org/repo' }),
+      clone_status: 'ready',
+    });
+    const operationId = generateId() as RepoFilesystemOperationID;
+    const claimed = await repo.claimFilesystemDeletion(created.repo_id, operationId);
+    expect(claimed).toMatchObject({
+      filesystem_status: 'deleting',
+      filesystem_operation_id: operationId,
+    });
+
+    await expect(
+      repo.update(
+        created.repo_id,
+        { filesystem_status: 'delete_failed' },
+        {
+          expectedFilesystemLifecycle: {
+            filesystemStatuses: ['deleting'],
+            operationId: generateId() as RepoFilesystemOperationID,
+          },
+        }
+      )
+    ).rejects.toBeInstanceOf(RepoFilesystemLifecycleConflictError);
+  });
+
+  dbTest('quarantines legacy prefix-conflicting rows from destructive deletion', async ({ db }) => {
+    const repository = new RepoRepository(db);
+    const legacy = await repository.create({
+      ...createRepoData({
+        slug: 'legacy',
+        local_path: '/home/user/.agor/repos/legacy',
+      }),
+      clone_status: 'ready',
+    });
+    await insert(db, repos)
+      .values({
+        repo_id: generateId(),
+        slug: 'legacy/child',
+        repo_type: 'remote',
+        created_at: new Date(),
+        updated_at: new Date(),
+        unix_group: null,
+        data: {
+          name: 'legacy/child',
+          remote_url: 'https://example.invalid/legacy-child.git',
+          local_path: '/home/user/.agor/repos/legacy/child',
+          clone_status: 'ready',
+        },
+      })
+      .run();
+
+    await expect(
+      repository.claimFilesystemDeletion(legacy.repo_id, generateId() as RepoFilesystemOperationID)
+    ).rejects.toBeInstanceOf(RepoFilesystemNamespaceConflictError);
+    await expect(repository.findById(legacy.repo_id)).resolves.toMatchObject({
+      filesystem_status: undefined,
+    });
+  });
+
+  dbTest('refuses deletion while clone materialization is in flight', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const created = await repo.create({
+      ...createRepoData({ slug: 'org/cloning' }),
+      clone_status: 'cloning',
+    });
+    await expect(
+      repo.claimFilesystemDeletion(created.repo_id, generateId() as RepoFilesystemOperationID)
+    ).rejects.toBeInstanceOf(RepoFilesystemLifecycleConflictError);
+  });
+
+  dbTest('refuses deletion while branch materialization is in flight', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const created = await repo.create({
+      ...createRepoData({ slug: 'org/branching' }),
+      clone_status: 'ready',
+    });
+    await new BranchRepository(db).create({
+      repo_id: created.repo_id,
+      created_by: generateId(),
+      name: 'feature',
+      ref: 'main',
+      path: '/home/user/.agor/worktrees/org/branching/feature',
+      branch_unique_id: 9_100_003,
+      filesystem_status: 'creating',
+    });
+    await expect(
+      repo.claimFilesystemDeletion(created.repo_id, generateId() as RepoFilesystemOperationID)
+    ).rejects.toBeInstanceOf(RepoFilesystemLifecycleConflictError);
   });
 });
 

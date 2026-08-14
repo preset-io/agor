@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -99,7 +99,16 @@ import {
 
 const repoId = '550e8400-e29b-41d4-a716-446655440001';
 const branchId = '550e8400-e29b-41d4-a716-446655440002';
-const deleteRoots = { reposRoot: '/safe/repos', branchesRoot: '/safe/worktrees' };
+const repoDeleteOperationId = '550e8400-e29b-41d4-a716-446655440098';
+const deleteRoots = {
+  reposRoot: '/safe/repos',
+  branchesRoot: '/safe/worktrees',
+  filesystemOperationId: repoDeleteOperationId,
+};
+const repoDeleteLifecycle = {
+  filesystem_status: 'deleting',
+  filesystem_operation_id: repoDeleteOperationId,
+};
 
 function createClient(records: {
   repo?: Record<string, unknown>;
@@ -464,6 +473,24 @@ describe('managed executor git/fs commands', () => {
     });
   });
 
+  it('returns canonical realpath identity when a local repository is registered through a symlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-repo-inspect-symlink-'));
+    const target = join(root, 'target');
+    const alias = join(root, 'alias');
+    await mkdir(target);
+    await symlink(target, alias);
+    try {
+      const result = await handleGitRepoInspect(
+        { command: 'git.repo.inspect', params: { path: alias } },
+        {}
+      );
+      expect(result).toMatchObject({ success: true, data: { path: target } });
+      expect(mocks.isValidGitRepo).toHaveBeenCalledWith(target);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('expands tilde from passwd user info rather than a misleading HOME', async () => {
     const oldHome = process.env.HOME;
     process.env.HOME = '/daemon/home';
@@ -644,6 +671,71 @@ describe('managed executor git/fs commands', () => {
       error_message: expect.stringContaining('safety check'),
     });
     expect(JSON.stringify(result)).not.toContain('/safe/worktrees/repo/from-payload');
+  });
+
+  it('refuses a legacy branch root that aliases another repository worktree namespace', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    const legacyRepo = {
+      repo_id: repoId,
+      slug: 'org',
+      local_path: '/safe/repos/org-legacy',
+    };
+    createClient({
+      repo: legacyRepo,
+      repoPages: [
+        [
+          legacyRepo,
+          {
+            repo_id: '550e8400-e29b-41d4-a716-446655440099',
+            slug: 'org/repo',
+            local_path: '/safe/repos/org/repo',
+          },
+        ],
+      ],
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        name: 'repo',
+        path: '/safe/worktrees/org/repo',
+        storage_mode: 'clone',
+        filesystem_status: 'deleting',
+      },
+      branches: [
+        {
+          branch_id: branchId,
+          repo_id: repoId,
+          name: 'repo',
+          path: '/safe/worktrees/org/repo',
+        },
+      ],
+      patchedBranches,
+    });
+
+    const result = await handleGitBranchRemove(
+      {
+        command: 'git.branch.remove',
+        sessionToken: 'jwt',
+        params: {
+          branchId,
+          filesystemOperationId: '550e8400-e29b-41d4-a716-446655440099',
+          branchPath: '/safe/worktrees/org/repo',
+          branchesRoot: '/safe/worktrees',
+          storageMode: 'clone',
+          deleteDbRecord: false,
+        },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('safety check') },
+    });
+    expect(mocks.deleteBranchDirectory).not.toHaveBeenCalled();
+    expect(patchedBranches).toContainEqual({
+      filesystem_status: 'delete_failed',
+      error_message: expect.stringContaining('safety check'),
+    });
   });
 
   it('refuses a persisted branch name that can traverse out of its canonical root', async () => {
@@ -963,6 +1055,7 @@ describe('managed executor git/fs commands', () => {
   it('derives git.repo.delete paths from daemon records instead of payload paths', async () => {
     createClient({
       repo: {
+        ...repoDeleteLifecycle,
         repo_id: repoId,
         slug: 'org/repo',
         repo_type: 'remote',
@@ -994,8 +1087,34 @@ describe('managed executor git/fs commands', () => {
     });
   });
 
-  it('refuses deletion when another same-tenant repo row aliases the managed root', async () => {
+  it('refuses git.repo.delete after its repository lifecycle generation is superseded', async () => {
+    createClient({
+      repo: {
+        ...repoDeleteLifecycle,
+        repo_id: repoId,
+        slug: 'org/repo',
+        repo_type: 'remote',
+        local_path: '/safe/repos/org/repo',
+        filesystem_operation_id: '550e8400-e29b-41d4-a716-446655440099',
+      },
+      branches: [],
+    });
+
+    const result = await handleGitRepoDelete(
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: expect.stringMatching(/canonical managed identity/i) },
+    });
+    expect(mocks.deleteRepoDirectory).not.toHaveBeenCalled();
+  });
+
+  it('refuses deletion when another same-tenant repo row aliases or descends from the root', async () => {
     const repo = {
+      ...repoDeleteLifecycle,
       repo_id: repoId,
       slug: 'org/repo',
       repo_type: 'remote',
@@ -1010,7 +1129,7 @@ describe('managed executor git/fs commands', () => {
             repo_id: '550e8400-e29b-41d4-a716-446655440099',
             slug: 'attacker/alias',
             repo_type: 'local',
-            local_path: repo.local_path,
+            local_path: `${repo.local_path}/child`,
           },
         ],
       ],
@@ -1024,9 +1143,53 @@ describe('managed executor git/fs commands', () => {
 
     expect(result).toMatchObject({
       success: false,
-      error: { message: expect.stringMatching(/multiple metadata rows/i) },
+      error: { message: expect.stringMatching(/overlaps another metadata owner/i) },
     });
     expect(mocks.deleteRepoDirectory).not.toHaveBeenCalled();
+  });
+
+  it('detects canonical repository aliases registered through different symlink paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-repo-delete-symlink-'));
+    const target = join(root, 'target');
+    const alias = join(root, 'alias');
+    await mkdir(target);
+    await symlink(target, alias);
+    const repo = {
+      ...repoDeleteLifecycle,
+      repo_id: repoId,
+      slug: 'legacy',
+      repo_type: 'remote',
+      local_path: target,
+    };
+    createClient({
+      repo,
+      repoPages: [
+        [
+          repo,
+          {
+            repo_id: '550e8400-e29b-41d4-a716-446655440099',
+            slug: 'alias/repo',
+            repo_type: 'local',
+            local_path: alias,
+          },
+        ],
+      ],
+      branches: [],
+    });
+
+    try {
+      const result = await handleGitRepoDelete(
+        { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
+        {}
+      );
+      expect(result).toMatchObject({
+        success: false,
+        error: { message: expect.stringMatching(/overlaps another metadata owner/i) },
+      });
+      expect(mocks.deleteRepoDirectory).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('uses slug-derived output paths for git.clone to avoid same-basename collisions', async () => {
@@ -1134,6 +1297,7 @@ describe('managed executor git/fs commands', () => {
     }));
     createClient({
       repo: {
+        ...repoDeleteLifecycle,
         repo_id: repoId,
         slug: 'org/repo',
         repo_type: 'remote',
@@ -1158,11 +1322,12 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/org/repo', '/safe/repos', {
       expectedRelativePath: 'org/repo',
     });
-  });
+  }, 30_000);
 
   it('rejects git.repo.delete if branch query returns a foreign branch', async () => {
     createClient({
       repo: {
+        ...repoDeleteLifecycle,
         repo_id: repoId,
         slug: 'org/repo',
         repo_type: 'remote',

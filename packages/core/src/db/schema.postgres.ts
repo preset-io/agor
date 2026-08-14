@@ -657,6 +657,9 @@ export const repos = pgTable(
           category: 'auth_failed' | 'not_found' | 'network' | 'git_unavailable' | 'unknown';
           message: string;
         };
+        filesystem_status?: 'deleting' | 'delete_failed';
+        filesystem_operation_id?: string;
+        filesystem_error?: string;
         // v2 environment config — source of truth. Named variants + optional
         // deployment-local template_overrides. See RepoEnvironment in
         // packages/core/src/types/branch.ts.

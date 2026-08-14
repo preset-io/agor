@@ -7,7 +7,6 @@ import type {
   BoardID,
   Branch,
   BranchArchiveOrDeleteOptions,
-  BranchStorageMode,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -16,6 +15,7 @@ import type {
   GatewayChannelPatchData,
   PermissionMode,
   Repo,
+  RepoBranchCreateRequest,
   RepoClientPatch,
   Session,
   SessionID,
@@ -1445,22 +1445,7 @@ function AppContent() {
 
   const handleCreateBranch = async (
     repoId: string,
-    data: {
-      name: string;
-      ref: string;
-      refType?: 'branch' | 'tag';
-      createBranch: boolean;
-      sourceBranch: string;
-      pullLatest: boolean;
-      issue_url?: string;
-      pull_request_url?: string;
-      boardId?: string;
-      custom_context?: Record<string, unknown>;
-      notes?: string | null;
-      position?: { x: number; y: number };
-      storage_mode?: BranchStorageMode;
-      clone_depth?: number;
-    }
+    data: RepoBranchCreateRequest
   ): Promise<Branch | null> => {
     if (!client) return null;
     try {

@@ -64,14 +64,15 @@ async function createSessionForUser(db: any, userId: UserID): Promise<SessionID>
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);
   const sessionRepo = new SessionRepository(db);
+  const slug = `test-repo-${generateId()}`;
 
   const repo = await repoRepo.create({
     repo_id: generateId() as UUID,
-    slug: `test-repo-${Date.now()}-${Math.random()}`,
+    slug,
     name: 'Test Repo',
     repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/repo.git',
-    local_path: '/tmp/test-repo',
+    local_path: `/tmp/${slug}`,
     default_branch: 'main',
   });
 
@@ -81,7 +82,7 @@ async function createSessionForUser(db: any, userId: UserID): Promise<SessionID>
     name: 'main',
     ref: 'main',
     branch_unique_id: Math.floor(Math.random() * 1_000_000),
-    path: '/tmp/test-repo',
+    path: `/tmp/${slug}/main`,
     base_ref: 'main',
     new_branch: false,
     created_by: userId,

@@ -682,7 +682,8 @@ export async function startup(ctx: StartupContext): Promise<void> {
         {
           command: 'git.managed-credentials.reconcile',
           sessionToken: generateScopedServiceToken(
-            app as unknown as { settings: { authentication?: { secret?: string } } }
+            app as unknown as { settings: { authentication?: { secret?: string } } },
+            { command: 'git.managed-credentials.reconcile' }
           ),
           daemonUrl: getDaemonUrl(),
           params: {},

@@ -1,4 +1,12 @@
-import type { AgorClient, Board, BoardID, Branch, Repo, TeammateConfig } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  BoardID,
+  Branch,
+  Repo,
+  RepoBranchCreateRequest,
+  TeammateConfig,
+} from '@agor-live/client';
 import { slugify } from '@/utils/repoSlug';
 import { ensureTeammateWelcomeNote } from '@/utils/teammateWelcomeNote';
 
@@ -23,19 +31,7 @@ export interface TeammateCreationInput {
 export interface TeammateCreationDeps {
   client: AgorClient | null;
   repoById: Map<string, Repo>;
-  onCreateBranch: (
-    repoId: string,
-    data: {
-      name: string;
-      ref: string;
-      createBranch: boolean;
-      sourceBranch: string;
-      pullLatest: boolean;
-      boardId?: string;
-      custom_context?: Record<string, unknown>;
-      notes?: string | null;
-    }
-  ) => Promise<Branch | null>;
+  onCreateBranch: (repoId: string, data: RepoBranchCreateRequest) => Promise<Branch | null>;
   onUpdateBranch: (
     branchId: string,
     updates: { board_id?: BoardID; custom_context?: Record<string, unknown>; notes?: string | null }

@@ -6,7 +6,6 @@ import type {
   BoardID,
   Branch,
   BranchArchiveOrDeleteOptions,
-  BranchStorageMode,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -14,6 +13,7 @@ import type {
   GatewayChannelCreateData,
   GatewayChannelPatchData,
   PermissionMode,
+  RepoBranchCreateRequest,
   RepoClientPatch,
   Session,
   SpawnConfig,
@@ -192,25 +192,7 @@ export interface AppProps {
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
-  onCreateBranch?: (
-    repoId: string,
-    data: {
-      name: string;
-      ref: string;
-      refType?: 'branch' | 'tag';
-      createBranch: boolean;
-      sourceBranch: string;
-      pullLatest: boolean;
-      issue_url?: string;
-      pull_request_url?: string;
-      boardId?: string;
-      custom_context?: Record<string, unknown>;
-      notes?: string | null;
-      position?: { x: number; y: number };
-      storage_mode?: BranchStorageMode;
-      clone_depth?: number;
-    }
-  ) => Promise<Branch | null>;
+  onCreateBranch?: (repoId: string, data: RepoBranchCreateRequest) => Promise<Branch | null>;
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;
   onNukeEnvironment?: (branchId: string) => void;
@@ -967,7 +949,7 @@ export const App: React.FC<AppProps> = ({
       pullLatest: config.pullLatest,
       issue_url: config.issue_url,
       pull_request_url: config.pull_request_url,
-      ...(config.board_id ? { boardId: config.board_id } : {}),
+      boardId: config.board_id,
       ...(config.position ? { position: config.position } : {}),
       ...(config.storage_mode ? { storage_mode: config.storage_mode } : {}),
       ...(config.clone_depth !== undefined ? { clone_depth: config.clone_depth } : {}),

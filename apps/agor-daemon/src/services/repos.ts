@@ -31,6 +31,8 @@ import {
   generateId,
   getCurrentTenantId,
   isDatabaseUniqueConstraintError,
+  RepoFilesystemLifecycleConflictError,
+  RepoFilesystemNamespaceConflictError,
   RepoRepository,
   runWithTenantDatabaseTransaction,
   shortId,
@@ -48,8 +50,11 @@ import type {
   CloneRepositoryResult,
   QueryParams,
   Repo,
+  RepoBranchCreateRequest,
   RepoClientPatch,
   RepoEnvironment,
+  RepoFilesystemOperationID,
+  RepoID,
   RepoSlug,
   UserID,
   UUID,
@@ -114,6 +119,11 @@ function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: strin
   throw new Error(
     'Could not auto-detect slug for local repository.\nUse --slug to provide one explicitly'
   );
+}
+
+function pathIsAtOrBelow(root: string, candidate: string): boolean {
+  const rel = path.relative(path.resolve(root), path.resolve(candidate));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 /**
@@ -506,6 +516,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       environmentWarning?: string;
     };
     const repoPath = metadata.path;
+    const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
+    if (
+      pathIsAtOrBelow(getReposDir(tenantId), repoPath) ||
+      pathIsAtOrBelow(getBranchesDir(tenantId), repoPath)
+    ) {
+      throw new BadRequest(
+        'Local repositories cannot be registered inside an Agor-managed filesystem root'
+      );
+    }
     const slug = deriveLocalRepoSlug(metadata.remoteUrl, data.slug);
 
     const existing = await this.repoRepo.findBySlug(slug);
@@ -557,34 +576,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    */
   async createBranch(
     id: string,
-    data: {
-      name: string;
-      ref: string;
-      refType?: 'branch' | 'tag';
-      createBranch?: boolean;
-      pullLatest?: boolean;
-      sourceBranch?: string;
-      issue_url?: string;
-      pull_request_url?: string;
-      boardId: string;
-      custom_context?: Record<string, unknown>;
-      notes?: string | null;
-      /** Explicit board position. Honored as-is when supplied; otherwise
-       *  the service computes a smart placement (zone-relative if a
-       *  zoneId was passed, else next-free slot among existing entities).
-       *  Agents/MCP callers should omit this so they don't have to think
-       *  about x/y; the UI passes the viewport center. */
-      position?: { x: number; y: number };
-      zoneId?: string;
-      environment_variant?: string;
-      /**
-       * Branch storage model — see context/explorations/clone-redesign.md.
-       * 'worktree' (default) = native `git worktree add`. 'clone' = self-standing `git clone`.
-       */
-      storage_mode?: BranchStorageMode;
-      /** Shallow clone depth (only when storage_mode='clone'). NULL/undefined = full clone. */
-      clone_depth?: number;
-    },
+    data: RepoBranchCreateRequest,
     params?: RepoParams
   ): Promise<Branch> {
     if (!data.boardId) {
@@ -597,6 +589,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const repo = await this.get(id, params);
     if (!isValidManagedRepoSlug(repo.slug)) {
       throw new BadRequest('Repository filesystem identity is invalid; repair it before use');
+    }
+    if (repo.filesystem_status === 'deleting' || repo.filesystem_status === 'delete_failed') {
+      throw new Conflict(
+        'Repository deletion must be completed or recovered before creating branches'
+      );
     }
 
     console.log('🔍 RepoService.createBranch - repo lookup result:', {
@@ -763,6 +760,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     try {
       branch = (await branchesService.create(branchCreateData, params)) as Branch;
     } catch (error) {
+      if (error instanceof RepoFilesystemNamespaceConflictError) {
+        throw new Conflict(error.message);
+      }
       if (isDatabaseUniqueConstraintError(error)) {
         throw new Conflict(
           `A branch named '${data.name}' already exists in this repository, including archived branches.`
@@ -1155,13 +1155,38 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    *
    * Supports query parameter: ?cleanup=true to delete filesystem directories
    *
-   * Behavior: Fail-fast transactional approach
-   * - If cleanup=true: Delete filesystem FIRST, then database (abort on filesystem failure)
-   * - If cleanup=false: Delete database only (filesystem preserved)
+   * Behavior: reserve one deletion generation before filesystem work, then
+   * delete metadata only after cleanup succeeds. Failures leave a durable,
+   * retryable row; metadata-only removal still uses the reservation to fence
+   * concurrent clone/branch creation.
    */
   async remove(id: string, params?: RepoParams): Promise<Repo> {
-    const repo = await this.get(id, params);
     const cleanup = params?.query?.cleanup === true;
+    const requestedRepo = await this.get(id, params);
+    const filesystemOperationId = generateId() as RepoFilesystemOperationID;
+
+    let repo: Repo;
+    try {
+      repo = await this.repoRepo.claimFilesystemDeletion(
+        requestedRepo.repo_id,
+        filesystemOperationId
+      );
+    } catch (error) {
+      if (
+        error instanceof RepoFilesystemLifecycleConflictError ||
+        error instanceof RepoFilesystemNamespaceConflictError
+      ) {
+        throw new Conflict(error.message);
+      }
+      throw error;
+    }
+    emitServiceEvent(this.app, {
+      path: 'repos',
+      event: 'patched',
+      data: repo,
+      params,
+      id: repo.repo_id,
+    });
 
     // Get ALL branches for this repo (needed for both filesystem and database cleanup).
     // CRITICAL: Use the unbounded repository query so transport pagination and
@@ -1179,90 +1204,119 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
       return found;
     };
-    const branches = await findRepoBranches(repo.repo_id as UUID);
-
-    console.log(
-      `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`
-    );
-
-    // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST.
-    // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
-    if (cleanup && repo.repo_type === 'remote') {
-      const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        { command: 'git.repo.delete', repo_id: repo.repo_id }
-      );
-
-      const cleanupResult = await runExecutorCommand(
-        {
-          command: 'git.repo.delete',
-          sessionToken,
-          daemonUrl: getDaemonUrl(),
-          params: {
-            repoId: repo.repo_id,
-            reposRoot: getReposDir((params as AuthenticatedParams | undefined)?.tenant?.tenant_id),
-            branchesRoot: getBranchesDir(
-              (params as AuthenticatedParams | undefined)?.tenant?.tenant_id
-            ),
+    const markDeleteFailed = async (error: unknown): Promise<void> => {
+      const diagnostic = error instanceof Error ? error.message : String(error);
+      console.error(`[repo.delete ${repo.repo_id}] failed: ${diagnostic}`);
+      try {
+        const failed = await this.repoRepo.update(
+          repo.repo_id,
+          {
+            filesystem_status: 'delete_failed',
+            filesystem_error:
+              'Repository deletion failed. Review trusted daemon diagnostics and retry.',
           },
-        },
-        {
-          logPrefix: `[repo.delete ${repo.slug}]`,
-          timeoutMs: 5 * 60_000,
-        }
+          {
+            expectedFilesystemLifecycle: {
+              filesystemStatuses: ['deleting'],
+              operationId: filesystemOperationId,
+            },
+          }
+        );
+        emitServiceEvent(this.app, {
+          path: 'repos',
+          event: 'patched',
+          data: failed,
+          params,
+          id: failed.repo_id,
+        });
+      } catch (statusError) {
+        console.error(
+          `[repo.delete ${repo.repo_id}] failed to persist delete_failed: ${statusError instanceof Error ? statusError.message : String(statusError)}`
+        );
+      }
+    };
+
+    try {
+      const branches = await findRepoBranches(repo.repo_id as UUID);
+      console.log(
+        `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`
       );
 
-      if (!cleanupResult.success) {
-        const errorMsg = cleanupResult.error?.message ?? 'unknown executor error';
-        const deletedPaths =
-          cleanupResult.error?.details && typeof cleanupResult.error.details === 'object'
-            ? ((cleanupResult.error.details as { deletedPaths?: unknown }).deletedPaths ?? [])
-            : [];
-        const deletedPathList = Array.isArray(deletedPaths)
-          ? deletedPaths.filter((value): value is string => typeof value === 'string')
-          : [];
+      // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST.
+      // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
+      if (cleanup && repo.repo_type === 'remote') {
+        const sessionToken = generateScopedServiceToken(
+          this.app as unknown as { settings: { authentication?: { secret?: string } } },
+          {
+            command: 'git.repo.delete',
+            repo_id: repo.repo_id,
+            filesystem_operation_id: filesystemOperationId,
+          }
+        );
 
-        if (deletedPathList.length > 0) {
+        const cleanupResult = await runExecutorCommand(
+          {
+            command: 'git.repo.delete',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            params: {
+              repoId: repo.repo_id,
+              filesystemOperationId,
+              reposRoot: getReposDir(
+                (params as AuthenticatedParams | undefined)?.tenant?.tenant_id
+              ),
+              branchesRoot: getBranchesDir(
+                (params as AuthenticatedParams | undefined)?.tenant?.tenant_id
+              ),
+            },
+          },
+          {
+            logPrefix: `[repo.delete ${repo.slug}]`,
+            timeoutMs: 5 * 60_000,
+          }
+        );
+
+        if (!cleanupResult.success) {
+          const errorMsg = cleanupResult.error?.message ?? 'unknown executor error';
+          console.error(`[repo.delete ${repo.repo_id}] executor cleanup failed: ${errorMsg}`);
           throw new Error(
-            `Partial deletion occurred: Successfully deleted ${deletedPathList.length} path(s): ${deletedPathList.join(', ')}. ` +
-              `Failed while deleting repository ${repo.slug}: ${errorMsg}. ` +
-              `Database NOT modified. Manual cleanup required for deleted paths.`
+            'Cannot delete repository: managed filesystem cleanup could not be verified'
           );
         }
 
-        throw new Error(
-          `Cannot delete repository: executor failed to delete managed directories for ${repo.slug}: ${errorMsg}. ` +
-            `No files were deleted. Please fix this issue and retry.`
+        console.log(
+          `✅ Successfully deleted ${branches.length} branch director${branches.length === 1 ? 'y' : 'ies'} and repository directory`
         );
       }
 
-      console.log(
-        `✅ Successfully deleted ${branches.length} branch director${branches.length === 1 ? 'y' : 'ies'} and repository directory`
-      );
+      const tenantId =
+        (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+      return await runWithTenantDatabaseTransaction(this.db, tenantId, async () => {
+        const lockedRepo = await this.repoRepo.lockForBranchInventory(repo.repo_id);
+        if (
+          lockedRepo.filesystem_status !== 'deleting' ||
+          lockedRepo.filesystem_operation_id !== filesystemOperationId
+        ) {
+          throw new RepoFilesystemLifecycleConflictError(
+            lockedRepo.repo_id as RepoID,
+            lockedRepo.filesystem_status,
+            lockedRepo.filesystem_operation_id
+          );
+        }
+        const metadataBranches = await findRepoBranches(lockedRepo.repo_id);
+        for (const branch of metadataBranches) {
+          await branchesService.removeMetadataWithRealtime(branch.branch_id, params);
+          console.log(`🗑️  Deleted branch from database: ${branch.name}`);
+        }
+
+        // The native transaction covers every branch row plus the repository.
+        // Tombstones queued above drain once, only after this final delete commits.
+        return super.remove(lockedRepo.repo_id, params) as Promise<Repo>;
+      });
+    } catch (error) {
+      await markDeleteFailed(error);
+      throw error;
     }
-
-    // Only reach here if filesystem cleanup succeeded (or wasn't requested)
-    // Now safe to delete from database
-
-    const tenantId =
-      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
-    return runWithTenantDatabaseTransaction(this.db, tenantId, async () => {
-      // Lock the parent first. PostgreSQL branch inserts take a conflicting FK
-      // key-share lock, so none can appear after the unbounded inventory read;
-      // SQLite's IMMEDIATE transaction provides the corresponding exclusion.
-      const lockedRepo = await this.repoRepo.lockForBranchInventory(repo.repo_id);
-      const metadataBranches = await findRepoBranches(lockedRepo.repo_id);
-      for (const branch of metadataBranches) {
-        // The repo deletion itself is already authorized; individual branch
-        // permission hooks would incorrectly block full repository cleanup.
-        await branchesService.removeMetadataWithRealtime(branch.branch_id, params);
-        console.log(`🗑️  Deleted branch from database: ${branch.name}`);
-      }
-
-      // The native transaction covers every branch row plus the repository.
-      // Tombstones queued above drain once, only after this final delete commits.
-      return super.remove(lockedRepo.repo_id, params) as Promise<Repo>;
-    });
   }
 }
 

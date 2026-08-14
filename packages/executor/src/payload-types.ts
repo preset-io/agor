@@ -742,6 +742,8 @@ export const GitRepoDeletePayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     /** Repo being deleted; executor fetches the concrete managed paths itself. */
     repoId: z.string().uuid(),
+    /** UUIDv7 generation reserved by the daemon before filesystem cleanup. */
+    filesystemOperationId: z.string().uuid(),
     /** Tenant-scoped root that is allowed to contain the managed repository. */
     reposRoot: z.string().min(1),
     /** Tenant-scoped root that is allowed to contain managed branches. */

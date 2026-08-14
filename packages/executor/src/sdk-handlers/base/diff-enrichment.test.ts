@@ -47,12 +47,14 @@ interface TestContentBlock {
 const tempDirs: string[] = [];
 
 function createTempGitRepo(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agor-diff-enrichment-'));
-  tempDirs.push(dir);
-  execSync('git init', { cwd: dir, stdio: 'ignore' });
-  execSync('git config user.email "test@example.com"', { cwd: dir, stdio: 'ignore' });
-  execSync('git config user.name "Test User"', { cwd: dir, stdio: 'ignore' });
-  return dir;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agor-diff-enrichment-'));
+  const repoDir = path.join(root, 'repo');
+  fs.mkdirSync(repoDir);
+  tempDirs.push(root);
+  execSync('git init', { cwd: repoDir, stdio: 'ignore' });
+  execSync('git config user.email "test@example.com"', { cwd: repoDir, stdio: 'ignore' });
+  execSync('git config user.name "Test User"', { cwd: repoDir, stdio: 'ignore' });
+  return repoDir;
 }
 
 afterEach(() => {

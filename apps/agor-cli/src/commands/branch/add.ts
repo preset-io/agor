@@ -4,7 +4,6 @@
  * Creates an isolated working directory for a specific branch.
  */
 
-import type { Branch } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -127,14 +126,14 @@ export default class BranchAdd extends BaseCommand {
       }
 
       // Call daemon API to create branch
-      const newBranch = (await client.service('repos').createBranch(repo.repo_id, {
+      const newBranch = await client.service(`repos/${repo.repo_id}/branches`).create({
         name: args.name,
         ref,
         createBranch,
         pullLatest,
         sourceBranch,
         boardId: flags['board-id'],
-      })) as unknown as Branch;
+      });
 
       this.log(`${chalk.green('✓')} Branch created and registered`);
       this.log(chalk.dim(`  Path: ${newBranch.path}`));

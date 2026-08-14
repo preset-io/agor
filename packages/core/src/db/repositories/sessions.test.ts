@@ -43,15 +43,16 @@ function createSessionData(overrides?: Partial<Session>): Partial<Session> {
 async function createTestBranch(db: any, overrides?: { branch_id?: UUID; repo_id?: UUID }) {
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);
+  const slug = `test-repo-${generateId()}`;
 
   // Create repo first
   const repo = await repoRepo.create({
     repo_id: overrides?.repo_id ?? generateId(),
-    slug: `test-repo-${Date.now()}`,
+    slug,
     name: 'Test Repo',
     repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/repo.git',
-    local_path: '/tmp/test-repo',
+    local_path: `/tmp/${slug}`,
     default_branch: 'main',
   });
 
@@ -62,7 +63,7 @@ async function createTestBranch(db: any, overrides?: { branch_id?: UUID; repo_id
     name: 'main',
     ref: 'main',
     branch_unique_id: Math.floor(Math.random() * 1000000), // Auto-assigned sequential ID
-    path: '/tmp/test-repo',
+    path: `/tmp/${slug}/main`,
     base_ref: 'main',
     new_branch: false,
     created_by: 'test-user' as UUID,

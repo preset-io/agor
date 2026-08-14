@@ -130,6 +130,26 @@ export type BranchExecutorPatch = Partial<
   >
 >;
 
+/** Shared input for the dedicated `POST /repos/:id/branches` route service. */
+export interface RepoBranchCreateRequest {
+  name: string;
+  ref: string;
+  refType?: 'branch' | 'tag';
+  createBranch?: boolean;
+  pullLatest?: boolean;
+  sourceBranch?: string;
+  issue_url?: string;
+  pull_request_url?: string;
+  boardId: string;
+  custom_context?: Record<string, unknown>;
+  notes?: string | null;
+  position?: { x: number; y: number };
+  zoneId?: string;
+  environment_variant?: string;
+  storage_mode?: BranchStorageMode;
+  clone_depth?: number;
+}
+
 /** Shared request shape used by UI, REST, Socket, and MCP deletion paths. */
 export type BranchArchiveOrDeleteOptions =
   | {

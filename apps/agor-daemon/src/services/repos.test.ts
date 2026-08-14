@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { getReposDir } from '@agor/core/config';
 import type { Application } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { ReposService } from './repos';
@@ -22,7 +24,9 @@ vi.mock('@agor/core/config', async (importOriginal) => {
 const repositoryMocks = vi.hoisted(() => ({
   deleteRepo: vi.fn(),
   findAllBranchesByRepoId: vi.fn(),
+  claimRepoFilesystemDeletion: vi.fn(),
   lockRepoForBranchInventory: vi.fn(),
+  updateRepo: vi.fn(),
 }));
 
 vi.mock('@agor/core/db', async (importOriginal) => {
@@ -43,9 +47,10 @@ vi.mock('@agor/core/db', async (importOriginal) => {
         create: vi.fn(),
         findById: vi.fn(),
         findAll: vi.fn(async () => []),
-        update: vi.fn(),
+        update: repositoryMocks.updateRepo,
         delete: repositoryMocks.deleteRepo,
         findBySlug: vi.fn(),
+        claimFilesystemDeletion: repositoryMocks.claimRepoFilesystemDeletion,
         lockForBranchInventory: repositoryMocks.lockRepoForBranchInventory,
       };
     }),
@@ -131,6 +136,28 @@ describe('ReposService.addLocalRepository executor boundary', () => {
       }),
       expect.any(Object)
     );
+  });
+
+  it('rejects canonical local repository paths anywhere below the managed root', async () => {
+    const managedChild = path.join(getReposDir(), '..safe-segment');
+    executorMocks.runExecutorCommand.mockResolvedValueOnce({
+      success: true,
+      data: {
+        path: managedChild,
+        defaultBranch: 'main',
+        credentialFindingCount: 0,
+      },
+    });
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+    const create = vi.spyOn(service, 'create');
+
+    await expect(
+      service.addLocalRepository({ path: '/submitted/repo', slug: 'local/repo' })
+    ).rejects.toThrow(/Agor-managed filesystem root/);
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('does not persist when executor inspection fails', async () => {
@@ -345,7 +372,20 @@ describe('ReposService.remove branch inventory', () => {
       name: `branch-${index}`,
     }));
     repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue(branches);
-    repositoryMocks.lockRepoForBranchInventory.mockReset().mockResolvedValue(repo);
+    let claimedRepo: Record<string, unknown> = repo;
+    repositoryMocks.claimRepoFilesystemDeletion
+      .mockReset()
+      .mockImplementation((_id, operationId) => {
+        claimedRepo = {
+          ...repo,
+          filesystem_status: 'deleting',
+          filesystem_operation_id: operationId,
+        };
+        return claimedRepo;
+      });
+    repositoryMocks.lockRepoForBranchInventory
+      .mockReset()
+      .mockImplementation(async () => claimedRepo);
     repositoryMocks.deleteRepo.mockReset().mockResolvedValue(undefined);
 
     const branchService = {
@@ -358,6 +398,7 @@ describe('ReposService.remove branch inventory', () => {
       get: () => ({}),
       service: vi.fn((name: string) => {
         if (name === 'branches') return branchService;
+        if (name === 'repos') return { emit: vi.fn() };
         throw new Error(`Unexpected service: ${name}`);
       }),
     } as unknown as Application;
@@ -387,5 +428,92 @@ describe('ReposService.remove branch inventory', () => {
     );
     expect(branchService.removeMetadataWithRealtime).toHaveBeenCalledTimes(10_001);
     expect(repositoryMocks.deleteRepo).toHaveBeenCalledOnce();
+  });
+
+  it('persists a sanitized retryable failure when executor cleanup cannot be verified', async () => {
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/delete-failure',
+      repo_type: 'remote',
+      local_path: '/managed/repos/preset-io/delete-failure',
+    };
+    let claimedRepo: Record<string, unknown> = repo;
+    repositoryMocks.claimRepoFilesystemDeletion
+      .mockReset()
+      .mockImplementation((_id, operationId) => {
+        claimedRepo = {
+          ...repo,
+          filesystem_status: 'deleting',
+          filesystem_operation_id: operationId,
+        };
+        return claimedRepo;
+      });
+    repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue([]);
+    repositoryMocks.deleteRepo.mockReset();
+    repositoryMocks.updateRepo.mockReset().mockImplementation(async (_id, patch) => ({
+      ...claimedRepo,
+      ...patch,
+    }));
+    executorMocks.runExecutorCommand.mockReset().mockResolvedValue({
+      success: false,
+      error: { message: 'EACCES at /trusted/diagnostic/path' },
+    });
+
+    const branchService = { removeMetadataWithRealtime: vi.fn() };
+    const app = {
+      get: () => ({}),
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return branchService;
+        if (name === 'repos') return { emit: vi.fn() };
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const infoLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      const failure = await service
+        .remove(repo.repo_id, {
+          query: { cleanup: true },
+          tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+        } as never)
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe(
+        'Cannot delete repository: managed filesystem cleanup could not be verified'
+      );
+      expect((failure as Error).message).not.toContain('/trusted/diagnostic/path');
+    } finally {
+      errorLog.mockRestore();
+      infoLog.mockRestore();
+    }
+
+    expect(executorMocks.runExecutorCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.repo.delete',
+        params: expect.objectContaining({
+          repoId: repo.repo_id,
+          filesystemOperationId: expect.any(String),
+        }),
+      }),
+      expect.any(Object)
+    );
+    expect(repositoryMocks.updateRepo).toHaveBeenCalledWith(
+      repo.repo_id,
+      {
+        filesystem_status: 'delete_failed',
+        filesystem_error:
+          'Repository deletion failed. Review trusted daemon diagnostics and retry.',
+      },
+      {
+        expectedFilesystemLifecycle: {
+          filesystemStatuses: ['deleting'],
+          operationId: claimedRepo.filesystem_operation_id,
+        },
+      }
+    );
+    expect(repositoryMocks.deleteRepo).not.toHaveBeenCalled();
   });
 });

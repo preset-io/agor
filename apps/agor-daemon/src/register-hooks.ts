@@ -80,6 +80,7 @@ import type {
   MessageID,
   Paginated,
   Params,
+  Repo,
   RepoID,
   Session,
   Task,
@@ -91,6 +92,7 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
+  REPO_CLONE_EXECUTOR_PATCH_FIELDS,
   REPO_FILESYSTEM_IDENTITY_FIELDS,
   REPO_SERVER_MANAGED_FIELDS,
   ROLES,
@@ -106,6 +108,7 @@ import {
 } from '@agor/core/unix';
 import {
   executorRuntimeScopeGuard,
+  getRepoExecutorServicePayload,
   isTaskScopedExecutorRequest,
   requireExecutorRuntimeToken,
   validateBranchExternalManagedWrite,
@@ -379,7 +382,7 @@ export function protectExternalBranchManagedWrites(context: HookContext): HookCo
 }
 
 /** Keep repository filesystem identity and clone lifecycle state server-owned. */
-export function protectExternalRepoManagedWrites(context: HookContext): HookContext {
+export async function protectExternalRepoManagedWrites(context: HookContext): Promise<HookContext> {
   if (!context.params.provider) return context;
   if (!context.data || typeof context.data !== 'object' || Array.isArray(context.data)) {
     throw new BadRequest('Repository writes require an object payload');
@@ -401,21 +404,95 @@ export function protectExternalRepoManagedWrites(context: HookContext): HookCont
   );
   if (!lifecycleField) return context;
 
-  const payload = (context.params as AuthenticatedParams).authentication?.payload as
-    | Record<string, unknown>
-    | undefined;
   const repoId = String(context.id ?? '');
+  const payload = getRepoExecutorServicePayload(context.params as AuthenticatedParams, repoId);
   const isCloneExecutor =
     context.method === 'patch' &&
-    payload?.type === 'service' &&
-    payload.sub === 'executor-service' &&
-    payload.purpose === 'executor-service' &&
-    payload.command === 'git.clone' &&
-    payload.repo_id === repoId;
+    payload?.command === 'git.clone' &&
+    Object.keys(data).every((field) => REPO_CLONE_PATCH_FIELDS.has(field));
   if (!isCloneExecutor) {
     throw new BadRequest(`Repository field '${lifecycleField}' is managed by the daemon`);
   }
+  const current = (await context.service.get(repoId, {
+    ...context.params,
+    provider: undefined,
+  })) as Repo;
+  if (current.clone_status !== 'cloning' || current.filesystem_status !== undefined) {
+    throw new Forbidden('Clone lifecycle credential no longer owns this repository operation');
+  }
   return context;
+}
+
+const REPO_CLONE_PATCH_FIELDS = new Set<string>(REPO_CLONE_EXECUTOR_PATCH_FIELDS);
+const REPO_SERVICE_GET_COMMANDS = new Set([
+  'git.clone',
+  'git.branch.add',
+  'git.repo.delete',
+  'git.repo.realign-origin',
+  'unix.sync-repo',
+]);
+
+/** Runtime capability boundary for every executor-service request on repos. */
+export async function enforceRepoServiceAccountCapability(
+  context: HookContext
+): Promise<HookContext> {
+  if (!context.params.provider) return context;
+  const payload = getRepoExecutorServicePayload(context.params as AuthenticatedParams);
+  const rawPayload = (context.params as AuthenticatedParams).authentication?.payload as
+    | Record<string, unknown>
+    | undefined;
+  if (!payload && rawPayload?.type !== 'service') return context;
+  if (
+    !payload &&
+    context.method === 'find' &&
+    rawPayload?.sub === 'executor-service' &&
+    rawPayload.purpose === 'executor-service' &&
+    rawPayload.command === 'git.managed-credentials.reconcile'
+  ) {
+    return context;
+  }
+  if (!payload) throw new Forbidden('Repository service credential is missing resource scope');
+
+  if (context.method === 'find') {
+    if (payload.command === 'git.repo.delete') {
+      return context;
+    }
+    throw new Forbidden('Repository service credential cannot enumerate repositories');
+  }
+
+  const repoId = String(context.id ?? '');
+  if (!repoId || payload.repo_id !== repoId) {
+    throw new Forbidden('Repository service credential does not match this repository');
+  }
+  if (context.method === 'get' && REPO_SERVICE_GET_COMMANDS.has(payload.command)) return context;
+
+  if (context.method === 'patch' && context.data && !Array.isArray(context.data)) {
+    const fields = Object.keys(context.data as Record<string, unknown>);
+    const allowed =
+      payload.command === 'git.clone'
+        ? fields.every((field) => REPO_CLONE_PATCH_FIELDS.has(field))
+        : payload.command === 'unix.sync-repo'
+          ? fields.every((field) => field === 'unix_group')
+          : false;
+    if (allowed) {
+      if (payload.command === 'git.clone') {
+        const current = (await context.service.get(repoId, {
+          ...context.params,
+          provider: undefined,
+        })) as Repo;
+        if (current.clone_status !== 'cloning' || current.filesystem_status !== undefined) {
+          throw new Forbidden(
+            'Clone lifecycle credential no longer owns this repository operation'
+          );
+        }
+      }
+      return context;
+    }
+  }
+
+  throw new Forbidden(
+    `Repository service credential '${payload.command}' cannot perform ${context.method}`
+  );
 }
 
 export function shouldRunSessionPostTurnHooks(
@@ -714,6 +791,12 @@ export function protectServerManagedUnixGroupWrites(kind: ManagedUnixGroupKind) 
     if (!context.params.provider) return context;
     if (!context.params.user?._isServiceAccount) {
       throw new Forbidden('unix_group is server-managed');
+    }
+    if (kind === 'repo') {
+      const payload = getRepoExecutorServicePayload(context.params as AuthenticatedParams, id);
+      if (!payload || (payload.command !== 'git.clone' && payload.command !== 'unix.sync-repo')) {
+        throw new Forbidden('Repository unix_group credential is not scoped to this operation');
+      }
     }
 
     // A transported executor may only stamp an absent field with the row's
@@ -1629,7 +1712,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('repos').hooks({
     before: {
-      all: [typedValidateQuery(repoQueryValidator), requireAuth],
+      all: [
+        typedValidateQuery(repoQueryValidator),
+        requireAuth,
+        enforceRepoServiceAccountCapability,
+      ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
         protectServerManagedUnixGroupWrites('repo'),
@@ -1645,8 +1732,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
-        protectServerManagedUnixGroupWrites('repo'),
         protectExternalRepoManagedWrites,
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],

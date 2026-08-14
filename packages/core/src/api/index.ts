@@ -18,7 +18,6 @@ import type {
   BranchExecutorPatch,
   BranchGroupGrantWithGroup,
   BranchID,
-  BranchStorageMode,
   BranchUnarchiveOptions,
   CardType,
   CardWithType,
@@ -52,6 +51,7 @@ import type {
   PatchAgenticToolPreset,
   PermissionMode,
   Repo,
+  RepoBranchCreateRequest,
   RepoClientPatch,
   RepoExecutorPatch,
   RuntimeTelemetryInput,
@@ -438,54 +438,17 @@ export interface MessagesBulkService {
   create(data: CreatePayload<Message>[], params?: Params): Promise<Message[]>;
 }
 
-/**
- * Repos service with branch management
- */
-export interface ReposService
-  extends AgorService<Repo, never, never, ClientInput<RepoClientPatch> | null> {
-  /**
-   * Create a git branch for a repository.
-   *
-   * Shape matches the daemon's `/repos/:id/branches` route + Feathers
-   * service. Keep this in sync with `RepoService.createBranch()` in
-   * apps/agor-daemon/src/services/repos.ts — drift here means CLI/client
-   * consumers silently drop fields.
-   */
-  createBranch(
-    id: string,
-    data: {
-      name: string;
-      ref: string;
-      refType?: 'branch' | 'tag';
-      createBranch?: boolean;
-      pullLatest?: boolean;
-      sourceBranch?: string;
-      issue_url?: string;
-      pull_request_url?: string;
-      boardId: string;
-      custom_context?: Record<string, unknown>;
-      notes?: string | null;
-      /** Explicit board position. Honored as-is when supplied. */
-      position?: { x: number; y: number };
-      zoneId?: string;
-      environment_variant?: string;
-      /**
-       * Branch storage model — see
-       * context/explorations/clone-redesign.md.
-       * 'worktree' (default) = native `git worktree add`.
-       * 'clone' = self-standing `git clone` with its own `.git/`.
-       */
-      storage_mode?: BranchStorageMode;
-      /** Shallow clone depth (only when storage_mode='clone'). */
-      clone_depth?: number;
-    },
-    params?: Params
-  ): Promise<Branch>;
+/** Public repository collection/item transport. */
+export type ReposService = AgorService<Repo, never, never, ClientInput<RepoClientPatch> | null>;
 
-  /**
-   * Remove a git branch
-   */
-  removeBranch(id: string, name: string, params?: Params): Promise<Repo>;
+/** Dedicated `POST /repos/:id/branches` route service. */
+export interface RepoBranchesService {
+  create(data: ClientInput<RepoBranchCreateRequest>, params?: Params): Promise<Branch>;
+}
+
+/** Dedicated `DELETE /repos/:id/branches/:name` route service. */
+export interface RepoBranchService {
+  remove(id?: string | null, params?: Params): Promise<Repo>;
 }
 
 /** Privileged repository patch surface used only by scoped lifecycle executors. */
@@ -654,6 +617,8 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos'): ReposService;
   service(path: 'repos/clone'): ReposCloneService;
   service(path: 'repos/local'): ReposLocalService;
+  service(path: `repos/${string}/branches`): RepoBranchesService;
+  service(path: `repos/${string}/branches/${string}`): RepoBranchService;
   service(path: 'branches'): BranchesService;
   service(path: `branches/${string}/archive-or-delete`): BranchArchiveOrDeleteService;
   service(path: `branches/${string}/unarchive`): BranchUnarchiveService;

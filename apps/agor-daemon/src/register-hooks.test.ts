@@ -29,6 +29,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   createTenantScopedBeforeHookChain,
+  enforceRepoServiceAccountCapability,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
@@ -312,38 +313,115 @@ describe('protectExternalRepoManagedWrites', () => {
         provider: 'rest',
         authentication: payload ? { payload } : undefined,
       },
+      service: {
+        get: vi.fn().mockResolvedValue({ clone_status: 'cloning' }),
+      },
     }) as HookContext;
 
   it.each(['slug', 'repo_type', 'local_path'])(
     'rejects external mutation of filesystem identity field %s',
-    (field) => {
-      expect(() => protectExternalRepoManagedWrites(context({ [field]: 'forged' }))).toThrow(
-        /immutable/
-      );
+    async (field) => {
+      await expect(
+        protectExternalRepoManagedWrites(context({ [field]: 'forged' }))
+      ).rejects.toThrow(/immutable/);
     }
   );
 
-  it('rejects clone lifecycle forgery by an ordinary member', () => {
-    expect(() => protectExternalRepoManagedWrites(context({ clone_status: 'ready' }))).toThrow(
-      /managed by the daemon/
-    );
+  it('rejects clone lifecycle forgery by an ordinary member', async () => {
+    await expect(
+      protectExternalRepoManagedWrites(context({ clone_status: 'ready' }))
+    ).rejects.toThrow(/managed by the daemon/);
   });
 
-  it('accepts clone lifecycle results only for the credential-scoped row', () => {
+  it('accepts clone lifecycle results only for the credential-scoped row', async () => {
     const payload = {
       type: 'service',
       sub: 'executor-service',
       purpose: 'executor-service',
+      role: 'service',
       command: 'git.clone',
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
     };
     const hook = context({ clone_status: 'ready' }, payload);
-    expect(protectExternalRepoManagedWrites(hook)).toBe(hook);
-    expect(() =>
+    await expect(protectExternalRepoManagedWrites(hook)).resolves.toBe(hook);
+    await expect(
       protectExternalRepoManagedWrites(
         context({ clone_status: 'ready' }, { ...payload, repo_id: 'victim' })
       )
-    ).toThrow(/managed by the daemon/);
+    ).rejects.toThrow(/managed by the daemon/);
+  });
+
+  it('fences clone credentials to one row and mutation method', async () => {
+    const payload = {
+      type: 'service',
+      sub: 'executor-service',
+      purpose: 'executor-service',
+      role: 'service',
+      command: 'git.clone',
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+    };
+    await expect(
+      enforceRepoServiceAccountCapability(context({ name: 'safe' }, payload))
+    ).resolves.toBeDefined();
+    await expect(
+      enforceRepoServiceAccountCapability({
+        ...context({ name: 'victim' }, payload),
+        id: '550e8400-e29b-41d4-a716-446655440099',
+      })
+    ).rejects.toThrow(/does not match/);
+    await expect(
+      enforceRepoServiceAccountCapability({
+        ...context({}, payload),
+        method: 'remove',
+      })
+    ).rejects.toThrow(/cannot perform remove/);
+    await expect(
+      enforceRepoServiceAccountCapability({
+        ...context({}, payload),
+        method: 'get',
+        data: undefined,
+      })
+    ).resolves.toBeDefined();
+    await expect(
+      enforceRepoServiceAccountCapability({
+        ...context({}, { ...payload, command: 'unrelated.executor.command' }),
+        method: 'get',
+        data: undefined,
+      })
+    ).rejects.toThrow(/cannot perform get/);
+    await expect(
+      enforceRepoServiceAccountCapability({
+        ...context({}, payload),
+        method: 'find',
+        id: null,
+        data: undefined,
+      })
+    ).rejects.toThrow(/cannot enumerate/);
+  });
+
+  it('allows only the global repository inventory required by credential reconciliation', async () => {
+    const payload = {
+      type: 'service',
+      sub: 'executor-service',
+      purpose: 'executor-service',
+      role: 'service',
+      command: 'git.managed-credentials.reconcile',
+    };
+    await expect(
+      enforceRepoServiceAccountCapability({
+        ...context({}, payload),
+        method: 'find',
+        id: null,
+        data: undefined,
+      })
+    ).resolves.toBeDefined();
+    await expect(
+      enforceRepoServiceAccountCapability({
+        ...context({}, payload),
+        method: 'get',
+        data: undefined,
+      })
+    ).rejects.toThrow(/missing resource scope/);
   });
 });
 
@@ -597,6 +675,45 @@ describe('protectServerManagedUnixGroupWrites', () => {
     await expect(
       protectServerManagedUnixGroupWrites('branch')(context('developers; groupdel root'))
     ).rejects.toThrow('Invalid persisted Unix group');
+  });
+
+  it('requires repository group stamps to carry the exact repo operation scope', async () => {
+    const repoId = '019ffd3d-2cef-79d1-a1c6-407300000002';
+    const repoGroup = 'agor_rp_019ffd3d2cef79d1a1c64073';
+    const repoContext = (command: string, scopedRepoId = repoId) =>
+      ({
+        path: 'repos',
+        method: 'patch',
+        id: repoId,
+        data: { unix_group: repoGroup },
+        params: {
+          provider: 'rest',
+          user: { role: 'service', _isServiceAccount: true },
+          authentication: {
+            payload: {
+              type: 'service',
+              sub: 'executor-service',
+              purpose: 'executor-service',
+              role: 'service',
+              command,
+              repo_id: scopedRepoId,
+            },
+          },
+        },
+        service: { get: vi.fn(async () => ({ unix_group: null })) },
+      }) as unknown as HookContext;
+
+    await expect(
+      protectServerManagedUnixGroupWrites('repo')(repoContext('unix.sync-repo'))
+    ).resolves.toBeDefined();
+    await expect(
+      protectServerManagedUnixGroupWrites('repo')(repoContext('git.repo.delete'))
+    ).rejects.toThrow(/not scoped/);
+    await expect(
+      protectServerManagedUnixGroupWrites('repo')(
+        repoContext('unix.sync-repo', '019ffd3d-2cef-79d1-a1c6-407300000099')
+      )
+    ).rejects.toThrow(/not scoped/);
   });
 });
 

@@ -4,7 +4,6 @@ import type {
   Board,
   Branch,
   BranchArchiveOrDeleteOptions,
-  BranchStorageMode,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -12,6 +11,7 @@ import type {
   GatewayChannelCreateData,
   GatewayChannelPatchData,
   Repo,
+  RepoBranchCreateRequest,
   RepoClientPatch,
   Session,
   UpdateUserInput,
@@ -88,20 +88,7 @@ export interface SettingsModalProps {
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
-  onCreateBranch?: (
-    repoId: string,
-    data: {
-      name: string;
-      ref: string;
-      createBranch: boolean;
-      sourceBranch: string;
-      pullLatest: boolean;
-      issue_url?: string;
-      pull_request_url?: string;
-      storage_mode?: BranchStorageMode;
-      clone_depth?: number;
-    }
-  ) => Promise<Branch | null>;
+  onCreateBranch?: (repoId: string, data: RepoBranchCreateRequest) => Promise<Branch | null>;
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;
   onCreateUser?: (data: CreateUserInput) => void;

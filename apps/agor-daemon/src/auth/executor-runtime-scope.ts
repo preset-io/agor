@@ -1,5 +1,12 @@
 import { BadRequest, Forbidden } from '@agor/core/feathers';
-import type { AuthenticatedParams, Branch, BranchID, HookContext, Params } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  Branch,
+  BranchID,
+  HookContext,
+  Params,
+  RepoFilesystemOperationID,
+} from '@agor/core/types';
 import {
   BRANCH_ARCHIVE_LIFECYCLE_FIELDS,
   BRANCH_FILESYSTEM_LIFECYCLE_FIELDS,
@@ -68,6 +75,39 @@ type BranchExecutorServicePayload = {
   branch_id: string;
   filesystem_operation_id?: string;
 };
+
+export type RepoExecutorServicePayload = {
+  type: 'service';
+  sub: 'executor-service';
+  purpose: 'executor-service';
+  role: 'service';
+  command: string;
+  repo_id: string;
+  filesystem_operation_id?: RepoFilesystemOperationID;
+};
+
+export function isRepoExecutorServicePayload(value: unknown): value is RepoExecutorServicePayload {
+  if (!value || typeof value !== 'object') return false;
+  const payload = value as Partial<RepoExecutorServicePayload>;
+  return (
+    payload.type === 'service' &&
+    payload.sub === 'executor-service' &&
+    payload.purpose === 'executor-service' &&
+    payload.role === 'service' &&
+    typeof payload.command === 'string' &&
+    typeof payload.repo_id === 'string'
+  );
+}
+
+export function getRepoExecutorServicePayload(
+  params: AuthenticatedParams,
+  repoId?: string
+): RepoExecutorServicePayload | null {
+  const payload = params.authentication?.payload;
+  if (!isRepoExecutorServicePayload(payload)) return null;
+  if (repoId !== undefined && payload.repo_id !== repoId) return null;
+  return payload;
+}
 
 function isBranchExecutorServicePayload(value: unknown): value is BranchExecutorServicePayload {
   if (!value || typeof value !== 'object') return false;

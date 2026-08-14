@@ -19,8 +19,9 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
+import { realpath as fsRealpath } from 'node:fs/promises';
 import { userInfo } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, sep as pathSeparator, relative, resolve } from 'node:path';
 import { getReposDir, isValidManagedRepoSlug, isValidSlug } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
@@ -76,6 +77,25 @@ import {
   handleUnixSyncRepo,
 } from './unix.js';
 
+async function canonicalFilesystemIdentity(inputPath: string): Promise<string> {
+  try {
+    return await fsRealpath(inputPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return resolve(inputPath);
+    throw error;
+  }
+}
+
+function filesystemPathsOverlap(left: string, right: string): boolean {
+  const contains = (parent: string, child: string) => {
+    const rel = relative(parent, child);
+    return (
+      rel === '' || (rel !== '..' && !rel.startsWith(`..${pathSeparator}`) && !isAbsolute(rel))
+    );
+  };
+  return contains(left, right) || contains(right, left);
+}
+
 /**
  * Self-hosted compatibility operation. The daemon authorizes the request and
  * launches this narrow inspection under the caller's resolved executor Unix
@@ -91,7 +111,7 @@ export async function handleGitRepoInspect(
       inputPath = join(userInfo().homedir, inputPath.slice(1).replace(/^[/\\]?/, ''));
     }
     if (!isAbsolute(inputPath)) throw new Error(`Path must be absolute: ${inputPath}`);
-    const repoPath = resolve(inputPath);
+    const repoPath = await canonicalFilesystemIdentity(resolve(inputPath));
     if (!(await isValidGitRepo(repoPath))) {
       throw new Error(`Not a valid git repository: ${repoPath}`);
     }
@@ -350,6 +370,7 @@ async function fetchBranchForRepo(client: AgorClient, repoId: string, branchId: 
 }
 
 interface BranchPathRecord {
+  branch_id?: string;
   repo_id?: string;
   name?: string;
   path?: string;
@@ -370,7 +391,7 @@ async function fetchAllRepos(client: AgorClient): Promise<Repo[]> {
 
 async function fetchAllBranchesForRepo(
   client: AgorClient,
-  repoId: string
+  repoId?: string
 ): Promise<BranchPathRecord[]> {
   const branches: BranchPathRecord[] = [];
   const limit = 1000;
@@ -378,7 +399,7 @@ async function fetchAllBranchesForRepo(
 
   while (true) {
     const result = await client.service('branches').find({
-      query: { repo_id: repoId, $limit: limit, $skip: skip },
+      query: { ...(repoId ? { repo_id: repoId } : {}), $limit: limit, $skip: skip },
     });
     const page = (Array.isArray(result) ? result : result.data) as BranchPathRecord[];
     branches.push(...page);
@@ -589,20 +610,30 @@ export async function handleGitRepoDelete(
 
     const repo = await client.service('repos').get(repoId);
     repoPath = repo.local_path;
-    if (!repoPath || repo.repo_type !== 'remote' || !isValidManagedRepoSlug(repo.slug)) {
+    if (
+      !repoPath ||
+      repo.repo_type !== 'remote' ||
+      !isValidManagedRepoSlug(repo.slug) ||
+      repo.filesystem_status !== 'deleting' ||
+      repo.filesystem_operation_id !== payload.params.filesystemOperationId
+    ) {
       throw new Error(`SAFETY CHECK FAILED: Repo ${repoId} has no canonical managed identity`);
     }
     const managedRepoPath = repoPath;
-    const aliases = (await fetchAllRepos(client)).filter(
-      (candidate) =>
-        candidate.repo_id !== repo.repo_id &&
-        resolve(candidate.local_path) === resolve(managedRepoPath)
-    );
+    const allRepos = await fetchAllRepos(client);
+    const canonicalManagedRepoPath = await canonicalFilesystemIdentity(managedRepoPath);
+    const aliases: Repo[] = [];
+    for (const candidate of allRepos) {
+      if (candidate.repo_id === repo.repo_id) continue;
+      const candidatePath = await canonicalFilesystemIdentity(candidate.local_path);
+      if (filesystemPathsOverlap(canonicalManagedRepoPath, candidatePath)) aliases.push(candidate);
+    }
     if (aliases.length > 0) {
-      throw new Error('SAFETY CHECK FAILED: Repository root is owned by multiple metadata rows');
+      throw new Error('SAFETY CHECK FAILED: Repository root overlaps another metadata owner');
     }
 
     const branches = await fetchAllBranchesForRepo(client, repoId);
+    const allBranches = await fetchAllBranchesForRepo(client);
 
     const foreignBranches = branches.filter((branch) => branch.repo_id !== repoId);
     if (foreignBranches.length > 0) {
@@ -611,10 +642,51 @@ export async function handleGitRepoDelete(
       );
     }
 
+    // Resolve each identity once. Repository deletion may inventory thousands
+    // of branches; resolving every candidate again for every target turns the
+    // safety check into millions of filesystem syscalls and can time out a
+    // valid cleanup before deletion even starts.
+    const canonicalBranches: Array<{
+      branchId: string | undefined;
+      canonicalPath: string;
+    }> = [];
+    for (const candidate of allBranches) {
+      if (!candidate.path) continue;
+      canonicalBranches.push({
+        branchId: candidate.branch_id,
+        canonicalPath: await canonicalFilesystemIdentity(candidate.path),
+      });
+    }
+    const otherRepoNamespaces: string[] = [];
+    for (const candidateRepo of allRepos) {
+      if (candidateRepo.repo_id === repoId || !isValidManagedRepoSlug(candidateRepo.slug)) {
+        continue;
+      }
+      otherRepoNamespaces.push(
+        await canonicalFilesystemIdentity(resolve(payload.params.branchesRoot, candidateRepo.slug))
+      );
+    }
+
     for (const branch of branches) {
       if (!branch.path) continue;
-      if (!isValidManagedBranchName(branch.name)) {
+      if (!branch.branch_id || !isValidManagedBranchName(branch.name)) {
         throw new Error('SAFETY CHECK FAILED: Branch filesystem identity is incomplete');
+      }
+      const canonicalBranchPath =
+        canonicalBranches.find((candidate) => candidate.branchId === branch.branch_id)
+          ?.canonicalPath ?? (await canonicalFilesystemIdentity(branch.path));
+      for (const candidate of canonicalBranches) {
+        if (candidate.branchId === branch.branch_id) continue;
+        if (filesystemPathsOverlap(canonicalBranchPath, candidate.canonicalPath)) {
+          throw new Error('SAFETY CHECK FAILED: Branch root overlaps another metadata owner');
+        }
+      }
+      for (const candidateNamespace of otherRepoNamespaces) {
+        if (filesystemPathsOverlap(canonicalBranchPath, candidateNamespace)) {
+          throw new Error(
+            'SAFETY CHECK FAILED: Legacy branch root overlaps another repository namespace'
+          );
+        }
       }
       await deleteBranchDirectory(branch.path, payload.params.branchesRoot, {
         expectedRelativePath: join(repo.slug, branch.name),
@@ -1495,6 +1567,32 @@ export async function handleGitBranchRemove(
       throw new Error('Safety check failed: Branch name is not a single managed path segment');
     }
     const persistedRepo = await client.service('repos').get(persistedBranch.repo_id);
+    const canonicalBranchPath = await canonicalFilesystemIdentity(branchPath);
+    const tenantBranches = await fetchAllBranchesForRepo(client);
+    for (const candidate of tenantBranches) {
+      if (!candidate.path || candidate.branch_id === branchId) continue;
+      const candidatePath = await canonicalFilesystemIdentity(candidate.path);
+      if (filesystemPathsOverlap(canonicalBranchPath, candidatePath)) {
+        throw new Error('SAFETY CHECK FAILED: Branch root overlaps another metadata owner');
+      }
+    }
+    const tenantRepos = await fetchAllRepos(client);
+    for (const candidateRepo of tenantRepos) {
+      if (
+        candidateRepo.repo_id === persistedBranch.repo_id ||
+        !isValidManagedRepoSlug(candidateRepo.slug)
+      ) {
+        continue;
+      }
+      const candidateNamespace = await canonicalFilesystemIdentity(
+        resolve(branchesRoot, candidateRepo.slug)
+      );
+      if (filesystemPathsOverlap(canonicalBranchPath, candidateNamespace)) {
+        throw new Error(
+          'SAFETY CHECK FAILED: Legacy branch root overlaps another repository namespace'
+        );
+      }
+    }
     const expectedRelativePath = join(persistedRepo.slug, persistedBranch.name);
     const deleteDirectory = () =>
       deleteBranchDirectory(branchPath, branchesRoot, {
@@ -1509,7 +1607,7 @@ export async function handleGitBranchRemove(
     // Find the repo path from the branch's .git file
     const { lstat, readFile, realpath, stat } = await import('node:fs/promises');
     const { existsSync } = await import('node:fs');
-    const { dirname, isAbsolute, resolve } = await import('node:path');
+    const { dirname, isAbsolute, resolve: resolvePath } = await import('node:path');
 
     const gitPath = join(branchPath, '.git');
     let filesystemRemoved = false;
@@ -1560,8 +1658,8 @@ export async function handleGitBranchRemove(
         // We need: <repo>
         const rawGitdirPath = match[1].trim();
         const gitdirPath = isAbsolute(rawGitdirPath)
-          ? resolve(rawGitdirPath)
-          : resolve(branchPath, rawGitdirPath);
+          ? resolvePath(rawGitdirPath)
+          : resolvePath(branchPath, rawGitdirPath);
         const gitBranchesDir = dirname(gitdirPath); // <repo>/.git/worktrees
         const dotGitDir = dirname(gitBranchesDir); // <repo>/.git
         const repoPath = dirname(dotGitDir); // <repo>
@@ -1609,7 +1707,7 @@ export async function handleGitBranchRemove(
           );
           await deleteDirectory();
           const worktreeStillRegistered = (await listGitWorktrees(resolvedRepoPath)).some(
-            (worktree) => resolve(worktree.path) === resolve(branchPath)
+            (worktree) => resolvePath(worktree.path) === resolvePath(branchPath)
           );
           if (worktreeStillRegistered) {
             await removeGitWorktree(resolvedRepoPath, branchPath);

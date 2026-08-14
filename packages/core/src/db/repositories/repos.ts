@@ -4,22 +4,37 @@
  * Type-safe CRUD operations for git repositories with short ID support.
  */
 
+import { isAbsolute, sep as pathSeparator, relative, resolve } from 'node:path';
 import type {
   Repo,
   RepoEnvironment,
   RepoEnvironmentConfigV1,
+  RepoFilesystemLifecycleExpectation,
+  RepoFilesystemOperationID,
+  RepoFilesystemStatus,
   RepoID,
   UUID,
 } from '@agor/core/types';
 import { REPO_IMMUTABLE_FIELDS } from '@agor/core/types';
-import { eq, like, sql } from 'drizzle-orm';
+import { and, eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
 import { resolveRepoGroupName, resolveRepoGroupUpdate } from '../../unix/group-manager';
 import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
-import { type RepoInsert, type RepoRow, repos } from '../schema';
+import {
+  deleteFrom,
+  executeRaw,
+  insert,
+  isPostgresDatabase,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
+import { branches, type RepoInsert, type RepoRow, repos } from '../schema';
+import { getCurrentTenantId } from '../tenant-context';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -63,6 +78,110 @@ export interface RepoRemoteUrlCredentialFinding {
   slug: string;
 }
 
+export interface RepoRepositoryUpdateOptions {
+  expectedFilesystemLifecycle?: RepoFilesystemLifecycleExpectation;
+}
+
+export class RepoFilesystemLifecycleConflictError extends RepositoryError {
+  constructor(
+    public readonly repoId: RepoID,
+    public readonly currentStatus: RepoFilesystemStatus | undefined,
+    public readonly currentOperationId: RepoFilesystemOperationID | undefined,
+    message = `Repository ${repoId} filesystem lifecycle changed concurrently`
+  ) {
+    super(message);
+    this.name = 'RepoFilesystemLifecycleConflictError';
+  }
+}
+
+export class RepoFilesystemNamespaceConflictError extends RepositoryError {
+  constructor(
+    message = 'Repository filesystem namespace overlaps another metadata owner; repair the conflicting rows before continuing'
+  ) {
+    super(message);
+    this.name = 'RepoFilesystemNamespaceConflictError';
+  }
+}
+
+function assertExpectedFilesystemLifecycle(
+  current: Repo,
+  expected: RepoFilesystemLifecycleExpectation | undefined
+): void {
+  if (!expected) return;
+  const statusMismatch =
+    expected.filesystemStatuses !== undefined &&
+    !expected.filesystemStatuses.includes(current.filesystem_status);
+  const operationMismatch =
+    expected.operationId !== undefined &&
+    (current.filesystem_operation_id ?? null) !== expected.operationId;
+  if (statusMismatch || operationMismatch) {
+    throw new RepoFilesystemLifecycleConflictError(
+      current.repo_id as RepoID,
+      current.filesystem_status,
+      current.filesystem_operation_id
+    );
+  }
+}
+
+function pathContains(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${pathSeparator}`) && !isAbsolute(rel));
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  return pathContains(left, right) || pathContains(right, left);
+}
+
+function slugNamespacesOverlap(left: string, right: string): boolean {
+  const leftSegments = left.split('/');
+  const rightSegments = right.split('/');
+  const sharedLength = Math.min(leftSegments.length, rightSegments.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    if (leftSegments[index] !== rightSegments[index]) return false;
+  }
+  return true;
+}
+
+export async function lockRepoFilesystemNamespaceMutation(
+  db: Database,
+  transactionDb: Database
+): Promise<void> {
+  if (!isPostgresDatabase(db)) return;
+  const tenantId = getCurrentTenantId();
+  // Request paths always carry tenant context, so normal operation uses a
+  // tenant-local lock. Trusted bootstrap/tests may intentionally use the
+  // unscoped owner connection; serialize those globally instead of weakening
+  // the mutation invariant or making repository primitives unusable there.
+  const lockKey = tenantId
+    ? `repo-filesystem-namespace:${tenantId}`
+    : 'repo-filesystem-namespace:unscoped';
+  await executeRaw(
+    transactionDb,
+    sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${lockKey}, 0))`
+  );
+}
+
+function assertFilesystemNamespaceAvailable(candidate: Repo, existing: readonly Repo[]): void {
+  for (const other of existing) {
+    if (other.repo_id === candidate.repo_id) continue;
+    // Worktree roots are always derived from the slug, even for repositories
+    // whose base clone is registered outside Agor's managed repositories
+    // directory. A legacy one-segment slug (`org`) must therefore never
+    // coexist with a descendant namespace (`org/repo`).
+    const worktreeNamespaceOverlap = slugNamespacesOverlap(other.slug, candidate.slug);
+    // Local repositories are user-owned inputs and are never recursively
+    // removed by Agor, so registering the same checkout twice is not a
+    // destructive-root alias. Any overlap involving a managed remote clone is
+    // unsafe because that root can be deleted.
+    const destructiveOverlap =
+      (other.repo_type === 'remote' || candidate.repo_type === 'remote') &&
+      pathsOverlap(other.local_path, candidate.local_path);
+    if (worktreeNamespaceOverlap || destructiveOverlap) {
+      throw new RepoFilesystemNamespaceConflictError();
+    }
+  }
+}
+
 /**
  * Repo repository implementation
  */
@@ -104,6 +223,11 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         environment_config,
         clone_status: data.clone_status,
         clone_error: data.clone_error,
+        filesystem_status: data.filesystem_status,
+        filesystem_operation_id: data.filesystem_operation_id as
+          | RepoFilesystemOperationID
+          | undefined,
+        filesystem_error: data.filesystem_error,
       },
       row
     );
@@ -161,6 +285,9 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // coerce that to `undefined` here so the stored value matches the
         // `clone_error?: RepoCloneError` invariant (set only when failed).
         clone_error: repo.clone_error || undefined,
+        filesystem_status: repo.filesystem_status,
+        filesystem_operation_id: repo.filesystem_operation_id,
+        filesystem_error: repo.filesystem_error,
       },
     };
   }
@@ -185,18 +312,23 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   async create(data: Partial<Repo>): Promise<Repo> {
     try {
       const insertData = this.repoToInsert(data);
-      await insert(this.db, repos).values(insertData).run();
+      return await runDatabaseTransaction(this.db, async (transactionDb) => {
+        await lockRepoFilesystemNamespaceMutation(this.db, transactionDb);
+        const existingRows = await select(transactionDb).from(repos).all();
+        assertFilesystemNamespaceAvailable(
+          this.rowToRepo({ ...insertData, data: insertData.data } as RepoRow),
+          existingRows.map((row: RepoRow) => this.rowToRepo(row))
+        );
+        await insert(transactionDb, repos).values(insertData).run();
 
-      const row = await select(this.db)
-        .from(repos)
-        .where(eq(repos.repo_id, insertData.repo_id))
-        .one();
+        const row = await select(transactionDb)
+          .from(repos)
+          .where(eq(repos.repo_id, insertData.repo_id))
+          .one();
 
-      if (!row) {
-        throw new RepositoryError('Failed to retrieve created repo');
-      }
-
-      return this.rowToRepo(row);
+        if (!row) throw new RepositoryError('Failed to retrieve created repo');
+        return this.rowToRepo(row);
+      });
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
@@ -280,6 +412,87 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         error
       );
     }
+  }
+
+  /**
+   * Atomically reserve a repository deletion before any filesystem work.
+   *
+   * The tenant-wide namespace lock serializes legacy prefix owners with new
+   * repository registration. The repository row lock serializes branch FK
+   * inserts, and the in-transaction branch-state check refuses to race an
+   * executor that is still materializing or deleting a child root.
+   */
+  async claimFilesystemDeletion(id: string, operationId: RepoFilesystemOperationID): Promise<Repo> {
+    const existing = await this.findById(id);
+    if (!existing) throw new EntityNotFoundError('Repo', id);
+
+    return runDatabaseTransaction(this.db, async (transactionDb) => {
+      await lockRepoFilesystemNamespaceMutation(this.db, transactionDb);
+      await lockRowForUpdate(transactionDb, this.db, repos, eq(repos.repo_id, existing.repo_id));
+      const currentRow = await select(transactionDb)
+        .from(repos)
+        .where(eq(repos.repo_id, existing.repo_id))
+        .one();
+      if (!currentRow) throw new EntityNotFoundError('Repo', id);
+      const current = this.rowToRepo(currentRow);
+
+      if (current.filesystem_status === 'deleting') {
+        throw new RepoFilesystemLifecycleConflictError(
+          current.repo_id as RepoID,
+          current.filesystem_status,
+          current.filesystem_operation_id,
+          `Repository ${current.repo_id} deletion is already in progress`
+        );
+      }
+      if (current.clone_status === 'cloning') {
+        throw new RepoFilesystemLifecycleConflictError(
+          current.repo_id as RepoID,
+          current.filesystem_status,
+          current.filesystem_operation_id,
+          `Repository ${current.repo_id} is still cloning`
+        );
+      }
+
+      const allRows = await select(transactionDb).from(repos).all();
+      assertFilesystemNamespaceAvailable(
+        current,
+        allRows.map((row: RepoRow) => this.rowToRepo(row))
+      );
+
+      const busyBranch = await select(transactionDb)
+        .from(branches)
+        .where(
+          and(
+            eq(branches.repo_id, current.repo_id),
+            sql`${branches.filesystem_status} IN ('creating', 'deleting')`
+          )
+        )
+        .one();
+      if (busyBranch) {
+        throw new RepoFilesystemLifecycleConflictError(
+          current.repo_id as RepoID,
+          current.filesystem_status,
+          current.filesystem_operation_id,
+          `Repository ${current.repo_id} has an in-flight branch filesystem operation`
+        );
+      }
+
+      const merged = deepMerge(current, {
+        filesystem_status: 'deleting' as const,
+        filesystem_operation_id: operationId,
+      });
+      delete merged.filesystem_error;
+      const insertData = this.repoToInsert(merged);
+      const row = await update(transactionDb, repos)
+        .set({
+          updated_at: new Date(),
+          data: insertData.data,
+        })
+        .where(eq(repos.repo_id, current.repo_id))
+        .returning()
+        .one();
+      return this.rowToRepo(row);
+    });
   }
 
   /**
@@ -373,7 +586,11 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    * Uses a transaction to ensure read-merge-write is atomic, preventing race conditions
    * when multiple updates happen concurrently (e.g., permission_config updates).
    */
-  async update(id: string, updates: Partial<Repo>): Promise<Repo> {
+  async update(
+    id: string,
+    updates: Partial<Repo>,
+    options?: RepoRepositoryUpdateOptions
+  ): Promise<Repo> {
     try {
       const fullId = await this.resolveId(id);
 
@@ -394,6 +611,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         }
 
         const current = this.rowToRepo(currentRow);
+        assertExpectedFilesystemLifecycle(current, options?.expectedFilesystemLifecycle);
 
         // STEP 2: Deep merge updates into current repo (in memory)
         // Preserves nested objects like permission_config when doing partial updates
@@ -411,6 +629,9 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
           current.unix_group,
           Object.hasOwn(updates, 'unix_group') ? updates.unix_group : undefined
         );
+        for (const field of ['filesystem_status', 'filesystem_error'] as const) {
+          if (Object.hasOwn(updates, field) && updates[field] === undefined) delete merged[field];
+        }
         const insertData = this.repoToInsert(merged);
 
         // STEP 3: Write merged repo (within same transaction)

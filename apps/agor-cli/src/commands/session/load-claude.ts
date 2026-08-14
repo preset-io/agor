@@ -103,7 +103,7 @@ export default class SessionLoadClaude extends BaseCommand {
 
       // Create branch for this imported session
       const branchName = `imported-${shortId(sessionId)}`;
-      const branch = await reposService.createBranch(repo.repo_id, {
+      const branch = await client.service(`repos/${repo.repo_id}/branches`).create({
         name: branchName,
         ref: branchName,
         createBranch: true,

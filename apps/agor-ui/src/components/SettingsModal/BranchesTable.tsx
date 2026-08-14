@@ -4,8 +4,8 @@ import type {
   Branch,
   BranchArchiveOrDeleteOptions,
   BranchMetadataAction,
-  BranchStorageMode,
   Repo,
+  RepoBranchCreateRequest,
   Session,
 } from '@agor-live/client';
 import { isTeammate, isValidManagedBranchName } from '@agor-live/client';
@@ -55,19 +55,7 @@ interface BranchesTableProps {
     options: BranchArchiveOrDeleteOptions
   ) => void | Promise<void>;
   onUnarchive?: (branchId: string, options?: { boardId?: string }) => void | Promise<void>;
-  onCreate?: (
-    repoId: string,
-    data: {
-      name: string;
-      ref: string;
-      createBranch: boolean;
-      sourceBranch: string;
-      pullLatest: boolean;
-      boardId?: string;
-      storage_mode?: BranchStorageMode;
-      clone_depth?: number;
-    }
-  ) => void;
+  onCreate?: (repoId: string, data: RepoBranchCreateRequest) => void;
   onRowClick?: (branch: Branch) => void;
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;

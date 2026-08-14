@@ -4,6 +4,7 @@
  * Type-safe CRUD operations for branches with short ID support.
  */
 
+import { dirname, isAbsolute, sep as pathSeparator, relative, resolve } from 'node:path';
 import type {
   AgenticToolName,
   BoardID,
@@ -17,9 +18,10 @@ import type {
   SessionStatus,
   UUID,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS, isValidManagedBranchName } from '@agor/core/types';
 import { and, desc, eq, exists, getTableColumns, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
+import { isValidManagedRepoSlug } from '../../config/repo-reference';
 import { generateId } from '../../lib/ids';
 import { BRANCH_IMMUTABLE_FIELDS } from '../../types/branch';
 import { resolveBranchGroupName, resolveBranchGroupUpdate } from '../../unix/group-manager';
@@ -31,6 +33,7 @@ import {
   isPostgresDatabase,
   jsonExtract,
   lockRowForUpdate,
+  runDatabaseTransaction,
   select,
   txAsDb,
   update,
@@ -47,6 +50,8 @@ import {
   branchOwners,
   groupMemberships,
   groups,
+  type RepoRow,
+  repos,
   schedules,
 } from '../schema';
 import {
@@ -60,6 +65,7 @@ import {
 import { visibleBranchAccessCondition } from './branch-access';
 import { GroupRepository } from './groups';
 import { deepMerge } from './merge-utils';
+import { lockRepoFilesystemNamespaceMutation, RepoFilesystemNamespaceConflictError } from './repos';
 
 const BRANCH_PERMISSION_RANK = Object.fromEntries(
   BRANCH_PERMISSION_LEVELS.map((level, index) => [level, index - 1])
@@ -72,6 +78,21 @@ const FS_ACCESS_RANK: Record<BranchFsAccessLevel, number> = {
 const VIEW_OR_BETTER_BRANCH_PERMISSIONS = ['view', 'session', 'prompt', 'all'] as const;
 const BRANCH_PERMISSION_SOURCES = ['board', 'override'] as const;
 const FS_ACCESS_BRANCH_PERMISSIONS = ['read', 'write'] as const;
+
+function filesystemPathContains(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${pathSeparator}`) && !isAbsolute(rel));
+}
+
+function filesystemPathsOverlap(left: string, right: string): boolean {
+  return filesystemPathContains(left, right) || filesystemPathContains(right, left);
+}
+
+function deriveBranchesRoot(branchPath: string, repoSlug: string): string {
+  let branchesRoot = dirname(resolve(branchPath));
+  for (const _segment of repoSlug.split('/')) branchesRoot = dirname(branchesRoot);
+  return branchesRoot;
+}
 
 export interface BranchRepositoryUpdateOptions {
   preserveUpdatedAt?: boolean;
@@ -302,7 +323,67 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async create(branch: Partial<Branch>): Promise<Branch> {
     const insertData = this.branchToInsert(branch);
     try {
-      const row = await insert(this.db, branches).values(insertData).returning().one();
+      const row = await runDatabaseTransaction(this.db, async (transactionDb) => {
+        await lockRepoFilesystemNamespaceMutation(this.db, transactionDb);
+        await lockRowForUpdate(
+          transactionDb,
+          this.db,
+          repos,
+          eq(repos.repo_id, insertData.repo_id)
+        );
+        const parent = await select(transactionDb)
+          .from(repos)
+          .where(eq(repos.repo_id, insertData.repo_id))
+          .one();
+        if (!parent) throw new EntityNotFoundError('Repo', String(insertData.repo_id));
+        const parentData = parent.data as { filesystem_status?: unknown };
+        if (
+          parentData.filesystem_status === 'deleting' ||
+          parentData.filesystem_status === 'delete_failed'
+        ) {
+          throw new RepositoryError(
+            `Cannot create branch '${branch.name}': repository deletion must be completed or recovered first`
+          );
+        }
+
+        const candidatePath = resolve(insertData.data.path);
+
+        // Service-created branches always use <branchesRoot>/<repoSlug>/<name>.
+        // Apply the cross-repository namespace check to that canonical shape,
+        // while retaining compatibility with historical/directly-seeded rows
+        // whose path predates the managed layout.
+        if (isValidManagedRepoSlug(parent.slug) && isValidManagedBranchName(insertData.name)) {
+          const branchesRoot = deriveBranchesRoot(candidatePath, parent.slug);
+          if (candidatePath === resolve(branchesRoot, parent.slug, insertData.name)) {
+            const existingBranchRows = (await select(transactionDb)
+              .from(branches)
+              .all()) as BranchRow[];
+            for (const existingBranch of existingBranchRows) {
+              const existingData = existingBranch.data as { path?: unknown };
+              if (
+                typeof existingData.path === 'string' &&
+                filesystemPathsOverlap(candidatePath, existingData.path)
+              ) {
+                throw new RepoFilesystemNamespaceConflictError(
+                  `Cannot create branch '${branch.name}': filesystem namespace overlaps another branch`
+                );
+              }
+            }
+            const tenantRepos = (await select(transactionDb).from(repos).all()) as RepoRow[];
+            for (const otherRepo of tenantRepos) {
+              if (otherRepo.repo_id === parent.repo_id || !isValidManagedRepoSlug(otherRepo.slug)) {
+                continue;
+              }
+              if (filesystemPathsOverlap(candidatePath, resolve(branchesRoot, otherRepo.slug))) {
+                throw new RepoFilesystemNamespaceConflictError(
+                  `Cannot create branch '${branch.name}': filesystem namespace overlaps another repository`
+                );
+              }
+            }
+          }
+        }
+        return insert(transactionDb, branches).values(insertData).returning().one();
+      });
       const baseUrl = await getBaseUrl();
       return this.rowToBranch(row, baseUrl);
     } catch (error) {
@@ -321,6 +402,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           error
         );
       }
+      if (error instanceof RepoFilesystemNamespaceConflictError) throw error;
       throw new RepositoryError(`Failed to create branch '${branch.name}': ${msg}`, error);
     }
   }

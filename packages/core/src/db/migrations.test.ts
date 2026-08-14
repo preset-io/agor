@@ -57,7 +57,7 @@ describe('Postgres migrations', () => {
     ).toEqual([]);
   });
 
-  it('assigns GitHub install state unique post-HA migration watermarks', async () => {
+  it('keeps journal watermarks increasing through branch filesystem ownership', async () => {
     const [postgresJournal, sqliteJournal] = await Promise.all(
       [
         new URL('../../drizzle/postgres/meta/_journal.json', import.meta.url),
@@ -66,8 +66,8 @@ describe('Postgres migrations', () => {
     );
 
     for (const [journal, expectedTag, expectedIndex] of [
-      [postgresJournal, '0082_github_install_state', 82],
-      [sqliteJournal, '0085_github_install_state', 85],
+      [postgresJournal, '0083_branch_filesystem_owner_unique', 83],
+      [sqliteJournal, '0086_branch_filesystem_owner_unique', 86],
     ] as const) {
       const entry = journal.entries.at(-1);
       const predecessor = journal.entries.at(-2);

@@ -7,8 +7,11 @@
  * JSON serialization, and genealogy queries.
  */
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { generateId, SHORT_ID_LENGTH, shortId } from '../../lib/ids';
 import type { Session, SessionID, TaskID, UserID } from '../../types';
 import { SessionStatus, TaskStatus } from '../../types';
@@ -26,8 +29,21 @@ import {
 /**
  * Helper to create a test database instance
  */
+const integrationDatabaseDirectory = mkdtempSync(join(tmpdir(), 'agor-integration-db-'));
+let integrationDatabaseCounter = 0;
+
+afterAll(() => {
+  rmSync(integrationDatabaseDirectory, { recursive: true, force: true });
+});
+
 function createTestDb() {
-  return createDatabase({ url: ':memory:' });
+  // libSQL `:memory:` databases are connection-local. Repository lifecycle
+  // tests now exercise multiple transactions, so use isolated disposable
+  // files whose state is shared by every transaction connection.
+  integrationDatabaseCounter += 1;
+  return createDatabase({
+    url: `file:${join(integrationDatabaseDirectory, `${integrationDatabaseCounter}.db`)}`,
+  });
 }
 
 /**

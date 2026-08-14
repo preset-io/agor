@@ -56,13 +56,13 @@ import {
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
-  BranchStorageMode,
   HookContext,
   MCPMemberPolicy,
   Message,
   MessageID,
   MessageSource,
   Params,
+  RepoBranchCreateRequest,
   ScheduleID,
   Session,
   SessionID,
@@ -3211,28 +3211,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/repos/:id/branches',
     {
-      async create(
-        data: {
-          name: string;
-          ref: string;
-          createBranch?: boolean;
-          refType?: 'branch' | 'tag';
-          pullLatest?: boolean;
-          sourceBranch?: string;
-          issue_url?: string;
-          pull_request_url?: string;
-          boardId: string;
-          /** Explicit board position. Omit to let the service compute a
-           *  smart default — preferred for MCP/agent callers. The UI
-           *  passes the viewport center so the new card lands where the
-           *  user invoked the dialog. */
-          position?: { x: number; y: number };
-          // Branch storage model — see context/explorations/clone-redesign.md.
-          storage_mode?: BranchStorageMode;
-          clone_depth?: number;
-        },
-        params: RouteParams
-      ) {
+      async create(data: RepoBranchCreateRequest, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Repo ID required');
         return reposService.createBranch(

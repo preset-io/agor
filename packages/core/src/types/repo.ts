@@ -1,7 +1,7 @@
 // src/types/repo.ts
 
 import type { RepoEnvironment, RepoEnvironmentConfigV1 } from './branch';
-import type { SessionID, UUID } from './id';
+import type { RepoFilesystemOperationID, SessionID, UUID } from './id';
 
 /**
  * URL-friendly identifier for repositories and branches
@@ -152,6 +152,15 @@ export interface Repo {
    */
   clone_error?: RepoCloneError;
 
+  /** Durable state for an in-progress or failed managed-root deletion. */
+  filesystem_status?: RepoFilesystemStatus;
+
+  /** UUIDv7 generation fencing one repository deletion attempt. */
+  filesystem_operation_id?: RepoFilesystemOperationID;
+
+  /** Sanitized durable failure for the current repository deletion attempt. */
+  filesystem_error?: string;
+
   /** Repository metadata */
   created_at: string;
   last_updated: string;
@@ -182,6 +191,9 @@ export const REPO_SERVER_MANAGED_FIELDS = [
   'unix_group',
   'clone_status',
   'clone_error',
+  'filesystem_status',
+  'filesystem_operation_id',
+  'filesystem_error',
   'last_updated',
 ] as const satisfies readonly (keyof Repo)[];
 export type RepoServerManagedField = (typeof REPO_SERVER_MANAGED_FIELDS)[number];
@@ -189,15 +201,36 @@ export type RepoServerManagedField = (typeof REPO_SERVER_MANAGED_FIELDS)[number]
 /** Metadata accepted from ordinary external repository patch callers. */
 export type RepoClientPatch = Omit<Partial<Repo>, RepoImmutableField | RepoServerManagedField>;
 
+/** Fields an exact-row `git.clone` lifecycle credential may report. */
+export const REPO_CLONE_EXECUTOR_PATCH_FIELDS = [
+  'name',
+  'default_branch',
+  'environment',
+  'unix_group',
+  'clone_status',
+  'clone_error',
+] as const satisfies readonly (keyof Repo)[];
+
 /** Privileged repository fields reported by clone/Unix lifecycle executors. */
 export type RepoExecutorPatch = Partial<
-  Pick<
-    Repo,
-    'name' | 'default_branch' | 'environment' | 'unix_group' | 'clone_status' | 'clone_error'
-  >
+  Pick<Repo, (typeof REPO_CLONE_EXECUTOR_PATCH_FIELDS)[number]>
 >;
 
 export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
+
+export const REPO_FILESYSTEM_STATUSES = ['deleting', 'delete_failed'] as const;
+export type RepoFilesystemStatus = (typeof REPO_FILESYSTEM_STATUSES)[number];
+
+export const REPO_FILESYSTEM_LIFECYCLE_FIELDS = [
+  'filesystem_status',
+  'filesystem_operation_id',
+  'filesystem_error',
+] as const satisfies readonly (keyof Repo)[];
+
+export interface RepoFilesystemLifecycleExpectation {
+  filesystemStatuses?: readonly (RepoFilesystemStatus | undefined)[];
+  operationId?: RepoFilesystemOperationID | null;
+}
 
 export type RepoCloneErrorCategory =
   | 'auth_failed'

@@ -40,7 +40,8 @@ export async function ensureRepoOriginAlignedForRepo(
   if (!repo.local_path) return;
 
   const sessionToken = generateScopedServiceToken(
-    app as unknown as { settings: { authentication?: { secret?: string } } }
+    app as unknown as { settings: { authentication?: { secret?: string } } },
+    { command: 'git.repo.realign-origin', repo_id: repo.repo_id }
   );
 
   spawnExecutorFireAndForget(
