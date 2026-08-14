@@ -57,7 +57,7 @@ describe('Postgres migrations', () => {
     ).toEqual([]);
   });
 
-  it('enforces transcript index creation as an offline existing-db cutover', () => {
+  it('enforces PostgreSQL transcript indexes as an offline existing-db cutover', () => {
     expect(
       pendingOfflineCutoverMigrations({
         applied: ['0082_github_install_state'],
@@ -69,7 +69,7 @@ describe('Postgres migrations', () => {
         applied: ['0085_github_install_state'],
         pending: ['0086_transcript_hydration_keysets'],
       })
-    ).toEqual(['0086_transcript_hydration_keysets']);
+    ).toEqual([]);
     expect(
       pendingOfflineCutoverMigrations({
         applied: [],

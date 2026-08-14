@@ -1,6 +1,7 @@
 import { BadRequest } from '@agor/core/feathers';
 import {
   type HookContext,
+  isCanonicalFullUuid,
   MESSAGE_TYPE_VALUES,
   type MessageCreate,
   MessageRole,
@@ -23,10 +24,6 @@ const MESSAGE_CREATE_FIELDS = new Set<keyof MessageCreate>([
 const MESSAGE_TYPES = new Set<string>(MESSAGE_TYPE_VALUES);
 const MESSAGE_ROLES = new Set<string>(Object.values(MessageRole));
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
-
 /** Runtime counterpart to the public MessageCreate DTO. */
 export function assertMessageCreatePayload(data: unknown): asserts data is MessageCreate {
   if (Array.isArray(data)) throw new BadRequest('Bulk Message create is not supported');
@@ -42,14 +39,14 @@ export function assertMessageCreatePayload(data: unknown): asserts data is Messa
     throw new BadRequest(`Unsupported Message create fields: ${unsupported.join(', ')}`);
   }
 
-  if (input.message_id !== undefined && !isNonEmptyString(input.message_id)) {
-    throw new BadRequest('message_id must be a non-empty string when provided');
+  if (input.message_id !== undefined && !isCanonicalFullUuid(input.message_id)) {
+    throw new BadRequest('message_id must be a canonical full UUID when provided');
   }
-  if (!isNonEmptyString(input.session_id)) {
-    throw new BadRequest('session_id is required');
+  if (!isCanonicalFullUuid(input.session_id)) {
+    throw new BadRequest('session_id must be a canonical full UUID');
   }
-  if (input.task_id !== undefined && !isNonEmptyString(input.task_id)) {
-    throw new BadRequest('task_id must be a non-empty string when provided');
+  if (input.task_id !== undefined && !isCanonicalFullUuid(input.task_id)) {
+    throw new BadRequest('task_id must be a canonical full UUID when provided');
   }
   if (!MESSAGE_TYPES.has(String(input.type))) {
     throw new BadRequest('Unsupported Message type');
@@ -60,7 +57,11 @@ export function assertMessageCreatePayload(data: unknown): asserts data is Messa
   if (!Number.isSafeInteger(input.index) || (input.index as number) < 0) {
     throw new BadRequest('index must be a non-negative integer');
   }
-  if (!isNonEmptyString(input.timestamp) || !Number.isFinite(Date.parse(input.timestamp))) {
+  if (
+    typeof input.timestamp !== 'string' ||
+    input.timestamp.length === 0 ||
+    !Number.isFinite(Date.parse(input.timestamp))
+  ) {
     throw new BadRequest('timestamp must be a valid date string');
   }
   if (typeof input.content_preview !== 'string') {

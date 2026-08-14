@@ -363,6 +363,29 @@ describe('ReactiveSessionHandle message snapshot reconciliation', () => {
     expect(handle.isTaskLoaded(task.task_id)).toBe(false);
   });
 
+  it('does not reverse an unload that occurs during a direct Task load', async () => {
+    const first = makeTask('task-1', TaskStatus.COMPLETED);
+    const second = makeTask('task-2', TaskStatus.COMPLETED);
+    const snapshot = makeMessage(first.task_id, 0);
+    const opts: MockClientOptions = {
+      tasks: [first, second],
+      messagesByTask: { [first.task_id]: [snapshot], [second.task_id]: [] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    opts.deferTaskMessageFetch = first.task_id;
+    const loading = handle.loadTaskMessages(first.task_id);
+    await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalledTimes(2));
+    handle.unloadTaskMessages(first.task_id);
+    mock.releaseMessageFetch();
+
+    await expect(loading).resolves.toEqual([snapshot]);
+    expect(handle.isTaskLoaded(first.task_id)).toBe(false);
+    expect(handle.getTaskMessages(first.task_id)).toEqual([]);
+  });
+
   it('reconciles a removal over a large transcript snapshot before commit', async () => {
     const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
     const mock = createMockClient(opts);

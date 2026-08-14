@@ -252,7 +252,19 @@ describe('MessagesService.create boundary', () => {
       const sessionId = await createTestSession(db);
       const valid = message(sessionId, 0);
       const cases: Array<[unknown, string]> = [
-        [{ ...valid, session_id: undefined }, 'session_id is required'],
+        [{ ...valid, session_id: undefined }, 'session_id must be a canonical full UUID'],
+        [
+          { ...valid, message_id: 'not-a-uuid' },
+          'message_id must be a canonical full UUID when provided',
+        ],
+        [
+          { ...valid, message_id: `${generateId()}-overlength` },
+          'message_id must be a canonical full UUID when provided',
+        ],
+        [
+          { ...valid, task_id: 'task-short' },
+          'task_id must be a canonical full UUID when provided',
+        ],
         [{ ...valid, role: 'observer' }, 'Unsupported Message role'],
         [{ ...valid, index: -1 }, 'index must be a non-negative integer'],
         [{ ...valid, timestamp: 'not-a-date' }, 'timestamp must be a valid date string'],

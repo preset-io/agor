@@ -7,6 +7,7 @@
 
 import { MESSAGE_PAGINATION, PAGINATION } from '@agor/core/config';
 import {
+  MessageIdentifierIntegrityError,
   MessageParentIntegrityError,
   MessagesRepository,
   type TenantScopeAwareDatabase,
@@ -209,7 +210,12 @@ const MESSAGE_PATCH_FIELD_SET = new Set<keyof MessagePatch>(MESSAGE_PATCH_FIELDS
 /**
  * Extended messages service with custom methods
  */
-export class MessagesService extends DrizzleService<Message, MessageCreate, MessageParams> {
+export class MessagesService extends DrizzleService<
+  Message,
+  MessageCreate,
+  MessageParams,
+  MessagePatch
+> {
   private messagesRepo: MessagesRepository;
 
   constructor(db: TenantScopeAwareDatabase) {
@@ -237,7 +243,12 @@ export class MessagesService extends DrizzleService<Message, MessageCreate, Mess
     try {
       return await super.create(data, params);
     } catch (error) {
-      if (error instanceof MessageParentIntegrityError) throw new BadRequest(error.message);
+      if (
+        error instanceof MessageParentIntegrityError ||
+        error instanceof MessageIdentifierIntegrityError
+      ) {
+        throw new BadRequest(error.message);
+      }
       throw error;
     }
   }

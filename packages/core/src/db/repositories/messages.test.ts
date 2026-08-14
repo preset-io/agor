@@ -131,6 +131,21 @@ async function createTestTask(db: any, sessionId: SessionID): Promise<TaskID> {
 // ============================================================================
 
 describe('MessagesRepository.create', () => {
+  dbTest('rejects noncanonical supplied IDs before SQLite persistence', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+
+    await expect(
+      messages.create(
+        createMessageData({
+          session_id: sessionId,
+          message_id: `${generateId()}-overlength` as MessageID,
+        })
+      )
+    ).rejects.toThrow('message_id must be a canonical full UUID');
+    await expect(messages.findBySessionId(sessionId)).resolves.toEqual([]);
+  });
+
   dbTest('sanitizes PostgreSQL-invalid Unicode in JSON and preview fields', async ({ db }) => {
     const actualNul = String.fromCharCode(0);
     const loneHighSurrogate = String.fromCharCode(0xd800);

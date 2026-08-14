@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { prefixToLikePattern, SHORT_ID_LENGTH, toShortId } from '../types/id';
+import { isCanonicalFullUuid, prefixToLikePattern, SHORT_ID_LENGTH, toShortId } from '../types/id';
 import {
   expandPrefix,
   findByShortIdPrefix,
@@ -73,6 +73,20 @@ describe('isValidUUID', () => {
   it('should reject non-v7 UUIDs', () => {
     expect(isValidUUID('01933e4a-7b89-4c35-a8f3-9d2e1c4b5a6f')).toBe(false); // v4
     expect(isValidUUID('01933e4a-7b89-1c35-a8f3-9d2e1c4b5a6f')).toBe(false); // v1
+  });
+});
+
+describe('isCanonicalFullUuid', () => {
+  it('accepts the lowercase full UUID representation used by storage and queries', () => {
+    expect(isCanonicalFullUuid('01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f')).toBe(true);
+    expect(isCanonicalFullUuid('00000000-0000-0000-0000-000000000000')).toBe(true);
+  });
+
+  it('rejects short, uppercase, malformed, and overlength IDs', () => {
+    expect(isCanonicalFullUuid('01933e4a')).toBe(false);
+    expect(isCanonicalFullUuid('01933E4A-7B89-7C35-A8F3-9D2E1C4B5A6F')).toBe(false);
+    expect(isCanonicalFullUuid('not-a-uuid')).toBe(false);
+    expect(isCanonicalFullUuid('01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f0')).toBe(false);
   });
 });
 

@@ -326,12 +326,17 @@ export class ReactiveSessionHandle {
 
   async loadTaskMessages(taskId: string): Promise<Message[]> {
     this.assertNotDisposed();
-    this.recordMessageCacheMutation(taskId);
+    const cacheMutationSequence = this.recordMessageCacheMutation(taskId);
     const fetchToken = this.beginMessageFetch();
     try {
       const snapshot = await this.fetchTaskMessagesAtHighWater(taskId);
       let committed = snapshot;
       this.updateState((prev) => {
+        // A later unload (or newer load) owns cache membership. The older
+        // request may resolve to its caller, but must not reverse that choice.
+        if (this.messageCacheMutationsByTask.get(taskId) !== cacheMutationSequence) {
+          return prev;
+        }
         // A Task removal is journaled separately from Message mutations. Do
         // not let an older transcript request recreate the removed Task's
         // bucket after the realtime Task handler deleted it.
@@ -500,9 +505,10 @@ export class ReactiveSessionHandle {
     });
   }
 
-  private recordMessageCacheMutation(taskId: string): void {
+  private recordMessageCacheMutation(taskId: string): number {
     this.messageCacheMutationSequence += 1;
     this.messageCacheMutationsByTask.set(taskId, this.messageCacheMutationSequence);
+    return this.messageCacheMutationSequence;
   }
 
   dispose(): void {

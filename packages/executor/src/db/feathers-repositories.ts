@@ -14,6 +14,7 @@ import type {
   MCPServerFilters,
   MCPServerID,
   Message,
+  MessageCreate,
   MessageID,
   Repo,
   Session,
@@ -70,9 +71,9 @@ export class FeathersMessagesRepository {
     }
   }
 
-  async create(message: Omit<Message, 'message_id'>): Promise<Message> {
+  async create(message: MessageCreate): Promise<Message> {
     const service = this.client.service('messages');
-    return await service.create(message as Partial<Message>);
+    return await service.create(message);
   }
 }
 

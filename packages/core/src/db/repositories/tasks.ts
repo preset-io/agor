@@ -630,8 +630,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     const rows = await dataQuery.all();
     return {
       data: opts.selectTaskIdOnly
-        ? rows.map((row) => ({ task_id: (row as Pick<TaskRow, 'task_id'>).task_id as TaskID }))
-        : rows.map((row) => this.rowToTask(row as TaskRow)),
+        ? rows.map((row: unknown) => ({
+            task_id: (row as Pick<TaskRow, 'task_id'>).task_id as TaskID,
+          }))
+        : rows.map((row: unknown) => this.rowToTask(row as TaskRow)),
       total: Number(countRow?.count ?? 0),
     };
   }

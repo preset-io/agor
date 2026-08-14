@@ -8,6 +8,7 @@
 import type { Message, MessageCreate, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
 import { and, asc, desc, eq, gt, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import { isCanonicalFullUuid } from '../../types/id';
 import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
 import type { Database } from '../client';
 import {
@@ -48,6 +49,13 @@ export class MessageParentIntegrityError extends Error {
   ) {
     super(message);
     this.name = 'MessageParentIntegrityError';
+  }
+}
+
+export class MessageIdentifierIntegrityError extends Error {
+  constructor(readonly field: 'message_id' | 'session_id' | 'task_id') {
+    super(`${field} must be a canonical full UUID`);
+    this.name = 'MessageIdentifierIntegrityError';
   }
 }
 
@@ -238,6 +246,15 @@ export class MessagesRepository {
       ...input,
       message_id: input.message_id ?? (generateId() as MessageID),
     };
+    if (!isCanonicalFullUuid(message.message_id)) {
+      throw new MessageIdentifierIntegrityError('message_id');
+    }
+    if (!isCanonicalFullUuid(message.session_id)) {
+      throw new MessageIdentifierIntegrityError('session_id');
+    }
+    if (message.task_id && !isCanonicalFullUuid(message.task_id)) {
+      throw new MessageIdentifierIntegrityError('task_id');
+    }
     const row = this.messageToRow(message);
     return this.runMetadataMutation(() =>
       runDatabaseTransaction(
@@ -396,17 +413,15 @@ export class MessagesRepository {
       content_preview: messages.content_preview,
       parent_tool_use_id: messages.parent_tool_use_id,
     } as const;
-    const projection: Record<string, unknown> | undefined = selectedFields
-      ? Object.fromEntries(
-          selectedFields.flatMap((field) => {
-            if (field === 'content' || field === 'tool_uses' || field === 'metadata') {
-              return [['data', messages.data]];
-            }
-            const column = physicalColumns[field as keyof typeof physicalColumns];
-            return column ? [[field, column]] : [];
-          })
-        )
-      : undefined;
+    const projection: Record<string, unknown> | undefined = selectedFields ? {} : undefined;
+    for (const field of selectedFields ?? []) {
+      if (field === 'content' || field === 'tool_uses' || field === 'metadata') {
+        if (projection) projection.data = messages.data;
+        continue;
+      }
+      const column = physicalColumns[field as keyof typeof physicalColumns];
+      if (projection && column) projection[field] = column;
+    }
 
     let dataQuery = select(this.db, projection).from(messages);
     if (whereClause) dataQuery = dataQuery.where(whereClause);
@@ -435,8 +450,10 @@ export class MessagesRepository {
     const rows = await dataQuery.all();
     return {
       data: selectedFields
-        ? rows.map((row) => this.projectedRowToMessage(row as Partial<MessageRow>, selectedFields))
-        : rows.map((row) => this.rowToMessage(row as MessageRow)),
+        ? rows.map((row: unknown) =>
+            this.projectedRowToMessage(row as Partial<MessageRow>, selectedFields)
+          )
+        : rows.map((row: unknown) => this.rowToMessage(row as MessageRow)),
       total,
     };
   }

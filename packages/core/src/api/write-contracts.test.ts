@@ -6,6 +6,7 @@ import type {
   ScheduleCreateData,
   SchedulePatchData,
 } from '../types/index.js';
+import { MessageRole } from '../types/index.js';
 import type {
   AgorClient,
   ClientInput,
@@ -104,7 +105,7 @@ function assertClientWriteBoundaries(client: AgorClient): void {
     session_id: 'session-id',
     task_id: 'task-id',
     type: 'user',
-    role: 'user',
+    role: MessageRole.USER,
     index: 0,
     timestamp: '2026-08-14T00:00:00.000Z',
     content_preview: 'Prompt',

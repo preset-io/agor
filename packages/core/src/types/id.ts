@@ -28,6 +28,14 @@
  */
 export type UUID = string & { readonly __brand: 'UUID' };
 
+/** Full lowercase UUID storage form accepted by query and persistence boundaries. */
+export function isCanonicalFullUuid(value: unknown): value is UUID {
+  return (
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+  );
+}
+
 export type GroupID = UUID & { readonly __entity: 'Group' };
 
 /**

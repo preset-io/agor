@@ -85,6 +85,12 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         content_preview: content,
         content,
       });
+      await expect(
+        repository.create({
+          ...message(99, 'invalid ID must not reach PostgreSQL'),
+          message_id: `${generateId()}-overlength` as Message['message_id'],
+        })
+      ).rejects.toThrow('message_id must be a canonical full UUID');
       const first = await repository.create(message(0, `zip${actualNul}${loneHighSurrogate}😀`));
       const createdBeforePatch = await select(scoped, { created_at: messagesTable.created_at })
         .from(messagesTable)
