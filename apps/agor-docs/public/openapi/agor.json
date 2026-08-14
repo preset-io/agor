@@ -10244,64 +10244,6 @@
         }
       }
     },
-    "/repos/{id}/branches/{name}/{id_2}": {
-      "delete": {
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "description": "id parameter"
-          },
-          {
-            "in": "path",
-            "name": "name",
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "description": "name parameter"
-          },
-          {
-            "in": "path",
-            "name": "id_2",
-            "description": "ID of :id to remove",
-            "schema": {
-              "type": "integer"
-            },
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/_id"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "404": {
-            "description": "not found"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Removes the resource with id.",
-        "summary": "Removes the resource with id",
-        "tags": ["repos"],
-        "security": []
-      }
-    },
     "/repos/{id}/import-agor-yml": {
       "post": {
         "parameters": [
