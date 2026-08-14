@@ -121,13 +121,34 @@ jobs:
 
           publish_exact() {
             local artifact=$1
-            local manifest name version spec local_sha remote_sha
+            local manifest name version spec local_sha remote_sha lookup_error
             manifest=$(tar -xOf "$artifact" package/package.json)
             name=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.name)' "$manifest")
             version=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.version)' "$manifest")
             spec="$name@$version"
             local_sha=$(sha1sum "$artifact" | awk '{print $1}')
-            remote_sha=$(npm view "$spec" dist.shasum --json 2>/dev/null | tr -d '"[:space:]' || true)
+
+            # npm emits a JSON error object on stdout for a missing version when
+            # --json is used. Preserve the command status instead of mistaking
+            # that object for a published tarball shasum.
+            lookup_error=$(mktemp)
+            if remote_sha=$(npm view "$spec" dist.shasum 2>"$lookup_error"); then
+              remote_sha=$(printf '%s' "$remote_sha" | tr -d '"[:space:]')
+              if [[ -z "$remote_sha" ]]; then
+                echo "::error::npm returned no shasum for existing package $spec"
+                rm -f "$lookup_error"
+                return 1
+              fi
+            elif grep -Eq '(^|[[:space:]])E404([[:space:]]|$)' "$lookup_error"; then
+              remote_sha=""
+            else
+              echo "::error::Failed to query npm for $spec"
+              cat "$lookup_error" >&2
+              rm -f "$lookup_error"
+              return 1
+            fi
+            rm -f "$lookup_error"
+
             if [[ -n "$remote_sha" ]]; then
               if [[ "$remote_sha" != "$local_sha" ]]; then
                 echo "::error::$spec already exists with different tarball bytes"
