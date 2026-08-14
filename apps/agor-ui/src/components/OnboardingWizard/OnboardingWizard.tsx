@@ -97,6 +97,12 @@ const STEPS: WizardStep[] = ['persona', 'llm', 'workspace', 'integrations', 'don
 // user can rename it. Named the teammate and the board the wizard creates.
 const DEFAULT_TEAMMATE_NAME = 'Scout';
 
+// Surfaced when the workspace step needs the API but the socket client isn't
+// available. That step is required and has no Skip, so a bare early return
+// would leave its only button doing nothing at all.
+const NO_CLIENT_BOARD_ERROR =
+  "Can't reach the server right now - check your connection and try again.";
+
 // The workspace step creates the user's board + first teammate, so it is NOT
 // skippable — completing the wizard must always yield a board to land on.
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
@@ -936,8 +942,18 @@ export function OnboardingWizard({
 
   const handleSkip = useCallback(() => {
     if (currentStep === 'done') return;
+    // Skipping the LLM step must not leave a merely *highlighted* provider
+    // behind. Selecting a card sets `selectedAgent` before any key is entered,
+    // and completion reads a non-null agent as "there is a model to run on" —
+    // which would bootstrap the teammate's first session with no credentials.
+    // Clear it unless the provider is genuinely configured.
+    if (currentStep === 'llm' && selectedAgent && !agentHasKey(selectedAgent)) {
+      setSelectedAgent(null);
+      setApiKey('');
+      setLlmError(null);
+    }
     goToStep(STEPS[stepIndex + 1]);
-  }, [currentStep, stepIndex, goToStep]);
+  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey]);
 
   const handlePrimary = useCallback(async () => {
     switch (currentStep) {
@@ -1020,7 +1036,10 @@ export function OnboardingWizard({
         // Board created earlier this pass (Back → edit → forward): rename the
         // same board instead of creating a duplicate.
         if (createdBoardId) {
-          if (!client) return;
+          if (!client) {
+            setBoardError(NO_CLIENT_BOARD_ERROR);
+            return;
+          }
           setBoardCreating(true);
           setBoardError(null);
           try {
@@ -1042,7 +1061,10 @@ export function OnboardingWizard({
           goToStep('integrations');
           return;
         }
-        if (!client) return;
+        if (!client) {
+          setBoardError(NO_CLIENT_BOARD_ERROR);
+          return;
+        }
         setBoardCreating(true);
         setBoardError(null);
         try {
@@ -1734,7 +1756,11 @@ export function OnboardingWizard({
 
   const renderDone = () => {
     const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
-    const teammateReady = hasExistingBoard;
+    // What the wizard has actually done by this point is create/confirm the
+    // board. The teammate itself is seeded by the app shell *after* the user
+    // clicks through, so claiming "Teammate ready" here would be a lie the
+    // checklist can't back up.
+    const boardReady = hasExistingBoard;
 
     return (
       <div style={{ textAlign: 'center', padding: '8px 0' }}>
@@ -1812,7 +1838,11 @@ export function OnboardingWizard({
         <Paragraph
           style={{ color: TEXT_SECONDARY, marginBottom: 28, maxWidth: 380, margin: '0 auto 28px' }}
         >
-          Open your board to start your first AI session.
+          {/* Without a model there is no first session to open — the completion
+              handler deliberately stops at the board. Don't promise one. */}
+          {aiConnected
+            ? 'Open your board to start your first AI session.'
+            : 'Open your board to get started. Connect an AI model in Settings whenever you are ready.'}
         </Paragraph>
 
         {/* Summary checklist */}
@@ -1836,9 +1866,9 @@ export function OnboardingWizard({
               hint: 'Add in Settings - AI & Agents',
             },
             {
-              label: 'Teammate ready',
-              done: teammateReady,
-              hint: 'Add more teammates anytime in Settings',
+              label: 'Board created',
+              done: boardReady,
+              hint: 'Create one anytime from the sidebar',
             },
             {
               label: 'MCP tools',

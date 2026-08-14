@@ -150,6 +150,33 @@ describe('seedOnboardingTeammate', () => {
     expect(result).toEqual({});
   });
 
+  // The LLM step is skippable, so `agent` can legitimately be null at completion.
+  // Bootstrapping a claude-code session anyway would fail on the first turn with
+  // no credentials — the workspace is still created, but the caller gets no
+  // session id and therefore lands the user on their board.
+  for (const agent of [null, undefined] as const) {
+    it(`creates the workspace but no session when the LLM step was skipped (agent: ${agent})`, async () => {
+      createTeammateBranchMock.mockResolvedValue({
+        branch_id: 'branch-1',
+        board_id: 'board-1',
+      } as Branch);
+
+      const { input, onWarn, onCreateSession } = setup({ agent });
+      const result = await seedOnboardingTeammate(input);
+
+      // The teammate's branch still lands on the board...
+      expect(createTeammateBranchMock).toHaveBeenCalledTimes(1);
+      // ...but nothing is prompted, and no claude-code default sneaks in.
+      expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+      expect(onCreateSession).not.toHaveBeenCalled();
+      expect(result).toEqual({});
+
+      // The user is told why there's no session waiting for them.
+      expect(onWarn).toHaveBeenCalledTimes(1);
+      expect(onWarn.mock.calls[0][0]).toMatch(/connect an ai model/i);
+    });
+  }
+
   it('does nothing when no teammate was named (the workspace step was skipped)', async () => {
     const { input, onWarn } = setup({ teammateName: '   ' });
     const result = await seedOnboardingTeammate(input);

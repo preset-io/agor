@@ -586,6 +586,72 @@ describe('OnboardingWizard', () => {
     expect(result.teammateName).toBe('Scout');
   });
 
+  it('skipping the LLM step finishes onto the board with no agent to bootstrap a session', async () => {
+    const onComplete = vi.fn();
+    const { boardsService } = renderWizard({ onComplete });
+
+    // persona — skipped.
+    clickButton(/skip for now/i);
+
+    // llm — highlight a provider but never connect it, then skip. Selecting a
+    // card alone must not survive as "there is a model to run on".
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    clickButton('Claude');
+    expect(screen.getByLabelText('Anthropic API key')).toBeInTheDocument();
+    clickButton(/skip for now/i);
+
+    // workspace is still required, so a board is created either way.
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    clickButton(/^continue →/i);
+    await waitFor(() => expect(boardsService.create).toHaveBeenCalledTimes(1));
+
+    expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
+    clickButton(/^continue →/i);
+
+    // The summary must not claim a connected AI, and must not promise a first
+    // session that will never be started.
+    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(screen.getByText(/connect an ai model in settings whenever/i)).toBeInTheDocument();
+    expect(screen.getByText('Add in Settings - AI & Agents')).toBeInTheDocument();
+
+    clickButton(/open my board/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    const result = onComplete.mock.calls[0][0] as {
+      agent: string | null;
+      boardId: string;
+      sessionId: string;
+    };
+    // A null agent is what tells the completion handler to seed the workspace
+    // and land on the board rather than open a credential-less claude-code
+    // session (see seedOnboardingTeammate).
+    expect(result.agent).toBeNull();
+    expect(result.boardId).toBe('board-1');
+    expect(result.sessionId).toBe('');
+  });
+
+  it('final checklist reports the board it created, not a teammate it has not seeded yet', () => {
+    renderWizard({ initialStep: 'done' });
+
+    expect(screen.getByText('Board created')).toBeInTheDocument();
+    // The teammate is seeded by the app shell *after* this step resolves, so
+    // the wizard has nothing to tick off here.
+    expect(screen.queryByText('Teammate ready')).not.toBeInTheDocument();
+  });
+
+  it('explains the failure instead of no-oping when the required workspace step has no client', async () => {
+    renderWizard({ initialStep: 'workspace', client: null });
+
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    clickButton(/^continue →/i);
+
+    // The workspace step is required and has no Skip, so a silent early return
+    // would leave the user on a dead button with no explanation.
+    expect(await screen.findByText(/can't reach the server right now/i)).toBeInTheDocument();
+    expect(screen.getByText('Name your AI teammate')).toBeInTheDocument();
+    expect(screen.queryByText('Recommended tools')).not.toBeInTheDocument();
+  });
+
   it('shows a loading state on the final step while onComplete is in flight', async () => {
     // onComplete stays pending until we resolve it — mirrors the app shell
     // creating the teammate + navigating before the modal closes.
