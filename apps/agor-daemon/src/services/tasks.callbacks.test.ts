@@ -252,6 +252,17 @@ describe('TasksService completion callbacks', () => {
     expect(callbackPrompt).not.toContain('## Original Prompt');
     expect(callbackPrompt).not.toContain('investigate duplicate callbacks');
     expect(messagesFind).toHaveBeenCalledTimes(1);
+    expect(messagesFind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: {
+          session_id: childSessionId,
+          task_id: taskId,
+          role: 'assistant',
+          $sort: { index: -1 },
+          $limit: 1,
+        },
+      })
+    );
     await vi.waitFor(() =>
       expect(triggerQueueProcessing).toHaveBeenCalledWith(parentSessionId, {})
     );

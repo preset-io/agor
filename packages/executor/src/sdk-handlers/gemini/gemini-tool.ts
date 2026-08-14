@@ -146,9 +146,12 @@ export class GeminiTool implements ITool {
       throw new Error('GeminiTool not initialized with messagesService for live execution');
     }
 
-    // Get next message index
-    const existingMessages = await this.messagesRepo.findBySessionId(sessionId);
-    let nextIndex = existingMessages.length;
+    // Hydrate only this Task while deriving the append position from one row.
+    const [existingMessages, sessionNextIndex] = await Promise.all([
+      taskId ? this.messagesRepo.findByTaskId(taskId) : Promise.resolve([]),
+      this.messagesRepo.getNextIndexBySessionId(sessionId),
+    ]);
+    let nextIndex = sessionNextIndex;
 
     // Create user message (or reuse the daemon's pre-write — see Alt D in
     // docs/never-lose-prompt-design.md).
@@ -160,7 +163,7 @@ export class GeminiTool implements ITool {
       this.messagesService!,
       { messageSource, existingMessages }
     );
-    nextIndex = userMessage.index + 1;
+    nextIndex = Math.max(nextIndex, userMessage.index + 1);
 
     // Execute prompt via Gemini SDK with streaming
     const assistantMessageIds: MessageID[] = [];
@@ -344,9 +347,12 @@ export class GeminiTool implements ITool {
       throw new Error('GeminiTool not initialized with messagesService for live execution');
     }
 
-    // Get next message index
-    const existingMessages = await this.messagesRepo.findBySessionId(sessionId);
-    let nextIndex = existingMessages.length;
+    // Hydrate only this Task while deriving the append position from one row.
+    const [existingMessages, sessionNextIndex] = await Promise.all([
+      taskId ? this.messagesRepo.findByTaskId(taskId) : Promise.resolve([]),
+      this.messagesRepo.getNextIndexBySessionId(sessionId),
+    ]);
+    let nextIndex = sessionNextIndex;
 
     // Create user message (or reuse the daemon's pre-write — see Alt D in
     // docs/never-lose-prompt-design.md).
@@ -358,7 +364,7 @@ export class GeminiTool implements ITool {
       this.messagesService!,
       { messageSource, existingMessages }
     );
-    nextIndex = userMessage.index + 1;
+    nextIndex = Math.max(nextIndex, userMessage.index + 1);
 
     // Execute prompt via Gemini SDK
     const assistantMessageIds: MessageID[] = [];

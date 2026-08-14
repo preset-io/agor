@@ -37,7 +37,7 @@ describe('createCanUseToolCallback', () => {
         patch: vi.fn().mockResolvedValue(undefined),
       } as any,
       messagesRepo: {
-        findBySessionId: vi.fn().mockResolvedValue([]),
+        getNextIndexBySessionId: vi.fn().mockResolvedValue(0),
       } as any,
       messagesService: {
         create: vi.fn().mockResolvedValue(undefined),

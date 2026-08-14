@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/api';
-import type { SessionID } from '@agor/core/types';
+import type { SessionID, TaskID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   FeathersMCPOAuthAuthHeadersRepository,
@@ -9,25 +9,37 @@ import {
 } from './feathers-repositories';
 
 describe('FeathersMessagesRepository', () => {
-  it('requests session-wide history without adding a task filter', async () => {
-    const find = vi.fn().mockResolvedValue([]);
-    const service = vi.fn((path: string) => {
-      if (path !== 'messages') {
-        throw new Error(`unexpected service path: ${path}`);
-      }
-      return { find };
-    });
+  it('accumulates the complete transcript for one exact Task', async () => {
+    const findAll = vi.fn().mockResolvedValue([]);
     const repo = new FeathersMessagesRepository({
-      service,
+      service: () => ({ findAll }),
     } as unknown as AgorClient);
 
-    await repo.findBySessionId('session-1' as SessionID);
+    await repo.findByTaskId('task-1' as TaskID);
 
+    expect(findAll).toHaveBeenCalledWith({
+      query: { task_id: 'task-1', $sort: { index: 1 } },
+    });
+  });
+
+  it('computes the next sparse index from one selected row', async () => {
+    const find = vi.fn().mockResolvedValue({
+      total: 2,
+      limit: 1,
+      skip: 0,
+      data: [{ index: 9 }],
+    });
+    const repo = new FeathersMessagesRepository({
+      service: () => ({ find }),
+    } as unknown as AgorClient);
+
+    await expect(repo.getNextIndexBySessionId('session-1' as SessionID)).resolves.toBe(10);
     expect(find).toHaveBeenCalledWith({
       query: {
         session_id: 'session-1',
-        $sort: { index: 1 },
-        $limit: 10000,
+        $sort: { index: -1 },
+        $limit: 1,
+        $select: ['index'],
       },
     });
   });

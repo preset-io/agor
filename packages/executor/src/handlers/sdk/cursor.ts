@@ -269,18 +269,23 @@ async function buildCursorMcpServers(args: {
   return count > 0 ? mcpServers : undefined;
 }
 
-async function getSessionMessages(client: AgorClient, sessionId: SessionID): Promise<Message[]> {
-  const existingMessages = await client.service('messages').find({
-    query: {
-      session_id: sessionId,
-      $sort: { index: 1 },
-    },
+async function getTaskMessages(client: AgorClient, taskId: TaskID): Promise<Message[]> {
+  return client.service('messages').findAll({
+    query: { task_id: taskId, $sort: { index: 1 } },
   });
-  return Array.isArray(existingMessages) ? existingMessages : existingMessages.data;
 }
 
-function getNextMessageIndexFrom(messages: ReadonlyArray<Message>): number {
-  return messages.length;
+async function getNextMessageIndex(client: AgorClient, sessionId: SessionID): Promise<number> {
+  const result = await client.service('messages').find({
+    query: {
+      session_id: sessionId,
+      $sort: { index: -1 },
+      $limit: 1,
+      $select: ['index'],
+    },
+  });
+  const messages = Array.isArray(result) ? result : result.data;
+  return messages.length > 0 ? messages[0].index + 1 : 0;
 }
 
 async function createUserMessage(args: {
@@ -508,19 +513,22 @@ export async function executeCursorTask(params: {
         await client.service('sessions').patch(sessionId, { sdk_session_id: agent.agentId });
       }
 
-      const existingMessages = await getSessionMessages(client, sessionId);
+      const [existingMessages, sessionNextIndex] = await Promise.all([
+        getTaskMessages(client, taskId),
+        getNextMessageIndex(client, sessionId),
+      ]);
       const userMessage = await createUserMessage({
         client,
         sessionId,
         taskId,
         prompt,
-        index: getNextMessageIndexFrom(existingMessages),
+        index: sessionNextIndex,
         messageSource: params.messageSource,
         existingMessages,
       });
 
       const assistantMessageId = generateId() as MessageID;
-      let nextIndex = Math.max(getNextMessageIndexFrom(existingMessages), userMessage.index + 1);
+      let nextIndex = Math.max(sessionNextIndex, userMessage.index + 1);
       let assistantMessageIndex: number | undefined;
       const ensureAssistantMessageIndex = () => {
         assistantMessageIndex ??= nextIndex++;

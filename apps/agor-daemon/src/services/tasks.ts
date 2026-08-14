@@ -792,23 +792,38 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     try {
       const messagesService = this.app.service('messages');
 
-      // Fetch all messages from the btw fork's task to extract prompt + response
-      const messagesResult = await messagesService.find({
-        query: {
-          session_id: btwSession.session_id,
-          task_id: task.task_id,
-        },
-      });
-
-      const allMessages = messagesResult.data || messagesResult;
-      const messageList = Array.isArray(allMessages) ? allMessages : [];
+      // Only the boundary messages are needed; do not hydrate the whole fork.
+      const [firstUserResult, lastAssistantResult] = await Promise.all([
+        messagesService.find({
+          query: {
+            session_id: btwSession.session_id,
+            task_id: task.task_id,
+            role: 'user',
+            $sort: { index: 1 },
+            $limit: 1,
+          },
+        }),
+        messagesService.find({
+          query: {
+            session_id: btwSession.session_id,
+            task_id: task.task_id,
+            role: 'assistant',
+            $sort: { index: -1 },
+            $limit: 1,
+          },
+        }),
+      ]);
+      const firstUserMessages = Array.isArray(firstUserResult)
+        ? firstUserResult
+        : firstUserResult.data;
+      const lastAssistantMessages = Array.isArray(lastAssistantResult)
+        ? lastAssistantResult
+        : lastAssistantResult.data;
 
       // Extract the original prompt (first user message or task description)
-      // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-      const userMessages = messageList.filter((msg: any) => msg.role === 'user');
       let promptText = '';
-      if (userMessages.length > 0) {
-        const firstUser = userMessages[0];
+      if (firstUserMessages.length > 0) {
+        const firstUser = firstUserMessages[0];
         promptText =
           typeof firstUser.content === 'string'
             ? firstUser.content
@@ -826,15 +841,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
 
       // Extract the last assistant response
-      const assistantMessages = messageList
-        // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-        .filter((msg: any) => msg.role === 'assistant')
-        // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-        .sort((a: any, b: any) => (b.index || 0) - (a.index || 0));
-
       let responseText = '';
-      if (assistantMessages.length > 0) {
-        const lastMsg = assistantMessages[0];
+      if (lastAssistantMessages.length > 0) {
+        const lastMsg = lastAssistantMessages[0];
         responseText =
           typeof lastMsg.content === 'string'
             ? lastMsg.content
@@ -1154,18 +1163,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             query: {
               session_id: childSession.session_id,
               task_id: task.task_id,
+              role: 'assistant',
+              $sort: { index: -1 },
+              $limit: 1,
             },
           });
 
-          // Keep the assistant selection here because the standard task page
-          // returns the transcript in index order and this callback needs the
-          // last assistant response.
           const allMessages = messages.data || messages;
-          const assistantMessages = (Array.isArray(allMessages) ? allMessages : [])
-            // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-            .filter((msg: any) => msg.role === 'assistant')
-            // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-            .sort((a: any, b: any) => (b.index || 0) - (a.index || 0)); // Descending by index
+          const assistantMessages = Array.isArray(allMessages) ? allMessages : [];
 
           if (assistantMessages.length > 0) {
             const lastMsg = assistantMessages[0];

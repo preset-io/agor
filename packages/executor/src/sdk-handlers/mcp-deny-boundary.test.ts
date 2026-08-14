@@ -152,7 +152,7 @@ describe('a denied MCP tool never reaches the server', () => {
           cancelPendingRequests: vi.fn(),
         } as never,
         tasksService: { patch: vi.fn().mockResolvedValue(undefined) } as never,
-        messagesRepo: { findBySessionId: vi.fn().mockResolvedValue([]) } as never,
+        messagesRepo: { getNextIndexBySessionId: vi.fn().mockResolvedValue(0) } as never,
         sessionsService: { patch: vi.fn().mockResolvedValue(undefined) } as never,
         permissionLocks: new Map(),
         mcpServerRepo: {} as never,

@@ -46,13 +46,13 @@ export function extractTokenUsage(raw: unknown): TokenUsage | undefined {
  * fallback writer even after the daemon adopts the user-message write up-front
  * inside `POST /sessions/:id/prompt`.
  *
- * Callers should always pass `existingMessages` (the result of
- * `messagesRepo.findBySessionId(sessionId)` they already fetched to compute
- * `nextIndex`) so the guard can fire. The `nextIndex` argument is still used
+ * Callers should always pass `existingMessages` (the result of the bounded-page
+ * `messagesRepo.findByTaskId(taskId)` hydration) so the guard can fire. The
+ * `nextIndex` argument is still derived separately from the session's last row and used
  * for the freshly-created row's `index`; if the guard fires, callers should
  * recompute their next index from the returned message:
  *
- *   nextIndex = userMessage.index + 1;
+ *   nextIndex = Math.max(nextIndex, userMessage.index + 1);
  */
 export async function createUserMessage(
   sessionId: SessionID,

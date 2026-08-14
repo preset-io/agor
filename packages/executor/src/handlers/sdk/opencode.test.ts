@@ -4,7 +4,8 @@ const mocks = vi.hoisted(() => ({
   runTurn: vi.fn(),
   createUserMessage: vi.fn(),
   messagesCreate: vi.fn(),
-  messagesFind: vi.fn(),
+  taskMessagesFind: vi.fn(),
+  nextMessageIndex: vi.fn(),
   branchFind: vi.fn(),
   permissionRegister: vi.fn(),
   permissionUnregister: vi.fn(),
@@ -33,7 +34,10 @@ vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
 vi.mock('../../db/feathers-repositories.js', () => ({
   createFeathersBackedRepositories: () => ({
     branches: { findById: mocks.branchFind },
-    messages: { findBySessionId: mocks.messagesFind },
+    messages: {
+      findByTaskId: mocks.taskMessagesFind,
+      getNextIndexBySessionId: mocks.nextMessageIndex,
+    },
     messagesService: { create: mocks.messagesCreate },
     sessionMCP: {},
     mcpServers: {},
@@ -110,7 +114,8 @@ function execute(
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.branchFind.mockResolvedValue({ path: '/worktree' });
-  mocks.messagesFind.mockResolvedValueOnce([]).mockResolvedValueOnce([{}]);
+  mocks.taskMessagesFind.mockResolvedValue([]);
+  mocks.nextMessageIndex.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
   mocks.runTurn.mockResolvedValue({
     finalMessage: {
       content: 'done',
