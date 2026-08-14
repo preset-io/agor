@@ -2,16 +2,10 @@
  * Helpers for finding "active" tasks for a session — DISPATCHING / RUNNING / STOPPING /
  * AWAITING_PERMISSION / AWAITING_INPUT — sorted by recency.
  *
- * Background: `TasksService.find()` short-circuits on `session_id: string`
- * (see `services/tasks.ts:65-110`) and returns ALL session tasks in
- * `created_at` ASC, ignoring any `status` filter or `$sort` passed in the
- * same query. So callers can't write `{ session_id, status: RUNNING }`
- * and trust the result. We instead fetch the full session task list once
- * and filter/sort in process.
- *
- * Without this helper, multiple sites (widget MCP tool, stop route,
- * potentially more) end up with parallel hand-rolled workarounds that
- * drift. Keep this as the single source.
+ * Keep the active-task selection rule centralized for widget, stop, and
+ * system-message callers. TasksService now composes Session/status filters in
+ * SQL, but these callers intentionally need both the active subset and a
+ * most-recent fallback from one complete Session snapshot.
  */
 
 import type { Application } from '@agor/core/feathers';

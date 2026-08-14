@@ -6,7 +6,7 @@
 
 import type { MessageID, Task, TaskPendingDispatchStatus, UUID } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
@@ -819,6 +819,46 @@ describe('TaskRepository.findAll', () => {
 
     const visible = await taskRepo.findAll({ visibleToUserId: viewerId });
     expect(visible.map((task) => task.task_id)).toEqual([visibleTask.task_id]);
+  });
+});
+
+describe('TaskRepository.findPage', () => {
+  dbTest('counts and returns only the requested deterministic SQL page', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = [];
+    for (let index = 0; index < 12; index += 1) {
+      created.push(
+        await taskRepo.create(
+          createTaskData({ session_id: sessionId, full_prompt: `Task ${index}` })
+        )
+      );
+    }
+
+    const client = (
+      db as unknown as {
+        $client: { execute: (...args: unknown[]) => Promise<unknown> };
+      }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const page = await taskRepo.findPage({
+      sessionId,
+      sort: { task_id: 1 },
+      limit: 2,
+      skip: 3,
+    });
+
+    const expected = [...created]
+      .sort((left, right) => left.task_id.localeCompare(right.task_id))
+      .slice(3, 5)
+      .map((task) => task.task_id);
+    expect(page.total).toBe(12);
+    expect(page.data.map((task) => task.task_id)).toEqual(expected);
+    expect(
+      execute.mock.calls.some(
+        ([query]) => /tasks/i.test(JSON.stringify(query)) && /limit/i.test(JSON.stringify(query))
+      )
+    ).toBe(true);
   });
 });
 

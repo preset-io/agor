@@ -131,28 +131,52 @@ export const sessionQuerySchema = createQuerySchema(
 /**
  * Task query schema
  */
-export const taskQuerySchema = createQuerySchema(
-  Type.Object({
-    task_id: Type.Optional(CommonSchemas.uuid),
-    session_id: Type.Optional(CommonSchemas.uuid),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal('queued'),
-        Type.Literal('created'),
-        Type.Literal('dispatching'),
-        Type.Literal('running'),
-        Type.Literal('stopping'),
-        Type.Literal('awaiting_permission'),
-        Type.Literal('awaiting_input'),
-        Type.Literal('timed_out'),
-        Type.Literal('completed'),
-        Type.Literal('failed'),
-        Type.Literal('stopped'),
-      ])
-    ),
-    created_at: Type.Optional(CommonSchemas.timestamp),
-    updated_at: Type.Optional(CommonSchemas.timestamp),
-  })
+const taskSortDirection = Type.Union([Type.Literal(1), Type.Literal(-1)]);
+export const taskQuerySchema = Type.Intersect(
+  [
+    Type.Object({
+      task_id: Type.Optional(CommonSchemas.uuid),
+      session_id: Type.Optional(CommonSchemas.uuid),
+      status: Type.Optional(
+        Type.Union([
+          Type.Literal('queued'),
+          Type.Literal('created'),
+          Type.Literal('dispatching'),
+          Type.Literal('running'),
+          Type.Literal('stopping'),
+          Type.Literal('awaiting_permission'),
+          Type.Literal('awaiting_input'),
+          Type.Literal('timed_out'),
+          Type.Literal('completed'),
+          Type.Literal('failed'),
+          Type.Literal('stopped'),
+        ])
+      ),
+      created_at: Type.Optional(CommonSchemas.timestamp),
+    }),
+    Type.Object({
+      $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+      // Exact Session hydration may have to traverse beyond the first 10k
+      // Tasks. TasksService still rejects deep offsets on broad queries.
+      $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+      $sort: Type.Optional(
+        Type.Partial(
+          Type.Object(
+            {
+              task_id: taskSortDirection,
+              session_id: taskSortDirection,
+              status: taskSortDirection,
+              created_at: taskSortDirection,
+              created_by: taskSortDirection,
+            },
+            { additionalProperties: false }
+          )
+        )
+      ),
+      $select: Type.Optional(Type.Array(Type.String())),
+    }),
+  ],
+  { additionalProperties: false }
 );
 
 const messageTypeSchema = Type.Union([
@@ -215,14 +239,11 @@ export const messageQuerySchema = Type.Object(
         {
           message_id: Type.Optional(sortDirectionSchema),
           session_id: Type.Optional(sortDirectionSchema),
-          task_id: Type.Optional(sortDirectionSchema),
           type: Type.Optional(sortDirectionSchema),
           role: Type.Optional(sortDirectionSchema),
           index: Type.Optional(sortDirectionSchema),
           timestamp: Type.Optional(sortDirectionSchema),
           created_at: Type.Optional(sortDirectionSchema),
-          content_preview: Type.Optional(sortDirectionSchema),
-          parent_tool_use_id: Type.Optional(sortDirectionSchema),
         },
         { additionalProperties: false }
       )
