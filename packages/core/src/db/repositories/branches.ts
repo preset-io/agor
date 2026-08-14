@@ -425,6 +425,15 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
+   * Return the complete branch inventory for one repository without transport
+   * pagination. Repository deletion uses this after locking the parent row so
+   * every database-cascaded removal has a corresponding tombstone.
+   */
+  async findAllByRepoId(repoId: UUID): Promise<Branch[]> {
+    return this.findAll({ repo_id: repoId });
+  }
+
+  /**
    * Health-monitor discovery query. Returns only routing metadata so the
    * background monitor can enter the correct tenant DB scope before loading
    * branch contents or patching health state.

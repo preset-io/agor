@@ -248,6 +248,32 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   }
 
   /**
+   * Lock the canonical repository row before inventorying branches for delete.
+   *
+   * The caller must already own a native transaction. PostgreSQL's FOR UPDATE
+   * lock conflicts with the key-share lock taken by a concurrent branch FK
+   * insert, so no new child can appear between inventory and repository delete.
+   * SQLite relies on the caller's IMMEDIATE transaction for the equivalent
+   * write exclusion.
+   */
+  async lockForBranchInventory(id: string): Promise<Repo> {
+    try {
+      const fullId = await this.resolveId(id);
+      await lockRowForUpdate(this.db, this.db, repos, eq(repos.repo_id, fullId));
+
+      const row = await select(this.db).from(repos).where(eq(repos.repo_id, fullId)).one();
+      if (!row) throw new EntityNotFoundError('Repo', id);
+      return this.rowToRepo(row);
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to lock repo branch inventory: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find managed repos only (DEPRECATED: all repos are managed now)
    *
    * Kept for backwards compatibility - returns all repos.

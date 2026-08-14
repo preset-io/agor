@@ -1155,25 +1155,22 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const cleanup = params?.query?.cleanup === true;
 
     // Get ALL branches for this repo (needed for both filesystem and database cleanup).
-    // CRITICAL: Use an internal call (no provider) so repo deletion owns the
-    // full branch inventory for this repo, independent of caller RBAC scope.
+    // CRITICAL: Use the unbounded repository query so transport pagination and
+    // caller RBAC scope cannot truncate the deletion inventory.
     const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
-    const findRepoBranches = async (): Promise<Branch[]> => {
-      const result = (await branchesService.find({
-        query: { repo_id: repo.repo_id },
-        paginate: false,
-      })) as unknown as Branch[] | { data: Branch[] };
-      const found = Array.isArray(result) ? result : result.data;
-      const foreignBranches = found.filter((branch) => branch.repo_id !== repo.repo_id);
+    const branchRepo = new BranchRepository(this.db);
+    const findRepoBranches = async (repoId: UUID): Promise<Branch[]> => {
+      const found = await branchRepo.findAllByRepoId(repoId);
+      const foreignBranches = found.filter((branch) => branch.repo_id !== repoId);
       if (foreignBranches.length > 0) {
         throw new Error(
-          `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(s) not belonging to repo ${repo.repo_id}. ` +
+          `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(s) not belonging to repo ${repoId}. ` +
             `Aborting deletion to prevent cross-repo data loss. This is a bug — please report it.`
         );
       }
       return found;
     };
-    const branches = await findRepoBranches();
+    const branches = await findRepoBranches(repo.repo_id as UUID);
 
     console.log(
       `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`
@@ -1240,10 +1237,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const tenantId =
       (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
     return runWithTenantDatabaseTransaction(this.db, tenantId, async () => {
-      // Re-read under the native metadata transaction so a branch added while
-      // filesystem orchestration was in flight cannot disappear through the
-      // repository FK cascade without its own tombstone.
-      const metadataBranches = await findRepoBranches();
+      // Lock the parent first. PostgreSQL branch inserts take a conflicting FK
+      // key-share lock, so none can appear after the unbounded inventory read;
+      // SQLite's IMMEDIATE transaction provides the corresponding exclusion.
+      const lockedRepo = await this.repoRepo.lockForBranchInventory(repo.repo_id);
+      const metadataBranches = await findRepoBranches(lockedRepo.repo_id);
       for (const branch of metadataBranches) {
         // The repo deletion itself is already authorized; individual branch
         // permission hooks would incorrectly block full repository cleanup.
@@ -1253,7 +1251,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
       // The native transaction covers every branch row plus the repository.
       // Tombstones queued above drain once, only after this final delete commits.
-      return super.remove(id, params) as Promise<Repo>;
+      return super.remove(lockedRepo.repo_id, params) as Promise<Repo>;
     });
   }
 }
