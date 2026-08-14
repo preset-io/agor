@@ -1154,6 +1154,60 @@ describe('agor_sessions_create', () => {
     expect(parsed.remoteRelationship).toBeUndefined();
   });
 
+  // Genealogy and provenance are orthogonal and can coexist: a cross-branch
+  // caller assigns a valid same-target-branch genealogy parent. The child gets
+  // BOTH the local genealogy parent AND a remote_create edge sourced from the
+  // cross-branch caller.
+  it('records both genealogy parent and remote_create edge for a cross-branch caller with an explicit parent', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: Array<{ id: unknown; data: unknown }> = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        // The explicit parent lives in the target branch; the caller (sess-A)
+        // lives in a different branch.
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: id === 'sess-A' ? 'wt-caller' : 'wt-target',
+          genealogy: { children: [] },
+        }),
+        patch: async (id: unknown, data: unknown) => {
+          patchCalls.push({ id, data });
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-A' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+      parentSessionId: 'sess-parent',
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    // Local genealogy parent is honored...
+    expect(created.genealogy.parent_session_id).toBe('sess-parent');
+    expect(patchCalls[0].id).toBe('sess-parent');
+    // ...AND the cross-branch caller is recorded as the remote creator.
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toMatchObject({
+      source_session_id: 'sess-A',
+      target_session_id: 'sess-new',
+      relationship_type: 'remote_create',
+    });
+  });
+
   it('does not auto-link to the calling session when creating in a different branch', async () => {
     const sessionCreates: unknown[] = [];
     const patchCalls: unknown[] = [];

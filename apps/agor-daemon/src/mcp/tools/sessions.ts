@@ -1169,6 +1169,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       let remoteRelationshipSourceSessionId: string | undefined;
       let remoteRelationshipSourceBranchId: string | undefined;
 
+      // Decision 1 — genealogy: resolve an EXPLICIT parent (same-branch only).
+      // Implicit same-branch genealogy is handled in decision 2.
       if (args.parentSessionId !== undefined && args.parentSessionId !== null) {
         resolvedParentSessionId = await resolveSessionId(ctx, args.parentSessionId);
         parentSessionForPatch = (await ctx.app
@@ -1181,17 +1183,21 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
               'For cross-branch completion routing, use enableCallback/callbackSessionId instead of genealogy.'
           );
         }
-      } else if (ctx.sessionId && !resolvedParentSessionId) {
-        // No explicit genealogy parent. Inspect the calling session: same
-        // branch is an implicit genealogy parent (omitted only); a different
-        // branch makes the caller the remote creator regardless of the
-        // genealogy opt-out.
+      }
+
+      // Decision 2 — inspect the calling session, independently of genealogy.
+      // A cross-branch caller is the remote creator and ALWAYS gets a
+      // `remote_create` edge (it can coexist with an explicit same-branch
+      // genealogy parent). A same-branch caller becomes the implicit genealogy
+      // parent only when `parentSessionId` was omitted (an explicit parent
+      // wins; `null` opts out).
+      if (ctx.sessionId) {
         const callingSession = (await ctx.app
           .service('sessions')
           .get(ctx.sessionId, ctx.baseServiceParams)) as Session;
 
         if (callingSession.branch_id === branch.branch_id) {
-          if (args.parentSessionId === undefined) {
+          if (args.parentSessionId === undefined && !resolvedParentSessionId) {
             resolvedParentSessionId = callingSession.session_id;
             parentSessionForPatch = callingSession;
           }
