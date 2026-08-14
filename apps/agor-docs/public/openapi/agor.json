@@ -737,11 +737,6 @@
         "additionalProperties": true,
         "description": "Schema for impersonate. See @agor-live/client for the authoritative TypeScript type."
       },
-      "bulk": {
-        "type": "object",
-        "additionalProperties": true,
-        "description": "Schema for bulk. See @agor-live/client for the authoritative TypeScript type."
-      },
       "streaming": {
         "type": "object",
         "additionalProperties": true,
