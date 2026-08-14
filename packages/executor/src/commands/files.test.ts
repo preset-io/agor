@@ -33,9 +33,22 @@ describe('branch file commands', () => {
     });
     expect(await readBranchFile(root, 'image.png')).toMatchObject({
       isText: false,
+      mimeType: 'image/png',
       content: 'AAEC',
       encoding: 'base64',
     });
+  });
+
+  it.each([
+    ['screenshot.jpg', 'image/jpeg'],
+    ['screenshot.jpeg', 'image/jpeg'],
+    ['evidence.gif', 'image/gif'],
+    ['recording.webm', 'video/webm'],
+  ])('detects the %s MIME type as %s', async (filename, mimeType) => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-files-'));
+    await writeFile(join(root, filename), Buffer.from([0, 1, 2]));
+
+    expect(await readBranchFile(root, filename)).toMatchObject({ isText: false, mimeType });
   });
 
   it('rejects traversal and symlink escapes', async () => {

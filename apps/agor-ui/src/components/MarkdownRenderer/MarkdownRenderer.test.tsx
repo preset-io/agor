@@ -140,6 +140,71 @@ describe('MarkdownRenderer', () => {
     anchorClick.mockRestore();
   });
 
+  it('renders internal branch-file links as authenticated preview and download actions', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          path: 'evidence/screenshot.png',
+          title: 'screenshot.png',
+          size: 3,
+          lastModified: new Date(0).toISOString(),
+          isText: false,
+          mimeType: 'image/png',
+          content: 'AAEC',
+          encoding: 'base64',
+        }),
+        { status: 200 }
+      )
+    );
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, {
+        createObjectURL: vi.fn(() => 'blob:branch-file-preview'),
+        revokeObjectURL: vi.fn(),
+      })
+    );
+
+    const branchId = '0193f1a2-3b4c-7d5e-a8f3-9d2e1c4b5a6f';
+    render(
+      <MarkdownRenderer
+        content={`[screenshot.png](https://agor.live/_branch-files/${branchId}/evidence%2Fscreenshot.png)`}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'screenshot.png' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(
+      new RegExp(`/file/evidence%2Fscreenshot\\.png\\?branch_id=${branchId}$`)
+    );
+    expect(anchorClick).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Download screenshot.png' })).toBeInTheDocument();
+
+    anchorClick.mockRestore();
+  });
+
+  it('falls back to an ordinary link for a malformed branch-file URL instead of a privileged download', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MarkdownRenderer
+        content={'[evil](https://agor.live/_branch-files/not-a-branch-id/etc%2Fpasswd)'}
+      />
+    );
+
+    // The branch id fails BRANCH_ID_PATTERN, so the rewrite never fires and
+    // Streamdown parses it as an ordinary external link — never a fetch.
+    const link = await screen.findByRole('link', { name: 'evil' });
+    expect(link).toHaveAttribute(
+      'href',
+      'https://agor.live/_branch-files/not-a-branch-id/etc%2Fpasswd'
+    );
+    expect(screen.queryByRole('button', { name: 'evil' })).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('adds stable ids and self-links when heading anchors are enabled', async () => {
     const { container } = render(<MarkdownRenderer content={'## Foo\n\n## Foo!'} headingAnchors />);
 
