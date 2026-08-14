@@ -128,6 +128,16 @@ export const PAGINATION = {
 } as const;
 
 /**
+ * Messages carry transcript/tool payloads and are materially heavier than most
+ * list resources. Keep each transport page small; callers that intentionally
+ * need a complete Task transcript use the client's paginated `findAll()` loop.
+ */
+export const MESSAGE_PAGINATION = {
+  DEFAULT_LIMIT: 100,
+  MAX_LIMIT: 1_000,
+} as const;
+
+/**
  * Git Constants
  */
 export const GIT = {

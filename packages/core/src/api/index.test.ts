@@ -596,6 +596,37 @@ describe('createClient', () => {
       });
     });
 
+    it('should preserve an exact Task filter while walking server-clamped pages', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      findMock
+        .mockResolvedValueOnce({
+          total: 2,
+          limit: 1,
+          skip: 0,
+          data: [{ message_id: 'm1', task_id: 't1', index: 0 }],
+        })
+        .mockResolvedValueOnce({
+          total: 2,
+          limit: 1,
+          skip: 1,
+          data: [{ message_id: 'm2', task_id: 't1', index: 1 }],
+        });
+
+      await expect(
+        messagesService.findAll({
+          query: { task_id: 't1', $sort: { index: 1 }, $limit: 10_000 },
+        })
+      ).resolves.toEqual([
+        { message_id: 'm1', task_id: 't1', index: 0 },
+        { message_id: 'm2', task_id: 't1', index: 1 },
+      ]);
+      expect(findMock).toHaveBeenNthCalledWith(2, {
+        query: { task_id: 't1', $sort: { index: 1 }, $limit: 1, $skip: 1 },
+      });
+    });
+
     // Executor lifecycle callbacks use explicitly registered custom methods.
     // server-side via `app.use(path, service, { methods })`, but the Feathers Socket.io
     // client only wires standard CRUD at construction time. Without an explicit

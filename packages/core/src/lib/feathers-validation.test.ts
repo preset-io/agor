@@ -4,6 +4,7 @@ import {
   branchQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
+  messageQueryValidator,
   sessionQueryValidator,
   typedValidateQuery,
   userQueryValidator,
@@ -118,6 +119,41 @@ describe('sessionQueryValidator', () => {
       session_id: '019e8e1c',
       _swapReplace: true,
     });
+  });
+});
+
+describe('messageQueryValidator', () => {
+  it('coerces supported pagination and preserves a bounded session set', async () => {
+    const context = {
+      params: {
+        query: {
+          session_id: { $in: ['019e8e1c', '019e8e1d'] },
+          task_id: '019e8e1e',
+          role: 'assistant',
+          $limit: '1000',
+          $skip: '12000',
+          $sort: { index: '-1' },
+          $select: ['message_id', 'content'],
+        },
+      },
+    };
+
+    await typedValidateQuery(messageQueryValidator)(context);
+
+    expect(context.params.query).toEqual({
+      session_id: { $in: ['019e8e1c', '019e8e1d'] },
+      task_id: '019e8e1e',
+      role: 'assistant',
+      $limit: 1000,
+      $skip: 12000,
+      $sort: { index: -1 },
+      $select: ['message_id', 'content'],
+    });
+  });
+
+  it('rejects unknown filters instead of broadening the query', async () => {
+    const context = { params: { query: { task: '019e8e1e' } } };
+    await expect(typedValidateQuery(messageQueryValidator)(context)).rejects.toThrow();
   });
 });
 

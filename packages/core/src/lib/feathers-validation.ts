@@ -22,6 +22,16 @@ export const queryValidator = new Ajv({
 });
 
 /**
+ * Message queries reject unknown fields instead of silently removing them.
+ * Silently turning a misspelled filter into a broad transcript query is both
+ * surprising and potentially expensive.
+ */
+export const strictQueryValidator = new Ajv({
+  coerceTypes: true,
+  useDefaults: true,
+});
+
+/**
  * Common TypeBox schemas for reusable field types
  */
 export const CommonSchemas = {
@@ -143,6 +153,85 @@ export const taskQuerySchema = createQuerySchema(
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),
   })
+);
+
+const messageTypeSchema = Type.Union([
+  Type.Literal('user'),
+  Type.Literal('assistant'),
+  Type.Literal('system'),
+  Type.Literal('file-history-snapshot'),
+  Type.Literal('permission_request'),
+  Type.Literal('input_request'),
+  Type.Literal('daemon_restart'),
+  Type.Literal('daemon_crash'),
+  Type.Literal('widget_request'),
+]);
+const messageRoleSchema = Type.Union([
+  Type.Literal('user'),
+  Type.Literal('assistant'),
+  Type.Literal('system'),
+]);
+const sortDirectionSchema = Type.Union([Type.Literal(1), Type.Literal(-1)]);
+const messageSelectableFieldSchema = Type.Union(
+  [
+    'message_id',
+    'session_id',
+    'task_id',
+    'type',
+    'role',
+    'index',
+    'timestamp',
+    'content_preview',
+    'content',
+    'tool_uses',
+    'parent_tool_use_id',
+    'metadata',
+  ].map((field) => Type.Literal(field))
+);
+
+/**
+ * Message list contract. `$limit` is accepted above the service ceiling so
+ * Feathers can clamp it consistently; `$skip` must allow `findAll()` to walk a
+ * Task containing more than the historical global 10k limit.
+ */
+export const messageQuerySchema = Type.Object(
+  {
+    session_id: Type.Optional(
+      Type.Union([
+        CommonSchemas.uuid,
+        Type.Object(
+          { $in: Type.Array(CommonSchemas.uuid, { maxItems: 1_000 }) },
+          { additionalProperties: false }
+        ),
+      ])
+    ),
+    task_id: Type.Optional(CommonSchemas.uuid),
+    type: Type.Optional(messageTypeSchema),
+    role: Type.Optional(messageRoleSchema),
+    $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+    $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+    $sort: Type.Optional(
+      Type.Object(
+        {
+          message_id: Type.Optional(sortDirectionSchema),
+          session_id: Type.Optional(sortDirectionSchema),
+          task_id: Type.Optional(sortDirectionSchema),
+          type: Type.Optional(sortDirectionSchema),
+          role: Type.Optional(sortDirectionSchema),
+          index: Type.Optional(sortDirectionSchema),
+          timestamp: Type.Optional(sortDirectionSchema),
+          created_at: Type.Optional(sortDirectionSchema),
+          content_preview: Type.Optional(sortDirectionSchema),
+          parent_tool_use_id: Type.Optional(sortDirectionSchema),
+        },
+        { additionalProperties: false }
+      )
+    ),
+    $select: Type.Optional(
+      Type.Array(messageSelectableFieldSchema, { maxItems: 12, uniqueItems: true })
+    ),
+  },
+  { additionalProperties: false }
 );
 
 /**
@@ -343,6 +432,7 @@ export const mcpCatalogQuerySchema = Type.Intersect(
  */
 export const sessionQueryValidator = getValidator(sessionQuerySchema, queryValidator);
 export const taskQueryValidator = getValidator(taskQuerySchema, queryValidator);
+export const messageQueryValidator = getValidator(messageQuerySchema, strictQueryValidator);
 export const branchQueryValidator = getValidator(branchQuerySchema, queryValidator);
 export const boardQueryValidator = getValidator(boardQuerySchema, queryValidator);
 export const userQueryValidator = getValidator(userQuerySchema, queryValidator);

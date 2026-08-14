@@ -60,6 +60,7 @@ import {
   branchQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
+  messageQueryValidator,
   repoQueryValidator,
   sessionQueryValidator,
   taskQueryValidator,
@@ -1034,7 +1035,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('messages').hooks({
     before: {
-      all: [requireAuth, executorRuntimeScopeGuard()],
+      all: [typedValidateQuery(messageQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Scope messages.find() to sessions the caller can access.
         // Without this backstop, any authenticated member could list messages

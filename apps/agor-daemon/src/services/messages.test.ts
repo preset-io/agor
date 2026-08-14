@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { PAGINATION } from '@agor/core/config';
+import { MESSAGE_PAGINATION } from '@agor/core/config';
 import {
   AuthenticationService,
   authenticate,
@@ -105,6 +105,15 @@ describe('MessagesService.find pagination', () => {
       expect((result as { data: Message[] }).data).toHaveLength(2);
       expect((result as { data: Message[] }).data.map((message) => message.index)).toEqual([7, 8]);
 
+      const defaultPage = await createMessagesService(db).find({
+        query: { session_id: sessionId },
+      });
+      expect(defaultPage).toMatchObject({
+        total: 32,
+        limit: MESSAGE_PAGINATION.DEFAULT_LIMIT,
+        skip: 0,
+      });
+
       const statements = execute.mock.calls.map(([query]) => JSON.stringify(query));
       expect(
         statements.some((statement) => /messages/i.test(statement) && /limit/i.test(statement))
@@ -126,15 +135,26 @@ describe('MessagesService.find pagination', () => {
         query: {
           session_id: sessionId,
           role: MessageRole.ASSISTANT,
-          $limit: PAGINATION.MAX_LIMIT + 1,
+          $limit: MESSAGE_PAGINATION.MAX_LIMIT + 1,
           $select: ['message_id', 'role'],
         },
       });
-      expect(selected).toMatchObject({ limit: PAGINATION.MAX_LIMIT, total: 32 });
+      expect(selected).toMatchObject({ limit: MESSAGE_PAGINATION.MAX_LIMIT, total: 32 });
       expect(Object.keys((selected as { data: Message[] }).data[0]).sort()).toEqual([
         'message_id',
         'role',
       ]);
+
+      await expect(
+        createMessagesService(db).find({
+          query: { session: sessionId } as never,
+        })
+      ).rejects.toThrow('Unsupported messages query field');
+      await expect(
+        createMessagesService(db).find({
+          query: { session_id: sessionId, $sort: { content: 1 } },
+        })
+      ).rejects.toThrow('Unsupported $sort field');
     }
   );
 
@@ -300,13 +320,13 @@ dbTest(
       });
 
       const overMaxResponse = await fetch(
-        `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&role=assistant&$limit=${PAGINATION.MAX_LIMIT + 1}`,
+        `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&role=assistant&$limit=${MESSAGE_PAGINATION.MAX_LIMIT + 1}`,
         { headers }
       );
       expect(overMaxResponse.status).toBe(200);
       await expect(overMaxResponse.json()).resolves.toMatchObject({
         total: 2,
-        limit: PAGINATION.MAX_LIMIT,
+        limit: MESSAGE_PAGINATION.MAX_LIMIT,
       });
 
       for (const parameter of ['$limit=-1', '$skip=-1', '$limit=1.5', '$skip=not-a-number']) {

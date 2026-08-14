@@ -5,7 +5,7 @@
  * Uses DrizzleService adapter with MessagesRepository.
  */
 
-import { PAGINATION } from '@agor/core/config';
+import { MESSAGE_PAGINATION } from '@agor/core/config';
 import { MessagesRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type {
@@ -29,9 +29,6 @@ export const MESSAGES_SERVICE_TRANSPORT_METHODS = [
   'create',
   'patch',
   'remove',
-  'findBySession',
-  'findByTask',
-  'findByRange',
 ] as const;
 
 /**
@@ -68,6 +65,9 @@ function normalizeSort(value: unknown): Record<string, 1 | -1> | undefined {
 
   const normalized: Record<string, 1 | -1> = {};
   for (const [field, rawDirection] of Object.entries(value)) {
+    if (!MESSAGE_SORT_FIELDS.has(field)) {
+      throw new BadRequest(`Unsupported $sort field: ${field}`);
+    }
     if (rawDirection === 1 || rawDirection === '1') {
       normalized[field] = 1;
     } else if (rawDirection === -1 || rawDirection === '-1') {
@@ -80,6 +80,11 @@ function normalizeSort(value: unknown): Record<string, 1 | -1> | undefined {
 }
 
 function normalizeQuery(rawQuery: Record<string, unknown>): Query {
+  for (const field of Object.keys(rawQuery)) {
+    if (!MESSAGE_QUERY_FIELDS.has(field)) {
+      throw new BadRequest(`Unsupported messages query field: ${field}`);
+    }
+  }
   const query = { ...rawQuery } as Query;
   if ('$limit' in rawQuery && rawQuery.$limit !== undefined) {
     query.$limit = parseNonNegativeInteger(rawQuery.$limit, '$limit');
@@ -88,8 +93,93 @@ function normalizeQuery(rawQuery: Record<string, unknown>): Query {
     query.$skip = parseNonNegativeInteger(rawQuery.$skip, '$skip');
   }
   if ('$sort' in rawQuery) query.$sort = normalizeSort(rawQuery.$sort);
+  if ('$select' in rawQuery) {
+    if (
+      !Array.isArray(rawQuery.$select) ||
+      rawQuery.$select.some(
+        (field) => typeof field !== 'string' || !MESSAGE_SELECT_FIELDS.has(field)
+      )
+    ) {
+      throw new BadRequest('$select contains an unsupported Message field');
+    }
+  }
+
+  const sessionId = rawQuery.session_id;
+  if (
+    sessionId !== undefined &&
+    !(
+      typeof sessionId === 'string' ||
+      (sessionId !== null &&
+        typeof sessionId === 'object' &&
+        !Array.isArray(sessionId) &&
+        Object.keys(sessionId).length === 1 &&
+        Array.isArray((sessionId as { $in?: unknown }).$in) &&
+        (sessionId as { $in: unknown[] }).$in.length <= 1_000 &&
+        (sessionId as { $in: unknown[] }).$in.every((value) => typeof value === 'string'))
+    )
+  ) {
+    throw new BadRequest('session_id must be an ID or a bounded $in array of IDs');
+  }
+  if (rawQuery.task_id !== undefined && typeof rawQuery.task_id !== 'string') {
+    throw new BadRequest('task_id must be an ID');
+  }
+  if (rawQuery.type !== undefined && !MESSAGE_TYPES.has(rawQuery.type as Message['type'])) {
+    throw new BadRequest('Unsupported Message type');
+  }
+  if (rawQuery.role !== undefined && !MESSAGE_ROLES.has(rawQuery.role as Message['role'])) {
+    throw new BadRequest('Unsupported Message role');
+  }
   return query;
 }
+
+const MESSAGE_QUERY_FIELDS = new Set([
+  'session_id',
+  'task_id',
+  'type',
+  'role',
+  '$limit',
+  '$skip',
+  '$sort',
+  '$select',
+]);
+const MESSAGE_SORT_FIELDS = new Set([
+  'message_id',
+  'session_id',
+  'task_id',
+  'type',
+  'role',
+  'index',
+  'timestamp',
+  'created_at',
+  'content_preview',
+  'parent_tool_use_id',
+]);
+const MESSAGE_SELECT_FIELDS = new Set([
+  'message_id',
+  'session_id',
+  'task_id',
+  'type',
+  'role',
+  'index',
+  'timestamp',
+  'content_preview',
+  'content',
+  'tool_uses',
+  'parent_tool_use_id',
+  'metadata',
+]);
+const MESSAGE_TYPES = new Set<Message['type']>([
+  'user',
+  'assistant',
+  'system',
+  'file-history-snapshot',
+  'permission_request',
+  'input_request',
+  'daemon_restart',
+  'daemon_crash',
+  'widget_request',
+]);
+const MESSAGE_ROLES = new Set<Message['role']>(['user', 'assistant', 'system']);
 
 /**
  * Extended messages service with custom methods
@@ -103,8 +193,8 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
       id: 'message_id',
       resourceType: 'Message',
       paginate: {
-        default: PAGINATION.DEFAULT_LIMIT,
-        max: PAGINATION.MAX_LIMIT,
+        default: MESSAGE_PAGINATION.DEFAULT_LIMIT,
+        max: MESSAGE_PAGINATION.MAX_LIMIT,
       },
       multi: ['create', 'remove'], // Allow bulk creates and removes
     });
@@ -113,8 +203,9 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
   }
 
   /**
-   * Find the exact SQL page for standard Feathers queries. Custom full-history
-   * methods below intentionally keep their existing unpaginated semantics.
+   * Find the exact SQL page for standard Feathers queries. Complete Task
+   * hydration is a client concern: `findAll({ task_id })` walks these bounded
+   * pages rather than opening an unbounded transport route.
    */
   async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
     const query = normalizeQuery((params?.query ?? {}) as Record<string, unknown>);
@@ -155,14 +246,14 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
   }
 
   /**
-   * Custom method: Get messages by session
+   * Daemon-internal helper: get messages by session.
    */
   async findBySession(sessionId: SessionID): Promise<Message[]> {
     return this.messagesRepo.findBySessionId(sessionId);
   }
 
   /**
-   * Custom method: Get messages by task
+   * Daemon-internal helper: get messages by task.
    */
   async findByTask(taskId: TaskID): Promise<Message[]> {
     return this.messagesRepo.findByTaskId(taskId);
@@ -177,7 +268,7 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
   }
 
   /**
-   * Custom method: Get messages in a range
+   * Daemon-internal helper: get messages in a range.
    */
   async findByRange(
     sessionId: SessionID,

@@ -71,24 +71,62 @@
           },
           "type": {
             "type": "string",
-            "enum": ["user", "assistant", "system", "tool_use", "tool_result"]
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "file-history-snapshot",
+              "permission_request",
+              "input_request",
+              "daemon_restart",
+              "daemon_crash",
+              "widget_request"
+            ]
           },
           "role": {
+            "type": "string",
+            "enum": ["user", "assistant", "system"]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "content_preview": {
             "type": "string"
           },
           "content": {
-            "type": "string"
+            "oneOf": [{ "type": "string" }, { "type": "array", "items": {} }, { "type": "object" }]
           },
-          "created_at": {
+          "tool_uses": {
+            "type": "array",
+            "items": { "type": "object" }
+          },
+          "parent_tool_use_id": {
             "type": "string",
-            "format": "date-time"
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
       "messagesList": {
         "type": "object",
-        "additionalProperties": true,
-        "description": "Schema for messagesList. See @agor-live/client for the authoritative TypeScript type."
+        "required": ["total", "limit", "skip", "data"],
+        "properties": {
+          "total": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 0, "maximum": 1000 },
+          "skip": { "type": "integer", "minimum": 0 },
+          "data": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/messages" }
+          }
+        }
       },
       "boards": {
         "type": "object",
