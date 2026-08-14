@@ -1,5 +1,5 @@
 import { generateId } from '@agor/core';
-import type { MessageID, SessionID, TaskID } from '@agor/core/types';
+import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessagesService, TasksService } from '../base/index.js';
@@ -183,7 +183,7 @@ describe('extractTokenUsage', () => {
 describe('createSystemMessage', () => {
   it('preserves the provider failure marker without allowing reserved metadata overrides', async () => {
     const messagesService = {
-      create: vi.fn().mockResolvedValue(undefined),
+      create: vi.fn(async (data: Partial<Message>) => data as Message),
     } as unknown as MessagesService;
     const sessionId = generateId() as SessionID;
     const messageId = generateId() as MessageID;
@@ -213,6 +213,33 @@ describe('createSystemMessage', () => {
       is_provider_failure_result: true,
       model: 'claude-sonnet-4-6',
     });
+  });
+
+  it('returns the daemon-confirmed system message after message hooks transform it', async () => {
+    const messagesService = {
+      create: vi.fn(
+        async (data: Partial<Message>) =>
+          ({
+            ...data,
+            content: 'safe provider recovery message',
+            content_preview: 'safe provider recovery message',
+            metadata: { ...data.metadata, error_kind: 'provider_credit_exhausted' },
+          }) as Message
+      ),
+    } as unknown as MessagesService;
+
+    const result = await createSystemMessage(
+      generateId() as SessionID,
+      generateId() as MessageID,
+      [{ type: 'text', text: 'raw provider body' }],
+      undefined,
+      0,
+      'claude-sonnet-4-6',
+      messagesService
+    );
+
+    expect(result.content).toBe('safe provider recovery message');
+    expect(result.metadata?.error_kind).toBe('provider_credit_exhausted');
   });
 });
 
@@ -707,7 +734,7 @@ describe('createUserMessageFromContent', () => {
 describe('createAssistantMessage', () => {
   function createMockMessagesService(): MessagesService {
     return {
-      create: vi.fn().mockResolvedValue(undefined),
+      create: vi.fn(async (data: Partial<Message>) => data as Message),
     } as unknown as MessagesService;
   }
 
@@ -741,6 +768,38 @@ describe('createAssistantMessage', () => {
     expect(result.content).toEqual(content);
     expect(result.content_preview).toBe('Hello, I am Claude!');
     expect(result.metadata?.model).toBe('claude-sonnet-4-6');
+  });
+
+  it('returns the daemon-confirmed assistant message after message hooks transform it', async () => {
+    const messagesService = {
+      create: vi.fn(
+        async (data: Partial<Message>) =>
+          ({
+            ...data,
+            type: 'system',
+            role: MessageRole.SYSTEM,
+            content: 'safe provider recovery message',
+            content_preview: 'safe provider recovery message',
+            metadata: { ...data.metadata, error_kind: 'missing_credential' },
+          }) as Message
+      ),
+    } as unknown as MessagesService;
+
+    const result = await createAssistantMessage(
+      generateId() as SessionID,
+      generateId() as MessageID,
+      [{ type: 'text', text: 'raw provider body' }],
+      undefined,
+      undefined,
+      0,
+      'claude-sonnet-4-6',
+      messagesService
+    );
+
+    expect(result.type).toBe('system');
+    expect(result.role).toBe(MessageRole.SYSTEM);
+    expect(result.content).toBe('safe provider recovery message');
+    expect(result.metadata?.error_kind).toBe('missing_credential');
   });
 
   it('should extract text from multiple text blocks', async () => {

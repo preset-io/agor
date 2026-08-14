@@ -202,10 +202,10 @@ export async function createAssistantMessage(
     },
   };
 
-  await messagesService.create(message);
+  const persisted = await messagesService.create(message);
   await patchTaskModelIfKnown(tasksService, taskId, resolvedModel);
 
-  return message;
+  return persisted;
 }
 
 /**
@@ -267,6 +267,5 @@ export async function createSystemMessage(
     },
   };
 
-  await messagesService.create(message);
-  return message;
+  return await messagesService.create(message);
 }

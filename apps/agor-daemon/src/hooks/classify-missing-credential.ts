@@ -127,28 +127,27 @@ const PROVIDER_CREDIT_SIGNALS = [
 const PROVIDER_CREDIT_SIGNAL_PATTERN = new RegExp(`\\b(?:${PROVIDER_CREDIT_SIGNALS.join('|')})\\b`);
 const PROVIDER_ERROR_SEARCH_WINDOW = 500;
 
-function textContent(content: Message['content'] | undefined): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
+function textBlocks(content: Message['content'] | undefined): string[] {
+  if (typeof content === 'string') return [content];
+  if (!Array.isArray(content)) return [];
 
   return content
     .filter((block) => block.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text as string)
-    .join('\n');
+    .map((block) => block.text as string);
 }
 
 function isProviderCreditFailure(
   tool: AgenticToolName,
   content: Message['content'] | undefined
 ): boolean {
-  const text = textContent(content).toLowerCase();
-  if (!text) return false;
+  const blocks = textBlocks(content);
+  if (blocks.length === 0) return false;
 
-  // Claude's SDK joins its error array with newlines. Bound each error's
-  // search window instead of rejecting the whole joined response when one
-  // error is long; this still avoids classifying arbitrary distant prose.
-  return text.split(/\r?\n/).some((error) => {
-    const searchWindow = error.slice(0, PROVIDER_ERROR_SEARCH_WINDOW);
+  // Claude's executor preserves each sdkResult.errors[] entry as its own text
+  // block. Bound each actual block without splitting internal newlines; a
+  // zero-turn string remains one bounded entry.
+  return blocks.some((block) => {
+    const searchWindow = block.slice(0, PROVIDER_ERROR_SEARCH_WINDOW).toLowerCase();
     const isAnthropicCreditFailure =
       tool === 'claude-code' && /\bcredit balance is too low\b/.test(searchWindow);
     const hasStableCreditSignal = PROVIDER_CREDIT_SIGNAL_PATTERN.test(searchWindow);

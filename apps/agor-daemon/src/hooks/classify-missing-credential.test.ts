@@ -259,7 +259,7 @@ describe('classifyMissingCredentialFailure', () => {
     ]);
   });
 
-  it('checks each joined SDK error within its own bounded search window', async () => {
+  it('does not classify a signal beyond the bound of one multiline error block', async () => {
     vi.mocked(resolveApiKey).mockResolvedValue({
       apiKey: 'sk-ant-user-key',
       connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
@@ -273,8 +273,31 @@ describe('classifyMissingCredentialFailure', () => {
         content: [
           {
             type: 'text',
-            text: `${'x'.repeat(600)}\ncredit balance is too low`,
+            text: `${'x'.repeat(500)}\ncredit balance is too low`,
           },
+        ],
+      })
+    );
+
+    expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+  });
+
+  it('classifies an early signal in a distinct error block after a long multiline error', async () => {
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: 'sk-ant-user-key',
+      connection: { ANTHROPIC_API_KEY: 'sk-ant-user-key' },
+      source: 'user',
+      useNativeAuth: false,
+    });
+
+    const ctx = await runHook()(
+      makeContext({
+        ...sdkErrorBillingResult,
+        content: [
+          { type: 'text', text: 'Agent SDK error (error_during_execution): ' },
+          { type: 'text', text: `${'x'.repeat(600)}\nordinary tail` },
+          { type: 'text', text: '\n' },
+          { type: 'text', text: 'payment_required' },
         ],
       })
     );
