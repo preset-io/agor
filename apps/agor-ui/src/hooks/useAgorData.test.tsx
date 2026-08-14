@@ -490,6 +490,40 @@ describe('useAgorData — socket-event bailouts', () => {
     }
   });
 
+  it('authoritatively clears task/message comment attachments after a branch cascade', async () => {
+    const branch = makeBranch({ branch_id: 'b-1' });
+    const taskComment = {
+      comment_id: 'comment-task',
+      board_id: 'board-1',
+      task_id: 'task-deleted-with-branch',
+      content: 'task comment',
+    };
+    const messageComment = {
+      comment_id: 'comment-message',
+      board_id: 'board-1',
+      message_id: 'message-deleted-with-branch',
+      content: 'message comment',
+    };
+    const seed: Record<string, unknown[]> = {
+      branches: [branch],
+      'board-comments': [taskComment, messageComment],
+    };
+    const { client, emit } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    seed['board-comments:findAll'] = [
+      { ...taskComment, task_id: null },
+      { ...messageComment, message_id: null },
+    ];
+    act(() => emit('branches', 'removed', branch));
+
+    await waitFor(() => {
+      expect(agorStore.getState().commentById.get('comment-task')?.task_id).toBeNull();
+      expect(agorStore.getState().commentById.get('comment-message')?.message_id).toBeNull();
+    });
+  });
+
   it('keeps a missed hard delete removed after reconnect refetch', async () => {
     const session = makeSession({ session_id: 's-1', branch_id: 'b-1' });
     const branch = makeBranch({ branch_id: 'b-1' });

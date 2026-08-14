@@ -152,6 +152,7 @@ import {
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
+import { captureBranchRemovalRealtimeVisibility as captureBranchRemovalVisibility } from './utils/branch-removal-realtime.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
@@ -165,10 +166,7 @@ import {
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
 } from './utils/realtime-access-cache.js';
-import {
-  configureRealtimePublish,
-  setBranchRemovalRealtimeVisibility,
-} from './utils/realtime-publish.js';
+import { configureRealtimePublish } from './utils/realtime-publish.js';
 import {
   ensureCurrentScheduleLoaded,
   ensureScheduleRunsAsCaller,
@@ -848,15 +846,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       throw new NotFound(`Branch not found: ${String(context.id)}`);
     }
 
-    // This fact must reflect the same tenant-scoped transaction that is about
-    // to delete the branch. Bypass any older daemon-local cache entry before
-    // the ACL rows disappear with the branch.
-    realtimeAccessCache.invalidateBranch(branch.branch_id);
-    const visibility = await realtimeAccessCache.getBranchVisibility(branch.branch_id);
-    if (!visibility) {
-      throw new NotFound(`Branch not found: ${branch.branch_id}`);
-    }
-    setBranchRemovalRealtimeVisibility(context.params, branch.branch_id, visibility);
+    await captureBranchRemovalVisibility({
+      params: context.params,
+      branchRepository,
+      branchId: branch.branch_id,
+      realtimeAccessCache,
+    });
     return context;
   };
 

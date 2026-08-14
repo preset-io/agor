@@ -6,7 +6,6 @@ import {
   authorizeBranchArchiveDelete,
   consumeBranchArchiveDeleteAuthorization,
 } from './branch-archive-delete-authorization';
-import { BRANCH_REMOVAL_VISIBILITY_PARAM } from './realtime-publish';
 
 function context(): HookContext {
   return {
@@ -53,19 +52,22 @@ describe('authorizeBranchArchiveDelete', () => {
     ).toThrow(Forbidden);
   });
 
-  it('captures hard-delete visibility before granting the route capability', async () => {
+  it('canonicalizes a short route ID before granting authority without capturing visibility', async () => {
     const branch = {
-      branch_id: '00000000-0000-7000-8000-000000000001',
+      branch_id: '018f0000-0000-7000-8000-000000000001',
       others_can: 'none',
     };
+    const findRealtimeVisibilityBranch = vi.fn();
+    const findExplicitViewUserIds = vi.fn();
     const branchRepository = {
       findById: vi.fn(async () => branch),
       isOwner: vi.fn(async () => true),
       resolveUserPermission: vi.fn(async () => 'all'),
-      findRealtimeVisibilityBranch: vi.fn(async () => branch),
-      findExplicitViewUserIds: vi.fn(async () => ['00000000-0000-7000-8000-0000000000ff']),
+      findRealtimeVisibilityBranch,
+      findExplicitViewUserIds,
     } as unknown as BranchRepository;
     const hook = context();
+    hook.params.route = { id: '018F0000' };
 
     await expect(
       authorizeBranchArchiveDelete(hook, {
@@ -74,11 +76,10 @@ describe('authorizeBranchArchiveDelete', () => {
       })
     ).resolves.toBe(hook);
 
-    expect((hook.params as Record<string, unknown>)[BRANCH_REMOVAL_VISIBILITY_PARAM]).toEqual({
-      branchId: branch.branch_id,
-      mode: 'explicitUsers',
-      userIds: ['00000000-0000-7000-8000-0000000000ff'],
-    });
+    expect(branchRepository.findById).toHaveBeenCalledWith('018F0000');
+    expect(hook.params.route?.id).toBe(branch.branch_id);
+    expect(findRealtimeVisibilityBranch).not.toHaveBeenCalled();
+    expect(findExplicitViewUserIds).not.toHaveBeenCalled();
     expect(() =>
       consumeBranchArchiveDeleteAuthorization(hook.params, branch.branch_id as never, 'delete')
     ).not.toThrow();

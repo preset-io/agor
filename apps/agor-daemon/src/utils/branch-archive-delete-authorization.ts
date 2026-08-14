@@ -7,8 +7,6 @@ import {
   ensureBranchOwnerOrAdmin,
   ensureBranchPermission,
 } from './branch-authorization.js';
-import { resolveBranchRealtimeVisibility } from './realtime-access-cache.js';
-import { setBranchRemovalRealtimeVisibility } from './realtime-publish.js';
 
 /**
  * Process-local capability proving the hooked archive/delete service boundary
@@ -44,8 +42,10 @@ export function consumeBranchArchiveDeleteAuthorization(
 
 /**
  * Canonical branch-control gate for the long-running archive/delete service.
- * The caller supplies a tenant DB scope; this function authorizes and captures
- * hard-delete visibility before granting the process-local capability.
+ * The caller supplies a tenant DB scope. This function resolves the canonical
+ * branch ID, authorizes control, and grants the process-local capability before
+ * any long-running side effect. Realtime visibility is intentionally captured
+ * later, in the transaction that performs a hard delete.
  */
 export async function authorizeBranchArchiveDelete(
   context: HookContext,
@@ -72,16 +72,10 @@ export async function authorizeBranchArchiveDelete(
   }
 
   const { metadataAction } = context.data;
-
-  if (metadataAction === 'delete') {
-    const visibility = await resolveBranchRealtimeVisibility(
-      options.branchRepository,
-      branch.branch_id
-    );
-    if (!visibility) throw new Forbidden(`Branch not found: ${id}`);
-    setBranchRemovalRealtimeVisibility(context.params, branch.branch_id, visibility);
-  }
-
+  // Repository lookups accept short/uppercase prefixes but every trusted
+  // boundary after this hook must use the canonical UUID. The route handler
+  // reads this same params object after before hooks finish.
+  context.params.route = { ...(context.params.route ?? {}), id: branch.branch_id };
   markBranchArchiveDeleteAuthorized(context.params, branch.branch_id, metadataAction);
   return context;
 }

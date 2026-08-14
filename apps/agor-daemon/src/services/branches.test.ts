@@ -12,6 +12,7 @@ import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
+import { BRANCH_REMOVAL_VISIBILITY_PARAM } from '../utils/realtime-publish.js';
 import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
@@ -1287,6 +1288,12 @@ describe('BranchesService.archiveOrDelete', () => {
     } as never;
     vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
     const wrappedRemove = vi.spyOn(service, 'remove');
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch').mockResolvedValue({
+      branch_id: branchId,
+      others_can: 'none',
+    } as never);
+    vi.spyOn(branchRepo, 'findExplicitViewUserIds').mockResolvedValue(['user-1' as UUID]);
     const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
     markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
 
@@ -1312,6 +1319,51 @@ describe('BranchesService.archiveOrDelete', () => {
         params,
       })
     );
+  });
+
+  it('captures hard-delete visibility after authorization, inside the metadata transaction', async () => {
+    const { service, branchRepo, branchesService } = createServiceHarness();
+    const branchId = 'wt-delete-acl-race' as BranchID;
+    const oldViewer = '00000000-0000-7000-8000-000000000001' as UUID;
+    const newViewer = '00000000-0000-7000-8000-000000000002' as UUID;
+    const removedBranch = {
+      branch_id: branchId,
+      name: 'WT Delete ACL Race',
+      path: '/tmp/wt-delete-acl-race',
+      archived: false,
+      others_can: 'none',
+      environment_instance: { status: 'stopped' },
+    } as never;
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch').mockResolvedValue(removedBranch);
+    let currentViewers = [oldViewer];
+    vi.spyOn(branchRepo, 'findExplicitViewUserIds').mockImplementation(async () => currentViewers);
+    vi.spyOn(branchRepo, 'delete').mockResolvedValue();
+
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
+    // Simulate an ACL update after the route granted control but before the
+    // long-running archive/delete operation reaches its metadata transaction.
+    currentViewers = [newViewer];
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'delete', filesystemAction: 'preserved' },
+      params
+    );
+
+    const eventHook = branchesService.emit.mock.calls[0][2] as {
+      params: Record<string, unknown>;
+    };
+    expect(eventHook.params[BRANCH_REMOVAL_VISIBILITY_PARAM]).toEqual({
+      branchId,
+      mode: 'explicitUsers',
+      userIds: [newViewer],
+    });
   });
 
   it('rejects direct callers before any environment, token, executor, or metadata work', async () => {

@@ -71,6 +71,7 @@ import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
+import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-realtime.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
@@ -1353,6 +1354,39 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
+   * Internal metadata-only hard-delete primitive.
+   *
+   * The visibility snapshot, row deletion, and post-commit tombstone enqueue
+   * share one tenant transaction. This method deliberately bypasses the
+   * registered `remove` wrapper and its filesystem/Unix hooks; it is not listed
+   * in the service's transport methods.
+   */
+  async removeMetadataWithRealtime(id: BranchID, params?: BranchParams): Promise<Branch> {
+    const removalParams = params ?? ({} as BranchParams);
+    return this.withTenantDatabase(removalParams, async () => {
+      const branch = (await super.get(id, removalParams)) as Branch;
+      await captureBranchRemovalRealtimeVisibility({
+        params: removalParams,
+        branchRepository: this.branchRepo,
+        branchId: branch.branch_id,
+      });
+
+      // Feathers replaces registered standard methods with event-producing
+      // wrappers. The adapter call performs only the metadata deletion; the
+      // explicit event below is the single authoritative tombstone.
+      const removedBranch = (await super.remove(branch.branch_id, removalParams)) as Branch;
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'removed',
+        data: removedBranch,
+        params: removalParams,
+        id: removedBranch.branch_id,
+      });
+      return removedBranch;
+    });
+  }
+
+  /**
    * Custom method: Archive or delete branch with filesystem options
    *
    * This method implements the archive/delete modal functionality.
@@ -1548,26 +1582,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
       console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
 
-      // Keep metadata removal isolated from the standard remove hook's Unix
-      // group/filesystem side effects. emitServiceEvent snapshots the HookContext
-      // now and queues the tombstone on the active tenant transaction, so a
-      // commit emits once and a rollback emits nothing.
-      await this.withTenantDatabase(params, async () => {
-        // Call the adapter implementation directly. Feathers replaces the
-        // registered service's standard methods with event-producing wrappers;
-        // calling `this.remove()` here would therefore publish once through
-        // Feathers and once through the explicit post-commit tombstone below.
-        // `super.remove()` performs only the transactional metadata deletion,
-        // without the standard remove hooks or their Unix/filesystem effects.
-        const removedBranch = (await super.remove(id, params)) as Branch;
-        emitServiceEvent(this.app, {
-          path: 'branches',
-          event: 'removed',
-          data: removedBranch,
-          params,
-          id: removedBranch.branch_id,
-        });
-      });
+      await this.removeMetadataWithRealtime(id, params);
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
       return { deleted: true, branch_id: id };

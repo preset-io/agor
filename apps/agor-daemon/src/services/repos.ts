@@ -46,6 +46,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -1154,11 +1155,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Get ALL branches for this repo (needed for both filesystem and database cleanup).
     // CRITICAL: Use an internal call (no provider) so repo deletion owns the
     // full branch inventory for this repo, independent of caller RBAC scope.
-    const branchesService = this.app.service('branches');
-    const branchesResult = await branchesService.find({
+    const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
+    const branchesResult = (await branchesService.find({
       query: { repo_id: repo.repo_id },
       paginate: false,
-    });
+    })) as unknown as Branch[] | { data: Branch[] };
 
     const branches = (
       Array.isArray(branchesResult) ? branchesResult : branchesResult.data
@@ -1235,24 +1236,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Only reach here if filesystem cleanup succeeded (or wasn't requested)
     // Now safe to delete from database
 
-    // IMPORTANT: Use Feathers service to delete branches (not direct DB cascade) because:
-    // 1. WebSocket events broadcast to all clients (real-time UI updates)
-    // 2. Service hooks run properly (lifecycle, validation, etc.)
-    // 3. Session cascades trigger (sessions → tasks → messages)
-    // 4. Foreign key cascades may not be reliable (pragmas are async fire-and-forget)
-    // NOTE: Don't spread external params — use internal call to bypass auth/RBAC hooks.
-    // The repo deletion itself is already authorized; individual branch permission checks
-    // would incorrectly block cleanup of branches the user doesn't directly own.
+    // Delete each branch through the internal metadata-only primitive while the
+    // repository's tenant transaction is still active. It captures the current
+    // ACL audience, deletes the branch, and queues exactly one tombstone for the
+    // OUTER commit. Any branch or repository failure aborts the transaction, so
+    // queued removals are discarded and the repository FK cascade is never used
+    // as a silent fallback. The repo deletion itself is already authorized;
+    // individual branch permission hooks would incorrectly block full cleanup.
     for (const branch of branches) {
-      try {
-        await branchesService.remove(branch.branch_id);
-        console.log(`🗑️  Deleted branch from database: ${branch.name}`);
-      } catch (error) {
-        console.warn(
-          `⚠️  Failed to delete branch ${branch.name} from database:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
+      await branchesService.removeMetadataWithRealtime(branch.branch_id, params);
+      console.log(`🗑️  Deleted branch from database: ${branch.name}`);
     }
 
     // Finally, delete repository from database
