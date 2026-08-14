@@ -282,6 +282,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                     </Card>
                   );
                 }
+                if (object.type !== 'artifact') return null;
                 const artifact = artifactById.get(object.artifact_id);
                 return (
                   <Card

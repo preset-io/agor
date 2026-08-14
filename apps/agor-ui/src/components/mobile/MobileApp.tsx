@@ -114,7 +114,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               branchById={branchById}
               sessionById={sessionById}
               onMenuClick={() => setDrawerOpen(true)}
-              onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
               onOpenSettings={onOpenWorkspaceSettings}
             />
           }
