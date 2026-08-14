@@ -1,5 +1,5 @@
 import { generateId } from '@agor/core';
-import type { MessageID, SessionID } from '@agor/core/types';
+import type { Message, MessageID, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessagesService } from '../base/index.js';
 import { createAssistantMessage } from './message-builder.js';
@@ -98,7 +98,7 @@ describe('SDKMessageProcessor result logging', () => {
     expect(complete?.isSynthesizedResult).toBe(true);
 
     const messagesService = {
-      create: vi.fn().mockResolvedValue(undefined),
+      create: vi.fn(async (data: Partial<Message>) => data as Message),
     } as unknown as MessagesService;
     const message = await createAssistantMessage(
       'test-session-id' as SessionID,
