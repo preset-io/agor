@@ -1,4 +1,11 @@
 import type { ResolvedRedisSettings } from '@agor/core/config';
+import {
+  BranchRealtimeVisibilityMode,
+  type BranchRemovalRealtimeVisibilitySnapshot,
+  REALTIME_RELAY_VERSION,
+  type RealtimeRelayEnvelope,
+  type RedisRealtimeHealth,
+} from '@agor/core/types';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Redis, { type RedisOptions } from 'ioredis';
 import type { Namespace, Server } from 'socket.io';
@@ -6,37 +13,8 @@ import type { Namespace, Server } from 'socket.io';
 export const FEATHERS_RELAY_EVENT = 'agor:feathers-publication:v1';
 export const MAX_REALTIME_RELAY_BYTES = 512 * 1024;
 
-/**
- * Authorization snapshot for a branch tombstone. Branch and ACL rows are gone
- * by the time a committed `branches.removed` event is published, so every HA
- * replica needs the pre-delete visibility fact carried by the existing relay.
- */
-export type BranchRemovalRealtimeVisibilitySnapshot =
-  | { branchId: string; mode: 'allAuthenticated' }
-  | { branchId: string; mode: 'explicitUsers'; userIds: string[] };
-
 export function redisAdapterKey(keyPrefix: string): string {
   return `${keyPrefix}:socket.io`;
-}
-
-export interface RealtimeRelayEnvelope {
-  version: 1;
-  tenantId: string;
-  path: string;
-  event: string;
-  method?: string;
-  id?: string | number;
-  data: unknown;
-  branchRemovalVisibility?: BranchRemovalRealtimeVisibilitySnapshot;
-}
-
-export interface RedisRealtimeHealth {
-  required: true;
-  ready: boolean;
-  draining: boolean;
-  adapterAttached: boolean;
-  pubStatus: string;
-  subStatus: string;
 }
 
 type RelayHandler = (envelope: RealtimeRelayEnvelope) => void | Promise<void>;
@@ -262,7 +240,7 @@ export function isRealtimeRelayEnvelope(value: unknown): value is RealtimeRelayE
       v.event === 'removed' &&
       isBranchRemovalRealtimeVisibilitySnapshot(removalVisibility));
   return (
-    v.version === 1 &&
+    v.version === REALTIME_RELAY_VERSION &&
     typeof v.tenantId === 'string' &&
     v.tenantId.length > 0 &&
     v.tenantId.length <= 128 &&
@@ -294,9 +272,11 @@ export function isBranchRemovalRealtimeVisibilitySnapshot(
   ) {
     return false;
   }
-  if (snapshot.mode === 'allAuthenticated') return snapshot.userIds === undefined;
+  if (snapshot.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) {
+    return snapshot.userIds === undefined;
+  }
   return (
-    snapshot.mode === 'explicitUsers' &&
+    snapshot.mode === BranchRealtimeVisibilityMode.EXPLICIT_USERS &&
     Array.isArray(snapshot.userIds) &&
     snapshot.userIds.every(
       (userId) => typeof userId === 'string' && userId.length > 0 && userId.length <= 256

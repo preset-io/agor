@@ -1,9 +1,12 @@
-import type { Branch, BranchID, UserID, UUID } from '@agor/core/types';
+import {
+  type Branch,
+  type BranchID,
+  type BranchRealtimeVisibility,
+  BranchRealtimeVisibilityMode,
+  type UserID,
+  type UUID,
+} from '@agor/core/types';
 import { PERMISSION_RANK } from './branch-authorization.js';
-
-export type BranchRealtimeVisibility =
-  | { mode: 'allAuthenticated' }
-  | { mode: 'explicitUsers'; userIds: Set<UserID> };
 
 export type RealtimeAccessBranchRepository = {
   findRealtimeVisibilityBranch(
@@ -122,9 +125,9 @@ export class RealtimeAccessCache {
     }
 
     const visibility: BranchRealtimeVisibility = branchAllowsAllAuthenticated(branch)
-      ? { mode: 'allAuthenticated' }
+      ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
       : {
-          mode: 'explicitUsers',
+          mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
           userIds: new Set(
             (await this.options.branchRepository.findExplicitViewUserIds(branch.branch_id)).map(
               (userId) => userId as UserID
@@ -164,8 +167,8 @@ export class RealtimeAccessCache {
   }
 
   private visibilityFromEntry(entry: BranchVisibilityCacheEntry): BranchRealtimeVisibility {
-    return entry.mode === 'allAuthenticated'
-      ? { mode: 'allAuthenticated' }
-      : { mode: 'explicitUsers', userIds: entry.userIds };
+    return entry.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED
+      ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+      : { mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS, userIds: entry.userIds };
   }
 }

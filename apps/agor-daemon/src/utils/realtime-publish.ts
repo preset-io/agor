@@ -6,14 +6,24 @@ import {
 import type { BranchRepository, SessionRepository, TenantScopeAwareDatabase } from '@agor/core/db';
 import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { BranchID, HookContext, TenantID, User, UserID } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
 import {
+  type BranchID,
+  type BranchRealtimeVisibility,
+  BranchRealtimeVisibilityMode,
   type BranchRemovalRealtimeVisibilitySnapshot,
+  type HookContext,
+  hasMinimumRole,
+  REALTIME_RELAY_VERSION,
+  type RealtimeRelayEnvelope,
+  ROLES,
+  type TenantID,
+  type User,
+  type UserID,
+} from '@agor/core/types';
+import {
   isBranchRemovalRealtimeVisibilitySnapshot,
   isRealtimeRelayEnvelope,
   MAX_REALTIME_RELAY_BYTES,
-  type RealtimeRelayEnvelope,
 } from '../realtime/redis-realtime.js';
 import { tenantChannelName } from '../realtime/routing.js';
 import { isSuperAdmin } from './branch-authorization.js';
@@ -22,7 +32,6 @@ import {
   resolveKnowledgeRealtimeUserIds,
 } from './knowledge-realtime-publish.js';
 import {
-  type BranchRealtimeVisibility,
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
@@ -37,11 +46,11 @@ export function setBranchRemovalRealtimeVisibility(
   visibility: BranchRealtimeVisibility
 ): void {
   const snapshot: BranchRemovalRealtimeVisibilitySnapshot =
-    visibility.mode === 'allAuthenticated'
-      ? { branchId, mode: 'allAuthenticated' }
+    visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED
+      ? { branchId, mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
       : {
           branchId,
-          mode: 'explicitUsers',
+          mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
           userIds: [...visibility.userIds].sort(),
         };
   (params as HookContext['params'] & Record<string, unknown>)[BRANCH_REMOVAL_VISIBILITY_PARAM] =
@@ -65,9 +74,12 @@ function visibilityFromRemovalSnapshot(
   snapshot: BranchRemovalRealtimeVisibilitySnapshot | null
 ): BranchRealtimeVisibility | null {
   if (!snapshot) return null;
-  return snapshot.mode === 'allAuthenticated'
-    ? { mode: 'allAuthenticated' }
-    : { mode: 'explicitUsers', userIds: new Set(snapshot.userIds as UserID[]) };
+  return snapshot.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED
+    ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+    : {
+        mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+        userIds: new Set(snapshot.userIds),
+      };
 }
 
 /**
@@ -642,7 +654,7 @@ async function resolveStreamingDelivery(
   const visibility = branchId ? await accessCache.getBranchVisibility(branchId) : null;
   if (!visibility) return serviceConnections;
 
-  if (visibility.mode === 'allAuthenticated') {
+  if (visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) {
     const channels: PublishChannel[] = [serviceConnections];
     if (room) channels.push(room);
     if (ownerId) channels.push(ownerChannel());
@@ -677,7 +689,7 @@ function filterToUserIdsOrAdmins(
 
 function filterToUserIdsOrSuperadmins(
   authenticated: PublishChannel,
-  userIds: Set<UserID>,
+  userIds: ReadonlySet<UserID>,
   allowSuperadmin: boolean
 ): PublishChannel {
   return authenticated.filter((connection: unknown) => {
@@ -689,7 +701,7 @@ function filterToUserIdsOrSuperadmins(
   });
 }
 
-function extractConnectionTenantId(context: HookContext): string | undefined {
+function extractConnectionTenantId(context: HookContext): TenantID | undefined {
   const params = context.params as
     | {
         connection?: {
@@ -701,12 +713,15 @@ function extractConnectionTenantId(context: HookContext): string | undefined {
   const tenant = params?.connection?.tenant ?? params?.connection?.data?.tenant;
   return tenant && typeof tenant === 'object' && 'tenant_id' in tenant
     ? typeof tenant.tenant_id === 'string'
-      ? tenant.tenant_id
+      ? (tenant.tenant_id as TenantID)
       : undefined
     : undefined;
 }
 
-function resolveRealtimeTenantId(multiTenancy: ResolvedMultiTenancyConfig, context: HookContext) {
+function resolveRealtimeTenantId(
+  multiTenancy: ResolvedMultiTenancyConfig,
+  context: HookContext
+): TenantID {
   try {
     return resolveTenantContext(multiTenancy, { params: context.params }).tenant_id;
   } catch (error) {
@@ -714,7 +729,9 @@ function resolveRealtimeTenantId(multiTenancy: ResolvedMultiTenancyConfig, conte
     if (error instanceof TenantResolutionError && connectionTenantId) return connectionTenantId;
 
     const ambientTenantId = getCurrentTenantId();
-    if (error instanceof TenantResolutionError && ambientTenantId) return ambientTenantId;
+    if (error instanceof TenantResolutionError && ambientTenantId) {
+      return ambientTenantId as TenantID;
+    }
     throw error;
   }
 }
@@ -751,7 +768,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     }
 
     let tenantScoped = authenticated;
-    let tenantId: string | undefined;
+    let tenantId: TenantID | undefined;
     if (multiTenancy) {
       try {
         tenantId = resolveRealtimeTenantId(multiTenancy, context);
@@ -835,7 +852,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         });
         return filterToServiceConnections(tenantScoped);
       }
-      if (visibility.mode === 'allAuthenticated') return tenantScoped;
+      if (visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) return tenantScoped;
       return filterToUserIdsOrSuperadmins(tenantScoped, visibility.userIds, allowSuperadmin);
     };
 
@@ -880,7 +897,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
           ? branchRemovalVisibilitySnapshot(context, removedBranchId)
           : null;
         const envelope: RealtimeRelayEnvelope = {
-          version: 1,
+          version: REALTIME_RELAY_VERSION,
           tenantId: resolved.tenantId,
           path: context.path,
           event: context.event,
@@ -915,7 +932,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     if (!mayEnterRedisRelay(envelope.path, envelope.event)) return;
     const params: HookContext['params'] & Record<string, unknown> = {
       provider: 'socketio-redis-relay',
-      tenant: { tenant_id: envelope.tenantId as TenantID, source: 'explicit' },
+      tenant: { tenant_id: envelope.tenantId, source: 'explicit' },
     };
     if (envelope.branchRemovalVisibility) {
       params[BRANCH_REMOVAL_VISIBILITY_PARAM] = envelope.branchRemovalVisibility;
