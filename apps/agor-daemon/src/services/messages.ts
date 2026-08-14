@@ -8,14 +8,15 @@
 import { MESSAGE_PAGINATION } from '@agor/core/config';
 import { MessagesRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type {
-  Message,
-  MessageID,
-  Paginated,
-  QueryParams,
-  SessionID,
-  TaskID,
-  UUID,
+import {
+  type Message,
+  type MessageID,
+  MessageRole,
+  type Paginated,
+  type QueryParams,
+  type SessionID,
+  type TaskID,
+  type UUID,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 
@@ -179,7 +180,11 @@ const MESSAGE_TYPES = new Set<Message['type']>([
   'daemon_crash',
   'widget_request',
 ]);
-const MESSAGE_ROLES = new Set<Message['role']>(['user', 'assistant', 'system']);
+const MESSAGE_ROLES = new Set<Message['role']>([
+  MessageRole.USER,
+  MessageRole.ASSISTANT,
+  MessageRole.SYSTEM,
+]);
 
 /**
  * Extended messages service with custom methods
