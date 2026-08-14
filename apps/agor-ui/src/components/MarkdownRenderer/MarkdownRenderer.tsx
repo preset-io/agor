@@ -115,15 +115,20 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   text = highlightMentionsInMarkdown(text);
   // Convert Agor's authenticated virtual upload and branch-file links into
   // closed custom elements before Streamdown's external-link hardener runs.
+  // Every captured group is HTML-escaped before interpolation: these are
+  // hand-built HTML strings (not JSX), so an unescaped `"` in a filename
+  // could otherwise break out of the attribute and inject new attributes
+  // or elements. The HTML parser decodes the entities back to the original
+  // text, so components still receive the real filename via props.
   text = text.replace(
     INTERNAL_UPLOAD_MARKDOWN_LINK,
     (_, filename: string, uploadRef: string) =>
-      `<agor-upload upload_ref="${uploadRef}" filename="${filename}"></agor-upload>`
+      `<agor-upload upload_ref="${escapeHtmlAttribute(uploadRef)}" filename="${escapeHtmlAttribute(filename)}"></agor-upload>`
   );
   text = text.replace(
     INTERNAL_BRANCH_FILE_MARKDOWN_LINK,
     (_, filename: string, branchId: string, encodedPath: string) =>
-      `<agor-branch-file branch_id="${branchId}" path="${encodedPath}" filename="${filename}"></agor-branch-file>`
+      `<agor-branch-file branch_id="${escapeHtmlAttribute(branchId)}" path="${escapeHtmlAttribute(encodedPath)}" filename="${escapeHtmlAttribute(filename)}"></agor-branch-file>`
   );
 
   // Detect dark mode from Ant Design token system
@@ -288,6 +293,22 @@ function reactText(value: React.ReactNode): string {
     .join('');
 }
 
+/**
+ * Escapes a value for safe interpolation into a double-quoted HTML
+ * attribute inside a hand-built markup string (not JSX, so React's
+ * auto-escaping doesn't apply). The HTML parser decodes these entities
+ * back to the original text, so the receiving component still sees the
+ * real, unescaped value via props.
+ */
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const UPLOAD_REF_PATTERN =
   'upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const ESCAPED_UPLOAD_VIRTUAL_URL_PREFIX = UPLOAD_VIRTUAL_URL_PREFIX.replace(
@@ -305,12 +326,20 @@ const BRANCH_ID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3
 // extra-escaped parens, so it never contains a literal ')' that could close
 // the Markdown link early.
 const BRANCH_FILE_PATH_PATTERN = "[A-Za-z0-9%._~!*'-]{1,2000}";
+// buildBranchFileMarkdownLink() emits the real filename as the link label —
+// unlike uploads' fixed ASCII-only charset, evidence filenames routinely
+// include parens and Unicode (e.g. "before (final).png", "résumé.webm"), so
+// this only excludes what would break Markdown's own `[...]` bracket syntax
+// (a literal `]`) or span lines. Every capture is HTML-escaped before this
+// is interpolated into generated markup (see escapeHtmlAttribute above), so
+// widening the charset here does not reopen attribute injection.
+const BRANCH_FILE_LABEL_PATTERN = '[^\\]\\n]{1,200}';
 const ESCAPED_BRANCH_FILE_VIRTUAL_URL_PREFIX = BRANCH_FILE_VIRTUAL_URL_PREFIX.replace(
   /[.*+?^${}()|[\]\\]/g,
   '\\$&'
 );
 const INTERNAL_BRANCH_FILE_MARKDOWN_LINK = new RegExp(
-  `\\[([A-Za-z0-9._ -]{1,200})\\]\\(${ESCAPED_BRANCH_FILE_VIRTUAL_URL_PREFIX}(${BRANCH_ID_PATTERN})\\/(${BRANCH_FILE_PATH_PATTERN})\\)`,
+  `\\[(${BRANCH_FILE_LABEL_PATTERN})\\]\\(${ESCAPED_BRANCH_FILE_VIRTUAL_URL_PREFIX}(${BRANCH_ID_PATTERN})\\/(${BRANCH_FILE_PATH_PATTERN})\\)`,
   'g'
 );
 
