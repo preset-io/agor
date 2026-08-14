@@ -1083,45 +1083,6 @@ export function isOAuthRequired(status: number, headers: Headers): boolean {
 }
 
 /**
- * Get a cached OAuth 2.1 token for an MCP URL
- *
- * This checks all cached tokens and returns a valid one if the metadata URL
- * matches or contains the MCP URL's origin.
- *
- * @param mcpUrl - The MCP server URL to find a cached token for
- * @returns The cached token if valid, undefined otherwise
- */
-export function getCachedOAuth21Token(mcpUrl: string): string | undefined {
-  const now = Date.now();
-
-  let mcpOrigin: string;
-  try {
-    mcpOrigin = new URL(mcpUrl).origin;
-  } catch {
-    return undefined;
-  }
-
-  // Check all cached tokens for a match
-  for (const [metadataUrl, cached] of authCodeTokenCache.entries()) {
-    // Check if token is still valid
-    if (cached.expiresAt <= now) {
-      continue;
-    }
-
-    // Check if the metadata URL is from the same origin as the MCP URL
-    try {
-      const metadataOrigin = new URL(metadataUrl).origin;
-
-      if (metadataOrigin === mcpOrigin || metadataUrl.includes(mcpOrigin)) {
-        return cached.token;
-      }
-    } catch {}
-  }
-
-  return undefined;
-}
-
-/**
  * Clear cached OAuth tokens from Authorization Code flow
  *
  * Useful when switching accounts or forcing re-authentication.
@@ -1223,8 +1184,9 @@ export interface OAuthFlowContext {
  *
  * Inputs:
  *   - `authServerMetadata`: required when no full URL overrides are supplied
- *   - `cacheKey`: token cache key (must share origin with the MCP URL so
- *     `getCachedOAuth21Token` can find it on later requests)
+ *   - `cacheKey`: becomes `context.metadataUrl` — the exact key
+ *     `completeMCPOAuthFlow` writes its legacy CLI cache entry under, and the
+ *     metadata URI the daemon persists as the grant's binding
  */
 async function startMCPOAuthFlowWithAS(opts: {
   authServerMetadata: AuthorizationServerMetadata | null;
@@ -1434,10 +1396,11 @@ export async function startMCPOAuthFlow(
      */
     prefetchedAuthServerMetadata?: AuthorizationServerMetadata;
     /**
-     * Token cache key. When `prefetchedAuthServerMetadata` is provided there's
-     * no real RFC 9728 metadata URL to use as the key, so the caller passes a
-     * stable string (typically the MCP URL itself). `getCachedOAuth21Token`
-     * matches by URL origin, so any value sharing the MCP URL's origin works.
+     * Metadata URL stand-in. When `prefetchedAuthServerMetadata` is provided
+     * there's no real RFC 9728 metadata URL, so the caller passes a stable
+     * string (typically the MCP URL itself). It lands on
+     * `OAuthFlowContext.metadataUrl` and must be the same value on every flow
+     * for the server: lookups against it are exact-match, never by origin.
      */
     cacheKey?: string;
     /** Disable process-global DCR credential reuse in multi-user daemons. */
@@ -1466,9 +1429,9 @@ export async function startMCPOAuthFlow(
       throw new Error('Authorization-server-direct discovery requires explicit legacy mode');
     }
     if (!options.cacheKey) {
-      // Without a cache key, `getCachedOAuth21Token` can't find the token on
-      // future requests — every MCP call would re-trigger the browser flow.
-      // The daemon callsites have the MCP URL handy and should pass it.
+      // Without it there is no `context.metadataUrl` to carry through the
+      // flow — the daemon persists that as the grant's metadata URI. The
+      // daemon callsites have the MCP URL handy and should pass it.
       throw new Error(
         'startMCPOAuthFlow: cacheKey is required when prefetchedAuthServerMetadata is provided ' +
           '(typically pass the MCP server URL).'

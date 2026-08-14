@@ -81,6 +81,7 @@ import type {
   MessageID,
   Paginated,
   Params,
+  RepoID,
   Session,
   Task,
   User,
@@ -96,6 +97,12 @@ import {
   SCHEDULE_PATCH_WRITE_FIELDS,
   TaskStatus,
 } from '@agor/core/types';
+import {
+  generateBranchGroupName,
+  generateRepoGroupName,
+  resolveBranchGroupName,
+  resolveRepoGroupName,
+} from '@agor/core/unix';
 import {
   executorRuntimeScopeGuard,
   isTaskScopedExecutorRequest,
@@ -122,6 +129,7 @@ import {
   markRemoteRelationshipsEnrichedResult,
 } from './services/sessions.js';
 import { isAuthenticationUserLookup, isLocalAuthenticationLookup } from './services/users.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
   ensureMinimumRole,
@@ -131,6 +139,7 @@ import {
 } from './utils/authorization.js';
 import {
   cacheBranchAccess,
+  ensureBranchOwnerOrAdmin,
   ensureBranchPermission,
   ensureCanCreateSession,
   ensureCanModifySchedule,
@@ -152,6 +161,7 @@ import {
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
+import { captureBranchRemovalRealtimeVisibility as captureBranchRemovalVisibility } from './utils/branch-removal-realtime.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
@@ -605,6 +615,72 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   return context;
 }
 
+type ManagedUnixGroupKind = 'branch' | 'repo';
+
+/**
+ * Keep `unix_group` server-owned and validate every trusted write.
+ *
+ * Executor service accounts may perform the one normal transport write: stamp
+ * the canonical group on a row whose field is still absent. Explicit legacy
+ * migration writes directly through the local database after global checks.
+ */
+export function protectServerManagedUnixGroupWrites(kind: ManagedUnixGroupKind) {
+  return async (context: HookContext): Promise<HookContext> => {
+    const data =
+      context.data && typeof context.data === 'object' && !Array.isArray(context.data)
+        ? (context.data as Record<string, unknown>)
+        : undefined;
+    if (!data || !Object.hasOwn(data, 'unix_group')) return context;
+
+    const value = data.unix_group;
+    const id =
+      typeof context.id === 'string'
+        ? context.id
+        : typeof data[`${kind}_id`] === 'string'
+          ? (data[`${kind}_id`] as string)
+          : undefined;
+
+    if (value !== null && value !== undefined) {
+      if (typeof value !== 'string' || !id) {
+        throw new BadRequest(`A valid ${kind} id is required to validate unix_group`);
+      }
+      if (kind === 'branch') {
+        resolveBranchGroupName(id as BranchID, value);
+      } else {
+        resolveRepoGroupName(id as RepoID, value);
+      }
+    }
+
+    if (!context.params.provider) return context;
+    if (!context.params.user?._isServiceAccount) {
+      throw new Forbidden('unix_group is server-managed');
+    }
+
+    // A transported executor may only stamp an absent field with the row's
+    // canonical name. It cannot clear, rename, or migrate an existing stamp.
+    if (context.method !== 'patch' || !id || typeof value !== 'string') {
+      throw new Forbidden('Executor unix_group writes must stamp one existing row');
+    }
+    const canonical =
+      kind === 'branch'
+        ? generateBranchGroupName(id as BranchID)
+        : generateRepoGroupName(id as RepoID);
+    if (value !== canonical) {
+      throw new Forbidden('Executor unix_group writes must use the canonical group name');
+    }
+
+    const existing = (await context.service.get(id, {
+      ...context.params,
+      provider: undefined,
+    })) as { unix_group?: string | null };
+    if (existing.unix_group != null && existing.unix_group !== value) {
+      throw new Forbidden('Persisted unix_group is authoritative and cannot be changed');
+    }
+
+    return context;
+  };
+}
+
 /** Run an identity-only service's database-reading before hooks in one short unit of work. */
 export function createTenantScopedBeforeHookChain(
   db: TenantScopeAwareDatabase,
@@ -831,6 +907,26 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const branchId =
       (context.result as { branch_id?: unknown } | undefined)?.branch_id ?? context.id;
     await invalidateRealtimeBranchAccess(branchId);
+    return context;
+  };
+
+  const captureBranchRemovalRealtimeVisibility = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    const loadedBranch = (context.params as AuthenticatedParams & { branch?: Branch }).branch;
+    const branch =
+      loadedBranch ??
+      (typeof context.id === 'string' ? await branchRepository.findById(context.id) : null);
+    if (!branch) {
+      throw new NotFound(`Branch not found: ${String(context.id)}`);
+    }
+
+    await captureBranchRemovalVisibility({
+      params: context.params,
+      branchRepository,
+      branchId: branch.branch_id,
+      realtimeAccessCache,
+    });
     return context;
   };
 
@@ -1476,16 +1572,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(repoQueryValidator), requireAuth],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
@@ -1514,17 +1613,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create branches'),
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         injectCreatedBy(),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
+        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         ...(branchRbacEnabled
@@ -1554,12 +1656,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete branches'),
+        loadBranch(branchRepository),
         ...(branchRbacEnabled
           ? [
-              loadBranch(branchRepository),
               ensureBranchPermission('all', 'delete branches', superadminOpts), // Require 'all' permission to delete
             ]
-          : []),
+          : [ensureBranchOwnerOrAdmin('delete branches')]),
+        captureBranchRemovalRealtimeVisibility,
       ],
     },
     after: {
@@ -2251,7 +2354,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   //   still applies inside the service (see services/terminals.ts).
   // - Setting the flag to false disables the terminal for everyone (including
   //   admins). The modal is hidden from the UI in that case.
-  const webTerminalEnabled = config.execution?.allow_web_terminal !== false;
+  const webTerminalCapability = resolveWebTerminalCapability({ config, deployment });
+  const webTerminalEnabled = webTerminalCapability.enabled;
   safeService('terminals')?.hooks({
     before: {
       all: [
@@ -2259,7 +2363,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           if (!webTerminalEnabled) {
             throw new Forbidden(
-              'Web terminal is disabled on this instance. Ask an administrator to unset or enable execution.allow_web_terminal in the daemon config.'
+              `Web terminal is unavailable on this instance (${webTerminalCapability.reason ?? 'disabled'}).`
             );
           }
           return context;

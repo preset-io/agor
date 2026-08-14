@@ -1,32 +1,16 @@
 import type { ResolvedRedisSettings } from '@agor/core/config';
+import {
+  isRealtimeRelayEnvelope,
+  REALTIME_RELAY_EVENT,
+  type RealtimeRelayEnvelope,
+} from '@agor/core/realtime';
+import type { RedisRealtimeHealth } from '@agor/core/types';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Redis, { type RedisOptions } from 'ioredis';
 import type { Namespace, Server } from 'socket.io';
 
-export const FEATHERS_RELAY_EVENT = 'agor:feathers-publication:v1';
-export const MAX_REALTIME_RELAY_BYTES = 512 * 1024;
-
 export function redisAdapterKey(keyPrefix: string): string {
   return `${keyPrefix}:socket.io`;
-}
-
-export interface RealtimeRelayEnvelope {
-  version: 1;
-  tenantId: string;
-  path: string;
-  event: string;
-  method?: string;
-  id?: string | number;
-  data: unknown;
-}
-
-export interface RedisRealtimeHealth {
-  required: true;
-  ready: boolean;
-  draining: boolean;
-  adapterAttached: boolean;
-  pubStatus: string;
-  subStatus: string;
 }
 
 type RelayHandler = (envelope: RealtimeRelayEnvelope) => void | Promise<void>;
@@ -162,7 +146,7 @@ export class RedisRealtimeRuntime {
     // serverSideEmit is namespace-scoped. Use the root Namespace explicitly
     // rather than relying on Server's EventEmitter delegation so send and
     // receive are guaranteed to bind to the same adapter instance.
-    this.namespace.on(FEATHERS_RELAY_EVENT, (raw: unknown) => {
+    this.namespace.on(REALTIME_RELAY_EVENT, (raw: unknown) => {
       if (!this.relayHandler || !isRealtimeRelayEnvelope(raw)) return;
       if (process.env.AGOR_DEBUG_REALTIME_PUBLISH === '1') {
         console.debug(
@@ -190,7 +174,7 @@ export class RedisRealtimeRuntime {
         `[realtime/redis] relay sent path=${envelope.path} event=${envelope.event} tenant=${envelope.tenantId}`
       );
     }
-    this.namespace.serverSideEmit(FEATHERS_RELAY_EVENT, envelope);
+    this.namespace.serverSideEmit(REALTIME_RELAY_EVENT, envelope);
   }
 
   beginDrain(): void {
@@ -232,35 +216,4 @@ export class RedisRealtimeRuntime {
     };
     await Promise.all([closeClient(this.pubClient), closeClient(this.subClient)]);
   }
-}
-
-export function isRealtimeRelayEnvelope(value: unknown): value is RealtimeRelayEnvelope {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const v = value as Record<string, unknown>;
-  let dataIsBoundedJson = false;
-  try {
-    const encoded = JSON.stringify(v.data);
-    dataIsBoundedJson =
-      encoded !== undefined && Buffer.byteLength(encoded, 'utf8') <= MAX_REALTIME_RELAY_BYTES;
-  } catch {
-    dataIsBoundedJson = false;
-  }
-  return (
-    v.version === 1 &&
-    typeof v.tenantId === 'string' &&
-    v.tenantId.length > 0 &&
-    v.tenantId.length <= 128 &&
-    typeof v.path === 'string' &&
-    v.path.length > 0 &&
-    v.path.length <= 128 &&
-    typeof v.event === 'string' &&
-    v.event.length > 0 &&
-    v.event.length <= 128 &&
-    (v.method === undefined || (typeof v.method === 'string' && v.method.length <= 128)) &&
-    (v.id === undefined ||
-      (typeof v.id === 'string' && v.id.length <= 256) ||
-      (typeof v.id === 'number' && Number.isFinite(v.id))) &&
-    'data' in v &&
-    dataIsBoundedJson
-  );
 }

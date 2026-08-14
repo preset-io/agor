@@ -56,6 +56,7 @@ import {
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
+  BranchArchiveOrDeleteOptions,
   HookContext,
   MCPMemberPolicy,
   Message,
@@ -74,6 +75,7 @@ import type {
 } from '@agor/core/types';
 import {
   hasMinimumRole,
+  isBranchArchiveOrDeleteOptions,
   isTaskPendingDispatch,
   MCP_MEMBER_POLICIES,
   MessageRole,
@@ -125,6 +127,7 @@ import {
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
@@ -137,6 +140,7 @@ import {
   registerAuthenticatedRoute as registerAuthenticatedRouteBase,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
 import {
   cacheBranchAccess,
   checkSessionOwnerOrAdmin,
@@ -3527,10 +3531,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
       if (!id) throw new Error('Branch ID required');
-      const options = data as {
-        metadataAction: 'archive' | 'delete';
-        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-      };
+      if (!isBranchArchiveOrDeleteOptions(data)) {
+        throw new BadRequest('Invalid branch archive/delete options');
+      }
+      const options: BranchArchiveOrDeleteOptions = data;
       return branchesService.archiveOrDelete(
         id as import('@agor/core/types').BranchID,
         options,
@@ -3545,32 +3549,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'archive or delete branches'),
-        inTenantDatabaseScope(async (context: HookContext) => {
-          const id = context.params.route?.id;
-          if (!id) throw new Error('Branch ID required');
-
-          const branch = await branchRepository.findById(id);
-          if (!branch) {
-            throw new Forbidden(`Branch not found: ${id}`);
-          }
-
-          await cacheBranchAccess(context.params, branchRepository, branch);
-
-          return context;
-        }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'archive or delete branches', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to archive/delete branches'
-                );
-              }
-              return context;
-            },
+        inTenantDatabaseScope((context: HookContext) =>
+          authorizeBranchArchiveDelete(context, {
+            branchRepository,
+            branchRbacEnabled,
+            superadminOpts,
+          })
+        ),
       ],
     },
   });
@@ -4377,7 +4362,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Server-side gate in register-hooks.ts is the source of truth; this
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
-          webTerminal: config.execution?.allow_web_terminal !== false,
+          webTerminal: resolveWebTerminalCapability({ config, deployment }).enabled,
+          webTerminalCapability: resolveWebTerminalCapability({ config, deployment }),
           // How managed environment lifecycle fields execute. In
           // webhook-only mode the UI/MCP may still show env controls, but
           // non-URL rendered commands are rejected server-side.

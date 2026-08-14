@@ -1175,10 +1175,29 @@ export function useAgorData(
 
     // Subscribe to branch events
     const branchesService = client.service('branches');
+    const branchRemovedSync = (branch: Branch) => {
+      realtime.branchRemoved(branch);
+      // Branch deletion cascades tasks/messages without child Feathers events.
+      // Comments survive those cascades with task_id/message_id SET NULL, but
+      // the branch tombstone does not contain the deleted descendant IDs.
+      // Rehydrate the authoritative comment set under the standard quiet-window
+      // guard so stale attachment IDs disappear without risking resurrection.
+      void runHydration(
+        'branch-removal-comments',
+        ['comments'],
+        () =>
+          client.service('board-comments').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        (allComments) =>
+          agorStore.getState().applyMaps((prev) => ({
+            ...prev,
+            commentById: buildById(allComments, 'comment_id', prev.commentById),
+          }))
+      );
+    };
     branchesService.on('created', realtime.branchCreated);
     branchesService.on('patched', realtime.branchPatched);
     branchesService.on('updated', realtime.branchPatched);
-    branchesService.on('removed', realtime.branchRemoved);
+    branchesService.on('removed', branchRemovedSync);
 
     // Subscribe to user events
     const usersService = client.service('users');
@@ -1380,7 +1399,7 @@ export function useAgorData(
       branchesService.removeListener('created', realtime.branchCreated);
       branchesService.removeListener('patched', realtime.branchPatched);
       branchesService.removeListener('updated', realtime.branchPatched);
-      branchesService.removeListener('removed', realtime.branchRemoved);
+      branchesService.removeListener('removed', branchRemovedSync);
 
       usersService.removeListener('created', realtime.userCreated);
       usersService.removeListener('patched', realtime.userPatched);

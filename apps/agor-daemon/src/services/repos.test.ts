@@ -19,6 +19,12 @@ vi.mock('@agor/core/config', async (importOriginal) => {
   };
 });
 
+const repositoryMocks = vi.hoisted(() => ({
+  deleteRepo: vi.fn(),
+  findAllBranchesByRepoId: vi.fn(),
+  lockRepoForBranchInventory: vi.fn(),
+}));
+
 vi.mock('@agor/core/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/db')>();
 
@@ -27,6 +33,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
     BranchRepository: vi.fn().mockImplementation(function BranchRepository() {
       return {
         findActiveByRepoAndName: vi.fn(async () => null),
+        findAllByRepoId: repositoryMocks.findAllBranchesByRepoId,
         getAllUsedUniqueIds: vi.fn(async () => []),
         addOwner: vi.fn(async () => undefined),
       };
@@ -37,8 +44,9 @@ vi.mock('@agor/core/db', async (importOriginal) => {
         findById: vi.fn(),
         findAll: vi.fn(async () => []),
         update: vi.fn(),
-        delete: vi.fn(),
+        delete: repositoryMocks.deleteRepo,
         findBySlug: vi.fn(),
+        lockForBranchInventory: repositoryMocks.lockRepoForBranchInventory,
       };
     }),
   };
@@ -221,5 +229,63 @@ describe('ReposService.cloneRepository Git lifecycle identity', () => {
       expect.objectContaining({ command: 'git.clone' }),
       expect.objectContaining({ asUser: 'daemon-user' })
     );
+  });
+});
+
+describe('ReposService.remove branch inventory', () => {
+  it('uses the unbounded repository inventory after locking instead of Feathers pagination', async () => {
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/large-repo',
+      repo_type: 'remote',
+    };
+    const branches = Array.from({ length: 10_001 }, (_, index) => ({
+      branch_id: `branch-${index}`,
+      repo_id: repo.repo_id,
+      name: `branch-${index}`,
+    }));
+    repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue(branches);
+    repositoryMocks.lockRepoForBranchInventory.mockReset().mockResolvedValue(repo);
+    repositoryMocks.deleteRepo.mockReset().mockResolvedValue(undefined);
+
+    const branchService = {
+      find: vi.fn(async () => {
+        throw new Error('transport-paginated find must not be used');
+      }),
+      removeMetadataWithRealtime: vi.fn(async () => undefined),
+    };
+    const app = {
+      get: () => ({}),
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return branchService;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const tx = { run: vi.fn() };
+    const db = {
+      run: vi.fn(),
+      transaction: vi.fn(async (work: (transaction: unknown) => Promise<unknown>) => work(tx)),
+    };
+    const service = new ReposService(db as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      await service.remove(repo.repo_id, {
+        tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+      } as never);
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(branchService.find).not.toHaveBeenCalled();
+    expect(repositoryMocks.findAllBranchesByRepoId).toHaveBeenNthCalledWith(1, repo.repo_id);
+    expect(repositoryMocks.findAllBranchesByRepoId).toHaveBeenNthCalledWith(2, repo.repo_id);
+    expect(repositoryMocks.lockRepoForBranchInventory).toHaveBeenCalledWith(repo.repo_id);
+    expect(repositoryMocks.lockRepoForBranchInventory.mock.invocationCallOrder[0]).toBeLessThan(
+      repositoryMocks.findAllBranchesByRepoId.mock.invocationCallOrder[1]!
+    );
+    expect(branchService.removeMetadataWithRealtime).toHaveBeenCalledTimes(10_001);
+    expect(repositoryMocks.deleteRepo).toHaveBeenCalledOnce();
   });
 });

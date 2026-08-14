@@ -22,18 +22,21 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '@agor/core/config';
+import { loadConfigFromFile } from '@agor/core/config';
 import {
+  and,
+  BranchRepository,
   branches,
   branchOwners,
   createDatabase,
   eq,
-  inArray,
+  isNull,
   repos,
+  resolveDatabaseUrl,
   select,
   shortId,
   update,
@@ -53,11 +56,14 @@ import {
   getUserBranchesDir,
   getUserGroups,
   groupExists,
+  isLegacyManagedGroupName,
   isUserInGroup,
   listAgorUsers,
   listBranchGroups,
   listRepoGroups,
   REPO_GIT_PERMISSION_MODE,
+  resolveBranchGroupName,
+  resolveRepoGroupName,
   SymlinkCommands,
   UnixGroupCommands,
   UnixUserCommands,
@@ -74,11 +80,79 @@ interface UserWithUnix {
   unix_username: string;
 }
 
-interface BranchOwnership {
+interface BranchAuthorization {
   branch_id: string;
   name: string;
   unix_group: string | null;
   repo_id: string;
+}
+
+interface ExplicitFsAuthorizationSource {
+  findExplicitFsAccessUserIds(branchId: BranchID): Promise<readonly string[]>;
+}
+
+interface ExplicitFsAuthorizationIndex {
+  branchesByUserId: Map<string, BranchAuthorization[]>;
+  userIdsByBranchId: Map<string, Set<string>>;
+}
+
+interface BranchGroupAuthorizationIndex {
+  groupByBranchId: Map<string, string>;
+  userIdsByGroup: Map<string, Set<string>>;
+}
+
+/**
+ * Index the repository's canonical explicit filesystem authorization expansion
+ * for Unix membership reconciliation. Keep policy in BranchRepository rather
+ * than reimplementing owners/group/board grant rules in this privileged CLI.
+ */
+export async function buildExplicitFsAuthorizationIndex(
+  branchRows: readonly BranchAuthorization[],
+  authorizationSource: ExplicitFsAuthorizationSource
+): Promise<ExplicitFsAuthorizationIndex> {
+  const branchesByUserId = new Map<string, BranchAuthorization[]>();
+  const userIdsByBranchId = new Map<string, Set<string>>();
+
+  for (const branch of branchRows) {
+    const userIds = new Set(
+      await authorizationSource.findExplicitFsAccessUserIds(branch.branch_id as BranchID)
+    );
+    userIdsByBranchId.set(branch.branch_id, userIds);
+
+    for (const userId of userIds) {
+      const authorizedBranches = branchesByUserId.get(userId) ?? [];
+      authorizedBranches.push(branch);
+      branchesByUserId.set(userId, authorizedBranches);
+    }
+  }
+
+  return { branchesByUserId, userIdsByBranchId };
+}
+
+/**
+ * Collapse branch authorization by persisted Unix group. Legacy UUID-prefix
+ * collisions can make several rows share one group, so expected membership is
+ * deliberately unioned across the whole cohort before any pruning decision.
+ */
+export function buildBranchGroupAuthorizationIndex(
+  branchRows: readonly BranchAuthorization[],
+  userIdsByBranchId: ReadonlyMap<string, ReadonlySet<string>>
+): BranchGroupAuthorizationIndex {
+  const groupByBranchId = new Map<string, string>();
+  const userIdsByGroup = new Map<string, Set<string>>();
+
+  for (const branch of branchRows) {
+    if (!branch.unix_group) continue;
+    const group = resolveBranchGroupName(branch.branch_id as BranchID, branch.unix_group);
+    groupByBranchId.set(branch.branch_id, group);
+    const expectedUserIds = userIdsByGroup.get(group) ?? new Set<string>();
+    for (const userId of userIdsByBranchId.get(branch.branch_id) ?? []) {
+      expectedUserIds.add(userId);
+    }
+    userIdsByGroup.set(group, expectedUserIds);
+  }
+
+  return { groupByBranchId, userIdsByGroup };
 }
 
 interface SyncResult {
@@ -92,6 +166,11 @@ interface SyncResult {
     missing: string[];
   };
   errors: string[];
+}
+
+/** Whether this DB view can prove facts about the host-global Unix namespace. */
+export function canVerifyGlobalUnixState(databaseUrl: string): boolean {
+  return databaseUrl.startsWith('file:');
 }
 
 export default class SyncUnix extends Command {
@@ -225,62 +304,60 @@ export default class SyncUnix extends Command {
     let syncErrors = 0;
 
     try {
-      // Connect to database
-      // When running via sudo, os.homedir() returns /root, but we need the original user's DB.
-      // Use SUDO_USER env var to resolve the correct home directory.
-      let databaseUrl = process.env.DATABASE_URL;
-      if (!databaseUrl) {
-        const sudoUser = process.env.SUDO_USER;
-        let agorHome: string;
-
-        if (sudoUser) {
-          // Running under sudo - use the invoking user's home directory
-          // Try to get home directory from passwd entry
-          try {
-            const passwdEntry = execSync(`getent passwd ${sudoUser}`, {
-              encoding: 'utf-8',
-              stdio: ['pipe', 'pipe', 'ignore'],
-            }).trim();
-            const homeDir = passwdEntry.split(':')[5]; // 6th field is home directory
-            agorHome = join(homeDir, '.agor');
-          } catch {
-            // Fallback to /home/<user>/.agor if getent fails
-            agorHome = join('/home', sudoUser, '.agor');
-          }
-        } else {
-          // Not running under sudo - use current user's home
-          agorHome = join(homedir(), '.agor');
+      // Resolve both config and database relative to the invoking user. When
+      // running via sudo, os.homedir() points at /root rather than the Agor
+      // installation being administered.
+      const sudoUser = process.env.SUDO_USER;
+      let operatorHome = homedir();
+      if (sudoUser) {
+        try {
+          const passwdEntry = execFileSync('getent', ['passwd', sudoUser], {
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'ignore'],
+          }).trim();
+          operatorHome = passwdEntry.split(':')[5] || join('/home', sudoUser);
+        } catch {
+          operatorHome = join('/home', sudoUser);
         }
+      }
 
-        const dbPath = join(agorHome, 'agor.db');
+      const agorHome = join(operatorHome, '.agor');
+      const configPath = join(agorHome, 'config.yaml');
+      if (!existsSync(configPath)) {
+        this.error(`Config not found: ${configPath}`);
+      }
+      const config = await loadConfigFromFile(configPath);
+      const resolvedDatabaseUrl = resolveDatabaseUrl({
+        config,
+        env: process.env,
+        homeDir: operatorHome,
+      });
+      const databaseUrl =
+        resolvedDatabaseUrl.startsWith('file:') || /^[a-z][a-z0-9+.-]*:/i.test(resolvedDatabaseUrl)
+          ? resolvedDatabaseUrl
+          : `file:${resolvedDatabaseUrl}`;
+      const hasGlobalUnixStateView = canVerifyGlobalUnixState(databaseUrl);
 
-        // Verify the database exists
+      if ((cleanupGroups || cleanupUsers) && !hasGlobalUnixStateView) {
+        this.error(
+          'sync-unix cleanup supports only the host-local SQLite database. ' +
+            'Unix users and groups are system-global, so a PostgreSQL/RLS or remote database view cannot prove that another tenant or host is not still using them.'
+        );
+      }
+
+      if (hasGlobalUnixStateView) {
+        const dbPath = databaseUrl.slice('file:'.length);
         if (!existsSync(dbPath)) {
-          this.log(chalk.red(`Database not found: ${dbPath}`));
-          if (sudoUser) {
-            this.log(
-              chalk.yellow(
-                `\nHint: Running as root via sudo. Expected database at ~${sudoUser}/.agor/agor.db`
-              )
-            );
-            this.log(
-              chalk.yellow('If your database is elsewhere, set DATABASE_URL environment variable:')
-            );
-            this.log(chalk.gray('  sudo DATABASE_URL=file:/path/to/agor.db agor local sync-unix'));
-          }
-          process.exit(1);
+          this.error(`Database not found: ${dbPath}`);
         }
-
-        databaseUrl = `file:${dbPath}`;
       }
 
       const db = createDatabase({ url: databaseUrl });
 
-      // Load config and get daemon user
+      // Get daemon user from the same operator config used for DB resolution.
       // The daemon user must be added to all Unix groups so it can access files
       // Since this command runs under sudo, we MUST require explicit config
       // (process.env.USER would return 'root' which is wrong)
-      const config = await loadConfig();
       const daemonUser = config.daemon?.unix_user;
 
       if (!daemonUser) {
@@ -386,12 +463,50 @@ export default class SyncUnix extends Command {
             data: { local_path?: string } | null;
           };
 
-          const expectedGroup =
-            rawRepo.unix_group || generateRepoGroupName(rawRepo.repo_id as RepoID);
           const dbNeedsBackfill = rawRepo.unix_group === null;
-          const groupMissingOnSystem = !groupExists(expectedGroup);
+          let expectedGroup =
+            rawRepo.unix_group == null
+              ? generateRepoGroupName(rawRepo.repo_id as RepoID)
+              : resolveRepoGroupName(rawRepo.repo_id as RepoID, rawRepo.unix_group);
           const repoPath = rawRepo.data?.local_path;
           const pathUsable = repoPath ? existsSync(repoPath) : false;
+          let hadError = false;
+
+          // Persist before any system-global group or filesystem operation.
+          if (dbNeedsBackfill) {
+            if (dryRun) {
+              this.log(
+                chalk.gray(
+                  `   [dry-run] Would update database: SET unix_group = '${expectedGroup}' WHERE repo_id = '${rawRepo.repo_id}'`
+                )
+              );
+              reposBackfilled++;
+            } else {
+              try {
+                await update(db, repos)
+                  .set({ unix_group: expectedGroup })
+                  .where(and(eq(repos.repo_id, rawRepo.repo_id), isNull(repos.unix_group)))
+                  .run();
+                const stampedRepo = await select(db, { unix_group: repos.unix_group })
+                  .from(repos)
+                  .where(eq(repos.repo_id, rawRepo.repo_id))
+                  .one();
+                if (!stampedRepo?.unix_group) {
+                  throw new Error('unix_group remained absent after stamping');
+                }
+                expectedGroup = resolveRepoGroupName(
+                  rawRepo.repo_id as RepoID,
+                  stampedRepo.unix_group
+                );
+                reposBackfilled++;
+                this.log(chalk.green(`   ✓ Backfilled unix_group in database`));
+              } catch (error) {
+                syncErrors++;
+                hadError = true;
+                this.log(chalk.red(`   ✗ Failed to update database: ${error}`));
+              }
+            }
+          }
 
           this.log(chalk.bold(`📁 ${rawRepo.slug}`));
           this.log(chalk.gray(`   repo_id: ${shortId(rawRepo.repo_id)}`));
@@ -404,7 +519,12 @@ export default class SyncUnix extends Command {
             this.log(chalk.gray(`   repo path: <none in data.local_path>`));
           }
 
-          let hadError = false;
+          if (hadError) {
+            this.log('');
+            continue;
+          }
+
+          const groupMissingOnSystem = !groupExists(expectedGroup);
 
           // 1. Ensure Unix group exists on the system
           if (groupMissingOnSystem) {
@@ -440,32 +560,7 @@ export default class SyncUnix extends Command {
             }
           }
 
-          // 3. Backfill DB if unix_group was NULL
-          if (!hadError && dbNeedsBackfill) {
-            if (dryRun) {
-              this.log(
-                chalk.gray(
-                  `   [dry-run] Would update database: SET unix_group = '${expectedGroup}' WHERE repo_id = '${rawRepo.repo_id}'`
-                )
-              );
-              reposBackfilled++;
-            } else {
-              try {
-                await update(db, repos)
-                  .set({ unix_group: expectedGroup })
-                  .where(eq(repos.repo_id, rawRepo.repo_id))
-                  .run();
-                reposBackfilled++;
-                this.log(chalk.green(`   ✓ Backfilled unix_group in database`));
-              } catch (error) {
-                syncErrors++;
-                hadError = true;
-                this.log(chalk.red(`   ✗ Failed to update database: ${error}`));
-              }
-            }
-          }
-
-          // 4. Apply permissions (idempotent; always run unless error)
+          // 3. Apply permissions (idempotent; always run unless error)
           if (!hadError) {
             if (!repoPath) {
               this.log(chalk.yellow(`   ⚠ No local_path in repo data, skipping permissions`));
@@ -516,6 +611,71 @@ export default class SyncUnix extends Command {
         }
       }
 
+      // Stamp every active branch before any membership or filesystem phase
+      // can use its group. This is intentionally DB-first: if a later host
+      // operation fails, rerunning converges on the same persisted name.
+      const branchesForStamp = targetBranchId
+        ? await select(db).from(branches).where(eq(branches.branch_id, targetBranchId)).all()
+        : await select(db).from(branches).all();
+      const unstampedBranches = branchesForStamp.filter(
+        (row: { archived: boolean; filesystem_status: string | null; unix_group: string | null }) =>
+          row.unix_group == null && !(row.archived && row.filesystem_status === 'deleted')
+      ) as Array<{ branch_id: string; name: string; unix_group: null }>;
+
+      if (unstampedBranches.length > 0) {
+        this.log(chalk.cyan.bold('\n━━━ Stamp Branch Unix Groups ━━━\n'));
+      }
+      const plannedBranchGroups = new Map<string, string>();
+      for (const branch of unstampedBranches) {
+        const candidate = generateBranchGroupName(branch.branch_id as BranchID);
+        plannedBranchGroups.set(branch.branch_id, candidate);
+        if (dryRun) {
+          branchesBackfilled++;
+          this.log(
+            chalk.gray(`   [dry-run] ${branch.name}: would persist unix_group ${candidate}`)
+          );
+          continue;
+        }
+
+        try {
+          await update(db, branches)
+            .set({ unix_group: candidate })
+            .where(and(eq(branches.branch_id, branch.branch_id), isNull(branches.unix_group)))
+            .run();
+          const stampedBranch = await select(db, { unix_group: branches.unix_group })
+            .from(branches)
+            .where(eq(branches.branch_id, branch.branch_id))
+            .one();
+          if (!stampedBranch?.unix_group) {
+            throw new Error('unix_group remained absent after stamping');
+          }
+          resolveBranchGroupName(branch.branch_id as BranchID, stampedBranch.unix_group);
+          branchesBackfilled++;
+          this.log(chalk.green(`   ✓ ${branch.name}: persisted ${stampedBranch.unix_group}`));
+        } catch (error) {
+          syncErrors++;
+          this.log(chalk.red(`   ✗ ${branch.name}: failed to persist unix_group: ${error}`));
+        }
+      }
+      if (unstampedBranches.length > 0) this.log('');
+
+      // Build one authorization snapshot for both additions and pruning. The
+      // repository owns the policy expansion (direct owners, branch groups,
+      // board owners, and board groups); consuming the same snapshot in both
+      // directions prevents a later phase from undoing an earlier one.
+      const branchesForAuthorization = targetBranchId
+        ? []
+        : ((await select(db).from(branches).all()) as BranchAuthorization[]);
+      const explicitFsAuthorization = targetBranchId
+        ? {
+            branchesByUserId: new Map<string, BranchAuthorization[]>(),
+            userIdsByBranchId: new Map<string, Set<string>>(),
+          }
+        : await buildExplicitFsAuthorizationIndex(
+            branchesForAuthorization,
+            new BranchRepository(db)
+          );
+
       if (targetBranchId) {
         this.log(chalk.gray('   ⊘ Skipping user sync phase (--branch-id mode)\n'));
       } else if (validUsers.length === 0) {
@@ -525,40 +685,6 @@ export default class SyncUnix extends Command {
         // Don't return early - still need to run cleanup if requested
       } else {
         this.log(chalk.cyan(`Found ${validUsers.length} user(s) with unix_username\n`));
-
-        // Prefetch all branch ownerships in a single query to avoid N+1
-        const userIds = validUsers.map((u) => u.user_id);
-        // biome-ignore lint/suspicious/noExplicitAny: Join query requires type assertion
-        const allOwnerships = await (db as any)
-          .select()
-          .from(branchOwners)
-          .innerJoin(branches, eq(branchOwners.branch_id, branches.branch_id))
-          .where(inArray(branchOwners.user_id, userIds));
-
-        // Group ownerships by user_id for O(1) lookup
-        const ownershipsByUser = new Map<string, BranchOwnership[]>();
-        for (const row of allOwnerships) {
-          const userId = (
-            row as {
-              branch_owners: { user_id: string };
-              branches: {
-                branch_id: string;
-                name: string;
-                unix_group: string | null;
-                repo_id: string;
-              };
-            }
-          ).branch_owners.user_id;
-          const ownership: BranchOwnership = {
-            branch_id: (row as { branches: { branch_id: string } }).branches.branch_id,
-            name: (row as { branches: { name: string } }).branches.name,
-            unix_group: (row as { branches: { unix_group: string | null } }).branches.unix_group,
-            repo_id: (row as { branches: { repo_id: string } }).branches.repo_id,
-          };
-          const existing = ownershipsByUser.get(userId) || [];
-          existing.push(ownership);
-          ownershipsByUser.set(userId, existing);
-        }
 
         // Build a map of repo_id -> unix_group for quick lookup in the
         // per-user loop. The Sync Repos phase above already ensured every
@@ -631,18 +757,39 @@ export default class SyncUnix extends Command {
               }
             }
 
-            // Get branches owned by this user (from prefetched data)
-            const ownedBranches: BranchOwnership[] = ownershipsByUser.get(user.user_id) || [];
+            // Get every branch for which the user has explicit filesystem
+            // authorization, not only branches they directly own.
+            const authorizedBranches =
+              explicitFsAuthorization.branchesByUserId.get(user.user_id) ?? [];
 
             if (verbose) {
-              this.log(chalk.gray(`   Owns ${ownedBranches.length} branch(s)`));
+              this.log(
+                chalk.gray(
+                  `   Has explicit filesystem access to ${authorizedBranches.length} branch(s)`
+                )
+              );
             }
 
-            // Build expected groups from owned branches
-            for (const wt of ownedBranches) {
-              // Use existing unix_group or generate from branch_id
+            // Build expected groups from authorized branches
+            for (const wt of authorizedBranches) {
+              if (wt.unix_group == null && !dryRun) {
+                const message = `Branch ${wt.name} has no persisted unix_group; skipping host group access`;
+                result.errors.push(message);
+                this.log(chalk.red(`   ✗ ${message}`));
+                continue;
+              }
+              // A dry-run may plan an absent stamp, but every mutating run
+              // reaches this phase only after the DB-first stamping pass.
               const expectedGroup =
-                wt.unix_group || generateBranchGroupName(wt.branch_id as BranchID);
+                wt.unix_group == null
+                  ? plannedBranchGroups.get(wt.branch_id)
+                  : resolveBranchGroupName(wt.branch_id as BranchID, wt.unix_group);
+              if (!expectedGroup) {
+                const message = `Branch ${wt.name} has no persisted or planned unix_group; skipping host group access`;
+                result.errors.push(message);
+                this.log(chalk.red(`   ✗ ${message}`));
+                continue;
+              }
               result.groups.expected.push(expectedGroup);
 
               const isInGroup = result.groups.actual.includes(expectedGroup);
@@ -705,15 +852,24 @@ export default class SyncUnix extends Command {
               }
             }
 
-            // Sync repo groups - user should be in repo group for each unique repo they own branches in
+            // Sync repo groups - a user needs the repo group for every repo in
+            // which they have explicit filesystem access to a branch.
             const repoIdsSeen = new Set<string>();
-            for (const wt of ownedBranches) {
+            for (const wt of authorizedBranches) {
               if (repoIdsSeen.has(wt.repo_id)) continue;
               repoIdsSeen.add(wt.repo_id);
 
-              // Get repo group (from prefetched map or generate)
+              const persistedRepoGroup = repoGroupMap.get(wt.repo_id);
+              if (persistedRepoGroup == null && !dryRun) {
+                const message = `Repo ${shortId(wt.repo_id)} has no persisted unix_group; skipping host group access`;
+                result.errors.push(message);
+                this.log(chalk.red(`   ✗ ${message}`));
+                continue;
+              }
               const repoGroup =
-                repoGroupMap.get(wt.repo_id) || generateRepoGroupName(wt.repo_id as RepoID);
+                persistedRepoGroup == null
+                  ? generateRepoGroupName(wt.repo_id as RepoID)
+                  : resolveRepoGroupName(wt.repo_id as RepoID, persistedRepoGroup);
               result.groups.expected.push(repoGroup);
 
               const isInRepoGroup = result.groups.actual.includes(repoGroup);
@@ -790,7 +946,7 @@ export default class SyncUnix extends Command {
       //   1. Unix group exists on the system (creates if missing — covers
       //      fresh branches and DB-migration cruft).
       //   2. Daemon user is a member of the group.
-      //   3. unix_group is backfilled in the DB if NULL.
+      // Group names were persisted by the DB-first stamping phase above.
       //
       // Archived+deleted branches are left alone here; the Sync Branch
       // Permissions phase below handles their group cleanup.
@@ -823,9 +979,27 @@ export default class SyncUnix extends Command {
             data: { path?: string } | null;
           };
 
-          const expectedGroup =
-            rawWt.unix_group || generateBranchGroupName(rawWt.branch_id as BranchID);
           const dbNeedsBackfill = rawWt.unix_group === null;
+          if (dbNeedsBackfill && !dryRun) {
+            this.log(
+              chalk.red(
+                `   ✗ ${rawWt.name}: unix_group is still absent; skipping host group access`
+              )
+            );
+            continue;
+          }
+          const expectedGroup =
+            rawWt.unix_group == null
+              ? plannedBranchGroups.get(rawWt.branch_id)
+              : resolveBranchGroupName(rawWt.branch_id as BranchID, rawWt.unix_group);
+          if (!expectedGroup) {
+            this.log(
+              chalk.red(
+                `   ✗ ${rawWt.name}: unix_group is absent and no dry-run stamp was planned; skipping`
+              )
+            );
+            continue;
+          }
           const groupMissingOnSystem = !groupExists(expectedGroup);
 
           // Skip logging for branches already in canonical state (quiet mode)
@@ -889,30 +1063,6 @@ export default class SyncUnix extends Command {
             }
           }
 
-          // 3. Backfill DB if unix_group was NULL
-          if (!hadError && dbNeedsBackfill) {
-            if (dryRun) {
-              this.log(
-                chalk.gray(
-                  `   [dry-run] Would update database: SET unix_group = '${expectedGroup}' WHERE branch_id = '${rawWt.branch_id}'`
-                )
-              );
-              branchesBackfilled++;
-            } else {
-              try {
-                await update(db, branches)
-                  .set({ unix_group: expectedGroup })
-                  .where(eq(branches.branch_id, rawWt.branch_id))
-                  .run();
-                branchesBackfilled++;
-                this.log(chalk.green(`   ✓ Backfilled unix_group in database`));
-              } catch (error) {
-                syncErrors++;
-                this.log(chalk.red(`   ✗ Failed to update database: ${error}`));
-              }
-            }
-          }
-
           this.log('');
         }
 
@@ -930,12 +1080,15 @@ export default class SyncUnix extends Command {
 
       this.log(chalk.cyan.bold('\n━━━ Sync Branch Permissions ━━━\n'));
 
-      // Refresh from DB to pick up unix_group values backfilled in the phase above.
+      // Refresh from DB to use persisted unix_group values. In dry-run mode,
+      // include the in-memory proposed stamp so the preview also reports the
+      // downstream filesystem permission work.
       const allBranchesForSync = targetBranchId
         ? await select(db).from(branches).where(eq(branches.branch_id, targetBranchId)).all()
         : await select(db).from(branches).all();
       const branchesWithGroup = allBranchesForSync.filter(
-        (wt: { unix_group: string | null }) => wt.unix_group !== null
+        (wt: { branch_id: string; unix_group: string | null }) =>
+          wt.unix_group !== null || (dryRun && plannedBranchGroups.has(wt.branch_id))
       );
 
       // Build repo path lookup map for git branch operations
@@ -965,7 +1118,7 @@ export default class SyncUnix extends Command {
             name: string;
             ref: string;
             repo_id: string;
-            unix_group: string;
+            unix_group: string | null;
             archived: boolean;
             filesystem_status: string | null;
             others_fs_access: 'none' | 'read' | 'write' | null;
@@ -973,6 +1126,16 @@ export default class SyncUnix extends Command {
           };
 
           const branchPath = rawBranch.data?.path;
+          const branchGroup = rawBranch.unix_group
+            ? resolveBranchGroupName(rawBranch.branch_id as BranchID, rawBranch.unix_group)
+            : plannedBranchGroups.get(rawBranch.branch_id);
+          if (!branchGroup) {
+            this.log(
+              chalk.red(`   ✗ ${rawBranch.name}: no persisted or planned unix_group; skipping`)
+            );
+            branchesSkipped++;
+            continue;
+          }
 
           // Skip branches without a path in the data blob
           if (!branchPath) {
@@ -992,7 +1155,15 @@ export default class SyncUnix extends Command {
 
           if (action === 'cleanup') {
             // Archived+deleted: remove Unix group cruft
-            const wtGroup = rawBranch.unix_group;
+            const wtGroup = branchGroup;
+            if (isLegacyManagedGroupName(wtGroup)) {
+              this.log(
+                chalk.yellow(
+                  `   ⊘ ${rawBranch.name}: retaining shared-capable legacy group ${wtGroup}; use agor local fix-group-uuids`
+                )
+              );
+              continue;
+            }
             if (groupExists(wtGroup)) {
               this.log(
                 chalk.yellow(
@@ -1089,7 +1260,7 @@ export default class SyncUnix extends Command {
 
           this.log(chalk.bold(`📁 ${rawBranch.name}`));
           this.log(chalk.gray(`   branch_id: ${shortId(rawBranch.branch_id)}`));
-          this.log(chalk.gray(`   unix_group: ${rawBranch.unix_group}`));
+          this.log(chalk.gray(`   unix_group: ${branchGroup}`));
           this.log(chalk.gray(`   path: ${branchPath}`));
           if (rawBranch.archived) {
             this.log(
@@ -1208,7 +1379,7 @@ export default class SyncUnix extends Command {
 
           const permCmds = UnixGroupCommands.setDirectoryGroup(
             branchPath,
-            rawBranch.unix_group,
+            branchGroup,
             permissionMode
           );
           if (await execAllCmds(permCmds)) {
@@ -1253,39 +1424,30 @@ export default class SyncUnix extends Command {
 
       // ========================================
       // Membership Pruning Phase
-      // Removes users from branch groups they no longer own
+      // Removes users from branch groups they are no longer authorized to use
       // ========================================
 
       if (targetBranchId) {
         this.log(chalk.gray('   ⊘ Skipping membership pruning phase (--branch-id mode)\n'));
+      } else if (!hasGlobalUnixStateView) {
+        this.log(
+          chalk.yellow(
+            '   ⊘ Skipping membership pruning: a PostgreSQL/RLS or remote database view cannot prove global Unix group membership\n'
+          )
+        );
       } else {
         this.log(chalk.cyan.bold('\n━━━ Prune Stale Group Memberships ━━━\n'));
 
         {
-          // Build a map of branch group → expected members (owners + daemon)
-          const allWtForPrune = await select(db).from(branches).all();
-          const allOwnerRows = await select(db).from(branchOwners).all();
+          // Build a map of branch group → expected members (explicit
+          // filesystem authorization + daemon) from the same repository-owned
+          // policy snapshot used by the addition phase.
+          const allWtForPrune = branchesForAuthorization;
 
-          // Map branch_id → unix_group
-          const wtGroupMap = new Map<string, string>();
-          for (const wt of allWtForPrune) {
-            const raw = wt as { branch_id: string; unix_group: string | null };
-            if (raw.unix_group) {
-              wtGroupMap.set(raw.branch_id, raw.unix_group);
-            }
-          }
-
-          // Map unix_group → set of expected user_ids
-          const groupToOwnerIds = new Map<string, Set<string>>();
-          for (const row of allOwnerRows) {
-            const raw = row as { branch_id: string; user_id: string };
-            const group = wtGroupMap.get(raw.branch_id);
-            if (group) {
-              const owners = groupToOwnerIds.get(group) || new Set();
-              owners.add(raw.user_id);
-              groupToOwnerIds.set(group, owners);
-            }
-          }
+          const branchGroupAuthorization = buildBranchGroupAuthorizationIndex(
+            allWtForPrune,
+            explicitFsAuthorization.userIdsByBranchId
+          );
 
           // Map user_id → unix_username for all users with unix_username
           const allUsersForPrune = (await select(db).from(users).all()) as UserWithUnix[];
@@ -1300,15 +1462,17 @@ export default class SyncUnix extends Command {
 
           // Iterate ALL branch groups (including those with zero owners)
           let pruneChecked = 0;
-          for (const [, group] of wtGroupMap.entries()) {
+          for (const group of new Set(branchGroupAuthorization.groupByBranchId.values())) {
             if (!groupExists(group)) continue;
             pruneChecked++;
 
-            // Get expected unix_usernames for this group (may be empty if no owners)
-            const ownerIds = groupToOwnerIds.get(group) || new Set<string>();
+            // Get expected Unix usernames for this group (may be empty when no
+            // user has explicit filesystem authorization).
+            const authorizedUserIds =
+              branchGroupAuthorization.userIdsByGroup.get(group) ?? new Set<string>();
             const expectedUsernames = new Set<string>();
-            for (const ownerId of ownerIds) {
-              const uname = userIdToUnixName.get(ownerId);
+            for (const userId of authorizedUserIds) {
+              const uname = userIdToUnixName.get(userId);
               if (uname) expectedUsernames.add(uname);
             }
             // Daemon user is always expected
@@ -1324,7 +1488,11 @@ export default class SyncUnix extends Command {
               // Only prune DB-managed users (skip manually-added system users)
               if (!unixNameToUserId.has(member)) continue;
 
-              this.log(chalk.yellow(`   → Removing ${member} from ${group} (no longer owner)`));
+              this.log(
+                chalk.yellow(
+                  `   → Removing ${member} from ${group} (no explicit filesystem access)`
+                )
+              );
               if (await execCmd(UnixGroupCommands.removeUserFromGroup(member, group))) {
                 membershipsRemoved++;
                 this.log(chalk.green(`   ✓ Removed ${member} from ${group}`));
@@ -1499,9 +1667,8 @@ export default class SyncUnix extends Command {
         // Get all branch groups that should exist (from DB)
         const allBranches = await select(db).from(branches).all();
         const expectedGroups = new Set(
-          allBranches.map(
-            (wt: { branch_id: string; unix_group: string | null }) =>
-              wt.unix_group || generateBranchGroupName(wt.branch_id as BranchID)
+          allBranches.flatMap((wt: { branch_id: string; unix_group: string | null }) =>
+            wt.unix_group ? [resolveBranchGroupName(wt.branch_id as BranchID, wt.unix_group)] : []
           )
         );
 
@@ -1522,6 +1689,14 @@ export default class SyncUnix extends Command {
           this.log(chalk.yellow(`   Found ${staleGroups.length} stale group(s) to remove:\n`));
 
           for (const groupName of staleGroups) {
+            if (isLegacyManagedGroupName(groupName)) {
+              this.log(
+                chalk.yellow(
+                  `   ⊘ Retaining legacy group ${groupName}; use agor local fix-group-uuids for globally verified cleanup`
+                )
+              );
+              continue;
+            }
             this.log(chalk.yellow(`   → Deleting group ${groupName}...`));
             if (await execCmd(UnixGroupCommands.deleteGroup(groupName))) {
               groupsDeleted++;
@@ -1540,9 +1715,8 @@ export default class SyncUnix extends Command {
         // Get all repo groups that should exist (from DB)
         const allReposForCleanup = await select(db).from(repos).all();
         const expectedRepoGroups = new Set(
-          allReposForCleanup.map(
-            (r: { repo_id: string; unix_group: string | null }) =>
-              r.unix_group || generateRepoGroupName(r.repo_id as RepoID)
+          allReposForCleanup.flatMap((r: { repo_id: string; unix_group: string | null }) =>
+            r.unix_group ? [resolveRepoGroupName(r.repo_id as RepoID, r.unix_group)] : []
           )
         );
 
@@ -1565,6 +1739,14 @@ export default class SyncUnix extends Command {
           );
 
           for (const groupName of staleRepoGroups) {
+            if (isLegacyManagedGroupName(groupName)) {
+              this.log(
+                chalk.yellow(
+                  `   ⊘ Retaining legacy group ${groupName}; use agor local fix-group-uuids for globally verified cleanup`
+                )
+              );
+              continue;
+            }
             this.log(chalk.yellow(`   → Deleting group ${groupName}...`));
             if (await execCmd(UnixGroupCommands.deleteGroup(groupName))) {
               groupsDeleted++;

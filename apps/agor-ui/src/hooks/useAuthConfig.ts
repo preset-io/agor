@@ -38,6 +38,12 @@ export interface FeaturesConfig {
    * Defaults to true when the daemon config key is unset.
    */
   webTerminal?: boolean;
+  /** Process/runtime ownership contract advertised by the daemon. */
+  webTerminalCapability?: {
+    enabled: boolean;
+    mode: 'owner-local-ephemeral' | 'disabled';
+    reason?: string;
+  };
   /**
    * How managed environment lifecycle fields are handled by this instance.
    * Defaults to 'hybrid': shell commands and URL webhooks are both supported.

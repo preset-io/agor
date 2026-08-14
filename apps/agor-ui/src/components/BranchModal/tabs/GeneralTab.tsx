@@ -1,4 +1,11 @@
-import type { Board, Branch, MCPServer, Repo, Session } from '@agor-live/client';
+import type {
+  Board,
+  Branch,
+  BranchArchiveOrDeleteOptions,
+  MCPServer,
+  Repo,
+  Session,
+} from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
@@ -27,13 +34,7 @@ interface GeneralTabProps {
   canEdit: boolean;
   state: GeneralFormState;
   setField: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
-  onArchiveOrDelete?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
 }
 
 export const GeneralTab: React.FC<GeneralTabProps> = ({
@@ -50,10 +51,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const branchById = useAgorStore(selectBranchById);
 
-  const handleArchiveOrDelete = (options: {
-    metadataAction: 'archive' | 'delete';
-    filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-  }) => {
+  const handleArchiveOrDelete = (options: BranchArchiveOrDeleteOptions) => {
     onArchiveOrDelete?.(branch.branch_id, options);
   };
 

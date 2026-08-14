@@ -240,6 +240,25 @@ try {
   }
   console.log('ok - executor home and stable Agor workspace mounts are shared across replicas');
 
+  for (const service of ['daemon-a', 'daemon-b']) {
+    const doctor = JSON.parse(dockerOutput('exec', '-T', service, 'agor', 'doctor', '--json'));
+    assert.equal(doctor.policy?.source, 'config.yaml');
+    const diagnosedToolIds = doctor.agenticTools.map((tool) => tool.id).sort();
+    assert.deepEqual(
+      [...doctor.policy.selected].sort(),
+      diagnosedToolIds,
+      `${service} HA smoke policy does not select every managed agentic tool`
+    );
+    for (const tool of doctor.agenticTools) {
+      assert.equal(
+        tool.status,
+        'ready',
+        `${service} does not see the prepared ${tool.id} integration`
+      );
+    }
+  }
+  console.log('ok - all declarative agentic-tool integrations are ready on both replicas');
+
   const corsProbe = await fetch(`${ingress}/health`, {
     headers: { origin: publicOrigin },
   });

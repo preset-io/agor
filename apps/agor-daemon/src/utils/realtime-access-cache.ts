@@ -1,9 +1,12 @@
-import type { Branch, BranchID, UserID, UUID } from '@agor/core/types';
+import {
+  type Branch,
+  type BranchID,
+  type BranchRealtimeVisibility,
+  BranchRealtimeVisibilityMode,
+  type UserID,
+  type UUID,
+} from '@agor/core/types';
 import { PERMISSION_RANK } from './branch-authorization.js';
-
-export type BranchRealtimeVisibility =
-  | { mode: 'allAuthenticated' }
-  | { mode: 'explicitUsers'; userIds: Set<UserID> };
 
 export type RealtimeAccessBranchRepository = {
   findRealtimeVisibilityBranch(
@@ -46,6 +49,26 @@ const DEFAULT_SESSION_BRANCH_TTL_MS = 60 * 60_000;
 function branchAllowsAllAuthenticated(branch: Pick<Branch, 'others_can'>): boolean {
   const othersCan = branch.others_can ?? 'session';
   return PERMISSION_RANK[othersCan] >= PERMISSION_RANK.view;
+}
+
+/** Resolve current branch visibility without consulting daemon-local cache state. */
+export async function resolveBranchRealtimeVisibility(
+  repository: RealtimeAccessBranchRepository,
+  branchId: BranchID
+): Promise<BranchRealtimeVisibility | null> {
+  const branch = await repository.findRealtimeVisibilityBranch(branchId);
+  if (!branch) return null;
+
+  return branchAllowsAllAuthenticated(branch)
+    ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+    : {
+        mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+        userIds: new Set(
+          (await repository.findExplicitViewUserIds(branch.branch_id)).map(
+            (userId) => userId as UserID
+          )
+        ),
+      };
 }
 
 /**
@@ -115,24 +138,16 @@ export class RealtimeAccessCache {
       return this.visibilityFromEntry(cached);
     }
 
-    const branch = await this.options.branchRepository.findRealtimeVisibilityBranch(branchId);
-    if (!branch) {
+    const visibility = await resolveBranchRealtimeVisibility(
+      this.options.branchRepository,
+      branchId
+    );
+    if (!visibility) {
       this.branchVisibility.delete(branchId);
       return null;
     }
 
-    const visibility: BranchRealtimeVisibility = branchAllowsAllAuthenticated(branch)
-      ? { mode: 'allAuthenticated' }
-      : {
-          mode: 'explicitUsers',
-          userIds: new Set(
-            (await this.options.branchRepository.findExplicitViewUserIds(branch.branch_id)).map(
-              (userId) => userId as UserID
-            )
-          ),
-        };
-
-    this.branchVisibility.set(branch.branch_id, {
+    this.branchVisibility.set(branchId, {
       ...visibility,
       expiresAt: now + this.branchVisibilityTtlMs,
     });
@@ -164,8 +179,8 @@ export class RealtimeAccessCache {
   }
 
   private visibilityFromEntry(entry: BranchVisibilityCacheEntry): BranchRealtimeVisibility {
-    return entry.mode === 'allAuthenticated'
-      ? { mode: 'allAuthenticated' }
-      : { mode: 'explicitUsers', userIds: entry.userIds };
+    return entry.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED
+      ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+      : { mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS, userIds: entry.userIds };
   }
 }

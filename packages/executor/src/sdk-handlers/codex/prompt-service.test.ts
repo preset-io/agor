@@ -2186,6 +2186,52 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     });
   });
 
+  it('passes custom HTTP headers through Codex env_http_headers without inlining secrets', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'userguiding',
+          transport: 'http',
+          url: 'https://example.com/mcp',
+          auth: { type: 'none' },
+          headers: {
+            'X-API-Key': 'secret-api-key',
+            'X-Workspace': 'workspace-123',
+          },
+        },
+      },
+    ]);
+
+    const service = makeService();
+    try {
+      const { servers, total } = await (service as any).buildMcpServersConfig(
+        '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+        undefined,
+        { sessionOwnerId }
+      );
+
+      expect(total).toBe(1);
+      expect(servers.userguiding).toMatchObject({
+        url: 'https://example.com/mcp',
+        env_http_headers: {
+          'X-API-Key': 'AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1',
+          'X-Workspace': 'AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2',
+        },
+      });
+      expect(servers.userguiding).not.toHaveProperty('headers');
+      expect(servers.userguiding).not.toHaveProperty('http_headers');
+      expect(process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1).toBe(
+        'secret-api-key'
+      );
+      expect(process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2).toBe(
+        'workspace-123'
+      );
+    } finally {
+      delete process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1;
+      delete process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2;
+    }
+  });
+
   it('applies default_tools_approval_mode=approve to ALL servers in a mixed config', async () => {
     mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
       {

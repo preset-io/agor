@@ -35,6 +35,7 @@ import {
   PROMPT_FLOW_PATCH_FIELDS,
   protectExternalTaskCreate,
   protectServerManagedTaskWrites,
+  protectServerManagedUnixGroupWrites,
   type RegisterHooksContext,
   registerHooks,
   shouldDrainQueueAfterSessionPostTurnPatch,
@@ -219,6 +220,82 @@ describe('protectServerManagedTaskWrites', () => {
     context.params.provider = undefined;
 
     await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+  });
+});
+
+describe('protectServerManagedUnixGroupWrites', () => {
+  const branchId = '019ffd3d-2cef-79d1-a1c6-407300000001';
+  const canonicalGroup = 'agor_wt_019ffd3d2cef79d1a1c64073';
+  const legacyGroup = 'agor_wt_019ffd3d';
+  const context = (
+    unixGroup: unknown,
+    options: {
+      provider?: string;
+      serviceAccount?: boolean;
+      existingGroup?: string | null;
+    } = {}
+  ) =>
+    ({
+      path: 'branches',
+      method: 'patch',
+      id: branchId,
+      data: { unix_group: unixGroup },
+      params: {
+        provider: options.provider,
+        user: options.serviceAccount
+          ? {
+              user_id: 'executor',
+              email: 'executor@local',
+              role: 'service',
+              _isServiceAccount: true,
+            }
+          : { user_id: 'member', email: 'member@example.com', role: 'member' },
+      },
+      service: {
+        get: vi.fn(async () => ({ unix_group: options.existingGroup ?? null })),
+      },
+    }) as unknown as HookContext;
+
+  it('rejects unix_group writes from normal transport users', async () => {
+    await expect(
+      protectServerManagedUnixGroupWrites('branch')(context(canonicalGroup, { provider: 'rest' }))
+    ).rejects.toThrow('server-managed');
+  });
+
+  it('allows an executor service account to stamp the canonical name once', async () => {
+    const hook = context(canonicalGroup, { provider: 'rest', serviceAccount: true });
+    await expect(protectServerManagedUnixGroupWrites('branch')(hook)).resolves.toBe(hook);
+  });
+
+  it('rejects executor attempts to migrate an authoritative legacy stamp', async () => {
+    await expect(
+      protectServerManagedUnixGroupWrites('branch')(
+        context(canonicalGroup, {
+          provider: 'rest',
+          serviceAccount: true,
+          existingGroup: legacyGroup,
+        })
+      )
+    ).rejects.toThrow('authoritative');
+  });
+
+  it('rejects valid-looking names that belong to another row', async () => {
+    await expect(
+      protectServerManagedUnixGroupWrites('branch')(
+        context('agor_wt_019ffd3d2cef79d1a1c64074', {
+          provider: 'rest',
+          serviceAccount: true,
+        })
+      )
+    ).rejects.toThrow('Invalid persisted Unix group');
+  });
+
+  it('validates trusted internal legacy writes', async () => {
+    const hook = context(legacyGroup);
+    await expect(protectServerManagedUnixGroupWrites('branch')(hook)).resolves.toBe(hook);
+    await expect(
+      protectServerManagedUnixGroupWrites('branch')(context('developers; groupdel root'))
+    ).rejects.toThrow('Invalid persisted Unix group');
   });
 });
 

@@ -214,11 +214,11 @@ Two follow-ups suggested (out of scope here):
   `oauth-refresh.ts` header as known follow-up. Combined with the 1-hour
   default bug above, the failure mode for Notion is silent stale-token use
   until the provider rejects.
-- ⚠️ **In-memory `authCodeTokenCache`** in `oauth-mcp-transport.ts` is
-  vestigial in daemon mode (the DB-backed path is authoritative). Worth
-  pruning to one cache to avoid drift. `getCachedOAuth21Token` is referenced
-  from `apps/agor-daemon/src/oauth-cache.ts` and `services/gateway.ts`, and
-  this in-memory map is what backs it.
+- **In-memory `authCodeTokenCache`** in `oauth-mcp-transport.ts` is vestigial
+  in daemon mode: daemon callers pass `cacheToken:false`, so only the
+  standalone CLI flow reads and writes it, keyed on the exact metadata URL.
+  Its origin-matching reader is gone, and the daemon resolves tokens from
+  `user_mcp_oauth_tokens` only.
 - ⚠️ **Token endpoint inference on refresh.** `refreshAndPersistToken` falls
   back to `inferOAuthTokenUrl(server.url)` when `oauth_token_url` isn't
   persisted on the server config. We should persist the _discovered_ token
@@ -720,9 +720,8 @@ Don't build it speculatively — the maintenance cost is double.
   know when to refresh) but creates the Notion silent-break failure mode
   when paired with no retry-on-401. Document the contract.
 - `authCodeTokenCache` (in-memory, in `oauth-mcp-transport.ts`) is vestigial
-  in daemon mode. Worth auditing whether `getCachedOAuth21Token` callsites
-  in `apps/agor-daemon/src/oauth-cache.ts` and `services/gateway.ts` can
-  read directly from `user_mcp_oauth_tokens` instead.
+  in daemon mode; the daemon reads `user_mcp_oauth_tokens` directly. Any new
+  reader must key on tenant + user + server, not on a URL.
 - DCR scope auto-population strips scopes when `client_id` is pre-registered
   (intentional). When DCR is used, we should **add** `offline_access` if
   advertised by the AS — currently we just join `scopes_supported`.
