@@ -590,7 +590,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       // so a successful retry/unarchive cannot remain visually poisoned by
       // the previous attempt. undefined cannot express deletion through
       // deepMerge because it intentionally means preserve.
-      if (updates.filesystem_status !== undefined && updates.filesystem_status !== 'failed') {
+      if (
+        updates.filesystem_status !== undefined &&
+        updates.filesystem_status !== 'failed' &&
+        updates.filesystem_status !== 'delete_failed'
+      ) {
         delete merged.error_message;
       }
 

@@ -1315,6 +1315,7 @@ describe('agor_branches_cleanup_candidates', () => {
       makeBranch({ branch_id: 'candidate-ready', filesystem_status: undefined }),
       makeBranch({ branch_id: 'candidate-preserved', filesystem_status: 'preserved' }),
       makeBranch({ branch_id: 'candidate-cleaned', filesystem_status: 'cleaned' }),
+      makeBranch({ branch_id: 'candidate-delete-failed', filesystem_status: 'delete_failed' }),
       makeBranch({
         branch_id: 'too-recent',
         archived_at: '2026-05-30T00:00:00.000Z',
@@ -1345,12 +1346,17 @@ describe('agor_branches_cleanup_candidates', () => {
     });
     expect(
       parsed.candidates.map((candidate: { branch_id: string }) => candidate.branch_id)
-    ).toEqual(['candidate-ready', 'candidate-preserved', 'candidate-cleaned']);
+    ).toEqual([
+      'candidate-ready',
+      'candidate-preserved',
+      'candidate-cleaned',
+      'candidate-delete-failed',
+    ]);
     expect(parsed.safety).toMatchObject({
       read_only: true,
       archived_only: true,
       archived_older_than_days: 7,
-      filesystem_statuses: ['ready', 'preserved', 'cleaned'],
+      filesystem_statuses: ['ready', 'preserved', 'cleaned', 'delete_failed'],
       exclude_teammates: true,
       exclude_private: true,
     });
@@ -1360,7 +1366,7 @@ describe('agor_branches_cleanup_candidates', () => {
       path_exists: true,
     });
     expect(parsed.scanned).toMatchObject({
-      archived_branches: 8,
+      archived_branches: 9,
       source_pages: 1,
       source_page_limit: 10000,
     });

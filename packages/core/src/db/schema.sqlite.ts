@@ -729,7 +729,16 @@ export const branches = sqliteTable(
     archived_at: t.timestamp('archived_at'),
     archived_by: text('archived_by', { length: 36 }),
     filesystem_status: text('filesystem_status', {
-      enum: ['creating', 'ready', 'failed', 'preserved', 'cleaned', 'deleted'],
+      enum: [
+        'creating',
+        'ready',
+        'failed',
+        'preserved',
+        'cleaned',
+        'deleting',
+        'deleted',
+        'delete_failed',
+      ],
     }),
 
     // RBAC: App-layer permissions (rbac.md)
@@ -782,7 +791,7 @@ export const branches = sqliteTable(
         issue_url?: string; // GitHub/GitLab issue
         pull_request_url?: string; // PR link
         notes?: string; // Freeform user notes
-        error_message?: string; // Error details when filesystem_status is 'failed'
+        error_message?: string; // Error details when filesystem_status is 'failed' or 'delete_failed'
 
         // Environment instance (runtime state only, no variables)
         environment_instance?: {

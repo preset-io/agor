@@ -325,17 +325,27 @@ export interface Branch {
    * Archive states (set when branch is archived):
    * - 'preserved': Filesystem left untouched
    * - 'cleaned': git clean -fdx run (removes node_modules, build artifacts)
+   * - 'deleting': Exact branch root deletion is in progress
    * - 'deleted': Entire branch directory deleted from disk
+   * - 'delete_failed': Deletion failed or could not be verified; metadata is retained for retry
    *
    * Note: null/undefined means 'ready' for backward compatibility
    */
-  filesystem_status?: 'creating' | 'ready' | 'failed' | 'preserved' | 'cleaned' | 'deleted';
+  filesystem_status?:
+    | 'creating'
+    | 'ready'
+    | 'failed'
+    | 'preserved'
+    | 'cleaned'
+    | 'deleting'
+    | 'deleted'
+    | 'delete_failed';
 
   /**
-   * Error message when filesystem_status is 'failed'
+   * Error message when filesystem_status is 'failed' or 'delete_failed'
    *
-   * Contains the reason why branch creation failed (e.g., git worktree add error).
-   * Cleared when status transitions away from 'failed'.
+   * Contains a sanitized reason for creation or deletion failure.
+   * Cleared when status transitions away from either failure state.
    */
   error_message?: string;
 

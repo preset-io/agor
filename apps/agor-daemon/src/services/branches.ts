@@ -39,7 +39,13 @@ import {
   validateManagedEnvLifecyclePolicy,
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+} from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   Board,
@@ -76,7 +82,6 @@ import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
-import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   generateScopedServiceToken,
@@ -111,6 +116,26 @@ export type BranchParams = QueryParams<{
   };
 
 type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
+
+// The sudo rm helper has its own 10-minute resource bound. Leave a minute for
+// absence verification, the final Feathers patch, and JSON result delivery so
+// the daemon does not kill a correctly failing executor at the same deadline.
+const BRANCH_FILESYSTEM_DELETE_TIMEOUT_MS = 11 * 60_000;
+const GENERIC_BRANCH_DELETE_FAILURE =
+  'Filesystem deletion failed. Review daemon diagnostics and retry.';
+const BRANCH_DELETE_TIMEOUT_FAILURE =
+  'Filesystem deletion timed out and may be incomplete. The branch was retained for retry.';
+
+function sanitizeExecutorBranchDeleteFailure(result: {
+  error?: { code?: string; message?: string };
+}): string {
+  if (result.error?.code === 'GIT_BRANCH_REMOVE_FAILED' && result.error.message) {
+    // The git.branch.remove handler emits a fixed set of path-free messages.
+    return result.error.message.slice(0, 500);
+  }
+  if (result.error?.code === 'EXECUTOR_TIMEOUT') return BRANCH_DELETE_TIMEOUT_FAILURE;
+  return GENERIC_BRANCH_DELETE_FAILURE;
+}
 
 interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
   command: 'environment.lifecycle';
@@ -186,6 +211,169 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<T> {
     const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     return runWithTenantDatabaseScope(this.db, tenantId, work);
+  }
+
+  private branchFilesystemDeletePayload(
+    branch: Branch,
+    sessionToken: string,
+    params?: BranchParams
+  ): Record<string, unknown> {
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    const executionMode = resolveExecutionSecurityMode(this.app.get('config'));
+    return {
+      command: 'git.branch.remove',
+      sessionToken,
+      daemonUrl: getDaemonUrl(),
+      params: {
+        branchId: branch.branch_id,
+        branchPath: branch.path,
+        branchesRoot: getBranchesDir(tenantId),
+        deleteDbRecord: false,
+        branch: branch.ref,
+        deleteBranch: branch.new_branch,
+        storageMode: branch.storage_mode ?? 'worktree',
+        // Local strict/insulated mode owns a scoped sudoers boundary. Simple
+        // and delegated/container execution retain direct deletion semantics.
+        privilegedFilesystemDelete: executionMode.shouldInitUnixGroups,
+      },
+    };
+  }
+
+  private async generateBranchFilesystemDeleteToken(
+    branch: Branch,
+    userId: UserID,
+    params: BranchParams | undefined,
+    tokenType: 'branch-delete' | 'branch-remove'
+  ): Promise<string> {
+    const tokenService = (
+      this.app as unknown as {
+        sessionTokenService?: import('../services/session-token-service').SessionTokenService;
+      }
+    ).sessionTokenService;
+    if (!tokenService) throw new Error('Session token service unavailable');
+    return this.withTenantDatabase(params, () =>
+      tokenService.generateToken(tokenType, userId, {
+        branchId: branch.branch_id,
+        maxUses: -1,
+      })
+    );
+  }
+
+  private async patchBranchDeleteFailed(
+    branch: Branch,
+    message: string,
+    params?: BranchParams
+  ): Promise<void> {
+    try {
+      const current = await this.withTenantDatabase(params, () =>
+        this.get(branch.branch_id, params)
+      );
+      if (current.filesystem_status === 'delete_failed') return;
+      const patched = await this.withTenantDatabase(params, () =>
+        this.patch(
+          branch.branch_id,
+          {
+            filesystem_status: 'delete_failed',
+            error_message: message.slice(0, 500),
+          },
+          { ...params, provider: undefined }
+        )
+      );
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: patched,
+        params,
+        id: branch.branch_id,
+      });
+    } catch {
+      // The row may already have been explicitly removed, or the database may
+      // be unavailable. Never turn a lifecycle fallback into an unhandled
+      // rejection; the executor/daemon diagnostic remains authoritative.
+      console.error(`[BranchesService.delete ${branch.name}] Failed to persist delete_failed`);
+    }
+  }
+
+  private async markBranchDeleting(branch: Branch, params?: BranchParams): Promise<Branch> {
+    const patched = await this.withTenantDatabase(params, () =>
+      this.patch(
+        branch.branch_id,
+        { filesystem_status: 'deleting' },
+        { ...params, provider: undefined }
+      )
+    );
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: patched,
+      params,
+      id: branch.branch_id,
+    });
+    return patched;
+  }
+
+  private async runBranchFilesystemDelete(
+    branch: Branch,
+    userId: UserID,
+    params: BranchParams | undefined,
+    tokenType: 'branch-delete' | 'branch-remove'
+  ) {
+    let sessionToken: string;
+    try {
+      sessionToken = await this.generateBranchFilesystemDeleteToken(
+        branch,
+        userId,
+        params,
+        tokenType
+      );
+    } catch {
+      await this.patchBranchDeleteFailed(branch, GENERIC_BRANCH_DELETE_FAILURE, params);
+      return {
+        success: false as const,
+        error: { code: 'EXECUTOR_TOKEN_FAILED', message: GENERIC_BRANCH_DELETE_FAILURE },
+      };
+    }
+
+    const result = await runExecutorCommand(
+      this.branchFilesystemDeletePayload(branch, sessionToken, params),
+      {
+        logPrefix: `[BranchesService.delete ${branch.name}]`,
+        timeoutMs: BRANCH_FILESYSTEM_DELETE_TIMEOUT_MS,
+      }
+    );
+    if (!result.success) {
+      const message = sanitizeExecutorBranchDeleteFailure(result);
+      await this.patchBranchDeleteFailed(branch, message, params);
+      return {
+        ...result,
+        error: { ...result.error, message },
+      };
+    }
+    return result;
+  }
+
+  private async spawnBranchFilesystemDelete(
+    branch: Branch,
+    userId: UserID,
+    params?: BranchParams
+  ): Promise<void> {
+    try {
+      const sessionToken = await this.generateBranchFilesystemDeleteToken(
+        branch,
+        userId,
+        params,
+        'branch-delete'
+      );
+      spawnExecutor(this.branchFilesystemDeletePayload(branch, sessionToken, params), {
+        logPrefix: `[BranchesService.delete ${branch.name}]`,
+        onExit: async (code) => {
+          if (code === 0) return;
+          await this.patchBranchDeleteFailed(branch, GENERIC_BRANCH_DELETE_FAILURE, params);
+        },
+      });
+    } catch {
+      await this.patchBranchDeleteFailed(branch, GENERIC_BRANCH_DELETE_FAILURE, params);
+    }
   }
 
   private loadEnvironmentForAction(
@@ -1284,73 +1472,32 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async remove(id: BranchID, params?: BranchParams): Promise<Branch> {
     const { deleteFromFilesystem } = params?.query || {};
-    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
 
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    // Remove from database FIRST for instant UI feedback
-    // CASCADE will clean up related comments automatically
-    const result = await super.remove(id, params);
 
-    // Then remove from filesystem via executor (fire-and-forget)
-    // Executor handles its own logging and error reporting via Feathers
+    // Filesystem cleanup is a precondition of metadata deletion when explicitly
+    // requested. Keeping the row is what makes a failure visible and retryable.
     if (deleteFromFilesystem) {
-      console.log(`🗑️  Spawning executor to remove branch from filesystem: ${branch.path}`);
-
-      // Resolve Unix user for sudo wrap. Returns undefined in simple/no-RBAC
-      // mode so we don't try to sudo on hosts without passwordless sudoers
-      // (#1140 root cause; #1143 fixed the branch-remove sister bug by
-      // centralizing the gate inside the resolver itself).
-      const asUser = await resolveGitImpersonationForBranch(
-        this.db,
-        branch,
-        this.app.get('config')
-      );
-
-      // Generate session token for executor authentication. Hook chain
-      // enforces auth before we get here, so non-null assertion is safe.
+      console.log(`🗑️  Removing branch filesystem before metadata: ${branch.path}`);
       const userId = (params as AuthenticatedParams).user!.user_id as UserID;
-      const appWithToken = this.app as unknown as {
-        sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-      };
-
-      // Generate token and spawn executor (fire-and-forget)
-      appWithToken.sessionTokenService
-        ?.generateToken('branch-remove', userId, { branchId: branch.branch_id, maxUses: -1 })
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.remove',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId: branch.branch_id,
-                branchPath: branch.path,
-                branchesRoot: getBranchesDir(tenantId),
-                deleteDbRecord: false, // Already deleted above
-                // Clean up the branch if it was created by Agor
-                branch: branch.ref,
-                deleteBranch: branch.new_branch,
-                // Branch storage mode — executor needs this to pick the right
-                // teardown path (clone-mode just rm -rf; worktree-mode also
-                // runs `git worktree remove --force` against the base repo).
-                storageMode: branch.storage_mode ?? 'worktree',
-              },
-            },
-            {
-              logPrefix: `[BranchesService.remove ${branch.name}]`,
-              asUser, // Run as resolved user (fresh groups via sudo -u)
-            }
-          );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch removal:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
+      await this.markBranchDeleting(branch, params);
+      const deletion = await this.runBranchFilesystemDelete(
+        branch,
+        userId,
+        params,
+        'branch-remove'
+      );
+      if (!deletion.success) {
+        throw new Conflict(
+          `${deletion.error?.message || GENERIC_BRANCH_DELETE_FAILURE} Branch metadata was retained.`
+        );
+      }
     }
 
+    // CASCADE will clean up related comments automatically. This happens only
+    // after a requested filesystem deletion has been verified by the executor.
+    const result = await super.remove(id, params);
     return result as Branch;
   }
 
@@ -1472,56 +1619,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             error instanceof Error ? error.message : String(error)
           );
         });
-    } else if (filesystemAction === 'deleted') {
-      console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
-      const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
-
-      // No user impersonation for infrastructure operations — the daemon user
-      // owns all branches and impersonation would resolve getBranchesDir()
-      // to the wrong home directory, causing safety check failures.
-
-      void this.withTenantDatabase(
-        params,
-        () =>
-          appWithToken.sessionTokenService?.generateToken(
-            'branch-delete',
-            userId ?? currentUserId,
-            {
-              branchId: branch.branch_id,
-              maxUses: -1,
-            }
-          ) ?? Promise.reject(new Error('Session token service unavailable'))
-      )
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.remove',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId: branch.branch_id,
-                branchPath: branch.path,
-                branchesRoot: getBranchesDir(tenantId),
-                deleteDbRecord: false, // Daemon handles DB deletion separately
-                // Clean up the branch if it was created by Agor
-                branch: branch.ref,
-                deleteBranch: branch.new_branch,
-                // Branch storage mode — see sibling call site comment in
-                // `BranchesService.remove` above for why this matters.
-                storageMode: branch.storage_mode ?? 'worktree',
-              },
-            },
-            {
-              logPrefix: `[BranchesService.delete ${branch.name}]`,
-            }
-          );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch deletion:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
     }
 
     // Retire branch-scoped terminal attachments before archive/delete. The
@@ -1550,7 +1647,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             archived: true,
             archived_at: new Date().toISOString(),
             archived_by: currentUserId,
-            filesystem_status: filesystemAction,
+            filesystem_status: filesystemAction === 'deleted' ? 'deleting' : filesystemAction,
             // Preserve board_id + board_object placement so unarchive can restore in-place
             updated_at: new Date().toISOString(),
           },
@@ -1591,10 +1688,35 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
 
+      if (filesystemAction === 'deleted') {
+        // Archival itself is complete and visible immediately. The executor
+        // owns the asynchronous deleting -> deleted/delete_failed transition.
+        await this.spawnBranchFilesystemDelete(
+          { ...branch, ...archivedBranch } as Branch,
+          (userId ?? currentUserId) as UserID,
+          params
+        );
+      }
+
       return archivedBranch;
     } else {
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
       console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
+
+      if (filesystemAction === 'deleted') {
+        await this.markBranchDeleting(branch, params);
+        const deletion = await this.runBranchFilesystemDelete(
+          branch,
+          (userId ?? currentUserId) as UserID,
+          params,
+          'branch-delete'
+        );
+        if (!deletion.success) {
+          throw new Conflict(
+            `${deletion.error?.message || GENERIC_BRANCH_DELETE_FAILURE} Branch metadata was retained.`
+          );
+        }
+      }
 
       await this.removeMetadataWithRealtime(id, params);
 

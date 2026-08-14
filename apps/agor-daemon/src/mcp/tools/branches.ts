@@ -61,6 +61,7 @@ const CLEANUP_CANDIDATE_DEFAULT_FILESYSTEM_STATUSES = [
   'ready',
   'preserved',
   'cleaned',
+  'delete_failed',
 ] as const satisfies readonly CleanupCandidateFilesystemStatus[];
 const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = [
   'creating',
@@ -68,7 +69,9 @@ const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = [
   'failed',
   'preserved',
   'cleaned',
+  'deleting',
   'deleted',
+  'delete_failed',
 ] as const satisfies readonly CleanupCandidateFilesystemStatus[];
 const CLEANUP_CANDIDATE_STORAGE_MODES = ['worktree', 'clone'] as const;
 

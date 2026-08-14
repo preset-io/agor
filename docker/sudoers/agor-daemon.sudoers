@@ -102,11 +102,20 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/*/.agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/ln -sfn * /home/*/agor/worktrees/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/rm -f /home/*/agor/worktrees/*
 
+# Exact branch-root deletion for strict/insulated mode. Code validates the
+# tenant-aware worktrees root, rejects symlinked roots/components, executes rm
+# argv-style (no shell), and verifies absence afterward. Keep these argv flags
+# in sync with packages/git/src/index.ts; do not grant a generic `rm -rf *`.
+agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /home/*/.agor/worktrees/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /home/*/agor/worktrees/*
+
 # Optional: /var/agor for shared worktree storage
 agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chgrp * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /var/agor/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /var/agor/worktrees/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /var/agor/tenants/*/worktrees/*
 
 # ============================================================================
 # FILE CONTENT - Writing Config Files (SCOPED TO AGOR PATHS)

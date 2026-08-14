@@ -368,6 +368,7 @@ describe('GitBranchRemovePayloadSchema', () => {
     expect(result.command).toBe('git.branch.remove');
     expect(result.params.branchPath).toBe('/data/agor/worktrees/user/repo/feature-x');
     expect(result.params.branchId).toBe('550e8400-e29b-41d4-a716-446655440002');
+    expect(result.params.privilegedFilesystemDelete).toBe(false);
   });
 
   it('should parse with force option', () => {
@@ -379,11 +380,13 @@ describe('GitBranchRemovePayloadSchema', () => {
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
         branchesRoot: '/data/agor/worktrees',
         force: true,
+        privilegedFilesystemDelete: true,
       },
     };
 
     const result = GitBranchRemovePayloadSchema.parse(payload);
     expect(result.params.force).toBe(true);
+    expect(result.params.privilegedFilesystemDelete).toBe(true);
   });
 });
 

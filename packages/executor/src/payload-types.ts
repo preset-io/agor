@@ -332,6 +332,12 @@ export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
     /** Tenant-aware root that must contain branchPath */
     branchesRoot: z.string(),
 
+    /**
+     * Run the final exact-root removal through the scoped sudo rule. Enabled
+     * only by the daemon for local strict/insulated Unix isolation modes.
+     */
+    privilegedFilesystemDelete: z.boolean().optional().default(false),
+
     /** Force removal even if dirty */
     force: z.boolean().optional(),
 

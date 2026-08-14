@@ -85,4 +85,31 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
       'release/2024-q1'
     );
   });
+
+  it('surfaces a retryable filesystem deletion failure', () => {
+    const repo = makeRepo();
+    const branch = {
+      branch_id: 'branch-delete-failed',
+      repo_id: repo.repo_id,
+      name: 'failed-delete',
+      ref: 'failed-delete',
+      path: '/tmp/failed-delete',
+      archived: false,
+      filesystem_status: 'delete_failed',
+      error_message: 'Privileged filesystem deletion is unavailable or was denied.',
+      created_at: '2026-08-14T00:00:00.000Z',
+    } as unknown as Branch;
+
+    renderWithProviders(
+      <BranchesTable
+        client={null}
+        branchById={new Map([[branch.branch_id, branch]])}
+        repoById={new Map([[repo.repo_id, repo]])}
+        boardById={new Map<string, Board>()}
+        sessionsByBranch={new Map()}
+      />
+    );
+
+    expect(screen.getByText('delete failed')).toBeInTheDocument();
+  });
 });

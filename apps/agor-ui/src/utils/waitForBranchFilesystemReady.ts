@@ -33,8 +33,16 @@ export async function waitForBranchFilesystemReady(
     if (lastStatus === 'failed') {
       throw new Error(branch.error_message || 'Branch filesystem creation failed');
     }
+    if (lastStatus === 'delete_failed') {
+      throw new Error(branch.error_message || 'Branch filesystem deletion failed');
+    }
 
-    if (lastStatus === 'deleted' || lastStatus === 'cleaned' || lastStatus === 'preserved') {
+    if (
+      lastStatus === 'deleting' ||
+      lastStatus === 'deleted' ||
+      lastStatus === 'cleaned' ||
+      lastStatus === 'preserved'
+    ) {
       throw new Error(`Branch filesystem is ${lastStatus}`);
     }
 

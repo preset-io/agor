@@ -1836,39 +1836,128 @@ export async function deleteRepoDirectory(
  */
 export async function deleteBranchDirectory(
   branchPath: string,
-  allowedBranchesDir: string
+  allowedBranchesDir: string,
+  options: {
+    /** Use the narrowly-scoped sudo deletion path (strict/insulated mode). */
+    privileged?: boolean;
+    /** Test seam; production callers use the built-in sudo runner. */
+    privilegedDelete?: (target: string) => Promise<void>;
+  } = {}
 ): Promise<void> {
-  const { rm } = await import('node:fs/promises');
-  const { realpathSync, existsSync } = await import('node:fs');
-  const { resolve, relative } = await import('node:path');
+  const { lstat, realpath, rm, stat } = await import('node:fs/promises');
+  const { dirname, isAbsolute, relative, resolve, sep } = await import('node:path');
 
-  // Safety check: ensure we're only deleting from configured branches directory
-  const branchesDir = allowedBranchesDir;
+  const requestedRoot = resolve(allowedBranchesDir);
+  const requestedTarget = resolve(branchPath);
+  const lexicalRelativePath = relative(requestedRoot, requestedTarget);
 
-  // Use realpathSync to follow symlinks and canonicalize paths.
-  // If the branch directory was already removed (e.g. by `git worktree remove`),
-  // fall back to resolve() — the safety check still works since the base dir exists.
-  const resolvedBranchesDir = realpathSync(branchesDir);
-  const resolvedBranchPath = existsSync(branchPath)
-    ? realpathSync(branchPath)
-    : resolve(realpathSync(resolve(branchPath, '..')), resolve(branchPath).split('/').pop()!);
+  // Validate lexical containment before touching the target. A missing target is
+  // an idempotent success, but an out-of-root path is never accepted as one.
+  if (
+    lexicalRelativePath === '' ||
+    lexicalRelativePath === '..' ||
+    lexicalRelativePath.startsWith(`..${sep}`) ||
+    isAbsolute(lexicalRelativePath)
+  ) {
+    throw new Error('Safety check failed: Branch path must be a child of the branches root');
+  }
 
-  // Get relative path from branchesDir to branchPath
-  const relativePath = relative(resolvedBranchesDir, resolvedBranchPath);
+  let targetInfo: Awaited<ReturnType<typeof lstat>>;
+  try {
+    targetInfo = await lstat(requestedTarget);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
 
-  // Check if relative path goes outside (starts with '..' or is absolute)
-  if (relativePath.startsWith('..') || resolve(relativePath) === relativePath) {
-    throw new Error(
-      `Safety check failed: Branch path must be inside ${branchesDir}. Got: ${branchPath}`
+  // rm itself does not follow a command-line symlink, but refusing one before
+  // sudo keeps the validation contract explicit and prevents a future helper
+  // change from turning a link into a deletion oracle.
+  if (targetInfo.isSymbolicLink()) {
+    throw new Error('Safety check failed: Branch root is a symlink');
+  }
+  if (!targetInfo.isDirectory()) {
+    throw new Error('Safety check failed: Branch root is not a directory');
+  }
+
+  const resolvedRoot = await realpath(requestedRoot);
+  const resolvedTarget = await realpath(requestedTarget);
+  const expectedResolvedTarget = resolve(resolvedRoot, lexicalRelativePath);
+
+  // A different canonical target means at least one component below the
+  // configured root is a symlink. The configured root itself may legitimately
+  // contain symlinks (for example /home/<user> on hosted boxes), which is why
+  // comparison starts at resolvedRoot rather than rejecting every ancestor.
+  if (resolvedTarget !== expectedResolvedTarget) {
+    throw new Error('Safety check failed: Branch path traverses a symlink');
+  }
+
+  const parentInfo = await stat(dirname(resolvedTarget));
+  if (targetInfo.dev !== parentInfo.dev) {
+    throw new Error('Safety check failed: Branch root is a filesystem mount point');
+  }
+
+  if (options.privileged) {
+    const privilegedDelete = options.privilegedDelete ?? deleteBranchDirectoryWithSudo;
+    await privilegedDelete(requestedTarget);
+  } else {
+    await rm(resolvedTarget, { recursive: true, force: true });
+  }
+
+  // Command exit 0 is not authoritative: independently prove the recorded root
+  // is gone. This catches skipped mount contents, partial cleanup, and helpers
+  // that reported success prematurely.
+  try {
+    await lstat(requestedTarget);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  throw new Error('Branch directory deletion could not be verified');
+}
+
+const PRIVILEGED_BRANCH_DELETE_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Build the fixed sudo argv used for an already-validated branch root.
+ * Exported so the sudoers contract and the no-shell argument boundary can be
+ * regression tested without performing a privileged deletion.
+ */
+export function buildPrivilegedBranchDeleteArgs(target: string): string[] {
+  return ['-n', '/usr/bin/rm', '-rf', '--one-file-system', '--preserve-root=all', '--', target];
+}
+
+/**
+ * Delete one already-validated branch root as root.
+ *
+ * argv execution avoids shell expansion. GNU rm does not follow symlinks found
+ * inside the tree; --one-file-system avoids crossing nested mounts and
+ * --preserve-root=all refuses a branch root mounted from another filesystem.
+ */
+async function deleteBranchDirectoryWithSudo(target: string): Promise<void> {
+  const { execFile } = await import('node:child_process');
+  await new Promise<void>((resolvePromise, reject) => {
+    execFile(
+      '/usr/bin/sudo',
+      buildPrivilegedBranchDeleteArgs(target),
+      { timeout: PRIVILEGED_BRANCH_DELETE_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+      (error, _stdout, stderr) => {
+        if (!error) {
+          resolvePromise();
+          return;
+        }
+        const detail = (stderr || error.message)
+          .replaceAll(target, '<branch-root>')
+          .trim()
+          .slice(0, 500);
+        reject(
+          new Error(`Privileged branch deletion failed${detail ? `: ${detail}` : ''}`, {
+            cause: error,
+          })
+        );
+      }
     );
-  }
-
-  // Additional safety: don't allow deleting the branches directory itself
-  if (resolvedBranchPath === resolvedBranchesDir || relativePath === '') {
-    throw new Error('Cannot delete the branches directory itself');
-  }
-
-  await rm(resolvedBranchPath, { recursive: true, force: true });
+  });
 }
 
 /**

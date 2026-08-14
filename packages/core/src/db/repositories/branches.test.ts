@@ -953,6 +953,25 @@ describe('BranchRepository.update', () => {
     expect(refetched?.error_message).toBeUndefined();
   });
 
+  dbTest('retains delete errors until a deletion retry starts', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const created = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    const failed = await branchRepo.update(created.branch_id, {
+      filesystem_status: 'delete_failed',
+      error_message: 'Privileged filesystem deletion is unavailable',
+    });
+    expect(failed.error_message).toContain('Privileged');
+
+    const retrying = await branchRepo.update(created.branch_id, {
+      filesystem_status: 'deleting',
+    });
+    expect(retrying.filesystem_status).toBe('deleting');
+    expect(retrying.error_message).toBeUndefined();
+  });
+
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
     const wtRepo = new BranchRepository(db);
 

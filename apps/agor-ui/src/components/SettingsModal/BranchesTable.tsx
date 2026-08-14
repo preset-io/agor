@@ -25,6 +25,7 @@ import {
   Select,
   Space,
   Table,
+  Tag,
   Tooltip,
   Typography,
   theme,
@@ -163,6 +164,26 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     };
   }, [archiveFilter, archivedLoaded, client]);
 
+  // Archived branches are intentionally absent from the main branch store.
+  // Keep the locally fetched archived rows current while the asynchronous
+  // executor publishes deleting -> deleted/delete_failed transitions.
+  useEffect(() => {
+    if (!client) return;
+    const branchesService = client.service('branches');
+    const handlePatched = (branch: Branch) => {
+      setArchivedBranches((previous) => {
+        const index = previous.findIndex((candidate) => candidate.branch_id === branch.branch_id);
+        if (index === -1) return previous;
+        const next = [...previous];
+        next[index] = branch;
+        return next;
+      });
+    };
+
+    branchesService.on('patched', handlePatched);
+    return () => branchesService.removeListener('patched', handlePatched);
+  }, [client]);
+
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {
     const values = form.getFieldsValue();
@@ -255,6 +276,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           ...source,
           archived: true,
           archived_at: new Date().toISOString(),
+          filesystem_status:
+            options.filesystemAction === 'deleted' ? 'deleting' : options.filesystemAction,
         };
         setArchivedBranches((prev) => {
           const index = prev.findIndex((branch) => branch.branch_id === branchId);
@@ -384,6 +407,28 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           <Typography.Text type="secondary">
             {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}
           </Typography.Text>
+        );
+      },
+    },
+    {
+      title: 'Filesystem',
+      key: 'filesystem_status',
+      width: 110,
+      render: (_: unknown, record: Branch) => {
+        const status = record.filesystem_status ?? 'ready';
+        const label = status.replaceAll('_', ' ');
+        const color =
+          status === 'delete_failed' || status === 'failed'
+            ? 'error'
+            : status === 'deleting' || status === 'creating'
+              ? 'processing'
+              : status === 'deleted'
+                ? 'success'
+                : 'default';
+        return (
+          <Tooltip title={record.error_message}>
+            <Tag color={color}>{label}</Tag>
+          </Tooltip>
         );
       },
     },

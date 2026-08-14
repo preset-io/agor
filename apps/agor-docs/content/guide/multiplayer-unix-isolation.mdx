@@ -173,6 +173,10 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /home/*/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/*/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/ln -sfn * /home/*/agor/worktrees/*
 
+# Exact branch-root deletion; flags and path are fixed by Agor
+agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /home/*/.agor/worktrees/*
+agor ALL=(ALL) NOPASSWD: /usr/bin/rm -rf --one-file-system --preserve-root=all -- /home/*/agor/worktrees/*
+
 # Optional shared storage
 agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /var/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /var/agor/*
@@ -211,6 +215,9 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
 **Customization:**
 
 - Replace `agor` with your daemon username throughout (e.g., `agorpg`)
+- Reinstall the shipped sudoers file after upgrading. Strict and insulated
+  branch deletion needs the exact-root `rm` rules shown above; without them,
+  the branch is retained with a retryable `delete_failed` filesystem status.
 - The file includes extensive comments and troubleshooting tips
 - Read the full file before deploying to production
 

@@ -150,7 +150,7 @@ const teammateContext = {
   },
 };
 
-function createServiceHarness() {
+function createServiceHarness(config: Record<string, unknown> = {}) {
   const boardObjectsService = {
     find: vi.fn(async () => ({ data: [] })),
     findByBranchId: vi.fn(async () => null),
@@ -180,7 +180,7 @@ function createServiceHarness() {
     generateToken: vi.fn(async () => 'executor-token'),
   };
   const app = {
-    get: () => ({}),
+    get: (key: string) => (key === 'config' ? config : {}),
     sessionTokenService,
     service(path: string) {
       if (path === 'board-objects') return boardObjectsService;
@@ -1389,6 +1389,199 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(remove).not.toHaveBeenCalled();
     expect(sessionTokenService.generateToken).not.toHaveBeenCalled();
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  it('archives with deleting before spawning a privileged filesystem delete', async () => {
+    const { service } = createServiceHarness({
+      execution: { unix_user_mode: 'strict', branch_rbac: true },
+    });
+    const branchId = 'wt-archive-delete' as BranchID;
+    const patches: Array<Record<string, unknown>> = [];
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'WT Archive Delete',
+      ref: 'feature',
+      path: '/safe/worktrees/repo/feature',
+      archived: false,
+      filesystem_status: 'ready',
+      storage_mode: 'clone',
+      new_branch: true,
+      environment_instance: { status: 'stopped' },
+    } as never);
+    vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+      patches.push(data as Record<string, unknown>);
+      return {
+        branch_id: branchId,
+        name: 'WT Archive Delete',
+        path: '/safe/worktrees/repo/feature',
+        archived: Boolean((data as { archived?: boolean }).archived),
+        ...(data as Record<string, unknown>),
+      } as never;
+    });
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'archive', filesystemAction: 'deleted' },
+      {
+        user: { user_id: 'user-1' },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never
+    );
+
+    expect(patches[0]).toMatchObject({
+      archived: true,
+      filesystem_status: 'deleting',
+    });
+    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.branch.remove',
+        params: expect.objectContaining({
+          branchId,
+          deleteDbRecord: false,
+          privilegedFilesystemDelete: true,
+        }),
+      }),
+      expect.objectContaining({ onExit: expect.any(Function) })
+    );
+  });
+
+  it('retains hard-delete metadata and records delete_failed when the executor fails', async () => {
+    const { service } = createServiceHarness({
+      execution: { unix_user_mode: 'strict', branch_rbac: true },
+    });
+    const branchId = 'wt-hard-delete-failure' as BranchID;
+    const patches: Array<Record<string, unknown>> = [];
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'WT Hard Delete Failure',
+      ref: 'feature',
+      path: '/safe/worktrees/repo/feature',
+      archived: true,
+      filesystem_status: 'deleted',
+      storage_mode: 'clone',
+      new_branch: true,
+      environment_instance: { status: 'stopped' },
+    } as never);
+    vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+      patches.push(data as Record<string, unknown>);
+      return { branch_id: branchId, ...(data as Record<string, unknown>) } as never;
+    });
+    const removeSpy = vi.spyOn(service, 'remove').mockResolvedValue({} as never);
+    mockedRunExecutorCommand.mockResolvedValueOnce({
+      success: false,
+      error: {
+        code: 'GIT_BRANCH_REMOVE_FAILED',
+        message:
+          'Privileged filesystem deletion is unavailable or was denied. Check sudoers and retry.',
+      },
+    });
+
+    await expect(
+      service.archiveOrDelete(branchId, { metadataAction: 'delete', filesystemAction: 'deleted' }, {
+        user: { user_id: 'user-1' },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never)
+    ).rejects.toThrow(/metadata was retained/i);
+
+    expect(patches).toContainEqual({ filesystem_status: 'deleting' });
+    expect(patches).toContainEqual({
+      filesystem_status: 'delete_failed',
+      error_message: expect.stringContaining('sudoers'),
+    });
+    expect(removeSpy).not.toHaveBeenCalled();
+  });
+
+  it('hard-deletes metadata only after verified filesystem deletion succeeds', async () => {
+    const { service } = createServiceHarness({
+      execution: { unix_user_mode: 'strict', branch_rbac: true },
+    });
+    const branchId = 'wt-hard-delete-success' as BranchID;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'WT Hard Delete Success',
+      ref: 'feature',
+      path: '/safe/worktrees/repo/feature',
+      archived: true,
+      filesystem_status: 'delete_failed',
+      storage_mode: 'clone',
+      new_branch: true,
+      environment_instance: { status: 'stopped' },
+    } as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue({
+      branch_id: branchId,
+      filesystem_status: 'deleting',
+    } as never);
+    const removeSpy = vi
+      .spyOn(service, 'remove')
+      .mockResolvedValue({ branch_id: branchId } as never);
+    mockedRunExecutorCommand.mockResolvedValueOnce({
+      success: true,
+      data: { branchId, filesystemRemoved: true },
+    });
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'delete', filesystemAction: 'deleted' },
+      {
+        user: { user_id: 'user-1' },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never
+    );
+
+    expect(patchSpy).toHaveBeenCalledWith(
+      branchId,
+      { filesystem_status: 'deleting' },
+      expect.anything()
+    );
+    expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.branch.remove',
+        params: expect.objectContaining({ privilegedFilesystemDelete: true }),
+      }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) })
+    );
+    expect(removeSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BranchesService.remove filesystem precondition', () => {
+  it('retains the row when an explicit REST/socket filesystem delete fails', async () => {
+    const branchId = 'wt-remove-delete-failure' as BranchID;
+    const current = {
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'WT Remove Delete Failure',
+      ref: 'feature',
+      path: '/safe/worktrees/repo/feature',
+      archived: true,
+      filesystem_status: 'deleted',
+      storage_mode: 'clone',
+      new_branch: true,
+      environment_instance: { status: 'stopped' },
+    };
+    const { service, repository } = createPatchHarness({
+      current,
+      updated: { ...current, filesystem_status: 'deleting' },
+    });
+    mockedRunExecutorCommand.mockResolvedValueOnce({
+      success: false,
+      error: { code: 'GIT_BRANCH_REMOVE_FAILED', message: 'Filesystem deletion failed.' },
+    });
+
+    await expect(
+      service.remove(branchId, {
+        query: { deleteFromFilesystem: true },
+        user: { user_id: 'user-1' },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never)
+    ).rejects.toThrow(/metadata was retained/i);
+
+    expect(repository.update).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'deleting' })
+    );
+    expect(repository.delete).not.toHaveBeenCalled();
   });
 });
 

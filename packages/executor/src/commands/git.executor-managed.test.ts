@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   parseAgorYml: vi.fn(),
   writeAgorYml: vi.fn(),
   deleteBranchDirectory: vi.fn(),
+  removeGitWorktree: vi.fn(),
   deleteRepoDirectory: vi.fn(),
   cloneRepo: vi.fn(),
   createBranchAsClone: vi.fn(),
@@ -51,6 +52,7 @@ vi.mock('../git/index.js', async () => {
     cloneRepo: mocks.cloneRepo,
     createBranchAsClone: mocks.createBranchAsClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
+    removeGitWorktree: mocks.removeGitWorktree,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
     isValidGitRepo: mocks.isValidGitRepo,
     getDefaultBranch: mocks.getDefaultBranch,
@@ -193,6 +195,7 @@ beforeEach(() => {
     defaultBranch: 'main',
   });
   mocks.createBranchAsClone.mockResolvedValue({ path: '/trusted/branch', ref: 'main' });
+  mocks.removeGitWorktree.mockResolvedValue(undefined);
   mocks.isValidGitRepo.mockResolvedValue(true);
   mocks.getDefaultBranch.mockResolvedValue('main');
   mocks.getRemoteUrl.mockResolvedValue('https://user:secret@example.com/org/repo.git');
@@ -485,7 +488,18 @@ describe('managed executor git/fs commands', () => {
     const branchesRoot = await mkdtemp(join(tmpdir(), 'agor-tenant-worktrees-'));
     const branchPath = join(branchesRoot, 'repo', 'feature');
     await mkdir(branchPath, { recursive: true });
-    createClient({});
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      branch: {
+        branch_id: branchId,
+        path: branchPath,
+        storage_mode: 'clone',
+      },
+      patchedBranches,
+    });
+    mocks.deleteBranchDirectory.mockImplementationOnce(async () => {
+      await rm(branchPath, { recursive: true, force: true });
+    });
 
     try {
       const result = await handleGitBranchRemove(
@@ -497,6 +511,7 @@ describe('managed executor git/fs commands', () => {
             branchPath,
             branchesRoot,
             storageMode: 'clone',
+            privilegedFilesystemDelete: true,
             deleteDbRecord: false,
           },
         },
@@ -504,9 +519,212 @@ describe('managed executor git/fs commands', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot);
+      expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot, {
+        privileged: true,
+      });
+      expect(patchedBranches).toContainEqual({ filesystem_status: 'deleted' });
     } finally {
       await rm(branchesRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses payload path drift and persists a sanitized retryable failure', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      branch: {
+        branch_id: branchId,
+        path: '/safe/worktrees/repo/persisted',
+        storage_mode: 'clone',
+      },
+      patchedBranches,
+    });
+
+    const result = await handleGitBranchRemove(
+      {
+        command: 'git.branch.remove',
+        sessionToken: 'jwt',
+        params: {
+          branchId,
+          branchPath: '/safe/worktrees/repo/from-payload',
+          branchesRoot: '/safe/worktrees',
+          storageMode: 'clone',
+          privilegedFilesystemDelete: true,
+          deleteDbRecord: false,
+        },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('safety check') },
+    });
+    expect(mocks.deleteBranchDirectory).not.toHaveBeenCalled();
+    expect(patchedBranches).toContainEqual({
+      filesystem_status: 'delete_failed',
+      error_message: expect.stringContaining('safety check'),
+    });
+    expect(JSON.stringify(result)).not.toContain('/safe/worktrees/repo/from-payload');
+  });
+
+  it('persists delete_failed and never reports deleted when privileged removal fails', async () => {
+    const branchesRoot = await mkdtemp(join(tmpdir(), 'agor-delete-failure-'));
+    const branchPath = join(branchesRoot, 'repo', 'feature');
+    await mkdir(branchPath, { recursive: true });
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      branch: { branch_id: branchId, path: branchPath, storage_mode: 'clone' },
+      patchedBranches,
+    });
+    mocks.deleteBranchDirectory.mockRejectedValueOnce(
+      new Error(`EACCES: permission denied, rmdir '${branchPath}/node_modules/native/build'`)
+    );
+
+    try {
+      const result = await handleGitBranchRemove(
+        {
+          command: 'git.branch.remove',
+          sessionToken: 'jwt',
+          params: {
+            branchId,
+            branchPath,
+            branchesRoot,
+            storageMode: 'clone',
+            privilegedFilesystemDelete: true,
+            deleteDbRecord: false,
+          },
+        },
+        {}
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        error: { message: expect.stringContaining('sudoers') },
+      });
+      expect(patchedBranches).toEqual([
+        {
+          filesystem_status: 'delete_failed',
+          error_message: expect.stringContaining('sudoers'),
+        },
+      ]);
+      expect(JSON.stringify(result)).not.toContain(branchPath);
+    } finally {
+      await rm(branchesRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('uses privileged exact-root deletion when git worktree removal hits an ACL boundary', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'agor-worktree-delete-'));
+    const branchesRoot = join(tempRoot, 'worktrees');
+    const branchPath = join(branchesRoot, 'repo', 'feature');
+    const repoPath = join(tempRoot, 'repos', 'repo');
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    await mkdir(branchPath, { recursive: true });
+    await mkdir(repoPath, { recursive: true });
+    await writeFile(
+      join(branchPath, '.git'),
+      `gitdir: ${join(repoPath, '.git', 'worktrees', 'feature')}\n`
+    );
+    createClient({
+      repo: { repo_id: repoId, local_path: repoPath },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: branchPath,
+        storage_mode: 'worktree',
+      },
+      patchedBranches,
+    });
+    mocks.removeGitWorktree
+      .mockRejectedValueOnce(new Error('EACCES: permission denied, rmdir node_modules/native'))
+      .mockResolvedValueOnce(undefined);
+    mocks.deleteBranchDirectory.mockImplementationOnce(async () => {
+      await rm(branchPath, { recursive: true, force: true });
+    });
+
+    try {
+      const result = await handleGitBranchRemove(
+        {
+          command: 'git.branch.remove',
+          sessionToken: 'jwt',
+          params: {
+            branchId,
+            branchPath,
+            branchesRoot,
+            storageMode: 'worktree',
+            privilegedFilesystemDelete: true,
+            deleteDbRecord: false,
+          },
+        },
+        {}
+      );
+
+      expect(result.success).toBe(true);
+      expect(mocks.removeGitWorktree).toHaveBeenNthCalledWith(1, repoPath, branchPath);
+      expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot, {
+        privileged: true,
+      });
+      expect(mocks.removeGitWorktree).toHaveBeenNthCalledWith(2, repoPath, branchPath);
+      expect(patchedBranches).toContainEqual({ filesystem_status: 'deleted' });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a worktree gitdir pointer that targets a different repository', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'agor-worktree-pointer-'));
+    const branchesRoot = join(tempRoot, 'worktrees');
+    const branchPath = join(branchesRoot, 'repo', 'feature');
+    const persistedRepoPath = join(tempRoot, 'repos', 'persisted');
+    const pointedRepoPath = join(tempRoot, 'repos', 'other');
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    await mkdir(branchPath, { recursive: true });
+    await mkdir(persistedRepoPath, { recursive: true });
+    await mkdir(pointedRepoPath, { recursive: true });
+    await writeFile(
+      join(branchPath, '.git'),
+      `gitdir: ${join(pointedRepoPath, '.git', 'worktrees', 'feature')}\n`
+    );
+    createClient({
+      repo: { repo_id: repoId, local_path: persistedRepoPath },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: branchPath,
+        storage_mode: 'worktree',
+      },
+      patchedBranches,
+    });
+
+    try {
+      const result = await handleGitBranchRemove(
+        {
+          command: 'git.branch.remove',
+          sessionToken: 'jwt',
+          params: {
+            branchId,
+            branchPath,
+            branchesRoot,
+            storageMode: 'worktree',
+            privilegedFilesystemDelete: true,
+            deleteDbRecord: false,
+          },
+        },
+        {}
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        error: { message: expect.stringContaining('safety check') },
+      });
+      expect(mocks.removeGitWorktree).not.toHaveBeenCalled();
+      expect(mocks.deleteBranchDirectory).not.toHaveBeenCalled();
+      expect(patchedBranches).toContainEqual({
+        filesystem_status: 'delete_failed',
+        error_message: expect.stringContaining('safety check'),
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
     }
   });
 
