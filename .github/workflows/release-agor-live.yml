@@ -243,12 +243,13 @@ jobs:
           remaining=("${packages[@]}")
 
           # npm publish can return before a new version is visible through
-          # every registry read path. Retry the complete missing set rather
-          # than reporting a successful publish as failed immediately.
+          # every registry read path. Force npm to revalidate its metadata
+          # cache and retry the complete missing set rather than reporting a
+          # successful publish as failed immediately.
           for attempt in {1..13}; do
             next=()
             for package in "${remaining[@]}"; do
-              actual=$(npm view "$package@$VERSION" version 2>/dev/null || true)
+              actual=$(npm view --prefer-online "$package@$VERSION" version 2>/dev/null || true)
               if [[ "$actual" == "$VERSION" ]]; then
                 echo "✓ $package@$VERSION is visible"
               else
