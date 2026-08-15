@@ -120,6 +120,8 @@ interface AutocompleteTextareaProps {
   kbLinkTarget?: KbLinkTarget;
   /** Draw attention to the textarea while it is empty. */
   highlightWhenEmpty?: boolean;
+  /** Style overrides for the underlying Ant Design textarea control. */
+  textareaStyle?: React.CSSProperties;
 }
 
 // Minimum characters required after : before showing emoji picker (like Slack)
@@ -379,6 +381,7 @@ export const AutocompleteTextarea = React.forwardRef<
       kbDocs,
       kbLinkTarget = 'stable-uri',
       highlightWhenEmpty = false,
+      textareaStyle,
     },
     ref
   ) => {
@@ -1497,6 +1500,7 @@ export const AutocompleteTextarea = React.forwardRef<
             transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
             position: 'relative',
             zIndex: 1,
+            ...textareaStyle,
           }}
         />
       </div>

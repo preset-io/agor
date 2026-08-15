@@ -89,7 +89,7 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
         zIndex: 1000,
         display: 'flex',
         gap: '8px',
-        alignItems: 'flex-end',
+        alignItems: 'center',
       }}
     >
       <div style={{ flex: 1 }}>
@@ -102,6 +102,7 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
           sessionId={sessionId}
           userById={userById}
           autoSize={{ minRows: 1, maxRows: 4 }}
+          textareaStyle={{ minHeight: 40, paddingBlock: 8 }}
           enableKnowledgeMentions
           kbLinkTarget="absolute-route"
         />
@@ -112,6 +113,7 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
         onClick={() => void handleSend()}
         disabled={disabled || !prompt.trim()}
         size="large"
+        style={{ width: 40, height: 40, flex: '0 0 40px', padding: 0 }}
       />
     </div>
   );

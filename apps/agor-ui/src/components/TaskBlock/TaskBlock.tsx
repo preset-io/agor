@@ -816,6 +816,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               teammateEmoji={teammateEmoji}
                               client={client}
                               onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+                              compact={compact}
                             />
                           </div>
                         );

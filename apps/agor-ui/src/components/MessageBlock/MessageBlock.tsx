@@ -105,6 +105,7 @@ interface MessageBlockProps {
     scope: PermissionScope
   ) => void;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
+  compact?: boolean;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -337,6 +338,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   teammateEmoji,
   client = null,
   onOpenAgenticToolSettings,
+  compact = false,
 }) => {
   const { token } = theme.useToken();
 
@@ -687,7 +689,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {hasTextBefore &&
         (() => {
           const avatar = isUser ? (
-            <UserIdentityAvatar user={currentUser} />
+            <UserIdentityAvatar user={currentUser} size={compact ? 32 : 40} />
           ) : (
             getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token })
           );
@@ -758,6 +760,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   root: { maxWidth: '100%' },
                   body: { minWidth: 0 },
                   content: {
+                    padding: compact ? '6px 10px' : undefined,
                     backgroundColor: isCallback
                       ? token.colorWarningBg
                       : isUser
