@@ -108,7 +108,10 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         style={{
           flex: 1,
           overflowY: 'auto',
+          minWidth: 0,
+          paddingInline: 8,
           paddingBottom: 80, // Space for fixed input
+          boxSizing: 'border-box',
         }}
       >
         <ConversationView
