@@ -21,6 +21,7 @@ import {
   removeManagedAgorVersion,
   removeManagedInstallDebris,
   removeManagedIntegration,
+  repairManagedIntegrationPermissions,
   writeAgenticToolSelectionManifest,
 } from '../lib/agentic-tool-integrations.js';
 
@@ -91,6 +92,7 @@ export default class Install extends Command {
 
     for (const tool of configured) {
       const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
+      await repairManagedIntegrationPermissions(tool, agorVersion);
       if (await this.isAligned(tool, agorVersion)) {
         this.log(chalk.green(`✓ ${definition.displayName} is already aligned`));
         continue;

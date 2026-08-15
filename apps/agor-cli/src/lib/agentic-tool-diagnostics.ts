@@ -5,7 +5,10 @@ import {
   getAgenticToolInstallDir,
   type InstallableAgenticTool,
 } from '@agor/core/agentic-integrations';
-import { readManagedIntegrationManifest } from './agentic-tool-integrations.js';
+import {
+  assertManagedIntegrationPermissions,
+  readManagedIntegrationManifest,
+} from './agentic-tool-integrations.js';
 
 export type AgenticToolDiagnostic = {
   id: InstallableAgenticTool;
@@ -39,6 +42,7 @@ async function diagnoseManagedIntegration(
   }
 
   try {
+    await assertManagedIntegrationPermissions(tool, agorVersion);
     await assertManagedAgenticToolInstallReady(tool, agorVersion, installDir);
     return {
       id: tool,

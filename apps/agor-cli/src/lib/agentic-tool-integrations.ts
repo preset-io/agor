@@ -1,6 +1,16 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   assertManagedAgenticToolInstallReady,
@@ -27,6 +37,98 @@ import {
   isInstallableAgenticTool,
 } from '@agor/core/agentic-integrations';
 
+const SHARED_MANAGED_DIRECTORY_MODE = 0o755;
+const PRIVATE_MANAGED_DIRECTORY_MODE = 0o700;
+
+async function ensureSharedManagedDirectory(directory: string): Promise<void> {
+  await mkdir(directory, { recursive: true, mode: SHARED_MANAGED_DIRECTORY_MODE });
+  await chmod(directory, SHARED_MANAGED_DIRECTORY_MODE);
+}
+
+async function repairExistingSharedManagedDirectory(directory: string): Promise<void> {
+  try {
+    const metadata = await stat(directory);
+    if (!metadata.isDirectory()) throw new Error(`${directory} is not a directory`);
+    await chmod(directory, SHARED_MANAGED_DIRECTORY_MODE);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+async function makeManagedPackageTreeShared(directory: string): Promise<void> {
+  const metadata = await lstat(directory);
+  if (metadata.isSymbolicLink()) return;
+  if (metadata.isDirectory()) {
+    await chmod(directory, SHARED_MANAGED_DIRECTORY_MODE);
+    for (const entry of await readdir(directory)) {
+      await makeManagedPackageTreeShared(join(directory, entry));
+    }
+    return;
+  }
+  if (metadata.isFile()) {
+    const sharedBits = (metadata.mode & 0o111) === 0 ? 0o004 : 0o005;
+    await chmod(directory, metadata.mode | sharedBits);
+  }
+}
+
+async function assertManagedPackageTreeShared(directory: string): Promise<void> {
+  const metadata = await lstat(directory);
+  if (metadata.isSymbolicLink()) return;
+  if (metadata.isDirectory()) {
+    if ((metadata.mode & 0o005) !== 0o005) {
+      throw new Error(
+        `Managed integration directory is not readable and traversable by executor users: ${directory}`
+      );
+    }
+    for (const entry of await readdir(directory)) {
+      await assertManagedPackageTreeShared(join(directory, entry));
+    }
+    return;
+  }
+  if (metadata.isFile()) {
+    const requiredBits = (metadata.mode & 0o111) === 0 ? 0o004 : 0o005;
+    if ((metadata.mode & requiredBits) !== requiredBits) {
+      throw new Error(`Managed integration file is not usable by executor users: ${directory}`);
+    }
+  }
+}
+
+/** Repair the deployment-global path traversed by strict/insulated executor users. */
+export async function repairManagedIntegrationPermissions(
+  tool: InstallableAgenticTool,
+  agorVersion: string
+): Promise<void> {
+  if (process.platform === 'win32') return;
+  const root = getAgenticToolsRoot();
+  for (const directory of [root, join(root, agorVersion)]) {
+    await repairExistingSharedManagedDirectory(directory);
+  }
+  const installDirectory = getAgenticToolInstallDir(tool, agorVersion);
+  try {
+    await makeManagedPackageTreeShared(installDirectory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+/** Diagnose the path as a non-daemon executor would see it on POSIX. */
+export async function assertManagedIntegrationPermissions(
+  tool: InstallableAgenticTool,
+  agorVersion: string
+): Promise<void> {
+  if (process.platform === 'win32') return;
+  const root = getAgenticToolsRoot();
+  for (const directory of [root, join(root, agorVersion)]) {
+    const metadata = await stat(directory);
+    if (!metadata.isDirectory() || (metadata.mode & 0o005) !== 0o005) {
+      throw new Error(
+        `Managed integration directory is not readable and traversable by executor users: ${directory}`
+      );
+    }
+  }
+  await assertManagedPackageTreeShared(getAgenticToolInstallDir(tool, agorVersion));
+}
+
 export function normalizeAgenticToolName(value: string): InstallableAgenticTool | undefined {
   const normalized = value === 'claude' ? 'claude-code' : value;
   return isInstallableAgenticTool(normalized) ? normalized : undefined;
@@ -39,7 +141,7 @@ export async function writeAgenticToolSelectionManifest(
   const root = getAgenticToolsRoot();
   const destination = getAgenticToolSelectionManifestPath();
   const temporary = join(root, `.selection-${randomUUID()}.tmp`);
-  await mkdir(root, { recursive: true, mode: 0o700 });
+  await ensureSharedManagedDirectory(root);
   try {
     await writeFile(
       temporary,
@@ -57,15 +159,22 @@ export async function writeAgenticToolSelectionManifest(
 export async function acquireAgenticToolInstallLock(): Promise<() => Promise<void>> {
   const root = getAgenticToolsRoot();
   const lock = join(root, '.install.lock');
-  await mkdir(root, { recursive: true, mode: 0o700 });
+  await ensureSharedManagedDirectory(root);
   try {
-    return await acquireFileLock(root, {
+    const release = await acquireFileLock(root, {
       lockfilePath: lock,
       realpath: false,
       stale: 10_000,
       update: 5_000,
       retries: 0,
     });
+    try {
+      await chmod(lock, PRIVATE_MANAGED_DIRECTORY_MODE);
+      return release;
+    } catch (error) {
+      await release();
+      throw error;
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ELOCKED') {
       throw new Error(
@@ -275,14 +384,13 @@ export async function installManagedIntegration(
   const parent = join(getAgenticToolsRoot(), agorVersion);
   const staging = join(parent, `.${tool}.staging-${randomUUID()}`);
   const backup = join(parent, `.${tool}.previous-${randomUUID()}`);
-  await mkdir(parent, { recursive: true });
+  await ensureSharedManagedDirectory(getAgenticToolsRoot());
+  await ensureSharedManagedDirectory(parent);
+  await repairManagedIntegrationPermissions(tool, agorVersion);
   await rm(staging, { recursive: true, force: true });
-  // The managed tool tree is shared runtime for every executor identity (it
-  // holds only published npm packages, no secrets). In strict/insulated unix
-  // modes, sessions run as other unix users who must traverse this dir to load
-  // the version-aligned SDK, so it must be world-traversable — 0o700 here would
-  // make `require.resolve` fail with MODULE_NOT_FOUND for non-daemon users.
-  await mkdir(staging, { recursive: true, mode: 0o755 });
+  // Keep the incomplete tree daemon-private. It becomes shared only after
+  // readiness validation and immediately before atomic promotion.
+  await mkdir(staging, { recursive: true, mode: PRIVATE_MANAGED_DIRECTORY_MODE });
 
   try {
     await writeFile(
@@ -317,6 +425,7 @@ export async function installManagedIntegration(
       `${JSON.stringify(manifest, null, 2)}\n`,
       'utf8'
     );
+    await makeManagedPackageTreeShared(staging);
 
     let hadPrevious = false;
     try {
@@ -329,7 +438,11 @@ export async function installManagedIntegration(
       await rename(staging, destination);
       if (hadPrevious) await rm(backup, { recursive: true, force: true });
     } catch (error) {
-      if (hadPrevious) await rename(backup, destination).catch(() => undefined);
+      if (hadPrevious) {
+        await rename(backup, destination)
+          .then(() => chmod(destination, SHARED_MANAGED_DIRECTORY_MODE))
+          .catch(() => undefined);
+      }
       throw error;
     }
     return manifest;
