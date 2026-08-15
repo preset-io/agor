@@ -102,6 +102,8 @@ interface TaskBlockProps {
   client?: AgorClient | null;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
+  /** Phone-sized transcript presentation without desktop-only indents or gradients. */
+  compact?: boolean;
 }
 
 /**
@@ -485,6 +487,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     onOpenAgenticToolSettings,
     isLatestTask = false,
     client = null,
+    compact = false,
   }) => {
     const { token } = theme.useToken();
     const runtimeLive = shouldRenderLiveTaskProgress(task);
@@ -708,21 +711,28 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           activeKey={isExpanded ? ['task-content'] : []}
           onChange={(keys) => onExpandChange(task.task_id, keys.length > 0)}
           expandIcon={() => null}
-          style={{ background: 'transparent', margin: `${token.sizeUnit * 3}px 0` }}
+          style={{
+            background: 'transparent',
+            margin: compact ? '8px 0' : `${token.sizeUnit * 3}px 0`,
+            borderRadius: compact ? token.borderRadiusLG : undefined,
+            overflow: 'hidden',
+          }}
           items={[
             {
               key: 'task-content',
               label: taskHeader,
               styles: {
                 header: {
-                  padding: token.sizeUnit * 2,
+                  padding: compact ? '10px 8px' : token.sizeUnit * 2,
                   alignItems: 'flex-start',
-                  background: taskHeaderGradient || 'transparent',
+                  background: compact
+                    ? token.colorBgContainer
+                    : taskHeaderGradient || 'transparent',
                   borderRadius: isExpanded ? '8px 8px 0 0' : 8,
                 },
                 body: {
                   background: 'transparent',
-                  padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 2}px`,
+                  padding: compact ? '8px' : `${token.sizeUnit * 2}px ${token.sizeUnit * 2}px`,
                 },
               },
               children: (
@@ -819,6 +829,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               messages={block.messages}
                               isTaskRunning={runtimeLive}
                               isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
+                              compact={compact}
                             />
                           </div>
                         );

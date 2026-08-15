@@ -129,6 +129,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           teammateEmoji={
             branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
           }
+          compact
         />
       </div>
       <MobilePromptInput
