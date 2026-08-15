@@ -4,19 +4,15 @@
 #   3. This workflow builds once, runs the full packaged-install matrix, and
 #      publishes those exact tarballs with npm trusted publishing (OIDC).
 #
-# workflow_dispatch is useful for a non-publishing preflight on any ref and for
-# retrying a failed publish from an existing v* tag. It may not publish a branch.
+# workflow_dispatch is a non-publishing preflight on the selected ref. Retry a
+# failed tag release with GitHub's "Re-run failed jobs" so it reuses the same
+# validated artifacts and cannot accidentally publish from a branch.
 name: Release agor-live
 
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish after validation (requires selecting an existing v* tag)
-        type: boolean
-        default: false
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -35,13 +31,11 @@ jobs:
 
       - id: release
         name: Validate tag and package alignment
-        env:
-          REQUESTED_PUBLISH: ${{ inputs.publish || false }}
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./packages/agor-live/package.json').version")
           SHOULD_PUBLISH=false
-          if [[ "$GITHUB_EVENT_NAME" == push || "$REQUESTED_PUBLISH" == true ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
               echo "::error::Publishing is allowed only from an existing v* tag"
               exit 1
@@ -241,9 +235,36 @@ jobs:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
-          for package in \
+          packages=(
             @agor-live/claude @agor-live/codex @agor-live/copilot \
             @agor-live/gemini @agor-live/opencode @agor-live/cursor \
-            @agor-live/client agor-live; do
-            test "$(npm view "$package@$VERSION" version)" = "$VERSION"
+            @agor-live/client agor-live
+          )
+          remaining=("${packages[@]}")
+
+          # npm publish can return before a new version is visible through
+          # every registry read path. Retry the complete missing set rather
+          # than reporting a successful publish as failed immediately.
+          for attempt in {1..13}; do
+            next=()
+            for package in "${remaining[@]}"; do
+              actual=$(npm view "$package@$VERSION" version 2>/dev/null || true)
+              if [[ "$actual" == "$VERSION" ]]; then
+                echo "✓ $package@$VERSION is visible"
+              else
+                next+=("$package")
+              fi
+            done
+
+            if [[ "${#next[@]}" -eq 0 ]]; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 13 ]]; then
+              echo "::error::npm versions were not visible after 60 seconds: ${next[*]}"
+              exit 1
+            fi
+
+            echo "Waiting for npm registry propagation: ${next[*]}"
+            remaining=("${next[@]}")
+            sleep 5
           done
