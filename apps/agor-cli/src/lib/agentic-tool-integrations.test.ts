@@ -169,6 +169,10 @@ const writePackage = (name, source) => {
 };
 writePackage('@agor-live/codex', "export const AGOR_INTEGRATION_VERSION = '0.24.0'; export const sdk = {};");
 writePackage('@openai/codex-sdk', 'export const fixture = true;');
+const privatePackage = path.join(prefix, 'node_modules', '@agor-live', 'codex');
+fs.chmodSync(privatePackage, 0o700);
+fs.chmodSync(path.join(privatePackage, 'package.json'), 0o600);
+fs.chmodSync(path.join(privatePackage, 'index.js'), 0o600);
 fs.writeFileSync(${JSON.stringify(capturedArguments)}, JSON.stringify(args));
 `
       );
@@ -182,6 +186,9 @@ fs.writeFileSync(${JSON.stringify(capturedArguments)}, JSON.stringify(args));
       for (const directory of [root, join(root, '0.24.0'), join(root, '0.24.0', 'codex')]) {
         expect((await stat(directory)).mode & 0o777).toBe(0o755);
       }
+      const installedPackage = join(root, '0.24.0', 'codex', 'node_modules', '@agor-live', 'codex');
+      expect((await stat(installedPackage)).mode & 0o777).toBe(0o755);
+      expect((await stat(join(installedPackage, 'index.js'))).mode & 0o004).toBe(0o004);
       await expect(assertManagedIntegrationPermissions('codex', '0.24.0')).resolves.toBeUndefined();
       const args = JSON.parse(await readFile(capturedArguments, 'utf8')) as string[];
       expect(args).toContain('--ignore-scripts');
