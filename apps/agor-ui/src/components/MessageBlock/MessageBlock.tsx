@@ -757,10 +757,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   // conversation viewport and push its left edge off-screen.
                   // Bound the whole row (including avatar) and allow the body
                   // to shrink; the code body then owns horizontal scrolling.
-                  root: { maxWidth: '100%' },
-                  body: { minWidth: 0 },
+                  root: { maxWidth: '100%', gap: compact ? 8 : undefined },
+                  body: { minWidth: 0, alignSelf: compact && isUser ? 'center' : undefined },
                   content: {
-                    padding: compact ? '6px 10px' : undefined,
+                    padding: compact && isUser ? '4px 10px' : undefined,
+                    minHeight: compact && isUser ? 32 : undefined,
+                    display: compact && isUser ? 'flex' : undefined,
+                    alignItems: compact && isUser ? 'center' : undefined,
                     backgroundColor: isCallback
                       ? token.colorWarningBg
                       : isUser
