@@ -76,16 +76,40 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
     steps:
       - uses: actions/setup-node@v7
         with:
           node-version: '24.19.0'
-          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
       # Trusted publishing requires npm >=11.5.1. Pin the release client rather
       # than inheriting whichever npm happens to ship with the runner image.
       - run: npm install -g --ignore-scripts npm@11.16.0
+
+      # Do not pass setup-node's registry-url here. It writes an _authToken
+      # placeholder that makes npm attempt token auth instead of trusted
+      # publishing: https://github.com/actions/setup-node/issues/1551
+      - name: Verify npm trusted publishing environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC request URL is unavailable}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC request token is unavailable}"
+          if [[ -n "${NODE_AUTH_TOKEN:-}" || -n "${NPM_TOKEN:-}" ]]; then
+            echo "::error::Static npm credentials are configured; this release requires trusted publishing"
+            exit 1
+          fi
+          if [[ "$(npm config get registry)" != "https://registry.npmjs.org/" ]]; then
+            echo "::error::npm is not configured for the public registry"
+            exit 1
+          fi
+          npmrc=$(npm config get userconfig)
+          if [[ -f "$npmrc" ]] && grep -Eq '_auth(Token)?[[:space:]]*=' "$npmrc"; then
+            echo "::error::npm user config contains static registry credentials"
+            exit 1
+          fi
 
       - uses: actions/download-artifact@v7
         with:
