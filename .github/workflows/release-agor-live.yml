@@ -136,14 +136,25 @@ jobs:
           for artifact in "${expected[@]}"; do test -f "$RELEASE/$artifact"; done
           (cd "$RELEASE" && sha256sum "${expected[@]}")
 
-      - name: Publish integrations, client, then agor-live
+      - name: Preflight trusted publishers and publish exact artifacts
         env:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
           RELEASE="$RUNNER_TEMP/release"
+          artifacts=(
+            "$RELEASE/agor-live-claude-$VERSION.tgz"
+            "$RELEASE/agor-live-codex-$VERSION.tgz"
+            "$RELEASE/agor-live-copilot-$VERSION.tgz"
+            "$RELEASE/agor-live-gemini-$VERSION.tgz"
+            "$RELEASE/agor-live-opencode-$VERSION.tgz"
+            "$RELEASE/agor-live-cursor-$VERSION.tgz"
+            "$RELEASE/agor-live-client-$VERSION.tgz"
+            "$RELEASE/agor-live-$VERSION.tgz"
+          )
+          to_publish=()
 
-          publish_exact() {
+          inspect_exact() {
             local artifact=$1
             local manifest name version spec local_sha remote_sha lookup_error
             manifest=$(tar -xOf "$artifact" package/package.json)
@@ -181,17 +192,49 @@ jobs:
               echo "✓ $spec already contains the validated artifact; skipping"
               return
             fi
-            npm publish "$artifact" --access public
+
+            to_publish+=("$artifact")
           }
 
-          # agor-live is the user-visible release marker and is always last, so
-          # a partial failure cannot expose a base package whose selected tool
-          # wrappers are not yet available.
-          for id in claude codex copilot gemini opencode cursor; do
-            publish_exact "$RELEASE/agor-live-$id-$VERSION.tgz"
+          verify_trusted_publisher() {
+            local artifact=$1
+            local manifest name probe_log
+            manifest=$(tar -xOf "$artifact" package/package.json)
+            name=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.name)' "$manifest")
+            probe_log=$(mktemp)
+
+            # npm's dry-run still performs the real package-scoped OIDC token
+            # exchange. npm returns success when that exchange is unavailable,
+            # so require its pinned client's explicit success diagnostic.
+            if ! npm publish "$artifact" --access public --dry-run --loglevel verbose >"$probe_log" 2>&1 || \
+              ! grep -Fq 'oidc Successfully retrieved and set token' "$probe_log"; then
+              echo "::error::npm trusted publishing is not authorized for $name"
+              echo "::error::Configure preset-io/agor, release-agor-live.yml, environment npm, and allow npm publish in this package's npmjs.com settings"
+              grep -E 'npm (verbose oidc|warn publish|error)' "$probe_log" >&2 || true
+              rm -f "$probe_log"
+              return 1
+            fi
+
+            rm -f "$probe_log"
+            echo "✓ npm trusted publisher accepted $name"
+          }
+
+          # Determine the complete missing set before authenticating or
+          # publishing. This keeps exact-byte partial-release recovery intact.
+          for artifact in "${artifacts[@]}"; do
+            inspect_exact "$artifact"
           done
-          publish_exact "$RELEASE/agor-live-client-$VERSION.tgz"
-          publish_exact "$RELEASE/agor-live-$VERSION.tgz"
+
+          # Prove every missing package's npm-side trust relationship before
+          # publishing any package, avoiding preventable partial releases.
+          for artifact in "${to_publish[@]}"; do
+            verify_trusted_publisher "$artifact"
+          done
+
+          # agor-live is the user-visible release marker and remains last.
+          for artifact in "${to_publish[@]}"; do
+            npm publish "$artifact" --access public
+          done
 
       - name: Verify registry release
         env:
