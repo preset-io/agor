@@ -42,10 +42,11 @@ const PRIVATE_MANAGED_DIRECTORY_MODE = 0o700;
 export const INTERACTIVE_AGENTIC_TOOL_SELECTION_REQUIRED =
   'Select at least one agentic tool, or press Ctrl+C to exit.';
 
-export function validateInteractiveAgenticToolSelection(
-  selection: readonly InstallableAgenticTool[]
-): true | string {
-  return selection.length > 0 || INTERACTIVE_AGENTIC_TOOL_SELECTION_REQUIRED;
+export function validateInteractiveAgenticToolSelection(selection: unknown): true | string {
+  return (
+    (Array.isArray(selection) && selection.length > 0) ||
+    INTERACTIVE_AGENTIC_TOOL_SELECTION_REQUIRED
+  );
 }
 
 async function ensureSharedManagedDirectory(directory: string): Promise<void> {
