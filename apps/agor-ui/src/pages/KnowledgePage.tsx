@@ -3642,7 +3642,7 @@ export function KnowledgePage({
         size="large"
         destroyOnHidden
         styles={{
-          container: { borderStartStartRadius: 16, borderStartEndRadius: 16, overflow: 'hidden' },
+          content: { borderStartStartRadius: 16, borderStartEndRadius: 16, overflow: 'hidden' },
           body: { padding: 16, overflowX: 'hidden' },
         }}
       >

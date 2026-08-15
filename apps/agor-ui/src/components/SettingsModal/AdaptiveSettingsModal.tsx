@@ -6,6 +6,8 @@ export type AdaptiveSettingsModalProps = Omit<ModalProps, 'footer'> & {
   footer?: ReactNode;
 };
 
+type ModalCancelEvent = Parameters<NonNullable<ModalProps['onCancel']>>[0];
+
 /** Desktop dialog that becomes a bottom sheet on phone-sized settings surfaces. */
 export function AdaptiveSettingsModal({
   children,
@@ -61,7 +63,7 @@ export function AdaptiveSettingsModal({
       footer
     ) : (
       <Flex justify="flex-end" gap={8} wrap>
-        <Button {...cancelButtonProps} onClick={onCancel}>
+        <Button {...cancelButtonProps} onClick={(event) => onCancel?.(event as ModalCancelEvent)}>
           {cancelText}
         </Button>
         <Button type="primary" {...okButtonProps} loading={confirmLoading} onClick={onOk}>
@@ -74,7 +76,7 @@ export function AdaptiveSettingsModal({
     <Drawer
       title={title}
       open={open}
-      onClose={onCancel}
+      onClose={(event) => onCancel?.(event as ModalCancelEvent)}
       placement="bottom"
       size="large"
       closable={closable}
@@ -85,7 +87,7 @@ export function AdaptiveSettingsModal({
         if (!isOpen) afterClose?.();
       }}
       styles={{
-        container: { borderStartStartRadius: 16, borderStartEndRadius: 16, overflow: 'hidden' },
+        content: { borderStartStartRadius: 16, borderStartEndRadius: 16, overflow: 'hidden' },
         body: { overflowX: 'hidden', overflowY: 'auto', padding: 16 },
         footer: { padding: '12px 16px' },
       }}
