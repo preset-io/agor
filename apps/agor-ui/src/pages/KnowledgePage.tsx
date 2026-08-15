@@ -61,7 +61,6 @@ import {
   InputNumber,
   Layout,
   List,
-  Modal,
   Popover,
   Segmented,
   Select,
@@ -98,6 +97,7 @@ import { GlobalUserMenu } from '../components/GlobalUserMenu';
 import { HighlightMatch } from '../components/HighlightMatch';
 import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
+import { AdaptiveSettingsModal } from '../components/SettingsModal/AdaptiveSettingsModal';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
 import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
 import { knowledgeAttributionDisplay } from '../knowledgeAttributionDisplay';
@@ -787,6 +787,7 @@ export function KnowledgePage({
   const [relocateModalOpen, setRelocateModalOpen] = useState(false);
   const [relocateFolder, setRelocateFolder] = useState(ROOT_FOLDER);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [mobileBrowserOpen, setMobileBrowserOpen] = useState(false);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [historyView, setHistoryView] = useState<'preview' | 'diff'>('preview');
   const [titleActionsVisible, setTitleActionsVisible] = useState(false);
@@ -934,10 +935,11 @@ export function KnowledgePage({
     [sidebarMinSize, viewportWidth]
   );
   const effectiveSidebarSize = clampPercent(sidebarSize, sidebarMinSize, sidebarMaxSize);
+  const compact = viewportWidth < 768;
 
   useEffect(() => {
-    sidebarPanelRef.current?.resize(effectiveSidebarSize);
-  }, [effectiveSidebarSize]);
+    sidebarPanelRef.current?.resize(compact ? 0 : effectiveSidebarSize);
+  }, [compact, effectiveSidebarSize]);
 
   const namespaceSlugById = useMemo(() => {
     const map = new Map<string, string>();
@@ -2927,15 +2929,16 @@ export function KnowledgePage({
       <Header
         style={{
           display: 'flex',
+          flexWrap: compact ? 'wrap' : 'nowrap',
           alignItems: 'center',
           justifyContent: 'space-between',
-          height: 56,
-          padding: '0 16px',
+          height: compact ? 104 : 56,
+          padding: compact ? '8px 12px' : '0 16px',
           background: token.colorBgContainer,
           borderBottom: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <Space size={12}>
+        <Space size={compact ? 4 : 12}>
           <Button
             type="text"
             icon={<ArrowLeftOutlined />}
@@ -2943,7 +2946,7 @@ export function KnowledgePage({
               if (await confirmDiscardUnsavedChanges()) navigate('/');
             }}
           />
-          <BrandLogo level={3} style={{ marginTop: -4 }} />
+          {!compact && <BrandLogo level={3} style={{ marginTop: -4 }} />}
           <Text
             strong
             style={{
@@ -2958,21 +2961,23 @@ export function KnowledgePage({
             <BulbOutlined style={{ color: token.colorTextSecondary }} />
             Knowledge
           </Text>
-          <Tooltip title="Knowledge is in beta — expect rough edges while the data model, MCP tools, and editor settle.">
-            <Tag
-              color="orange"
-              style={{
-                fontSize: 10,
-                lineHeight: '16px',
-                padding: '0 6px',
-                margin: 0,
-                cursor: 'help',
-                userSelect: 'none',
-              }}
-            >
-              BETA
-            </Tag>
-          </Tooltip>
+          {!compact && (
+            <Tooltip title="Knowledge is in beta — expect rough edges while the data model, MCP tools, and editor settle.">
+              <Tag
+                color="orange"
+                style={{
+                  fontSize: 10,
+                  lineHeight: '16px',
+                  padding: '0 6px',
+                  margin: 0,
+                  cursor: 'help',
+                  userSelect: 'none',
+                }}
+              >
+                BETA
+              </Tag>
+            </Tooltip>
+          )}
         </Space>
         <div
           ref={globalSearchContainerRef}
@@ -2980,11 +2985,12 @@ export function KnowledgePage({
             if (event.key === 'Escape') setGlobalSearchOpen(false);
           }}
           style={{
-            flex: 1,
+            flex: compact ? '0 0 100%' : 1,
+            order: compact ? 3 : undefined,
             display: 'flex',
             justifyContent: 'center',
-            minWidth: 220,
-            padding: '0 20px',
+            minWidth: compact ? 0 : 220,
+            padding: compact ? 0 : '0 20px',
           }}
         >
           <Popover
@@ -3033,7 +3039,15 @@ export function KnowledgePage({
             />
           </Popover>
         </div>
-        <Space>
+        <Space size={compact ? 2 : 8}>
+          {compact && (
+            <Button
+              type="text"
+              icon={<FolderOpenOutlined />}
+              aria-label="Browse Knowledge"
+              onClick={() => setMobileBrowserOpen(true)}
+            />
+          )}
           <Tooltip title="Refresh Knowledge" placement="bottom">
             <Button
               type="text"
@@ -3063,7 +3077,13 @@ export function KnowledgePage({
         </Space>
       </Header>
 
-      <Content style={{ height: 'calc(100vh - 56px)', overflow: 'hidden', padding: 0 }}>
+      <Content
+        style={{
+          height: `calc(100vh - ${compact ? 104 : 56}px)`,
+          overflow: 'hidden',
+          padding: 0,
+        }}
+      >
         <PanelGroup
           id="knowledge-layout"
           direction="horizontal"
@@ -3078,10 +3098,10 @@ export function KnowledgePage({
             id="knowledge-sidebar"
             order={1}
             ref={sidebarPanelRef}
-            defaultSize={effectiveSidebarSize}
-            minSize={sidebarMinSize}
-            maxSize={sidebarMaxSize}
-            style={{ minWidth: KNOWLEDGE_SIDEBAR_MIN_WIDTH_PX }}
+            defaultSize={compact ? 0 : effectiveSidebarSize}
+            minSize={compact ? 0 : sidebarMinSize}
+            maxSize={compact ? 0 : sidebarMaxSize}
+            style={{ minWidth: compact ? 0 : KNOWLEDGE_SIDEBAR_MIN_WIDTH_PX, overflow: 'hidden' }}
           >
             <aside
               style={{
@@ -3175,6 +3195,7 @@ export function KnowledgePage({
           </Panel>
           <PanelResizeHandle
             style={{
+              display: compact ? 'none' : undefined,
               width: '4px',
               background: token.colorBorderSecondary,
               cursor: 'col-resize',
@@ -3206,7 +3227,7 @@ export function KnowledgePage({
                   maxWidth: fillMain ? 'none' : 1040,
                   height: fillMain ? '100%' : undefined,
                   margin: fillMain ? 0 : '0 auto',
-                  padding: showGraph ? 0 : isEditing ? 24 : '40px 56px',
+                  padding: showGraph ? 0 : compact ? 16 : isEditing ? 24 : '40px 56px',
                   boxSizing: 'border-box',
                   display: fillMain ? 'flex' : undefined,
                   flexDirection: fillMain ? 'column' : undefined,
@@ -3247,7 +3268,8 @@ export function KnowledgePage({
                       }}
                       style={{
                         position: 'relative',
-                        display: isEditing ? 'flex' : 'block',
+                        display: isEditing || compact ? 'flex' : 'block',
+                        flexDirection: compact ? 'column' : 'row',
                         alignItems: 'flex-start',
                         gap: 16,
                       }}
@@ -3300,10 +3322,14 @@ export function KnowledgePage({
                                 placeholder="Page title"
                                 size="large"
                                 variant="borderless"
-                                style={{ fontSize: 32, fontWeight: 700, paddingInline: 0 }}
+                                style={{
+                                  fontSize: compact ? 24 : 32,
+                                  fontWeight: 700,
+                                  paddingInline: 0,
+                                }}
                               />
                             ) : (
-                              <Title level={1} style={{ margin: 0 }}>
+                              <Title level={compact ? 2 : 1} style={{ margin: 0 }}>
                                 {isEditing ? titleDraft : activeDoc.title}
                               </Title>
                             )}
@@ -3359,7 +3385,9 @@ export function KnowledgePage({
                           ) : (
                             <Tag>{kindLabels[activeDoc.kind] ?? activeDoc.kind}</Tag>
                           )}
-                          <Text type="secondary">{activeDoc.path}</Text>
+                          <Text type="secondary" style={{ overflowWrap: 'anywhere' }}>
+                            {activeDoc.path}
+                          </Text>
                         </Space>
                         {!isEditing && activeAttribution && (
                           <Text type="secondary">
@@ -3392,8 +3420,9 @@ export function KnowledgePage({
                       </Space>
 
                       <Space
+                        wrap
                         style={
-                          isEditing
+                          isEditing || compact
                             ? undefined
                             : {
                                 position: 'absolute',
@@ -3475,10 +3504,15 @@ export function KnowledgePage({
                     </div>
 
                     {isEditing ? (
-                      <Flex gap={16} align="stretch" style={{ flex: 1, minHeight: 0 }}>
+                      <Flex
+                        vertical={compact}
+                        gap={16}
+                        align="stretch"
+                        style={{ flex: 1, minHeight: 0, overflow: compact ? 'auto' : undefined }}
+                      >
                         <div
                           style={{
-                            width: '50%',
+                            width: compact ? '100%' : '50%',
                             minWidth: 0,
                             minHeight: 0,
                             display: 'flex',
@@ -3505,7 +3539,7 @@ export function KnowledgePage({
                         </div>
                         <div
                           style={{
-                            width: '50%',
+                            width: compact ? '100%' : '50%',
                             minWidth: 0,
                             minHeight: 0,
                             display: 'flex',
@@ -3601,10 +3635,113 @@ export function KnowledgePage({
       </Content>
 
       <Drawer
+        title="Browse Knowledge"
+        open={compact && mobileBrowserOpen}
+        onClose={() => setMobileBrowserOpen(false)}
+        placement="bottom"
+        size="large"
+        destroyOnHidden
+        styles={{
+          container: { borderStartStartRadius: 16, borderStartEndRadius: 16, overflow: 'hidden' },
+          body: { padding: 16, overflowX: 'hidden' },
+        }}
+      >
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+          {!client && <Alert type="warning" title="Knowledge requires a daemon connection." />}
+          <Text type="secondary" style={{ fontSize: 11, textTransform: 'uppercase' }}>
+            Space
+          </Text>
+          <Select
+            {...searchableSelectProps}
+            value={activeSpace}
+            onChange={(value) => {
+              changeKnowledgeSpace(value);
+            }}
+            style={{ width: '100%' }}
+            options={spaceOptions}
+          />
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder="Filter visible docs"
+            aria-label="Filter visible Knowledge docs"
+            value={sidebarFilterQuery}
+            onChange={(event) => setSidebarFilterQuery(event.target.value)}
+          />
+          <Flex gap={8} wrap>
+            <Button
+              style={{ flex: 1 }}
+              type="primary"
+              icon={<FileAddOutlined />}
+              onClick={() => {
+                setMobileBrowserOpen(false);
+                openCreateModal('doc');
+              }}
+              disabled={!client}
+            >
+              New Page
+            </Button>
+            <Button
+              icon={<FolderAddOutlined />}
+              onClick={() => {
+                setMobileBrowserOpen(false);
+                openFolderModal();
+              }}
+            >
+              New folder
+            </Button>
+          </Flex>
+          <Segmented
+            block
+            size="small"
+            value={kindFilter}
+            onChange={(value) => updateKindFilter(String(value))}
+            options={['All', 'Pages', 'Skills', 'Memories']}
+          />
+          <Spin spinning={loading}>
+            <div
+              style={{
+                background: token.colorFillQuaternary,
+                borderRadius: token.borderRadiusLG,
+                padding: 4,
+              }}
+              onClick={(event) => {
+                if ((event.target as HTMLElement).closest('button')) setMobileBrowserOpen(false);
+              }}
+            >
+              <button
+                type="button"
+                onClick={goToGraphHome}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  minHeight: 40,
+                  padding: '8px 10px',
+                  border: 0,
+                  borderRadius: token.borderRadius,
+                  background: showGraph ? token.colorPrimaryBg : 'transparent',
+                  color: token.colorText,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <ApartmentOutlined />
+                Graph
+              </button>
+              {renderRootContents()}
+            </div>
+          </Spin>
+        </Space>
+      </Drawer>
+
+      <Drawer
         title="Version history"
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
-        size="72vw"
+        placement={compact ? 'bottom' : 'right'}
+        size={compact ? 'large' : '72vw'}
         destroyOnHidden
         extra={
           <Space>
@@ -3628,13 +3765,16 @@ export function KnowledgePage({
           </Space>
         }
       >
-        <Flex gap={16} style={{ height: '100%' }}>
+        <Flex vertical={compact} gap={16} style={{ height: '100%', minWidth: 0 }}>
           <div
             style={{
-              width: 280,
+              width: compact ? '100%' : 280,
+              maxHeight: compact ? '32vh' : undefined,
               flexShrink: 0,
-              borderRight: `1px solid ${token.colorBorderSecondary}`,
-              paddingRight: 12,
+              borderRight: compact ? undefined : `1px solid ${token.colorBorderSecondary}`,
+              borderBottom: compact ? `1px solid ${token.colorBorderSecondary}` : undefined,
+              paddingRight: compact ? 0 : 12,
+              paddingBottom: compact ? 12 : 0,
               overflow: 'auto',
             }}
           >
@@ -3761,7 +3901,7 @@ export function KnowledgePage({
         </Flex>
       </Drawer>
 
-      <Modal
+      <AdaptiveSettingsModal
         title="Knowledge settings"
         open={knowledgeSettingsOpen}
         onCancel={() => setKnowledgeSettingsOpen(false)}
@@ -3783,14 +3923,23 @@ export function KnowledgePage({
                       message="Namespaces are the Knowledge RBAC boundary. Use the workspace fallback for broad access, and add specific user or group grants below when access should be narrower."
                     />
                     {namespaceError && <Alert type="error" showIcon message={namespaceError} />}
-                    <Flex justify="space-between" align="center">
+                    <Flex
+                      vertical={compact}
+                      gap={compact ? 12 : 0}
+                      justify="space-between"
+                      align={compact ? 'stretch' : 'center'}
+                    >
                       <Space direction="vertical" size={0}>
                         <Text strong>Knowledge namespaces</Text>
                         <Text type="secondary">
                           Create and manage Knowledge spaces, defaults, and broad workspace access.
                         </Text>
                       </Space>
-                      <Button type="primary" onClick={() => openNamespaceEditor(null)}>
+                      <Button
+                        type="primary"
+                        block={compact}
+                        onClick={() => openNamespaceEditor(null)}
+                      >
                         New namespace
                       </Button>
                     </Flex>
@@ -3901,11 +4050,15 @@ export function KnowledgePage({
                         <Form.Item
                           name="provider"
                           label="Provider"
-                          style={{ minWidth: 180, flex: 1 }}
+                          style={{ minWidth: compact ? '100%' : 180, flex: 1 }}
                         >
                           <Select options={[{ label: 'OpenAI', value: 'openai' }]} />
                         </Form.Item>
-                        <Form.Item name="model" label="Model" style={{ minWidth: 240, flex: 2 }}>
+                        <Form.Item
+                          name="model"
+                          label="Model"
+                          style={{ minWidth: compact ? '100%' : 240, flex: 2 }}
+                        >
                           <Select
                             options={OPENAI_EMBEDDING_MODEL_OPTIONS}
                             onChange={() => settingsForm.setFieldValue('dimensions', 1536)}
@@ -3915,7 +4068,7 @@ export function KnowledgePage({
                           name="dimensions"
                           label="Dimensions"
                           tooltip="Agor V1 indexes 1536-dimensional embeddings. text-embedding-3-large is requested with dimensions=1536."
-                          style={{ width: 140 }}
+                          style={{ width: compact ? '100%' : 140 }}
                         >
                           <InputNumber
                             disabled
@@ -3963,35 +4116,35 @@ export function KnowledgePage({
                         <Form.Item
                           name={['chunking', 'target_tokens']}
                           label="Target tokens"
-                          style={{ width: 150 }}
+                          style={{ width: compact ? 'calc(50% - 6px)' : 150 }}
                         >
                           <InputNumber min={100} precision={0} style={{ width: '100%' }} />
                         </Form.Item>
                         <Form.Item
                           name={['chunking', 'max_tokens']}
                           label="Max tokens"
-                          style={{ width: 150 }}
+                          style={{ width: compact ? 'calc(50% - 6px)' : 150 }}
                         >
                           <InputNumber min={100} precision={0} style={{ width: '100%' }} />
                         </Form.Item>
                         <Form.Item
                           name={['chunking', 'overlap_tokens']}
                           label="Overlap"
-                          style={{ width: 130 }}
+                          style={{ width: compact ? 'calc(50% - 6px)' : 130 }}
                         >
                           <InputNumber min={0} precision={0} style={{ width: '100%' }} />
                         </Form.Item>
                         <Form.Item
                           name={['chunking', 'min_tokens']}
                           label="Min tokens"
-                          style={{ width: 130 }}
+                          style={{ width: compact ? 'calc(50% - 6px)' : 130 }}
                         >
                           <InputNumber min={0} precision={0} style={{ width: '100%' }} />
                         </Form.Item>
                         <Form.Item
                           name={['indexing', 'batch_size']}
                           label="Batch size"
-                          style={{ width: 130 }}
+                          style={{ width: compact ? 'calc(50% - 6px)' : 130 }}
                         >
                           <InputNumber min={1} max={128} precision={0} style={{ width: '100%' }} />
                         </Form.Item>
@@ -4004,11 +4157,16 @@ export function KnowledgePage({
                         </Form.Item>
                       </Flex>
                     </Form>
-                    <Flex justify="space-between" align="center">
+                    <Flex
+                      vertical={compact}
+                      gap={12}
+                      justify="space-between"
+                      align={compact ? 'stretch' : 'center'}
+                    >
                       <Text type="secondary">
                         Reindexing queues current Knowledge chunks and wakes the background indexer.
                       </Text>
-                      <Space>
+                      <Space wrap style={{ justifyContent: compact ? 'flex-end' : undefined }}>
                         <Button onClick={reindexKnowledge} loading={settingsSaving}>
                           Reindex now
                         </Button>
@@ -4027,9 +4185,9 @@ export function KnowledgePage({
             ]}
           />
         </Spin>
-      </Modal>
+      </AdaptiveSettingsModal>
 
-      <Modal
+      <AdaptiveSettingsModal
         title={namespaceEditing ? 'Edit namespace' : 'Create namespace'}
         open={namespaceEditorOpen}
         onCancel={() => setNamespaceEditorOpen(false)}
@@ -4076,7 +4234,7 @@ export function KnowledgePage({
               <Form.Item
                 name="visibility_default"
                 label="Default document visibility"
-                style={{ minWidth: 180, flex: 1 }}
+                style={{ minWidth: compact ? '100%' : 180, flex: 1 }}
               >
                 <Select
                   options={[
@@ -4089,7 +4247,7 @@ export function KnowledgePage({
                 name="others_can"
                 label="Everyone else in workspace"
                 tooltip="Fallback for users not listed in specific namespace access."
-                style={{ minWidth: 180, flex: 1 }}
+                style={{ minWidth: compact ? '100%' : 180, flex: 1 }}
               >
                 <Select
                   options={[
@@ -4117,7 +4275,7 @@ export function KnowledgePage({
                 onChange={(value) => setNamespaceAclSubject(value ?? null)}
                 options={namespaceAclSubjectOptions}
                 optionFilterProp="label"
-                style={{ minWidth: 280, flex: 1 }}
+                style={{ minWidth: compact ? '100%' : 280, flex: 1 }}
               />
               <Select
                 value={namespaceAclPermission}
@@ -4127,7 +4285,7 @@ export function KnowledgePage({
                   { label: 'Write', value: 'write' },
                   { label: 'Own', value: 'own' },
                 ]}
-                style={{ width: 120 }}
+                style={{ width: compact ? 'calc(100% - 72px)' : 120 }}
               />
               <Button onClick={addNamespaceAclDraftEntry} disabled={!namespaceAclSubject}>
                 + Add
@@ -4182,9 +4340,9 @@ export function KnowledgePage({
             </Spin>
           </Space>
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
 
-      <Modal
+      <AdaptiveSettingsModal
         title="Relocate page"
         open={relocateModalOpen}
         okText="Move"
@@ -4238,9 +4396,9 @@ export function KnowledgePage({
             }}
           />
         </Space>
-      </Modal>
+      </AdaptiveSettingsModal>
 
-      <Modal
+      <AdaptiveSettingsModal
         title={`Create ${kindLabels[createKind] ?? 'Page'}`}
         open={createModalOpen}
         okText="Create"
@@ -4315,9 +4473,9 @@ export function KnowledgePage({
             description={<Text code>{createPathPreview}</Text>}
           />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
 
-      <Modal
+      <AdaptiveSettingsModal
         title="New Folder"
         open={folderModalOpen}
         okText="Create folder"
@@ -4367,7 +4525,7 @@ export function KnowledgePage({
             description="Empty folders are local placeholders until you create a page inside them; they still appear in relocate targets."
           />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
     </Layout>
   );
 }
