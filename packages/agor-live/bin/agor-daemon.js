@@ -18,7 +18,9 @@ const { dirname: pathDirname, join: pathJoin } = await import('node:path');
 const { fileURLToPath: toFilePath } = await import('node:url');
 const packageRoot = pathJoin(pathDirname(toFilePath(import.meta.url)), '..');
 const packageMetadata = JSON.parse(readFileSync(pathJoin(packageRoot, 'package.json'), 'utf8'));
-process.env.AGOR_VERSION ??= packageMetadata.version;
+// The installed package is the authority for its managed-integration version.
+// Do not inherit a stale value when an older Agor executor upgrades the host.
+process.env.AGOR_VERSION = packageMetadata.version;
 process.env.AGOR_AGENTIC_TOOLS_DIR ??= pathJoin(homedir(), '.agor', 'agentic-tools');
 process.env.AGOR_MANAGED_AGENTIC_TOOLS ??= '1';
 

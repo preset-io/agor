@@ -226,6 +226,9 @@ jobs:
           export PATH="$ROOT/npm-shim:$PATH"
           export AGOR_SMOKE_REAL_NPM="$REAL_NPM"
           export AGOR_SMOKE_CODEX="$CODEX"
+          # Model an upgrade initiated from an executor spawned by the prior
+          # Agor version. The newly installed launcher must own AGOR_VERSION.
+          export AGOR_VERSION=0.0.0-stale
           AGOR_TELEMETRY=0 "$RUNNER_TEMP/plain-install/prefix/bin/agor" init \
             --non-interactive --agentic-tools codex
           AGOR_TELEMETRY=0 "$RUNNER_TEMP/plain-install/prefix/bin/agor" doctor --json \
