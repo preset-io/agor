@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { BUNDLED_INTERNAL_PACKAGES } from './package-contract.js';
 
@@ -125,9 +125,23 @@ export async function packRelease({ packageRoot = scriptRoot, destination, inter
   }
 }
 
-const invoked = process.argv[1]
-  ? pathToFileURL(resolve(process.argv[1])).href === import.meta.url
-  : false;
+export async function isDirectInvocation(argvPath, moduleUrl = import.meta.url) {
+  if (!argvPath) return false;
+  try {
+    const [argvRealPath, moduleRealPath] = await Promise.all([
+      realpath(resolve(argvPath)),
+      realpath(fileURLToPath(moduleUrl)),
+    ]);
+    return argvRealPath === moduleRealPath;
+  } catch {
+    return false;
+  }
+}
+
+// Node preserves the spelling used in process.argv[1], but canonicalizes the
+// ES module URL. Production checkouts commonly live behind a symlink (for
+// example /home -> /var/lib/...); compare physical paths so the CLI still runs.
+const invoked = await isDirectInvocation(process.argv[1]);
 if (invoked) {
   const destinationIndex = process.argv.indexOf('--destination');
   const destination = destinationIndex === -1 ? undefined : process.argv[destinationIndex + 1];

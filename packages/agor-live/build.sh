@@ -393,6 +393,10 @@ for directory in "${INTEGRATION_DIRS[@]}" "$CLIENT_DIR"; do
 done
 LIVE_TARBALL=$(node "$SCRIPT_DIR/scripts/pack-release.mjs" \
   --destination "$RELEASE_DIR" --internal-root "$INTERNAL_STAGE")
+if [[ -z "$LIVE_TARBALL" || ! -f "$LIVE_TARBALL" ]]; then
+  echo "  ✗ agor-live pack did not produce the expected tarball: ${LIVE_TARBALL:-<no path returned>}"
+  exit 1
+fi
 echo "  ✓ $(basename "$LIVE_TARBALL")"
 rm -rf "$INTERNAL_STAGE"
 
