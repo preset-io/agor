@@ -125,7 +125,7 @@ export async function packRelease({ packageRoot = scriptRoot, destination, inter
   }
 }
 
-export async function isDirectInvocation(argvPath, moduleUrl = import.meta.url) {
+async function isDirectInvocation(argvPath, moduleUrl = import.meta.url) {
   if (!argvPath) return false;
   try {
     const [argvRealPath, moduleRealPath] = await Promise.all([
