@@ -6,6 +6,7 @@
 #   ./build.sh                    # Build only
 #   ./build.sh --bump patch       # Bump version and build release tarballs
 #   ./build.sh --bump minor       # Bump to next minor version
+#   ./build.sh --version 0.25.0-rc.1 # Set an explicit aligned release candidate
 #   ./build.sh --skip-install     # Skip pnpm install step
 #   ./build.sh --with-sandpack    # Include self-hosted Sandpack bundler in build
 
@@ -21,10 +22,16 @@ export NODE_OPTIONS="--max-old-space-size=4096 ${NODE_OPTIONS:-}"
 SKIP_INSTALL=false
 WITH_SANDPACK=false
 BUMP=""
+TARGET_VERSION=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --bump)      BUMP="$2"; shift 2 ;;
+    --bump)
+      [[ $# -ge 2 ]] || { echo "--bump requires patch, minor, or major"; exit 1; }
+      BUMP="$2"; shift 2 ;;
+    --version)
+      [[ $# -ge 2 ]] || { echo "--version requires an exact SemVer version"; exit 1; }
+      TARGET_VERSION="$2"; shift 2 ;;
     --skip-install) SKIP_INSTALL=true; shift ;;
     --with-sandpack) WITH_SANDPACK=true; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -33,6 +40,14 @@ done
 
 if [[ -n "$BUMP" && "$BUMP" != "patch" && "$BUMP" != "minor" && "$BUMP" != "major" ]]; then
   echo "Invalid bump type: $BUMP (must be patch, minor, or major)"
+  exit 1
+fi
+if [[ -n "$BUMP" && -n "$TARGET_VERSION" ]]; then
+  echo "Use either --bump or --version, not both"
+  exit 1
+fi
+if [[ -n "$TARGET_VERSION" ]] && ! [[ "$TARGET_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  echo "Invalid version: $TARGET_VERSION (must be an exact SemVer version)"
   exit 1
 fi
 
@@ -59,8 +74,8 @@ echo ""
 
 # ── Version bump ─────────────────────────────────────────────────────────────
 
+CURRENT_VERSION=$(node -p "require('$SCRIPT_DIR/package.json').version")
 if [[ -n "$BUMP" ]]; then
-  CURRENT_VERSION=$(node -p "require('$SCRIPT_DIR/package.json').version")
   IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
   case $BUMP in
@@ -71,7 +86,14 @@ if [[ -n "$BUMP" ]]; then
 
   NEW_VERSION="$MAJOR.$MINOR.$PATCH"
   echo "📌 Version bump: $CURRENT_VERSION → $NEW_VERSION ($BUMP)"
+elif [[ -n "$TARGET_VERSION" ]]; then
+  NEW_VERSION="$TARGET_VERSION"
+  echo "📌 Version set: $CURRENT_VERSION → $NEW_VERSION"
+else
+  NEW_VERSION="$CURRENT_VERSION"
+fi
 
+if [[ -n "$BUMP" || -n "$TARGET_VERSION" ]]; then
   # Update the base, client, and every version-aligned integration package.
   node - "$NEW_VERSION" "$SCRIPT_DIR" "$CLIENT_DIR" "${INTEGRATION_DIRS[@]}" <<'NODE'
 const fs = require('fs');
@@ -96,8 +118,6 @@ NODE
   echo "  ✓ Updated version-aligned agentic tool packages"
   echo ""
 else
-  NEW_VERSION=$(node -p "require('$SCRIPT_DIR/package.json').version")
-
   # Sync client version to match agor-live (no bump, just align)
   CLIENT_VERSION=$(node -p "require('$CLIENT_DIR/package.json').version")
   if [[ "$CLIENT_VERSION" != "$NEW_VERSION" ]]; then

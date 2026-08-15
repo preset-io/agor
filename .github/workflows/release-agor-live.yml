@@ -3,6 +3,7 @@
 #   2. After merge, push v<package-version> on that main commit.
 #   3. This workflow builds once, runs the full packaged-install matrix, and
 #      publishes those exact tarballs with npm trusted publishing (OIDC).
+#      Stable versions use `latest`; SemVer prereleases use `next`.
 #
 # workflow_dispatch is a non-publishing preflight on the selected ref. Retry a
 # failed tag release with GitHub's "Re-run failed jobs" so it reuses the same
@@ -23,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.release.outputs.version }}
+      npm_tag: ${{ steps.release.outputs.npm_tag }}
       should_publish: ${{ steps.release.outputs.should_publish }}
     steps:
       - uses: actions/checkout@v7
@@ -34,6 +36,8 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./packages/agor-live/package.json').version")
+          NPM_TAG=latest
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+- ]]; then NPM_TAG=next; fi
           SHOULD_PUBLISH=false
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
@@ -54,6 +58,7 @@ jobs:
           fi
           node scripts/check-agentic-tool-packages.mjs
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
           echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
 
   validate:
@@ -132,6 +137,7 @@ jobs:
 
       - name: Preflight trusted publishers and publish exact artifacts
         env:
+          NPM_TAG: ${{ needs.metadata.outputs.npm_tag }}
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
@@ -200,7 +206,7 @@ jobs:
             # npm's dry-run still performs the real package-scoped OIDC token
             # exchange. npm returns success when that exchange is unavailable,
             # so require its pinned client's explicit success diagnostic.
-            if ! npm publish "$artifact" --access public --dry-run --loglevel verbose >"$probe_log" 2>&1 || \
+            if ! npm publish "$artifact" --access public --tag "$NPM_TAG" --dry-run --loglevel verbose >"$probe_log" 2>&1 || \
               ! grep -Fq 'oidc Successfully retrieved and set token' "$probe_log"; then
               echo "::error::npm trusted publishing is not authorized for $name"
               echo "::error::Configure preset-io/agor, release-agor-live.yml, environment npm, and allow npm publish in this package's npmjs.com settings"
@@ -227,11 +233,12 @@ jobs:
 
           # agor-live is the user-visible release marker and remains last.
           for artifact in "${to_publish[@]}"; do
-            npm publish "$artifact" --access public
+            npm publish "$artifact" --access public --tag "$NPM_TAG"
           done
 
       - name: Verify registry release
         env:
+          NPM_TAG: ${{ needs.metadata.outputs.npm_tag }}
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
@@ -258,7 +265,7 @@ jobs:
             done
 
             if [[ "${#next[@]}" -eq 0 ]]; then
-              exit 0
+              break
             fi
             if [[ "$attempt" -eq 13 ]]; then
               echo "::error::npm versions were not visible after 60 seconds: ${next[*]}"
@@ -268,4 +275,13 @@ jobs:
             echo "Waiting for npm registry propagation: ${next[*]}"
             remaining=("${next[@]}")
             sleep 5
+          done
+
+          for package in "${packages[@]}"; do
+            tagged=$(npm view --prefer-online "$package@$NPM_TAG" version 2>/dev/null || true)
+            if [[ "$tagged" != "$VERSION" ]]; then
+              echo "::error::$package@$NPM_TAG resolved to ${tagged:-<missing>}, expected $VERSION"
+              exit 1
+            fi
+            echo "✓ $package@$NPM_TAG resolves to $VERSION"
           done
