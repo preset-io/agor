@@ -277,7 +277,12 @@ export async function installManagedIntegration(
   const backup = join(parent, `.${tool}.previous-${randomUUID()}`);
   await mkdir(parent, { recursive: true });
   await rm(staging, { recursive: true, force: true });
-  await mkdir(staging, { recursive: true, mode: 0o700 });
+  // The managed tool tree is shared runtime for every executor identity (it
+  // holds only published npm packages, no secrets). In strict/insulated unix
+  // modes, sessions run as other unix users who must traverse this dir to load
+  // the version-aligned SDK, so it must be world-traversable — 0o700 here would
+  // make `require.resolve` fail with MODULE_NOT_FOUND for non-daemon users.
+  await mkdir(staging, { recursive: true, mode: 0o755 });
 
   try {
     await writeFile(
