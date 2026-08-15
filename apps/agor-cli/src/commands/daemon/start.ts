@@ -10,14 +10,12 @@
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
 import type { AgorConfig } from '@agor/core/config';
 import { loadConfig, loadConfigFromFile } from '@agor/core/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
-import {
-  formatPendingMigrationsMessage,
-  getPendingMigrationsInfo,
-} from '../../lib/check-migrations.js';
+import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';
 import { getDaemonPid, startDaemon } from '../../lib/daemon-manager.js';
 
@@ -55,13 +53,16 @@ export default class DaemonStart extends Command {
       return;
     }
 
-    // 3. Fail fast on pending migrations. The daemon performs this same
+    // 3. Fail before detaching when an upgrade still needs package reconciliation.
+    await this.failOnUnreadyAgenticTools(config);
+
+    // 4. Fail fast on pending migrations. The daemon performs this same
     //    check on startup, but in background mode its stderr is redirected
     //    into ~/.agor/logs/daemon.log — so the error would be invisible at
     //    the user's terminal. Surface it inline here before spawning.
     await this.failOnPendingMigrations();
 
-    // 4. Foreground mode: import and run in-process (blocks forever)
+    // 5. Foreground mode: import and run in-process (blocks forever)
     if (flags.foreground) {
       this.log(chalk.bold('Starting Agor daemon in foreground...'));
       try {
@@ -75,7 +76,7 @@ export default class DaemonStart extends Command {
       return;
     }
 
-    // 5. Background mode (default): spawn detached process
+    // 6. Background mode (default): spawn detached process
     this.log(chalk.bold('Starting Agor daemon...'));
 
     const daemonPath = this.resolveDaemonEntrypoint();
@@ -97,10 +98,22 @@ export default class DaemonStart extends Command {
     }
   }
 
-  private async failOnPendingMigrations(): Promise<void> {
-    let info: Awaited<ReturnType<typeof getPendingMigrationsInfo>>;
+  private async failOnUnreadyAgenticTools(config: AgorConfig): Promise<void> {
     try {
-      info = await getPendingMigrationsInfo();
+      await assertConfiguredAgenticToolsReady(config);
+    } catch (error) {
+      this.error(
+        chalk.red(
+          `✗ Agentic tools are not ready\n${error instanceof Error ? error.message : String(error)}`
+        )
+      );
+    }
+  }
+
+  private async failOnPendingMigrations(): Promise<void> {
+    let blocker: string | null;
+    try {
+      blocker = await getDaemonStartMigrationBlocker();
     } catch (error) {
       // Don't swallow the failure silently — the old behavior (pre-regression)
       // was to warn and continue, but that is what led to the daemon dying in
@@ -114,11 +127,11 @@ export default class DaemonStart extends Command {
       );
     }
 
-    if (info === null) return;
+    if (blocker === null) return;
 
     // Write directly to stderr so the message is not swallowed by oclif's
     // log level filters and is clearly separated from any stdout consumers.
-    process.stderr.write(chalk.red(formatPendingMigrationsMessage(info)));
+    process.stderr.write(chalk.red(blocker));
     this.exit(1);
   }
 

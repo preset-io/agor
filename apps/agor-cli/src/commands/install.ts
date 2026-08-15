@@ -22,6 +22,7 @@ import {
   removeManagedInstallDebris,
   removeManagedIntegration,
   repairManagedIntegrationPermissions,
+  validateInteractiveAgenticToolSelection,
   writeAgenticToolSelectionManifest,
 } from '../lib/agentic-tool-integrations.js';
 
@@ -73,6 +74,7 @@ export default class Install extends Command {
             value,
             checked: previouslySelected.has(value as InstallableAgenticTool),
           })),
+          validate: validateInteractiveAgenticToolSelection,
         },
       ]);
       await writeAgenticToolSelectionManifest(selected);

@@ -289,6 +289,54 @@ export async function inspectManagedAgenticToolAlignment(
 }
 
 /**
+ * Fail before a packaged daemon starts when its deployment-owned tool policy
+ * is implicit or its selected package set is not ready for this exact Agor version.
+ */
+export async function assertConfiguredAgenticToolsReady(
+  config: { agentic_tools?: { installed?: InstallableAgenticTool[] } },
+  env: NodeJS.ProcessEnv = process.env
+): Promise<readonly InstallableAgenticTool[] | undefined> {
+  if (env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return undefined;
+
+  const agorVersion = resolveManagedAgenticToolVersion(undefined, env);
+  if (!agorVersion) {
+    throw new Error(
+      'Managed agentic tools are enabled, but AGOR_VERSION is unavailable. Reinstall the agor-live package.'
+    );
+  }
+
+  const policy = await resolveAgenticToolSelectionPolicy(config);
+  if (policy.source === 'missing-manifest') {
+    throw new Error(
+      [
+        'No agentic tools have been selected for this installation.',
+        'Run `agor install` to select at least one tool before starting the daemon.',
+        'For an intentionally tool-free headless deployment, set `agentic_tools.installed: []` in config.yaml.',
+      ].join('\n')
+    );
+  }
+
+  const configured = policy.selected;
+  const state = await inspectManagedAgenticToolAlignment(configured, agorVersion);
+  const invalid = state.filter((item) => item.status !== 'ready');
+  if (invalid.length === 0) return configured;
+
+  const lines = invalid.map(
+    (item) =>
+      `  - ${item.displayName}: missing or invalid (expected ${item.expectedVersion})${item.detail ? `; ${item.detail}` : ''}`
+  );
+  throw new Error(
+    [
+      `Configured agentic tool packages are not aligned with Agor ${agorVersion}:`,
+      ...lines,
+      '',
+      `Run \`${AGENTIC_TOOL_REPAIR_COMMAND}\` as the daemon user.`,
+      'Inspect without changing anything with `agor doctor`.',
+    ].join('\n')
+  );
+}
+
+/**
  * Load an SDK from Agor's isolated, version-aligned integration tree.
  * Source checkouts use workspace dependencies unless managed mode is explicitly enabled.
  */

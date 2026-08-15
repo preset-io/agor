@@ -44,6 +44,7 @@ import {
   type InstallableAgenticTool,
   normalizeAgenticToolName,
   resolveManagedAgenticToolVersion,
+  validateInteractiveAgenticToolSelection,
 } from '../lib/agentic-tool-integrations.js';
 
 export function isFreshInitState(state: {
@@ -715,8 +716,7 @@ export default class Init extends Command {
           name: `${definition.displayName} (${definition.packageName}@${agorVersion})`,
           value: tool,
         })),
-        validate: (selection) =>
-          selection.length > 0 || 'Select at least one agentic tool, or press Ctrl+C to exit.',
+        validate: validateInteractiveAgenticToolSelection,
       },
     ]);
     return selectedTools;

@@ -2,10 +2,13 @@
  * `agor daemon restart` - Restart daemon
  */
 
+import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
+import { loadConfig } from '@agor/core/config';
 import { isDaemonRunning } from '@agor-live/client';
 import { getDaemonUrl } from '@agor-live/client/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
+import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';
 import { startDaemon, stopDaemon } from '../../lib/daemon-manager.js';
 
@@ -34,6 +37,28 @@ export default class DaemonRestart extends Command {
       this.log('Your installation may be corrupted. Try reinstalling:');
       this.log(`  ${chalk.cyan('npm install -g agor-live')}`);
       this.log('');
+      this.exit(1);
+    }
+
+    // Validate the new package set before stopping a currently healthy daemon.
+    try {
+      await assertConfiguredAgenticToolsReady(await loadConfig());
+    } catch (error) {
+      this.log(chalk.red('✗ Agentic tools are not ready'));
+      this.log(error instanceof Error ? error.message : String(error));
+      this.exit(1);
+    }
+
+    let migrationBlocker: string | null;
+    try {
+      migrationBlocker = await getDaemonStartMigrationBlocker();
+    } catch (error) {
+      this.log(chalk.red('✗ Failed to check database migration status'));
+      this.log(error instanceof Error ? error.message : String(error));
+      this.exit(1);
+    }
+    if (migrationBlocker) {
+      process.stderr.write(chalk.red(migrationBlocker));
       this.exit(1);
     }
 

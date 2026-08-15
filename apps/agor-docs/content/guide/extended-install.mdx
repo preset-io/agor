@@ -87,9 +87,12 @@ Inspect the managed integrations at any time:
 agor doctor
 ```
 
-The packaged daemon refuses to start when a selected integration is absent, corrupt, or from a
-different Agor version. An explicitly empty headless selection does not block startup; a missing
-legacy local manifest produces an actionable warning. Unselected tools are unavailable to tenants.
+Packaged `agor daemon start` and `agor daemon restart` refuse before detaching or stopping a healthy
+daemon when a selected integration is absent, corrupt, or from a different Agor version. They print
+the exact `agor install --sync` repair command at the terminal. An explicitly empty headless
+selection does not block startup; an older installation with neither a YAML policy nor a local
+manifest must run interactive `agor install` and select at least one tool. Unselected tools are
+unavailable to tenants.
 In the UI, workspace admins see **Not installed by this deployment** separately from **Disabled in
 this workspace**; users configure credentials only for installed, enabled tools, and transient
 provider probes use a separate status-unavailable state. Workspace and tenant admins cannot install
@@ -147,9 +150,14 @@ removes current-version packages absent from `agentic_tools.installed`, deletes 
 directory, and cleans interrupted staging/backup directories. There is currently no compatibility
 range or keep-old mode: every managed wrapper must exactly match `agor-live`.
 
+Both `agor daemon start` and `agor daemon restart` run package and migration preflights at the
+terminal. Restart performs them before stopping a healthy daemon, so an incomplete upgrade does not
+turn into an avoidable outage followed only by a log-file error.
+
 On upgrades from a legacy configuration where the YAML key and local manifest are both absent,
 `agor install --sync` fails without changing packages and directs the operator to interactive
-`agor install`. Docker and Kubernetes deployments should always declare
+`agor install`; daemon startup fails with the same short instruction rather than opening a UI with
+no usable agent. Docker and Kubernetes deployments should always declare
 `agentic_tools.installed` and use `--sync`.
 
 Microsoft Teams gateway support remains optional and separate from agentic tools:

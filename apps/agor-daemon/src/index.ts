@@ -28,6 +28,7 @@ import { UI_MOUNT_PATH } from '@agor/core/utils/url';
 
 patchConsole();
 
+import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
 import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
 import {
   loadConfig,
@@ -60,7 +61,6 @@ import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
-import { assertConfiguredAgenticToolsAligned } from './setup/agentic-tool-alignment.js';
 import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
@@ -173,7 +173,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Deployment package availability is instance-global. Validate it before
   // database or tenant initialization so no tenant can expand the daemon's
   // installed-code surface and a broken upgrade never starts listening.
-  const resolvedAgenticTools = await assertConfiguredAgenticToolsAligned(config);
+  const resolvedAgenticTools = await assertConfiguredAgenticToolsReady(config);
   if (resolvedAgenticTools) {
     // In-memory projection only: config.yaml remains immutable while every
     // service consumes the same deployment policy resolved at startup.
