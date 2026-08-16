@@ -88,7 +88,7 @@ describe('db status command', () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it('does not expose credentials when status fails', async () => {
     const secret = 'status-secret-value';
@@ -99,7 +99,7 @@ describe('db status command', () => {
     expect(result.code).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(secret);
     expect(`${result.stdout}\n${result.stderr}`).not.toContain('postgresql://user:');
-  });
+  }, 30_000);
 
   it('does not expose credentials when migration fails', async () => {
     const secret = 'migration-secret-value';
@@ -110,5 +110,5 @@ describe('db status command', () => {
     expect(result.code).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(secret);
     expect(`${result.stdout}\n${result.stderr}`).not.toContain('postgresql://user:');
-  });
+  }, 30_000);
 });

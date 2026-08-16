@@ -3,6 +3,7 @@ import {
   getMigrationImpact,
   introspectMigrationStatus,
   MIGRATION_IMPACT_SUMMARY_MAX_LENGTH,
+  pendingOfflineCutoverMigrations,
 } from './migrate';
 
 describe('migration status introspection', () => {
@@ -87,6 +88,23 @@ describe('migration status introspection', () => {
       rollbackCompatibility: 'unknown',
       summary: 'Migration impact metadata is unavailable.',
     });
+  });
+
+  it('registers impact metadata for every offline cutover migration', () => {
+    const offlineMigrations = pendingOfflineCutoverMigrations('postgresql', {
+      applied: ['0000_init'],
+      pending: [
+        '0074_knowledge_embedding_claims',
+        '0078_mcp_oauth_pending_flows',
+        '0082_github_install_state',
+        '0083_transcript_hydration_keysets',
+      ],
+    });
+
+    expect(offlineMigrations).toHaveLength(4);
+    for (const name of offlineMigrations) {
+      expect(getMigrationImpact(name).classification).not.toBe('unknown');
+    }
   });
 
   it('keeps impact summaries within the public bound', () => {
