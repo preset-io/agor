@@ -1580,6 +1580,59 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         id = session.session_id;
         const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
 
+        // Branch RBAC — fail fast before admitting a Task. This route creates
+        // its Task via `taskRepo.createPending` (repository admission), which
+        // deliberately bypasses `TasksService.create` and therefore its
+        // `ensureCanPromptInSession` hook. Without this check a 'session'-tier
+        // collaborator prompting ANOTHER user's session is admitted rather than
+        // rejected: the Task queues and the executor then runs under the session
+        // OWNER's identity/home (in `unix_user_mode: sandbox`, the owner's
+        // per-user home store), so the prompt either silently impersonates the
+        // owner or stalls into a hung task instead of returning a clean 403.
+        // Mirrors the `/tasks/:id/run` (~L1832) and upload (~L2233) routes.
+        // Internal/daemon callers (spawn-prompt forward, widget submissions,
+        // scheduler, gateway) are provider-less and skipped, as are executor
+        // service accounts.
+        const promptBranchId = session.branch_id;
+        const isInternalPrompt = !params.provider;
+        const isPromptServiceAccount =
+          (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
+        if (branchRbacEnabled && !isInternalPrompt && !isPromptServiceAccount && promptBranchId) {
+          const promptUserId = params.user?.user_id as UUID | undefined;
+          if (!promptUserId) {
+            throw new NotAuthenticated('Authentication required to prompt a session');
+          }
+          const access = await runWithTenantDatabaseScope(db, promptTenantId, async () => {
+            const wt = await branchRepository.findById(promptBranchId);
+            if (!wt) return null;
+            const isOwner = await branchRepository.isOwner(wt.branch_id, promptUserId);
+            const branchPermission = await branchRepository.resolveUserPermission(wt, promptUserId);
+            return { branchPermission, isOwner, wt };
+          });
+          if (!access) {
+            throw new NotFound(`Branch ${promptBranchId} not found`);
+          }
+          const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+            branch: access.wt,
+            session,
+            userId: promptUserId,
+            isOwner: access.isOwner,
+            userRole: params.user?.role,
+            allowSuperadmin: superadminOpts.allowSuperadmin,
+            branchPermission: access.branchPermission,
+          });
+          if (!allowed) {
+            throw new Forbidden(
+              effectiveLevel === 'session'
+                ? `You have 'session' permission — you can only prompt sessions you created. ` +
+                    `This session was created by another user. Ask a branch owner to upgrade ` +
+                    `your access to 'prompt' if you need to prompt other users' sessions.`
+                : `You need 'prompt' permission to prompt this session. You have ` +
+                    `'${effectiveLevel}' permission.`
+            );
+          }
+        }
+
         const reconcileDurablyDispatchedTask = async (): Promise<Task | null> => {
           if (!data.idempotencyTaskId) return null;
           const prior = await taskRepo.findById(data.idempotencyTaskId);
