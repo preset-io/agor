@@ -65,6 +65,11 @@ export interface MigrationImpact {
   summary: string;
 }
 
+export interface MigrationImpactPolicy {
+  requiresOfflineCutover: boolean;
+  impact: Readonly<MigrationImpact>;
+}
+
 export interface PendingMigrationIntrospection {
   name: string;
   requiresOfflineCutover: boolean;
@@ -97,7 +102,20 @@ const UNKNOWN_MIGRATION_IMPACT = defineMigrationImpact({
   summary: 'Migration impact metadata is unavailable.',
 });
 
-const MIGRATION_IMPACTS = new Map<string, Readonly<MigrationImpact>>([
+export function createMigrationImpactRegistry(
+  entries: ReadonlyArray<readonly [string, MigrationImpactPolicy]>
+): {
+  impacts: ReadonlyMap<string, MigrationImpactPolicy>;
+  offlineCutoverMigrations: ReadonlySet<string>;
+} {
+  const impacts = new Map(entries);
+  const offlineCutoverMigrations = new Set(
+    entries.filter(([, policy]) => policy.requiresOfflineCutover).map(([name]) => name)
+  );
+  return { impacts, offlineCutoverMigrations };
+}
+
+const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   ...[
     '0074_knowledge_embedding_claims',
     '0078_mcp_oauth_pending_flows',
@@ -106,36 +124,36 @@ const MIGRATION_IMPACTS = new Map<string, Readonly<MigrationImpact>>([
     (name) =>
       [
         name,
-        defineMigrationImpact({
-          classification: 'protocol',
-          userAction: 'required',
-          rollbackCompatibility: 'incompatible',
-          summary: 'Requires a coordinated offline cutover and is not rollback compatible.',
-        }),
+        {
+          requiresOfflineCutover: true,
+          impact: defineMigrationImpact({
+            classification: 'protocol',
+            userAction: 'required',
+            rollbackCompatibility: 'incompatible',
+            summary: 'Requires a coordinated offline cutover and is not rollback compatible.',
+          }),
+        },
       ] as const
   ),
   [
     '0083_transcript_hydration_keysets',
-    defineMigrationImpact({
-      classification: 'performance',
-      userAction: 'required',
-      rollbackCompatibility: 'compatible',
-      summary: 'Requires a coordinated offline cutover to build indexes; rollback is compatible.',
-    }),
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'performance',
+        userAction: 'required',
+        rollbackCompatibility: 'compatible',
+        summary: 'Requires a coordinated offline cutover to build indexes; rollback is compatible.',
+      }),
+    },
   ],
 ]);
-
-// Every migration with registered impact currently requires an offline cutover
-// on an existing PostgreSQL database. Deriving the classification from the
-// impact registry prevents an offline migration from silently receiving the
-// unknown fallback impact.
-const OFFLINE_CUTOVER_MIGRATIONS = new Set(MIGRATION_IMPACTS.keys());
 
 const NO_OFFLINE_ACTION_SUMMARY =
   'No offline cutover is required for this database and migration state.';
 
 export function getMigrationImpact(name: string): MigrationImpact {
-  return MIGRATION_IMPACTS.get(name) ?? UNKNOWN_MIGRATION_IMPACT;
+  return MIGRATION_IMPACT_REGISTRY.impacts.get(name)?.impact ?? UNKNOWN_MIGRATION_IMPACT;
 }
 
 export function introspectMigrationStatus(
@@ -200,7 +218,9 @@ export function pendingOfflineCutoverMigrations(
   // A genuinely fresh database cannot have an old worker using the pre-claim
   // protocol, so first installation remains automatic.
   if (dialect !== 'postgresql' || status.applied.length === 0) return [];
-  return status.pending.filter((tag) => OFFLINE_CUTOVER_MIGRATIONS.has(tag));
+  return status.pending.filter((tag) =>
+    MIGRATION_IMPACT_REGISTRY.offlineCutoverMigrations.has(tag)
+  );
 }
 
 function getRootCause(error: unknown): unknown {

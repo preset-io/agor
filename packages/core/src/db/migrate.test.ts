@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createMigrationImpactRegistry,
   getMigrationImpact,
   introspectMigrationStatus,
   MIGRATION_IMPACT_SUMMARY_MAX_LENGTH,
+  type MigrationImpactPolicy,
   pendingOfflineCutoverMigrations,
 } from './migrate';
 
@@ -105,6 +107,23 @@ describe('migration status introspection', () => {
     for (const name of offlineMigrations) {
       expect(getMigrationImpact(name).classification).not.toBe('unknown');
     }
+  });
+
+  it('does not derive offline cutover policy from impact metadata presence', () => {
+    const onlinePolicy: MigrationImpactPolicy = {
+      requiresOfflineCutover: false,
+      impact: {
+        classification: 'schema',
+        userAction: 'none',
+        rollbackCompatibility: 'compatible',
+        summary: 'Adds an ordinary online schema change.',
+      },
+    };
+
+    const registry = createMigrationImpactRegistry([['9998_ordinary_online', onlinePolicy]]);
+
+    expect(registry.impacts.get('9998_ordinary_online')).toBe(onlinePolicy);
+    expect(registry.offlineCutoverMigrations.has('9998_ordinary_online')).toBe(false);
   });
 
   it('keeps impact summaries within the public bound', () => {
