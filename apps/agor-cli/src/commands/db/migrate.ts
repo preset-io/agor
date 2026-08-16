@@ -5,14 +5,17 @@
 import {
   checkMigrationStatus,
   createDatabase,
-  formatSanitizedDbError,
   isSQLiteDatabase,
   pendingOfflineCutoverMigrations,
-  sanitizeDbError,
 } from '@agor/core/db';
-import { expandPath, extractDbFilePath } from '@agor/core/utils/path';
+import { expandPath } from '@agor/core/utils/path';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import {
+  databaseBackupGuidance,
+  migrationFailureMessage,
+  migrationVerificationDiagnostics,
+} from '../../lib/db-migrate-presentation.js';
 import {
   requireOfflineCutoverAcknowledgement,
   runConfirmedMigrations,
@@ -44,12 +47,11 @@ export default class DbMigrate extends Command {
       // Priority: DATABASE_URL > AGOR_DB_PATH > default SQLite path
       const dbUrl =
         process.env.DATABASE_URL || expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db');
-      const dbFilePath = extractDbFilePath(dbUrl);
-
       this.log(chalk.bold('🔍 Checking database migration status...'));
       this.log('');
 
       const db = createDatabase({ url: dbUrl });
+      const dialect = isSQLiteDatabase(db) ? 'sqlite' : 'postgresql';
       const status = await checkMigrationStatus(db);
 
       if (!status.hasPending) {
@@ -70,10 +72,7 @@ export default class DbMigrate extends Command {
       });
       this.log('');
 
-      const offlineCutovers = pendingOfflineCutoverMigrations(
-        isSQLiteDatabase(db) ? 'sqlite' : 'postgresql',
-        status
-      );
+      const offlineCutovers = pendingOfflineCutoverMigrations(dialect, status);
       if (offlineCutovers.length > 0) {
         this.log(chalk.red.bold('⛔ OFFLINE CUTOVER REQUIRED'));
         this.log('');
@@ -95,8 +94,9 @@ export default class DbMigrate extends Command {
       // Warn about backup
       this.log(chalk.bold('⚠️  IMPORTANT: Backup your database before proceeding!'));
       this.log('');
-      this.log(`Run this command to create a backup:`);
-      this.log(chalk.cyan(`  cp ${dbFilePath} ${dbFilePath}.backup-$(date +%s)`));
+      databaseBackupGuidance(dialect, dbUrl).forEach((line) => {
+        this.log(chalk.cyan(line));
+      });
       this.log('');
 
       // Skip confirmation if --yes flag is set
@@ -150,12 +150,9 @@ export default class DbMigrate extends Command {
         this.log('  3. Schema changes were made manually outside migrations');
         this.log('');
         this.log(chalk.bold('Diagnostic steps:'));
-        this.log('  1. Check if columns already exist:');
-        this.log(chalk.cyan(`     sqlite3 ${dbFilePath} "PRAGMA table_info(branches)"`));
-        this.log('  2. Rebuild core package:');
-        this.log(chalk.cyan('     cd packages/core && pnpm build'));
-        this.log('  3. Check migration hashes:');
-        this.log(chalk.cyan(`     sqlite3 ${dbFilePath} "SELECT hash FROM __drizzle_migrations"`));
+        migrationVerificationDiagnostics(dialect, dbUrl).forEach((line) => {
+          this.log(chalk.cyan(line));
+        });
         this.log('');
         this.error(`Migration verification failed`);
       }
@@ -169,8 +166,7 @@ export default class DbMigrate extends Command {
       // Force exit to close database connections (postgres-js keeps connections open)
       process.exit(0);
     } catch (error) {
-      const safeError = sanitizeDbError(error);
-      this.error(`Failed to run migrations: ${formatSanitizedDbError(safeError)}`);
+      this.error(migrationFailureMessage(error));
     }
   }
 }
