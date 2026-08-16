@@ -6,7 +6,6 @@
  */
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
 
 import {
@@ -204,6 +203,7 @@ import {
   isSessionMcpServerLinkVisibleToCaller,
   loadMcpServerForCaller,
 } from './utils/mcp-server-authorization.js';
+import { resolveOwnerHomeStore } from './utils/sandbox-context.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
@@ -1006,7 +1006,7 @@ function createExecuteHandler(
     // Effective fs access of the OWNER on the branch: 'write' | 'read' | 'none'.
     // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
     // to 'write' when RBAC is off (open-access behavior).
-    let sandboxBranchAccess: 'write' | 'read' | 'none' = 'write';
+    let sessionOwnerBranchAccess: 'write' | 'read' | 'none' = 'write';
     if (session.branch_id) {
       const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
         const branchRepo = new BranchRepository(tenantDb);
@@ -1031,11 +1031,11 @@ function createExecuteHandler(
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);
       cwd = branchMounts.path;
       sandboxBaseRepoPath = branchMounts.baseRepoPath;
-      sandboxBranchAccess = branchMounts.fsAccess;
+      sessionOwnerBranchAccess = branchMounts.fsAccess;
       // Under the sandbox, 'none' means the branch would not be mounted at all,
       // so the task cannot operate on it. Fail fast with a clear message rather
       // than letting bwrap abort on a missing chdir target.
-      if (sandboxCfg?.enabled === true && sandboxBranchAccess === 'none') {
+      if (sandboxCfg?.enabled === true && sessionOwnerBranchAccess === 'none') {
         throw new Error(
           `The session owner has no filesystem access to branch ${session.branch_id}. ` +
             'Grant at least read access (others_fs_access) to run sessions on this branch under ' +
@@ -1050,22 +1050,26 @@ function createExecuteHandler(
     // auth/state, so prompting another user's session runs against the owner's
     // home (carry strict's warning). The SOURCE is the owner's `filesystem_home`
     // if set (the migration points it at their existing /home/<user> so no files
-    // move), else the canonical store. Only computed when the mode is active.
-    const dataHome = process.env.AGOR_DATA_HOME?.trim() || join(homedir(), '.agor');
+    // move), else the canonical store (see resolveOwnerHomeStore). Only computed
+    // when the mode is active — and FAIL CLOSED if the owner can't be resolved.
     let sandboxHomeStore: string | undefined;
-    if (
-      sandboxCfg?.enabled === true &&
-      sandboxCfg?.home_mode === 'per_user' &&
-      session.created_by
-    ) {
+    if (sandboxCfg?.enabled === true && sandboxCfg?.home_mode === 'per_user') {
+      if (!session.created_by) {
+        throw new Error(
+          'sandbox home_mode=per_user requires a resolvable session owner; refusing to spawn ' +
+            'with a shared home (fail closed).'
+        );
+      }
       const ownerFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
         new UsersRepository(tenantDb)
           .findById(session.created_by as string)
           .then((u) => u?.filesystem_home?.trim() || undefined)
       );
-      sandboxHomeStore =
-        ownerFilesystemHome ??
-        join(dataHome, 'tenants', tenantId ?? 'default', 'homes', session.created_by);
+      sandboxHomeStore = resolveOwnerHomeStore({
+        tenantId,
+        ownerUserId: session.created_by,
+        filesystemHome: ownerFilesystemHome,
+      });
     }
 
     // Determine Unix user for executor
@@ -1225,7 +1229,7 @@ function createExecuteHandler(
         // buildSandboxWrap). Undefined when the sandbox / per_user home is off.
         sandboxBaseRepoPath,
         sandboxHomeStore,
-        sandboxBranchAccess,
+        sessionOwnerBranchAccess,
       },
     };
 

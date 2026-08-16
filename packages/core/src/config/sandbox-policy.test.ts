@@ -110,16 +110,21 @@ describe('resolveBwrapArgs — RBAC-aware branch mount', () => {
     ).toBe(true);
   });
 
-  it('read binds the branch READ-ONLY (no rw bind)', () => {
+  it('read binds the branch AND the shared .git READ-ONLY (no rw bind)', () => {
     const args = resolveBwrapArgs({}, { ...CTX, branchAccess: 'read' });
     expect(hasTriple(args, '--ro-bind', CTX.branchPath, CTX.branchPath)).toBe(true);
     expect(hasTriple(args, '--bind', CTX.branchPath, CTX.branchPath)).toBe(false);
+    // The shared common .git must NOT be writable for a read-only collaborator
+    // (else they could mutate shared refs/hooks across sessions).
+    expect(hasTriple(args, '--ro-bind', BASE_GIT, BASE_GIT)).toBe(true);
+    expect(hasTriple(args, '--bind', BASE_GIT, BASE_GIT)).toBe(false);
   });
 
-  it('none does not mount the branch at all', () => {
+  it('none mounts neither the branch nor the shared .git', () => {
     const args = resolveBwrapArgs({}, { ...CTX, branchAccess: 'none' });
     expect(hasTriple(args, '--bind', CTX.branchPath, CTX.branchPath)).toBe(false);
     expect(hasTriple(args, '--ro-bind', CTX.branchPath, CTX.branchPath)).toBe(false);
+    expect(args.includes(BASE_GIT)).toBe(false);
   });
 
   it('applies in per_user mode too (read → ro on top of the overlay)', () => {
@@ -202,9 +207,7 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     expect(hasPair(args, '--tmpfs', '/')).toBe(false);
   });
 
-  it('falls back to shared-home logic when per_user is set but no store resolved', () => {
-    const args = resolveBwrapArgs({ home_mode: 'per_user' }, CTX); // no ownerHomeStore
-    expect(args.some((a) => a === '--setenv')).toBe(false);
-    expect(hasPair(args, '--tmpfs', CTX.worktreesRoot!)).toBe(true); // shared path active
+  it('FAILS CLOSED (throws) when per_user is set but no store resolved — no silent shared fallback', () => {
+    expect(() => resolveBwrapArgs({ home_mode: 'per_user' }, CTX)).toThrow(/fail closed/i);
   });
 });

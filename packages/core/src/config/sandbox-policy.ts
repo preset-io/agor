@@ -116,8 +116,18 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
   const protectSecrets = sandbox.protect_secrets ?? SANDBOX_PROTECT_SECRETS_DEFAULT;
   const isolateBranches = sandbox.isolate_branches ?? SANDBOX_ISOLATE_BRANCHES_DEFAULT;
   const homeMode = sandbox.home_mode ?? SANDBOX_HOME_MODE_DEFAULT;
-  // `per_user` is only meaningful once the daemon has resolved an owner store.
-  const perUser = homeMode === 'per_user' && !!ctx.ownerHomeStore;
+  // FAIL CLOSED: `per_user` MUST have a resolved owner store. Silently falling
+  // back to the shared daemon home would defeat the whole point of the mode
+  // (the caller asked for per-user isolation and would instead get the daemon's
+  // home). The daemon is responsible for resolving/creating the store before
+  // calling; a missing store is a programming error, not a soft downgrade.
+  if (homeMode === 'per_user' && !ctx.ownerHomeStore) {
+    throw new Error(
+      'sandbox home_mode=per_user requires an owner home store, but none was resolved. ' +
+        'Refusing to fall back to a shared home (fail closed).'
+    );
+  }
+  const perUser = homeMode === 'per_user';
   // RBAC-aware branch mount: write → rw bind, read → ro bind, none → not mounted.
   const branchBindFlag =
     ctx.branchAccess === 'read' ? '--ro-bind' : ctx.branchAccess === 'none' ? null : '--bind';
@@ -174,10 +184,14 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     if (include.branch && branchBindFlag) {
       args.push(branchBindFlag, ctx.branchPath, ctx.branchPath);
     }
-    // Re-expose the base repo's git dir so worktree commits work.
-    if (include.base_repo && ctx.baseRepoPath) {
+    // Re-expose the base repo's shared git dir. It is a linked worktree's common
+    // `.git` (refs/objects/config/hooks) shared across ALL worktrees, so it must
+    // honor the SAME RBAC flag as the branch — otherwise a `read` collaborator
+    // could mutate shared refs/hooks and cross session boundaries. write → rw
+    // (commits), read → ro, none → not mounted.
+    if (include.base_repo && ctx.baseRepoPath && branchBindFlag) {
       const gitDir = join(ctx.baseRepoPath, '.git');
-      args.push('--bind', gitDir, gitDir);
+      args.push(branchBindFlag, gitDir, gitDir);
     }
     // Re-expose managed tool binaries (hidden by the overlay); ro, tolerant of
     // a source-mode install that has no such dir.
@@ -218,9 +232,10 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
   if (include.branch && branchBindFlag) {
     args.push(branchBindFlag, ctx.branchPath, ctx.branchPath);
   }
-  if (include.base_repo && ctx.baseRepoPath) {
+  // Shared common `.git` follows the branch's RBAC flag (see per-user block).
+  if (include.base_repo && ctx.baseRepoPath && branchBindFlag) {
     const gitDir = join(ctx.baseRepoPath, '.git');
-    args.push('--bind', gitDir, gitDir);
+    args.push(branchBindFlag, gitDir, gitDir);
   }
   if (include.home) {
     args.push('--bind', ctx.homeDir, ctx.homeDir);

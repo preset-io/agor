@@ -140,8 +140,9 @@ inside a session, confirm:
   tool auth/state) — carry the same warning as before ("letting others prompt
   your session gives them your home"). Env-level credentials still come from the
   prompter via the env-resolver, not the owner.
-- **Terminals** are sandboxed (daemon secrets masked) but do not yet get the full
-  per-user-home / RBAC-mount treatment that prompts do.
+- **Terminals** get the same sandbox treatment as prompts: per-user home overlay
+  (keyed by the terminal user), RBAC-aware branch mount (ro / refused without
+  write), and masked daemon secrets.
 - **Repo-level git ops** (clone / realign-origin) run unwrapped as the daemon
   user — Agor's own trusted code, no branch cwd.
 

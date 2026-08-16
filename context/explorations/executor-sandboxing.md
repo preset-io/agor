@@ -213,6 +213,15 @@ tool state:
   would still contain it under a distinct uid). Both are kernel-enforced; bwrap escapes are rare.
   For **mutually-hostile multi-tenant**, the strong boundary remains containers/microVM/k8s
   ([[docker-executor-mode]]); sandbox targets **trusted-org multi-user** (strict's real audience).
+- **Shared PID namespace (KNOWN GAP, not yet closed).** We `--unshare-user` but NOT `--unshare-pid`,
+  and mount `/proc`. All executors run as the daemon's host uid, so — depending on host
+  `ptrace_scope` (Yama) / `hidepid` — a same-uid executor could inspect daemon/sibling process
+  metadata, fds, env, or `/proc/<pid>/root` via procfs, a process-side route around the filesystem
+  masks. Deferred deliberately: adding `--unshare-pid` makes bwrap PID 1 in a new namespace and must
+  be validated against the pgid-based Stop/containment contract (see [[task-runtime-state]]) before
+  shipping. Until then the filesystem masks are the guarantee and we rely on the host's procfs
+  hardening for the process side. Tracked as a follow-up; do not market sandbox as a full uid-isolation
+  replacement on this axis without it.
 
 ---
 

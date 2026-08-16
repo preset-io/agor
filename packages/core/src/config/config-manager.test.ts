@@ -158,20 +158,37 @@ describe('resolveEffectiveConfig', () => {
     });
   });
 
-  it('sandbox mode honors explicit sandbox tunables (home_mode/fail override) but forces enabled', () => {
+  it('sandbox mode FORCES its security invariants — config/env cannot weaken them', () => {
     const resolved = resolveEffectiveConfig(
       {
         execution: {
           unix_user_mode: 'sandbox',
+          // Every one of these attempts to weaken the mode and must be ignored.
           sandbox: { enabled: false, home_mode: 'shared', fail_if_unavailable: false },
+        },
+      },
+      { AGOR_SANDBOX_HOME_MODE: 'shared' }
+    );
+    expect(resolved.execution?.sandbox).toMatchObject({
+      enabled: true,
+      home_mode: 'per_user',
+      fail_if_unavailable: true,
+    });
+  });
+
+  it('sandbox mode preserves non-security tunables (include/extras/protect_secrets)', () => {
+    const resolved = resolveEffectiveConfig(
+      {
+        execution: {
+          unix_user_mode: 'sandbox',
+          sandbox: { extra_allow_write: ['/opt/cache'], include: { tmp: false } },
         },
       },
       {}
     );
-    // enabled is non-negotiable in sandbox mode; the rest respect the explicit config.
-    expect(resolved.execution?.sandbox?.enabled).toBe(true);
-    expect(resolved.execution?.sandbox?.home_mode).toBe('shared');
-    expect(resolved.execution?.sandbox?.fail_if_unavailable).toBe(false);
+    expect(resolved.execution?.sandbox?.extra_allow_write).toEqual(['/opt/cache']);
+    expect(resolved.execution?.sandbox?.include).toMatchObject({ tmp: false });
+    expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
   });
 
   it('AGOR_SANDBOX_HOME_MODE env still overrides home_mode without the sandbox isolation mode', () => {

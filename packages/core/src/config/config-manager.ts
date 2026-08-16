@@ -1019,28 +1019,37 @@ export function resolveEffectiveConfig(
   const sandboxIsolation = effectiveUnixMode === 'sandbox';
 
   // Fold config file + env vars + `sandbox`-mode implications into ONE sandbox
-  // settings object (a single `sandbox:` key below). `sandbox` mode is the
-  // strict replacement: it FORCES the sandbox on with a per-owner home overlay
-  // and (by default) fails closed, while still honoring explicit tunables
-  // (include/protect_secrets/extras, and an explicit home_mode/fail override).
+  // settings object (a single `sandbox:` key below).
+  //
+  // `unix_user_mode: sandbox` is a NAMED SECURITY MODE, so its core invariants
+  // are NON-NEGOTIABLE: the sandbox is on, the home is per-owner, and it fails
+  // closed. Operator config/env may NOT weaken these (a "sandbox" that silently
+  // runs with a shared daemon home or spawns unsandboxed would violate the
+  // contract). Other tunables (include/protect_secrets/extras) are still
+  // honored. If you want a tunable standalone sandbox, use `unix_user_mode` !=
+  // `sandbox` with `sandbox.enabled: true` and set home_mode/fail explicitly.
   const envSandboxEnabled = env.AGOR_SANDBOX_ENABLED === 'true';
+  // env home_mode override applies ONLY outside sandbox mode (in sandbox mode it
+  // is forced to per_user). env wins over the config file, matching other
+  // AGOR_* overrides.
   const envHomeMode =
     env.AGOR_SANDBOX_HOME_MODE === 'per_user' || env.AGOR_SANDBOX_HOME_MODE === 'shared'
       ? env.AGOR_SANDBOX_HOME_MODE
       : undefined;
   let resolvedSandbox = config.execution?.sandbox;
-  if (sandboxIsolation || envSandboxEnabled || envHomeMode) {
+  if (sandboxIsolation) {
     resolvedSandbox = {
       ...config.execution?.sandbox,
-      ...(envHomeMode ? { home_mode: envHomeMode } : {}),
+      // forced — cannot be weakened by config or env in sandbox mode
+      enabled: true,
+      home_mode: 'per_user',
+      fail_if_unavailable: true,
+    };
+  } else if (envSandboxEnabled || envHomeMode) {
+    resolvedSandbox = {
+      ...config.execution?.sandbox,
       ...(envSandboxEnabled ? { enabled: true } : {}),
-      ...(sandboxIsolation
-        ? {
-            enabled: true, // non-negotiable: sandbox mode without the sandbox is meaningless
-            home_mode: config.execution?.sandbox?.home_mode ?? envHomeMode ?? 'per_user',
-            fail_if_unavailable: config.execution?.sandbox?.fail_if_unavailable ?? true,
-          }
-        : {}),
+      ...(envHomeMode ? { home_mode: envHomeMode } : {}),
     };
   }
 

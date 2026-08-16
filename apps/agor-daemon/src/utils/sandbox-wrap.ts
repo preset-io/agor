@@ -1,7 +1,12 @@
 /**
- * Wrap an executor spawn in a filesystem-only OS sandbox (`bubblewrap`) at the
- * single spawn chokepoint, so EVERY agentic tool, terminal, and git/file op runs
- * under one filesystem policy — tool-agnostic.
+ * Wrap an AGENT executor spawn in a filesystem-only OS sandbox (`bubblewrap`).
+ * Applied by `spawnExecutorLocal` — the chokepoint for agent workloads: prompt
+ * tasks and web terminals, across all agentic tools (tool-agnostic).
+ *
+ * NOT applied to daemon-internal command spawns (`runExecutorCommand` /
+ * `startInteractiveExecutor`: git-state/autocomplete probes, file reads, OAuth
+ * flows) — those are Agor's own trusted code with no agent-authored payload,
+ * analogous to repo-level ops running unwrapped.
  *
  * Filesystem-only by design: no `--unshare-net`, so the network namespace stays
  * shared and the executor keeps its daemon/model connectivity. Network egress
@@ -18,12 +23,13 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import {
   type AgorSandboxSettings,
   resolveBwrapArgs,
   type SandboxPathContext,
 } from '@agor/core/config';
+import { bwrapOnPath, probeBwrapUserns } from '@agor/core/unix';
 
 export interface SandboxWrap {
   cmd: string;
@@ -31,13 +37,16 @@ export interface SandboxWrap {
   extraEnv: Record<string, string>;
 }
 
-let bwrapOnPathCache: boolean | undefined;
+// FUNCTIONAL availability: bwrap must be on PATH AND able to create an
+// unprivileged user namespace on this host (installed-but-blocked is common on
+// hardened kernels). Cached once — the kernel/userns capability does not change
+// during a daemon's lifetime, and the probe spawns a process.
+let bwrapAvailableCache: boolean | undefined;
 function bwrapAvailable(): boolean {
-  if (bwrapOnPathCache !== undefined) return bwrapOnPathCache;
-  bwrapOnPathCache = (process.env.PATH ?? '')
-    .split(delimiter)
-    .some((d) => d && existsSync(join(d, 'bwrap')));
-  return bwrapOnPathCache;
+  if (bwrapAvailableCache === undefined) {
+    bwrapAvailableCache = bwrapOnPath() && probeBwrapUserns();
+  }
+  return bwrapAvailableCache;
 }
 
 /**
@@ -52,7 +61,8 @@ function bwrapAvailable(): boolean {
  */
 export function buildSandboxWrap(params: {
   sandbox: AgorSandboxSettings | undefined;
-  cwd: string;
+  /** The branch working directory (task cwd) — NOT the executor process cwd. */
+  branchPath: string;
   cmd: string;
   args: string[];
   baseRepoPath?: string;
@@ -60,14 +70,14 @@ export function buildSandboxWrap(params: {
   /** RBAC-resolved fs access of the session owner to the branch. Default 'write'. */
   branchAccess?: 'write' | 'read' | 'none';
 }): SandboxWrap | null {
-  const { sandbox, cwd, cmd, args, baseRepoPath, ownerHomeStore, branchAccess } = params;
+  const { sandbox, branchPath, cmd, args, baseRepoPath, ownerHomeStore, branchAccess } = params;
   if (!sandbox?.enabled) return null;
 
   const unavailableReason =
     process.platform !== 'linux'
       ? `filesystem sandbox requires Linux (bubblewrap); platform is ${process.platform}`
       : !bwrapAvailable()
-        ? '`bwrap` (bubblewrap) is not on PATH'
+        ? '`bwrap` (bubblewrap) is missing or cannot create an unprivileged user namespace'
         : null;
   if (unavailableReason) {
     if (sandbox.fail_if_unavailable) {
@@ -102,7 +112,7 @@ export function buildSandboxWrap(params: {
   }
 
   const ctx: SandboxPathContext = {
-    branchPath: cwd,
+    branchPath,
     branchAccess,
     homeDir: home,
     // Worktrees root is <dataHome>/worktrees regardless of repo-slug depth

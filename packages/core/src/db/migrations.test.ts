@@ -95,7 +95,9 @@ describe('Postgres migrations', () => {
       expect(entry).toMatchObject({ idx: expectedIndex, tag: expectedTag });
       expect(entry?.when).toBeGreaterThan(predecessor?.when ?? 0);
 
-      const hydrationEntry = journal.entries.at(-1);
+      // Find by tag rather than assuming it is the newest entry — later
+      // migrations (e.g. add_user_filesystem_home) legitimately follow it.
+      const hydrationEntry = journal.entries.find(({ tag }) => tag === hydrationTag);
       expect(hydrationEntry).toMatchObject({ idx: hydrationIndex, tag: hydrationTag });
       expect(hydrationEntry?.when).toBeGreaterThan(entry?.when ?? 0);
     }

@@ -390,9 +390,10 @@ When set to `false`:
 >   `agor.db`, and the JWT secret. The daemon prints a startup warning on every
 >   boot in this combination (which is the default for fresh installs).
 > - In `unix_user_mode: sandbox`, the terminal runs inside the filesystem
->   sandbox: the daemon trust root and sibling branches are masked, so a member
->   shell cannot read `config.yaml`/`agor.db`/the JWT secret. (Terminals do not
->   yet get the full per-user-home/RBAC-mount treatment that prompts do.)
+>   sandbox with the SAME treatment as prompts: the terminal user's per-user home
+>   overlay, an RBAC-aware branch mount (read-only, or refused, if they lack
+>   write), and the daemon trust root + sibling branches masked. A member shell
+>   cannot read `config.yaml`/`agor.db`/the JWT secret or other users' homes.
 > - In `unix_user_mode: insulated`, the terminal runs as the shared executor
 >   user. Daemon secrets are protected, but members share `$HOME`/`/tmp` with
 >   each other.

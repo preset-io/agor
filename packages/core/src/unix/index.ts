@@ -6,6 +6,8 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
+// bubblewrap capability probes (executor sandbox availability)
+export * from './bwrap.js';
 // Command execution abstraction (for admin CLI commands)
 export * from './command-executor.js';
 // Env command deny-list (defence-in-depth)

@@ -474,7 +474,11 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // threaded through `payload.params` (see register-services) — the sandbox
   // never derives these from disk.
   const sandboxParams = payload.params as
-    | { sandboxBaseRepoPath?: unknown; sandboxHomeStore?: unknown; sandboxBranchAccess?: unknown }
+    | {
+        sandboxBaseRepoPath?: unknown;
+        sandboxHomeStore?: unknown;
+        sessionOwnerBranchAccess?: unknown;
+      }
     | undefined;
   const sandboxBaseRepoPath =
     typeof sandboxParams?.sandboxBaseRepoPath === 'string'
@@ -484,20 +488,21 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     typeof sandboxParams?.sandboxHomeStore === 'string'
       ? sandboxParams.sandboxHomeStore
       : undefined;
-  const sandboxBranchAccess =
-    sandboxParams?.sandboxBranchAccess === 'read' || sandboxParams?.sandboxBranchAccess === 'none'
-      ? sandboxParams.sandboxBranchAccess
+  const sessionOwnerBranchAccess =
+    sandboxParams?.sessionOwnerBranchAccess === 'read' ||
+    sandboxParams?.sessionOwnerBranchAccess === 'none'
+      ? sandboxParams.sessionOwnerBranchAccess
       : 'write';
   if (!asUser && sandboxWorkdir) {
     try {
       const wrap = buildSandboxWrap({
         sandbox: configuredExecutorDefaults.sandbox,
-        cwd: sandboxWorkdir,
+        branchPath: sandboxWorkdir,
         cmd,
         args,
         baseRepoPath: sandboxBaseRepoPath,
         ownerHomeStore: sandboxHomeStore,
-        branchAccess: sandboxBranchAccess,
+        branchAccess: sessionOwnerBranchAccess,
       });
       if (wrap) {
         spawnCmd = wrap.cmd;
