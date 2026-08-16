@@ -135,6 +135,16 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
   const args: string[] = [
     '--die-with-parent', // bwrap exits when the daemon kills the process group
     '--unshare-user', // unprivileged mount namespace (host uid preserved)
+    // Fresh PID namespace: the sandbox's /proc shows ONLY its own processes, so
+    // a same-uid executor cannot reach the daemon's or a sibling's
+    // /proc/<pid>/{environ,root,fd,...} — closing the process-side route around
+    // the filesystem masks (independent of host ptrace_scope/hidepid). bwrap
+    // becomes PID 1 and reaps; verified compatible with Agor's pgid-based Stop
+    // (SIGTERM to the executor's process group tears down the whole tree, and
+    // the kernel kills the namespace when bwrap exits). NOT --unshare-net: the
+    // network namespace stays shared so the executor keeps daemon/model
+    // loopback connectivity.
+    '--unshare-pid',
     '--ro-bind',
     '/',
     '/', // everything readable, nothing writable by default

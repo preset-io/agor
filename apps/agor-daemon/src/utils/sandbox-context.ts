@@ -10,7 +10,7 @@
 
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 /** Resolve `$AGOR_DATA_HOME`, falling back to `~/.agor`. */
 export function resolveDataHome(): string {
@@ -29,12 +29,19 @@ export function validateFilesystemHomeOverride(
   rawPath: string,
   dataHome = resolveDataHome()
 ): string {
-  const path = resolve(rawPath);
-  if (path === '/' || path === '') {
+  // Reject relative paths OUTRIGHT — do not silently `resolve()` them against
+  // the daemon cwd (a value like `tmp/user` would otherwise be accepted).
+  if (!isAbsolute(rawPath)) {
+    throw new Error(`Invalid filesystem_home ${rawPath}: must be an absolute path`);
+  }
+  if (rawPath === '/') {
     throw new Error(`Invalid filesystem_home ${rawPath}: refusing to overlay the filesystem root`);
   }
-  const canonical = existsSync(path) ? realpathSync(path) : path;
-  const dh = resolve(dataHome);
+  // Canonicalize BOTH sides (realpath when the dir exists) so a symlinked data
+  // root or override can't sneak past the lexical prefix check below.
+  const canonical = existsSync(rawPath) ? realpathSync(rawPath) : resolve(rawPath);
+  const dhResolved = resolve(dataHome);
+  const dh = existsSync(dhResolved) ? realpathSync(dhResolved) : dhResolved;
   // Reject the data root itself, an ancestor of it, or anything inside it — all
   // would let the overlay reach the daemon's trust root / worktrees / repos.
   if (canonical === dh || dh.startsWith(`${canonical}/`) || canonical.startsWith(`${dh}/`)) {

@@ -91,10 +91,14 @@ All filesystem operations are **strictly scoped** to Agor-managed paths:
 `unix_user_mode: sandbox` is the recommended way to run a trusted-org multi-user
 Agor. It replaces the Unix-account machinery (sudoers, host accounts, per-branch
 groups, password sync) documented in the [Setup Guide](#setup-guide) below with
-an **executor filesystem sandbox**: every agent, terminal, and git/file op is
-wrapped in [bubblewrap](https://github.com/containers/bubblewrap) at the single
-spawn chokepoint. Everything runs as the daemon user, but the **mount namespace**
-— computed directly from Agor's RBAC — enforces isolation.
+an **executor filesystem sandbox**: each **provider agent process (prompt task)
+and web terminal** is wrapped in
+[bubblewrap](https://github.com/containers/bubblewrap) — a user + PID + mount
+namespace. Everything runs as the daemon user, but the namespaces (computed
+directly from Agor's RBAC) enforce isolation. Daemon-internal bounded executor
+commands (git-state / autocomplete probes, file reads, OAuth flows) are Agor's
+own code governed by app-layer authorization and run unwrapped — they never
+execute agent-authored commands.
 
 ### What it gives you
 
@@ -111,10 +115,14 @@ spawn chokepoint. Everything runs as the daemon user, but the **mount namespace*
 - **Host toolchain for free.** The host filesystem is mounted read-only, so
   `git`, `node`, `rg`, compilers, etc. all work without building an image; only
   _writes_ are scoped.
+- **Process isolation.** A fresh PID namespace means the sandbox's `/proc` shows
+  only its own processes — the daemon and other users' executors are not visible,
+  so the daemon's environment/fds/secrets can't be reached via `/proc` either
+  (independent of host `ptrace_scope`).
 
-It is **filesystem-only** — the network namespace stays shared, so the executor
-keeps daemon/model connectivity. Network egress control, if wanted, is deferred
-to each tool's own config.
+The **network** namespace stays shared, so the executor keeps daemon/model
+connectivity. Network egress control, if wanted, is deferred to each tool's own
+config.
 
 ### Setup
 
@@ -134,10 +142,16 @@ execution:
   unix_user_mode: sandbox
 ```
 
-`sandbox` mode implies `branch_rbac: true`, `sandbox.enabled: true`,
-`sandbox.home_mode: per_user`, and fail-closed (`fail_if_unavailable: true`).
-Fine-tune via `execution.sandbox.*` if needed (see the design notes in
-`context/explorations/executor-sandboxing.md`). No sudoers, no Unix accounts.
+`sandbox` mode **forces** `branch_rbac: true`, `sandbox.enabled: true`,
+`sandbox.home_mode: per_user`, and fail-closed (`fail_if_unavailable: true`) —
+these security invariants **cannot** be overridden by config or env in this mode
+(a `sandbox` that silently ran with a shared home or spawned unsandboxed would
+violate the contract). Only non-security policy tunables under
+`execution.sandbox.*` (e.g. `include.*`, `extra_allow_write`, `extra_deny_read`)
+are honored. If you want a *tunable* standalone sandbox, use a non-`sandbox`
+`unix_user_mode` with `sandbox.enabled: true` and set those explicitly. See the
+design notes in `context/explorations/executor-sandboxing.md`. No sudoers, no
+Unix accounts.
 
 > **Not for hostile multi-tenant.** A bubblewrap/kernel escape lands as the
 > daemon user (a namespace boundary, not a separate uid). For mutually-hostile

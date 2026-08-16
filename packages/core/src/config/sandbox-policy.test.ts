@@ -28,9 +28,13 @@ function hasPair(args: string[], flag: string, a: string): boolean {
 }
 
 describe('resolveBwrapArgs', () => {
-  it('is filesystem-only: read-only root, NO network namespace unshare', () => {
+  it('read-only root; unshares user + PID namespaces; keeps network shared', () => {
     const args = resolveBwrapArgs({}, CTX);
     expect(hasTriple(args, '--ro-bind', '/', '/')).toBe(true);
+    expect(args).toContain('--unshare-user');
+    // PID namespace closes the /proc process-side route around the fs masks.
+    expect(args).toContain('--unshare-pid');
+    // …but NOT the network namespace (executor keeps daemon/model loopback).
     expect(args).not.toContain('--unshare-net');
   });
 

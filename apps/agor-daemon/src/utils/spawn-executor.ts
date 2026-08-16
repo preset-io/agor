@@ -477,7 +477,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     | {
         sandboxBaseRepoPath?: unknown;
         sandboxHomeStore?: unknown;
-        sessionOwnerBranchAccess?: unknown;
+        principalBranchAccess?: unknown;
       }
     | undefined;
   const sandboxBaseRepoPath =
@@ -488,10 +488,10 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     typeof sandboxParams?.sandboxHomeStore === 'string'
       ? sandboxParams.sandboxHomeStore
       : undefined;
-  const sessionOwnerBranchAccess =
-    sandboxParams?.sessionOwnerBranchAccess === 'read' ||
-    sandboxParams?.sessionOwnerBranchAccess === 'none'
-      ? sandboxParams.sessionOwnerBranchAccess
+  const principalBranchAccess =
+    sandboxParams?.principalBranchAccess === 'read' ||
+    sandboxParams?.principalBranchAccess === 'none'
+      ? sandboxParams.principalBranchAccess
       : 'write';
   if (!asUser && sandboxWorkdir) {
     try {
@@ -502,7 +502,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
         args,
         baseRepoPath: sandboxBaseRepoPath,
         ownerHomeStore: sandboxHomeStore,
-        branchAccess: sessionOwnerBranchAccess,
+        branchAccess: principalBranchAccess,
       });
       if (wrap) {
         spawnCmd = wrap.cmd;

@@ -213,15 +213,15 @@ tool state:
   would still contain it under a distinct uid). Both are kernel-enforced; bwrap escapes are rare.
   For **mutually-hostile multi-tenant**, the strong boundary remains containers/microVM/k8s
   ([[docker-executor-mode]]); sandbox targets **trusted-org multi-user** (strict's real audience).
-- **Shared PID namespace (KNOWN GAP, not yet closed).** We `--unshare-user` but NOT `--unshare-pid`,
-  and mount `/proc`. All executors run as the daemon's host uid, so — depending on host
-  `ptrace_scope` (Yama) / `hidepid` — a same-uid executor could inspect daemon/sibling process
-  metadata, fds, env, or `/proc/<pid>/root` via procfs, a process-side route around the filesystem
-  masks. Deferred deliberately: adding `--unshare-pid` makes bwrap PID 1 in a new namespace and must
-  be validated against the pgid-based Stop/containment contract (see [[task-runtime-state]]) before
-  shipping. Until then the filesystem masks are the guarantee and we rely on the host's procfs
-  hardening for the process side. Tracked as a follow-up; do not market sandbox as a full uid-isolation
-  replacement on this axis without it.
+- **Process-side isolation via PID namespace (CLOSED).** We `--unshare-pid` in addition to
+  `--unshare-user`, so the sandbox gets a fresh `/proc` showing ONLY its own processes (bwrap as PID
+  1 + the executor). The daemon and sibling executors are structurally absent from the sandbox's
+  procfs, so the same-uid `/proc/<pid>/{environ,root,fd,…}` route around the filesystem masks is
+  closed regardless of host `ptrace_scope`/`hidepid`. Verified live: without the flag the sandbox
+  saw 704 host PIDs; with it, 5 (its own). Verified compatible with the pgid-based Stop/containment
+  contract ([[task-runtime-state]]): a single `SIGTERM` to the executor's process group tears the
+  whole tree down (bwrap PID 1 + children), and the kernel kills the namespace when bwrap exits — no
+  leaks. We deliberately do NOT `--unshare-net` (loopback to the daemon must stay reachable).
 
 ---
 

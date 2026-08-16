@@ -285,7 +285,7 @@ export class TerminalsService {
     const rbacOn = config.execution?.branch_rbac === true;
     let sandboxHomeStore: string | undefined;
     let sandboxBaseRepoPath: string | undefined;
-    let sessionOwnerBranchAccess: 'write' | 'read' | 'none' = 'write';
+    let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
     if (sandboxCfg?.enabled === true) {
       if (branch.storage_mode !== 'clone' && branch.repo_id) {
         sandboxBaseRepoPath = await this.withTenantDatabase((tenantDb) =>
@@ -298,9 +298,9 @@ export class TerminalsService {
         const access = await this.withTenantDatabase((tenantDb) =>
           new BranchRepository(tenantDb).resolveUserAccess(branch, userId)
         );
-        sessionOwnerBranchAccess =
+        principalBranchAccess =
           access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
-        if (sessionOwnerBranchAccess === 'none') {
+        if (principalBranchAccess === 'none') {
           throw new Forbidden(
             'You have no filesystem access to this branch; cannot open a sandboxed terminal on it.'
           );
@@ -374,7 +374,7 @@ export class TerminalsService {
             // Undefined when the sandbox / per_user home is off.
             sandboxHomeStore,
             sandboxBaseRepoPath,
-            sessionOwnerBranchAccess,
+            principalBranchAccess,
           },
         },
         {

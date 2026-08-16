@@ -1916,5 +1916,33 @@
     "rationale": "Canonicalizes an admin-supplied filesystem_home to blunt symlink swaps before it is used as a sandbox bind source.",
     "reviewTarget": null,
     "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-195",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/sandbox-context.ts",
+    "import": "node:fs",
+    "symbol": "existsSync",
+    "local": "existsSync",
+    "operation": "call:existsSync@validateFilesystemHomeOverride#2",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Checks whether the resolved data root exists before canonicalizing it for the filesystem_home overlap check.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-196",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/sandbox-context.ts",
+    "import": "node:fs",
+    "symbol": "realpathSync",
+    "local": "realpathSync",
+    "operation": "call:realpathSync@validateFilesystemHomeOverride#2",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Canonicalizes the data root (blunts a symlinked AGOR_DATA_HOME) before the filesystem_home overlap check.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

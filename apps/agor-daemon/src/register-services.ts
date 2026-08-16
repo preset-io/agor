@@ -1006,7 +1006,7 @@ function createExecuteHandler(
     // Effective fs access of the OWNER on the branch: 'write' | 'read' | 'none'.
     // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
     // to 'write' when RBAC is off (open-access behavior).
-    let sessionOwnerBranchAccess: 'write' | 'read' | 'none' = 'write';
+    let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
     if (session.branch_id) {
       const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
         const branchRepo = new BranchRepository(tenantDb);
@@ -1031,11 +1031,11 @@ function createExecuteHandler(
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);
       cwd = branchMounts.path;
       sandboxBaseRepoPath = branchMounts.baseRepoPath;
-      sessionOwnerBranchAccess = branchMounts.fsAccess;
+      principalBranchAccess = branchMounts.fsAccess;
       // Under the sandbox, 'none' means the branch would not be mounted at all,
       // so the task cannot operate on it. Fail fast with a clear message rather
       // than letting bwrap abort on a missing chdir target.
-      if (sandboxCfg?.enabled === true && sessionOwnerBranchAccess === 'none') {
+      if (sandboxCfg?.enabled === true && principalBranchAccess === 'none') {
         throw new Error(
           `The session owner has no filesystem access to branch ${session.branch_id}. ` +
             'Grant at least read access (others_fs_access) to run sessions on this branch under ' +
@@ -1229,7 +1229,7 @@ function createExecuteHandler(
         // buildSandboxWrap). Undefined when the sandbox / per_user home is off.
         sandboxBaseRepoPath,
         sandboxHomeStore,
-        sessionOwnerBranchAccess,
+        principalBranchAccess,
       },
     };
 

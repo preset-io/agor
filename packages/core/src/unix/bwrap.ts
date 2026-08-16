@@ -35,9 +35,23 @@ export function bwrapOnPath(pathEnv = process.env.PATH ?? ''): boolean {
  */
 export function probeBwrapUserns(): boolean {
   try {
+    // Probe exactly what the executor sandbox uses (user + PID namespace +
+    // proc), so an installed-but-restricted host is detected up front.
     const r = spawnSync(
       'bwrap',
-      ['--unshare-user', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--', 'true'],
+      [
+        '--unshare-user',
+        '--unshare-pid',
+        '--ro-bind',
+        '/',
+        '/',
+        '--dev',
+        '/dev',
+        '--proc',
+        '/proc',
+        '--',
+        'true',
+      ],
       { stdio: 'ignore', timeout: 10_000 }
     );
     return r.status === 0;
