@@ -26,20 +26,20 @@ daemon user) and SSH-into-the-box parity. Isolation is now a namespace boundary,
 not a uid boundary. This targets **trusted-org multi-user**, not hostile
 multi-tenant (use containers/microVMs for that).
 
-## Why the migration is low-risk (no full backup needed)
+## Risk and recovery model
 
 - **`chown → daemon user` is aligned with the `simple` fallback.** If sandbox
-  misbehaves you can drop to `unix_user_mode: simple` (or set
-  `sandbox.fail_if_unavailable: false`) and everything keeps working with the
-  same ownership — no re-chown needed to recover. The only mode you can't
-  cleanly fall back to is `strict` (per-user uids), which you're leaving anyway.
+  misbehaves you can drop to `unix_user_mode: simple` and keep the same
+  ownership — no re-chown needed to recover availability. `simple` is a
+  time-bounded degraded security mode, not an isolation-equivalent rollback.
 - **No files move.** The migration sets each user's `filesystem_home` to their
   existing `/home/<unix_username>`, and the sandbox overlays it **in place**. So
   in-flight session state (`~/.claude/projects/**`, Codex `sessions/**`) is
   preserved and sessions resume normally.
-- **Cheap insurance instead of a backup.** The migration script writes an
-  ownership manifest (`find … -printf '%u %g %p'`) before chowning — a tiny text
-  file that can reconstruct prior ownership even for a multi-TB tree.
+- **Ownership still changes at large scale.** The migration writes a compressed,
+  NUL-delimited numeric owner/group/path manifest before chowning. On trees with
+  millions of inodes that artifact can still be large and is not a substitute
+  for the deployment's normal volume/database backup.
 
 ## Prerequisites
 
@@ -54,6 +54,11 @@ multi-tenant (use containers/microVMs for that).
    If blocked on Ubuntu 24.04+: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
 2. The daemon must run **as the user you will chown everything to** (e.g.
    `agorpg`). Note it — you'll pass it as `--daemon-user`.
+3. Deploy database migrations first and verify `users.filesystem_home` exists.
+4. Back up the database and deployment config. For volume-backed deployments,
+   take an application-consistent volume snapshot before changing ownership.
+5. Drain queued/running work and stop the daemon before `--apply`. The script
+   refuses to apply while its configured systemd service is active.
 
 ## Procedure
 
@@ -62,7 +67,7 @@ All scripts live in `scripts/` and are **dry-run by default**.
 ### 1. Pre-flight: confirm home relocation is safe
 
 ```bash
-scripts/sandbox-home-migration-preflight.sh '/home/*'
+sudo scripts/sandbox-home-migration-preflight.sh '/home/*' --stable-home /home/agorpg
 ```
 
 Read-only; prints per-file hit counts only (never contents). It scans each
@@ -74,36 +79,45 @@ home's tool state for that home's own absolute path in three tiers:
   — cwd-keyed, expected, **not** a blocker.
 - **SESSIONS** (`.codex/sessions/**`) — historical transcripts, cosmetic.
 
-Exit 0 / "SAFE" means no auth/settings file hard-codes its home path. (On Agor's
-prod box this passed across 40+ homes with zero auth blockers.)
+Exit 0 / "SAFE" means no auth/settings file hard-codes a home path that the
+overlay will hide.
 
-### 2. Migrate (dry-run, then apply)
+### 2. Migrate (dry-run, stop daemon, then apply)
 
 ```bash
-# Preview every action, change nothing:
-scripts/strict-to-sandbox-migration.sh --daemon-user agorpg
+# SQLite: preview every action as root so all credential files are readable.
+sudo scripts/strict-to-sandbox-migration.sh \
+  --data-home /absolute/agor-data \
+  --config /absolute/config.yaml \
+  --daemon-user agorpg
 
-# Execute:
-scripts/strict-to-sandbox-migration.sh --daemon-user agorpg --apply
+# PostgreSQL: DATABASE_URL is used through psql under the tenant's forced RLS
+# scope. The expected count is mandatory on apply so a narrowed scope fails.
+sudo --preserve-env=DATABASE_URL scripts/strict-to-sandbox-migration.sh \
+  --data-home /absolute/agor-data \
+  --config /absolute/config.yaml \
+  --daemon-user agorpg \
+  --tenant-id default \
+  --expected-user-count 42
+
+# Drain work, stop the daemon, repeat the exact reviewed command with --apply.
 ```
 
 Steps it performs (in order):
 
-1. Re-runs the pre-flight (aborts on blockers).
-2. Writes the ownership manifest to `$AGOR_DATA_HOME/ownership-manifest-pre-sandbox.txt`.
-3. For each Agor user with a `unix_username`: sets `filesystem_home` to their
-   passwd home (`getent passwd`) and `chown -R <daemon-user>` that home.
-4. `chown -R <daemon-user>` the whole `$AGOR_DATA_HOME` (worktrees + repos + db + config).
-5. Flips `execution.unix_user_mode: sandbox` in `config.yaml`.
+1. Verifies the schema, tenant-visible user count, host identities, config, and
+   every resolved home; any missing/unsafe path aborts.
+2. Re-runs pre-flight against those exact homes.
+3. Writes a non-overwritable compressed ownership manifest and preserves the
+   operator config. `--resume` reuses and verifies those artifacts.
+4. Sets every `filesystem_home` in one transaction and verifies the row mapping.
+5. Chowns each resolved home's canonical directory and the canonical data root
+   to the daemon owner (important when `/home/<user>` is a symlink).
+6. Atomically flips `execution.unix_user_mode: sandbox`.
 
-Add `--teardown` to also `groupdel agor_wt_*` and remove
-`/etc/sudoers.d/agor-daemon`. **Recommendation: skip `--teardown` on the first
-pass** — leave the Unix accounts/groups in place until sandbox is proven, then
-tear down later.
-
-Postgres note: the DB step uses `sqlite3` for the common self-hosted case. On
-Postgres the script prints the `UPDATE users SET filesystem_home=…` statements
-for you to run.
+**Do not use `--teardown` on the initial migration.** PostgreSQL runs reject it
+because tenant-scoped RLS cannot prove that deleting host-global groups is safe.
+Keep users, groups, and sudoers until sandbox has a meaningful production soak.
 
 ### 3. Restart + verify
 
@@ -120,15 +134,13 @@ inside a session, confirm:
 
 ## Rollback
 
-- **Fast:** set `execution.unix_user_mode: simple` (or keep `sandbox` but
-  `sandbox.fail_if_unavailable: false`) and restart. Ownership already matches
-  (daemon user), so nothing else to undo. You lose isolation but stay running —
-  acceptable for a high-trust team while you diagnose.
-- **Full (restore per-user ownership):** replay the manifest:
-  ```bash
-  while read u g p; do chown "$u:$g" "$p"; done < "$AGOR_DATA_HOME/ownership-manifest-pre-sandbox.txt"
-  ```
-  then set `unix_user_mode` back to `strict`/`insulated`.
+- **Fast:** set `execution.unix_user_mode: simple`, keep `branch_rbac: true`,
+  disable the web terminal, and restart. Ownership already matches the daemon.
+  Filesystem and tool-home isolation are degraded until sandbox is restored.
+- **Full:** retain the ownership manifest as forensic rollback data, but do not
+  replay one `chown` process per inode. Reconcile branch/repo permissions in
+  bulk with `agor local sync-unix`, restore homes by owner in bounded batches,
+  restore sudoers if removed, then return to `strict`/`insulated`.
 
 ## Known behavior changes to expect
 
@@ -154,3 +166,4 @@ inside a session, confirm:
 | Tools re-prompt for auth in a session  | user had no `unix_username`/home → empty canonical store | populate `filesystem_home`, or let the user re-auth once (persists) |
 | Non-owner agent can't write the branch | RBAC `others_fs_access: read` → ro mount                 | grant write on the branch, or raise the default                     |
 | Migration ran as the wrong user        | daemon runs as a different user than the chown target    | re-run with the correct `--daemon-user`; daemon must own the tree   |
+| PostgreSQL user count differs          | wrong tenant/RLS scope or changed user inventory         | stop; reconcile the expected count before any apply                 |

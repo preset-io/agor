@@ -22,7 +22,7 @@
  * See `context/explorations/executor-sandboxing.md`.
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -104,7 +104,7 @@ export function buildSandboxWrap(params: {
     if (sandbox.fail_if_unavailable) {
       throw new Error(
         `execution.sandbox.enabled but ${unavailableReason}. ` +
-          'Install bubblewrap, or set execution.sandbox.fail_if_unavailable: false.'
+          'Install bubblewrap or, outside unix_user_mode: sandbox, explicitly allow an unsandboxed fallback.'
       );
     }
     console.warn(`[Sandbox] ${unavailableReason} — spawning executor UNSANDBOXED.`);
@@ -137,6 +137,9 @@ export function buildSandboxWrap(params: {
     branchAccess,
     pidNamespace: pidNamespaceAvailable(),
     homeDir: home,
+    canonicalHomeDir: realpathSync(home),
+    dataHome,
+    canonicalDataHome: realpathSync(dataHome),
     // Worktrees root is <dataHome>/worktrees regardless of repo-slug depth
     // (slugs contain "/", so deriving from cwd is unreliable).
     worktreesRoot: join(dataHome, 'worktrees'),

@@ -99,6 +99,7 @@ When `home_mode: per_user`, a single `--bind` REPLACES the shared-home logic abo
 
 ```
 --tmpfs /home                                          # FIRST: wipe sibling homes (leak fix)
+--tmpfs <data_home>                                    # when data_home is outside passwd-home
 --bind <store>  <passwd-home>                          # overlay: ~ IS the owner store (filesystem_home or canonical)
 --bind <store>/tmp  /tmp                               # /tmp == ~/tmp: on-disk, per-user, persists (NOT RAM tmpfs)
 --tmpfs /var/tmp                                        # small ephemeral scratch
@@ -111,10 +112,12 @@ When `home_mode: per_user`, a single `--bind` REPLACES the shared-home logic abo
 --chdir  <branch>
 ```
 
-The overlay hides the **entire** daemon `.agor` tree (config.yaml, agor.db, worktrees, repos) _by
-construction_ — so `protect_secrets` and `isolate_branches` are satisfied without a single explicit
-mask. It ALSO `--tmpfs`-es the homes-parent dir (e.g. `/home`) FIRST, so sibling homes are not
-readable through the `--ro-bind / /` (the cross-user leak fix — otherwise, once homes live at
+When the data root is below the passwd home, the overlay hides the **entire** daemon `.agor` tree
+(config.yaml, agor.db, worktrees, repos) by construction. When a hosted deployment places the data
+root elsewhere, Agor explicitly masks that root before re-exposing the authorized branch, base git
+dir, and managed tools. It ALSO `--tmpfs`-es the homes-parent dir (e.g. `/home`) FIRST, including
+its canonical alias when the passwd home traverses symlinks, so sibling homes are not readable
+through the `--ro-bind / /` (the cross-user leak fix — otherwise, once homes live at
 `/home/<user>`, one owner could read another's `~/.codex/auth.json`). `~` is then a private,
 persistent home per **session owner** (keyed by `session.created_by`, not the prompter): passwd-home,
 `$HOME`, and `~` all agree (no `$HOME`-vs-passwd split), so passwd-consulting tools resolve it
@@ -293,8 +296,8 @@ per-tool secrets never enter a shared env). So sandbox + RBAC-mounting + env-res
    (dry-run by default; `--apply`, `--teardown`). It sets each user's `filesystem_home` to their
    existing `/home/<unix_username>` (no `mv`), `chown`s the data tree + homes to the daemon user,
    flips `unix_user_mode: sandbox`, and optionally `groupdel agor_wt_*` + removes the sudoers file.
-   Branches already live under the daemon user's `~/.agor`; strict merely chowned them to per-user
-   uids/groups — so a recursive re-own covers it.
+   Hosted data roots may live outside the daemon passwd home; the sandbox masks
+   that root explicitly before re-exposing the authorized paths.
 
    **Home relocation is safe (empirically checked).** Moving each user's `~/.claude`/`~/.codex` into
    the per-owner store does not break the tools: a grep of real prod homes found tool CONFIG is
@@ -302,17 +305,16 @@ per-tool secrets never enter a shared env). So sandbox + RBAC-mounting + env-res
    `config.toml` / `auth.json`); `.claude.json` `projects:{}` keys are branch/cwd paths, not the home
    path; only Codex `sessions/` transcripts embed the old absolute path (historical, non-blocking).
    The overlay presents the store at the passwd home, so no path preservation or passwd-faking is
-   needed — just relocate + re-expose `~/.agor/agentic-tools`. Migration copies each home:
-   `cp -a /home/<user>/{.claude,.codex,…} <data_home>/tenants/<tenant>/homes/<owner_id>/`.
+   needed. The migration overlays each existing home in place; it does not copy
+   or move tool state.
 
    **Pre-flight before relocating** — `scripts/sandbox-home-migration-preflight.sh` (read-only; prints
    only per-file hit counts, never contents). It scans every home's tool state for that home's own
    absolute path in three tiers: AUTH/SETTINGS (`auth.json`/`.credentials.json`/`settings.json` — a
    hit blocks), CWD REGISTRY (`.claude.json` `.projects`/`.githubRepoPaths`, `config.toml`
-   `[projects."…"]` — cwd-keyed, expected, non-fatal), SESSIONS (historical, cosmetic). Run across
-   Agor's prod box (44 homes): **0 auth/settings blockers**; the only config hits were cwd-keyed
-   registries on a personal-dev home (where cwd lives under `$HOME`). In Agor the executor cwd is the
-   branch (re-exposed at its real path), so even those never reference the home → relocation is safe.
+   `[projects."…"]` — cwd-keyed, expected, non-fatal), SESSIONS (historical, cosmetic). A migration
+   requires zero auth/settings blockers. In Agor the executor cwd is the branch (re-exposed at its
+   real path), so cwd registries do not imply that a tool home itself is path-dependent.
 
 6. ✅ **Soft-deprecate** — the daemon logs a deprecation warning on `strict`/`insulated` startup
    pointing to the migration script (`apps/agor-daemon/src/startup.ts`).

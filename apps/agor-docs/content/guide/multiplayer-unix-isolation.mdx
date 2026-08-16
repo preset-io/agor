@@ -121,7 +121,7 @@ execute agent-authored commands.
   environment/fds/secrets can't be reached via `/proc` (independent of host
   `ptrace_scope`). Many container runtimes block this; there the sandbox falls
   back to a user + mount namespace (filesystem masks still apply) and `agor
-  doctor` reports **PID namespace** as unavailable. Verify with `agor doctor`.
+doctor` reports **PID namespace** as unavailable. Verify with `agor doctor`.
 
 The **network** namespace stays shared, so the executor keeps daemon/model
 connectivity. Network egress control, if wanted, is deferred to each tool's own
@@ -151,10 +151,16 @@ these security invariants **cannot** be overridden by config or env in this mode
 (a `sandbox` that silently ran with a shared home or spawned unsandboxed would
 violate the contract). Only non-security policy tunables under
 `execution.sandbox.*` (e.g. `include.*`, `extra_allow_write`, `extra_deny_read`)
-are honored. If you want a *tunable* standalone sandbox, use a non-`sandbox`
+are honored. If you want a _tunable_ standalone sandbox, use a non-`sandbox`
 `unix_user_mode` with `sandbox.enabled: true` and set those explicitly. See the
 design notes in `context/explorations/executor-sandboxing.md`. No sudoers, no
 Unix accounts.
+
+If `AGOR_DATA_HOME` is outside the daemon user's passwd home (for example, on a
+persistent volume), Agor masks that external data root before re-exposing only
+the current branch, its authorized git data, and managed agent tools. It also
+masks canonical path aliases when the passwd home or data root traverses
+symlinks.
 
 > **Not for hostile multi-tenant.** A bubblewrap/kernel escape lands as the
 > daemon user (a namespace boundary, not a separate uid). For mutually-hostile
@@ -346,13 +352,13 @@ execution:
 
 **Mode Comparison:**
 
-| Mode        | Isolation mechanism        | Unix Groups | Process Impersonation | Sudoers / host accounts | Use Case                    |
-| ----------- | -------------------------- | ----------- | --------------------- | ----------------------- | --------------------------- |
-| `simple`    | none                       | ❌          | ❌                    | ❌                      | Single user, dev/testing    |
-| `sandbox`   | **filesystem sandbox** (bwrap) | ❌      | ❌                    | ❌                      | **Multi-user (recommended)** |
-| `delegated` | external substrate         | ❌          | ❌                    | ❌                      | Hosted/containerized, identity enforced by orchestration |
-| `insulated` | Unix groups + FS perms     | ✅          | Optional              | ✅                      | Shared dev (being phased out) |
-| `strict`    | Unix uids + groups + FS    | ✅          | ✅ Required           | ✅                      | Compliance (being phased out) |
+| Mode        | Isolation mechanism            | Unix Groups | Process Impersonation | Sudoers / host accounts | Use Case                                                 |
+| ----------- | ------------------------------ | ----------- | --------------------- | ----------------------- | -------------------------------------------------------- |
+| `simple`    | none                           | ❌          | ❌                    | ❌                      | Single user, dev/testing                                 |
+| `sandbox`   | **filesystem sandbox** (bwrap) | ❌          | ❌                    | ❌                      | **Multi-user (recommended)**                             |
+| `delegated` | external substrate             | ❌          | ❌                    | ❌                      | Hosted/containerized, identity enforced by orchestration |
+| `insulated` | Unix groups + FS perms         | ✅          | Optional              | ✅                      | Shared dev (being phased out)                            |
+| `strict`    | Unix uids + groups + FS        | ✅          | ✅ Required           | ✅                      | Compliance (being phased out)                            |
 
 **When to use each mode:**
 
@@ -505,10 +511,10 @@ agor_wt_019ffd3d2cef79d1a1c64073:x:1050:alice,bob
 Agor defines three permission levels per branch:
 
 | Level    | Filesystem Access | View Sessions | Prompt Sessions | Modify Branch |
-| -------- | ----------------- | ------------- | --------------- | --------------- |
-| `view`   | Read-only         | ✅            | ❌              | ❌              |
-| `prompt` | No direct access  | ✅            | ✅              | ❌              |
-| `all`    | Read-write        | ✅            | ✅              | ✅              |
+| -------- | ----------------- | ------------- | --------------- | ------------- |
+| `view`   | Read-only         | ✅            | ❌              | ❌            |
+| `prompt` | No direct access  | ✅            | ✅              | ❌            |
+| `all`    | Read-write        | ✅            | ✅              | ✅            |
 
 **Permission Grant Levels:**
 

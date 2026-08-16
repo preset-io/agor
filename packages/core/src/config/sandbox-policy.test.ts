@@ -4,6 +4,7 @@ import { resolveBwrapArgs, type SandboxPathContext } from './sandbox-policy';
 const CTX: SandboxPathContext = {
   branchPath: '/home/agor/.agor/worktrees/acme/feature-x',
   homeDir: '/home/agor',
+  dataHome: '/home/agor/.agor',
   worktreesRoot: '/home/agor/.agor/worktrees',
   // repo working-copy ROOT (repo.local_path); the resolver binds <root>/.git.
   baseRepoPath: '/home/agor/.agor/repos/acme',
@@ -191,6 +192,72 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     // data_home that lives OUTSIDE the overlaid home).
     expect(hasTriple(args, '--ro-bind', '/dev/null', CTX.agorConfigPath!)).toBe(true);
     expect(hasTriple(args, '--ro-bind', '/dev/null', CTX.agorDbPath!)).toBe(true);
+  });
+
+  it('masks an external data root before re-exposing only the authorized paths', () => {
+    const dataHome = '/var/lib/agor/data';
+    const externalCtx: SandboxPathContext = {
+      ...PER_USER_CTX,
+      dataHome,
+      branchPath: `${dataHome}/worktrees/acme/feature-x`,
+      worktreesRoot: `${dataHome}/worktrees`,
+      baseRepoPath: `${dataHome}/repos/acme`,
+      agenticToolsPath: `${dataHome}/agentic-tools`,
+      agorConfigPath: `${dataHome}/config.yaml`,
+      agorDbPath: `${dataHome}/agor.db`,
+    };
+    const args = resolveBwrapArgs({ home_mode: 'per_user' }, externalCtx);
+    const maskIdx = args.findIndex((a, i) => a === '--tmpfs' && args[i + 1] === dataHome);
+    const branchIdx = args.findIndex(
+      (a, i) => a === '--bind' && args[i + 1] === externalCtx.branchPath
+    );
+    const toolsIdx = args.findIndex(
+      (a, i) => a === '--ro-bind-try' && args[i + 1] === externalCtx.agenticToolsPath
+    );
+
+    expect(maskIdx).toBeGreaterThanOrEqual(0);
+    expect(branchIdx).toBeGreaterThan(maskIdx);
+    expect(toolsIdx).toBeGreaterThan(maskIdx);
+  });
+
+  it('masks canonical home aliases when the passwd home is a symlink', () => {
+    const canonicalHomeDir = '/var/lib/agor/home/agor';
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user' },
+      {
+        ...PER_USER_CTX,
+        canonicalHomeDir,
+        canonicalDataHome: `${canonicalHomeDir}/.agor`,
+      }
+    );
+    const canonicalMaskIdx = args.findIndex(
+      (a, i) => a === '--tmpfs' && args[i + 1] === '/var/lib/agor/home'
+    );
+    const overlayIdx = args.findIndex((a, i) => a === '--bind' && args[i + 1] === STORE);
+
+    expect(hasPair(args, '--tmpfs', '/home')).toBe(true);
+    expect(canonicalMaskIdx).toBeGreaterThanOrEqual(0);
+    expect(overlayIdx).toBeGreaterThan(canonicalMaskIdx);
+    expect(hasPair(args, '--tmpfs', `${canonicalHomeDir}/.agor`)).toBe(false);
+  });
+
+  it('keeps an external data root masked when branch access is none', () => {
+    const dataHome = '/var/lib/agor/data';
+    const branchPath = `${dataHome}/worktrees/acme/private`;
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user' },
+      { ...PER_USER_CTX, dataHome, branchPath, branchAccess: 'none' }
+    );
+
+    expect(hasPair(args, '--tmpfs', dataHome)).toBe(true);
+    expect(hasTriple(args, '--bind', branchPath, branchPath)).toBe(false);
+    expect(hasTriple(args, '--ro-bind', branchPath, branchPath)).toBe(false);
+  });
+
+  it('fails closed instead of masking the filesystem root as an external data root', () => {
+    expect(() =>
+      resolveBwrapArgs({ home_mode: 'per_user' }, { ...PER_USER_CTX, dataHome: '/' })
+    ).toThrow(/invalid sandbox data root/i);
   });
 
   it('binds /tmp to <store>/tmp (on-disk, per-user), keeps /var/tmp ephemeral, pins TMPDIR', () => {

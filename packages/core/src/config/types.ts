@@ -418,9 +418,11 @@ export interface AgorSandboxSettings {
    *    (`<data_home>/tenants/<tenant>/homes/<owner_id>`) at the passwd home, so
    *    `~` is a private, persistent home per session owner. The overlay hides
    *    the entire daemon `.agor` tree (config, db, worktrees, repos) and every
-   *    other user's home by construction; the branch, base repo, and managed
-   *    agentic-tools are re-exposed on top. This is the substrate that lets
-   *    per-user isolation work without Unix accounts (the strict-mode
+   *    other user's home by construction. When the data root lives outside the
+   *    passwd home, Agor masks that root explicitly. Symlink aliases of the
+   *    home and data root are masked as well. The branch, base repo, and
+   *    managed agentic-tools are re-exposed on top. This is the substrate that
+   *    lets per-user isolation work without Unix accounts (the strict-mode
    *    replacement). Default: `shared`.
    */
   home_mode?: 'shared' | 'per_user';

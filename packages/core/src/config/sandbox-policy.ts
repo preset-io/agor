@@ -24,7 +24,7 @@
  * See `context/explorations/executor-sandboxing.md`.
  */
 
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import type { AgorSandboxSettings } from './types';
 
 /** Effective defaults for the Agor sugar layer. */
@@ -88,6 +88,22 @@ export interface SandboxPathContext {
   branchAccess?: 'write' | 'read' | 'none';
   /** The effective user's home directory (the passwd home / overlay mountpoint). */
   homeDir: string;
+  /**
+   * Canonical target of {@link homeDir}, when it differs because the passwd
+   * home traverses symlinks. Both paths must be hidden: otherwise the same
+   * files remain reachable through the canonical alias beneath the root bind.
+   */
+  canonicalHomeDir?: string;
+  /**
+   * Agor's daemon data root. In a conventional install this is under
+   * {@link homeDir} and the per-user overlay hides it automatically. Hosted
+   * installs may place it elsewhere (for example on a persistent volume), in
+   * which case per-user mode must mask it explicitly before re-exposing the
+   * authorized branch and managed tools.
+   */
+  dataHome?: string;
+  /** Canonical target of {@link dataHome}, for the same alias protection. */
+  canonicalDataHome?: string;
   /** The worktrees root containing every branch dir. Required for `isolate_branches`. */
   worktreesRoot?: string;
   /**
@@ -179,10 +195,33 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // OUR passwd home, not its siblings. Skip if the parent is `/` (e.g. a
     // /root home) — tmpfs-ing `/` would be catastrophic and root has no sibling
     // homes under a homes dir anyway.
-    const homesParent = dirname(ctx.homeDir);
-    if (homesParent && homesParent !== '/' && homesParent !== '.') {
-      args.push('--tmpfs', homesParent);
+    const hiddenRoots = new Set<string>();
+    const homeDirs = [ctx.homeDir, ctx.canonicalHomeDir].filter((path): path is string => !!path);
+    for (const homeDir of homeDirs) {
+      if (!isAbsolute(homeDir)) {
+        throw new Error(`Invalid sandbox home path ${homeDir}: expected an absolute path`);
+      }
+      const homesParent = dirname(homeDir);
+      if (homesParent && homesParent !== '/' && homesParent !== '.') hiddenRoots.add(homesParent);
     }
+    // The home overlay only hides data stored below the passwd home. A hosted
+    // deployment may keep AGOR_DATA_HOME on a persistent volume elsewhere; the
+    // read-only root bind would otherwise leave sibling branches and daemon
+    // files visible. Mask that root, then re-expose only the authorized paths
+    // below. Bubblewrap resolves bind sources before applying these mounts, so
+    // owner stores/branches beneath the masked root remain valid sources.
+    const dataHomes = [ctx.dataHome, ctx.canonicalDataHome].filter(
+      (path): path is string => !!path
+    );
+    for (const dataHome of dataHomes) {
+      if (!isAbsolute(dataHome) || dataHome === '/') {
+        throw new Error(`Invalid sandbox data root ${dataHome}: expected an absolute path below /`);
+      }
+      if (!homeDirs.some((homeDir) => isPathWithin(dataHome, homeDir))) {
+        hiddenRoots.add(dataHome);
+      }
+    }
+    for (const root of hiddenRoots) args.push('--tmpfs', root);
     // Bind the owner's private store OVER the passwd home. This single mount:
     //   • makes `~` a persistent, per-owner home (passwd home + $HOME + tilde
     //     all agree — no `$HOME`-vs-passwd split);
@@ -290,4 +329,9 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
   args.push('--chdir', ctx.branchPath);
 
   return args;
+}
+
+function isPathWithin(candidate: string, parent: string): boolean {
+  const rel = relative(parent, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
