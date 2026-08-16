@@ -110,3 +110,11 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
     ...(routine ? { routine } : {}),
   };
 }
+
+/** Format only the allowlisted scalar fields of a sanitized database diagnostic. */
+export function formatSanitizedDbError(error: SanitizedDbError): string {
+  const metadata = (['code', 'constraint', 'routine'] as const)
+    .flatMap((key) => (error[key] ? [`${key}=${error[key]}`] : []))
+    .join(' ');
+  return metadata ? `${error.message} (${metadata})` : error.message;
+}

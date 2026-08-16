@@ -1,5 +1,6 @@
 import {
   type Database,
+  isSQLiteDatabase,
   OfflineMigrationCutoverRequiredError,
   pendingOfflineCutoverMigrations,
   runMigrations,
@@ -11,10 +12,14 @@ interface MigrationStatus {
 }
 
 export function requireOfflineCutoverAcknowledgement(
+  db: Database,
   status: MigrationStatus,
   acknowledged: boolean
 ): void {
-  const offlineMigrations = pendingOfflineCutoverMigrations(status);
+  const offlineMigrations = pendingOfflineCutoverMigrations(
+    isSQLiteDatabase(db) ? 'sqlite' : 'postgresql',
+    status
+  );
   if (offlineMigrations.length > 0 && !acknowledged) {
     throw new OfflineMigrationCutoverRequiredError(offlineMigrations);
   }

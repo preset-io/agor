@@ -7,7 +7,7 @@ import {
 
 describe('migration status introspection', () => {
   it('reports an offline pending migration and aggregate cutover requirement', () => {
-    const report = introspectMigrationStatus({
+    const report = introspectMigrationStatus('postgresql', {
       applied: ['0000_init'],
       pending: ['0074_knowledge_embedding_claims'],
       dbAheadOfBinary: false,
@@ -15,6 +15,7 @@ describe('migration status introspection', () => {
 
     expect(report).toEqual({
       schemaVersion: 1,
+      dialect: 'postgresql',
       appliedMigrations: ['0000_init'],
       pendingMigrations: [
         {
@@ -35,19 +36,48 @@ describe('migration status introspection', () => {
 
   it('keeps ordinary and fresh-database migrations online', () => {
     expect(
-      introspectMigrationStatus({
+      introspectMigrationStatus('postgresql', {
         applied: ['0000_init'],
         pending: ['0001_ordinary'],
         dbAheadOfBinary: false,
       }).pendingMigrations[0]?.requiresOfflineCutover
     ).toBe(false);
     expect(
-      introspectMigrationStatus({
+      introspectMigrationStatus('postgresql', {
         applied: [],
         pending: ['0074_knowledge_embedding_claims'],
         dbAheadOfBinary: false,
       }).requiresOfflineCutover
     ).toBe(false);
+    const fresh = introspectMigrationStatus('postgresql', {
+      applied: [],
+      pending: ['0074_knowledge_embedding_claims'],
+      dbAheadOfBinary: false,
+    }).pendingMigrations[0];
+    expect(fresh?.impact.userAction).toBe('none');
+    expect(fresh?.impact.summary).not.toMatch(/requires? .*offline cutover/i);
+  });
+
+  it('never requires offline acknowledgement for an existing SQLite database', () => {
+    const report = introspectMigrationStatus('sqlite', {
+      applied: ['0000_init'],
+      pending: ['0074_knowledge_embedding_claims'],
+      dbAheadOfBinary: false,
+    });
+    expect(report.dialect).toBe('sqlite');
+    expect(report.requiresOfflineCutover).toBe(false);
+    expect(report.pendingMigrations[0]).toMatchObject({
+      requiresOfflineCutover: false,
+      impact: { userAction: 'none' },
+    });
+  });
+
+  it('describes the index migration as rollback-compatible performance work', () => {
+    expect(getMigrationImpact('0083_transcript_hydration_keysets')).toMatchObject({
+      classification: 'performance',
+      userAction: 'required',
+      rollbackCompatibility: 'compatible',
+    });
   });
 
   it('uses an explicit conservative representation for absent impact metadata', () => {

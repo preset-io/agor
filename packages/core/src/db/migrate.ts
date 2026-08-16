@@ -29,6 +29,7 @@ import type { Database } from './client';
 import { insert, isPostgresDatabase, isSQLiteDatabase } from './database-wrapper';
 import { sanitizeDbError } from './sanitize-error';
 import { boards } from './schema';
+import type { DatabaseDialect } from './schema-factory';
 import { getCurrentTenantId } from './tenant-scope';
 
 /**
@@ -83,43 +84,89 @@ export interface PendingMigrationIntrospection {
 /** Stable, versioned contract returned by migration status tooling. */
 export interface MigrationStatusIntrospection {
   schemaVersion: 1;
+  dialect: DatabaseDialect;
   appliedMigrations: string[];
   pendingMigrations: PendingMigrationIntrospection[];
   requiresOfflineCutover: boolean;
   databaseAheadOfBinary: boolean;
 }
 
-const UNKNOWN_MIGRATION_IMPACT: MigrationImpact = Object.freeze({
+function defineMigrationImpact(impact: MigrationImpact): Readonly<MigrationImpact> {
+  if (impact.summary.length > MIGRATION_IMPACT_SUMMARY_MAX_LENGTH) {
+    throw new Error(
+      `Migration impact summary exceeds ${MIGRATION_IMPACT_SUMMARY_MAX_LENGTH} characters`
+    );
+  }
+  return Object.freeze(impact);
+}
+
+const UNKNOWN_MIGRATION_IMPACT = defineMigrationImpact({
   classification: 'unknown',
   userAction: 'unknown',
   rollbackCompatibility: 'unknown',
   summary: 'Migration impact metadata is unavailable.',
 });
 
-const OFFLINE_CUTOVER_IMPACT: MigrationImpact = Object.freeze({
-  classification: 'protocol',
-  userAction: 'required',
-  rollbackCompatibility: 'incompatible',
-  summary: 'Requires a coordinated offline cutover and is not rollback compatible.',
-});
+const MIGRATION_IMPACTS = new Map<string, Readonly<MigrationImpact>>([
+  ...[
+    '0074_knowledge_embedding_claims',
+    '0078_mcp_oauth_pending_flows',
+    '0082_github_install_state',
+  ].map(
+    (name) =>
+      [
+        name,
+        defineMigrationImpact({
+          classification: 'protocol',
+          userAction: 'required',
+          rollbackCompatibility: 'incompatible',
+          summary: 'Requires a coordinated offline cutover and is not rollback compatible.',
+        }),
+      ] as const
+  ),
+  [
+    '0083_transcript_hydration_keysets',
+    defineMigrationImpact({
+      classification: 'performance',
+      userAction: 'required',
+      rollbackCompatibility: 'compatible',
+      summary: 'Requires a coordinated offline cutover to build indexes; rollback is compatible.',
+    }),
+  ],
+]);
+
+const NO_OFFLINE_ACTION_SUMMARY =
+  'No offline cutover is required for this database and migration state.';
 
 export function getMigrationImpact(name: string): MigrationImpact {
-  return OFFLINE_CUTOVER_MIGRATIONS.has(name) ? OFFLINE_CUTOVER_IMPACT : UNKNOWN_MIGRATION_IMPACT;
+  return MIGRATION_IMPACTS.get(name) ?? UNKNOWN_MIGRATION_IMPACT;
 }
 
-export function introspectMigrationStatus(status: {
-  pending: readonly string[];
-  applied: readonly string[];
-  dbAheadOfBinary: boolean;
-}): MigrationStatusIntrospection {
-  const offline = new Set(pendingOfflineCutoverMigrations(status));
-  const pendingMigrations = status.pending.map((name) => ({
-    name,
-    requiresOfflineCutover: offline.has(name),
-    impact: getMigrationImpact(name),
-  }));
+export function introspectMigrationStatus(
+  dialect: DatabaseDialect,
+  status: {
+    pending: readonly string[];
+    applied: readonly string[];
+    dbAheadOfBinary: boolean;
+  }
+): MigrationStatusIntrospection {
+  const offline = new Set(pendingOfflineCutoverMigrations(dialect, status));
+  const pendingMigrations = status.pending.map((name) => {
+    const requiresOfflineCutover = offline.has(name);
+    const registeredImpact = getMigrationImpact(name);
+    const impact =
+      !requiresOfflineCutover && registeredImpact.userAction === 'required'
+        ? defineMigrationImpact({
+            ...registeredImpact,
+            userAction: 'none',
+            summary: NO_OFFLINE_ACTION_SUMMARY,
+          })
+        : registeredImpact;
+    return { name, requiresOfflineCutover, impact };
+  });
   return {
     schemaVersion: 1,
+    dialect,
     appliedMigrations: [...status.applied],
     pendingMigrations,
     requiresOfflineCutover: pendingMigrations.some((migration) => migration.requiresOfflineCutover),
@@ -147,13 +194,16 @@ export class OfflineMigrationCutoverRequiredError extends MigrationError {
   }
 }
 
-export function pendingOfflineCutoverMigrations(status: {
-  pending: readonly string[];
-  applied: readonly string[];
-}): string[] {
+export function pendingOfflineCutoverMigrations(
+  dialect: DatabaseDialect,
+  status: {
+    pending: readonly string[];
+    applied: readonly string[];
+  }
+): string[] {
   // A genuinely fresh database cannot have an old worker using the pre-claim
   // protocol, so first installation remains automatic.
-  if (status.applied.length === 0) return [];
+  if (dialect !== 'postgresql' || status.applied.length === 0) return [];
   return status.pending.filter((tag) => OFFLINE_CUTOVER_MIGRATIONS.has(tag));
 }
 
@@ -389,7 +439,7 @@ export async function runMigrations(
 
     if (isPostgresDatabase(db) && options.allowOfflineCutover !== true) {
       const status = await checkMigrationStatus(db);
-      const offlineMigrations = pendingOfflineCutoverMigrations(status);
+      const offlineMigrations = pendingOfflineCutoverMigrations('postgresql', status);
       if (offlineMigrations.length > 0) {
         throw new OfflineMigrationCutoverRequiredError(offlineMigrations);
       }

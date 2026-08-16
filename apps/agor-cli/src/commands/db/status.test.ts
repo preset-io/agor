@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const cliRoot = resolve(import.meta.dirname, '../../..');
+const COMMAND_TIMEOUT_MS = 15_000;
 
 function runDb(
   command: 'status' | 'migrate',
@@ -32,10 +33,31 @@ function runDb(
     );
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+      forceKill = setTimeout(() => child.kill('SIGKILL'), 2_000);
+    }, COMMAND_TIMEOUT_MS);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
+    };
     child.stdout.on('data', (chunk) => (stdout += String(chunk)));
     child.stderr.on('data', (chunk) => (stderr += String(chunk)));
-    child.once('error', reject);
-    child.once('close', (code) => resolveRun({ code, stdout, stderr }));
+    child.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once('close', (code) => {
+      cleanup();
+      if (timedOut) {
+        reject(new Error(`db ${command} subprocess exceeded ${COMMAND_TIMEOUT_MS}ms`));
+      } else {
+        resolveRun({ code, stdout, stderr });
+      }
+    });
   });
 }
 
@@ -52,11 +74,13 @@ describe('db status command', () => {
       expect(Object.keys(output).sort()).toEqual([
         'appliedMigrations',
         'databaseAheadOfBinary',
+        'dialect',
         'pendingMigrations',
         'requiresOfflineCutover',
         'schemaVersion',
       ]);
       expect(output.schemaVersion).toBe(1);
+      expect(output.dialect).toBe('sqlite');
       expect(output.appliedMigrations).toEqual([]);
       expect(Array.isArray(output.pendingMigrations)).toBe(true);
       expect((output.pendingMigrations as unknown[]).length).toBeGreaterThan(0);
@@ -70,7 +94,7 @@ describe('db status command', () => {
     const secret = 'status-secret-value';
     const result = await runDb('status', ['--json'], {
       AGOR_DB_DIALECT: 'postgresql',
-      DATABASE_URL: `postgresql://user:${secret}@[invalid/database`,
+      DATABASE_URL: `postgresql://user:${secret}@127.0.0.1:1/database?connect_timeout=1`,
     });
     expect(result.code).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(secret);
@@ -81,7 +105,7 @@ describe('db status command', () => {
     const secret = 'migration-secret-value';
     const result = await runDb('migrate', ['--yes'], {
       AGOR_DB_DIALECT: 'postgresql',
-      DATABASE_URL: `postgresql://user:${secret}@[invalid/database`,
+      DATABASE_URL: `postgresql://user:${secret}@127.0.0.1:1/database?connect_timeout=1`,
     });
     expect(result.code).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(secret);

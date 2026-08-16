@@ -5,6 +5,8 @@
 import {
   checkMigrationStatus,
   createDatabase,
+  formatSanitizedDbError,
+  isSQLiteDatabase,
   pendingOfflineCutoverMigrations,
   sanitizeDbError,
 } from '@agor/core/db';
@@ -68,12 +70,15 @@ export default class DbMigrate extends Command {
       });
       this.log('');
 
-      const offlineCutovers = pendingOfflineCutoverMigrations(status);
+      const offlineCutovers = pendingOfflineCutoverMigrations(
+        isSQLiteDatabase(db) ? 'sqlite' : 'postgresql',
+        status
+      );
       if (offlineCutovers.length > 0) {
         this.log(chalk.red.bold('⛔ OFFLINE CUTOVER REQUIRED'));
         this.log('');
         this.log(
-          `${offlineCutovers.join(', ')} changes a distributed state/ownership protocol and is not rolling-compatible.`
+          `${offlineCutovers.join(', ')} includes migration work that is not safe while existing daemons are writing.`
         );
         this.log('Old and new daemons must not index this database concurrently.');
         this.log('');
@@ -84,7 +89,7 @@ export default class DbMigrate extends Command {
         );
         this.log('  3. Start only daemons running the new release.');
         this.log('');
-        requireOfflineCutoverAcknowledgement(status, flags['offline-cutover']);
+        requireOfflineCutoverAcknowledgement(db, status, flags['offline-cutover']);
       }
 
       // Warn about backup
@@ -165,7 +170,7 @@ export default class DbMigrate extends Command {
       process.exit(0);
     } catch (error) {
       const safeError = sanitizeDbError(error);
-      this.error(`Failed to run migrations: ${safeError.message}`);
+      this.error(`Failed to run migrations: ${formatSanitizedDbError(safeError)}`);
     }
   }
 }

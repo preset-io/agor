@@ -5,6 +5,7 @@
 import {
   checkMigrationStatus,
   createDatabase,
+  formatSanitizedDbError,
   getDatabaseUrl,
   introspectMigrationStatus,
   isSQLiteDatabase,
@@ -65,9 +66,16 @@ export default class DbStatus extends Command {
         // implementation details while the runtime builds the report.
         const status = await withoutConsoleOutput(async () => {
           const db = createDatabase({ url: getDatabaseUrl() });
-          return checkMigrationStatus(db);
+          return { db, status: await checkMigrationStatus(db) };
         });
-        this.log(JSON.stringify(introspectMigrationStatus(status)));
+        this.log(
+          JSON.stringify(
+            introspectMigrationStatus(
+              isSQLiteDatabase(status.db) ? 'sqlite' : 'postgresql',
+              status.status
+            )
+          )
+        );
         process.exit(0);
       }
 
@@ -146,7 +154,7 @@ export default class DbStatus extends Command {
       process.exit(0);
     } catch (error) {
       const safeError = sanitizeDbError(error);
-      this.error(`Failed to get migration status: ${safeError.message}`);
+      this.error(`Failed to get migration status: ${formatSanitizedDbError(safeError)}`);
     }
   }
 }

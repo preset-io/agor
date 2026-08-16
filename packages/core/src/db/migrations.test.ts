@@ -14,13 +14,13 @@ interface JournalEntry {
 describe('Postgres migrations', () => {
   it('requires the Knowledge claim protocol migration to be an offline existing-db cutover', () => {
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0073_task_runtime_reconciliation'],
         pending: ['0074_knowledge_embedding_claims'],
       })
     ).toEqual(['0074_knowledge_embedding_claims']);
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
         pending: ['0000_pretty_mac_gargan', '0074_knowledge_embedding_claims'],
       })
@@ -29,13 +29,13 @@ describe('Postgres migrations', () => {
 
   it('enforces the structurally incompatible MCP OAuth migration as an offline cutover', () => {
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0076_executor_session_token_session_binding'],
         pending: ['0078_mcp_oauth_pending_flows'],
       })
     ).toEqual(['0078_mcp_oauth_pending_flows']);
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
         pending: ['0000_pretty_mac_gargan', '0078_mcp_oauth_pending_flows'],
       })
@@ -44,13 +44,13 @@ describe('Postgres migrations', () => {
 
   it('enforces the GitHub callback authority migration as an offline cutover', () => {
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0078_mcp_oauth_pending_flows'],
         pending: ['0082_github_install_state'],
       })
     ).toEqual(['0082_github_install_state']);
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
         pending: ['0000_pretty_mac_gargan', '0082_github_install_state'],
       })
@@ -59,19 +59,19 @@ describe('Postgres migrations', () => {
 
   it('enforces PostgreSQL transcript indexes as an offline existing-db cutover', () => {
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0082_github_install_state'],
         pending: ['0083_transcript_hydration_keysets'],
       })
     ).toEqual(['0083_transcript_hydration_keysets']);
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0085_github_install_state'],
         pending: ['0086_transcript_hydration_keysets'],
       })
     ).toEqual([]);
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
         pending: ['0000_pretty_mac_gargan', '0083_transcript_hydration_keysets'],
       })

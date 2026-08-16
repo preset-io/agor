@@ -184,7 +184,8 @@ pnpm agor db migrate         # apply pending migrations to local DB
 ```
 
 `db status --json` writes exactly one JSON document to stdout. Version 1 reports
-`appliedMigrations`, structured `pendingMigrations`, the aggregate
+the database `dialect` (`sqlite` or `postgresql`), `appliedMigrations`, structured
+`pendingMigrations`, the aggregate
 `requiresOfflineCutover` decision, and `databaseAheadOfBinary`. Each pending
 migration includes the runtime-owned `requiresOfflineCutover` decision and a
 bounded `impact` object (`classification`, `userAction`,
