@@ -112,6 +112,7 @@ async function runInteractiveInit(
 
   let output = '';
   let skippedAdmin = false;
+  let declinedSandbox = false;
   let rejectedEmptySelection = false;
   let selectedTools = false;
   return await new Promise((resolve, reject) => {
@@ -124,6 +125,12 @@ async function runInteractiveInit(
       const plain = stripTerminalControl(output);
       if (!skippedAdmin && plain.includes('Set up your admin account now?')) {
         skippedAdmin = true;
+        terminal.write('n\r');
+      }
+      // Fresh init offers the OS-level executor sandbox (single y/N) before tool
+      // selection. Decline it here to keep this fixture's assertions focused.
+      if (!declinedSandbox && plain.includes('Sandbox agents')) {
+        declinedSandbox = true;
         terminal.write('n\r');
       }
       if (
