@@ -1,16 +1,18 @@
 /**
- * Executor filesystem-sandbox policy resolver (pure)
+ * Executor sandbox policy resolver (pure)
  *
  * Turns the operator-facing {@link AgorSandboxSettings} policy + the concrete
  * paths Agor already knows (branch dir, base repo, home, worktrees root) into a
- * **bubblewrap** argument list. The daemon prepends `bwrap <args> --` to every
- * executor invocation at the single spawn chokepoint, so filesystem isolation
- * is uniform across all agentic tools, terminals, and git/file ops.
+ * **bubblewrap** argument list. The daemon prepends `bwrap <args> --` to each
+ * AGENT executor spawn (prompt tasks + web terminals) at the `spawnExecutorLocal`
+ * chokepoint, so the isolation policy is uniform across all agentic tools and
+ * terminals. (Daemon-internal bounded executor commands — git-state/autocomplete
+ * probes, file reads, OAuth — run unwrapped as Agor's own code.)
  *
- * This is a **filesystem sandbox only**: we do NOT pass `--unshare-net`, so the
- * network namespace stays shared and the executor keeps its daemon/model
- * connectivity. (SRT/`srt` always unshare-nets, which severs the executor↔daemon
- * loopback — hence raw bwrap.)
+ * The sandbox unshares the **user, PID, and mount** namespaces but NOT the
+ * network: we do NOT pass `--unshare-net`, so the executor keeps its
+ * daemon/model loopback connectivity. (SRT/`srt` always unshare-nets, which
+ * severs the executor↔daemon loopback — hence raw bwrap.)
  *
  * Pure — no `fs`, no `os`. The daemon supplies concrete paths from its own
  * authoritative state (branch dir, `repo.local_path`, home) — it does NOT parse

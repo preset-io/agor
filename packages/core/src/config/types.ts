@@ -376,15 +376,16 @@ export interface AgorSandboxIncludeSettings {
 }
 
 /**
- * OS-level executor **filesystem** sandbox policy. Global, single-policy —
- * deliberately NOT per-session to avoid config-hell. Disabled by default;
- * `agor init` offers a one-shot opt-in.
+ * OS-level executor sandbox policy. Global, single-policy — deliberately NOT
+ * per-session to avoid config-hell. Disabled by default; `agor init` offers a
+ * one-shot opt-in.
  *
- * When enabled, Agor wraps EVERY executor invocation (all agentic tools,
- * terminals, git/file ops) in `bubblewrap` at the single spawn chokepoint, so
- * filesystem isolation is uniform across tools — not per-tool. This is a
- * **filesystem sandbox only**: the network namespace is left shared
- * (`--share-net`) so the executor keeps its daemon/model connectivity. Network
+ * When enabled, Agor wraps each AGENT executor spawn (prompt tasks + web
+ * terminals) in `bubblewrap` at the `spawnExecutorLocal` chokepoint, so the
+ * isolation policy is uniform across tools — not per-tool. (Daemon-internal
+ * bounded executor commands run unwrapped as Agor's own code.) The sandbox
+ * unshares the user, PID, and mount namespaces but NOT the network
+ * (`--share-net`), so the executor keeps its daemon/model connectivity. Network
  * egress control, if wanted, is left to each tool's own config.
  *
  * Agor resolves `include.*` / `protect_secrets` / `isolate_branches` into

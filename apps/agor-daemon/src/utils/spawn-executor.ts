@@ -455,13 +455,10 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   let spawnCmd = cmd;
   let spawnArgs = args;
   let spawnEnv = envWithDaemonUrl;
-  // Sandbox around the WORK directory (the branch the agent operates in), which
-  // is `payload.cwd` — NOT the executor process cwd (which is the executor
-  // package dir for prompt tasks). No payload.cwd (e.g. repo-level ops) ⇒ no wrap.
-  // The work dir (branch the agent operates in) is `payload.params.cwd` for
-  // prompt/terminal tasks, or top-level `payload.cwd` for some commands — NOT
-  // the executor process cwd (which is the executor package dir). No work dir
-  // (e.g. repo-level ops) ⇒ no wrap.
+  // Sandbox around the WORK directory (the branch the agent operates in): it is
+  // `payload.params.cwd` for prompt/terminal tasks, or top-level `payload.cwd`
+  // for some commands — NOT the executor process cwd (the executor package dir
+  // for prompt tasks). No work dir (e.g. repo-level ops) ⇒ no wrap.
   const paramsCwd = (payload.params as { cwd?: unknown } | undefined)?.cwd;
   const candidateCwd =
     typeof payload.cwd === 'string' && payload.cwd.length > 0

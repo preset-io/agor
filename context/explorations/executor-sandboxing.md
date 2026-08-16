@@ -38,9 +38,10 @@ The exploration tried three substrates; the network model decided it.
   `000` to the daemon). srt is designed to sandbox the _commands an agent runs_, not the agent
   runtime; Claude Code itself only wraps its Bash tool, never its own process. There is no srt
   config that lets a wrapped long-lived process reach a local service.
-- **Raw `bubblewrap`, filesystem-only, `--share-net`** — bubblewrap IS the Linux engine under srt.
-  Using it directly, we take the filesystem sandbox and **skip the network namespace**, so the
-  executor keeps loopback to the daemon and egress to the model API. This is the shipped approach.
+- **Raw `bubblewrap` (user + PID + mount namespaces, `--share-net`)** — bubblewrap IS the Linux
+  engine under srt. Using it directly, we take the filesystem + PID isolation and **skip only the
+  network namespace**, so the executor keeps loopback to the daemon and egress to the model API.
+  This is the shipped approach.
 
 **Net:** srt/whole-process-wrap and local-daemon connectivity are mutually exclusive on Linux; raw
 bwrap `--share-net` sits exactly in that gap. Network egress control, if ever wanted, is deferred
@@ -321,7 +322,7 @@ per-tool secrets never enter a shared env). So sandbox + RBAC-mounting + env-res
 
 ## 8. File map (implemented)
 
-- `packages/core/src/config/types.ts` — `AgorSandboxSettings` (filesystem-only) incl. `home_mode`.
+- `packages/core/src/config/types.ts` — `AgorSandboxSettings` incl. `home_mode`.
 - `packages/core/src/config/sandbox-policy.ts` — pure `resolveBwrapArgs()` (shared + `per_user` overlay branches); `.git`-pointer parser removed (+ tests).
 - `packages/core/src/config/config-manager.ts` — `AGOR_SANDBOX_ENABLED` → `enabled`, `AGOR_SANDBOX_HOME_MODE` → `home_mode` (in `resolveEffectiveConfig`).
 - `apps/agor-daemon/src/register-services.ts` — resolves authoritative `repo.local_path` (→ `sandboxBaseRepoPath`) + per-owner store path (→ `sandboxHomeStore`) into `payload.params`.

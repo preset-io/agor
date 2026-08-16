@@ -1,16 +1,17 @@
 /**
- * Wrap an AGENT executor spawn in a filesystem-only OS sandbox (`bubblewrap`).
- * Applied by `spawnExecutorLocal` — the chokepoint for agent workloads: prompt
- * tasks and web terminals, across all agentic tools (tool-agnostic).
+ * Wrap an AGENT executor spawn in an OS sandbox (`bubblewrap`: user + PID +
+ * mount namespaces). Applied by `spawnExecutorLocal` — the chokepoint for agent
+ * workloads: prompt tasks and web terminals, across all agentic tools
+ * (tool-agnostic).
  *
  * NOT applied to daemon-internal command spawns (`runExecutorCommand` /
  * `startInteractiveExecutor`: git-state/autocomplete probes, file reads, OAuth
  * flows) — those are Agor's own trusted code with no agent-authored payload,
  * analogous to repo-level ops running unwrapped.
  *
- * Filesystem-only by design: no `--unshare-net`, so the network namespace stays
- * shared and the executor keeps its daemon/model connectivity. Network egress
- * control, if wanted, is left to each tool's own config.
+ * The network namespace stays shared (no `--unshare-net`), so the executor
+ * keeps its daemon/model connectivity. Network egress control, if wanted, is
+ * left to each tool's own config.
  *
  * Daemon-side + synchronous: takes the concrete paths the daemon already knows
  * from its own DB state (branch dir, base repo `local_path`, per-owner home
