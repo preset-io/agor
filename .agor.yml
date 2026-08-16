@@ -110,14 +110,18 @@ environment:
     sandbox-peruser:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_SANDBOX_ENABLED=true AGOR_SANDBOX_HOME_MODE=per_user docker compose -p agor-{{branch.name}} up -d --build
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_UNIX_USER_MODE=sandbox docker compose -p agor-{{branch.name}} up -d --build
       description: >-
-        Sandbox + Phase-2 per-user HOME overlay (AGOR_SANDBOX_HOME_MODE=per_user).
-        Each session runs with a private, persistent home overlaid at the passwd
-        home from <data_home>/tenants/<tenant>/homes/<owner_id>. The overlay hides
-        the whole daemon .agor tree (config, db, worktrees, repos) + every other
-        home by construction — the substrate meant to replace unix_user_mode:
-        strict without Unix accounts. See context/explorations/executor-sandboxing.md.
+        PRODUCTION-ALIGNED sandbox isolation (unix_user_mode: sandbox). This one
+        setting FORCES branch_rbac=true + sandbox.enabled=true +
+        sandbox.home_mode=per_user + fail_if_unavailable=true (no OS impersonation).
+        Each session gets a private, persistent home overlaid at the passwd home
+        from <data_home>/tenants/<tenant>/homes/<owner_id> (or users.filesystem_home
+        when set), the daemon .agor tree + other homes are hidden, and the branch is
+        mounted rw/ro/none per the owner's RBAC fs_access. PID namespace is used
+        where the host allows it (bare-metal) and skipped in containers. The
+        strict-mode replacement — no sudoers / host accounts / groups. See
+        context/explorations/executor-sandboxing.md.
       extends: sqlite
     postgres:
       start: >-

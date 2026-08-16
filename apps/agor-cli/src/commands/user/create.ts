@@ -41,6 +41,12 @@ export default class UserCreate extends BaseCommand {
       description: 'Unix username for shell access (defaults to email prefix)',
       required: false,
     }),
+    'filesystem-home': Flags.string({
+      description:
+        'Absolute host home dir for the per-user sandbox overlay (unix_user_mode: sandbox). ' +
+        'Null/omitted uses the canonical per-user store. Admin-only.',
+      required: false,
+    }),
     'force-password-change': Flags.boolean({
       description: 'Force user to change password on first login',
       default: false,
@@ -113,6 +119,7 @@ export default class UserCreate extends BaseCommand {
         name: name || undefined,
         role: flags.role as UserRole,
         unix_username: flags['unix-username'],
+        filesystem_home: flags['filesystem-home'],
         must_change_password: flags['force-password-change'],
       };
       const user = await client.service('users').create(userData);
