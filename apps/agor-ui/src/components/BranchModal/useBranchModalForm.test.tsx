@@ -155,6 +155,53 @@ describe('useBranchModalForm — unified save', () => {
     expect(branchPatches).toHaveLength(0);
   });
 
+  it('allows a co-owned branch closed to others (others_can: none, multiple owners)', async () => {
+    // Regression: unlike boards, branches have no private/shared visibility
+    // mode. `others_can: 'none'` is just the most restrictive non-owner
+    // fallback tier and MUST NOT force a single solo owner — a branch can be
+    // co-owned while remaining closed to everyone else. A stray board-style
+    // "private branches must have exactly one private user" guard used to
+    // reject this exact configuration.
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
+    const bob = makeUser({ user_id: 'user-2', email: 'bob@example.com', role: 'member' });
+    const branch = makeBranch();
+    const { client, calls } = makeStubClient({ owners: [alice], users: [alice, bob] });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.loadingOwners).toBe(false));
+
+    act(() => {
+      result.current.setPermissions('permissionSource', 'override');
+      result.current.setPermissions('othersCan', 'none');
+    });
+    act(() => {
+      result.current.setPermissions('selectedOwnerIds', [
+        ...result.current.permissions.selectedOwnerIds,
+        'user-2',
+      ]);
+    });
+
+    let saveResult: Awaited<ReturnType<typeof result.current.save>> | undefined;
+    await act(async () => {
+      saveResult = await result.current.save();
+    });
+
+    expect(saveResult).toEqual({ ok: true });
+    // The second owner is added and the closed-to-others tier persists.
+    const ownerCreates = calls.filter(
+      (c) => c.service === 'branches/:id/owners' && c.method === 'create'
+    );
+    expect(ownerCreates).toHaveLength(1);
+    expect((ownerCreates[0].args[0] as { user_id: string }).user_id).toBe('user-2');
+    const branchPatches = calls.filter((c) => c.service === 'branches' && c.method === 'patch');
+    expect(branchPatches).toHaveLength(1);
+    expect(branchPatches[0].args[1]).toMatchObject({ others_can: 'none' });
+  });
+
   it('does not flag phantom dirty state when the branch prop refreshes for an untouched slice', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
     const branch = makeBranch({ notes: 'original' });
