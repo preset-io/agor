@@ -54,6 +54,79 @@ const OFFLINE_CUTOVER_MIGRATIONS = new Set([
   '0083_transcript_hydration_keysets',
 ]);
 
+/** Maximum length of an automation-facing migration impact summary. */
+export const MIGRATION_IMPACT_SUMMARY_MAX_LENGTH = 200;
+
+export type MigrationImpactClassification =
+  | 'schema'
+  | 'data'
+  | 'protocol'
+  | 'performance'
+  | 'unknown';
+export type MigrationUserAction = 'none' | 'required' | 'unknown';
+export type MigrationRollbackCompatibility = 'compatible' | 'incompatible' | 'unknown';
+
+/** Bounded metadata maintained by the migration runtime, never inferred from SQL or CLI text. */
+export interface MigrationImpact {
+  classification: MigrationImpactClassification;
+  userAction: MigrationUserAction;
+  rollbackCompatibility: MigrationRollbackCompatibility;
+  summary: string;
+}
+
+export interface PendingMigrationIntrospection {
+  name: string;
+  requiresOfflineCutover: boolean;
+  impact: MigrationImpact;
+}
+
+/** Stable, versioned contract returned by migration status tooling. */
+export interface MigrationStatusIntrospection {
+  schemaVersion: 1;
+  appliedMigrations: string[];
+  pendingMigrations: PendingMigrationIntrospection[];
+  requiresOfflineCutover: boolean;
+  databaseAheadOfBinary: boolean;
+}
+
+const UNKNOWN_MIGRATION_IMPACT: MigrationImpact = Object.freeze({
+  classification: 'unknown',
+  userAction: 'unknown',
+  rollbackCompatibility: 'unknown',
+  summary: 'Migration impact metadata is unavailable.',
+});
+
+const OFFLINE_CUTOVER_IMPACT: MigrationImpact = Object.freeze({
+  classification: 'protocol',
+  userAction: 'required',
+  rollbackCompatibility: 'incompatible',
+  summary: 'Requires a coordinated offline cutover and is not rollback compatible.',
+});
+
+export function getMigrationImpact(name: string): MigrationImpact {
+  return OFFLINE_CUTOVER_MIGRATIONS.has(name) ? OFFLINE_CUTOVER_IMPACT : UNKNOWN_MIGRATION_IMPACT;
+}
+
+export function introspectMigrationStatus(status: {
+  pending: readonly string[];
+  applied: readonly string[];
+  dbAheadOfBinary: boolean;
+}): MigrationStatusIntrospection {
+  const offline = new Set(pendingOfflineCutoverMigrations(status));
+  const pendingMigrations = status.pending.map((name) => ({
+    name,
+    requiresOfflineCutover: offline.has(name),
+    impact: getMigrationImpact(name),
+  }));
+  return {
+    schemaVersion: 1,
+    appliedMigrations: [...status.applied],
+    pendingMigrations,
+    requiresOfflineCutover: pendingMigrations.some((migration) => migration.requiresOfflineCutover),
+    databaseAheadOfBinary: status.dbAheadOfBinary,
+  };
+}
+
 export interface RunMigrationsOptions {
   /**
    * Acknowledge that every daemon using this existing database is stopped.

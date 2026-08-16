@@ -6,7 +6,9 @@ import {
   checkMigrationStatus,
   createDatabase,
   getDatabaseUrl,
+  introspectMigrationStatus,
   isSQLiteDatabase,
+  sanitizeDbError,
   sql,
 } from '@agor/core/db';
 import { Command, Flags } from '@oclif/core';
@@ -20,6 +22,19 @@ interface QueryResult {
   rowCount?: number;
 }
 
+async function withoutConsoleOutput<T>(operation: () => Promise<T>): Promise<T> {
+  const methods = ['log', 'info', 'warn', 'error'] as const;
+  const originals = methods.map((method) => console[method]);
+  for (const method of methods) console[method] = () => undefined;
+  try {
+    return await operation();
+  } finally {
+    methods.forEach((method, index) => {
+      console[method] = originals[index];
+    });
+  }
+}
+
 export default class DbStatus extends Command {
   static description = 'Show applied database migrations';
 
@@ -31,6 +46,11 @@ export default class DbStatus extends Command {
       description: 'Show detailed migration information including hashes and pending migrations',
       default: false,
     }),
+    json: Flags.boolean({
+      description: 'Output the versioned machine-readable migration status as JSON',
+      default: false,
+      exclusive: ['verbose'],
+    }),
   };
 
   async run(): Promise<void> {
@@ -39,6 +59,18 @@ export default class DbStatus extends Command {
     try {
       // Determine database URL using centralized logic
       // Priority: If AGOR_DB_DIALECT=postgresql, use DATABASE_URL; otherwise AGOR_DB_PATH
+      if (flags.json) {
+        // Database clients and probes may emit setup diagnostics. JSON mode is
+        // deliberately a single-document stdout contract, so contain those
+        // implementation details while the runtime builds the report.
+        const status = await withoutConsoleOutput(async () => {
+          const db = createDatabase({ url: getDatabaseUrl() });
+          return checkMigrationStatus(db);
+        });
+        this.log(JSON.stringify(introspectMigrationStatus(status)));
+        process.exit(0);
+      }
+
       const dbUrl = getDatabaseUrl();
       const db = createDatabase({ url: dbUrl });
 
@@ -113,9 +145,8 @@ export default class DbStatus extends Command {
       // Force exit to close database connections (postgres-js keeps connections open)
       process.exit(0);
     } catch (error) {
-      this.error(
-        `Failed to get migration status: ${error instanceof Error ? error.message : String(error)}`
-      );
+      const safeError = sanitizeDbError(error);
+      this.error(`Failed to get migration status: ${safeError.message}`);
     }
   }
 }
