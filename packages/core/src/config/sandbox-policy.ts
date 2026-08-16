@@ -9,10 +9,11 @@
  * terminals. (Daemon-internal bounded executor commands — git-state/autocomplete
  * probes, file reads, OAuth — run unwrapped as Agor's own code.)
  *
- * The sandbox unshares the **user, PID, and mount** namespaces but NOT the
- * network: we do NOT pass `--unshare-net`, so the executor keeps its
- * daemon/model loopback connectivity. (SRT/`srt` always unshare-nets, which
- * severs the executor↔daemon loopback — hence raw bwrap.)
+ * The sandbox unshares the **user + mount** namespaces (and the **PID**
+ * namespace where the host allows it — see `pidNamespace`) but NOT the network:
+ * we do NOT pass `--unshare-net`, so the executor keeps its daemon/model
+ * loopback connectivity. (SRT/`srt` always unshare-nets, which severs the
+ * executor↔daemon loopback — hence raw bwrap.)
  *
  * Pure — no `fs`, no `os`. The daemon supplies concrete paths from its own
  * authoritative state (branch dir, `repo.local_path`, home) — it does NOT parse
@@ -70,6 +71,14 @@ export const SANDBOX_SECRET_HOME_DIRS = [
 export interface SandboxPathContext {
   /** Branch working directory (the task cwd). */
   branchPath: string;
+  /**
+   * Whether to unshare a PID namespace (`--unshare-pid`). Default (unset/true)
+   * adds it — the secure baseline that hides the daemon/siblings from the
+   * sandbox's /proc. The daemon sets this to `false` when the host cannot mount
+   * proc in a nested PID namespace (common in containers), degrading to a
+   * user+mount sandbox rather than failing.
+   */
+  pidNamespace?: boolean;
   /**
    * The session owner's RBAC-resolved filesystem access to the branch, which
    * decides how the branch is mounted: `write` → `--bind` (rw), `read` →
@@ -137,24 +146,28 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
   const args: string[] = [
     '--die-with-parent', // bwrap exits when the daemon kills the process group
     '--unshare-user', // unprivileged mount namespace (host uid preserved)
-    // Fresh PID namespace: the sandbox's /proc shows ONLY its own processes, so
-    // a same-uid executor cannot reach the daemon's or a sibling's
-    // /proc/<pid>/{environ,root,fd,...} — closing the process-side route around
-    // the filesystem masks (independent of host ptrace_scope/hidepid). bwrap
-    // becomes PID 1 and reaps; verified compatible with Agor's pgid-based Stop
-    // (SIGTERM to the executor's process group tears down the whole tree, and
-    // the kernel kills the namespace when bwrap exits). NOT --unshare-net: the
-    // network namespace stays shared so the executor keeps daemon/model
-    // loopback connectivity.
-    '--unshare-pid',
+  ];
+  // Fresh PID namespace: the sandbox's /proc shows ONLY its own processes, so a
+  // same-uid executor cannot reach the daemon's or a sibling's
+  // /proc/<pid>/{environ,root,fd,...} — closing the process-side route around
+  // the filesystem masks (independent of host ptrace_scope/hidepid). bwrap
+  // becomes PID 1 and reaps; verified compatible with Agor's pgid-based Stop
+  // (SIGTERM to the executor's process group tears down the whole tree, and the
+  // kernel kills the namespace when bwrap exits). BEST-EFFORT: many container
+  // runtimes block mounting proc in a nested PID namespace, so the daemon sets
+  // `pidNamespace: false` when the host can't do it and we fall back to a
+  // user+mount sandbox (in a container the container itself is the boundary).
+  // NOT --unshare-net: the network stays shared for daemon/model loopback.
+  if (ctx.pidNamespace !== false) args.push('--unshare-pid');
+  args.push(
     '--ro-bind',
     '/',
     '/', // everything readable, nothing writable by default
     '--dev',
     '/dev',
     '--proc',
-    '/proc',
-  ];
+    '/proc'
+  );
 
   if (perUser) {
     // ── per-user home overlay ──────────────────────────────────────────────

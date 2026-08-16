@@ -1,8 +1,8 @@
 /**
- * Wrap an AGENT executor spawn in an OS sandbox (`bubblewrap`: user + PID +
- * mount namespaces). Applied by `spawnExecutorLocal` — the chokepoint for agent
- * workloads: prompt tasks and web terminals, across all agentic tools
- * (tool-agnostic).
+ * Wrap an AGENT executor spawn in an OS sandbox (`bubblewrap`: user + mount
+ * namespaces, plus a PID namespace where the host allows it). Applied by
+ * `spawnExecutorLocal` — the chokepoint for agent workloads: prompt tasks and
+ * web terminals, across all agentic tools (tool-agnostic).
  *
  * NOT applied to daemon-internal command spawns (`runExecutorCommand` /
  * `startInteractiveExecutor`: git-state/autocomplete probes, file reads, OAuth
@@ -30,7 +30,7 @@ import {
   resolveBwrapArgs,
   type SandboxPathContext,
 } from '@agor/core/config';
-import { bwrapOnPath, probeBwrapUserns } from '@agor/core/unix';
+import { bwrapOnPath, probeBwrapPidNamespace, probeBwrapUserns } from '@agor/core/unix';
 
 export interface SandboxWrap {
   cmd: string;
@@ -48,6 +48,26 @@ function bwrapAvailable(): boolean {
     bwrapAvailableCache = bwrapOnPath() && probeBwrapUserns();
   }
   return bwrapAvailableCache;
+}
+
+// Best-effort PID-namespace hardening: available on bare-metal hosts, commonly
+// blocked in containers (can't mount proc in a nested PID ns). Cached; warned
+// once so operators know the /proc process-side vector isn't closed on this
+// host (in a container the container itself is the isolation boundary).
+let pidNsCache: boolean | undefined;
+function pidNamespaceAvailable(): boolean {
+  if (pidNsCache === undefined) {
+    pidNsCache = probeBwrapPidNamespace();
+    if (!pidNsCache) {
+      console.warn(
+        '[Sandbox] This host cannot create a PID namespace for the executor sandbox ' +
+          '(common in containers). Falling back to a user + mount sandbox WITHOUT ' +
+          '--unshare-pid: filesystem masks still apply, but same-uid /proc process ' +
+          'inspection is governed by the host (ptrace_scope) or the surrounding container boundary.'
+      );
+    }
+  }
+  return pidNsCache;
 }
 
 /**
@@ -115,6 +135,7 @@ export function buildSandboxWrap(params: {
   const ctx: SandboxPathContext = {
     branchPath,
     branchAccess,
+    pidNamespace: pidNamespaceAvailable(),
     homeDir: home,
     // Worktrees root is <dataHome>/worktrees regardless of repo-slug depth
     // (slugs contain "/", so deriving from cwd is unreliable).

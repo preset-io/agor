@@ -1882,10 +1882,10 @@
     "import": "node:child_process",
     "symbol": "spawnSync",
     "local": "spawnSync",
-    "operation": "call:spawnSync@probeBwrapUserns#1",
+    "operation": "call:spawnSync@probeBwrap#1",
     "owner": "daemon host/operator runtime",
     "boundary": "deployment-local host capability",
-    "rationale": "Runs a fixed `bwrap --unshare-user \u2026 -- true` smoke test to verify unprivileged user namespaces work; no caller-controlled arguments.",
+    "rationale": "Runs a fixed `bwrap \u2026 -- true` smoke test (user ns, and optionally PID ns) to verify sandbox capability; no caller-controlled arguments.",
     "reviewTarget": null,
     "reviewDate": null
   },

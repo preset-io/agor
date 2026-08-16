@@ -28,14 +28,20 @@ function hasPair(args: string[], flag: string, a: string): boolean {
 }
 
 describe('resolveBwrapArgs', () => {
-  it('read-only root; unshares user + PID namespaces; keeps network shared', () => {
+  it('read-only root; unshares user + PID (default); keeps network shared', () => {
     const args = resolveBwrapArgs({}, CTX);
     expect(hasTriple(args, '--ro-bind', '/', '/')).toBe(true);
     expect(args).toContain('--unshare-user');
-    // PID namespace closes the /proc process-side route around the fs masks.
+    // PID namespace (default on) closes the /proc process-side route.
     expect(args).toContain('--unshare-pid');
     // …but NOT the network namespace (executor keeps daemon/model loopback).
     expect(args).not.toContain('--unshare-net');
+  });
+
+  it('omits --unshare-pid when the host cannot create a PID namespace (containers)', () => {
+    const args = resolveBwrapArgs({}, { ...CTX, pidNamespace: false });
+    expect(args).toContain('--unshare-user'); // user + mount sandbox still applies
+    expect(args).not.toContain('--unshare-pid');
   });
 
   it('defaults: branch + base-repo git dir writable, task-private tmpfs, chdir branch', () => {

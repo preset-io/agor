@@ -115,10 +115,13 @@ execute agent-authored commands.
 - **Host toolchain for free.** The host filesystem is mounted read-only, so
   `git`, `node`, `rg`, compilers, etc. all work without building an image; only
   _writes_ are scoped.
-- **Process isolation.** A fresh PID namespace means the sandbox's `/proc` shows
-  only its own processes — the daemon and other users' executors are not visible,
-  so the daemon's environment/fds/secrets can't be reached via `/proc` either
-  (independent of host `ptrace_scope`).
+- **Process isolation (where the host allows it).** On hosts that support it, a
+  fresh PID namespace means the sandbox's `/proc` shows only its own processes —
+  the daemon and other users' executors are invisible, so their
+  environment/fds/secrets can't be reached via `/proc` (independent of host
+  `ptrace_scope`). Many container runtimes block this; there the sandbox falls
+  back to a user + mount namespace (filesystem masks still apply) and `agor
+  doctor` reports **PID namespace** as unavailable. Verify with `agor doctor`.
 
 The **network** namespace stays shared, so the executor keeps daemon/model
 connectivity. Network egress control, if wanted, is deferred to each tool's own

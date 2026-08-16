@@ -11,9 +11,9 @@ import { join } from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 // Shared with the daemon so CLI + daemon never drift on what "sandbox
 // available" means (functional userns probe, not just PATH presence).
-import { probeBwrapUserns } from '@agor/core/unix';
+import { probeBwrapPidNamespace, probeBwrapUserns } from '@agor/core/unix';
 
-export { probeBwrapUserns };
+export { probeBwrapPidNamespace, probeBwrapUserns };
 
 export interface SandboxDepStatus {
   name: string;
@@ -50,7 +50,8 @@ export function diagnoseSandbox(
   config: Pick<AgorConfig, 'execution'>,
   platform: NodeJS.Platform = process.platform,
   // Injectable for tests. Only invoked when bwrap is present on Linux.
-  probeUserns: () => boolean = probeBwrapUserns
+  probeUserns: () => boolean = probeBwrapUserns,
+  probePidNs: () => boolean = probeBwrapPidNamespace
 ): SandboxDiagnosis {
   const enabled = config.execution?.sandbox?.enabled === true;
 
@@ -58,8 +59,8 @@ export function diagnoseSandbox(
   let supported = true;
 
   if (platform === 'linux') {
-    // Filesystem-only sandbox uses raw bubblewrap. Presence on PATH is
-    // necessary but NOT sufficient — also prove userns actually works.
+    // The sandbox uses raw bubblewrap. Presence on PATH is necessary but NOT
+    // sufficient — also prove the user namespace actually works.
     const bwrapPresent = hasBinaryOnPath('bwrap');
     deps = [{ name: 'bwrap', required: true, present: bwrapPresent, note: 'bubblewrap' }];
     if (bwrapPresent) {
@@ -68,6 +69,14 @@ export function diagnoseSandbox(
         required: true,
         present: probeUserns(),
         note: 'bwrap --unshare-user smoke test (fails on hardened kernels)',
+      });
+      // PID namespace is a best-effort hardening, NOT required: it closes the
+      // /proc process-side vector but is commonly blocked in containers.
+      deps.push({
+        name: 'PID namespace',
+        required: false,
+        present: probePidNs(),
+        note: 'bwrap --unshare-pid; hardening — often unavailable in containers',
       });
     }
   } else {

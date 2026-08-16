@@ -51,14 +51,15 @@ describe('diagnoseSandbox', () => {
     expect(d.deps.every((x) => !x.present)).toBe(true);
   });
 
-  it('when bwrap present, adds a functional userns dep and requires it for ok', () => {
+  it('when bwrap present, adds required userns + optional PID-ns deps', () => {
     process.env.PATH = fakeBin;
     const pass = diagnoseSandbox(
       { execution: { sandbox: { enabled: true } } },
       'linux',
+      () => true,
       () => true
     );
-    expect(pass.deps.map((x) => x.name)).toEqual(['bwrap', 'unprivileged userns']);
+    expect(pass.deps.map((x) => x.name)).toEqual(['bwrap', 'unprivileged userns', 'PID namespace']);
     expect(pass.ok).toBe(true);
 
     // bwrap installed but userns blocked (hardened kernel) → NOT ok.
@@ -66,9 +67,23 @@ describe('diagnoseSandbox', () => {
     const blocked = diagnoseSandbox(
       { execution: { sandbox: { enabled: true } } },
       'linux',
+      () => false,
       () => false
     );
     expect(blocked.deps.find((x) => x.name === 'unprivileged userns')?.present).toBe(false);
     expect(blocked.ok).toBe(false);
+  });
+
+  it('stays ok when PID namespace is unavailable (best-effort, not required)', () => {
+    process.env.PATH = fakeBin;
+    const d = diagnoseSandbox(
+      { execution: { sandbox: { enabled: true } } },
+      'linux',
+      () => true, // userns ok
+      () => false // PID ns blocked (container)
+    );
+    const pidDep = d.deps.find((x) => x.name === 'PID namespace');
+    expect(pidDep).toMatchObject({ required: false, present: false });
+    expect(d.ok).toBe(true); // still usable — userns is the required baseline
   });
 });

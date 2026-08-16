@@ -28,20 +28,13 @@ export function bwrapOnPath(pathEnv = process.env.PATH ?? ''): boolean {
   return false;
 }
 
-/**
- * Functionally probe that bwrap can actually create an unprivileged user +
- * mount namespace on THIS host. Runs a trivial `bwrap … -- true`. Returns false
- * on any nonzero exit / spawn error.
- */
-export function probeBwrapUserns(): boolean {
+function probeBwrap(extraArgs: string[]): boolean {
   try {
-    // Probe exactly what the executor sandbox uses (user + PID namespace +
-    // proc), so an installed-but-restricted host is detected up front.
     const r = spawnSync(
       'bwrap',
       [
         '--unshare-user',
-        '--unshare-pid',
+        ...extraArgs,
         '--ro-bind',
         '/',
         '/',
@@ -58,4 +51,26 @@ export function probeBwrapUserns(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * BASELINE availability: bwrap can create an unprivileged user + mount namespace
+ * and mount a fresh /proc on THIS host. This is the minimum the executor sandbox
+ * needs (filesystem isolation). Returns false on any nonzero exit / spawn error.
+ */
+export function probeBwrapUserns(): boolean {
+  return probeBwrap([]);
+}
+
+/**
+ * ADDITIONAL hardening: can bwrap also create a PID namespace with a fresh
+ * /proc? This closes the same-uid `/proc/<pid>/…` route around the fs masks,
+ * but many container runtimes block mounting proc in a nested PID namespace
+ * ("Operation not permitted") even when user namespaces work. Best-effort: the
+ * daemon includes `--unshare-pid` only when this passes, and degrades to a
+ * user+mount sandbox otherwise (in a container, the container itself is the
+ * isolation boundary).
+ */
+export function probeBwrapPidNamespace(): boolean {
+  return probeBwrap(['--unshare-pid']);
 }

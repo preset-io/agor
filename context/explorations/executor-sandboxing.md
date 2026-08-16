@@ -38,10 +38,10 @@ The exploration tried three substrates; the network model decided it.
   `000` to the daemon). srt is designed to sandbox the _commands an agent runs_, not the agent
   runtime; Claude Code itself only wraps its Bash tool, never its own process. There is no srt
   config that lets a wrapped long-lived process reach a local service.
-- **Raw `bubblewrap` (user + PID + mount namespaces, `--share-net`)** — bubblewrap IS the Linux
-  engine under srt. Using it directly, we take the filesystem + PID isolation and **skip only the
-  network namespace**, so the executor keeps loopback to the daemon and egress to the model API.
-  This is the shipped approach.
+- **Raw `bubblewrap` (user + mount namespaces, `--share-net`; PID namespace where the host allows)**
+  — bubblewrap IS the Linux engine under srt. Using it directly, we take the filesystem isolation
+  (plus a PID namespace on hosts that support it) and **skip only the network namespace**, so the
+  executor keeps loopback to the daemon and egress to the model API. This is the shipped approach.
 
 **Net:** srt/whole-process-wrap and local-daemon connectivity are mutually exclusive on Linux; raw
 bwrap `--share-net` sits exactly in that gap. Network egress control, if ever wanted, is deferred
@@ -214,15 +214,22 @@ tool state:
   would still contain it under a distinct uid). Both are kernel-enforced; bwrap escapes are rare.
   For **mutually-hostile multi-tenant**, the strong boundary remains containers/microVM/k8s
   ([[docker-executor-mode]]); sandbox targets **trusted-org multi-user** (strict's real audience).
-- **Process-side isolation via PID namespace (CLOSED).** We `--unshare-pid` in addition to
-  `--unshare-user`, so the sandbox gets a fresh `/proc` showing ONLY its own processes (bwrap as PID
-  1 + the executor). The daemon and sibling executors are structurally absent from the sandbox's
-  procfs, so the same-uid `/proc/<pid>/{environ,root,fd,…}` route around the filesystem masks is
-  closed regardless of host `ptrace_scope`/`hidepid`. Verified live: without the flag the sandbox
-  saw 704 host PIDs; with it, 5 (its own). Verified compatible with the pgid-based Stop/containment
-  contract ([[task-runtime-state]]): a single `SIGTERM` to the executor's process group tears the
-  whole tree down (bwrap PID 1 + children), and the kernel kills the namespace when bwrap exits — no
-  leaks. We deliberately do NOT `--unshare-net` (loopback to the daemon must stay reachable).
+- **Process-side isolation via PID namespace (BEST-EFFORT).** When the host allows it we
+  `--unshare-pid` alongside `--unshare-user`, giving the sandbox a fresh `/proc` that shows ONLY its
+  own processes (bwrap as PID 1 + the executor). The daemon and sibling executors are then
+  structurally absent from the sandbox's procfs, closing the same-uid
+  `/proc/<pid>/{environ,root,fd,…}` route around the filesystem masks regardless of host
+  `ptrace_scope`/`hidepid`. Verified live on bare metal: without the flag the sandbox saw 704 host
+  PIDs; with it, 5 (its own). Verified compatible with the pgid-based Stop/containment contract
+  ([[task-runtime-state]]): a single `SIGTERM` to the executor's process group tears the whole tree
+  down (bwrap PID 1 + children), and the kernel kills the namespace when bwrap exits — no leaks.
+  **Caveat:** many container runtimes refuse to mount proc in a nested PID namespace ("Operation not
+  permitted"), so the daemon functionally probes it (`probeBwrapPidNamespace`) and, when
+  unavailable, falls back to a user+mount sandbox WITHOUT `--unshare-pid` (logging a one-time
+  warning) rather than failing every task. In that fallback the process-side vector is governed by
+  the host's `ptrace_scope` or — in Agor Cloud, where each tenant/user runs in its OWN container —
+  by the container boundary itself, which is stronger than a PID namespace. We deliberately do NOT
+  `--unshare-net` (loopback to the daemon must stay reachable).
 
 ---
 

@@ -384,9 +384,9 @@ export interface AgorSandboxIncludeSettings {
  * terminals) in `bubblewrap` at the `spawnExecutorLocal` chokepoint, so the
  * isolation policy is uniform across tools — not per-tool. (Daemon-internal
  * bounded executor commands run unwrapped as Agor's own code.) The sandbox
- * unshares the user, PID, and mount namespaces but NOT the network
- * (`--share-net`), so the executor keeps its daemon/model connectivity. Network
- * egress control, if wanted, is left to each tool's own config.
+ * unshares the user + mount namespaces (and PID where the host allows it) but
+ * NOT the network (`--share-net`), so the executor keeps its daemon/model
+ * connectivity. Network egress control, if wanted, is left to each tool's own config.
  *
  * Agor resolves `include.*` / `protect_secrets` / `isolate_branches` into
  * bubblewrap bind mounts + masks using paths it already knows. See
