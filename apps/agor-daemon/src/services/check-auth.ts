@@ -270,6 +270,7 @@ async function probeCodexAuthFile(
   const inspection = await inspectCodexAuthViaExecutor(identity.unixUser, {
     reportedUnixUser: identity.reportedUnixUser,
     userId: identity.userId,
+    codexHome: identity.codexHome,
   });
   if (!inspection.ok) {
     // Only a genuinely absent file proves "no login". Permission/sudo/

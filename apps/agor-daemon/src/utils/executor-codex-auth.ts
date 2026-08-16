@@ -3,6 +3,13 @@ import { runExecutorCommand } from './spawn-executor.js';
 export interface ExecutorCodexAuthRouting {
   reportedUnixUser: string | null;
   userId: string;
+  /**
+   * Explicit `CODEX_HOME` (the `.codex` dir) for the auth-file executor op.
+   * Set in `unix_user_mode: sandbox` to the caller's per-user store `.codex` so
+   * auth persists where the sandboxed session reads it. Unset otherwise (the
+   * executor falls back to the effective user's `~/.codex`).
+   */
+  codexHome?: string;
 }
 
 export type ExecutorCodexAuthInspection =
@@ -23,6 +30,15 @@ const options = (asUser: string | null, routing?: ExecutorCodexAuthRouting) => (
         user_id: routing.userId,
       }
     : undefined,
+  // In sandbox mode the auth flow runs unsandboxed as the daemon user, but the
+  // executor resolves the auth file from CODEX_HOME. Point it at the caller's
+  // per-user store `.codex` so the write lands where the SANDBOXED session (with
+  // that store overlaid at ~) will later read it — otherwise auth.json goes to
+  // the daemon home and the session can't see it. Merge OVER process.env
+  // (options.env REPLACES the spawn env), keeping PATH/keys/etc.
+  ...(routing?.codexHome
+    ? { env: { ...(process.env as Record<string, string>), CODEX_HOME: routing.codexHome } }
+    : {}),
   sensitiveOutput: true,
   timeoutMs: 10_000,
   logPrefix: '[CodexAuthExecutor]',
