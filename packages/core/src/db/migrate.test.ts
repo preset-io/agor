@@ -61,17 +61,27 @@ describe('migration status introspection', () => {
     expect(fresh?.impact.summary).not.toMatch(/requires? .*offline cutover/i);
   });
 
-  it('preserves non-cutover user action for a registered online migration', () => {
-    const migration = introspectMigrationStatus('postgresql', {
+  it('shares queued-message impact metadata across the actual journal tags', () => {
+    const postgresqlMigration = introspectMigrationStatus('postgresql', {
       applied: ['0000_init'],
       pending: ['0030_migrate_queued_messages'],
       dbAheadOfBinary: false,
     }).pendingMigrations[0];
+    const sqliteMigration = introspectMigrationStatus('sqlite', {
+      applied: ['0000_init'],
+      pending: ['0040_migrate_queued_messages'],
+      dbAheadOfBinary: false,
+    }).pendingMigrations[0];
 
-    expect(migration).toMatchObject({
+    expect(postgresqlMigration).toMatchObject({
       requiresOfflineCutover: false,
-      impact: { userAction: 'required' },
+      impact: { classification: 'data', userAction: 'required' },
     });
+    expect(sqliteMigration).toMatchObject({
+      requiresOfflineCutover: false,
+      impact: { classification: 'data', userAction: 'required' },
+    });
+    expect(sqliteMigration?.impact).toBe(postgresqlMigration?.impact);
   });
 
   it('never requires offline acknowledgement for an existing SQLite database', () => {

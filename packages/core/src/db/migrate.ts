@@ -107,6 +107,16 @@ const UNKNOWN_MIGRATION_IMPACT = defineMigrationImpact({
   summary: 'Migration impact metadata is unavailable.',
 });
 
+const QUEUED_MESSAGES_MIGRATION_POLICY: MigrationImpactPolicy = {
+  requiresOfflineCutover: false,
+  impact: defineMigrationImpact({
+    classification: 'data',
+    userAction: 'required',
+    rollbackCompatibility: 'compatible',
+    summary: 'Queued work interrupted by the migration may need to be submitted again.',
+  }),
+};
+
 export function createMigrationImpactRegistry(
   entries: ReadonlyArray<readonly [string, MigrationImpactPolicy]>
 ): {
@@ -121,18 +131,8 @@ export function createMigrationImpactRegistry(
 }
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
-  [
-    '0030_migrate_queued_messages',
-    {
-      requiresOfflineCutover: false,
-      impact: defineMigrationImpact({
-        classification: 'data',
-        userAction: 'required',
-        rollbackCompatibility: 'compatible',
-        summary: 'Queued work interrupted by the migration may need to be submitted again.',
-      }),
-    },
-  ],
+  ['0030_migrate_queued_messages', QUEUED_MESSAGES_MIGRATION_POLICY],
+  ['0040_migrate_queued_messages', QUEUED_MESSAGES_MIGRATION_POLICY],
   ...[
     '0074_knowledge_embedding_claims',
     '0078_mcp_oauth_pending_flows',
