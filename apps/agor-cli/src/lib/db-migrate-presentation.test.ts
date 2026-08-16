@@ -1,6 +1,8 @@
+import { MigrationError, OfflineMigrationCutoverRequiredError } from '@agor/core/db';
 import { describe, expect, it } from 'vitest';
 import {
   databaseBackupGuidance,
+  MigrationVerificationError,
   migrationFailureMessage,
   migrationVerificationDiagnostics,
 } from './db-migrate-presentation.js';
@@ -65,5 +67,57 @@ describe('db migrate presentation', () => {
     expect(backup).toContain(`cp -- '/tmp/agor db'"'"'s/runtime.db'`);
     expect(diagnostics).toContain(`sqlite3 '/tmp/agor db'"'"'s/runtime.db'`);
     expect(diagnostics).toContain('PRAGMA table_info(branches)');
+  });
+
+  it.each([
+    'libsql://remote_user:raw-secret@db.example/remote?authToken=token%2Fencoded&mode=rw',
+    'https://db.example/remote?username=remote_user&password=raw-secret&token=token%2Fencoded',
+  ])('never prints remote SQLite connection details for %s', (remoteUrl) => {
+    const output = [
+      ...databaseBackupGuidance('sqlite', remoteUrl),
+      ...migrationVerificationDiagnostics('sqlite', remoteUrl),
+    ].join('\n');
+
+    expect(output).toContain('database provider procedure');
+    expect(output).toContain('database administration tools');
+    expect(output).not.toContain('cp ');
+    expect(output).not.toContain('sqlite3');
+    for (const sensitive of [
+      remoteUrl,
+      'db.example',
+      'remote',
+      'remote_user',
+      'raw-secret',
+      'authToken',
+      'password',
+      'token/encoded',
+      'token%2Fencoded',
+    ]) {
+      expect(output).not.toContain(sensitive);
+      expect(output).not.toContain(encodeURIComponent(sensitive));
+    }
+  });
+
+  it('retains only explicitly recognized actionable migration failures', () => {
+    expect(
+      migrationFailureMessage(new OfflineMigrationCutoverRequiredError(['0074_safe']))
+    ).toContain('Offline migration cutover required for: 0074_safe');
+    expect(migrationFailureMessage(new MigrationVerificationError())).toBe(
+      'Failed to run migrations: Migration verification failed'
+    );
+  });
+
+  it('sanitizes arbitrary MigrationError messages and wrapped driver failures', () => {
+    const secret = 'libsql://user:secret@private.example/db?authToken=encoded%2Ftoken';
+    for (const error of [
+      new MigrationError(`Driver rejected ${secret}`),
+      new MigrationError('Migration failed', new Error(`connection failed: ${secret}`)),
+    ]) {
+      const message = migrationFailureMessage(error);
+      expect(message).toBe('Failed to run migrations: Database operation failed');
+      expect(message).not.toContain(secret);
+      expect(message).not.toContain('private.example');
+      expect(message).not.toContain('encoded%2Ftoken');
+    }
   });
 });

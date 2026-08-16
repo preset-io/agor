@@ -26,7 +26,12 @@ import { sql } from 'drizzle-orm';
 import { migrate as migrateSQLite } from 'drizzle-orm/libsql/migrator';
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator';
 import type { Database } from './client';
-import { insert, isPostgresDatabase, isSQLiteDatabase } from './database-wrapper';
+import {
+  getDatabaseInstanceDialect,
+  insert,
+  isPostgresDatabase,
+  isSQLiteDatabase,
+} from './database-wrapper';
 import { sanitizeDbError } from './sanitize-error';
 import { boards } from './schema';
 import type { DatabaseDialect } from './schema-factory';
@@ -116,6 +121,18 @@ export function createMigrationImpactRegistry(
 }
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
+  [
+    '0030_migrate_queued_messages',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'data',
+        userAction: 'required',
+        rollbackCompatibility: 'compatible',
+        summary: 'Queued work interrupted by the migration may need to be submitted again.',
+      }),
+    },
+  ],
   ...[
     '0074_knowledge_embedding_claims',
     '0078_mcp_oauth_pending_flows',
@@ -167,9 +184,10 @@ export function introspectMigrationStatus(
   const offline = new Set(pendingOfflineCutoverMigrations(dialect, status));
   const pendingMigrations = status.pending.map((name) => {
     const requiresOfflineCutover = offline.has(name);
-    const registeredImpact = getMigrationImpact(name);
+    const registeredPolicy = MIGRATION_IMPACT_REGISTRY.impacts.get(name);
+    const registeredImpact = registeredPolicy?.impact ?? UNKNOWN_MIGRATION_IMPACT;
     const impact =
-      !requiresOfflineCutover && registeredImpact.userAction === 'required'
+      registeredPolicy?.requiresOfflineCutover === true && !requiresOfflineCutover
         ? defineMigrationImpact({
             ...registeredImpact,
             userAction: 'none',
@@ -449,11 +467,12 @@ export async function runMigrations(
   try {
     console.log('Running database migrations...');
 
+    const dialect = getDatabaseInstanceDialect(db);
     const migrationsFolder = getMigrationsFolder(db);
     console.log(`Using migrations folder: ${migrationsFolder}`);
-    console.log(`Database dialect: ${isSQLiteDatabase(db) ? 'sqlite' : 'postgres'}`);
+    console.log(`Database dialect: ${dialect === 'sqlite' ? 'sqlite' : 'postgres'}`);
 
-    if (isPostgresDatabase(db) && options.allowOfflineCutover !== true) {
+    if (dialect === 'postgresql' && options.allowOfflineCutover !== true) {
       const status = await checkMigrationStatus(db);
       const offlineMigrations = pendingOfflineCutoverMigrations('postgresql', status);
       if (offlineMigrations.length > 0) {

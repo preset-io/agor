@@ -5,7 +5,7 @@
 import {
   checkMigrationStatus,
   createDatabase,
-  isSQLiteDatabase,
+  getDatabaseInstanceDialect,
   pendingOfflineCutoverMigrations,
 } from '@agor/core/db';
 import { expandPath } from '@agor/core/utils/path';
@@ -13,6 +13,7 @@ import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import {
   databaseBackupGuidance,
+  MigrationVerificationError,
   migrationFailureMessage,
   migrationVerificationDiagnostics,
 } from '../../lib/db-migrate-presentation.js';
@@ -51,7 +52,7 @@ export default class DbMigrate extends Command {
       this.log('');
 
       const db = createDatabase({ url: dbUrl });
-      const dialect = isSQLiteDatabase(db) ? 'sqlite' : 'postgresql';
+      const dialect = getDatabaseInstanceDialect(db);
       const status = await checkMigrationStatus(db);
 
       if (!status.hasPending) {
@@ -154,7 +155,7 @@ export default class DbMigrate extends Command {
           this.log(chalk.cyan(line));
         });
         this.log('');
-        this.error(`Migration verification failed`);
+        throw new MigrationVerificationError();
       }
 
       this.log('');

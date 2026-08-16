@@ -6,6 +6,7 @@ import {
   checkMigrationStatus,
   createDatabase,
   formatSanitizedDbError,
+  getDatabaseInstanceDialect,
   getDatabaseUrl,
   introspectMigrationStatus,
   isSQLiteDatabase,
@@ -70,10 +71,7 @@ export default class DbStatus extends Command {
         });
         this.log(
           JSON.stringify(
-            introspectMigrationStatus(
-              isSQLiteDatabase(status.db) ? 'sqlite' : 'postgresql',
-              status.status
-            )
+            introspectMigrationStatus(getDatabaseInstanceDialect(status.db), status.status)
           )
         );
         process.exit(0);
@@ -81,6 +79,7 @@ export default class DbStatus extends Command {
 
       const dbUrl = getDatabaseUrl();
       const db = createDatabase({ url: dbUrl });
+      const sqlite = isSQLiteDatabase(db);
 
       // Use comprehensive migration status check
       const status = await checkMigrationStatus(db);
@@ -121,13 +120,13 @@ export default class DbStatus extends Command {
         this.log('');
 
         // Query Drizzle's tracking table for hash details
-        const result = isSQLiteDatabase(db)
+        const result = sqlite
           ? await db.run(sql`SELECT id, hash, created_at FROM __drizzle_migrations ORDER BY id ASC`)
           : await db.execute(
               sql`SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id ASC`
             );
 
-        const rows = isSQLiteDatabase(db) ? (result as QueryResult).rows : (result as unknown[]);
+        const rows = sqlite ? (result as QueryResult).rows : (result as unknown[]);
 
         this.log(
           `${chalk.dim('Database contains')} ${rows.length} ${chalk.dim('migration record(s)')}`
