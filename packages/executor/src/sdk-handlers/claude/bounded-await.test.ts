@@ -18,6 +18,22 @@ describe('awaitWithTimeout', () => {
     }
   });
 
+  it('propagates an ordinary rejection unchanged when it settles before the deadline', async () => {
+    const boom = new Error('boom');
+    await expect(awaitWithTimeout(Promise.reject(boom), 1_000)).rejects.toBe(boom);
+  });
+
+  it('clears the safety timer once the promise settles first', async () => {
+    vi.useFakeTimers();
+    try {
+      await expect(awaitWithTimeout(Promise.resolve('ok'), 15_000)).resolves.toBe('ok');
+      // The timer must be cleared in `finally`, not left pending to fire later.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not raise an unhandled rejection when the losing promise rejects late', async () => {
     vi.useFakeTimers();
     const rejection = vi.fn();
