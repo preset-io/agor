@@ -127,6 +127,123 @@ fi
   assert.match(result.stdout, new RegExp(`canonical: ${canonicalHome.replaceAll('/', '\\/')}`));
 });
 
+test('prepare-only freezes restartable owner-only units without changing DB or config', {
+  skip: !hasSqlite || !hasUserNamespace,
+}, async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const db = join(f.dataHome, 'agor.db');
+  const canonicalHome = join(f.root, 'canonical-home');
+  const passwdHome = join(f.root, 'passwd-home');
+  const repo = join(f.dataHome, 'repos', 'repo-a');
+  const worktreeBucket = join(f.dataHome, 'worktrees', 'owner-a', 'repo-a');
+  const branch = join(worktreeBucket, 'branch-a');
+  const bin = join(f.root, 'bin');
+  const findLog = join(f.root, 'find.log');
+  await mkdir(canonicalHome);
+  await symlink(canonicalHome, passwdHome);
+  await mkdir(repo, { recursive: true });
+  await mkdir(branch, { recursive: true });
+  await mkdir(bin);
+  execFileSync('sqlite3', [
+    db,
+    "CREATE TABLE users (tenant_id text, user_id text, unix_username text, filesystem_home text); INSERT INTO users VALUES ('default', 'user-1', 'fixture-user', NULL);",
+  ]);
+  await writeFile(
+    join(bin, 'getent'),
+    `#!/usr/bin/env bash
+if [ "$*" = 'passwd fixture-user' ]; then
+  echo 'fixture-user:x:1234:1234:Fixture:${passwdHome}:/bin/bash'
+else
+  exec /usr/bin/getent "$@"
+fi
+`
+  );
+  await writeFile(
+    join(bin, 'find'),
+    `#!/usr/bin/env bash
+printf '%q ' "$@" >> "$FIND_LOG"
+printf '\n' >> "$FIND_LOG"
+exec /usr/bin/find "$@"
+`
+  );
+  await chmod(join(bin, 'getent'), 0o755);
+  await chmod(join(bin, 'find'), 0o755);
+
+  const baseArgs = [
+    '--data-home',
+    f.dataHome,
+    '--config',
+    f.config,
+    '--daemon-user',
+    'root',
+    '--expected-user-count',
+    '1',
+    '--service-name',
+    'agor-migration-test-nonexistent',
+  ];
+  const env = {
+    ...process.env,
+    DATABASE_URL: '',
+    PATH: `${bin}:${process.env.PATH}`,
+    FIND_LOG: findLog,
+  };
+  const prepared = spawnSync('unshare', ['-Ur', migrationScript, '--prepare-only', ...baseArgs], {
+    encoding: 'utf8',
+    env,
+  });
+
+  assert.equal(prepared.status, 0, prepared.stderr);
+  assert.match(prepared.stdout, /PREPARED; no database, ownership, or mode mutation/);
+  assert.equal(await readFile(f.config, 'utf8'), 'execution:\n  unix_user_mode: strict\n');
+  assert.equal(
+    execFileSync('sqlite3', [db, "SELECT coalesce(filesystem_home, '') FROM users;"], {
+      encoding: 'utf8',
+    }).trim(),
+    ''
+  );
+
+  const manifest = join(f.dataHome, 'ownership-manifest-pre-sandbox.tsv.gz');
+  const planPath = `${manifest}.ownership-plan`;
+  const progressPath = `${manifest}.ownership-progress`;
+  execFileSync('gzip', ['-t', manifest]);
+  const plan = await readFile(planPath, 'utf8');
+  assert.match(plan, new RegExp(`tree\\|0\\|${repo.replaceAll('/', '\\/')}`));
+  assert.match(plan, new RegExp(`tree\\|0\\|${worktreeBucket.replaceAll('/', '\\/')}`));
+  assert.doesNotMatch(plan, new RegExp(`tree\\|0\\|${branch.replaceAll('/', '\\/')}`));
+
+  const unexpectedRepo = join(f.dataHome, 'repos', 'repo-added-after-prepare');
+  await mkdir(unexpectedRepo);
+  const rejected = spawnSync(
+    'unshare',
+    ['-Ur', migrationScript, '--apply', '--resume', ...baseArgs],
+    { encoding: 'utf8', env }
+  );
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /ownership roots differ from the preserved plan/);
+  assert.equal(
+    execFileSync('sqlite3', [db, "SELECT coalesce(filesystem_home, '') FROM users;"], {
+      encoding: 'utf8',
+    }).trim(),
+    ''
+  );
+  await rm(unexpectedRepo, { recursive: true });
+
+  await writeFile(progressPath, `${await readFile(progressPath, 'utf8')}done=000001\n`);
+  const applied = spawnSync(
+    'unshare',
+    ['-Ur', migrationScript, '--apply', '--resume', ...baseArgs],
+    { encoding: 'utf8', env }
+  );
+
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.match(applied.stdout, /\[000001\/\d+\] already complete; skipping/);
+  assert.equal(await readFile(f.config, 'utf8'), 'execution:\n  unix_user_mode: sandbox\n');
+  const findInvocations = await readFile(findLog, 'utf8');
+  assert.match(findInvocations, /-exec chown -h -- root/);
+  assert.doesNotMatch(findInvocations, /root:root/);
+});
+
 test('SQLite apply completes transaction, manifest, ownership walk, and config flip', {
   skip: !hasSqlite || !hasUserNamespace,
 }, async (t) => {

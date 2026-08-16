@@ -9,13 +9,15 @@
 # users.filesystem_home exists before running this script.
 #
 # Usage:
-#   scripts/strict-to-sandbox-migration.sh [--apply] [--resume] [--teardown]
+#   scripts/strict-to-sandbox-migration.sh [--apply | --prepare-only] [--resume]
+#       [--teardown]
 #       [--data-home DIR] [--daemon-user USER] [--config FILE]
 #       [--database-url URL] [--tenant-id ID] [--expected-user-count N]
 #       [--manifest FILE] [--skip-manifest] [--service-name NAME]
 set -euo pipefail
 
 APPLY=0
+PREPARE_ONLY=0
 RESUME=0
 TEARDOWN=0
 SKIP_MANIFEST=0
@@ -32,6 +34,9 @@ SERVICE_NAME="agor-daemon"
 DB_SQL_TMP=""
 CONFIG_TMP=""
 MANIFEST_TMP=""
+OWNERSHIP_PLAN_TMP=""
+OWNERSHIP_PROGRESS_TMP=""
+OWNERSHIP_COUNTER=""
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 say() { echo "  $*"; }
@@ -39,6 +44,9 @@ cleanup() {
   [ -z "$DB_SQL_TMP" ] || rm -f -- "$DB_SQL_TMP"
   [ -z "$CONFIG_TMP" ] || rm -f -- "$CONFIG_TMP"
   [ -z "$MANIFEST_TMP" ] || rm -f -- "$MANIFEST_TMP"
+  [ -z "$OWNERSHIP_PLAN_TMP" ] || rm -f -- "$OWNERSHIP_PLAN_TMP"
+  [ -z "$OWNERSHIP_PROGRESS_TMP" ] || rm -f -- "$OWNERSHIP_PROGRESS_TMP"
+  [ -z "$OWNERSHIP_COUNTER" ] || rm -f -- "$OWNERSHIP_COUNTER"
 }
 trap cleanup EXIT
 
@@ -49,6 +57,7 @@ require_value() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
+    --prepare-only) APPLY=1; PREPARE_ONLY=1 ;;
     --resume) RESUME=1 ;;
     --teardown) TEARDOWN=1 ;;
     --skip-manifest) SKIP_MANIFEST=1 ;;
@@ -70,12 +79,20 @@ CONFIG="${CONFIG:-$DATA_HOME/config.yaml}"
 SQLITE_DB="$DATA_HOME/agor.db"
 MANIFEST="${MANIFEST:-$DATA_HOME/ownership-manifest-pre-sandbox.tsv.gz}"
 CONFIG_BACKUP="$CONFIG.pre-sandbox"
+OWNERSHIP_PLAN="$MANIFEST.ownership-plan"
+OWNERSHIP_PROGRESS="$MANIFEST.ownership-progress"
 here="$(cd "$(dirname "$0")" && pwd)"
 
 [[ "$DATA_HOME" = /* ]] || die "data home must be absolute: $DATA_HOME"
 [ "$DATA_HOME" != "/" ] || die "refusing to use / as the data home"
 [[ "$CONFIG" = /* ]] || die "config path must be absolute: $CONFIG"
 [[ "$MANIFEST" = /* ]] || die "manifest path must be absolute: $MANIFEST"
+if [ "$PREPARE_ONLY" = 1 ] && [ "$TEARDOWN" = 1 ]; then
+  die "--prepare-only cannot be combined with --teardown"
+fi
+if [ "$PREPARE_ONLY" = 1 ] && [ "$SKIP_MANIFEST" = 1 ]; then
+  die "--prepare-only requires the ownership manifest"
+fi
 [[ "$TENANT_ID" =~ ^[A-Za-z0-9_-]+$ ]] || die "tenant id contains unsupported characters"
 if [ -n "$EXPECTED_USER_COUNT" ]; then
   [[ "$EXPECTED_USER_COUNT" =~ ^[0-9]+$ ]] || die "expected user count must be a non-negative integer"
@@ -99,7 +116,7 @@ case "$CURRENT_MODE" in
 esac
 
 if [ "$APPLY" = 1 ]; then
-  [ "$EUID" -eq 0 ] || die "--apply must run as root"
+  [ "$EUID" -eq 0 ] || die "--apply/--prepare-only must run as root"
   if command -v systemctl >/dev/null && systemctl is-active --quiet "$SERVICE_NAME"; then
     die "$SERVICE_NAME is active; drain work and stop the daemon before --apply"
   fi
@@ -145,9 +162,22 @@ fi
 if [ -e "$CONFIG_BACKUP" ] && [ "$RESUME" = 0 ]; then
   die "config backup already exists; preserve it and rerun with --resume"
 fi
+if [ -e "$OWNERSHIP_PLAN" ] && [ "$RESUME" = 0 ]; then
+  die "ownership plan already exists; preserve it and rerun with --resume"
+fi
+if [ -e "$OWNERSHIP_PROGRESS" ] && [ "$RESUME" = 0 ]; then
+  die "ownership progress already exists; preserve it and rerun with --resume"
+fi
 
 echo "== strict -> sandbox migration =="
-echo "mode          : $([ "$APPLY" = 1 ] && echo APPLY || echo DRY-RUN)"
+if [ "$PREPARE_ONLY" = 1 ]; then
+  RUN_MODE="PREPARE-ONLY"
+elif [ "$APPLY" = 1 ]; then
+  RUN_MODE="APPLY"
+else
+  RUN_MODE="DRY-RUN"
+fi
+echo "mode          : $RUN_MODE"
 echo "resume        : $([ "$RESUME" = 1 ] && echo yes || echo no)"
 echo "data home     : $DATA_HOME"
 echo "daemon owner  : $DAEMON_USER:$DAEMON_GROUP"
@@ -156,10 +186,89 @@ echo "config        : $CONFIG"
 echo "database      : $DB_KIND"
 echo "tenant        : $TENANT_ID"
 echo "manifest      : $([ "$SKIP_MANIFEST" = 1 ] && echo SKIPPED || echo "$MANIFEST")"
+echo "owner plan    : $OWNERSHIP_PLAN"
+echo "owner progress: $OWNERSHIP_PROGRESS"
 echo
 
 postgres_psql() {
   PGPASSWORD="$PGPASSWORD_VALUE" psql "$PGDATABASE_URL_SAFE" -X -v ON_ERROR_STOP=1 "$@"
+}
+
+declare -a OWNERSHIP_UNITS=()
+
+add_ownership_unit() {
+  local kind="$1"
+  local depth="$2"
+  local path="$3"
+  case "$kind" in
+    tree|shallow) ;;
+    *) die "unsupported ownership unit type: $kind" ;;
+  esac
+  [[ "$depth" =~ ^[0-9]+$ ]] || die "invalid ownership unit depth: $depth"
+  case "$path" in
+    *'|'*|*$'\n'*|*$'\r'*) die "ownership unit path contains an unsupported delimiter: $path" ;;
+  esac
+  [ -e "$path" ] || [ -L "$path" ] || die "ownership unit disappeared: $path"
+  OWNERSHIP_UNITS+=("$kind|$depth|$path")
+}
+
+build_ownership_plan() {
+  local child owner repo
+  local repos_root="$DATA_HOME_CANONICAL/repos"
+  local worktrees_root="$DATA_HOME_CANONICAL/worktrees"
+
+  [ ! -L "$repos_root" ] || die "managed repos root must not be a symlink: $repos_root"
+  [ ! -L "$worktrees_root" ] || die "managed worktrees root must not be a symlink: $worktrees_root"
+
+  OWNERSHIP_UNITS=()
+  # The root unit handles only scaffolding and top-level files. Large managed
+  # trees are separate units so a resume never repeats the entire data root.
+  add_ownership_unit shallow 1 "$DATA_HOME_CANONICAL"
+
+  shopt -s dotglob nullglob
+  for child in "$DATA_HOME_CANONICAL"/*; do
+    [ -d "$child" ] && [ ! -L "$child" ] || continue
+    case "$child" in
+      "$repos_root"|"$worktrees_root") ;;
+      *) add_ownership_unit tree 0 "$child" ;;
+    esac
+  done
+
+  if [ -d "$repos_root" ] && [ ! -L "$repos_root" ]; then
+    add_ownership_unit shallow 1 "$repos_root"
+    for repo in "$repos_root"/*; do
+      [ -d "$repo" ] && [ ! -L "$repo" ] || continue
+      add_ownership_unit tree 0 "$repo"
+    done
+  fi
+
+  if [ -d "$worktrees_root" ] && [ ! -L "$worktrees_root" ]; then
+    add_ownership_unit shallow 2 "$worktrees_root"
+    for owner in "$worktrees_root"/*; do
+      [ -d "$owner" ] && [ ! -L "$owner" ] || continue
+      for repo in "$owner"/*; do
+        [ -d "$repo" ] && [ ! -L "$repo" ] || continue
+        add_ownership_unit tree 0 "$repo"
+      done
+    done
+  fi
+  shopt -u dotglob nullglob
+
+  # Homes are deliberately last. Owner-only conversion preserves branch/repo
+  # group ACLs, while keeping homes untouched as long as possible improves the
+  # chance of a cheap strict-mode abort before the final phase.
+  for row in "${HOME_ROWS[@]}"; do
+    IFS='|' read -r tenant_id user_id unix_username home home_canonical <<< "$row"
+    add_ownership_unit tree 0 "$home_canonical"
+  done
+}
+
+render_ownership_plan() {
+  local index=0 unit
+  for unit in "${OWNERSHIP_UNITS[@]}"; do
+    index=$((index + 1))
+    printf '%06d|%s\n' "$index" "$unit"
+  done
 }
 
 echo "-- step 1: resolve database users and host homes --"
@@ -233,6 +342,10 @@ for row in "${HOME_ROWS[@]}"; do
 done
 echo
 
+build_ownership_plan
+say "planned ${#OWNERSHIP_UNITS[@]} restartable ownership units"
+echo
+
 if [ "$SKIP_MANIFEST" = 0 ]; then
   echo "-- step 3: ownership manifest --"
   if [ -f "$MANIFEST" ]; then
@@ -282,13 +395,67 @@ else
 fi
 echo
 
+echo "-- step 5: freeze restartable ownership plan --"
+if [ "$APPLY" = 1 ]; then
+  OWNERSHIP_PLAN_TMP="$(mktemp "$OWNERSHIP_PLAN.partial.XXXXXX")"
+  chmod 600 "$OWNERSHIP_PLAN_TMP"
+  render_ownership_plan > "$OWNERSHIP_PLAN_TMP"
+  if [ -e "$OWNERSHIP_PLAN" ]; then
+    [ "$RESUME" = 1 ] || die "ownership plan already exists: $OWNERSHIP_PLAN"
+    cmp -s "$OWNERSHIP_PLAN_TMP" "$OWNERSHIP_PLAN" || \
+      die "current ownership roots differ from the preserved plan: $OWNERSHIP_PLAN"
+    rm -f -- "$OWNERSHIP_PLAN_TMP"
+    OWNERSHIP_PLAN_TMP=""
+    say "reusing verified ownership plan: $OWNERSHIP_PLAN"
+  else
+    mv "$OWNERSHIP_PLAN_TMP" "$OWNERSHIP_PLAN"
+    OWNERSHIP_PLAN_TMP=""
+    say "ownership plan complete: $OWNERSHIP_PLAN"
+  fi
+
+  PLAN_SHA256="$(sha256sum "$OWNERSHIP_PLAN" | awk '{print $1}')"
+  if [ "$SKIP_MANIFEST" = 1 ]; then
+    MANIFEST_SHA256="skipped"
+  else
+    MANIFEST_SHA256="$(sha256sum "$MANIFEST" | awk '{print $1}')"
+  fi
+  if [ -e "$OWNERSHIP_PROGRESS" ]; then
+    [ "$RESUME" = 1 ] || die "ownership progress already exists: $OWNERSHIP_PROGRESS"
+    grep -qxF 'version=1' "$OWNERSHIP_PROGRESS" || die "unsupported ownership progress format"
+    grep -qxF "plan_sha256=$PLAN_SHA256" "$OWNERSHIP_PROGRESS" || \
+      die "ownership progress does not match the preserved plan"
+    grep -qxF "manifest_sha256=$MANIFEST_SHA256" "$OWNERSHIP_PROGRESS" || \
+      die "ownership progress does not match the preserved manifest"
+    say "reusing verified ownership progress: $OWNERSHIP_PROGRESS"
+  else
+    OWNERSHIP_PROGRESS_TMP="$(mktemp "$OWNERSHIP_PROGRESS.partial.XXXXXX")"
+    chmod 600 "$OWNERSHIP_PROGRESS_TMP"
+    printf 'version=1\nplan_sha256=%s\nmanifest_sha256=%s\n' \
+      "$PLAN_SHA256" "$MANIFEST_SHA256" > "$OWNERSHIP_PROGRESS_TMP"
+    mv "$OWNERSHIP_PROGRESS_TMP" "$OWNERSHIP_PROGRESS"
+    OWNERSHIP_PROGRESS_TMP=""
+    say "ownership progress initialized: $OWNERSHIP_PROGRESS"
+  fi
+  sync -f "$CONFIG_BACKUP" "$OWNERSHIP_PLAN" "$OWNERSHIP_PROGRESS"
+  [ "$SKIP_MANIFEST" = 1 ] || sync -f "$MANIFEST"
+else
+  say "would freeze ${#OWNERSHIP_UNITS[@]} ownership units and initialize durable progress"
+fi
+echo
+
+if [ "$PREPARE_ONLY" = 1 ]; then
+  echo "== done (PREPARED; no database, ownership, or mode mutation) =="
+  echo "Review and preserve the artifacts, then rerun the exact command with --apply --resume."
+  exit 0
+fi
+
 sql_quote() {
   local value="$1"
   value="${value//\'/\'\'}"
   printf "'%s'" "$value"
 }
 
-echo "-- step 5: set users.filesystem_home transactionally --"
+echo "-- step 6: set users.filesystem_home transactionally --"
 if [ "$APPLY" = 1 ]; then
   DB_SQL_TMP="$(mktemp)"
   chmod 600 "$DB_SQL_TMP"
@@ -344,21 +511,91 @@ else
 fi
 echo
 
-echo "-- step 6: transfer filesystem ownership --"
-if [ "$APPLY" = 1 ]; then
+declare -A COMPLETED_OWNERSHIP_UNITS=()
+
+load_completed_ownership_units() {
+  local line unit_id
+  while IFS= read -r line; do
+    case "$line" in
+      done=*)
+        unit_id="${line#done=}"
+        [[ "$unit_id" =~ ^[0-9]{6}$ ]] || die "invalid completed ownership unit: $unit_id"
+        COMPLETED_OWNERSHIP_UNITS["$unit_id"]=1
+        ;;
+    esac
+  done < "$OWNERSHIP_PROGRESS"
+}
+
+run_ownership_unit() {
+  local unit_id="$1"
+  local total="$2"
+  local kind="$3"
+  local depth="$4"
+  local path="$5"
+  local started_at status processed elapsed
+
+  if [ -n "${COMPLETED_OWNERSHIP_UNITS[$unit_id]+x}" ]; then
+    say "[$unit_id/$total] already complete; skipping $path"
+    return
+  fi
+
+  say "[$unit_id/$total] owner -> $DAEMON_USER (preserve group; no chmod/setfacl): $path"
+  OWNERSHIP_COUNTER="$(mktemp)"
+  started_at="$(date +%s)"
+  set +e
+  if [ "$kind" = "shallow" ]; then
+    find "$path" -xdev -maxdepth "$depth" -printf x \
+      \( -user "$DAEMON_USER" -o -exec chown -h -- "$DAEMON_USER" {} + \)
+  else
+    find "$path" -xdev -printf x \
+      \( -user "$DAEMON_USER" -o -exec chown -h -- "$DAEMON_USER" {} + \)
+  fi | fold -w 100000 | awk -v unit="$unit_id" -v total="$total" -v output="$OWNERSHIP_COUNTER" '
+    { processed += length($0); if (length($0) == 100000) printf "  [%s/%s] scanned %d paths\n", unit, total, processed > "/dev/stderr" }
+    END { print processed + 0 > output }
+  '
+  status="$?"
+  set -e
+  processed="$(cat "$OWNERSHIP_COUNTER")"
+  rm -f -- "$OWNERSHIP_COUNTER"
+  OWNERSHIP_COUNTER=""
+  [ "$status" -eq 0 ] || die "ownership unit $unit_id failed: $path"
+
+  sync -f "$path"
+  printf 'done=%s\n' "$unit_id" >> "$OWNERSHIP_PROGRESS"
+  sync -f "$OWNERSHIP_PROGRESS"
+  COMPLETED_OWNERSHIP_UNITS["$unit_id"]=1
+  elapsed=$(( $(date +%s) - started_at ))
+  say "[$unit_id/$total] complete; scanned $processed paths; elapsed ${elapsed}s"
+}
+
+verify_ownership_roots() {
+  local row tenant_id user_id unix_username home home_canonical unexpected
   for row in "${HOME_ROWS[@]}"; do
     IFS='|' read -r tenant_id user_id unix_username home home_canonical <<< "$row"
-    say "chown $home_canonical -> $DAEMON_USER:$DAEMON_GROUP"
-    chown -R -- "$DAEMON_USER:$DAEMON_GROUP" "$home_canonical"
+    unexpected="$(find "$home_canonical" -xdev ! -user "$DAEMON_USER" -print -quit)"
+    [ -z "$unexpected" ] || die "ownership verification failed under $home_canonical: $unexpected"
   done
-  say "chown $DATA_HOME_CANONICAL -> $DAEMON_USER:$DAEMON_GROUP"
-  chown -R -- "$DAEMON_USER:$DAEMON_GROUP" "$DATA_HOME_CANONICAL"
+  unexpected="$(find "$DATA_HOME_CANONICAL" -xdev ! -user "$DAEMON_USER" -print -quit)"
+  [ -z "$unexpected" ] || die "ownership verification failed under $DATA_HOME_CANONICAL: $unexpected"
+}
+
+echo "-- step 7: transfer filesystem ownership in restartable units --"
+if [ "$APPLY" = 1 ]; then
+  load_completed_ownership_units
+  total_units="${#OWNERSHIP_UNITS[@]}"
+  while IFS='|' read -r unit_id kind depth path; do
+    run_ownership_unit "$unit_id" "$total_units" "$kind" "$depth" "$path"
+  done < "$OWNERSHIP_PLAN"
+  say "verifying every migration root is owned by $DAEMON_USER"
+  verify_ownership_roots
+  say "ownership verification complete; groups, modes, and ACLs were not rewritten"
 else
-  say "would chown ${#HOME_ROWS[@]} homes and the Agor data tree"
+  say "would change only the owner across ${#OWNERSHIP_UNITS[@]} restartable, mount-bounded units"
+  say "would preserve groups and avoid explicit chmod/setfacl operations"
 fi
 echo
 
-echo "-- step 7: activate sandbox mode --"
+echo "-- step 8: activate sandbox mode --"
 if [ "$APPLY" = 1 ]; then
   CONFIG_TMP="$(mktemp "$CONFIG.sandbox.XXXXXX")"
   cp --preserve=all -- "$CONFIG" "$CONFIG_TMP"
@@ -374,7 +611,7 @@ fi
 echo
 
 if [ "$TEARDOWN" = 1 ]; then
-  echo "-- step 8: teardown legacy OS plumbing --"
+  echo "-- step 9: teardown legacy OS plumbing --"
   if [ "$APPLY" = 1 ]; then
     getent group | awk -F: '/^agor_wt_/{print $1}' | xargs -r -n1 groupdel
     rm -f -- /etc/sudoers.d/agor-daemon

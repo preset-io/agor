@@ -40,6 +40,9 @@ multi-tenant (use containers/microVMs for that).
   NUL-delimited numeric owner/group/path manifest before chowning. On trees with
   millions of inodes that artifact can still be large and is not a substitute
   for the deployment's normal volume/database backup.
+- **Groups and ACLs stay in place.** The forward conversion changes only inode
+  owners. It does not run `chgrp`, `chmod`, or `setfacl`, which retains useful
+  strict-mode recovery metadata while making the daemon the effective owner.
 
 ## Prerequisites
 
@@ -100,7 +103,25 @@ sudo --preserve-env=DATABASE_URL scripts/strict-to-sandbox-migration.sh \
   --tenant-id default \
   --expected-user-count 42
 
-# Drain work, stop the daemon, repeat the exact reviewed command with --apply.
+# Drain work and stop the daemon. First create the recovery artifacts and stop
+# at the explicit pre-ownership checkpoint:
+sudo --preserve-env=DATABASE_URL scripts/strict-to-sandbox-migration.sh \
+  --prepare-only \
+  --data-home /absolute/agor-data \
+  --config /absolute/config.yaml \
+  --daemon-user agorpg \
+  --tenant-id default \
+  --expected-user-count 42
+
+# Verify/preserve the manifest, config backup, ownership plan, and progress
+# journal. Then cross the ownership boundary deliberately:
+sudo --preserve-env=DATABASE_URL scripts/strict-to-sandbox-migration.sh \
+  --apply --resume \
+  --data-home /absolute/agor-data \
+  --config /absolute/config.yaml \
+  --daemon-user agorpg \
+  --tenant-id default \
+  --expected-user-count 42
 ```
 
 Steps it performs (in order):
@@ -108,12 +129,16 @@ Steps it performs (in order):
 1. Verifies the schema, tenant-visible user count, host identities, config, and
    every resolved home; any missing/unsafe path aborts.
 2. Re-runs pre-flight against those exact homes.
-3. Writes a non-overwritable compressed ownership manifest and preserves the
-   operator config. `--resume` reuses and verifies those artifacts.
+3. Writes a non-overwritable compressed ownership manifest, preserves the
+   operator config, and freezes a hash-bound ownership plan and progress
+   journal. `--prepare-only` exits here; `--resume` verifies and reuses them.
 4. Sets every `filesystem_home` in one transaction and verifies the row mapping.
-5. Chowns each resolved home's canonical directory and the canonical data root
-   to the daemon owner (important when `/home/<user>` is a symlink).
-6. Atomically flips `execution.unix_user_mode: sandbox`.
+5. Changes owners to the daemon in mount-bounded, restartable units. Repository
+   roots, worktree repository buckets, and user homes are independent units.
+   Groups are preserved and no explicit mode or ACL rewrite occurs. Completed
+   units are synced to the journal; an interrupted unit alone is repeated.
+6. Verifies every migration root is daemon-owned.
+7. Atomically flips `execution.unix_user_mode: sandbox`.
 
 **Do not use `--teardown` on the initial migration.** PostgreSQL runs reject it
 because tenant-scoped RLS cannot prove that deleting host-global groups is safe.
@@ -139,8 +164,9 @@ inside a session, confirm:
   Filesystem and tool-home isolation are degraded until sandbox is restored.
 - **Full:** retain the ownership manifest as forensic rollback data, but do not
   replay one `chown` process per inode. Reconcile branch/repo permissions in
-  bulk with `agor local sync-unix`, restore homes by owner in bounded batches,
-  restore sudoers if removed, then return to `strict`/`insulated`.
+  bulk only where verification finds drift, restore homes by owner in bounded
+  batches, restore sudoers if removed, then return to `strict`/`insulated`.
+  Preserved branch/repo groups and ACLs reduce how much reconciliation is needed.
 
 ## Known behavior changes to expect
 
