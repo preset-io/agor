@@ -31,7 +31,9 @@ RUN apt-get update && apt-get install -y \
   openssh-server \
   acl \
   ripgrep \
+  bubblewrap \
   && rm -rf /var/lib/apt/lists/*
+# bubblewrap: filesystem-only executor sandbox. See context/explorations/executor-sandboxing.md.
 
 # Configure SSH server for multi-user testing (used in postgres profile)
 RUN mkdir -p /run/sshd && \

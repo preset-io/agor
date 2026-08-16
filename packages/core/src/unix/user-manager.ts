@@ -447,6 +447,16 @@ export function resolveUnixUserForImpersonation(
         reason: 'simple mode - no impersonation',
       };
 
+    case 'sandbox':
+      // Strict replacement: NO OS impersonation — every session runs as the
+      // daemon user. Isolation comes from the executor filesystem sandbox
+      // (per-owner home overlay + RBAC-aware branch mount), not Unix uids.
+      return {
+        unixUser: null,
+        reportedUnixUser: null,
+        reason: 'sandbox mode - no impersonation (isolation via filesystem sandbox)',
+      };
+
     case 'delegated':
       // No impersonation, but the identity is load-bearing: the execution
       // substrate (command template / orchestration) selects the user's home

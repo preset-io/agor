@@ -92,6 +92,33 @@ environment:
       logs: docker compose -p agor-{{branch.name}} logs --tail=100
       health: http://localhost:{{add 3000 branch.unique_id}}/health
       app: http://{{host.ip_address}}:{{add 5000 branch.unique_id}}
+    sandbox:
+      start: >-
+        env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_SANDBOX_ENABLED=true docker compose -p agor-{{branch.name}} up -d --build
+      description: >-
+        SQLite dev with the OS-level executor filesystem sandbox ENABLED
+        (execution.sandbox.enabled via AGOR_SANDBOX_ENABLED=true). Every executor
+        spawn is wrapped in raw bubblewrap (filesystem-only, shared network so the
+        daemon/model stay reachable) at the single spawn chokepoint — tool-agnostic
+        across Claude/Codex/Gemini/terminals. Branch + tmp writable; the base repo
+        `.git` is bound for commits; ~/.agor secrets and sibling branches are hidden.
+        Requires unprivileged user namespaces inside the container — the
+        auto-loaded docker-compose.override.yml relaxes seccomp/apparmor for bwrap.
+        See context/explorations/executor-sandboxing.md.
+      extends: sqlite
+    sandbox-peruser:
+      start: >-
+        env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_SANDBOX_ENABLED=true AGOR_SANDBOX_HOME_MODE=per_user docker compose -p agor-{{branch.name}} up -d --build
+      description: >-
+        Sandbox + Phase-2 per-user HOME overlay (AGOR_SANDBOX_HOME_MODE=per_user).
+        Each session runs with a private, persistent home overlaid at the passwd
+        home from <data_home>/tenants/<tenant>/homes/<owner_id>. The overlay hides
+        the whole daemon .agor tree (config, db, worktrees, repos) + every other
+        home by construction — the substrate meant to replace unix_user_mode:
+        strict without Unix accounts. See context/explorations/executor-sandboxing.md.
+      extends: sqlite
     postgres:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000

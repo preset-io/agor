@@ -147,6 +147,41 @@ describe('resolveEffectiveConfig', () => {
       ).execution?.executor_unix_user
     ).toBe('custom-runner');
   });
+
+  it('unix_user_mode: sandbox implies RBAC + enabled per-user sandbox that fails closed', () => {
+    const resolved = resolveEffectiveConfig({ execution: { unix_user_mode: 'sandbox' } }, {});
+    expect(resolved.execution?.branch_rbac).toBe(true);
+    expect(resolved.execution?.sandbox).toMatchObject({
+      enabled: true,
+      home_mode: 'per_user',
+      fail_if_unavailable: true,
+    });
+  });
+
+  it('sandbox mode honors explicit sandbox tunables (home_mode/fail override) but forces enabled', () => {
+    const resolved = resolveEffectiveConfig(
+      {
+        execution: {
+          unix_user_mode: 'sandbox',
+          sandbox: { enabled: false, home_mode: 'shared', fail_if_unavailable: false },
+        },
+      },
+      {}
+    );
+    // enabled is non-negotiable in sandbox mode; the rest respect the explicit config.
+    expect(resolved.execution?.sandbox?.enabled).toBe(true);
+    expect(resolved.execution?.sandbox?.home_mode).toBe('shared');
+    expect(resolved.execution?.sandbox?.fail_if_unavailable).toBe(false);
+  });
+
+  it('AGOR_SANDBOX_HOME_MODE env still overrides home_mode without the sandbox isolation mode', () => {
+    const resolved = resolveEffectiveConfig(
+      { execution: { sandbox: { enabled: true } } },
+      { AGOR_SANDBOX_HOME_MODE: 'per_user' }
+    );
+    expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
+    expect(resolved.execution?.branch_rbac).not.toBe(true); // not sandbox mode → no forced RBAC
+  });
 });
 
 describe('resolveTeammateFrameworkRepoUrl', () => {

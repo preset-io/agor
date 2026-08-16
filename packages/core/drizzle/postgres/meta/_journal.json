@@ -582,6 +582,13 @@
       "when": 1786800000000,
       "tag": "0083_transcript_hydration_keysets",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1786900000000,
+      "tag": "0084_add_user_filesystem_home",
+      "breakpoints": true
     }
   ]
 }

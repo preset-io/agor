@@ -1010,6 +1010,40 @@ export function resolveEffectiveConfig(
 ): AgorConfig {
   const defaults = getDefaultConfig();
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : undefined;
+
+  // Resolve the effective Unix isolation mode (env override wins) so the
+  // `sandbox` mode can imply the rest of its machinery.
+  const effectiveUnixMode = (env.AGOR_UNIX_USER_MODE ??
+    config.execution?.unix_user_mode ??
+    'simple') as NonNullable<AgorConfig['execution']>['unix_user_mode'];
+  const sandboxIsolation = effectiveUnixMode === 'sandbox';
+
+  // Fold config file + env vars + `sandbox`-mode implications into ONE sandbox
+  // settings object (a single `sandbox:` key below). `sandbox` mode is the
+  // strict replacement: it FORCES the sandbox on with a per-owner home overlay
+  // and (by default) fails closed, while still honoring explicit tunables
+  // (include/protect_secrets/extras, and an explicit home_mode/fail override).
+  const envSandboxEnabled = env.AGOR_SANDBOX_ENABLED === 'true';
+  const envHomeMode =
+    env.AGOR_SANDBOX_HOME_MODE === 'per_user' || env.AGOR_SANDBOX_HOME_MODE === 'shared'
+      ? env.AGOR_SANDBOX_HOME_MODE
+      : undefined;
+  let resolvedSandbox = config.execution?.sandbox;
+  if (sandboxIsolation || envSandboxEnabled || envHomeMode) {
+    resolvedSandbox = {
+      ...config.execution?.sandbox,
+      ...(envHomeMode ? { home_mode: envHomeMode } : {}),
+      ...(envSandboxEnabled ? { enabled: true } : {}),
+      ...(sandboxIsolation
+        ? {
+            enabled: true, // non-negotiable: sandbox mode without the sandbox is meaningless
+            home_mode: config.execution?.sandbox?.home_mode ?? envHomeMode ?? 'per_user',
+            fail_if_unavailable: config.execution?.sandbox?.fail_if_unavailable ?? true,
+          }
+        : {}),
+    };
+  }
+
   return {
     ...defaults,
     ...config,
@@ -1039,6 +1073,13 @@ export function resolveEffectiveConfig(
       ...(env.AGOR_USE_EXECUTOR === 'true' && !env.AGOR_EXECUTOR_USERNAME
         ? { executor_unix_user: 'agor_executor' }
         : {}),
+      // Folded sandbox settings (config file + AGOR_SANDBOX_* env + `sandbox`
+      // isolation-mode implications). Computed above. AGOR_SANDBOX_ENABLED /
+      // AGOR_SANDBOX_HOME_MODE are used by the `sandbox` .agor.yml env variants.
+      ...(resolvedSandbox ? { sandbox: resolvedSandbox } : {}),
+      // `sandbox` isolation mode requires RBAC to be active (branch authorization
+      // is what the mount policy enforces). Force it on last so it wins.
+      ...(sandboxIsolation ? { branch_rbac: true } : {}),
     },
     paths: { ...defaults.paths, ...config.paths },
     analytics: { ...defaults.analytics, ...config.analytics },

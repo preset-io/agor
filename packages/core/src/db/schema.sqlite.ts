@@ -988,6 +988,11 @@ export const users = sqliteTable(
     // Unix username for process impersonation (optional, app-enforced uniqueness)
     unix_username: text('unix_username'),
 
+    // Absolute host home dir used as the per-user sandbox overlay SOURCE under
+    // unix_user_mode: sandbox (home_mode: per_user). Null → canonical store
+    // <data_home>/tenants/<tenant>/homes/<user_id>. See types/user.ts.
+    filesystem_home: text('filesystem_home'),
+
     // Onboarding state
     onboarding_completed: t.bool('onboarding_completed').notNull().default(false),
 

@@ -325,8 +325,15 @@ export interface AgorDatabaseSettings {
  *   fails loudly instead of silently sharing an identity
  * - `insulated` — executors run as a dedicated user with per-branch groups
  * - `strict` — sessions run as the session creator's own Unix user
+ * - `sandbox` — the strict-replacement. NO OS impersonation (everything runs as
+ *   the daemon user, like `simple`), but isolation is enforced by the executor
+ *   **filesystem sandbox** (bubblewrap) instead of Unix uids/groups: RBAC is on,
+ *   each session gets a per-owner home overlay (`sandbox.home_mode: per_user`),
+ *   and the branch is mounted per the caller's effective permission tier. No
+ *   sudoers / host accounts / password sync. Linux only. See
+ *   `context/explorations/executor-sandboxing.md`.
  */
-export type UnixUserMode = 'simple' | 'delegated' | 'insulated' | 'strict';
+export type UnixUserMode = 'simple' | 'delegated' | 'insulated' | 'strict' | 'sandbox';
 
 export interface AgorExecutorHeartbeatSettings {
   /** Enable executor task heartbeats (default: true). */
@@ -345,6 +352,87 @@ export interface AgorExecutorHeartbeatSettings {
     /** Callback timeout in milliseconds (default: 3000). */
     timeout_ms?: number;
   };
+}
+
+/**
+ * Which Agor-managed dynamic roots the sandbox should grant WRITE access to.
+ * The daemon/executor resolves each `true` flag to the concrete absolute path
+ * it already knows (branch working dir, base repo, /tmp, $HOME) and merges it
+ * into the effective `filesystem.allowWrite` list. Reads stay open by default
+ * (SRT model); see `protect_secrets` / `isolate_branches` for read denials.
+ */
+export interface AgorSandboxIncludeSettings {
+  /** Branch working directory. Effectively always true. Default: true. */
+  branch?: boolean;
+  /**
+   * The shared base repository (`~/.agor/repos/<slug>`), REQUIRED for git in
+   * worktree storage mode (the branch's `.git` is a pointer into it). Default: true.
+   */
+  base_repo?: boolean;
+  /** `/tmp` (+ a task-private temp). Default: true. */
+  tmp?: boolean;
+  /** All of `$HOME` (dangerous — secrets still denied via `protect_secrets`). Default: false. */
+  home?: boolean;
+}
+
+/**
+ * OS-level executor **filesystem** sandbox policy. Global, single-policy —
+ * deliberately NOT per-session to avoid config-hell. Disabled by default;
+ * `agor init` offers a one-shot opt-in.
+ *
+ * When enabled, Agor wraps EVERY executor invocation (all agentic tools,
+ * terminals, git/file ops) in `bubblewrap` at the single spawn chokepoint, so
+ * filesystem isolation is uniform across tools — not per-tool. This is a
+ * **filesystem sandbox only**: the network namespace is left shared
+ * (`--share-net`) so the executor keeps its daemon/model connectivity. Network
+ * egress control, if wanted, is left to each tool's own config.
+ *
+ * Agor resolves `include.*` / `protect_secrets` / `isolate_branches` into
+ * bubblewrap bind mounts + masks using paths it already knows. See
+ * `context/explorations/executor-sandboxing.md`.
+ */
+export interface AgorSandboxSettings {
+  /** Master switch. Default: false (open filesystem; tool approval flows still apply). */
+  enabled?: boolean;
+  /** Dynamic write roots Agor grants (branch/base_repo/tmp/home). */
+  include?: AgorSandboxIncludeSettings;
+  /**
+   * Deny reads of the daemon trust-root + common credential dirs
+   * (`~/.agor/config.yaml`, `agor.db`, `~/.ssh`, `~/.gnupg`, `~/.aws`,
+   * `~/.config/gcloud`, `~/.npmrc`). Applied even when `include.home` is true.
+   * Default: true.
+   */
+  protect_secrets?: boolean;
+  /**
+   * Cross-branch read isolation: mask the worktrees root, then re-expose only
+   * the current branch. Gives isolation even in `simple`/`delegated` mode
+   * (where all branches share the daemon uid). Default: true.
+   */
+  isolate_branches?: boolean;
+  /**
+   * How the executor's `$HOME` is presented inside the sandbox:
+   *  - `shared` (default): the daemon user's real home, with tool state/cache
+   *    dirs writable and the daemon trust-root + credential dirs masked.
+   *  - `per_user`: overlay a **per-owner home store**
+   *    (`<data_home>/tenants/<tenant>/homes/<owner_id>`) at the passwd home, so
+   *    `~` is a private, persistent home per session owner. The overlay hides
+   *    the entire daemon `.agor` tree (config, db, worktrees, repos) and every
+   *    other user's home by construction; the branch, base repo, and managed
+   *    agentic-tools are re-exposed on top. This is the substrate that lets
+   *    per-user isolation work without Unix accounts (the strict-mode
+   *    replacement). Default: `shared`.
+   */
+  home_mode?: 'shared' | 'per_user';
+  /** Extra writable paths added to the `include.*` roots (escape hatch). */
+  extra_allow_write?: string[];
+  /** Extra denied-read paths added to `protect_secrets` (escape hatch). */
+  extra_deny_read?: string[];
+  /**
+   * Hard-fail a task if the sandbox cannot start (missing `bwrap` / unsupported
+   * platform) instead of running unsandboxed. Recommended `true` for
+   * production security gates. Default: false.
+   */
+  fail_if_unavailable?: boolean;
 }
 
 /**
@@ -583,6 +671,12 @@ export interface AgorExecutionSettings {
    * ```
    */
   branch_storage?: AgorBranchStorageSettings;
+
+  /**
+   * OS-level executor sandbox policy (SRT: bubblewrap / Seatbelt). Disabled by
+   * default. Global, single-policy. See `context/explorations/executor-sandboxing.md`.
+   */
+  sandbox?: AgorSandboxSettings;
 }
 
 /**

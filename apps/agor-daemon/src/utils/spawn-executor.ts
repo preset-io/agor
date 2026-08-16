@@ -50,6 +50,7 @@ import {
   untrackExecutorProcess,
 } from '../executor-tracking.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
+import { buildSandboxWrap } from './sandbox-wrap.js';
 
 let configuredDaemonUrl: string | null = null;
 
@@ -85,6 +86,7 @@ export function configureExecutor(
   configuredExecutorDefaults = {
     executorCommandTemplate: config?.executor_command_template || undefined,
     asUser: config?.executor_unix_user || undefined,
+    sandbox: config?.sandbox?.enabled ? config.sandbox : undefined,
   };
   requireExecutorTenantContext = options.requireTenantContext === true;
 
@@ -448,6 +450,74 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   const { executorPath, cwd, asUser, envWithDaemonUrl, envFilePath, inlineEnv, cmd, args } =
     prepareLocalExecutorSpawn(options, '--stdin', location);
 
+  // OS-level sandbox wrap (SRT) — covers ALL tools at this one chokepoint.
+  // v1: non-impersonated (simple mode) spawns only.
+  let spawnCmd = cmd;
+  let spawnArgs = args;
+  let spawnEnv = envWithDaemonUrl;
+  // Sandbox around the WORK directory (the branch the agent operates in), which
+  // is `payload.cwd` — NOT the executor process cwd (which is the executor
+  // package dir for prompt tasks). No payload.cwd (e.g. repo-level ops) ⇒ no wrap.
+  // The work dir (branch the agent operates in) is `payload.params.cwd` for
+  // prompt/terminal tasks, or top-level `payload.cwd` for some commands — NOT
+  // the executor process cwd (which is the executor package dir). No work dir
+  // (e.g. repo-level ops) ⇒ no wrap.
+  const paramsCwd = (payload.params as { cwd?: unknown } | undefined)?.cwd;
+  const candidateCwd =
+    typeof payload.cwd === 'string' && payload.cwd.length > 0
+      ? payload.cwd
+      : typeof paramsCwd === 'string' && paramsCwd.length > 0
+        ? paramsCwd
+        : undefined;
+  const sandboxWorkdir = candidateCwd;
+  // Authoritative mount inputs the daemon resolved from its own DB state and
+  // threaded through `payload.params` (see register-services) — the sandbox
+  // never derives these from disk.
+  const sandboxParams = payload.params as
+    | { sandboxBaseRepoPath?: unknown; sandboxHomeStore?: unknown; sandboxBranchAccess?: unknown }
+    | undefined;
+  const sandboxBaseRepoPath =
+    typeof sandboxParams?.sandboxBaseRepoPath === 'string'
+      ? sandboxParams.sandboxBaseRepoPath
+      : undefined;
+  const sandboxHomeStore =
+    typeof sandboxParams?.sandboxHomeStore === 'string'
+      ? sandboxParams.sandboxHomeStore
+      : undefined;
+  const sandboxBranchAccess =
+    sandboxParams?.sandboxBranchAccess === 'read' || sandboxParams?.sandboxBranchAccess === 'none'
+      ? sandboxParams.sandboxBranchAccess
+      : 'write';
+  if (!asUser && sandboxWorkdir) {
+    try {
+      const wrap = buildSandboxWrap({
+        sandbox: configuredExecutorDefaults.sandbox,
+        cwd: sandboxWorkdir,
+        cmd,
+        args,
+        baseRepoPath: sandboxBaseRepoPath,
+        ownerHomeStore: sandboxHomeStore,
+        branchAccess: sandboxBranchAccess,
+      });
+      if (wrap) {
+        spawnCmd = wrap.cmd;
+        spawnArgs = wrap.args;
+        spawnEnv = { ...envWithDaemonUrl, ...wrap.extraEnv };
+        console.log(`${logPrefix} Sandbox: wrapping executor via bwrap (filesystem-only)`);
+      }
+    } catch (err) {
+      console.error(
+        `${logPrefix} Sandbox wrap failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+      observeExitCallback(options.onExit, 126, { mode: 'local' }, logPrefix);
+      return;
+    }
+  } else if (asUser && configuredExecutorDefaults.sandbox?.enabled) {
+    console.warn(
+      `${logPrefix} Sandbox enabled but skipped for impersonated (asUser) spawn — v1 covers non-impersonated only.`
+    );
+  }
+
   if (asUser) {
     // Safe summary only — never log secret values or their key names.
     const safeEnvKeys = Object.keys(inlineEnv ?? {}).filter((key) => !isSecretEnvKey(key));
@@ -465,9 +535,9 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     observeExitCallback(options.onExit, code, { mode: 'local' }, logPrefix);
   };
 
-  const executorProcess = spawn(cmd, args, {
+  const executorProcess = spawn(spawnCmd, spawnArgs, {
     cwd,
-    env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
+    env: asUser ? undefined : { ...spawnEnv }, // When impersonating, env is in the command; otherwise pass to spawn
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
     detached: process.platform !== 'win32',
   });
@@ -1428,7 +1498,7 @@ export function generateScopedServiceToken(
  */
 export type ExecutorConfig = Pick<
   AgorExecutionSettings,
-  'executor_command_template' | 'executor_unix_user'
+  'executor_command_template' | 'executor_unix_user' | 'sandbox'
 >;
 
 interface ExecutorSpawnDefaults {
@@ -1436,6 +1506,8 @@ interface ExecutorSpawnDefaults {
   executorCommandTemplate?: string;
   /** Unix user to run executors as */
   asUser?: string;
+  /** OS-level sandbox policy (SRT) wrapped around every local executor spawn. */
+  sandbox?: AgorExecutionSettings['sandbox'];
 }
 
 /** DI-based factory that bakes execution config into a spawner, independent of module-level defaults. */

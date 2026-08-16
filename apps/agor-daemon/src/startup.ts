@@ -728,6 +728,34 @@ export async function startup(ctx: StartupContext): Promise<void> {
     }
   }
 
+  // Isolation-mode banners: announce `sandbox` and soft-deprecate the OS-account
+  // modes it replaces.
+  {
+    const unixMode = config.execution?.unix_user_mode ?? 'simple';
+    if (unixMode === 'sandbox') {
+      const sandboxEnabled = config.execution?.sandbox?.enabled === true;
+      console.log(
+        '🧰 unix_user_mode=sandbox — OS isolation via the executor filesystem sandbox ' +
+          `(RBAC on, per-user home overlay). sandbox.enabled=${sandboxEnabled}.`
+      );
+      if (process.platform !== 'linux') {
+        console.warn(
+          `\x1b[33m⚠️  unix_user_mode=sandbox requires Linux (bubblewrap); platform is ${process.platform}. ` +
+            'Sessions will fail to start if sandbox.fail_if_unavailable is true (the default in this mode).\x1b[0m'
+        );
+      }
+    } else if (unixMode === 'strict' || unixMode === 'insulated') {
+      console.warn(
+        `\x1b[33m⚠️  unix_user_mode=${unixMode} is being phased out.\x1b[0m\n` +
+          '   The filesystem-sandbox mode (unix_user_mode: sandbox) provides the same\n' +
+          '   multi-user isolation without sudoers / host accounts / password sync, and is\n' +
+          '   the recommended path. Migration recipe:\n' +
+          '     scripts/strict-to-sandbox-migration.sh --help\n' +
+          '   See context/explorations/executor-sandboxing.md §7.'
+      );
+    }
+  }
+
   // 5. Start the Task-owned runtime reconciler. In shared mode every daemon
   // may discover the same routing refs; repository fences choose the winner.
   const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);
