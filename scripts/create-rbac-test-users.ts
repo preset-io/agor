@@ -13,6 +13,7 @@
  *   AGOR_DB_DIALECT - Should be 'postgresql'
  */
 
+import os from 'node:os';
 import path from 'node:path';
 import { getConfigPath } from '@agor/core/config';
 import {
