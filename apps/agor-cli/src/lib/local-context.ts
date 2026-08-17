@@ -15,3 +15,13 @@ export async function assertLocalContextUnlocked(config: AgorConfig): Promise<vo
     );
   }
 }
+
+/** Compatibility-only guard for diagnostics and stopping a pre-identity daemon. */
+export async function assertLocalContextUnlockedWhenIdentified(config: AgorConfig): Promise<void> {
+  try {
+    requireDeploymentId(config);
+  } catch {
+    return;
+  }
+  await assertLocalContextUnlocked(config);
+}

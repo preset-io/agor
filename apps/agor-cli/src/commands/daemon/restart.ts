@@ -3,18 +3,13 @@
  */
 
 import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
-import {
-  type AgorConfig,
-  getDaemonUrl,
-  loadConfig,
-  loadConfigFromFile,
-  resolveDaemonUrl,
-} from '@agor/core/config';
+import { type AgorConfig, getDaemonUrl, resolveDaemonUrl } from '@agor/core/config';
 import { resolveDatabaseUrl } from '@agor/core/db';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';
+import { loadDaemonConfigWithDeploymentIdentity } from '../../lib/daemon-deployment-config.js';
 import {
   getDaemonPid,
   getManagedDaemonIdentity,
@@ -22,6 +17,7 @@ import {
   stopDaemon,
 } from '../../lib/daemon-manager.js';
 import { isExpectedManagedDaemon, probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { confirmLegacyManagedDaemonStop } from '../../lib/legacy-daemon-stop.js';
 import { assertLocalContextUnlocked } from '../../lib/local-context.js';
 
 export default class DaemonRestart extends Command {
@@ -58,9 +54,12 @@ export default class DaemonRestart extends Command {
     const identity = getManagedDaemonIdentity();
     let restartConfig: AgorConfig;
     try {
-      restartConfig = identity?.configPath
-        ? await loadConfigFromFile(identity.configPath)
-        : await loadConfig();
+      const result = await loadDaemonConfigWithDeploymentIdentity(identity?.configPath);
+      restartConfig = result.config;
+      if (result.migrated) {
+        this.log(chalk.green(`✓ Added daemon.deployment_id: ${result.migrated.deploymentId}`));
+        this.log(chalk.dim(`Backup: ${result.migrated.backupPath}`));
+      }
     } catch (error) {
       this.log(chalk.red('✗ Failed to load daemon configuration'));
       this.log(error instanceof Error ? error.message : String(error));
@@ -109,7 +108,9 @@ export default class DaemonRestart extends Command {
       let stopped = false;
       if (existingPid !== null) {
         const managedInstanceId = identity?.instanceId;
-        if (!(await isExpectedManagedDaemon(oldDaemonUrl, managedInstanceId))) {
+        if (!identity) {
+          await confirmLegacyManagedDaemonStop(existingPid, oldDaemonUrl);
+        } else if (!(await isExpectedManagedDaemon(oldDaemonUrl, managedInstanceId))) {
           throw new Error(
             `Refusing to signal PID ${existingPid}: it cannot be verified as the CLI-managed Agor daemon at ${oldDaemonUrl}.`
           );

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assertLocalContextUnlocked } from './local-context';
+import {
+  assertLocalContextUnlocked,
+  assertLocalContextUnlockedWhenIdentified,
+} from './local-context';
 
 vi.mock('./auth.js', () => ({ loadToken: vi.fn() }));
 
@@ -8,6 +11,13 @@ import { loadToken } from './auth.js';
 const deploymentId = '019c1234-5678-7123-8123-123456789abc';
 
 describe('assertLocalContextUnlocked', () => {
+  it('allows the compatibility-only stop/diagnostic path before identity migration', async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    await expect(
+      assertLocalContextUnlockedWhenIdentified({ daemon: { port: 3030 } })
+    ).resolves.toBe(undefined);
+  });
+
   beforeEach(() => vi.mocked(loadToken).mockReset());
 
   it('allows logged-out local administration', async () => {

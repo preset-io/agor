@@ -8,7 +8,8 @@ import chalk from 'chalk';
 import { isInstalledPackage } from '../../lib/context.js';
 import { getDaemonPid, getManagedDaemonIdentity, stopDaemon } from '../../lib/daemon-manager.js';
 import { isExpectedManagedDaemon, probeAgorDaemon } from '../../lib/daemon-probe.js';
-import { assertLocalContextUnlocked } from '../../lib/local-context.js';
+import { confirmLegacyManagedDaemonStop } from '../../lib/legacy-daemon-stop.js';
+import { assertLocalContextUnlockedWhenIdentified } from '../../lib/local-context.js';
 
 export default class DaemonStop extends Command {
   static description = 'Stop daemon gracefully';
@@ -27,13 +28,16 @@ export default class DaemonStop extends Command {
     }
 
     try {
+      // Validate the PID first; this also clears stale identity state before
+      // a persisted custom config path can influence this command.
+      const pid = getDaemonPid();
       const identity = getManagedDaemonIdentity();
-      await assertLocalContextUnlocked(
-        identity?.configPath ? await loadConfigFromFile(identity.configPath) : await loadConfig()
-      );
+      const config = identity?.configPath
+        ? await loadConfigFromFile(identity.configPath)
+        : await loadConfig();
+      await assertLocalContextUnlockedWhenIdentified(config);
       const daemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
       const probe = await probeAgorDaemon(daemonUrl);
-      const pid = getDaemonPid();
       const expectedInstanceId = identity?.instanceId;
 
       if (pid === null) {
@@ -47,7 +51,9 @@ export default class DaemonStop extends Command {
         return;
       }
 
-      if (!(await isExpectedManagedDaemon(daemonUrl, expectedInstanceId))) {
+      if (!identity) {
+        await confirmLegacyManagedDaemonStop(pid, daemonUrl);
+      } else if (!(await isExpectedManagedDaemon(daemonUrl, expectedInstanceId))) {
         throw new Error(
           `Refusing to signal PID ${pid}: it cannot be verified as the CLI-managed Agor daemon at ${daemonUrl}. Remove stale ~/.agor/daemon.pid and ~/.agor/daemon.instance files only after verifying that PID yourself.`
         );
