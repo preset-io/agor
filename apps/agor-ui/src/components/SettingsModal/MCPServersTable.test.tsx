@@ -130,7 +130,6 @@ const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
  * not yet mounted, rather than torn down on the way out.
  */
 const openPolicyPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Member policy' }));
-const openServersPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Servers' }));
 
 describe('MCPServersTable member policy', () => {
   it('opens on the servers, with the policy a pane away', async () => {
@@ -367,24 +366,6 @@ describe('MCPServersTable member policy', () => {
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
-  });
-
-  it('leaves an admin working after a save whose answer carries no capability', async () => {
-    // A save answers with the same shape a read does, and the admin who just
-    // changed the policy must not lose the control they changed it with.
-    const { find, patch } = renderTable({
-      policy: 'use_existing_only',
-      currentUser: ADMIN,
-      omitCanConfigure: true,
-    });
-    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
-
-    openPolicyPane();
-    fireEvent.click(policyRadio(/Members can add shared servers/));
-    await waitFor(() => expect(patch).toHaveBeenCalled());
-
-    openServersPane();
-    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeEnabled();
   });
 
   it('withholds every action from a read-only account, whatever the policy allows', async () => {

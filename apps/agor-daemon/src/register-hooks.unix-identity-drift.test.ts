@@ -15,13 +15,18 @@
  * the validator, it was in whether the validator was reached.
  */
 
-import type { HookContext } from '@agor/core/types';
+import {
+  type HookContext,
+  type MessageCreate,
+  MessageRole,
+  type SessionID,
+} from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from './register-hooks';
 
 type RegisteredHook = (context: HookContext) => unknown;
 
-const SESSION_ID = '00000000-0000-7000-8000-000000000001';
+const SESSION_ID = '00000000-0000-7000-8000-000000000001' as SessionID;
 const BRANCH_ID = '00000000-0000-7000-8000-000000000002';
 const CREATOR_ID = '00000000-0000-7000-8000-000000000003';
 
@@ -119,21 +124,32 @@ const executorAuthentication = (sessionId: string) => ({
 });
 
 /** An external prompt write, as the REST/socket transports deliver it. */
-const makeContext = (path: 'messages' | 'tasks', asExecutor: false | string = false): HookContext =>
-  ({
+const makeContext = (
+  path: 'messages' | 'tasks',
+  asExecutor: false | string = false
+): HookContext => {
+  const message = {
+    session_id: SESSION_ID,
+    type: 'user',
+    role: MessageRole.USER,
+    index: 0,
+    timestamp: '2026-01-01T00:00:00.000Z',
+    content_preview: 'ship it',
+    content: 'ship it',
+  } satisfies MessageCreate;
+
+  return {
     path,
     method: 'create',
-    data:
-      path === 'messages'
-        ? { session_id: SESSION_ID, role: 'user', content: 'ship it' }
-        : { session_id: SESSION_ID, full_prompt: 'ship it' },
+    data: path === 'messages' ? message : { session_id: SESSION_ID, full_prompt: 'ship it' },
     params: {
       provider: 'rest',
       user: { user_id: CREATOR_ID, role: 'member' },
       query: {},
       ...(asExecutor ? { authentication: executorAuthentication(asExecutor) } : {}),
     },
-  }) as unknown as HookContext;
+  } as unknown as HookContext;
+};
 
 const runCreateChain = async (
   harness: Harness,
