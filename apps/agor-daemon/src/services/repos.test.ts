@@ -167,6 +167,73 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
     expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 
+  it('returns the failed representation when executor dispatch throws synchronously', async () => {
+    executorMocks.spawnExecutorFireAndForget.mockImplementationOnce(() => {
+      throw new Error('launcher unavailable');
+    });
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor',
+      local_path: '/managed/repos/agor',
+      default_branch: 'main',
+    };
+    const creatingBranch = {
+      branch_id: '550e8400-e29b-41d4-a716-446655440002',
+      repo_id: repo.repo_id,
+      name: 'dispatch-failure',
+      path: '/managed/worktrees/preset-io/agor/dispatch-failure',
+      filesystem_status: 'creating',
+    };
+    const failedBranch = {
+      ...creatingBranch,
+      filesystem_status: 'failed',
+      error_message: 'Failed to spawn executor: launcher unavailable',
+    };
+    const branches = {
+      create: vi.fn(async () => creatingBranch),
+      patch: vi.fn(async () => failedBranch),
+      find: vi.fn(async () => []),
+    };
+    const app = {
+      get: () => ({}),
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
+        if (name === 'branches') return branches;
+        if (name === 'board-objects') {
+          return { create: vi.fn(async () => undefined), find: vi.fn(async () => ({ data: [] })) };
+        }
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+
+    const result = await service.createBranch(
+      repo.repo_id,
+      {
+        name: creatingBranch.name,
+        ref: creatingBranch.name,
+        createBranch: true,
+        sourceBranch: 'main',
+        boardId: '550e8400-e29b-41d4-a716-446655440003',
+        position: { x: 10, y: 20 },
+        storage_mode: 'worktree',
+      },
+      { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+    );
+
+    expect(branches.patch).toHaveBeenCalledWith(
+      creatingBranch.branch_id,
+      {
+        filesystem_status: 'failed',
+        error_message: 'Failed to spawn executor: launcher unavailable',
+      },
+      expect.objectContaining({ provider: undefined })
+    );
+    expect(result).toEqual(failedBranch);
+  });
+
   it('does not attach a delegated user to daemon-owned Git lifecycle work', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
 

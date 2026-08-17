@@ -762,7 +762,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 1. Create git branch on filesystem
     // 2. Render environment templates with the materialized branch context
     // 3. Patch branch to 'ready' with rendered templates
-    const branch = (await branchesService.create(
+    let branch = (await branchesService.create(
       {
         repo_id: repo.repo_id,
         name: data.name,
@@ -939,14 +939,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[ReposService.createBranch] Failed to spawn executor:', message);
-      await branchesService.patch(
+      branch = (await branchesService.patch(
         branch.branch_id,
         {
           filesystem_status: 'failed',
           error_message: `Failed to spawn executor: ${message}`,
         },
         { ...params, provider: undefined }
-      );
+      )) as Branch;
     }
 
     // Return immediately with 'creating' status - UI will see updates via WebSocket
