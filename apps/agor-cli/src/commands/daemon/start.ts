@@ -8,18 +8,28 @@
  * Port/host are set via config.yaml (daemon.port / daemon.host) or env vars (PORT).
  */
 
+import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
 import type { AgorConfig } from '@agor/core/config';
-import { loadConfig, loadConfigFromFile, resolveDaemonUrl } from '@agor/core/config';
+import {
+  getConfigPath,
+  loadConfig,
+  loadConfigFromFile,
+  migrateConfigDeploymentId,
+  requireDeploymentId,
+  resolveDaemonUrl,
+} from '@agor/core/config';
 import { resolveDatabaseUrl } from '@agor/core/db';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import inquirer from 'inquirer';
 import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';
 import { getDaemonPid, startDaemon } from '../../lib/daemon-manager.js';
 import { probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { assertLocalContextUnlocked } from '../../lib/local-context.js';
 
 export default class DaemonStart extends Command {
   static description = 'Start the Agor daemon in the background';
@@ -46,7 +56,8 @@ export default class DaemonStart extends Command {
     const { flags } = await this.parse(DaemonStart);
 
     // 1. Load & validate config
-    const config = flags.config ? await this.loadConfigFromPath(flags.config) : await loadConfig();
+    const config = await this.loadConfigWithDeploymentIdentity(flags.config);
+    await assertLocalContextUnlocked(config);
     const daemonUrl = resolveDaemonUrl(config);
 
     // 2. Check if already running
@@ -109,6 +120,44 @@ export default class DaemonStart extends Command {
       this.log(chalk.red('Failed to start daemon:'));
       this.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
       this.exit(1);
+    }
+  }
+
+  private async loadConfigWithDeploymentIdentity(configPath?: string): Promise<AgorConfig> {
+    try {
+      const config = configPath ? await this.loadConfigFromPath(configPath) : await loadConfig();
+      requireDeploymentId(config);
+      return config;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("'daemon.deployment_id' is required")) throw error;
+
+      const path = resolve(configPath ?? getConfigPath());
+      const deploymentId = randomUUID();
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        this.error(
+          `Agor cannot start because daemon.deployment_id is missing from ${path}.\n\nAdd this under daemon:\n  deployment_id: ${deploymentId}\n\nAgor did not start.`
+        );
+      }
+
+      const { rewrite } = await inquirer.prompt<{ rewrite: boolean }>([
+        {
+          type: 'confirm',
+          name: 'rewrite',
+          default: false,
+          message:
+            'Add a deployment ID by rewriting config.yaml? A backup will be created; YAML comments and formatting may be lost.',
+        },
+      ]);
+      if (!rewrite) {
+        this.error(
+          `Add this under daemon in ${path}:\n  deployment_id: ${deploymentId}\n\nThen run agor daemon start again.`
+        );
+      }
+      const migrated = await migrateConfigDeploymentId(path, deploymentId);
+      this.log(chalk.green(`✓ Added daemon.deployment_id: ${migrated.deploymentId}`));
+      this.log(chalk.dim(`Backup: ${migrated.backupPath}`));
+      return migrated.config;
     }
   }
 

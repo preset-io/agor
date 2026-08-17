@@ -2,7 +2,7 @@
  * `agor daemon status` - Check daemon status
  */
 
-import { getDaemonUrl } from '@agor/core/config';
+import { getDaemonUrl, loadConfig, loadConfigFromFile } from '@agor/core/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { isAgorInitialized, isInstalledPackage } from '../../lib/context.js';
@@ -13,6 +13,7 @@ import {
   getPidFilePath,
 } from '../../lib/daemon-manager.js';
 import { probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { assertLocalContextUnlocked } from '../../lib/local-context.js';
 
 export default class DaemonStatus extends Command {
   static description = 'Check daemon status';
@@ -21,12 +22,16 @@ export default class DaemonStatus extends Command {
 
   async run(): Promise<void> {
     await this.parse(DaemonStatus);
+    const identity = getManagedDaemonIdentity();
+    await assertLocalContextUnlocked(
+      identity?.configPath ? await loadConfigFromFile(identity.configPath) : await loadConfig()
+    );
 
     // Check if Agor is initialized
     const initialized = await isAgorInitialized();
 
     // Get daemon info
-    const daemonUrl = getManagedDaemonIdentity()?.daemonUrl ?? (await getDaemonUrl());
+    const daemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
     const pid = getDaemonPid();
     const running = initialized ? (await probeAgorDaemon(daemonUrl)).running : false;
 

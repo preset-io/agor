@@ -45,7 +45,8 @@
     "topicSeparator": " ",
     "helpClass": "./dist/lib/help.js",
     "hooks": {
-      "command_not_found": "./dist/hooks/command-not-found.js"
+      "command_not_found": "./dist/hooks/command-not-found.js",
+      "prerun": "./dist/hooks/prerun.js"
     }
   }
 }

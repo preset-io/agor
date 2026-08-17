@@ -24,10 +24,12 @@ describe('probeAgorDaemon', () => {
     const url = await serve({
       service: 'agor-daemon',
       status: 'ok',
+      deploymentId: '019c1234-5678-7123-8123-123456789abc',
       managedInstanceId: 'owned-instance',
     });
     await expect(probeAgorDaemon(url)).resolves.toEqual({
       running: true,
+      deploymentId: '019c1234-5678-7123-8123-123456789abc',
       managedInstanceId: 'owned-instance',
     });
   });

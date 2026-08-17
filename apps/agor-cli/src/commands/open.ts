@@ -4,11 +4,11 @@
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { isDaemonRunning } from '@agor-live/client';
-import { getDaemonUrl } from '@agor-live/client/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
+import { loadToken } from '../lib/auth.js';
 import { getUIUrl } from '../lib/context.js';
+import { probeAgorDaemon } from '../lib/daemon-probe.js';
 
 const execAsync = promisify(exec);
 
@@ -18,23 +18,29 @@ export default class Open extends Command {
   static examples = ['<%= config.bin %> <%= command.id %>'];
 
   async run(): Promise<void> {
-    // Get daemon URL for health check
-    const daemonUrl = await getDaemonUrl();
+    const auth = await loadToken();
+    if (!auth) {
+      this.error('Not connected. Run agor login --url <daemon-url>.');
+    }
+    const daemonUrl = auth.target.url;
 
-    // Check if daemon is running
-    const running = await isDaemonRunning(daemonUrl);
+    const probe = await probeAgorDaemon(daemonUrl);
 
-    if (!running) {
-      this.log(chalk.red('✗ Daemon is not running'));
+    if (!probe.running) {
+      this.log(chalk.red('✗ Connected daemon is not reachable'));
       this.log('');
-      this.log('Start the daemon first:');
-      this.log(`  ${chalk.cyan('agor daemon start')}`);
+      this.log(`Target: ${chalk.cyan(daemonUrl)}`);
       this.log('');
       this.exit(1);
     }
+    if (probe.deploymentId !== auth.target.deploymentId) {
+      this.error(
+        `The daemon identity at ${daemonUrl} changed. Run agor login --url ${daemonUrl} again.`
+      );
+    }
 
     // Get UI URL (context-aware: dev/prod)
-    const uiUrl = getUIUrl();
+    const uiUrl = getUIUrl(daemonUrl);
 
     // Local environment: try to open browser
     try {

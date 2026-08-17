@@ -10,6 +10,7 @@ import { Transform } from 'node:stream';
 import {
   type AgorConfig,
   type ResolvedDeploymentConfig,
+  requireDeploymentId,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
@@ -4352,6 +4353,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const dbProbe = await probeDatabase(db);
       const publicResponse = {
         service: 'agor-daemon',
+        deploymentId: requireDeploymentId(config),
         // Present only for daemons detached by `agor daemon start`. The CLI
         // compares this opaque ID with its local ownership record before it
         // sends a signal, preventing a stale/recycled PID from being killed.

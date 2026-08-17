@@ -2,12 +2,13 @@
  * `agor daemon stop` - Stop daemon gracefully
  */
 
-import { getDaemonUrl } from '@agor/core/config';
+import { getDaemonUrl, loadConfig, loadConfigFromFile } from '@agor/core/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { isInstalledPackage } from '../../lib/context.js';
 import { getDaemonPid, getManagedDaemonIdentity, stopDaemon } from '../../lib/daemon-manager.js';
 import { isExpectedManagedDaemon, probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { assertLocalContextUnlocked } from '../../lib/local-context.js';
 
 export default class DaemonStop extends Command {
   static description = 'Stop daemon gracefully';
@@ -27,6 +28,9 @@ export default class DaemonStop extends Command {
 
     try {
       const identity = getManagedDaemonIdentity();
+      await assertLocalContextUnlocked(
+        identity?.configPath ? await loadConfigFromFile(identity.configPath) : await loadConfig()
+      );
       const daemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
       const probe = await probeAgorDaemon(daemonUrl);
       const pid = getDaemonPid();

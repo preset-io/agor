@@ -1,5 +1,6 @@
 export interface AgorDaemonProbe {
   running: boolean;
+  deploymentId?: string;
   managedInstanceId?: string;
 }
 
@@ -24,6 +25,7 @@ export async function probeAgorDaemon(url: string): Promise<AgorDaemonProbe> {
     if (body.service !== 'agor-daemon' && !isLegacyAgorHealth) return { running: false };
     return {
       running: true,
+      ...(typeof body.deploymentId === 'string' ? { deploymentId: body.deploymentId } : {}),
       ...(typeof body.managedInstanceId === 'string'
         ? { managedInstanceId: body.managedInstanceId }
         : {}),

@@ -26,6 +26,9 @@ export type UnknownJson = any;
  * Daemon settings
  */
 export interface AgorDaemonSettings {
+  /** Stable identity shared by every process belonging to this deployment. */
+  deployment_id?: string;
+
   /** Daemon port (default: 3030) */
   port?: number;
 

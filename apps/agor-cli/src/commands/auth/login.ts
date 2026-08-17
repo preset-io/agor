@@ -4,12 +4,19 @@
  * Prompts for email/password and stores JWT token for future CLI commands
  */
 
-import { createRestClient, isDaemonRunning } from '@agor-live/client';
-import { getDaemonUrl } from '@agor-live/client/config';
+import { access } from 'node:fs/promises';
+import {
+  getConfigPath,
+  loadConfig,
+  requireDeploymentId,
+  resolveDaemonUrl,
+} from '@agor/core/config';
+import { createRestClient } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
 import { saveToken } from '../../lib/auth';
+import { probeAgorDaemon } from '../../lib/daemon-probe';
 
 export default class Login extends Command {
   static description = 'Authenticate with Agor daemon';
@@ -28,17 +35,60 @@ export default class Login extends Command {
       char: 'p',
       description: 'Password (will prompt if not provided)',
     }),
+    url: Flags.string({ description: 'Daemon URL to authenticate with' }),
+    local: Flags.boolean({ description: 'Use the daemon from the local effective config' }),
   };
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Login);
 
-    // Get daemon URL
-    const daemonUrl = await getDaemonUrl();
+    if (flags.url && flags.local) this.error('Use either --url or --local, not both.');
+    const hasLocalConfig = await access(getConfigPath()).then(
+      () => true,
+      () => false
+    );
+    let localSelected = flags.local;
+    const localConfig = hasLocalConfig ? await loadConfig() : null;
+    let daemonUrl = flags.url
+      ? normalizeDaemonUrl(flags.url)
+      : localConfig
+        ? resolveDaemonUrl(localConfig)
+        : '';
+    if (!flags.url && !flags.local) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        this.error('Non-interactive login requires --url <daemon-url> or --local.');
+      }
+      const useLocal = hasLocalConfig
+        ? (
+            await inquirer.prompt<{ useLocal: boolean }>([
+              {
+                type: 'confirm',
+                name: 'useLocal',
+                default: true,
+                message: `Local deployment detected at ${daemonUrl}. Use it?`,
+              },
+            ])
+          ).useLocal
+        : false;
+      if (!useLocal) {
+        const answer = await inquirer.prompt<{ url: string }>([
+          {
+            type: 'input',
+            name: 'url',
+            message: 'Daemon URL',
+            validate: (value: string) => Boolean(value.trim()),
+          },
+        ]);
+        daemonUrl = normalizeDaemonUrl(answer.url);
+      } else {
+        localSelected = true;
+      }
+    }
+    if (flags.local && !hasLocalConfig) this.error(`No local config found at ${getConfigPath()}.`);
 
     // Check if daemon is running
-    const running = await isDaemonRunning(daemonUrl);
-    if (!running) {
+    const probe = await probeAgorDaemon(daemonUrl);
+    if (!probe.running) {
       this.error(
         chalk.red('✗ Daemon not running') +
           '\n\n' +
@@ -46,6 +96,19 @@ export default class Login extends Command {
           '\n  ' +
           chalk.cyan('cd apps/agor-daemon && pnpm dev')
       );
+    }
+    if (!probe.deploymentId) {
+      this.error(
+        `The daemon at ${daemonUrl} does not expose a deployment ID and is incompatible with this CLI. Upgrade the daemon before logging in.`
+      );
+    }
+    if (localSelected) {
+      const localDeploymentId = requireDeploymentId(localConfig ?? (await loadConfig()));
+      if (probe.deploymentId !== localDeploymentId) {
+        this.error(
+          `The daemon at ${daemonUrl} is deployment ${probe.deploymentId}, but the local config is ${localDeploymentId}. Refusing to log in as local.`
+        );
+      }
     }
 
     // Get credentials (prompt if not provided)
@@ -106,6 +169,12 @@ export default class Login extends Command {
 
       // Save token to disk
       await saveToken({
+        version: 2,
+        target: {
+          url: normalizeDaemonUrl(daemonUrl),
+          origin: new URL(daemonUrl).origin,
+          deploymentId: probe.deploymentId,
+        },
         accessToken: authResult.accessToken,
         user: {
           user_id: authResult.user.user_id,
@@ -136,7 +205,7 @@ export default class Login extends Command {
       client.io.io.opts.reconnection = false;
       client.io.removeAllListeners();
       client.io.close();
-      process.exit(0);
+      return;
     } catch (error) {
       // Cleanup socket connection
       client.io.io.opts.reconnection = false;
@@ -152,4 +221,12 @@ export default class Login extends Command {
       this.error(chalk.red(`✗ Authentication failed: ${errorMessage}`));
     }
   }
+}
+
+function normalizeDaemonUrl(value: string): string {
+  const url = new URL(value);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Daemon URL must use http:// or https://');
+  }
+  return url.href.replace(/\/$/, '');
 }

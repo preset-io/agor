@@ -22,6 +22,7 @@ import {
   stopDaemon,
 } from '../../lib/daemon-manager.js';
 import { isExpectedManagedDaemon, probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { assertLocalContextUnlocked } from '../../lib/local-context.js';
 
 export default class DaemonRestart extends Command {
   static description = 'Restart daemon';
@@ -65,6 +66,7 @@ export default class DaemonRestart extends Command {
       this.log(error instanceof Error ? error.message : String(error));
       this.exit(1);
     }
+    await assertLocalContextUnlocked(restartConfig);
 
     // Validate the new package set before stopping a currently healthy daemon.
     try {

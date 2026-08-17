@@ -5,11 +5,11 @@
  */
 
 import type { AgorClient } from '@agor-live/client';
-import { createRestClient, getApiKeyFromEnv, isDaemonRunning } from '@agor-live/client';
-import { getDaemonUrl } from '@agor-live/client/config';
+import { createRestClient, getApiKeyFromEnv } from '@agor-live/client';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { loadToken } from './lib/auth';
+import { probeAgorDaemon } from './lib/daemon-probe.js';
 
 /**
  * Base command with daemon connection utilities
@@ -23,14 +23,34 @@ export abstract class BaseCommand extends Command {
    * @returns Feathers client instance
    */
   protected async connectToDaemon(): Promise<AgorClient> {
-    // Get daemon URL from config
-    const daemonUrl = await getDaemonUrl();
+    const storedAuth = await loadToken();
+    const apiKey = getApiKeyFromEnv();
+    if (!storedAuth && !apiKey) {
+      this.error(
+        chalk.red('✗ Not authenticated') +
+          '\n\n' +
+          chalk.dim('Run:') +
+          '\n  ' +
+          chalk.cyan('agor login --url <daemon-url>')
+      );
+    }
+    const environmentTarget =
+      apiKey && process.env.DAEMON_URL && process.env.AGOR_DEPLOYMENT_ID
+        ? {
+            url: process.env.DAEMON_URL.replace(/\/$/, ''),
+            origin: new URL(process.env.DAEMON_URL).origin,
+            deploymentId: process.env.AGOR_DEPLOYMENT_ID,
+          }
+        : null;
+    const target = apiKey ? environmentTarget : storedAuth?.target;
+    if (!target) {
+      this.error('Environment API-key authentication requires DAEMON_URL and AGOR_DEPLOYMENT_ID.');
+    }
+    const daemonUrl = target.url;
     this.daemonUrl = daemonUrl;
+    const probe = await probeAgorDaemon(daemonUrl);
 
-    // Check if daemon is running (fast fail with 1s timeout)
-    const running = await isDaemonRunning(daemonUrl);
-
-    if (!running) {
+    if (!probe.running) {
       this.log(
         chalk.red('✗ Daemon not running') +
           '\n\n' +
@@ -48,7 +68,11 @@ export abstract class BaseCommand extends Command {
     }
 
     // Check for API key auth (takes precedence over stored JWT)
-    const apiKey = getApiKeyFromEnv();
+    if (probe.deploymentId !== target.deploymentId) {
+      this.error(
+        `The daemon identity at ${daemonUrl} changed. Run agor login --url ${daemonUrl} again.`
+      );
+    }
     if (apiKey) {
       return await createRestClient(daemonUrl, apiKey ?? undefined);
     }
@@ -57,22 +81,10 @@ export abstract class BaseCommand extends Command {
     const client = await createRestClient(daemonUrl);
 
     // Load stored authentication token
-    const storedAuth = await loadToken();
-
-    if (!storedAuth) {
-      this.error(
-        chalk.red('✗ Not authenticated') +
-          '\n\n' +
-          chalk.dim('Please login to use the Agor CLI:') +
-          '\n  ' +
-          chalk.cyan('agor login')
-      );
-    }
-
     try {
       await client.authenticate({
         strategy: 'jwt',
-        accessToken: storedAuth.accessToken,
+        accessToken: storedAuth!.accessToken,
       });
     } catch (_error) {
       // Token invalid or expired - clear it and show login prompt

@@ -5,7 +5,7 @@
  * Safe to run multiple times (idempotent).
  */
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { access, constants, mkdir, readdir, rm } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -105,8 +105,14 @@ export function assertInitSupportsConfiguredDatabase(dialect = process.env.AGOR_
 }
 
 export default class Init extends Command {
-  private initialDaemonConfig: NonNullable<AgorConfig['daemon']> = {};
-  private initialConfig: AgorConfig = getDefaultConfig();
+  private readonly deploymentId = randomUUID();
+  private initialDaemonConfig: NonNullable<AgorConfig['daemon']> = {
+    deployment_id: this.deploymentId,
+  };
+  private initialConfig: AgorConfig = {
+    ...getDefaultConfig(),
+    daemon: { ...getDefaultConfig().daemon, deployment_id: this.deploymentId },
+  };
   private requestedAgenticTools: InstallableAgenticTool[] | undefined;
   private nonInteractive = false;
   static description =
