@@ -8,12 +8,14 @@
 # rather than `agor-live@latest` on npm.
 #
 # Publish model: a successful CI run for a main push first publishes
-# :<full-sha>, then a serialized promotion moves :main and :latest if that SHA
-# is still the main head. v* tags and every in-repository PR commit publish
-# directly (PRs use the PR *head* SHA and re-point :pr-<n> on each update), so
-# trusted commits remain deployable by their own SHA. Fork and Dependabot PRs
-# still build and run the boot smoke test, but cannot publish because GitHub
-# intentionally withholds repository secrets from them.
+# :<full-sha>, then a serialized promotion may move :main and :latest. Those
+# mutable tags always identify a successfully tested main image; when a newer
+# main commit is red, they remain on the last successful promotion. v* tags
+# and every in-repository PR commit publish directly (PRs use the PR *head* SHA
+# and re-point :pr-<n> on each update), so trusted commits remain deployable by
+# their own SHA. Fork and Dependabot PRs still build and run the boot smoke
+# test, but cannot publish because GitHub intentionally withholds repository
+# secrets from them.
 #
 # Pushes to Docker Hub (docker.io/preset/agor). Required repo secrets
 # (Settings → Secrets and variables → Actions):
@@ -167,8 +169,8 @@ jobs:
 
   # Mutable tags are a separate, serialized promotion. Immutable SHA builds
   # can proceed independently, while main/latest can never be pushed by two
-  # workflow_run jobs at once. Do not cancel an in-flight promotion: the next
-  # queued current-head run will move the tags forward afterward.
+  # workflow_run jobs at once. Keep the full queue: builds may finish out of
+  # order, and dropping the one current-head promotion could strand the tags.
   promote-main:
     name: Promote main image
     needs: build
@@ -177,7 +179,7 @@ jobs:
     timeout-minutes: 5
     concurrency:
       group: build-image-main-promotion
-      cancel-in-progress: false
+      queue: max
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -188,9 +190,9 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Keep the head check and registry mutation in one serialized step. If a
-      # newer main commit lands after the check, its own CI-gated promotion is
-      # queued behind this one and will be the final writer.
+      # Keep the head check and registry mutation in one serialized step. A
+      # stale queued run skips; if main advances after this check, the tags
+      # intentionally remain on a tested image until a newer run passes CI.
       - name: Promote tested main image
         run: |
           current_sha="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" refs/heads/main | cut -f1)"
