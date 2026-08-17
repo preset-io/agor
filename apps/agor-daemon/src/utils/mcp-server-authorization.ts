@@ -15,6 +15,11 @@
  * whether a caller may be shown a row, an attachment link, or load one by id.
  * They decide visibility, not policy, so they stay beside the write authorizer
  * rather than folding into it.
+ *
+ * Those reads answer "whose row is this?", which a role change does not revisit.
+ * The endpoints that issue a credential rather than read one need the second
+ * question too, so the role floor those carry lives here as well — see
+ * {@link MCP_CAPABILITY_ISSUING_SERVICE_PATHS}.
  */
 
 import {
@@ -180,6 +185,127 @@ function assertAtLeastMember(role: unknown): void {
  * {@link canConfigureMCPServers}; nothing is authorized by reading it.
  */
 export { canConfigureMCPServers as canConfigureMcpServers } from '@agor/core/mcp';
+
+/**
+ * The `/mcp-servers/*` endpoints that mint, refresh, or exchange a credential,
+ * rather than exercising one that already exists.
+ *
+ * Ownership is a durable grant; role is current standing. `owner_user_id`
+ * records who configured a row and is never revisited when a user's role
+ * changes, so `loadMcpServerForCaller` keeps admitting the owner of a server
+ * after they are demoted to `viewer` — it is answering "whose row is this?",
+ * which demotion does not change the answer to. For reading a server one owns
+ * that is defensible. For these endpoints it is not: starting an authorization
+ * flow, exchanging a code, or refreshing a grant issues *new* capability, and a
+ * read-only account may not acquire capability it did not already hold.
+ * Discovery belongs here too — it opens the server's transport on its stored
+ * credential and writes the result back onto the row.
+ *
+ * So each of these carries a role floor in front of the ownership check, the
+ * way {@link authorizeMcpServerWrite} does for configuration CRUD. Ownership
+ * still decides *which* server; role decides whether the caller may issue
+ * against any at all.
+ *
+ * Registered by iterating this list rather than by adding a hook to each
+ * `app.service(...).hooks(...)` call in turn: a floor that is correct and a
+ * floor that runs are different claims, and the endpoints are spread over
+ * ~1,800 lines of `register-services.ts`, so per-endpoint wiring is exactly
+ * where the next one gets forgotten.
+ *
+ * Deliberately absent, and pinned as absent by
+ * `register-services.mcp-capability-role.test.ts`:
+ * - `oauth-disconnect` — revocation. Refusing a demoted user the ability to
+ *   drop their own grant would strand the credential this change exists to
+ *   contain, so it stays open at every role.
+ * - `oauth-status`, `oauth-attempt-status` — reads of the caller's own state.
+ * - `oauth-auth-headers` — vends a bearer for an *already-issued* grant to the
+ *   executor running a session, under a session token or service account
+ *   rather than the owner's role, so there is frequently no user role here to
+ *   floor. Whether demotion should invalidate grants already stored is a
+ *   separate question from who may issue new ones, and is open — demotion is a
+ *   column write today and revokes nothing (#2301).
+ * - `oauth-callback` — the provider's redirect. Unauthenticated by
+ *   construction; its authorization is the one-shot `state` claim, and the
+ *   flow it completes was already gated at `oauth-start`.
+ */
+export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
+  // Mints an authorization URL and a pending flow against a saved server.
+  'mcp-servers/oauth-start',
+  // Exchanges the authorization code and persists the resulting token.
+  'mcp-servers/oauth-complete',
+  // Forces a refresh, extending a grant's lifetime on demand.
+  'mcp-servers/oauth-refresh',
+  // Writes a shared token onto the named row and backfills its token endpoint.
+  'mcp-servers/test-oauth',
+  // Fetches an access token from a caller-supplied endpoint with
+  // caller-supplied credentials.
+  'mcp-servers/test-jwt',
+  // Opens the server's transport on its stored credential and writes the
+  // capability list back onto the row.
+  'mcp-servers/discover',
+] as const;
+
+/**
+ * The role floor for the endpoints above.
+ *
+ * Shares {@link isAtLeastMemberRole} with the write path rather than reaching
+ * for the generic `requireMinimumRole(ROLES.MEMBER)` hook: that one normalizes
+ * through `normalizeRole`, which answers MEMBER for an absent or empty role, so
+ * it admits precisely the caller carrying no role at all. The MCP floor is
+ * decided on the raw role for that reason, and having two floors that disagree
+ * on the same question is how the first one was lost.
+ *
+ * The bypasses match `ensureMinimumRole`: an internal daemon call carries no
+ * provider, and an executor service account carries no role to floor.
+ */
+export function assertMcpCapabilityRole(
+  params: AuthenticatedParams | undefined,
+  action: string
+): void {
+  if (!params?.provider) return;
+  const user = params.user;
+  if (!user) throw new NotAuthenticated('Authentication required');
+  if ((user as { _isServiceAccount?: boolean })._isServiceAccount === true) return;
+  if (isAtLeastMemberRole(user.role)) return;
+  throw new Forbidden(`You need member access to ${action}`);
+}
+
+/** {@link assertMcpCapabilityRole} as a Feathers hook, for the registration below. */
+export function requireMcpCapabilityRole<T extends { params: AuthenticatedParams }>(
+  action: string
+): (context: T) => T {
+  return (context) => {
+    assertMcpCapabilityRole(context.params, action);
+    return context;
+  };
+}
+
+/**
+ * Wire the floor onto every path in {@link MCP_CAPABILITY_ISSUING_SERVICE_PATHS}.
+ *
+ * A function rather than a loop inlined at the call site so a test can apply
+ * the real wiring to a real app and drive it, instead of asserting against a
+ * copy of the loop that could drift from the one that ships — the same reason
+ * {@link createMcpServerWriteAuthorizationHook} is a factory.
+ *
+ * Feathers appends hooks, so the `ctx.requireAuth` each of these services
+ * registers inline still runs first and this decides on an authenticated
+ * caller. Called after those registrations for that reason.
+ */
+export function registerMcpCapabilityRoleFloor(app: {
+  // Method syntax, not a function-typed property: under `strictFunctionTypes`
+  // the latter checks `hooks`' parameter contravariantly and no structural
+  // stand-in for Feathers' `HookOptions<A, S>` is assignable to it. Methods are
+  // checked bivariantly, which is what lets a real app satisfy this without the
+  // util importing the whole `Application` type just to name a loop.
+  service(path: string): { hooks(map: unknown): unknown };
+}): void {
+  for (const path of MCP_CAPABILITY_ISSUING_SERVICE_PATHS) {
+    app.service(path).hooks({
+      before: { create: [requireMcpCapabilityRole('connect and authorize MCP servers')] },
+    });
+  }
+}
 
 /**
  * A member widening their own server's reach, which is what

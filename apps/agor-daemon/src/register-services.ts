@@ -202,6 +202,7 @@ import {
 import {
   isSessionMcpServerLinkVisibleToCaller,
   loadMcpServerForCaller,
+  registerMcpCapabilityRoleFloor,
 } from './utils/mcp-server-authorization.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
@@ -4097,6 +4098,25 @@ async function registerMCPServices(
   });
 
   app.service('mcp-servers/discover').hooks({ before: { create: [ctx.requireAuth] } });
+
+  /**
+   * Role floor for the endpoints that issue capability rather than exercise it.
+   *
+   * Each of the services above authenticates and then admits the caller who
+   * owns the named row (`loadMcpServerForCaller`). Ownership survives a role
+   * change — nothing revisits `owner_user_id` when a user is demoted — so
+   * without this a user demoted to `viewer` keeps every one of these: starting
+   * an OAuth flow, exchanging the code, refreshing the grant, and re-probing
+   * the server on its stored credential. Configuration CRUD already grew this
+   * floor (`authorizeMcpServerWrite`); these are the rest of it.
+   *
+   * Registered by one pass over `MCP_CAPABILITY_ISSUING_SERVICE_PATHS` — where
+   * the reasoning and the deliberate exclusions live — rather than added to
+   * each `.hooks()` call above, which is spread over ~1,800 lines and is
+   * exactly where the next endpoint would be forgotten. Same shape as the
+   * tenant-identity registration loop.
+   */
+  registerMcpCapabilityRoleFloor(app);
 
   return { oauthCallbackHandler };
 }
