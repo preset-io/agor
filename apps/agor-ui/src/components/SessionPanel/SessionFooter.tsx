@@ -10,6 +10,7 @@ import type {
   Session,
   Task,
 } from '@agor-live/client';
+import { getDefaultModelForTool } from '@agor-live/client';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -184,12 +185,18 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     });
   };
 
-  // Model name + token counts for individual chips
-  const modelName = session.model_config?.model
+  // Model name + token counts for individual chips. A brand-new session hasn't
+  // persisted its model into model_config yet — it's resolved from tool/user
+  // defaults at runtime — so fall back to the tool's default model. Without this
+  // the chip wouldn't render (and its click-to-change popover would be
+  // unreachable) until the user first changed the model via Session Settings.
+  const effectiveModel =
+    session.model_config?.model ?? getDefaultModelForTool(session.agentic_tool);
+  const modelName = effectiveModel
     ? getModelDisplayName(
-        session.model_config.provider
-          ? `${session.model_config.provider}/${session.model_config.model}`
-          : session.model_config.model
+        session.model_config?.provider
+          ? `${session.model_config.provider}/${effectiveModel}`
+          : effectiveModel
       )
     : null;
   const tokenDisplay =

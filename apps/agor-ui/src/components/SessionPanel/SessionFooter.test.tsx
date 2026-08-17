@@ -140,11 +140,19 @@ describe('SessionFooter', () => {
     expect(container.querySelector('[data-icon="stop"]')).not.toBeInTheDocument();
   });
 
-  it('Model chip is hidden when no model is present', () => {
+  it('Model chip is hidden when no model is resolvable (tool without a static default)', () => {
     render(
       <SessionFooter
         {...baseProps}
-        session={{ ...baseSession, model_config: undefined } as unknown as Session}
+        // opencode has no static default model and needs a provider/model pair,
+        // so a fresh session with no model_config resolves to nothing.
+        session={
+          {
+            ...baseSession,
+            agentic_tool: 'opencode',
+            model_config: undefined,
+          } as unknown as Session
+        }
         tokenBreakdown={{ ...baseTokenBreakdown, total: 0 }}
       />,
       { wrapper: Wrapper }
@@ -152,6 +160,33 @@ describe('SessionFooter', () => {
     expect(screen.queryByTestId('model-chip')).not.toBeInTheDocument();
     expect(screen.queryByTestId('tokens-chip')).not.toBeInTheDocument();
     expect(screen.queryByTestId('stats-chip')).not.toBeInTheDocument();
+  });
+
+  it('Model chip renders and is clickable on a brand-new session before any model change', async () => {
+    // A fresh session persists no model into model_config — the model is
+    // resolved from tool defaults at runtime. The chip must still render and
+    // open its click-to-change popover (regression: it used to only appear
+    // after the user changed the model via Session Settings).
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={
+          {
+            ...baseSession,
+            agentic_tool: 'claude-code',
+            model_config: undefined,
+          } as unknown as Session
+        }
+      />,
+      { wrapper: Wrapper }
+    );
+    const chip = screen.getByTestId('model-chip');
+    expect(chip).toBeInTheDocument();
+    expect(chip.style.cursor).toBe('pointer');
+
+    // Clicking opens the model-picker popover (ModelSelector is stubbed).
+    fireEvent.click(chip);
+    expect(await screen.findByTestId('model-selector-stub')).toBeInTheDocument();
   });
 
   it('Context chip shows warning styling when context usage is above 80%', () => {
