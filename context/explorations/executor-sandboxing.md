@@ -157,6 +157,7 @@ execution:
       tmp: true # fresh task-private tmpfs at /tmp, /var/tmp
       home: false # all of $HOME writable (off; tool state dirs stay writable regardless)
     home_mode: shared # shared (daemon home, masked) | per_user (per-owner home overlay — see §2)
+    preserve_canonical_home_alias: false # opt-in continuity for symlinked daemon homes
     protect_secrets: true # mask ~/.agor/{config.yaml,agor.db} + ~/.ssh, ~/.gnupg, ~/.aws, ~/.config/gcloud, ~/.npmrc
     isolate_branches: true # hide the worktrees root, re-expose only the current branch
     extra_allow_write: [] # escape hatch: extra writable paths

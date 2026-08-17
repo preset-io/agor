@@ -155,6 +155,18 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     );
   }
   const perUser = homeMode === 'per_user';
+  const preserveCanonicalHomeAlias =
+    perUser &&
+    sandbox.preserve_canonical_home_alias === true &&
+    !!ctx.canonicalHomeDir &&
+    ctx.canonicalHomeDir !== ctx.homeDir;
+  if (preserveCanonicalHomeAlias) {
+    if (!isAbsolute(ctx.canonicalHomeDir as string) || ctx.canonicalHomeDir === '/') {
+      throw new Error(
+        `Invalid canonical sandbox home ${ctx.canonicalHomeDir}: expected an absolute path below /`
+      );
+    }
+  }
   // RBAC-aware branch mount: write → rw bind, read → ro bind, none → not mounted.
   const branchBindFlag =
     ctx.branchAccess === 'read' ? '--ro-bind' : ctx.branchAccess === 'none' ? null : '--bind';
@@ -232,6 +244,9 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // so a `filesystem_home` under the same parent still binds correctly.
     // We then re-expose exactly what the task needs ON TOP of the overlay.
     args.push('--bind', ctx.ownerHomeStore as string, ctx.homeDir);
+    if (preserveCanonicalHomeAlias) {
+      args.push('--bind', ctx.ownerHomeStore as string, ctx.canonicalHomeDir as string);
+    }
 
     if (include.tmp) {
       // /tmp lives in the user's OWN home (on disk, per-user, persists across
@@ -245,8 +260,11 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     }
     // Re-expose the branch (its worktrees ancestor is hidden by the overlay),
     // rw / ro / not-at-all per the owner's RBAC access.
+    const branchPaths = homeAliasPaths(ctx.branchPath, ctx, preserveCanonicalHomeAlias);
     if (include.branch && branchBindFlag) {
-      args.push(branchBindFlag, ctx.branchPath, ctx.branchPath);
+      for (const destination of branchPaths) {
+        args.push(branchBindFlag, ctx.branchPath, destination);
+      }
     }
     // Re-expose the base repo's shared git dir. It is a linked worktree's common
     // `.git` (refs/objects/config/hooks) shared across ALL worktrees, so it must
@@ -255,12 +273,20 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // (commits), read → ro, none → not mounted.
     if (include.base_repo && ctx.baseRepoPath && branchBindFlag) {
       const gitDir = join(ctx.baseRepoPath, '.git');
-      args.push(branchBindFlag, gitDir, gitDir);
+      for (const destination of homeAliasPaths(gitDir, ctx, preserveCanonicalHomeAlias)) {
+        args.push(branchBindFlag, gitDir, destination);
+      }
     }
     // Re-expose managed tool binaries (hidden by the overlay); ro, tolerant of
     // a source-mode install that has no such dir.
     if (ctx.agenticToolsPath) {
-      args.push('--ro-bind-try', ctx.agenticToolsPath, ctx.agenticToolsPath);
+      for (const destination of homeAliasPaths(
+        ctx.agenticToolsPath,
+        ctx,
+        preserveCanonicalHomeAlias
+      )) {
+        args.push('--ro-bind-try', ctx.agenticToolsPath, destination);
+      }
     }
     for (const p of sandbox.extra_allow_write ?? []) args.push('--bind', p, p);
     for (const p of sandbox.extra_deny_read ?? []) args.push('--ro-bind', '/dev/null', p);
@@ -271,12 +297,15 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // overlay wouldn't cover it and `--ro-bind / /` would otherwise expose the
     // daemon's config.yaml / agor.db to a sandboxed executor.
     for (const file of [ctx.agorConfigPath, ctx.agorDbPath]) {
-      if (file) args.push('--ro-bind', '/dev/null', file);
+      if (!file) continue;
+      for (const destination of homeAliasPaths(file, ctx, preserveCanonicalHomeAlias)) {
+        args.push('--ro-bind', '/dev/null', destination);
+      }
     }
 
     args.push('--setenv', 'HOME', ctx.homeDir);
     if (include.tmp) args.push('--setenv', 'TMPDIR', '/tmp');
-    args.push('--chdir', ctx.branchPath);
+    args.push('--chdir', canonicalHomePath(ctx.branchPath, ctx, preserveCanonicalHomeAlias));
     return args;
   }
 
@@ -334,4 +363,30 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
 function isPathWithin(candidate: string, parent: string): boolean {
   const rel = relative(parent, candidate);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function homeAliasPaths(
+  candidate: string,
+  ctx: SandboxPathContext,
+  preserveCanonicalHomeAlias: boolean
+): string[] {
+  if (!preserveCanonicalHomeAlias || !ctx.canonicalHomeDir) return [candidate];
+
+  const alias = isPathWithin(candidate, ctx.homeDir)
+    ? join(ctx.canonicalHomeDir, relative(ctx.homeDir, candidate))
+    : isPathWithin(candidate, ctx.canonicalHomeDir)
+      ? join(ctx.homeDir, relative(ctx.canonicalHomeDir, candidate))
+      : undefined;
+  return alias && alias !== candidate ? [candidate, alias] : [candidate];
+}
+
+function canonicalHomePath(
+  candidate: string,
+  ctx: SandboxPathContext,
+  preserveCanonicalHomeAlias: boolean
+): string {
+  if (preserveCanonicalHomeAlias && ctx.canonicalHomeDir && isPathWithin(candidate, ctx.homeDir)) {
+    return join(ctx.canonicalHomeDir, relative(ctx.homeDir, candidate));
+  }
+  return candidate;
 }

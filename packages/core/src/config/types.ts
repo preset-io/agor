@@ -426,6 +426,15 @@ export interface AgorSandboxSettings {
    *    replacement). Default: `shared`.
    */
   home_mode?: 'shared' | 'per_user';
+  /**
+   * Preserve a symlinked daemon home's canonical alias inside a per-user
+   * sandbox. The owner store and authorized dynamic paths are exposed at both
+   * the passwd-home path and its daemon-resolved canonical path, and the
+   * canonical branch path becomes the executor cwd. This keeps path-keyed SDK
+   * state resumable on non-standard hosts without exposing the canonical homes
+   * parent. Default: false.
+   */
+  preserve_canonical_home_alias?: boolean;
   /** Extra writable paths added to the `include.*` roots (escape hatch). */
   extra_allow_write?: string[];
   /** Extra denied-read paths added to `protect_secrets` (escape hatch). */

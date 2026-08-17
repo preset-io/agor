@@ -1834,6 +1834,34 @@
     "reviewDate": null
   },
   {
+    "id": "DAEMON-FS-CAP-197",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/sandbox-wrap.ts",
+    "import": "node:fs",
+    "symbol": "realpathSync",
+    "local": "realpathSync",
+    "operation": "call:realpathSync@buildSandboxWrap#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Canonicalizes the daemon passwd home before constructing executor sandbox masks and opt-in compatibility aliases; the path comes from the local OS account, not tenant input.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-198",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/sandbox-wrap.ts",
+    "import": "node:fs",
+    "symbol": "realpathSync",
+    "local": "realpathSync",
+    "operation": "call:realpathSync@buildSandboxWrap#2",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Canonicalizes the operator-configured daemon data root before constructing executor sandbox masks; the path is deployment-global configuration, not caller or tenant input.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
     "class": "A",
     "file": "packages/core/src/agentic-integrations.ts",
     "import": "node:fs/promises",

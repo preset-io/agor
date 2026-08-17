@@ -156,6 +156,20 @@ are honored. If you want a _tunable_ standalone sandbox, use a non-`sandbox`
 design notes in `context/explorations/executor-sandboxing.md`. No sudoers, no
 Unix accounts.
 
+Hosts that symlink the daemon home to another filesystem location can preserve
+that canonical alias for path-keyed SDK state created before migration:
+
+```yaml
+execution:
+  unix_user_mode: sandbox
+  sandbox:
+    preserve_canonical_home_alias: true
+```
+
+This re-exposes the same per-user home store and authorized branch/git mounts at
+the daemon-resolved canonical home path. It does not expose the canonical homes
+parent or sibling homes. Leave it off for conventional, non-symlinked homes.
+
 If `AGOR_DATA_HOME` is outside the daemon user's passwd home (for example, on a
 persistent volume), Agor masks that external data root before re-exposing only
 the current branch, its authorized git data, and managed agent tools. It also

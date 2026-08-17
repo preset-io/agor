@@ -181,13 +181,18 @@ describe('resolveEffectiveConfig', () => {
       {
         execution: {
           unix_user_mode: 'sandbox',
-          sandbox: { extra_allow_write: ['/opt/cache'], include: { tmp: false } },
+          sandbox: {
+            extra_allow_write: ['/opt/cache'],
+            include: { tmp: false },
+            preserve_canonical_home_alias: true,
+          },
         },
       },
       {}
     );
     expect(resolved.execution?.sandbox?.extra_allow_write).toEqual(['/opt/cache']);
     expect(resolved.execution?.sandbox?.include).toMatchObject({ tmp: false });
+    expect(resolved.execution?.sandbox?.preserve_canonical_home_alias).toBe(true);
     expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
   });
 

@@ -238,7 +238,61 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     expect(hasPair(args, '--tmpfs', '/home')).toBe(true);
     expect(canonicalMaskIdx).toBeGreaterThanOrEqual(0);
     expect(overlayIdx).toBeGreaterThan(canonicalMaskIdx);
+    expect(hasTriple(args, '--bind', STORE, canonicalHomeDir)).toBe(false);
     expect(hasPair(args, '--tmpfs', `${canonicalHomeDir}/.agor`)).toBe(false);
+    expect(hasPair(args, '--chdir', CTX.branchPath)).toBe(true);
+  });
+
+  it('optionally preserves the canonical home alias for path-keyed SDK state', () => {
+    const canonicalHomeDir = '/var/lib/agor/home/agor';
+    const canonicalBranch = `${canonicalHomeDir}/.agor/worktrees/acme/feature-x`;
+    const canonicalBaseGit = `${canonicalHomeDir}/.agor/repos/acme/.git`;
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user', preserve_canonical_home_alias: true },
+      {
+        ...PER_USER_CTX,
+        canonicalHomeDir,
+        canonicalDataHome: `${canonicalHomeDir}/.agor`,
+      }
+    );
+
+    expect(hasTriple(args, '--bind', STORE, '/home/agor')).toBe(true);
+    expect(hasTriple(args, '--bind', STORE, canonicalHomeDir)).toBe(true);
+    expect(hasTriple(args, '--bind', CTX.branchPath, canonicalBranch)).toBe(true);
+    expect(hasTriple(args, '--bind', BASE_GIT, canonicalBaseGit)).toBe(true);
+    expect(hasTriple(args, '--ro-bind', '/dev/null', `${canonicalHomeDir}/.agor/config.yaml`)).toBe(
+      true
+    );
+    expect(hasPair(args, '--chdir', canonicalBranch)).toBe(true);
+  });
+
+  it('preserves RBAC read-only access at both home aliases', () => {
+    const canonicalHomeDir = '/var/lib/agor/home/agor';
+    const canonicalBranch = `${canonicalHomeDir}/.agor/worktrees/acme/feature-x`;
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user', preserve_canonical_home_alias: true },
+      { ...PER_USER_CTX, canonicalHomeDir, branchAccess: 'read' }
+    );
+
+    expect(hasTriple(args, '--ro-bind', CTX.branchPath, CTX.branchPath)).toBe(true);
+    expect(hasTriple(args, '--ro-bind', CTX.branchPath, canonicalBranch)).toBe(true);
+    expect(hasTriple(args, '--bind', CTX.branchPath, canonicalBranch)).toBe(false);
+  });
+
+  it('does not expose either branch alias when RBAC access is none', () => {
+    const canonicalHomeDir = '/var/lib/agor/home/agor';
+    const canonicalBranch = `${canonicalHomeDir}/.agor/worktrees/acme/feature-x`;
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user', preserve_canonical_home_alias: true },
+      { ...PER_USER_CTX, canonicalHomeDir, branchAccess: 'none' }
+    );
+
+    for (const branchPath of [CTX.branchPath, canonicalBranch]) {
+      expect(hasTriple(args, '--bind', CTX.branchPath, branchPath)).toBe(false);
+      expect(hasTriple(args, '--ro-bind', CTX.branchPath, branchPath)).toBe(false);
+    }
+    expect(args).not.toContain(BASE_GIT);
+    expect(args).not.toContain(`${canonicalHomeDir}/.agor/repos/acme/.git`);
   });
 
   it('keeps an external data root masked when branch access is none', () => {
