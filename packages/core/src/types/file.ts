@@ -1,5 +1,7 @@
 // src/types/file.ts
 
+import type { BranchID } from './id';
+
 /**
  * Path to a file relative to branch root
  *
@@ -9,6 +11,63 @@
  * - "packages/core/src/types/file.ts"
  */
 export type FilePath = string;
+
+/**
+ * Provider-owned virtual Markdown link prefix naming an authenticated,
+ * closed branch-file download. Mirrors `UPLOAD_VIRTUAL_URL_PREFIX`: never
+ * dereferenced as a real host, only pattern-matched client-side and
+ * rewritten into an authenticated fetch through the `file` service.
+ */
+export const BRANCH_FILE_VIRTUAL_URL_PREFIX = 'https://agor.live/_branch-files/';
+
+/**
+ * Encodes a branch-relative file path for embedding in a virtual Markdown
+ * URL. Escapes parentheses in addition to the usual reserved characters so
+ * the result can never prematurely close a Markdown link's `(...)` target.
+ */
+export function encodeBranchFilePath(path: FilePath): string {
+  return encodeURIComponent(path).replace(
+    /[()]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+}
+
+/**
+ * Decodes a percent-encoded branch file path segment back to its
+ * branch-relative path. Throws on malformed percent-encoding.
+ */
+export function decodeBranchFilePath(encoded: string): FilePath {
+  return decodeURIComponent(encoded);
+}
+
+/**
+ * Escapes Markdown link-label metacharacters (`\`, `[`, `]`) so a filename
+ * containing them survives as literal text through the label's `[...]`
+ * boundary instead of prematurely closing it. Mirror of
+ * `unescapeMarkdownLinkLabel` below — keep both in sync.
+ */
+function escapeMarkdownLinkLabel(label: string): string {
+  return label.replace(/[\\[\]]/g, (char) => `\\${char}`);
+}
+
+/**
+ * Reverses `escapeMarkdownLinkLabel`: recovers the literal filename from a
+ * Markdown link label that may contain `\\`, `\[`, or `\]` escape
+ * sequences. Any other backslash sequence is left untouched.
+ */
+export function unescapeMarkdownLinkLabel(label: string): string {
+  return label.replace(/\\([\\[\]])/g, '$1');
+}
+
+/** Builds a closed virtual Markdown link naming an authenticated branch-file download. */
+export function buildBranchFileMarkdownLink(
+  branchId: BranchID,
+  path: FilePath,
+  displayName?: string
+): string {
+  const filename = displayName ?? path.split('/').pop() ?? path;
+  return `[${escapeMarkdownLinkLabel(filename)}](${BRANCH_FILE_VIRTUAL_URL_PREFIX}${branchId}/${encodeBranchFilePath(path)})`;
+}
 
 /**
  * File list response (lightweight, for browsing)

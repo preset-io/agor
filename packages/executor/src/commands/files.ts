@@ -108,6 +108,11 @@ function getMimeType(filePath: string): string | undefined {
     '.svg': 'image/svg+xml',
     '.yaml': 'text/yaml',
     '.yml': 'text/yaml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webm': 'video/webm',
   }[extname(filePath).toLowerCase()];
 }
 

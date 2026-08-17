@@ -7,7 +7,7 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, BadRequest } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   FileDetail,
@@ -38,6 +38,31 @@ function extractFile(data: unknown): FileDetail | null {
   if (!data || typeof data !== 'object') return null;
   const file = (data as { file?: unknown }).file;
   return file && typeof file === 'object' ? (file as FileDetail) : null;
+}
+
+/**
+ * REST clients percent-encode the id (`@feathersjs/rest-client`:
+ * `encodeURIComponent(id)`), but the REST transport's route matcher
+ * (`@feathersjs/transport-commons` Router) splits the request path on
+ * literal `/` before any decoding happens — so a nested id's encoded slash
+ * (`evidence%2Fscreenshot.png`) reaches the service unchanged, and the
+ * executor then 404s on a file literally named with a percent-encoded
+ * slash. Socket.IO calls pass `id` as a plain value with no such encoding,
+ * so only decode when the request actually came in over REST.
+ *
+ * `decodeURIComponent` throws a `URIError` on malformed percent-encoding
+ * (e.g. a lone `%` or an invalid escape like `%c3%28`) — an attacker- or
+ * client-controlled input reaching an authenticated request, not a server
+ * bug, so it's translated into a clean 400 instead of an uncaught 500.
+ */
+export function resolveRestFilePath(id: Id, params?: FileParams): string {
+  const raw = id.toString();
+  if (params?.provider !== 'rest') return raw;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new BadRequest('Invalid file path encoding');
+  }
 }
 
 export class FileService
@@ -71,7 +96,7 @@ export class FileService
     const resolved = await this.resolveBranchRead(branchId, params);
 
     const result = await this.runCommand('branch.files.read', resolved.branchId, resolved.asUser, {
-      filePath: id.toString(),
+      filePath: resolveRestFilePath(id, params),
     });
     if (!result.success) {
       throw new Error(`Failed to read file: ${result.error?.message ?? 'unknown executor error'}`);

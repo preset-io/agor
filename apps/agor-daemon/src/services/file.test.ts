@@ -1,7 +1,39 @@
 import { getCurrentTenantDatabaseScope, runWithTenantContext } from '@agor/core/db';
+import { BadRequest } from '@agor/core/feathers';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../utils/spawn-executor.js';
-import { FileService } from './file.js';
+import { FileService, resolveRestFilePath } from './file.js';
+
+describe('resolveRestFilePath', () => {
+  it('decodes a REST-provided id, recovering a nested path from its encoded slash', () => {
+    const encoded = encodeURIComponent('qa-evidence/pr-ready/screenshot.png');
+    expect(resolveRestFilePath(encoded, { provider: 'rest' } as never)).toBe(
+      'qa-evidence/pr-ready/screenshot.png'
+    );
+  });
+
+  it('leaves a non-REST id untouched, since only REST clients percent-encode it', () => {
+    // Socket.IO (and internal/no-provider) calls pass the plain path directly —
+    // decoding here would wrongly mangle a real "%" in a filename.
+    expect(resolveRestFilePath('100%.txt', { provider: 'socketio' } as never)).toBe('100%.txt');
+    expect(resolveRestFilePath('100%.txt', undefined)).toBe('100%.txt');
+  });
+
+  it('round-trips a root-level filename with no path separators', () => {
+    expect(resolveRestFilePath('README.md', { provider: 'rest' } as never)).toBe('README.md');
+  });
+
+  it('raises a clean BadRequest instead of an uncaught URIError on malformed REST percent-encoding', () => {
+    expect(() => resolveRestFilePath('%c3%28', { provider: 'rest' } as never)).toThrow(BadRequest);
+    expect(() => resolveRestFilePath('%', { provider: 'rest' } as never)).toThrow(BadRequest);
+  });
+
+  it('never throws for malformed percent-sequences arriving over a non-REST provider', () => {
+    // Socket.IO/internal callers never percent-encode, so a literal '%c3%28'
+    // filename is passed through untouched rather than rejected.
+    expect(resolveRestFilePath('%c3%28', { provider: 'socketio' } as never)).toBe('%c3%28');
+  });
+});
 
 const impersonationMocks = vi.hoisted(() => ({
   resolveExecutorReadAsUser: vi.fn(),

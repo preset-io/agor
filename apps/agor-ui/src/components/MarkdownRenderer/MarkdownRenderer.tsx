@@ -11,7 +11,13 @@
  * Typography wrapper provides consistent Ant Design styling.
  */
 
-import { UPLOAD_VIRTUAL_URL_PREFIX } from '@agor/core/types';
+import {
+  BRANCH_FILE_VIRTUAL_URL_PREFIX,
+  decodeBranchFilePath,
+  type FileDetail,
+  UPLOAD_VIRTUAL_URL_PREFIX,
+  unescapeMarkdownLinkLabel,
+} from '@agor/core/types';
 import { DownloadOutlined, PaperClipOutlined } from '@ant-design/icons';
 import { Button, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
@@ -108,12 +114,25 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
 
   // Pre-process text to highlight @ mentions
   text = highlightMentionsInMarkdown(text);
-  // Convert Agor's authenticated virtual upload links into a closed custom
-  // element before Streamdown's external-link hardener runs.
+  // Convert Agor's authenticated virtual upload and branch-file links into
+  // closed custom elements before Streamdown's external-link hardener runs.
+  // Every captured group is HTML-escaped before interpolation: these are
+  // hand-built HTML strings (not JSX), so an unescaped `"` in a filename
+  // could otherwise break out of the attribute and inject new attributes
+  // or elements. The HTML parser decodes the entities back to the original
+  // text, so components still receive the real filename via props.
   text = text.replace(
     INTERNAL_UPLOAD_MARKDOWN_LINK,
     (_, filename: string, uploadRef: string) =>
-      `<agor-upload upload_ref="${uploadRef}" filename="${filename}"></agor-upload>`
+      `<agor-upload upload_ref="${escapeHtmlAttribute(uploadRef)}" filename="${escapeHtmlAttribute(filename)}"></agor-upload>`
+  );
+  text = text.replace(
+    INTERNAL_BRANCH_FILE_MARKDOWN_LINK,
+    (_, filename: string, branchId: string, encodedPath: string) =>
+      // buildBranchFileMarkdownLink() backslash-escapes `\`, `[`, `]` in the
+      // label so filenames containing them survive Markdown's own `[...]`
+      // boundary; recover the literal filename before HTML-escaping it.
+      `<agor-branch-file branch_id="${escapeHtmlAttribute(branchId)}" path="${escapeHtmlAttribute(encodedPath)}" filename="${escapeHtmlAttribute(unescapeMarkdownLinkLabel(filename))}"></agor-branch-file>`
   );
 
   // Detect dark mode from Ant Design token system
@@ -155,6 +174,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
       blockquote: MarkdownBlockquote,
       a: MarkdownAnchor,
       'agor-upload': UploadAttachmentTag,
+      'agor-branch-file': BranchFileAttachmentTag,
     }),
     []
   );
@@ -177,7 +197,10 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
           mermaid={{ config: mermaidConfig }} // Set Mermaid theme based on current theme mode
           plugins={plugins}
           components={components}
-          allowedTags={{ 'agor-upload': ['upload_ref', 'filename'] }}
+          allowedTags={{
+            'agor-upload': ['upload_ref', 'filename'],
+            'agor-branch-file': ['branch_id', 'path', 'filename'],
+          }}
           linkSafety={LINK_SAFETY}
           rehypePlugins={rehypePlugins}
           remarkPlugins={streamdownRemarkPlugins}
@@ -274,6 +297,22 @@ function reactText(value: React.ReactNode): string {
     .join('');
 }
 
+/**
+ * Escapes a value for safe interpolation into a double-quoted HTML
+ * attribute inside a hand-built markup string (not JSX, so React's
+ * auto-escaping doesn't apply). The HTML parser decodes these entities
+ * back to the original text, so the receiving component still sees the
+ * real, unescaped value via props.
+ */
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const UPLOAD_REF_PATTERN =
   'upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const ESCAPED_UPLOAD_VIRTUAL_URL_PREFIX = UPLOAD_VIRTUAL_URL_PREFIX.replace(
@@ -285,24 +324,57 @@ const INTERNAL_UPLOAD_MARKDOWN_LINK = new RegExp(
   'g'
 );
 
-function UploadAttachmentLink({
-  uploadRef,
+// UUIDv7 (matches BranchID's format — see packages/core/src/types/id.ts).
+const BRANCH_ID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+// encodeBranchFilePath() output: encodeURIComponent charset plus its own
+// extra-escaped parens, so it never contains a literal ')' that could close
+// the Markdown link early.
+const BRANCH_FILE_PATH_PATTERN = "[A-Za-z0-9%._~!*'-]{1,2000}";
+// buildBranchFileMarkdownLink() emits the real filename as the link label —
+// unlike uploads' fixed ASCII-only charset, evidence filenames routinely
+// include parens, Unicode, and even Markdown metacharacters like `[`/`]`
+// (e.g. "before (final).png", "résumé.webm", "screenshot [draft].png").
+// buildBranchFileMarkdownLink() backslash-escapes `\`, `[`, and `]` in the
+// label, so this pattern accepts either an escaped pair (`\\.` — backslash
+// plus the character it protects) or any other character that isn't the
+// unescaped `]` that would close the label or a newline. Every capture is
+// HTML-escaped (after unescapeMarkdownLinkLabel — see below) before this is
+// interpolated into generated markup (see escapeHtmlAttribute above), so
+// widening the charset here does not reopen attribute injection.
+const BRANCH_FILE_LABEL_PATTERN = /(?:\\.|[^\]\n\\]){1,200}/.source;
+const ESCAPED_BRANCH_FILE_VIRTUAL_URL_PREFIX = BRANCH_FILE_VIRTUAL_URL_PREFIX.replace(
+  /[.*+?^${}()|[\]\\]/g,
+  '\\$&'
+);
+const INTERNAL_BRANCH_FILE_MARKDOWN_LINK = new RegExp(
+  `\\[(${BRANCH_FILE_LABEL_PATTERN})\\]\\(${ESCAPED_BRANCH_FILE_VIRTUAL_URL_PREFIX}(${BRANCH_ID_PATTERN})\\/(${BRANCH_FILE_PATH_PATTERN})\\)`,
+  'g'
+);
+
+/**
+ * Shared preview/download controls for authenticated virtual-link
+ * attachments. `primaryAction` controls what clicking the labeled link
+ * itself does — uploads preview first (existing behavior); branch files
+ * download first, matching the one-click "click the link to download"
+ * acceptance for QA evidence. The adjacent icon button always downloads.
+ */
+function AttachmentControls({
+  filename,
+  fetchBlob,
+  primaryAction,
   children,
 }: {
-  uploadRef: string;
+  filename: string;
+  fetchBlob: () => Promise<Blob>;
+  primaryAction: 'preview' | 'download';
   children: React.ReactNode;
 }) {
   const { showError } = useThemedMessage();
-  const filename = reactText(children).trim() || 'upload';
 
-  const openUpload = async (download: boolean) => {
+  const openAttachment = async (download: boolean) => {
     try {
-      const response = await fetch(
-        `${getDaemonUrl().replace(/\/$/, '')}/uploads/${encodeURIComponent(uploadRef)}/content`,
-        { headers: getAuthHeaders() }
-      );
-      if (!response.ok) throw new Error('Upload is unavailable');
-      const objectUrl = URL.createObjectURL(await response.blob());
+      const blob = await fetchBlob();
+      const objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = objectUrl;
       if (download) anchor.download = filename;
@@ -311,7 +383,7 @@ function UploadAttachmentLink({
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'Upload is unavailable');
+      showError(error instanceof Error ? error.message : 'File is unavailable');
     }
   };
 
@@ -322,7 +394,7 @@ function UploadAttachmentLink({
         size="small"
         icon={<PaperClipOutlined />}
         aria-label={filename}
-        onClick={() => void openUpload(false)}
+        onClick={() => void openAttachment(primaryAction === 'download')}
         style={{ height: 'auto', paddingInline: 0 }}
       >
         {children}
@@ -333,10 +405,35 @@ function UploadAttachmentLink({
           size="small"
           aria-label={`Download ${filename}`}
           icon={<DownloadOutlined />}
-          onClick={() => void openUpload(true)}
+          onClick={() => void openAttachment(true)}
         />
       </Tooltip>
     </span>
+  );
+}
+
+function UploadAttachmentLink({
+  uploadRef,
+  children,
+}: {
+  uploadRef: string;
+  children: React.ReactNode;
+}) {
+  const filename = reactText(children).trim() || 'upload';
+
+  const fetchBlob = async () => {
+    const response = await fetch(
+      `${getDaemonUrl().replace(/\/$/, '')}/uploads/${encodeURIComponent(uploadRef)}/content`,
+      { headers: getAuthHeaders() }
+    );
+    if (!response.ok) throw new Error('Upload is unavailable');
+    return response.blob();
+  };
+
+  return (
+    <AttachmentControls filename={filename} fetchBlob={fetchBlob} primaryAction="preview">
+      {children}
+    </AttachmentControls>
   );
 }
 
@@ -345,6 +442,67 @@ function UploadAttachmentTag(props: Record<string, unknown>) {
   const filename = typeof props.filename === 'string' ? props.filename : 'upload';
   if (!new RegExp(`^${UPLOAD_REF_PATTERN}$`).test(uploadRef)) return null;
   return <UploadAttachmentLink uploadRef={uploadRef}>{filename}</UploadAttachmentLink>;
+}
+
+/** Decodes a `FileDetail` response body into a typed Blob (utf-8 or base64 encoded content). */
+function fileDetailToBlob(detail: FileDetail): Blob {
+  if (detail.encoding === 'base64') {
+    const binaryString = atob(detail.content);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+    return new Blob([bytes], { type: detail.mimeType || 'application/octet-stream' });
+  }
+  return new Blob([detail.content], { type: detail.mimeType || 'text/plain' });
+}
+
+function BranchFileAttachmentLink({
+  branchId,
+  relativePath,
+  children,
+}: {
+  branchId: string;
+  relativePath: string;
+  children: React.ReactNode;
+}) {
+  const filename = reactText(children).trim() || relativePath.split('/').pop() || 'file';
+
+  const fetchBlob = async () => {
+    const response = await fetch(
+      `${getDaemonUrl().replace(/\/$/, '')}/file/${encodeURIComponent(relativePath)}?branch_id=${encodeURIComponent(branchId)}`,
+      { headers: getAuthHeaders() }
+    );
+    if (!response.ok) throw new Error('File is unavailable');
+    return fileDetailToBlob((await response.json()) as FileDetail);
+  };
+
+  return (
+    <AttachmentControls filename={filename} fetchBlob={fetchBlob} primaryAction="download">
+      {children}
+    </AttachmentControls>
+  );
+}
+
+function BranchFileAttachmentTag(props: Record<string, unknown>) {
+  const branchId = typeof props.branch_id === 'string' ? props.branch_id : '';
+  const encodedPath = typeof props.path === 'string' ? props.path : '';
+  const filename = typeof props.filename === 'string' ? props.filename : 'file';
+  // Defense in depth: agent output can embed this tag's raw HTML directly
+  // (Streamdown's allowedTags permits it), bypassing INTERNAL_BRANCH_FILE_MARKDOWN_LINK.
+  // Re-validate here so a malformed or hand-crafted tag never reaches fetch().
+  if (!new RegExp(`^${BRANCH_ID_PATTERN}$`).test(branchId)) return null;
+  if (!new RegExp(`^${BRANCH_FILE_PATH_PATTERN}$`).test(encodedPath)) return null;
+  let relativePath: string;
+  try {
+    relativePath = decodeBranchFilePath(encodedPath);
+  } catch {
+    return null;
+  }
+  if (!relativePath) return null;
+  return (
+    <BranchFileAttachmentLink branchId={branchId} relativePath={relativePath}>
+      {filename}
+    </BranchFileAttachmentLink>
+  );
 }
 
 function MarkdownAnchor({ children, className, href, node: _node, ...props }: MarkdownAnchorProps) {
