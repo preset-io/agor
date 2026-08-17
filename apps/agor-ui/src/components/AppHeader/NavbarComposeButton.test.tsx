@@ -200,6 +200,20 @@ describe('NavbarComposeButton', () => {
     localStorage.clear();
   });
 
+  it('shows the resolved primary teammate emoji on the collapsed trigger before opening', async () => {
+    const withEmoji = makeBranch({
+      custom_context: { teammate: { kind: 'teammate', displayName: 'Ada', emoji: '🎨' } },
+    });
+    renderCompose({ primary: withEmoji });
+    // Resolved eagerly on mount — no popover open needed.
+    expect(await screen.findByText('🎨')).toBeInTheDocument();
+  });
+
+  it('shows the 🤖 placeholder emoji on the trigger when no primary is set', async () => {
+    renderCompose({ primary: null });
+    expect(await screen.findByText('🤖')).toBeInTheDocument();
+  });
+
   it('opens the compose popover with a heading and prompt', async () => {
     renderCompose({ primary: primaryBranch });
     openPopover();
