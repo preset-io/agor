@@ -122,10 +122,12 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     borderRadius: token.borderRadius,
   };
 
-  // Resolve the primary teammate each time the popover opens — access can change
-  // between opens (branch archived, unshared), and null is the "needs picking" signal.
+  // Resolve eagerly once the client exists (so the collapsed trigger shows the
+  // teammate's emoji before first open) and re-resolve on open to catch changes
+  // made elsewhere. Null is the "needs picking" signal.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `open` re-resolves on reopen
   useEffect(() => {
-    if (!open || !client) return;
+    if (!client) return;
     let cancelled = false;
     setResolving(true);
     client
@@ -308,6 +310,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     return null;
   })();
 
+  const triggerEmoji = (primaryBranch && teammateEmoji(primaryBranch)) || '🤖';
   const boardPhrase = primaryBranch
     ? `${teammateName(primaryBranch)}'s board`
     : "your primary assistant's board";
@@ -473,11 +476,18 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
       >
         <Button
           type="primary"
-          icon={<EditOutlined style={{ fontSize: token.fontSizeLG }} />}
           aria-label="Compose — ask your primary assistant"
           title="Ask your primary assistant"
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        />
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: token.marginXXS,
+          }}
+        >
+          <span style={{ fontSize: token.fontSize, lineHeight: 1 }}>{triggerEmoji}</span>
+          <EditOutlined style={{ fontSize: token.fontSizeLG }} />
+        </Button>
       </Popover>
 
       <Drawer
