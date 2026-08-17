@@ -42,7 +42,7 @@ export default class UserCreateAdmin extends Command {
       default: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
     }),
     'unix-username': Flags.string({
-      description: 'Unix username for shell access',
+      description: 'Execution home key for shell access',
       default: DEVELOPMENT_DEFAULT_ADMIN_USER.unix_username,
     }),
     'dev-default': Flags.boolean({

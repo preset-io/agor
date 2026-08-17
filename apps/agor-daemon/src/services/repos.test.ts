@@ -13,7 +13,8 @@ vi.mock('@agor/core/config', async (importOriginal) => {
     })),
     resolveExecutionSecurityMode: vi.fn(() => ({
       appRbacEnabled: true,
-      shouldInitUnixGroups: true,
+      unixUserMode: 'simple',
+      requiresExecutionHomeKey: false,
     })),
     resolveMultiTenancyConfig: vi.fn(() => ({ mode: 'disabled' })),
   };
@@ -64,17 +65,6 @@ vi.mock('../utils/spawn-executor.js', () => {
     spawnExecutorFireAndForget: executorMocks.spawnExecutorFireAndForget,
   };
 });
-
-const impersonationMocks = vi.hoisted(() => ({
-  resolveExecutorReadAsUser: vi.fn(async () => 'requesting-user'),
-  resolveGitImpersonationForUser: vi.fn(async () => 'daemon-user'),
-}));
-vi.mock('../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: impersonationMocks.resolveExecutorReadAsUser,
-}));
-vi.mock('../utils/git-impersonation.js', () => ({
-  resolveGitImpersonationForUser: impersonationMocks.resolveGitImpersonationForUser,
-}));
 
 describe('ReposService.addLocalRepository executor boundary', () => {
   it('persists sanitized executor metadata with an explicit slug and no remote URL', async () => {
@@ -133,11 +123,9 @@ describe('ReposService.addLocalRepository executor boundary', () => {
   });
 });
 
-describe('ReposService.createBranch Git lifecycle identity', () => {
-  it('uses the Git lifecycle resolver rather than the requesting-user read resolver', async () => {
+describe('ReposService.createBranch Git lifecycle execution', () => {
+  it('does not attach a delegated user to daemon-owned Git lifecycle work', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
-    impersonationMocks.resolveExecutorReadAsUser.mockClear();
-    impersonationMocks.resolveGitImpersonationForUser.mockClear();
 
     const repo = {
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
@@ -189,20 +177,16 @@ describe('ReposService.createBranch Git lifecycle identity', () => {
       } as never
     );
 
-    expect(impersonationMocks.resolveGitImpersonationForUser).toHaveBeenCalledOnce();
-    expect(impersonationMocks.resolveExecutorReadAsUser).not.toHaveBeenCalled();
     expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
       expect.objectContaining({ command: 'git.branch.add' }),
-      expect.objectContaining({ asUser: 'daemon-user' })
+      expect.not.objectContaining({ delegatedHomeKey: expect.anything() })
     );
   });
 });
 
-describe('ReposService.cloneRepository Git lifecycle identity', () => {
-  it('creates managed storage as the daemon lifecycle user, not the requesting user', async () => {
+describe('ReposService.cloneRepository Git lifecycle execution', () => {
+  it('creates managed storage without delegated user routing', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
-    impersonationMocks.resolveExecutorReadAsUser.mockClear();
-    impersonationMocks.resolveGitImpersonationForUser.mockClear();
 
     const repos = { patch: vi.fn() };
     const app = {
@@ -223,11 +207,9 @@ describe('ReposService.cloneRepository Git lifecycle identity', () => {
       user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
     } as never);
 
-    expect(impersonationMocks.resolveGitImpersonationForUser).toHaveBeenCalledOnce();
-    expect(impersonationMocks.resolveExecutorReadAsUser).not.toHaveBeenCalled();
     expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
       expect.objectContaining({ command: 'git.clone' }),
-      expect.objectContaining({ asUser: 'daemon-user' })
+      expect.not.objectContaining({ delegatedHomeKey: expect.anything() })
     );
   });
 });

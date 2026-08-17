@@ -20,8 +20,6 @@ const mocks = vi.hoisted(() => ({
   getRemoteUrl: vi.fn(),
   scanGitConfigRemoteCredentials: vi.fn(),
   scrubGitConfigRemoteCredentials: vi.fn(),
-  handleUnixSyncRepo: vi.fn(),
-  handleUnixSyncBranch: vi.fn(),
   userHome: '/passwd/home',
 }));
 
@@ -68,15 +66,6 @@ vi.mock('@agor/git', async () => {
 vi.mock('../services/feathers-client.js', () => ({
   createExecutorClient: mocks.createExecutorClient,
 }));
-
-vi.mock('./unix.js', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>('./unix.js');
-  return {
-    ...actual,
-    handleUnixSyncRepo: mocks.handleUnixSyncRepo,
-    handleUnixSyncBranch: mocks.handleUnixSyncBranch,
-  };
-});
 
 import {
   handleBranchAgorYmlExport,
@@ -200,14 +189,6 @@ beforeEach(() => {
     findings: [{ configPath: '/repo/.git/config' }],
   });
   mocks.scrubGitConfigRemoteCredentials.mockResolvedValue({ findings: [] });
-  mocks.handleUnixSyncRepo.mockResolvedValue({
-    success: true,
-    data: { groupName: 'agor_repo_test' },
-  });
-  mocks.handleUnixSyncBranch.mockResolvedValue({
-    success: true,
-    data: { groupName: 'agor_wt_test' },
-  });
 });
 
 describe('managed executor git/fs commands', () => {
@@ -289,58 +270,6 @@ describe('managed executor git/fs commands', () => {
         depth: 42,
         referencePath: '/trusted/repo',
       })
-    );
-  });
-
-  it('runs branch isolation in the current lifecycle executor and fails closed', async () => {
-    const patchedBranches: Array<Record<string, unknown>> = [];
-    createClient({
-      repo: {
-        repo_id: repoId,
-        local_path: '/trusted/repo',
-        remote_url: 'https://example.com/repo.git',
-      },
-      branch: {
-        branch_id: branchId,
-        repo_id: repoId,
-        path: '/trusted/branch',
-        name: 'feature',
-        ref: 'feature',
-        base_ref: 'main',
-        new_branch: true,
-        ref_type: 'branch',
-        storage_mode: 'clone',
-      },
-      patchedBranches,
-    });
-    mocks.handleUnixSyncBranch.mockResolvedValueOnce({
-      success: false,
-      error: { code: 'UNIX_SYNC_BRANCH_FAILED', message: 'setfacl failed' },
-    });
-
-    const result = await handleGitBranchAdd(
-      {
-        command: 'git.branch.add',
-        sessionToken: 'tenant-token',
-        params: { branchId, repoId, initUnixGroup: true, daemonUser: 'agor' },
-      },
-      {}
-    );
-
-    expect(mocks.handleUnixSyncBranch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'unix.sync-branch',
-        sessionToken: 'tenant-token',
-        params: { branchId, daemonUser: 'agor' },
-      }),
-      {}
-    );
-    expect(result).toMatchObject({ success: false, error: { message: 'setfacl failed' } });
-    expect(patchedBranches).toContainEqual(
-      expect.objectContaining({ filesystem_status: 'failed' })
-    );
-    expect(patchedBranches).not.toContainEqual(
-      expect.objectContaining({ filesystem_status: 'ready' })
     );
   });
 
@@ -569,41 +498,6 @@ describe('managed executor git/fs commands', () => {
         process.env.GIT_CONFIG_PARAMETERS = previousGitConfigParameters;
       }
     }
-  });
-
-  it('keeps a cloned repo non-ready when lifecycle permission sync fails', async () => {
-    const patchedRepos: Array<Record<string, unknown>> = [];
-    createClient({ repo: { repo_id: repoId }, patchedRepos });
-    mocks.handleUnixSyncRepo.mockResolvedValueOnce({
-      success: false,
-      error: { code: 'UNIX_SYNC_REPO_FAILED', message: 'chgrp failed' },
-    });
-
-    const result = await handleGitClone(
-      {
-        command: 'git.clone',
-        sessionToken: 'tenant-token',
-        params: {
-          url: 'https://example.com/repo.git',
-          slug: 'repo',
-          repoId,
-          initUnixGroup: true,
-          daemonUser: 'agor',
-        },
-      },
-      {}
-    );
-
-    expect(mocks.handleUnixSyncRepo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'unix.sync-repo',
-        sessionToken: 'tenant-token',
-        params: expect.objectContaining({ repoId, daemonUser: 'agor', initialize: true }),
-      }),
-      {}
-    );
-    expect(result).toMatchObject({ success: false, error: { message: 'chgrp failed' } });
-    expect(patchedRepos).not.toContainEqual(expect.objectContaining({ clone_status: 'ready' }));
   });
 
   it('pages through every branch before deleting repo directories', async () => {

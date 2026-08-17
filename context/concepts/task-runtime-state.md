@@ -228,12 +228,10 @@ Containment then depends on execution mode:
 | Templated/remote executor | The scoped executor's fenced quiescence report, because the daemon cannot inspect a process group on another host.                                                                          |
 | OpenCode provider work    | Local process absence is insufficient to prove server-side work stopped, so termination can remain unverified.                                                                              |
 
-Local cooperative shutdown gives the wrapper 250 ms to disappear before
-signaling. In strict mode the target-user process may exit just before its
-root-owned `sudo` wrapper, so a target-user PGID probe can transiently return
-`EPERM`. The grace applies to both `present` and `unverified` probes; only an
-explicit later `absent` result verifies termination. Persistent uncertainty
-still fails closed. Templated/remote executors get a 15 second cooperative
+Local cooperative shutdown gives the process wrapper 250 ms to disappear before
+signaling. A PGID probe may still be `unverified` because of an OS inspection
+error; only an explicit later `absent` result verifies termination. Persistent
+uncertainty fails closed. Templated/remote executors get a 15 second cooperative
 window because the daemon has no local signal fallback.
 
 After provider cleanup returns, the executor makes bounded, idempotent retries

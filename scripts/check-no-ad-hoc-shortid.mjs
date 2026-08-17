@@ -29,7 +29,7 @@
  * why the receiver isn't a UUIDv7.
  *
  * Allowlist (whole-file): the helper itself, the type definitions, the
- * Unix-naming carve-out, the integration test scripts.
+ * integration test scripts.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -42,35 +42,9 @@ const ALLOWLIST = new Set([
   'packages/core/src/lib/ids.ts',
   'packages/core/src/lib/ids.test.ts',
   'packages/core/src/types/id.ts',
-  'packages/core/src/unix/group-manager.ts',
-  'packages/core/src/unix/user-manager.ts',
   'packages/core/src/db/scripts/test-integration.ts',
   'packages/core/src/db/scripts/test-integration.test.ts',
 ]);
-
-// Unix group generation is a persistence-boundary operation, not a general
-// formatting helper. Every other caller must read unix_group from the row and
-// validate it with resolveBranchGroupName/resolveRepoGroupName.
-const UNIX_GROUP_GENERATION_ALLOWLIST = new Set([
-  'apps/agor-cli/src/commands/local/sync-unix.ts',
-  'apps/agor-daemon/src/register-hooks.ts',
-  'packages/core/src/unix/group-manager.ts',
-  'packages/core/src/unix/group-manager.test.ts',
-  'packages/core/src/unix/group-uuid-migration.ts',
-  'packages/core/src/unix/unix-integration-service.ts',
-  'packages/executor/src/commands/unix.ts',
-]);
-const LEGACY_UNIX_GROUP_GENERATION_ALLOWLIST = new Set([
-  'packages/core/src/unix/group-manager.ts',
-  'packages/core/src/unix/group-manager.test.ts',
-  'packages/core/src/unix/group-uuid-migration.ts',
-]);
-
-const UNIX_GROUP_GENERATION_PATTERNS = [
-  /\bgenerate(?:Branch|Repo)GroupName\b/,
-  /agor_(?:wt|rp)_\$\{/,
-  /['"]agor_(?:wt|rp)_['"]\s*\+/,
-];
 
 // `reportId` and `displayId` are intentionally OMITTED — reports are
 // addressed by file path (`<session-id>/<task-id>.md`), not UUIDv7, and
@@ -158,7 +132,6 @@ async function dirExists(abs) {
 
 async function main() {
   let violations = 0;
-  let unixGroupViolations = 0;
   for (const dir of TARGETS) {
     const abs = path.join(ROOT, dir);
     if (!(await dirExists(abs))) continue;
@@ -173,20 +146,6 @@ async function main() {
             console.error(`${rel}:${i + 1}: ${lines[i].trim()}`);
             violations++;
           }
-        }
-        if (
-          !UNIX_GROUP_GENERATION_ALLOWLIST.has(rel) &&
-          UNIX_GROUP_GENERATION_PATTERNS.some((pattern) => pattern.test(lines[i]))
-        ) {
-          console.error(`${rel}:${i + 1}: ${lines[i].trim()}`);
-          unixGroupViolations++;
-        }
-        if (
-          !LEGACY_UNIX_GROUP_GENERATION_ALLOWLIST.has(rel) &&
-          /\bgenerateLegacy(?:Branch|Repo)GroupName\b/.test(lines[i])
-        ) {
-          console.error(`${rel}:${i + 1}: ${lines[i].trim()}`);
-          unixGroupViolations++;
         }
       }
     }
@@ -210,18 +169,7 @@ async function main() {
     process.exit(1);
   }
 
-  if (unixGroupViolations > 0) {
-    console.error(
-      `\n❌ ${unixGroupViolations} Unix group name generation boundary violation${unixGroupViolations === 1 ? '' : 's'} found.\n` +
-        `\nUnix group names are persisted identity. Generate a canonical name only in\n` +
-        `an allowlisted absent-field stamping or explicit migration boundary. Every\n` +
-        `host/filesystem/GID consumer must read unix_group from the branch/repo row\n` +
-        `and validate it with resolveBranchGroupName/resolveRepoGroupName.\n`
-    );
-    process.exit(1);
-  }
-
-  console.log('✅ No ad-hoc UUID truncation or Unix group generation bypass found.');
+  console.log('✅ No ad-hoc UUID truncation found.');
 }
 
 main().catch((err) => {

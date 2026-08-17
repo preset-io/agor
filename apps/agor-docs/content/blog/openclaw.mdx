@@ -174,7 +174,7 @@ Agor started with a different constraint: multiple teams, shared infrastructure,
 
 **RBAC for multi-user environments.** Who can see which worktrees? Who can spawn agents? Who can modify zone triggers? Role-based access control for team coordination.
 
-**Unix-level isolation.** Each user can have a Unix account. Agents run as the user who spawned them, inheriting that user's filesystem permissions. We're leaning on decades of battle-tested Unix security rather than inventing new isolation primitives.
+**Execution isolation.** Agents can run inside the fail-closed local filesystem sandbox or a tenant-scoped external substrate, without Agor creating host accounts.
 
 **SDK-level policies.** Because Agor builds on Claude Code, Codex, and Gemini SDKs, it inherits their permission systems: read-only modes, workspace boundaries, tool restrictions, approval flows. These policies can be set per-agent, per-worktree, or per-zone.
 

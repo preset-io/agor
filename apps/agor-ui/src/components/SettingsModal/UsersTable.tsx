@@ -299,15 +299,15 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           </Form.Item>
 
           <Form.Item
-            label="Unix Username"
+            label="Execution Home Key"
             name="unix_username"
-            help="Optional. Unix user for process impersonation (alphanumeric, hyphens, underscores only)"
+            help="Optional. Opaque home key for sandbox or delegated execution (alphanumeric, hyphens, underscores only)"
             rules={[
               {
                 pattern: /^[a-z0-9_-]+$/,
                 message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
               },
-              { max: 32, message: 'Unix username must be 32 characters or less' },
+              { max: 32, message: 'Execution home key must be 32 characters or less' },
             ]}
           >
             <Input placeholder="johnsmith" maxLength={32} />

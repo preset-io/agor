@@ -22,7 +22,6 @@ import {
   normalizeRepoUrl,
   PAGINATION,
   resolveBranchStorageConfig,
-  resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
@@ -52,8 +51,7 @@ import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
-import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -190,7 +188,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * - Parse .agor.yml
    * - Patch the existing row to `'ready'` (with parsed env, default branch)
    *   or `'failed'` (with categorized clone_error)
-   * - Initialize Unix group
    *
    * Returns immediately with `{ status: 'pending', slug, repo_id }`.
    * Clients see a `repos.created` event for the placeholder row, then a
@@ -261,16 +258,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // token ensures hooks like requireAdminForEnvConfig bypass via
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
-    // Unix group initialization is a filesystem concern controlled by
-    // unix_user_mode, not by app-level branch RBAC.
-    const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
-
-    // A managed clone is lifecycle storage beneath the daemon-owned repo
-    // root, not a read/probe in the requesting user's home. Run it as the Git
-    // lifecycle identity; the post-clone group initialization grants the
-    // creator access. Requesting-user impersonation cannot create the first
-    // slug directory in strict mode.
-    const asUser = await resolveGitImpersonationForUser(this.db, userId, this.app.get('config'));
+    // A managed clone is lifecycle storage beneath the configured repo root,
+    // not a read/probe in the requesting user's home. Delegated substrates
+    // receive the caller's stable execution-home key for routing.
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+      this.db,
+      userId,
+      this.app.get('config')
+    );
 
     // Pre-create the repo row with `clone_status: 'cloning'` so failures stay
     // queryable via `agor_repos_get(repoId)`. Pre-#1126 the row was only
@@ -330,13 +325,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           ...(data.default_branch ? { default_branch: data.default_branch } : {}),
           createDbRecord: true,
           userId: userId as string | undefined,
-          initUnixGroup,
-          ...(initUnixGroup ? { daemonUser: this.app.get('config').daemon?.unix_user } : {}),
         },
       },
       {
         logPrefix: `[clone ${slug}]`,
-        asUser, // Run as resolved user (fresh groups via sudo -u)
+        delegatedHomeKey: delegatedHomeKey,
         templateVariables: {
           user_id: userId,
         },
@@ -527,14 +520,18 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    const asUser = await resolveExecutorReadAsUser(this.db, userId, this.app.get('config'));
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+      this.db,
+      userId,
+      this.app.get('config')
+    );
     const inspection = await runExecutorCommand(
       {
         command: 'git.repo.inspect',
         daemonUrl: getDaemonUrl(),
         params: { path: inputPath },
       },
-      { asUser, logPrefix: '[repos.local.inspect]' }
+      { delegatedHomeKey: delegatedHomeKey, logPrefix: '[repos.local.inspect]' }
     );
     if (!inspection.success)
       throw new Error(inspection.error?.message ?? 'Repository inspection failed');
@@ -578,13 +575,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
       params
     )) as Repo;
-
-    // TODO: Unix group initialization for local repos
-    // For local repos, Unix group init should also go through executor.
-    // Currently, local repos don't trigger git operations via executor,
-    // so we'd need a separate executor command (e.g., 'unix.init-repo-group').
-    // For now, local repos don't get Unix group isolation automatically.
-    // Use `agor local sync-unix` to initialize groups for existing repos.
 
     return repo;
   }
@@ -684,7 +674,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
     // Auth hooks (`requireMinimumRole`) guarantee `params.user` exists by
     // the time we get here. The identity is forwarded so executor-local Git
-    // can resolve the requesting user's credentials in strict Unix mode.
+    // can resolve the requesting user's credential route.
     const userId = (params as AuthenticatedParams).user!.user_id as UserID;
 
     if (storageMode === 'clone') {
@@ -752,10 +742,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     const branchesService = this.app.service('branches');
 
-    // NOTE: Environment command templates (start_command, stop_command, etc.) are NOT
-    // rendered here. They will be rendered by the executor after Unix groups are created
-    // and GID is available, ensuring {{branch.gid}} is populated in templates.
-    // See: packages/executor/src/commands/git.ts:renderEnvironmentTemplates()
+    // Environment command templates (start_command, stop_command, etc.) are
+    // rendered by the executor after filesystem materialization.
 
     // Storage mode (storageMode + cloneDepth) was resolved + validated up
     // top so the preflights could gate on it; reuse those vars below.
@@ -763,9 +751,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Create DB record EARLY with 'creating' status
     // Executor will:
     // 1. Create git branch on filesystem
-    // 2. Initialize Unix groups (if unix_user_mode needs filesystem isolation)
-    // 3. Render environment templates with full context including GID
-    // 4. Patch branch to 'ready' with rendered templates
+    // 2. Render environment templates with the materialized branch context
+    // 3. Patch branch to 'ready' with rendered templates
     const branch = (await branchesService.create(
       {
         repo_id: repo.repo_id,
@@ -777,7 +764,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         new_branch: data.createBranch ?? false,
         branch_unique_id: branchUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor
-        // Environment templates will be rendered by executor after Unix group creation
+        // Environment templates are rendered after filesystem materialization.
         // RBAC fields are intentionally omitted at creation: new branches
         // always align with their board defaults. Overrides are a deliberate
         // post-create action from the Branch permissions tab.
@@ -909,24 +896,20 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // materialization of admin-defined templates.
     //
     // Per-user credentials: Feathers RPC (users.getGitEnvironment)
-    // Unix permissions: fail-closed inside the tenant-mounted lifecycle executor.
+    // Filesystem authorization stays fail-closed inside the selected substrate.
     try {
       const sessionToken = generateScopedServiceToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } },
         { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
       );
 
-      // Unix group initialization is a filesystem concern controlled by
-      // unix_user_mode, not by app-level branch RBAC.
-      const executionMode = resolveExecutionSecurityMode();
-      const initUnixGroup = executionMode.shouldInitUnixGroups;
-
-      // Managed Git lifecycle operations must run as the daemon lifecycle
-      // identity. In strict mode the requesting user can read an initialized
-      // branch through its group/ACL, but cannot create a child beneath the
-      // daemon-owned worktree root or mutate the base repo's .git/worktrees.
-      // Keep resolveExecutorReadAsUser for read/probe commands only.
-      const asUser = await resolveGitImpersonationForUser(this.db, userId, this.app.get('config'));
+      // Delegated substrates receive the caller's stable home key; local
+      // lifecycle operations use the daemon process identity.
+      const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+        this.db,
+        userId,
+        this.app.get('config')
+      );
 
       spawnExecutorFireAndForget(
         {
@@ -937,10 +920,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             branchId: branch.branch_id,
             repoId: repo.repo_id,
             userId: userId as string | undefined,
-            // Unix group isolation (only when unix_user_mode is non-simple)
-            initUnixGroup,
-            ...(initUnixGroup ? { daemonUser: this.app.get('config').daemon?.unix_user } : {}),
-            fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
             useReference:
               storageMode === 'clone' &&
               !!repo.local_path &&
@@ -949,7 +928,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         },
         {
           logPrefix: `[ReposService.createBranch ${data.name}]`,
-          asUser, // Run as lifecycle identity with fresh supplemental groups
+          delegatedHomeKey: delegatedHomeKey,
           templateVariables: {
             branch_id: branch.branch_id,
             user_id: userId,
@@ -997,7 +976,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const sessionToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
-    const asUser = await resolveExecutorReadAsUser(
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
       this.db,
       (serviceParams as Partial<AuthenticatedParams> | undefined)?.user?.user_id as
         | UserID
@@ -1018,7 +997,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
       {
         logPrefix: `[${command} ${repo.slug}/${branch.name}]`,
-        asUser,
+        delegatedHomeKey: delegatedHomeKey,
       }
     );
   }

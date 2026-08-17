@@ -2,18 +2,12 @@
  * Git Command Handlers for Executor
  *
  * These handlers execute git operations directly in the executor process.
- * This enables:
- * 1. Running as a different Unix user with fresh group memberships
- * 2. Proper isolation for RBAC-protected branches
- * 3. Consistent environment (credentials, env vars) resolution
+ * This enables consistent substrate, credential, and environment handling for
+ * filesystem operations on RBAC-protected branches.
  *
  * The executor handles the complete transaction:
  * 1. Filesystem operations (git clone, git worktree add/remove)
  * 2. Database record creation via Feathers services
- * 3. Privileged Unix group/ACL setup runs in this same tenant-mounted Git
- *    lifecycle executor, before the resource is marked ready. This avoids a
- *    nested executor-capacity dependency while keeping tenant paths out of the
- *    daemon process.
  *
  * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
  */
@@ -24,7 +18,6 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
-import type { BranchID } from '@agor/core/types';
 import { diagnoseGit } from '@agor/git';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
@@ -65,11 +58,6 @@ import type {
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
-import {
-  fixBranchGitDirPermissionsBasic,
-  handleUnixSyncBranch,
-  handleUnixSyncRepo,
-} from './unix.js';
 
 /**
  * Self-hosted compatibility operation. The daemon authorizes the request and
@@ -185,7 +173,7 @@ export async function handleGitManagedCredentialsReconcile(
  * credentials entirely).
  *
  * RPC failures are intentionally NOT swallowed: this is the channel through
- * which per-user credentials reach git ops in strict mode. If we returned `{}`
+ * which per-user credentials reach git operations. If we returned `{}`
  * on failure, git would silently fall back to the daemon user's ambient
  * credentials (e.g. `gh auth login`), which is exactly the cross-user leak
  * this whole flow is designed to prevent.
@@ -671,8 +659,7 @@ export async function handleGitClone(
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.clone] Connected to daemon');
 
-    // This check must run inside the executor, after impersonation/template
-    // setup, because that is the process whose PATH and identity own the
+    // This check must run inside the executor, after launcher setup, because that is the process whose PATH and identity own the
     // actual clone. A CLI/daemon preflight can pass while this runtime cannot
     // resolve Git (for example, with a filtered PATH or remote executor).
     const git = await diagnoseGit();
@@ -694,7 +681,7 @@ export async function handleGitClone(
 
     // The daemon selects this canonical, tenant-scoped destination. Trust only
     // that exact path for this one-purpose executor process so an existing
-    // daemon-owned clone can be inspected/reused under Unix impersonation.
+    // managed clone can be inspected/reused by the selected substrate.
     if (outputPath) {
       appendGitConfigParameterPairs([`safe.directory=${outputPath}`]);
     }
@@ -725,7 +712,6 @@ export async function handleGitClone(
 
     // Create DB record if requested (default: true)
     let repoId: string | undefined;
-    let unixGroup: string | undefined;
 
     if (createDbRecord) {
       // Parse .agor.yml for environment config (if present). Returns v2
@@ -800,33 +786,6 @@ export async function handleGitClone(
         console.log(`[git.clone] Repo record created: ${repoId}`);
       }
 
-      // Apply Unix isolation in this tenant-mounted lifecycle executor. Do not
-      // dispatch a nested executor: bounded hosted pools can deadlock when all
-      // outer Git jobs wait for inner permission jobs. Isolation is required
-      // in insulated/strict mode, so failure must prevent `ready`.
-      if (payload.params.initUnixGroup && repoId) {
-        console.log(`[git.clone] Initializing Unix group for repo ${shortId(repoId)}`);
-        const result = await handleUnixSyncRepo(
-          {
-            ...payload,
-            command: 'unix.sync-repo',
-            params: {
-              repoId,
-              daemonUser: payload.params.daemonUser,
-              initialize: true,
-              ...(payload.params.userId ? { creatorUserId: payload.params.userId } : {}),
-            },
-          },
-          options
-        );
-        if (!result.success) {
-          throw new Error(result.error?.message ?? 'Unix repository permission sync failed');
-        }
-        unixGroup = (result.data as { groupName?: string } | undefined)?.groupName;
-        if (!unixGroup) throw new Error('Unix repository permission sync returned no group');
-        console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
-      }
-
       if (repoId) {
         await client.service('repos').patch(repoId, { clone_status: 'ready' });
       }
@@ -841,7 +800,6 @@ export async function handleGitClone(
         slug,
         repoId,
         dbRecordCreated: createDbRecord,
-        unixGroup,
       },
     };
   } catch (error) {
@@ -906,10 +864,7 @@ export async function handleGitClone(
 }
 
 /**
- * Render environment command templates with full context including GID
- *
- * Fetches branch and repo from database, gets GID from Unix group (if available),
- * and renders all environment templates with complete context.
+ * Render environment command templates with the materialized branch context.
  *
  * @param client - Feathers client
  * @param branchId - Branch ID
@@ -933,7 +888,6 @@ async function renderEnvironmentTemplates(
 }> {
   // Import dependencies dynamically
   const { renderBranchSnapshot } = await import('@agor/core/environment/render-snapshot');
-  const { getGidFromGroupName, resolveBranchGroupName } = await import('@agor/core/unix');
   const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
 
   // Fetch branch and repo from database
@@ -945,11 +899,6 @@ async function renderEnvironmentTemplates(
   if (!repo.environment) {
     return {};
   }
-
-  // Look up GID from Unix group (only if group was created)
-  const unixGid = branch.unix_group
-    ? getGidFromGroupName(resolveBranchGroupName(branchId as BranchID, branch.unix_group))
-    : undefined;
 
   // Resolve host IP for {{host.ip_address}} (frozen into rendered commands).
   // Override comes from daemon-resolved config slice; autodetected fallback
@@ -967,7 +916,6 @@ async function renderEnvironmentTemplates(
         name: branch.name,
         path: branch.path,
         custom_context: branch.custom_context,
-        unix_gid: unixGid,
         host_ip_address: hostIpAddress,
         base_ref: branch.base_ref,
         ref_type: branch.ref_type,
@@ -1134,54 +1082,7 @@ export async function handleGitBranchAdd(
 
     console.log(`[git.branch.add] Branch created at ${branchPath}`);
 
-    // Apply Unix isolation in this same tenant-mounted lifecycle executor.
-    // This is awaited and fail-closed so the branch cannot become ready first.
-    let unixGroup: string | undefined;
-    if (payload.params.initUnixGroup && branchId) {
-      console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
-      const result = await handleUnixSyncBranch(
-        {
-          ...payload,
-          command: 'unix.sync-branch',
-          params: {
-            branchId,
-            daemonUser: payload.params.daemonUser,
-          },
-        },
-        options
-      );
-      if (!result.success) {
-        throw new Error(result.error?.message ?? 'Unix branch permission sync failed');
-      }
-      unixGroup = (result.data as { groupName?: string } | undefined)?.groupName;
-      if (!unixGroup) throw new Error('Unix branch permission sync returned no group');
-      console.log(`[git.branch.add] Unix group initialized: ${unixGroup}`);
-    } else if (payload.params.fixBasicPermissions && storageMode === 'worktree') {
-      // RBAC is explicitly disabled — set basic permissions for the base
-      // repo's .git/worktrees/<name>/ entry so git operations work even
-      // without Unix group isolation.
-      //
-      // Clone-mode skips this: there's no `.git/worktrees/<name>/` entry in
-      // any base repo (the working tree owns its own `.git/` directory),
-      // so running this would log a bogus failure on every clone-mode
-      // create. The clone's `.git/` is set up by `git clone` itself.
-      try {
-        console.log(
-          `[git.branch.add] RBAC disabled, setting basic permissions for .git/worktrees/${branchName}`
-        );
-        await fixBranchGitDirPermissionsBasic(repoPath, branchName);
-      } catch (error) {
-        console.error(
-          `[git.branch.add] Failed to set basic .git/worktrees permissions:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    }
-    // else: initUnixGroup is true but branchId is missing - skip both paths (this shouldn't happen)
-
-    // Render environment command templates (after Unix group creation if applicable)
-    // Templates should be rendered regardless of RBAC status, but GID will only be available
-    // when Unix groups are enabled
+    // Render environment command templates.
     let renderedTemplates:
       | {
           start_command?: string;
@@ -1195,10 +1096,9 @@ export async function handleGitBranchAdd(
 
     if (branchId) {
       try {
-        const logSuffix = unixGroup
-          ? `with GID for branch ${shortId(branchId)}`
-          : `for branch ${shortId(branchId)} (no Unix group)`;
-        console.log(`[git.branch.add] Rendering environment templates ${logSuffix}`);
+        console.log(
+          `[git.branch.add] Rendering environment templates for branch ${shortId(branchId)}`
+        );
         renderedTemplates = await renderEnvironmentTemplates(
           client,
           branchId,
@@ -1220,7 +1120,6 @@ export async function handleGitBranchAdd(
       console.log(`[git.branch.add] Marking branch ${shortId(branchId)} as ready`);
       await client.service('branches').patch(branchId, {
         filesystem_status: 'ready',
-        ...(unixGroup ? { unix_group: unixGroup } : {}),
         ...(renderedTemplates || {}),
       });
       console.log(`[git.branch.add] Branch marked as ready`);
@@ -1235,21 +1134,16 @@ export async function handleGitBranchAdd(
         repoPath,
         repoId,
         branchId,
-        unixGroup,
       },
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[git.branch.add] Failed:', errorMessage);
 
-    // Fallback: ensure the directory exists with correct perms/ACLs even when
-    // git worktree add fails (e.g., branch deleted during archive). This
-    // unblocks sync-unix, sessions, and manual recovery — the directory just
-    // won't be a proper git branch. Also repairs perms if a prior attempt
-    // created the dir but failed on group initialization.
+    // Fallback: preserve the historical empty-directory recovery behavior
+    // when git worktree add fails. No host permission repair is attempted.
     const fallbackPath = resolvedBranchPath;
     let fallbackCreated = false;
-    let fallbackPermissionsApplied = false;
     if (fallbackPath) {
       // Step 1: Ensure directory exists
       if (!existsSync(fallbackPath)) {
@@ -1261,34 +1155,6 @@ export async function handleGitBranchAdd(
           console.error(
             '[git.branch.add] Fallback: failed to create directory:',
             mkdirError instanceof Error ? mkdirError.message : String(mkdirError)
-          );
-        }
-      }
-
-      // Step 2: synchronously run idempotent repair in this lifecycle
-      // executor, even when a prior attempt already created the directory.
-      if (existsSync(fallbackPath) && payload.params.initUnixGroup && branchId && client) {
-        try {
-          const result = await handleUnixSyncBranch(
-            {
-              ...payload,
-              command: 'unix.sync-branch',
-              params: {
-                branchId,
-                daemonUser: payload.params.daemonUser,
-              },
-            },
-            options
-          );
-          if (!result.success) {
-            throw new Error(result.error?.message ?? 'Unix branch permission repair failed');
-          }
-          console.log(`[git.branch.add] Fallback: applied Unix group permissions`);
-          fallbackPermissionsApplied = true;
-        } catch (permError) {
-          console.error(
-            '[git.branch.add] Fallback: failed to set Unix group permissions:',
-            permError instanceof Error ? permError.message : String(permError)
           );
         }
       }
@@ -1332,7 +1198,6 @@ export async function handleGitBranchAdd(
           branchName: resolvedBranchName,
           branchPath: resolvedBranchPath,
           fallbackDirectoryCreated: fallbackCreated,
-          fallbackPermissionsApplied,
         },
       },
     };

@@ -50,7 +50,7 @@ import {
   TEAMMATE_NAMESPACE_MISSING_MESSAGE,
 } from '../../services/teammate-knowledge.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
-import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -730,8 +730,8 @@ async function runBranchKnowledgeCommand(
     },
     {
       logPrefix: `[Knowledge ${command}]`,
-      asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-        resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
+      delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        resolveDelegatedExecutionHomeKey(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
       ),
     }
   );

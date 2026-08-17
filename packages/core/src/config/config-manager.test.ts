@@ -28,13 +28,10 @@ import {
   getTenantDataRoot,
   initConfig,
   isBranchRbacEnabled,
-  isUnixGroupRefreshNeeded,
-  isUnixImpersonationEnabled,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
   RETIRED_CONFIG_KEYS,
-  requireDaemonUser,
   requirePublicBaseUrl,
   resolveBranchStorageConfig,
   resolveEffectiveConfig,
@@ -42,7 +39,7 @@ import {
   resolveTeammateFrameworkRepoUrl,
   rewriteConfigForTests,
   saveConfigForTests,
-  unixUserModeRequiresUsername,
+  unixUserModeRequiresExecutionHomeKey,
 } from './config-manager';
 import type { AgorConfig } from './types';
 
@@ -128,34 +125,19 @@ describe('resolveEffectiveConfig', () => {
     expect(resolved.paths?.data_home).toBe('/from-environment');
   });
 
-  it('keeps Unix executor impersonation opt-in while preserving explicit overrides', () => {
-    expect(
-      resolveEffectiveConfig(
-        {},
-        {
-          AGOR_USE_EXECUTOR: 'false',
-          AGOR_EXECUTOR_USERNAME: '',
-        }
-      ).execution?.executor_unix_user
-    ).toBeUndefined();
-    expect(
-      resolveEffectiveConfig(
-        {},
-        {
-          AGOR_USE_EXECUTOR: 'true',
-          AGOR_EXECUTOR_USERNAME: '',
-        }
-      ).execution?.executor_unix_user
-    ).toBe('agor_executor');
-    expect(
-      resolveEffectiveConfig(
-        {},
-        {
-          AGOR_USE_EXECUTOR: 'false',
-          AGOR_EXECUTOR_USERNAME: 'custom-runner',
-        }
-      ).execution?.executor_unix_user
-    ).toBe('custom-runner');
+  it.each(['opportunistic', 'strict', 'insulated'])(
+    'rejects removed AGOR_UNIX_USER_MODE=%s overrides with migration guidance',
+    (mode) => {
+      expect(() => resolveEffectiveConfig({}, { AGOR_UNIX_USER_MODE: mode })).toThrow(
+        new RegExp(`${mode}.*removed in Agor 0\\.25\\.0`, 's')
+      );
+    }
+  );
+
+  it('rejects an unknown AGOR_UNIX_USER_MODE override', () => {
+    expect(() => resolveEffectiveConfig({}, { AGOR_UNIX_USER_MODE: 'root' })).toThrow(
+      /must be one of: simple, sandbox, delegated/
+    );
   });
 
   it('unix_user_mode: sandbox implies RBAC + enabled per-user sandbox that fails closed', () => {
@@ -217,40 +199,6 @@ describe('resolveEffectiveConfig', () => {
 });
 
 describe('assertValidEffectiveExecutionConfig', () => {
-  it.each(['strict', 'insulated'] as const)(
-    'rejects sandboxing combined with %s Unix mode',
-    (unix_user_mode) => {
-      expect(() =>
-        assertValidEffectiveExecutionConfig({
-          execution: { unix_user_mode, sandbox: { enabled: true } },
-        })
-      ).toThrow(/incompatible/);
-    }
-  );
-
-  it('rejects sandboxing combined with a local impersonation user', () => {
-    expect(() =>
-      assertValidEffectiveExecutionConfig({
-        execution: {
-          unix_user_mode: 'simple',
-          executor_unix_user: 'agor_executor',
-          sandbox: { enabled: true },
-        },
-      })
-    ).toThrow(/executor_unix_user/);
-  });
-
-  it('rejects unsupported combinations introduced entirely by environment overrides', () => {
-    const resolved = resolveEffectiveConfig(
-      {},
-      {
-        AGOR_SANDBOX_ENABLED: 'true',
-        AGOR_USE_EXECUTOR: 'true',
-      }
-    );
-    expect(() => assertValidEffectiveExecutionConfig(resolved)).toThrow(/executor_unix_user/);
-  });
-
   it('rejects sandboxing combined with an external executor template', () => {
     expect(() =>
       assertValidEffectiveExecutionConfig({
@@ -856,7 +804,7 @@ describe('loadConfig cache', () => {
     expect(recovered.daemon?.port).toBe(8888);
   });
 
-  it('validates on every load path: loadConfigSync rejects deprecated values too', async () => {
+  it('validates on every load path: loadConfigSync rejects removed values too', async () => {
     // Regression guard for the shared-cache bug: if loadConfigSync had a
     // separate (un-validated) code path, calling it first could populate
     // the cache with an invalid config that a later loadConfig() would
@@ -864,15 +812,35 @@ describe('loadConfig cache', () => {
     //
     // YAML written as a raw string because `unix_user_mode: 'opportunistic'`
     // is intentionally not assignable to `AgorConfig.execution.unix_user_mode`
-    // (the value was deprecated and removed from the type) — that's what
+    // (the value was removed from the type) — that's what
     // validateConfig() catches at runtime for users who still have the value
     // in their config.yaml.
     await writeConfigFile('execution:\n  unix_user_mode: opportunistic\n');
 
-    expect(() => loadConfigSync()).toThrow(/opportunistic.*deprecated/s);
+    expect(() => loadConfigSync()).toThrow(/opportunistic.*removed in Agor 0\.25\.0/s);
     // And async path stays consistent.
-    await expect(loadConfig()).rejects.toThrow(/opportunistic.*deprecated/s);
+    await expect(loadConfig()).rejects.toThrow(/opportunistic.*removed in Agor 0\.25\.0/s);
   });
+
+  it.each(['strict', 'insulated'])(
+    'rejects removed %s mode with migration guidance',
+    async (mode) => {
+      await writeConfigFile(`execution:\n  unix_user_mode: ${mode}\n`);
+      expect(() => loadConfigSync()).toThrow(
+        new RegExp(`${mode}.*removed in Agor 0\\.25\\.0`, 's')
+      );
+      await expect(loadConfig()).rejects.toThrow(/latest Agor 0\.24\.x release/s);
+    }
+  );
+
+  it.each(['executor_unix_user', 'sync_unix_passwords'])(
+    'rejects removed host execution key %s',
+    async (key) => {
+      await writeConfigFile(`execution:\n  ${key}: legacy-value\n`);
+      expect(() => loadConfigSync()).toThrow(new RegExp(`execution\\.${key}`));
+      await expect(loadConfig()).rejects.toThrow(/removed host Unix execution/);
+    }
+  );
 
   it('rejects removed analytics module plugins on every load path', async () => {
     await writeConfigFile(
@@ -893,22 +861,6 @@ describe('loadConfig cache', () => {
     });
 
     expect(isBranchRbacEnabled()).toBe(true);
-    expect(isUnixImpersonationEnabled()).toBe(false);
-    expect(isUnixGroupRefreshNeeded()).toBe(false);
-    expect(() => requireDaemonUser(loadConfigSync())).not.toThrow();
-  });
-
-  it('requires daemon.unix_user only for non-simple Unix modes', async () => {
-    await writeConfigFile({
-      execution: { branch_rbac: false, unix_user_mode: 'insulated' },
-    });
-
-    expect(isBranchRbacEnabled()).toBe(false);
-    expect(isUnixImpersonationEnabled()).toBe(true);
-    expect(isUnixGroupRefreshNeeded()).toBe(true);
-    expect(() => requireDaemonUser(loadConfigSync())).toThrow(
-      /execution\.unix_user_mode is insulated or strict/
-    );
   });
 
   it.each([
@@ -918,12 +870,7 @@ describe('loadConfig cache', () => {
       expected: {
         appRbacEnabled: false,
         unixUserMode: 'simple',
-        unixImpersonationEnabled: false,
-        unixFsIsolationEnabled: false,
-        unixGroupRefreshNeeded: false,
-        requiresDaemonUnixUser: false,
-        shouldInitUnixGroups: false,
-        requiresUserUnixUsername: false,
+        requiresExecutionHomeKey: false,
       },
     },
     {
@@ -932,56 +879,18 @@ describe('loadConfig cache', () => {
       expected: {
         appRbacEnabled: true,
         unixUserMode: 'simple',
-        unixImpersonationEnabled: false,
-        unixFsIsolationEnabled: false,
-        unixGroupRefreshNeeded: false,
-        requiresDaemonUnixUser: false,
-        shouldInitUnixGroups: false,
-        requiresUserUnixUsername: false,
+        requiresExecutionHomeKey: false,
       },
     },
     {
       // Delegated requires per-user unix_username but performs no OS-level
-      // work on the daemon host: no sudo, no groups, no daemon.unix_user.
+      // work on the daemon host: no sudo and no host groups.
       name: 'delegated (identity enforced by execution substrate)',
       config: { execution: { branch_rbac: true, unix_user_mode: 'delegated' } } as AgorConfig,
       expected: {
         appRbacEnabled: true,
         unixUserMode: 'delegated',
-        unixImpersonationEnabled: false,
-        unixFsIsolationEnabled: false,
-        unixGroupRefreshNeeded: false,
-        requiresDaemonUnixUser: false,
-        shouldInitUnixGroups: false,
-        requiresUserUnixUsername: true,
-      },
-    },
-    {
-      name: 'Unix insulated without app RBAC',
-      config: { execution: { branch_rbac: false, unix_user_mode: 'insulated' } } as AgorConfig,
-      expected: {
-        appRbacEnabled: false,
-        unixUserMode: 'insulated',
-        unixImpersonationEnabled: true,
-        unixFsIsolationEnabled: true,
-        unixGroupRefreshNeeded: true,
-        requiresDaemonUnixUser: true,
-        shouldInitUnixGroups: true,
-        requiresUserUnixUsername: false,
-      },
-    },
-    {
-      name: 'Unix strict with app RBAC',
-      config: { execution: { branch_rbac: true, unix_user_mode: 'strict' } } as AgorConfig,
-      expected: {
-        appRbacEnabled: true,
-        unixUserMode: 'strict',
-        unixImpersonationEnabled: true,
-        unixFsIsolationEnabled: true,
-        unixGroupRefreshNeeded: true,
-        requiresDaemonUnixUser: true,
-        shouldInitUnixGroups: true,
-        requiresUserUnixUsername: true,
+        requiresExecutionHomeKey: true,
       },
     },
   ])('resolves execution security mode: $name', ({ config, expected }) => {
@@ -989,12 +898,11 @@ describe('loadConfig cache', () => {
   });
 });
 
-describe('unixUserModeRequiresUsername', () => {
-  it('requires a username only in strict and delegated', () => {
-    expect(unixUserModeRequiresUsername('simple')).toBe(false);
-    expect(unixUserModeRequiresUsername('insulated')).toBe(false);
-    expect(unixUserModeRequiresUsername('delegated')).toBe(true);
-    expect(unixUserModeRequiresUsername('strict')).toBe(true);
+describe('unixUserModeRequiresExecutionHomeKey', () => {
+  it('requires a username only in delegated mode', () => {
+    expect(unixUserModeRequiresExecutionHomeKey('simple')).toBe(false);
+    expect(unixUserModeRequiresExecutionHomeKey('sandbox')).toBe(false);
+    expect(unixUserModeRequiresExecutionHomeKey('delegated')).toBe(true);
   });
 });
 

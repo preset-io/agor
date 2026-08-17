@@ -118,19 +118,6 @@ export interface Repo {
   environment_config?: RepoEnvironmentConfigV1;
 
   /**
-   * Unix group for .git/ directory access
-   *
-   * Format: `agor_rp_<canonical-24-char-short-id>`; legacy persisted rows may
-   * retain the older 8-character form until explicitly migrated.
-   *
-   * This group is created when branch RBAC is enabled and controls access
-   * to the shared .git/ directory. Users who have access to ANY branch
-   * in this repo get added to this group, enabling git operations
-   * (commit, push, etc) by granting read/write access to .git/.
-   */
-  unix_group?: string;
-
-  /**
    * Async clone lifecycle status for `repo_type: 'remote'` repos.
    *
    * - `'cloning'`: row was pre-created by the daemon; executor is running `git clone`

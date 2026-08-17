@@ -1252,7 +1252,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       //
       // IMPORTANT: queued_by_user_id = the person who set up the callback
       // (task attribution), NOT the target session owner. Execution still runs
-      // as the target session's Unix user. Falls back to target session creator
+      // in the target session's immutable execution context. Falls back to its creator
       // for backward compat (legacy sessions without callback_created_by).
       const taskCallback = task.metadata?.completion_callback;
       const callbackCreator =

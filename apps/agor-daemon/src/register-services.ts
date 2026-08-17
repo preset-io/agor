@@ -16,7 +16,6 @@ import {
   type ResolvedDeploymentConfig,
   requirePublicBaseUrl,
   resolveDeploymentAgenticToolPolicy,
-  resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
@@ -48,7 +47,7 @@ import {
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   OAuthFlowContext,
   OAuthTokenResponse,
@@ -56,7 +55,6 @@ import type {
 import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type {
   AuthenticatedParams,
-  BranchID,
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
@@ -72,7 +70,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { hasMinimumRole, isMCPOAuthGrantBindingVersion, ROLES, TaskStatus } from '@agor/core/types';
-import { resolveBranchGroupName, type UnixUserMode } from '@agor/core/unix';
+import type { UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
 import type {
@@ -88,8 +86,6 @@ import {
   trackExecutorProcess,
 } from './executor-tracking.js';
 import { assertHaTaskPermissionSupported, isConstrainedHa } from './ha-support.js';
-import { shouldRegisterLocalHostOperations } from './host/availability.js';
-import { createLocalDaemonHostOperations } from './host/local/local-daemon-host-operations.js';
 import { registerOpenCodeServices } from './integrations/opencode/index.js';
 import {
   inOpenCodeNativeStateMutationSlot,
@@ -157,7 +153,6 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
-import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
 import {
   classifyMCPOAuthCompletionFailure,
@@ -248,7 +243,7 @@ export interface RegisteredServices {
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const { db, app, config, jwtSecret, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
+  const { db, app, config, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
 
   const _superadminOpts = { allowSuperadmin };
@@ -493,18 +488,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     !app.services['branches/:id/owners/:userId']
   ) {
     const branchRepo = new BranchRepository(db);
-    const executionMode = resolveExecutionSecurityMode(config);
     setupBranchOwnersService(app, branchRepo, {
-      jwtSecret,
-      daemonUser: config.daemon?.unix_user,
-      unixFsIsolationEnabled: executionMode.unixFsIsolationEnabled,
       allowSuperadmin,
     });
-  }
-
-  if (resolveExecutionSecurityMode(config).unixFsIsolationEnabled) {
-    const daemonUser = config.daemon?.unix_user || 'agor';
-    console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
 
   app.use('/groups', createGroupsService(db), {
@@ -661,24 +647,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const configService = createConfigService(db, config);
   configService.app = app;
-  // Host ACL/user/group operations exist only on a self-hosted daemon host. Hosted
-  // registration is intentionally absent rather than forwarding privileged
-  // work through an impersonated executor.
-  if (shouldRegisterLocalHostOperations(config)) {
-    app.use(
-      '/admin/local-actions',
-      createLocalActionsService(createLocalDaemonHostOperations(), async (branchId, params) => {
-        const branch = await app.service('branches').get(branchId, params);
-        if (!branch.unix_group) {
-          throw new BadRequest(
-            `Branch ${branchId} has no persisted unix_group; run agor local sync-unix --branch-id ${branchId}`
-          );
-        }
-        return resolveBranchGroupName(branchId as BranchID, branch.unix_group);
-      })
-    );
-  }
-
   app.use(
     '/agentic-tool-settings',
     createTenantAgenticToolSettingsService(db, deploymentAgenticToolPolicy)
@@ -705,7 +673,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   registerOpenCodeServices(ctx);
 
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
-  // it 0600 into the Unix identity that runs Codex and flips their auth
+  // it 0600 into the resolved Codex credential home and flips the caller's auth
   // method to subscription. Token material never leaves the daemon.
   app.use('/codex-auth/import', createCodexAuthImportService(app, db));
   app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
@@ -718,8 +686,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     .service('/codex-auth/device')
     .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
 
-  // Removes the caller's Codex login — deletes their auth.json as the right Unix
-  // identity and clears the stored codex auth method (emitting `patched` so the
+  // Removes the caller's Codex login — deletes auth.json through the resolved
+  // credential route and clears the stored auth method (emitting `patched` so the
   // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
   // grant, so other machines stay signed in.
   app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db));
@@ -926,7 +894,7 @@ function createExecuteHandler(
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
   // Only the modes that impersonate per user read the creator back; the others
   // never stamped a `unix_username` for it to have drifted from.
-  const unixIdentityGuard = resolveExecutionSecurityMode(config).requiresUserUnixUsername
+  const unixIdentityGuard = resolveExecutionSecurityMode(config).requiresExecutionHomeKey
     ? {
         loadCreator: (tenantDb: TenantScopedDatabase) => (userId: string) =>
           new UsersRepository(tenantDb).findById(userId),
@@ -1087,42 +1055,23 @@ function createExecuteHandler(
       });
     }
 
-    // Determine Unix user for executor
-    const {
-      getHomedirFromUsername,
-      resolveUnixUserForImpersonation,
-      validateResolvedUnixUser,
-      UnixUserNotFoundError,
-    } = await import('@agor/core/unix');
+    // Resolve the optional delegated home key reported to an external launcher.
+    // Local execution always runs as the daemon user.
+    const { resolveDelegatedHomeKey } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-    const configExecutorUser = config.execution?.executor_unix_user;
     const sessionUnixUser = session.unix_username;
 
-    const impersonationResult = resolveUnixUserForImpersonation({
+    const delegatedHomeKeyResolution = resolveDelegatedHomeKey({
       mode: unixUserMode,
-      userUnixUsername: sessionUnixUser,
-      executorUnixUser: configExecutorUser,
+      executionHomeKey: sessionUnixUser,
     });
 
-    const executorUnixUser = impersonationResult.unixUser;
-    const executorHomeDir = executorUnixUser ? getHomedirFromUsername(executorUnixUser) : homedir();
+    const executorHomeDir = homedir();
     const effectivePermissionMode =
       data.permissionMode || session.permission_config?.mode || undefined;
     const permissionModeForPayload =
       effectivePermissionMode === 'default' ? undefined : effectivePermissionMode;
-
-    // Validate Unix user
-    try {
-      validateResolvedUnixUser(unixUserMode, executorUnixUser);
-    } catch (err) {
-      if (err instanceof UnixUserNotFoundError) {
-        throw new Error(
-          `${(err as InstanceType<typeof UnixUserNotFoundError>).message}. Ensure the Unix user is created before attempting to execute sessions.`
-        );
-      }
-      throw err;
-    }
 
     // Resolve user environment variables
     const { createUserProcessEnvironment } = await import('@agor/core/config');
@@ -1171,7 +1120,6 @@ function createExecuteHandler(
         userId,
         tenantDb,
         undefined,
-        !!executorUnixUser,
         gatewayEnv,
         sessionId as SessionID
       );
@@ -1260,7 +1208,7 @@ function createExecuteHandler(
 
     let localExecutorPid: number | undefined;
     const executorOptions = (nativeState?: NativeStateSpawn): SpawnExecutorOptions => ({
-      asUser: executorUnixUser || undefined,
+      delegatedHomeKey: delegatedHomeKeyResolution.delegatedHomeKey || undefined,
       preparedEnv: executorEnv,
       logPrefix,
       templateVariables: {
@@ -1268,12 +1216,6 @@ function createExecuteHandler(
         task_id: taskId,
         branch_id: session.branch_id,
         user_id: userId,
-        // Mode-resolved identity for the execution substrate: the sudo user in
-        // insulated/strict, the session's unix_username in delegated (no sudo),
-        // and unset in simple. Supersedes the interim
-        // `sessionUnixUser || executorUnixUser` ordering from #2082, which
-        // shadowed insulated mode's configured executor identity.
-        unix_user: impersonationResult.reportedUnixUser || undefined,
       },
       onSpawn: (child, spawnContext) => {
         nativeState?.markSpawned();
@@ -1284,7 +1226,6 @@ function createExecuteHandler(
               sessionId,
               taskId,
               pid: child.pid,
-              ...(executorUnixUser ? { asUser: executorUnixUser } : {}),
             },
             app
           );

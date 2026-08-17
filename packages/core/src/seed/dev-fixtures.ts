@@ -11,12 +11,8 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import type { BranchID, RepoID, UUID } from '@agor/core/types';
-import {
-  getBranchesDir,
-  loadConfigSync,
-  resolveExecutionSecurityMode,
-} from '../config/config-manager';
+import type { BranchID, UUID } from '@agor/core/types';
+import { getBranchesDir, loadConfigSync } from '../config/config-manager';
 import { resolveMultiTenancyConfig } from '../config/multitenancy';
 import {
   BoardObjectRepository,
@@ -26,7 +22,6 @@ import {
 } from '../db/repositories';
 import { cloneRepo, createBranch } from '../git/exec';
 import { generateId } from '../lib/ids';
-import { DirectExecutor, UnixIntegrationService } from '../unix';
 
 export interface SeedOptions {
   /**
@@ -92,19 +87,6 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
     const boardRepo = new BoardRepository(db);
     const boardObjectRepo = new BoardObjectRepository(db);
 
-    // Setup Unix integration only when filesystem isolation is enabled.
-    let unixIntegrationService: UnixIntegrationService | null = null;
-    const unixSecurityMode = resolveExecutionSecurityMode();
-    if (unixSecurityMode.unixFsIsolationEnabled) {
-      const config = loadConfigSync();
-      const daemonUser = config.daemon?.unix_user || os.userInfo().username;
-      console.log(`🔐 Unix integration active (daemon user: ${daemonUser})`);
-      unixIntegrationService = new UnixIntegrationService(db, new DirectExecutor(), {
-        enabled: true,
-        daemonUser,
-      });
-    }
-
     const baseDir = options.baseDir ?? path.join(os.homedir(), '.agor', 'repos');
     const userId = options.userId;
 
@@ -162,19 +144,6 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
 
     console.log(`   ✓ Created repo: ${repo.slug} (${repo.repo_id})`);
 
-    // Unix Integration: Create repo group for .git access (same as daemon does)
-    if (unixIntegrationService) {
-      try {
-        const groupName = await unixIntegrationService.createRepoGroup(repo.repo_id as RepoID);
-        console.log(`   Unix group: ${groupName}`);
-      } catch (error) {
-        console.error(
-          `   ⚠️  Unix integration failed: ${error instanceof Error ? error.message : String(error)}`
-        );
-        // Continue - app-layer RBAC is still functional
-      }
-    }
-
     // STEP 2: Get default board
     console.log('2️⃣  Getting default board...');
     const defaultBoard = await boardRepo.getDefault();
@@ -221,22 +190,6 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
 
     // Add user as owner of the branch
     await branchRepo.addOwner(branch.branch_id, userId);
-
-    // Unix Integration: Create branch group and add owner (same as daemon hook does)
-    if (unixIntegrationService) {
-      try {
-        const groupName = await unixIntegrationService.createBranchGroup(branch.branch_id);
-        await unixIntegrationService.addUserToBranchGroup(branch.branch_id, userId);
-        // Fix permissions on .git/worktrees/<name>/ directory
-        await unixIntegrationService.fixBranchGitDirPermissions(branch.branch_id);
-        console.log(`   Unix group: ${groupName}`);
-      } catch (error) {
-        console.error(
-          `   ⚠️  Unix integration failed: ${error instanceof Error ? error.message : String(error)}`
-        );
-        // Continue - app-layer RBAC is still functional
-      }
-    }
 
     console.log(`   ✓ Created branch: ${branch.name} (${branch.branch_id})`);
 

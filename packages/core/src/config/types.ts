@@ -91,13 +91,6 @@ export interface AgorDaemonSettings {
    *  agents discover others via agor_search_tools (default: true) */
   mcpToolSearch?: boolean;
 
-  /** Unix user the daemon runs as. Used to refresh supplemental Unix groups.
-   * Required when Unix impersonation/isolation is enabled (`unix_user_mode`
-   * is `insulated` or `strict`). App-level `branch_rbac` alone does not
-   * require Unix impersonation. In dev mode without isolation, falls back to
-   * current process user. */
-  unix_user?: string;
-
   /** Instance label for deployment identification (e.g., "staging", "prod-us-east").
    * Displayed as a Tag in the UI navbar when set. */
   instanceLabel?: string;
@@ -314,26 +307,22 @@ export interface AgorDatabaseSettings {
 }
 
 /**
- * Unix user isolation mode controlling how session processes get mapped to
- * OS identities.
+ * Execution substrate and local filesystem-isolation mode.
  *
  * - `simple` — all processes run as the daemon user (no OS isolation)
- * - `delegated` — like `simple` (no sudo impersonation, no Unix groups), but
- *   every user MUST have a `unix_username`: it is passed to the execution
+ * - `delegated` — external launcher/substrate execution; every user MUST have
+ *   a `unix_username` home key, which is passed to the execution
  *   substrate (e.g. the `{unix_user}` executor-command-template variable, which
  *   hosted deployments use to select per-user home mounts) and its absence
  *   fails loudly instead of silently sharing an identity
- * - `insulated` — executors run as a dedicated user with per-branch groups
- * - `strict` — sessions run as the session creator's own Unix user
- * - `sandbox` — the strict-replacement. NO OS impersonation (everything runs as
- *   the daemon user, like `simple`), but isolation is enforced by the executor
- *   **filesystem sandbox** (bubblewrap) instead of Unix uids/groups: RBAC is on,
+ * - `sandbox` — daemon-user execution with isolation enforced by the executor
+ *   **filesystem sandbox** (bubblewrap): RBAC is on,
  *   each session gets a per-owner home overlay (`sandbox.home_mode: per_user`),
- *   and the branch is mounted per the caller's effective permission tier. No
- *   sudoers / host accounts / password sync. Linux only. See
+ *   and the branch is mounted per the caller's effective permission tier.
+ *   Linux only. See
  *   `context/explorations/executor-sandboxing.md`.
  */
-export type UnixUserMode = 'simple' | 'delegated' | 'insulated' | 'strict' | 'sandbox';
+export type UnixUserMode = 'simple' | 'delegated' | 'sandbox';
 
 export interface AgorExecutorHeartbeatSettings {
   /** Enable executor task heartbeats (default: true). */
@@ -422,8 +411,7 @@ export interface AgorSandboxSettings {
    *    passwd home, Agor masks that root explicitly. Symlink aliases of the
    *    home and data root are masked as well. The branch, base repo, and
    *    managed agentic-tools are re-exposed on top. This is the substrate that
-   *    lets per-user isolation work without Unix accounts (the strict-mode
-   *    replacement). Default: `shared`.
+   *    lets per-user isolation work without host accounts. Default: `shared`.
    */
   home_mode?: 'shared' | 'per_user';
   /**
@@ -470,13 +458,10 @@ export interface AgorExecutionSettings {
 
   dispatch_connect_timeout_ms?: number | null;
 
-  /** Unix user to run executors as (default: undefined = run as daemon user). When set, uses sudo impersonation. */
-  executor_unix_user?: string;
-
-  /** Unix user mode: simple (no isolation), insulated (branch groups), strict (enforce process impersonation) */
+  /** Execution mode: trusted local, delegated external, or local Linux sandbox. */
   unix_user_mode?: UnixUserMode;
 
-  /** Enable branch RBAC and ownership system (default: false). When enabled, enforces permission checks and Unix group isolation. */
+  /** Enable branch RBAC and ownership enforcement (default: false). */
   branch_rbac?: boolean;
 
   /**
@@ -489,8 +474,7 @@ export interface AgorExecutionSettings {
    * ⚠️ Security note: this flag does NOT reason about Unix isolation. In
    * `unix_user_mode: simple` the terminal runs as the daemon user and gives the
    * user a shell with access to `~/.agor/config.yaml`, `agor.db`, and the JWT
-   * secret. Safe combinations are `unix_user_mode: strict` (per-user Unix
-   * account) or `insulated` (shared executor user, no daemon access). The
+   * secret. Use `unix_user_mode: sandbox` for local multi-user isolation. The
    * daemon emits a startup warning when this flag is enabled in `simple` mode.
    *
    * Branch-level permissions still apply: opening a terminal against a
@@ -532,9 +516,6 @@ export interface AgorExecutionSettings {
    */
   mcp_token_expiration_ms?: number;
 
-  /** Sync web passwords to Unix user passwords (default: true). When enabled, passwords are synced on user creation/update. */
-  sync_unix_passwords?: boolean;
-
   /**
    * When true (default), the daemon writes the initial user-message row inside
    * `POST /sessions/:id/prompt`, immediately after the task is created. This
@@ -564,9 +545,7 @@ export interface AgorExecutionSettings {
    * Template variables (substituted at spawn time):
    * - {task_id} - Unique task identifier (for pod naming)
    * - {command} - Executor command (prompt, git.clone, etc.)
-   * - {unix_user} - Target Unix username
-   * - {unix_user_uid} - Target Unix UID (for runAsUser)
-   * - {unix_user_gid} - Target Unix GID (for fsGroup)
+   * - {unix_user} - Compatibility delegated home key
    * - {session_id} - Session ID (if available)
    * - {branch_id} - Branch ID (if available)
    * - {user_id} - Trusted authenticated Agor user UUID (if available)
@@ -581,14 +560,7 @@ export interface AgorExecutionSettings {
    *   kubectl run executor-{task_id} \
    *     --image=ghcr.io/preset-io/agor-executor:latest \
    *     --rm -i --restart=Never \
-   *     --overrides='{
-   *       "spec": {
-   *         "securityContext": {
-   *           "runAsUser": {unix_user_uid},
-   *           "fsGroup": {unix_user_gid}
-   *         }
-   *       }
-   *     }' \
+   *     --labels="agor-tenant={tenant_id},agor-user={user_id}" \
    *     -- agor-executor --stdin
    * ```
    *
@@ -596,7 +568,7 @@ export interface AgorExecutionSettings {
    * ```yaml
    * executor_command_template: |
    *   docker run --rm -i \
-   *     --user {unix_user_uid}:{unix_user_gid} \
+   *     --label agor.tenant={tenant_id} --label agor.user={user_id} \
    *     -v /data/agor:/data/agor \
    *     ghcr.io/preset-io/agor-executor:latest \
    *     agor-executor --stdin

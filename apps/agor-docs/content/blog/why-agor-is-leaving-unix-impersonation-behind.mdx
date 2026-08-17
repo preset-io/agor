@@ -1,0 +1,261 @@
+---
+title: 'Why Agor Is Leaving Unix Impersonation Behind'
+description: 'We tried mapping Agor RBAC onto Unix users, groups, ACLs, and homes. It was an attractive design, but the wrong foundation for where Agor is going.'
+author: 'Maxime Beauchemin'
+date: 2026-08-17
+---
+
+**tl;dr:** Agor is retiring its experimental `strict` and `insulated` Unix execution modes. They
+tried to turn an Agor server into a coherent multi-user Unix box: one host account per person,
+POSIX groups for branches, filesystem permissions derived from RBAC, and homes that also worked over
+SSH. The idea was appealing. The implementation became a growing pile of privileged reconciliation
+logic that did not scale to thousands of branches, shared filesystems, or Kubernetes.
+
+Now that Agor's Linux sandbox is viable, we have a simpler model: application RBAC remains the
+source of truth, and local executor processes receive an RBAC-derived filesystem view inside a
+[bubblewrap](https://github.com/containers/bubblewrap) mount namespace. External and
+[Kubernetes](https://kubernetes.io/docs/concepts/overview/) deployments use Agor's executor launcher
+interface and own their runtime topology. We are making this break before 1.0 rather than asking a
+security review, or our users, to reason about a model we no longer believe in.
+
+## The original vision was good
+
+The first model was easy to explain.
+
+Every Agor user would also be a Unix user. Every branch would have a Unix group. Agor's RBAC system
+would project into POSIX ownership, groups, modes, and ACLs. A user could open an Agor terminal or
+SSH into the machine and see the same home directory and the same branches. If we later wanted to
+put containers on top, we would already have a familiar UID/GID model underneath.
+
+That sounded manageable. It was also attractive in a very Unix way: use the operating system's
+native primitives instead of inventing new ones.
+
+The modes eventually called `strict` and `insulated` grew from that idea. Agor created users and
+groups, synchronized memberships, prepared homes, maintained branch symlinks, repaired ownership
+and permissions, and used `sudo` to launch work under another account.
+
+It worked just well enough to reveal why it was a dead end.
+
+## POSIX permissions are not application RBAC
+
+Traditional Unix permissions give each inode an owning user, one owning group, and everyone else.
+Each class gets read, write, and execute bits. This is an elegant model for a machine with a modest
+number of relatively stable users and groups.
+
+Agor's authorization graph is different. A branch can have owners, direct grants, organization
+groups, board-derived grants, and several permission tiers. Membership and access can change while
+agents are creating thousands of files. Reducing that graph to one owner and one group is lossy.
+
+ACLs looked like the answer. [Linux filesystem ACLs](https://man7.org/linux/man-pages/man5/acl.5.html)
+add named users and groups and support default ACLs that can be inherited by new directory entries.
+But “inherited” is not the same thing as an application-level
+invariant. Creation modes, umasks, rename and copy behavior, archive extraction, Git operations,
+tooling, and filesystem support all affect the resulting permissions. The kernel enforces the ACL
+that exists; the hard part is guaranteeing that the correct ACL continues to exist on every inode
+created by every tool.
+
+Consider a shared writable branch. I grant you access to my directory. You run a tool that creates
+a file with ownership or effective permissions that exclude me, or exclude the Agor daemon that
+must later inspect, move, or clean it up. Agor can try to repair the tree, but now authorization is
+eventually reconciled rather than structurally enforced.
+
+That leads to recursive `chown`, `chmod`, and ACL repair. On a large repository, those operations
+are slow and brittle. They race with active work. And because the daemon cannot repair arbitrary
+ownership as an ordinary user, it needs narrowly configured, but still security-sensitive, `sudo`
+authority.
+
+At that point, the “simple native Unix model” has turned into a privileged distributed state
+reconciler for inode metadata.
+
+## Shared storage makes it harder
+
+Agor needs to run on Kubernetes. That usually means work is not confined to one machine's local
+disk. Teams reach for NFS-family services, cloud network filesystems such as
+[Amazon EFS](https://docs.aws.amazon.com/efs/latest/ug/user-and-group-permissions.html), or systems
+such as CephFS.
+
+Those systems differ in ACL models, inheritance behavior, mount options, identity mapping, and
+which operations are available to a containerized process. Even when ordinary POSIX modes work,
+the exact ACL and ownership semantics Agor would need are not uniformly portable.
+
+UIDs and GIDs create another control plane. A numeric identity written by one node must mean the
+same thing on every node that mounts the volume. Agor would need to allocate those numbers, avoid
+collisions, propagate the mapping, and keep containers, hosts, shared storage, and perhaps SSH
+logins aligned. Names in `/etc/passwd` and `/etc/group` are only local views over those numbers;
+mounting a shared filesystem does not distribute the identity database.
+
+This is all possible with enough infrastructure: directory services, identity-aware storage,
+careful pod security contexts, and operational discipline. But Agor would be rebuilding part of an
+enterprise identity platform inside a product whose actual job is orchestrating coding agents.
+
+## Then came thousands of branches
+
+Agor instances can see thousands of branches. Under the original model, branches became Unix
+groups and collaborators accumulated supplemental group memberships.
+
+Eventually, `id` prints a wall of groups. Processes approach operating-system and runtime limits on
+supplemental memberships. Operators start tuning host parameters and debugging why one process has
+fresh memberships while another long-lived process does not. Agor uses `sudo -u` in places not to
+change identity, but simply to force a fresh group calculation.
+
+When a product-level permission change requires OS-group creation, membership reconciliation,
+filesystem repair, process refresh, and special handling for every storage backend, the abstraction
+is telling you something: it is the wrong abstraction.
+
+## Back to the actual guarantees
+
+We went back to first principles. What does Agor need to guarantee?
+
+First, application RBAC must remain authoritative. A user who cannot access a branch through Agor
+must not gain access because of stale host state.
+
+Second, agent processes should not see daemon secrets, other users' homes, sibling branches, or
+files outside the work they are authorized to perform.
+
+Third, execution identity and tenant identity must survive API requests, queues, child sessions,
+schedules, launch tokens, storage selection, and external runtimes.
+
+Fourth, Agor must remain practical on a laptop, a large shared Linux host, and an HA or Kubernetes
+deployment without pretending those environments have the same security boundary.
+
+The old design tried to satisfy these guarantees by continuously making the host filesystem look
+like the application database. The new design derives an execution view from the database at the
+moment a process starts.
+
+## Local Linux: an RBAC-derived sandbox
+
+On Linux, Agor can now launch agent sessions and web terminals inside a
+[bubblewrap mount namespace](https://github.com/containers/bubblewrap).
+The process still runs as the daemon's host user, but it sees a deliberately constructed filesystem:
+
+- its authorized branch, mounted read-write or read-only according to Agor RBAC;
+- its persistent execution home;
+- the repository metadata required for Git operations;
+- the tools and system paths it needs;
+- masks over daemon configuration, database state, sibling homes, unauthorized branches, and
+  common host credential directories.
+
+The policy fails closed. If sandbox mode is selected and bubblewrap is unavailable, Agor does not
+quietly run the agent without isolation. The sandbox deliberately shares the host network namespace
+because executors need to reach the daemon and model providers; this is filesystem and process-view
+containment, not a claim of network isolation or a hostile-tenant VM boundary.
+
+Most importantly, permission changes no longer require Agor to materialize a POSIX group or repair
+an entire tree. RBAC is translated into mounts for a new execution. There is no host account to
+create, no password to synchronize, and no supplemental group list to refresh.
+
+For continuity, Agor still has a tenant-local per-user home key and an optional explicit migrated
+home path. The legacy field may still be named `unix_username` for a while, but in the new local
+model it is not a host account. It is a stable selector for an execution home. We would rather
+remove the dangerous machinery now and improve the naming in a smaller follow-up than combine two
+migrations under a one-week security deadline.
+
+## What about macOS and trusted local use?
+
+Bubblewrap is a Linux primitive. Agor will continue to support a simple local mode for trusted use:
+processes run as the daemon user without an Agor filesystem-isolation guarantee. That is useful for
+personal development and controlled environments, but it is not a silent fallback from sandbox
+mode and it should not be marketed as equivalent security.
+
+A future macOS sandbox can have its own deliberate design. We will not preserve a broken Linux Unix-
+account architecture merely to make the configuration look uniform across operating systems.
+
+## Kubernetes and external execution
+
+Everyone runs Kubernetes differently. Images, schedulers, storage, workload identity, secrets,
+network policy, cancellation, and observability are infrastructure decisions. Baking one topology
+into the Agor repository would make an already substantial project responsible for governing every
+cluster it can launch into.
+
+Agor instead provides an external executor interface through `executor_command_template`, with
+trusted tenant and user identity available to the launcher. In delegated mode, the external
+substrate owns the mapping from that identity to runtime, home, credentials, and storage.
+
+This interface is not magic. A shell template does not prove isolation, and Agor's local bubblewrap
+policy does not automatically apply inside a pod. Operators own the governance and topology of
+their external executor environment. Our job in the open Agor codebase is to make the boundary
+explicit, propagate trusted identity, fail loudly on incomplete configuration, and avoid coupling
+the daemon to user-land files.
+
+That last point is foundational: user-land filesystem work flows through the executor boundary.
+Underneath it, Agor has been building HA-aware execution and a tenant-safe application substrate.
+Agor Cloud adds the opinionated orchestration and infrastructure required to operate those pieces
+as a service; the core repository does not need to absorb every Cloud topology to make external
+execution possible.
+
+## Why make the break now?
+
+Agor is pre-1.0. That is precisely when we should delete an experimental security model that did
+not fulfill its promises.
+
+Keeping `strict` and `insulated` around would not be conservative. It would ask users and security
+reviewers to reason about sudoers rules, host accounts, password synchronization, POSIX groups,
+ACL inheritance, recursive repair, stale memberships, and storage-specific behavior, even though
+our own production deployment has moved to sandboxing and our future architecture no longer relies
+on any of it.
+
+We plan to preserve a final transition release containing the migration scripts and documentation,
+then make the next minor line intentionally breaking. The practical migration is:
+
+1. back up the database, configuration, and storage;
+2. drain work and stop Agor;
+3. record existing per-user home paths where continuity matters;
+4. make repositories, branches, and homes accessible to the daemon account, typically by changing
+   owner/group in a controlled, mount-bounded migration;
+5. enable sandbox mode and verify home continuity, Git writes, branch RBAC, and secret masking;
+6. upgrade to the release that no longer contains strict/insulated machinery.
+
+The existing migration scripts are a reference implementation, not a promise that Agor can infer
+the safe ownership operation for every host. Automatic cleanup of old users and groups would be
+especially dangerous on shared machines, so stale host objects are better handled explicitly after
+the rollback window.
+
+## A smaller system is a safer system
+
+This change removes code that creates host users, synchronizes passwords, manages thousands of
+groups, rewrites ACLs, repairs ownership, maintains user-home symlinks, and launches executors with
+`sudo`. It removes configuration combinations whose guarantees were difficult to explain and even
+harder to test.
+
+What remains is more honest:
+
+- **simple** for trusted local execution;
+- **sandbox** for fail-closed local Linux filesystem isolation derived from Agor RBAC;
+- **delegated external execution** for infrastructure that supplies its own runtime boundary;
+- Agor groups and RBAC as application concepts, without projecting them into host POSIX state.
+
+The lesson is not that Unix permissions are bad. They are excellent at what they were designed to
+do. The lesson is that a dynamic, multi-tenant application authorization graph should not be
+continuously compiled into global host identity and inode metadata unless operating that identity
+system is the product.
+
+It is not our product.
+
+Agor's product is giving teams a reliable place to orchestrate agents. The best thing we can do for
+that mission, and for the security review in front of us, is slash the machinery we no longer trust,
+make the remaining boundaries explicit, and move forward with a system small enough to understand.
+
+## A note on open source and Agor Cloud
+
+Agor currently uses the [Business Source License](https://github.com/preset-io/agor/blob/main/LICENSE).
+The repository license is the authority on what is permitted. In practical terms, our intent is to
+make Agor available to builders and teams, including for internal production use, while preventing
+a third party from taking the project and selling Agor itself as a competing commercial service.
+
+I have spent more than a decade writing open source software, including starting Apache Airflow and
+Apache Superset. With Agor, I wanted to try a “fairly open” model: make the code available and useful
+to builders and teams, while preserving room for the company doing the work to fund it through Agor
+Cloud.
+
+We are curious to give BSL a real try and listen to the community. Licensing lives on a spectrum,
+but it also behaves like a ratchet: opening further is easy, while taking rights back later is the
+kind of move we never want to make. So we would rather start with a boundary we can sustain, learn
+from how people use Agor, and keep our options open to make it more permissive over time.
+
+Agor Cloud will carry opinionated deployment, multi-tenant orchestration, and operational guarantees
+on top of the public substrate. That commercial boundary is also an architectural boundary. The
+open repository should provide strong primitives and clear interfaces; it should not become an
+ever-growing collection of every infrastructure topology our hosted service may need.
+
+We think that is a fair trade. We will keep explaining what lives on each side of it, and we welcome
+feedback as we learn.

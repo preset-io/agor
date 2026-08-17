@@ -447,7 +447,7 @@ export interface User extends BaseUserFields {
   must_change_password: boolean;
   created_at: Date;
   updated_at?: Date;
-  // Unix username for process impersonation (optional, unique, admin-managed)
+  // Opaque execution-home key (optional, tenant-unique, admin-managed)
   unix_username?: string;
   /**
    * Absolute path to this user's home directory ON THE HOST, used as the
@@ -457,7 +457,7 @@ export interface User extends BaseUserFields {
    *
    * Null/undefined → the daemon uses the canonical store
    * `<data_home>/tenants/<tenant>/homes/<user_id>`. The migration off `strict`
-   * sets this to each user's existing `/home/<unix_username>` so no files move.
+   * may set this to an existing migrated home so no files move.
    * Admin/system-managed; not user-editable.
    */
   filesystem_home?: string;

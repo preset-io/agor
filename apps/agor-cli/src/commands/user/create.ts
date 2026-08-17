@@ -38,7 +38,7 @@ export default class UserCreate extends BaseCommand {
       default: 'admin',
     }),
     'unix-username': Flags.string({
-      description: 'Unix username for shell access (defaults to email prefix)',
+      description: 'Execution home key for shell access (defaults to email prefix)',
       required: false,
     }),
     'filesystem-home': Flags.string({
@@ -129,7 +129,7 @@ export default class UserCreate extends BaseCommand {
       this.log(`  Email:         ${chalk.cyan(user.email)}`);
       this.log(`  Name:          ${chalk.cyan(user.name || '(not set)')}`);
       this.log(`  Role:          ${chalk.cyan(user.role)}`);
-      this.log(`  Unix Username: ${chalk.cyan(user.unix_username || '(not set)')}`);
+      this.log(`  Execution Home Key: ${chalk.cyan(user.unix_username || '(not set)')}`);
       this.log(`  ID:            ${chalk.gray(shortId(user.user_id))}`);
       if (user.must_change_password) {
         this.log(`  ${chalk.yellow('⚠')} User must change password on first login`);

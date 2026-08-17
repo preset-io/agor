@@ -1,5 +1,7 @@
 # Task runtime HA reconciliation
 
+> **Historical audit record.** Unix impersonation, sudoers, POSIX projection, and related paths cited below were removed in 0.25; file pointers describe the audited revision, not the current tree.
+
 **Checkpoint date:** 2026-08-07
 **Base dependencies:** scheduler HA PR [#2174](https://github.com/preset-io/agor/pull/2174), merged as `f48e929e`, and Session queue HA PR [#2180](https://github.com/preset-io/agor/pull/2180), merged as `a1dc2c15`.
 

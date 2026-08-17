@@ -2342,8 +2342,7 @@ describe('TaskRepository.update', () => {
     const data = createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING });
     await taskRepo.create(data);
 
-    const errorMessage =
-      'Unix user agor_123 not found. Ensure the Unix user is created before attempting to execute sessions.';
+    const errorMessage = 'Delegated execution home key is unavailable for this session.';
     const updated = await taskRepo.update(data.task_id!, {
       status: TaskStatus.FAILED,
       completed_at: new Date().toISOString(),

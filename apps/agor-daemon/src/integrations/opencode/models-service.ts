@@ -23,10 +23,8 @@ async function readModelCatalog(
       context.dataHome,
       { operation: 'read-model-catalog' },
       {
-        asUser: context.asUser,
         env: context.executorEnv,
         logPrefix: '[OpenCode Models]',
-        templateVariables: { unix_user: context.asUser ?? undefined },
       }
     );
     result = await handle.result;

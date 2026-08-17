@@ -1,630 +1,100 @@
 ---
-title: Multiplayer Mode with Unix Isolation
-description: Running Agor with RBAC and Unix-level isolation for secure shared development environments
+title: Multiplayer Execution Isolation
+description: Configure branch RBAC with local filesystem sandboxing or a delegated execution substrate
 ---
 
-# Multiplayer Mode with Unix Isolation
+# Multiplayer Execution Isolation
 
-This guide covers running Agor with full RBAC (Role-Based Access Control) and Unix-level isolation, enabling secure multi-user collaboration on shared development infrastructure.
+Agor separates **application authorization** from the **execution boundary**. Branch RBAC decides which principals may view, prompt, or control a branch. Execution mode decides what files and credentials agent code can reach.
 
----
+## Supported modes
 
-## Overview
+| Mode | Boundary | Use case |
+|---|---|---|
+| `simple` | none beyond daemon-user permissions | trusted personal installation |
+| `sandbox` | fail-closed bubblewrap filesystem mounts | shared Linux host |
+| `delegated` | operator-supplied external substrate | hosted/containerized execution |
 
-Agor's multiplayer mode brings back the power of shared development servers with modern security:
+The former `strict` and `insulated` modes were removed in Agor 0.25. Agor no longer creates host users or groups, changes passwords, repairs ACLs, creates per-user symlinks, or launches executors through sudo.
 
-- **Shared development environments** - Multiple users collaborate on the same codebase with proper isolation
-- **OS-level security** - Branch permissions enforced at the Unix filesystem level
-- **Process impersonation** - Agent sessions run as the actual user who created them
-- **Real-time collaboration** - See what teammates are working on, share terminals, pair program
-
-Think of it as **"once upon a time, teams shared servers"**, but with proper RBAC, credential isolation, and modern workflows.
-
-> **Start here:** for most trusted-org multi-user deployments, use
-> [`unix_user_mode: sandbox`](#sandbox-mode-recommended) — it delivers this
-> isolation via a per-session filesystem sandbox with **no sudoers, host
-> accounts, or Unix groups**. The `insulated`/`strict` Unix-account modes
-> documented below still work but are being phased out.
-
----
-
-## Security Model
-
-Agor implements **defense in depth** with multiple security layers:
-
-### Multi-Layer Protection
-
-1. **App Layer** - Agor API validates permissions before any operation
-2. **Sudoers Layer** - Commands restricted to specific Agor-managed paths
-3. **OS Layer** - Unix permissions prevent unauthorized filesystem access
-4. **Audit Layer** - All privileged operations logged to `/var/log/auth.log`
-
-### What the Daemon Can Do (With Proper Sudoers Configuration)
-
-- Create and manage Unix users in the `agor_users` group
-- Create Unix groups for branch isolation (`agor_wt_*`)
-- Impersonate managed users to run agent sessions
-- Modify filesystem permissions on Agor-managed directories only
-- Execute scoped privileged commands via sudo
-
-### Scoped Privileges
-
-All filesystem operations are **strictly scoped** to Agor-managed paths:
-
-- `/home/*/agor/*` - User branch symlinks and config
-- `/home/*/.agor/*` - Agor data directories
-- `/var/agor/*` - Optional shared storage directory
-
-**System paths are NOT accessible** - the daemon cannot modify `/etc`, `/usr`, `/root`, or other system directories.
-
-### Security Properties
-
-- ✅ **Scoped impersonation** - Only `agor_users` group members can be impersonated (prevents root escalation)
-- ✅ **Credential isolation** - Each user's API keys, SSH keys, and dotfiles are isolated
-- ✅ **Filesystem enforcement** - Unix permissions prevent cross-user access
-- ✅ **Audit trail** - All sudo operations logged with timestamp and command
-- ✅ **Defense in depth** - Multiple layers: app validation → sudoers → OS permissions
-
-### Threat Model
-
-| Threat                       | Impact                          | Mitigation                                   |
-| ---------------------------- | ------------------------------- | -------------------------------------------- |
-| **Malicious user prompts**   | ⚠️ Can damage own files         | ✓ Permission system, audit logs              |
-| **Daemon compromise**        | ⚠️ Can access daemon user files | ✓ Daemon unprivileged, limited blast radius  |
-| **User escalation**          | ❌ Cannot access other users    | ✓ Unix permissions, scoped sudoers           |
-| **Credential theft**         | ❌ Cannot read other user keys  | ✓ File permissions (600 on private keys)     |
-| **Sudoers misconfiguration** | ⚠️ Risk if overly permissive    | ✓ Scoped rules, agor_users group restriction |
-
-### Recommendations
-
-1. **Private Network** - Run on VPN or trusted network, not public internet
-2. **Trusted Users** - Only grant access to users you trust with shared infrastructure
-3. **API Key Rotation** - Regularly rotate API keys, especially when users leave
-4. **Monitor Audit Logs** - Check `/var/log/auth.log` for suspicious sudo activity
-5. **Resource Limits** - Use ulimits, cgroups, or quotas to prevent resource exhaustion
-6. **Regular Audits** - Review branch ownership quarterly with `agor branch owners audit`
-
----
-
-## Sandbox mode (recommended)
-
-`unix_user_mode: sandbox` is the recommended way to run a trusted-org multi-user
-Agor. It replaces the Unix-account machinery (sudoers, host accounts, per-branch
-groups, password sync) documented in the [Setup Guide](#setup-guide) below with
-an **executor filesystem sandbox**: each **provider agent process (prompt task)
-and web terminal** is wrapped in
-[bubblewrap](https://github.com/containers/bubblewrap) — a user + PID + mount
-namespace. Everything runs as the daemon user, but the namespaces (computed
-directly from Agor's RBAC) enforce isolation. Daemon-internal bounded executor
-commands (git-state / autocomplete probes, file reads, OAuth flows) are Agor's
-own code governed by app-layer authorization and run unwrapped — they never
-execute agent-authored commands.
-
-### What it gives you
-
-- **Per-user home.** Each session gets a private, persistent `~` (a per-owner
-  home overlaid at the passwd home). The daemon's `~/.agor` trust root
-  (`config.yaml`, `agor.db`, JWT secret) and every _other_ user's home are
-  hidden by construction.
-- **Cross-branch isolation.** Only the task's branch is mounted; sibling
-  branches and repos are not visible.
-- **RBAC-aware mounts.** The branch is mounted read-write, read-only, or not at
-  all according to the owner's effective `others_fs_access` on it.
-- **`/tmp` in the user's home.** `/tmp` is an on-disk per-user dir (not a shared
-  host `/tmp`, not a RAM tmpfs), persisting across turns.
-- **Host toolchain for free.** The host filesystem is mounted read-only, so
-  `git`, `node`, `rg`, compilers, etc. all work without building an image; only
-  _writes_ are scoped.
-- **Process isolation (where the host allows it).** On hosts that support it, a
-  fresh PID namespace means the sandbox's `/proc` shows only its own processes —
-  the daemon and other users' executors are invisible, so their
-  environment/fds/secrets can't be reached via `/proc` (independent of host
-  `ptrace_scope`). Many container runtimes block this; there the sandbox falls
-  back to a user + mount namespace (filesystem masks still apply) and `agor
-doctor` reports **PID namespace** as unavailable. Verify with `agor doctor`.
-
-The **network** namespace stays shared, so the executor keeps daemon/model
-connectivity. Network egress control, if wanted, is deferred to each tool's own
-config.
-
-### Setup
-
-```bash
-# 1. Install bubblewrap on the daemon host (Linux only).
-sudo apt-get install -y bubblewrap          # Debian/Ubuntu
-# Ubuntu 24.04+ may restrict unprivileged user namespaces; if so:
-sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-# 2. Verify the host can actually run it (functional userns probe, not just PATH):
-agor doctor                                  # look for the "unprivileged userns" row
-```
-
-```yaml
-# 3. ~/.agor/config.yaml — that's the whole config.
-execution:
-  unix_user_mode: sandbox
-```
-
-`sandbox` mode **forces** `branch_rbac: true`, `sandbox.enabled: true`,
-`sandbox.home_mode: per_user`, and fail-closed (`fail_if_unavailable: true`) —
-these security invariants **cannot** be overridden by config or env in this mode
-(a `sandbox` that silently ran with a shared home or spawned unsandboxed would
-violate the contract). Only non-security policy tunables under
-`execution.sandbox.*` (e.g. `include.*`, `extra_allow_write`, `extra_deny_read`)
-are honored. If you want a _tunable_ standalone sandbox, use a non-`sandbox`
-`unix_user_mode` with `sandbox.enabled: true` and set those explicitly. See the
-design notes in `context/explorations/executor-sandboxing.md`. Sandbox settings
-cannot be combined with `strict`, `insulated`, `executor_unix_user`, or an
-`executor_command_template`; the daemon rejects those unsupported combinations
-at startup. No sudoers, no Unix accounts.
-
-Hosts that symlink the daemon home to another filesystem location can preserve
-that canonical alias for path-keyed SDK state created before migration:
+## Sandbox mode
 
 ```yaml
 execution:
   unix_user_mode: sandbox
-  sandbox:
-    preserve_canonical_home_alias: true
 ```
 
-This re-exposes the same per-user home store and authorized branch/git mounts at
-the daemon-resolved canonical home path. It does not expose the canonical homes
-parent or sibling homes. Leave it off for conventional, non-symlinked homes.
+Sandbox mode automatically enables branch RBAC and the per-user filesystem sandbox. It requires Linux and bubblewrap and refuses to launch rather than silently falling back.
 
-If `AGOR_DATA_HOME` is outside the daemon user's passwd home (for example, on a
-persistent volume), Agor masks that external data root before re-exposing only
-the current branch, its authorized git data, and managed agent tools. It also
-masks canonical path aliases when the passwd home or data root traverses
-symlinks.
+For each launch the daemon derives mount access from trusted tenant and branch authorization state:
 
-> **Not for hostile multi-tenant.** A bubblewrap/kernel escape lands as the
-> daemon user (a namespace boundary, not a separate uid). For mutually-hostile
-> tenants use containers / microVMs / k8s. `sandbox` targets **trusted-org
-> multi-user** — the same audience as `strict`/`insulated`.
+- the active branch is writable, read-only, or absent according to the principal's permission;
+- sibling worktrees and tenant homes are masked;
+- daemon state and external data roots are hidden;
+- the principal receives a persistent private home overlay;
+- provider and daemon connectivity still use the host network namespace—this is filesystem isolation, not network isolation.
 
-> **macOS/Windows:** bubblewrap is Linux-only. On other platforms the sandbox is
-> unavailable; with `fail_if_unavailable` (the default in this mode) sessions
-> refuse to start rather than run unsandboxed.
+`users.filesystem_home` can point at a migrated home. Otherwise Agor uses its canonical tenant-scoped home store. Never derive this path from untrusted request data.
 
-**Migrating an existing `strict`/`insulated` deployment?** See the in-repo guide
-`context/guides/migrate-strict-to-sandbox.md`.
+### Web terminals
 
----
-
-## Setup Guide
-
-> The steps below (PostgreSQL, volumes, **sudoers**, Unix accounts) apply to the
-> legacy `insulated` / `strict` modes. For a new multi-user deployment, prefer
-> [Sandbox mode](#sandbox-mode-recommended) above — it needs none of this.
-
-### Prerequisites
-
-- Linux server with systemd
-- PostgreSQL (recommended for production)
-- sudo access for initial setup
-- tmux (for multiplayer terminal sessions)
-
-### 1. PostgreSQL Configuration
-
-For production multiplayer deployments, use PostgreSQL instead of SQLite:
-
-```yaml
-# ~/.agor/config.yaml
-database:
-  driver: postgres
-  url: postgresql://agor:password@localhost:5432/agor
-```
-
-### 2. Volume Configuration
-
-Configure persistent storage for branches and repositories:
-
-```yaml
-# ~/.agor/config.yaml
-storage:
-  repos_dir: /var/lib/agor/repos
-  branches_dir: /var/lib/agor/branches
-```
-
-### 3. Sudoers Configuration
-
-The daemon requires sudo access for Unix user/group management. Agor provides a comprehensive, production-ready sudoers file with extensive documentation and security scoping.
-
-**Installation:**
-
-```bash
-# Download the sudoers file
-curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-daemon.sudoers
-
-# CRITICAL: Always validate syntax before installing
-sudo visudo -c -f ./agor-daemon.sudoers
-
-# Install with correct permissions
-sudo install -m 0440 ./agor-daemon.sudoers /etc/sudoers.d/agor
-
-# Verify configuration
-sudo -l -U agor
-```
-
-**View the complete file:** [`docker/sudoers/agor-daemon.sudoers`](https://github.com/preset-io/agor/blob/main/docker/sudoers/agor-daemon.sudoers)
-
-<details>
-<summary>**What the sudoers file enables**</summary>
-
-**User Impersonation (Core Feature):**
-
-```bash
-# Run agent sessions as the user who created them
-# SECURITY: Only agor_users group members can be impersonated
-agor ALL=(%agor_users) NOPASSWD: ALL
-```
-
-**User Management:**
-
-```bash
-# Create/manage Unix users for Agor users
-agor ALL=(ALL) NOPASSWD: /usr/sbin/useradd *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/userdel *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/chpasswd
-```
-
-**Group Management (Branch Isolation):**
-
-```bash
-# Create Unix groups per branch (agor_wt_<id>)
-agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
-```
-
-**Filesystem Operations (SCOPED TO AGOR PATHS ONLY):**
-
-```bash
-# User home directories - branch symlinks and config
-agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/agor/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/.agor/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /home/*/agor/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/*/agor/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/ln -sfn * /home/*/agor/worktrees/*
-
-# Optional shared storage
-agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /var/agor/*
-agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /var/agor/*
-```
-
-**Query Commands (Read-Only, Safe):**
-
-```bash
-agor ALL=(ALL) NOPASSWD: /usr/bin/id *
-agor ALL=(ALL) NOPASSWD: /usr/bin/getent *
-agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
-```
-
-</details>
-
-**Key Security Properties:**
-
-1. **Scoped Impersonation** - Only `agor_users` group members can be impersonated
-   - Prevents escalation to system users (root, postgres, www-data, etc.)
-   - All Agor-managed users automatically added to `agor_users`
-
-2. **Path Scoping** - Filesystem operations restricted to Agor-managed paths:
-   - `/home/*/agor/*` - User branch symlinks
-   - `/home/*/.agor/*` - User Agor data
-   - `/var/agor/*` - Shared storage (optional)
-   - **Cannot access**: `/etc`, `/usr`, `/root`, system directories
-
-3. **No TTY Required** - `Defaults:agor !requiretty` enables daemon operation
-   - Code MUST use `sudo -n` to fail fast if TTY somehow required
-   - Without `-n` flag, missing TTY causes process freeze
-
-4. **Audit Trail** - All sudo operations logged to `/var/log/auth.log`
-   - Monitor with: `sudo grep agor /var/log/auth.log | tail -20`
-   - Consider forwarding to SIEM for compliance environments
-
-**Customization:**
-
-- Replace `agor` with your daemon username throughout (e.g., `agorpg`)
-- The file includes extensive comments and troubleshooting tips
-- Read the full file before deploying to production
-
-### 4. Enable app RBAC and/or Unix Isolation
-
-Configure Agor's execution mode via config:
-
-```yaml
-# ~/.agor/config.yaml
-execution:
-  # Enable app-level branch ownership/visibility (default: false).
-  # This does not create Unix groups or require sudoers by itself.
-  branch_rbac: true
-
-  # Unix user mode (default: simple)
-  # Options:
-  #   - simple: No isolation, all runs as daemon user
-  #   - sandbox: RECOMMENDED for multi-user. OS isolation via the executor
-  #     FILESYSTEM SANDBOX (bubblewrap) instead of Unix accounts — no sudoers,
-  #     no host accounts, no per-branch groups, no password sync. Implies RBAC +
-  #     a per-user home overlay. Linux only. See "Sandbox mode" below.
-  #   - delegated: Like simple (no sudo, no groups), but every user must have
-  #     a unix_username; it is passed to the executor command template as
-  #     {unix_user} and its absence fails loudly. For hosted/containerized
-  #     deployments where the orchestration layer enforces identity.
-  #   - insulated: (being phased out) Branch groups + single executor user
-  #   - strict: (being phased out) Full per-user isolation, enforced impersonation
-  unix_user_mode: sandbox
-
-  # Optional: Specific Unix user for executor (insulated mode only)
-  executor_unix_user: agor_executor
-```
-
-> **`insulated` and `strict` are being phased out** in favor of `sandbox`, which
-> delivers the same multi-user isolation without the sudoers / host-account /
-> password-sync apparatus. They still work (the daemon logs a deprecation
-> warning on startup). See [Sandbox mode](#sandbox-mode-recommended) and the
-> in-repo migration guide `context/guides/migrate-strict-to-sandbox.md`.
-
-**Mode Comparison:**
-
-| Mode        | Isolation mechanism            | Unix Groups | Process Impersonation | Sudoers / host accounts | Use Case                                                 |
-| ----------- | ------------------------------ | ----------- | --------------------- | ----------------------- | -------------------------------------------------------- |
-| `simple`    | none                           | ❌          | ❌                    | ❌                      | Single user, dev/testing                                 |
-| `sandbox`   | **filesystem sandbox** (bwrap) | ❌          | ❌                    | ❌                      | **Multi-user (recommended)**                             |
-| `delegated` | external substrate             | ❌          | ❌                    | ❌                      | Hosted/containerized, identity enforced by orchestration |
-| `insulated` | Unix groups + FS perms         | ✅          | Optional              | ✅                      | Shared dev (being phased out)                            |
-| `strict`    | Unix uids + groups + FS        | ✅          | ✅ Required           | ✅                      | Compliance (being phased out)                            |
-
-**When to use each mode:**
-
-- **`simple`** - Default, single user or fully trusted team, no setup required
-- **`sandbox`** - **Recommended for any multi-user, trusted-org deployment.** OS
-  isolation without OS plumbing: everything runs as the daemon user, but each
-  session is wrapped in a bubblewrap filesystem sandbox (per-user home overlay,
-  cross-branch/secret isolation, RBAC-aware mounts). Only prerequisite is
-  `bubblewrap` + unprivileged user namespaces on the host (Linux). See below.
-- **`delegated`** - Hosted/containerized deployments where the execution
-  substrate (e.g. per-user home mounts selected via the `{unix_user}` template
-  variable) enforces identity. No sudoers or local Unix accounts needed, but a
-  session whose user has no `unix_username` fails loudly instead of silently
-  sharing an identity
-- **`insulated`** _(being phased out)_ - Daemon-from-executor isolation via a shared executor user + branch groups
-- **`strict`** _(being phased out)_ - Full per-user Unix isolation with enforced impersonation
-
-`branch_rbac` and `unix_user_mode` are intentionally independent: RBAC controls
-Agor app permissions; `insulated`/`strict` Unix modes control OS identities,
-Unix groups, and filesystem permissions. `delegated` performs no OS-level work
-on the daemon host — it only requires and propagates per-user identity.
-`sandbox` implies `branch_rbac: true` (the mount policy enforces branch
-authorization directly from RBAC).
-
-### 4b. (Optional) Disable the Web Terminal
-
-The browser-based terminal (xterm.js modal) is enabled by default for any user
-with role `member` or higher. To disable it for everyone (including admins),
-set:
+A branch terminal requires at least `session` permission. In sandbox mode it receives the same filesystem boundary as an agent launch. In `simple` mode it is a daemon-user shell and should be disabled on shared instances:
 
 ```yaml
 execution:
   allow_web_terminal: false
 ```
 
-Default behavior (flag unset or `true`):
-
-- Any authenticated user with role `member` or higher can open a terminal.
-- Branch-level permissions still apply. Opening a branch-scoped terminal
-  requires at least `session` permission on that branch (when
-  `branch_rbac` is on).
-
-When set to `false`:
-
-- Terminal buttons are hidden in the UI and the `/terminals` service rejects
-  requests from every role.
-
-> ⚠️ **Security caveat. This flag does not reason about Unix isolation.**
->
-> - In `unix_user_mode: simple`, the terminal runs as the daemon user. A member
->   opening a terminal gains a shell with read access to `~/.agor/config.yaml`,
->   `agor.db`, and the JWT secret. The daemon prints a startup warning on every
->   boot in this combination (which is the default for fresh installs).
-> - In `unix_user_mode: sandbox`, the terminal runs inside the filesystem
->   sandbox with the SAME treatment as prompts: the terminal user's per-user home
->   overlay, an RBAC-aware branch mount (read-only, or refused, if they lack
->   write), and the daemon trust root + sibling branches masked. A member shell
->   cannot read `config.yaml`/`agor.db`/the JWT secret or other users' homes.
-> - In `unix_user_mode: insulated`, the terminal runs as the shared executor
->   user. Daemon secrets are protected, but members share `$HOME`/`/tmp` with
->   each other.
-> - In `unix_user_mode: strict`, terminals run as the user's own Unix account,
->   which is the SSH-equivalent safe default.
->
-> For any deployment where you do not trust all members with daemon-level
-> access, either run in `insulated`/`strict` mode or set
-> `allow_web_terminal: false`.
-
-The terminal cwd and effective Unix identity are always derived server-side
-from the authorized branch and authenticated user. Each branch has a separate
-terminal runtime attachment; opening another branch never asks one shell to
-switch across daemon-visible worktrees. Daemon/runtime loss is shown as a
-disconnect and requires explicit reconnect. Zellij persistence, when available
-on the same runtime, is separate from Agor transport persistence. Agor stores
-bounded Zellij resurrection state in the effective Unix user's home, scoped by
-tenant, user, and branch. `simple` and `insulated` modes intentionally share
-that Unix home; `strict` mode and delegated per-user runtimes provide separate
-homes. Resurrection can restore layout, cwd, viewport, and bounded scrollback,
-but not live process identity or in-memory shell state.
-
-### 5. Observability Setup
-
-For production deployments, configure logging and monitoring:
+## Delegated execution
 
 ```yaml
-# ~/.agor/config.yaml
-logging:
-  level: info
-  format: json
-  file: /var/log/agor/daemon.log
-
-metrics:
-  enabled: true
-  port: 9090 # Prometheus metrics endpoint
+execution:
+  unix_user_mode: delegated
+  executor_command_template: >-
+    launcher --tenant {tenant_id} --user {user_id}
 ```
 
----
+Agor does not claim to prove an external launcher's isolation. The operator must ensure:
 
-## How It Works
+- tenant and immutable user identity are bound to the runtime;
+- homes and credentials are isolated;
+- branch storage matches application authorization;
+- Stop, heartbeat, retry, and orphan cleanup semantics are enforced;
+- terminal support is owner-affine or disabled;
+- network access is explicitly controlled.
 
-### Three-Layer Architecture
+Prefer `{tenant_id}` and `{user_id}`. `{unix_user}` remains temporarily as an opaque, validated home key for compatible hosted launchers; it is not a Unix account and is never passed to sudo.
 
-Agor combines app-level RBAC with OS-level enforcement:
+## Branch permissions
 
-1. **App Layer** - API validates permissions before operations
-2. **Unix Groups** - Branch isolation via filesystem permissions
-3. **Process Impersonation** - Agents run as the session creator's Unix user
+`others_can` controls non-owner access:
 
-### User Management
+| Value | Meaning |
+|---|---|
+| `none` | no access |
+| `view` | read branch, session, task, and message data |
+| `session` | create and prompt the caller's own sessions |
+| `prompt` | prompt sessions created by other users |
+| `all` | full branch/session control |
 
-When RBAC is enabled (`branch_rbac: true`):
+`session` is the safe collaboration default. Keep `dangerously_allow_session_sharing` off unless cross-user credential execution is explicitly intended.
 
-1. Each Agor user gets a Unix account (auto-created or pre-provisioned)
-2. Format: `agor_<short-id>` (e.g., `agor_03b62447`) or custom username
-3. All managed users added to `agor_users` group
-4. Users can be impersonated by daemon for session execution
-5. Each user gets home directory with:
-   - `~/agor/worktrees/` - Symlinks to authorized branches
-   - `~/.ssh/` - User's SSH keys (isolated)
-   - `~/.config/gh/` - GitHub CLI credentials (isolated)
-   - `~/.claude/` - Claude SDK session state
+## Migrating from 0.24
 
-### Branch Isolation
-
-Each branch gets OS-level protection:
-
-1. **Unix Group** - Dedicated group `agor_wt_<24-character-short-id>`
-2. **Filesystem Permissions** - Directory owned by group with proper mode
-3. **Group Membership** - Branch owners added to group
-4. **Home Symlinks** - Owners get `~/agor/worktrees/<name>` → branch path
-
-**Example:**
+Run the migration while still on the latest 0.24.x bridge release:
 
 ```bash
-# Branch created
-$ ls -la /var/agor/worktrees/wt-019ffd3d2cef79d1a1c64073/
-drwxrwx--- alice agor_wt_019ffd3d2cef79d1a1c64073 my-project/
-
-# Alice's home
-$ ls -la ~/agor/worktrees/
-lrwxrwxrwx alice alice my-project-019ffd3d -> /var/agor/worktrees/wt-019ffd3d2cef79d1a1c64073/my-project
-
-# Bob added as owner
-$ getent group agor_wt_019ffd3d2cef79d1a1c64073
-agor_wt_019ffd3d2cef79d1a1c64073:x:1050:alice,bob
+scripts/strict-to-sandbox-migration.sh --help
+scripts/strict-to-sandbox-migration.sh --prepare-only
+scripts/strict-to-sandbox-migration.sh --apply
 ```
 
-### Permission Levels
+Verify sandbox launches and user home contents before installing 0.25. Version 0.25 refuses `strict`, `insulated`, and `opportunistic` configuration values with migration guidance; it does not downgrade them to `simple`.
 
-Agor defines three permission levels per branch:
+Historical `unix_group` database values remain nullable for rollback and audit but are no longer written or interpreted. `unix_username` remains temporarily as the delegated home key and immutable session stamp.
 
-| Level    | Filesystem Access | View Sessions | Prompt Sessions | Modify Branch |
-| -------- | ----------------- | ------------- | --------------- | ------------- |
-| `view`   | Read-only         | ✅            | ❌              | ❌            |
-| `prompt` | No direct access  | ✅            | ✅              | ❌            |
-| `all`    | Read-write        | ✅            | ✅              | ✅            |
+## Related
 
-**Permission Grant Levels:**
-
-- **Branch Owners** - Explicitly granted via `branch_owners` table
-- **Non-Owners** - Default level set by `others_can` field on branch
-
-### Session Execution Context
-
-**Critical insight:** Sessions are bound to their creator forever (immutable).
-
-```typescript
-// Session record
-{
-  session_id: "abc123",
-  created_by: alice_user_id,  // IMMUTABLE
-  branch_id: "wt-xyz789"
-}
-
-// When Bob prompts Alice's session:
-// - Task creator: Bob (for attribution)
-// - Execution user: Alice (session.created_by)
-// - Working directory: Alice's branch
-// - Credentials used: Alice's ~/.ssh, ~/.config/gh
-```
-
-**Why immutable?**
-
-- Claude SDK stores state in creator's `~/.claude/`
-- Session continuity requires consistent user context
-- Credentials belong to session creator
-
----
-
-## Troubleshooting
-
-### Migrating legacy 8-character groups
-
-New branch and repo groups use collision-safe 24-character short IDs. Existing
-8-character names remain supported and normal sync never renames a persisted
-group automatically.
-
-For an existing `strict` or `insulated` installation, first preview and then
-migrate only real legacy collision cohorts (recommended):
-
-```bash
-sudo agor local fix-group-uuids --only-dups --dry-run
-sudo agor local fix-group-uuids --only-dups
-```
-
-An optional full migration handles every legacy branch and repo group and
-removes system-only legacy groups after proving that no database row or managed
-filesystem root still uses them:
-
-```bash
-sudo agor local fix-group-uuids --dry-run
-sudo agor local fix-group-uuids
-```
-
-The command reconstructs membership from current database authorization,
-verifies managed paths before switching each row, and is safe to rerun after an
-interruption. It intentionally supports only the host-local single-tenant
-SQLite database: system-global Unix groups cannot be safely reconciled from a
-tenant-limited PostgreSQL/RLS view.
-
-### Daemon Can't Create Users
-
-Check sudoers configuration:
-
-```bash
-sudo -l -U agor
-```
-
-### Permission Denied on Branch
-
-Verify group membership:
-
-```bash
-id username
-ls -la /path/to/branch
-```
-
-### Session Fails to Start
-
-Check if user is in `agor_users` group:
-
-```bash
-getent group agor_users
-```
-
----
-
-## Related Docs
-
-- [Architecture](/guide/architecture) (system design overview)
-- [Multiplayer & Social](/guide/multiplayer-social) (shared terminals, cursors, comments)
-- [Branches](/guide/branches) and [Sessions & Trees](/guide/sessions) (core primitives)
-- [Security](/security) (trust boundaries and deployment modes)
+- [Security](/security)
+- [Containerized Execution](/guide/containerized-execution)
+- [Multiplayer Social](/guide/multiplayer-social)

@@ -200,7 +200,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       const isTaken = await this.isUnixUsernameTaken(data.unix_username);
       if (isTaken) {
         throw new RepositoryError(
-          `Unix username "${data.unix_username}" is already in use by another user`
+          `Execution home key "${data.unix_username}" is already in use by another user`
         );
       }
     }
@@ -321,7 +321,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       const isTaken = await this.isUnixUsernameTaken(updates.unix_username, fullId);
       if (isTaken) {
         throw new RepositoryError(
-          `Unix username "${updates.unix_username}" is already in use by another user`
+          `Execution home key "${updates.unix_username}" is already in use by another user`
         );
       }
     }

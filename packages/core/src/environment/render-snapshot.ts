@@ -56,7 +56,6 @@ export interface RenderBranchInput {
   name: string;
   path: string;
   custom_context?: Record<string, unknown>;
-  unix_gid?: number;
   host_ip_address?: string;
   base_ref?: string;
   ref_type?: 'branch' | 'tag';
@@ -137,7 +136,6 @@ export function renderBranchSnapshot(
     path: branch.path,
     repo_slug: repo.slug,
     custom_context: branch.custom_context,
-    unix_gid: branch.unix_gid,
     host_ip_address: branch.host_ip_address,
     base_ref: branch.base_ref,
     ref_type: branch.ref_type,

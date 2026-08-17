@@ -5,8 +5,8 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerBranchTools } from './branches.js';
 
-vi.mock('../../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: vi.fn().mockResolvedValue(undefined),
+vi.mock('../../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {

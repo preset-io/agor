@@ -25,7 +25,7 @@ Things that still warrant caution:
 - **Restrict who can reach the bot.** Limit Slack DM scope (private workspace or app distribution settings), narrow GitHub `watch_repos`, and use Shortcut's search scope to constrain which stories can summon the assistant.
 - **Use dedicated branches.** Don't point channels at branches holding production secrets. Create isolated branches scoped to gateway use.
 - **Pick the right permission mode.** `supervised` or `manual` modes preserve human-in-the-loop on tool calls; `trust` is fine for bounded, well-understood automations but removes that gate.
-- **Mind the [Unix isolation mode](/guide/multiplayer-unix-isolation).** In `simple` mode the agent runs as the daemon user; in `strict` mode it runs as the matched Agor user's Unix identity, which is what you want when channels span teams.
+- **Mind the [execution isolation mode](/guide/multiplayer-unix-isolation).** `simple` shares the daemon account, `sandbox` applies fail-closed branch mounts, and `delegated` relies on a reviewed external substrate. Gateway attribution alone is not a filesystem boundary.
 - **Rotate tokens.** Bot tokens, app tokens, API tokens, private keys, and webhook secrets should be rotated like any other secret.
 
 > **The mental model:** a gateway channel is a remote terminal into an agent that holds the same authority as a human prompting that branch. Configure who can reach it, what it can do, and which identity it runs as, and the rest is normal Agor surface area.

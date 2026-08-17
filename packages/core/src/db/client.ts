@@ -346,7 +346,7 @@ export type SystemDatabase = Database & { readonly [systemDatabaseBrand]: 'syste
 export const DEFAULT_DB_PATH = 'file:~/.agor/agor.db';
 
 export interface DatabaseUrlResolutionOptions {
-  /** Already-loaded config, allowing sudo/local callers to choose the correct home. */
+  /** Already-loaded config, allowing local callers to choose the correct home. */
   config?: Pick<AgorConfig, 'database'>;
   /** Environment override source (defaults to process.env). */
   env?: NodeJS.ProcessEnv;

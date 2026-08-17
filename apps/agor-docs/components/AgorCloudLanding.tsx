@@ -181,8 +181,8 @@ const security: Array<{ title: string; body: string }> = [
     body: 'The open-source flags that widen attack surface (shared dev boxes, broad bypass modes) are off in Cloud. We know which knobs belong in which position because we run it ourselves.',
   },
   {
-    title: 'Unix-level isolation',
-    body: 'Sessions, worktrees, and environments run as distinct Unix users, with filesystem permissions enforcing the boundaries between users, branches, and agents as defense-in-depth.',
+    title: 'Substrate isolation',
+    body: 'Sessions and workspaces are routed through tenant-scoped runtime and storage boundaries rather than host-user impersonation.',
   },
   {
     title: 'Independently reviewed',

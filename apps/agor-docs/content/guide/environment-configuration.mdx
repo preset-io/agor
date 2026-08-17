@@ -80,7 +80,6 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `{{branch.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
 | `{{branch.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
 | `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
-| `{{branch.gid}}` | Branch | `1042` | Unix GID of the branch's isolation group. |
 | `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
 | `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
@@ -410,6 +409,6 @@ process map as evidence that it is healthy.
 ## See also
 
 - [Containerized execution](/guide/containerized-execution) runs the rendered commands inside isolated containers.
-- [Multiplayer and Unix isolation](/guide/multiplayer-unix-isolation) covers how RBAC and Unix user modes gate who can Start / Render / edit env config.
+- [Multiplayer and execution isolation](/guide/multiplayer-unix-isolation) covers how RBAC and execution modes gate who can Start / Render / edit env config.
 - Template helper source: `packages/core/src/templates/handlebars-helpers.ts`
 - `.agor.yml` parser source: `packages/core/src/config/agor-yml.ts`

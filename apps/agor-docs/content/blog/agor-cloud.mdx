@@ -70,11 +70,9 @@ What that buys you:
 
 This is boring infrastructure work that someone has to do. You can pay people to do it in-house, or you can pay us to do it once for everyone.
 
-### Unix-Level User Isolation
+### Execution isolation
 
-Inside every Agor instance, sessions, worktrees, and dev environments run as distinct Unix users. Filesystem permissions enforce boundaries between users, between branches, between agents. No shared process space, no leaky abstractions, no "well, they're all in the same container."
-
-This is how multi-user systems were designed to work, and it's the security floor we build everything else on top of.
+Cloud routes sessions and workspaces through tenant-scoped runtime, storage, home, and credential boundaries. The orchestration substrate owns that enforcement; Agor does not manufacture isolation by creating host Unix accounts.
 
 ### Hardened for the Public Internet
 

@@ -4,17 +4,10 @@
  * Type-safe CRUD operations for git repositories with short ID support.
  */
 
-import type {
-  Repo,
-  RepoEnvironment,
-  RepoEnvironmentConfigV1,
-  RepoID,
-  UUID,
-} from '@agor/core/types';
+import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
-import { resolveRepoGroupName, resolveRepoGroupUpdate } from '../../unix/group-manager';
 import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
@@ -92,7 +85,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         repo_id: row.repo_id as UUID,
         slug: row.slug,
         repo_type: (row.repo_type as Repo['repo_type']) ?? 'remote',
-        unix_group: row.unix_group ?? undefined,
         created_at: new Date(row.created_at).toISOString(),
         last_updated: row.updated_at
           ? new Date(row.updated_at).toISOString()
@@ -145,8 +137,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       created_at: new Date(repo.created_at ?? now),
       updated_at: repo.last_updated ? new Date(repo.last_updated) : new Date(now),
       repo_type: repo.repo_type,
-      unix_group:
-        repo.unix_group == null ? null : resolveRepoGroupName(repoId as RepoID, repo.unix_group),
       data: {
         name: repo.name ?? repo.slug,
         remote_url: repo.remote_url ? stripHttpUrlUserinfo(repo.remote_url) : undefined,
@@ -397,11 +387,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // STEP 2: Deep merge updates into current repo (in memory)
         // Preserves nested objects like permission_config when doing partial updates
         const merged = deepMerge(current, updates);
-        merged.unix_group = resolveRepoGroupUpdate(
-          current.repo_id as RepoID,
-          current.unix_group,
-          Object.hasOwn(updates, 'unix_group') ? updates.unix_group : undefined
-        );
         const insertData = this.repoToInsert(merged);
 
         // STEP 3: Write merged repo (within same transaction)
@@ -412,7 +397,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
             slug: insertData.slug,
             updated_at: newUpdatedAt,
             repo_type: insertData.repo_type,
-            unix_group: insertData.unix_group,
             data: insertData.data,
           })
           .where(eq(repos.repo_id, fullId))
@@ -471,12 +455,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
 
         const current = this.rowToRepo(currentRow);
         const next: Repo = { ...current, ...patch };
-        next.unix_group = resolveRepoGroupUpdate(
-          current.repo_id as RepoID,
-          current.unix_group,
-          Object.hasOwn(patch, 'unix_group') ? patch.unix_group : undefined
-        );
-
         const insertData = this.repoToInsert(next);
         const newUpdatedAt = new Date();
         await update(txAsDb(tx), repos)
@@ -484,7 +462,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
             slug: insertData.slug,
             updated_at: newUpdatedAt,
             repo_type: insertData.repo_type,
-            unix_group: insertData.unix_group,
             data: insertData.data,
           })
           .where(eq(repos.repo_id, fullId))

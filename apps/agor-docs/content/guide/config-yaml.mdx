@@ -38,8 +38,8 @@ YAML list, including `[]` when a tool-free deployment is intentional.
 
 Supported environment overrides still win over YAML. Important examples are `PORT`,
 `DAEMON_HOST`, `DAEMON_URL`, `AGOR_JWT_SECRET`, `AGOR_MASTER_SECRET`, `AGOR_TELEMETRY`,
-`AGOR_RBAC_ENABLED`, `AGOR_UNIX_USER_MODE`, `AGOR_EXECUTOR_USERNAME`, and
-`AGOR_DAEMON_UNIX_USER`. They are resolved in memory and never written back.
+`AGOR_RBAC_ENABLED`, `AGOR_UNIX_USER_MODE`, and the sandbox overrides. They are
+resolved in memory and never written back.
 
 JWT and master secrets must be stable. Prefer a deployment secret manager. If neither env nor YAML
 provides one, the daemon fails closed rather than silently rotating it.

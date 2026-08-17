@@ -283,7 +283,7 @@ describe('OpenCode provider auth service', () => {
 
     await runWithTenantContext('tenant-a', async () => {
       await expect(service().find(params)).rejects.toThrow(
-        /unavailable in delegated Unix user mode/i
+        /unavailable in delegated execution mode/i
       );
     });
 
@@ -921,19 +921,11 @@ describe('OpenCode provider auth service', () => {
     expect(cancel).toHaveBeenCalled();
   });
 
-  it('reports logical isolation in simple and insulated modes and OS isolation only in strict', async () => {
-    const modes = [
-      { mode: 'simple', boundary: 'logical' },
-      { mode: 'insulated', boundary: 'logical', executor_unix_user: 'agor_executor' },
-      { mode: 'strict', boundary: 'os' },
-    ] as const;
-
-    for (const { mode, boundary, executor_unix_user } of modes) {
-      loadConfig.mockReturnValue({
-        execution: { unix_user_mode: mode, executor_unix_user },
-      } as never);
+  it('reports logical isolation for supported native modes', async () => {
+    for (const mode of ['simple', 'sandbox'] as const) {
+      loadConfig.mockReturnValue({ execution: { unix_user_mode: mode } } as never);
       const result = await runWithTenantContext('tenant-a', () => service().find(params));
-      expect(result.isolation).toEqual({ mode, boundary });
+      expect(result.isolation).toEqual({ mode, boundary: 'logical' });
     }
   });
 });

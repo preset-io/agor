@@ -1,5 +1,10 @@
 # Executor Expansion: Unified Isolation Pivot Point
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 **Status:** 🔬 Exploration → Design
 **Created:** 2025-12-17
 **Target:** Agor Cloud + Agor Local

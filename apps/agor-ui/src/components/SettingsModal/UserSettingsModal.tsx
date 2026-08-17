@@ -1106,7 +1106,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'security',
       },
       {
-        label: 'Unix username',
+        label: 'Execution home key',
         kind: 'setting',
         keywords: 'impersonation os process user',
         panelKey: 'security',
@@ -1522,11 +1522,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </FieldRow>
 
         <FieldRow
-          label="Unix username"
+          label="Execution home key"
           name="unix_username"
           help={
             isAdmin
-              ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
+              ? 'Opaque home key for sandbox or delegated execution (alphanumeric, hyphens, underscores only)'
               : 'Maintained by administrators'
           }
           rules={[
@@ -1534,7 +1534,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               pattern: /^[a-z0-9_-]+$/,
               message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
             },
-            { max: 32, message: 'Unix username must be 32 characters or less' },
+            { max: 32, message: 'Execution home key must be 32 characters or less' },
           ]}
         >
           <Input placeholder="johnsmith" maxLength={32} disabled={!isAdmin} />

@@ -43,7 +43,7 @@ describe('PromptPayloadSchema', () => {
   });
 
   it('should parse prompt payload with optional fields', () => {
-    // Note: asUser is now handled at spawn time, not in payload
+    // Delegated launcher identity is handled at spawn time, not in payload
     const payload = {
       command: 'prompt',
       sessionToken: 'jwt-token-here',
@@ -608,14 +608,10 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('environment.logs');
     expect(commands).toContain('git.repo.realign-origin');
     expect(commands).toContain('git.repo.delete');
-    expect(commands).toContain('unix.sync-branch');
-    expect(commands).toContain('unix.sync-board');
-    expect(commands).toContain('unix.sync-repo');
-    expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
     expect(commands).toContain('agentic-tool.invoke');
     expect(commands).toContain('codex.auth-file');
-    expect(commands.length).toBe(32);
+    expect(commands.length).toBe(28);
   });
 });

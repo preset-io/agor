@@ -4389,7 +4389,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           managedEnvsExecutionMode:
             config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,
           // True when the daemon runs in a multi-user Unix isolation mode
-          // (insulated/strict). UI hides "trust everyone on this instance"
+          // (sandbox). UI hides "trust everyone on this instance"
           // surfaces when true. Server-side gates (e.g. ArtifactsService.
           // grantTrust) are the source of truth and reject regardless.
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',

@@ -42,7 +42,7 @@ export default class UserUpdate extends BaseCommand {
       options: ['superadmin', 'admin', 'member', 'viewer'],
     }),
     'unix-username': Flags.string({
-      description: 'New Unix username for shell access',
+      description: 'New Execution home key for shell access',
     }),
     'filesystem-home': Flags.string({
       description:
@@ -93,7 +93,7 @@ export default class UserUpdate extends BaseCommand {
               { name: 'Name', value: 'name' },
               { name: 'Password', value: 'password' },
               { name: 'Role', value: 'role' },
-              { name: 'Unix Username', value: 'unix_username' },
+              { name: 'Execution Home Key', value: 'unix_username' },
               { name: 'Force Password Change', value: 'force_password_change' },
             ],
           },
@@ -149,7 +149,7 @@ export default class UserUpdate extends BaseCommand {
           {
             type: 'input',
             name: 'unix_username',
-            message: 'New Unix username:',
+            message: 'New Execution home key:',
             when: fields.includes('unix_username'),
             default: user.unix_username,
           },
@@ -205,7 +205,7 @@ export default class UserUpdate extends BaseCommand {
       this.log(`  Email:         ${chalk.cyan(updatedUser.email)}`);
       this.log(`  Name:          ${chalk.cyan(updatedUser.name || '(not set)')}`);
       this.log(`  Role:          ${chalk.cyan(updatedUser.role)}`);
-      this.log(`  Unix Username: ${chalk.cyan(updatedUser.unix_username || '(not set)')}`);
+      this.log(`  Execution Home Key: ${chalk.cyan(updatedUser.unix_username || '(not set)')}`);
       this.log(`  ID:            ${chalk.gray(shortId(updatedUser.user_id))}`);
       if (updatedUser.must_change_password) {
         this.log(`  ${chalk.yellow('⚠')} User must change password on next login`);

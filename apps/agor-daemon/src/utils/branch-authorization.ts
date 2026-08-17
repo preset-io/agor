@@ -28,8 +28,8 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
-import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js';
+import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -443,7 +443,7 @@ export function ensureBranchPermission(
     }
 
     // Service accounts (executor) bypass RBAC — they perform privileged
-    // internal operations (unix.sync-branch, git.branch.add, etc.)
+    // internal operations (git.branch.add, etc.)
     if (context.params.user._isServiceAccount) {
       return context;
     }
@@ -1055,8 +1055,8 @@ export function loadBranchFromSession(branchRepo: BranchRepository) {
  * Ensure session is immutable to its creator
  *
  * Validates that critical session fields (created_by, unix_username) cannot be changed.
- * This is CRITICAL for Unix isolation - session execution context is determined
- * by session.created_by (which maps to Unix user) and session.unix_username.
+ * These fields bind the immutable principal, execution home, credentials, and
+ * resumable SDK state for the session.
  *
  * @see context/guides/rbac-and-unix-isolation.md — Session Ownership / Execution Model
  */
@@ -1073,14 +1073,14 @@ export function ensureSessionImmutability() {
     // Check if created_by is being changed
     if (data?.created_by !== undefined) {
       throw new Forbidden(
-        'session.created_by is immutable - it determines execution context (Unix user, credentials, SDK state)'
+        'session.created_by is immutable - it determines execution context, credentials, and SDK state'
       );
     }
 
     // Check if unix_username is being changed
     if (data?.unix_username !== undefined) {
       throw new Forbidden(
-        'session.unix_username is immutable - it determines SDK session storage location and execution user'
+        'session.unix_username is immutable - it determines the execution-home and SDK state location'
       );
     }
 
@@ -1154,7 +1154,7 @@ export async function loadUnixUsernameForUser(
  * When a session is created, stamp it with the creator's current unix_username.
  * This unix_username is IMMUTABLE and determines:
  * - SDK session storage location (~/.claude/, ~/.codex/, etc.)
- * - Unix user for all session operations (sudo -u)
+ * - immutable execution-home key for session operations
  *
  * IMPORTANT: Run this hook BEFORE any permission checks that might need the unix_username.
  *
@@ -1164,8 +1164,8 @@ export async function loadUnixUsernameForUser(
  * {@link loadUnixUsernameForUser} to keep the two paths in sync.
  *
  * @param userRepo - UserRepository instance
- * @param unixUserMode - When the mode requires per-user unix_username
- *   (strict/delegated), a creator without one is rejected at create time
+ * @param unixUserMode - When delegated mode requires a per-user home key,
+ *   a creator without one is rejected at create time
  *   instead of failing later at prompt time.
  */
 export function setSessionUnixUsername(
@@ -1196,7 +1196,7 @@ export function setSessionUnixUsername(
     // IMMUTABLE - even if user's unix_username changes later, session keeps this value.
     data.unix_username = await loadUnixUsernameForUser(userRepo, userId);
     if (unixUserMode) {
-      assertUnixUsernameSatisfiesMode(data.unix_username, unixUserMode);
+      assertExecutionHomeKeySatisfiesMode(data.unix_username, unixUserMode);
     }
 
     return context;
@@ -1265,7 +1265,7 @@ export async function assertSessionUnixIdentityUnchanged(
  * This prevents security issues where:
  * - User's unix_username changed after session creation
  * - SDK session data would be inaccessible (stored in old home directory)
- * - Execution would happen as wrong Unix user
+ * - Execution would use a different home and credential namespace
  *
  * The executor of this very session is exempt. It authenticates with a session
  * token minted for the prompting user, so it is not a service account and would
@@ -1859,7 +1859,7 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
  *
  * Default behavior — and the behavior whenever the caller is the parent owner,
  * an admin, or a superadmin — attributes the child to the **caller** so it
- * runs under the caller's Unix identity, credentials, and env vars.
+ * uses the caller's execution-home, credentials, and env vars.
  *
  * Legacy "identity borrowing" (child inherits parent.created_by, so it runs
  * under the *parent owner's* identity even when spawned by a different user)

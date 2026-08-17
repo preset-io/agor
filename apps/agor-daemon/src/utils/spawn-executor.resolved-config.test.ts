@@ -124,7 +124,7 @@ describe('buildResolvedConfigSlice', () => {
       [
         'execution:',
         '  permission_timeout_ms: 60000',
-        '  unix_user_mode: strict',
+        '  unix_user_mode: sandbox',
         'daemon:',
         '  host_ip_address: 10.0.0.5',
         '  port: 4040',

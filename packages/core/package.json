@@ -418,12 +418,6 @@
       "import": "./dist/local-actions/index.js",
       "require": "./dist/local-actions/index.cjs"
     },
-    "./local-actions/identity": {
-      "source": "./src/local-actions/identity.ts",
-      "types": "./dist/local-actions/identity.d.ts",
-      "import": "./dist/local-actions/identity.js",
-      "require": "./dist/local-actions/identity.cjs"
-    },
     "./templates/teammate-welcome-note": {
       "source": "./src/templates/teammate-welcome-note.ts",
       "types": "./dist/templates/teammate-welcome-note.d.ts",

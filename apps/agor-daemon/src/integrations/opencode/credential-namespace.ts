@@ -14,11 +14,6 @@ import {
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, DeepReadonly, UserID } from '@agor/core/types';
-import {
-  getHomedirFromUsername,
-  resolveUnixUserForImpersonation,
-  validateResolvedUnixUser,
-} from '@agor/core/unix';
 
 const OPENCODE_EXECUTOR_ENV_KEYS = [
   'PATH',
@@ -39,7 +34,6 @@ const OPENCODE_EXECUTOR_ENV_KEYS = [
 export type AuthenticatedOpenCodeSubjectContext = OpenCodeCredentialNamespace & {
   tenantId: string;
   subjectUserId: UserID;
-  asUser: string | null;
   mode: OpenCodeNativeUnixUserMode;
   executorEnv: Record<string, string>;
 };
@@ -65,13 +59,7 @@ export async function resolveAuthenticatedOpenCodeSubjectContext(
   });
   if (!user) throw new NotAuthenticated('Authenticated OpenCode user no longer exists.');
 
-  const { unixUser } = resolveUnixUserForImpersonation({
-    mode,
-    userUnixUsername: user.unix_username,
-    executorUnixUser: config.execution?.executor_unix_user,
-  });
-  validateResolvedUnixUser(mode, unixUser);
-  const homeDir = unixUser ? getHomedirFromUsername(unixUser) : homedir();
+  const homeDir = homedir();
   if (!homeDir) {
     throw new BadRequest('Could not resolve the Unix home used by OpenCode execution.');
   }
@@ -84,7 +72,6 @@ export async function resolveAuthenticatedOpenCodeSubjectContext(
       subjectUserId: callerId,
       homeDir,
     }),
-    asUser: unixUser,
     mode,
     executorEnv: Object.fromEntries(
       OPENCODE_EXECUTOR_ENV_KEYS.flatMap((key) =>

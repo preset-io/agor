@@ -65,16 +65,15 @@ environment:
     full:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=strict docker compose -f
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=sandbox docker compose -f
         docker-compose.yml -f docker-compose.postgres.yml -p agor-{{branch.name}}
         --profile postgres up -d --build postgres agor-dev
       stop: >-
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: >-
-        Production-like: PostgreSQL + branch RBAC + strict Unix user impersonation (each Agor user
-        runs sessions as their own Unix identity). Requires the sudoers config shipped under
-        docker/sudoers/.
+        Production-like: PostgreSQL + branch RBAC + fail-closed local bubblewrap filesystem
+        isolation. No host accounts, Unix groups, or sudo impersonation.
       extends: sqlite
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
@@ -120,7 +119,7 @@ environment:
         when set), the daemon .agor tree + other homes are hidden, and the branch is
         mounted rw/ro/none per the owner's RBAC fs_access. PID namespace is used
         where the host allows it (bare-metal) and skipped in containers. The
-        strict-mode replacement — no sudoers / host accounts / groups. See
+        No sudoers, host accounts, or POSIX branch groups. See
         context/explorations/executor-sandboxing.md.
       extends: sqlite
     postgres:

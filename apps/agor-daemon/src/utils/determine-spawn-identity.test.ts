@@ -5,7 +5,7 @@
  * agor_sessions_prompt(mode:"fork"|"subsession")).
  *
  * The default behavior MUST be "attribute child to caller" so that user A
- * spawning from user B's session does NOT inherit user B's Unix identity,
+ * spawning from user B's session does NOT inherit user B's execution identity,
  * credentials, or env vars. The legacy parent-inheriting "identity borrowing"
  * is gated behind the branch opt-in `dangerously_allow_session_sharing`.
  */

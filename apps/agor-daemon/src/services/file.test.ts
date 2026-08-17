@@ -4,11 +4,11 @@ import { runExecutorCommand } from '../utils/spawn-executor.js';
 import { FileService } from './file.js';
 
 const impersonationMocks = vi.hoisted(() => ({
-  resolveExecutorReadAsUser: vi.fn(),
+  resolveDelegatedExecutionHomeKey: vi.fn(),
 }));
 
-vi.mock('../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: impersonationMocks.resolveExecutorReadAsUser,
+vi.mock('../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: impersonationMocks.resolveDelegatedExecutionHomeKey,
 }));
 
 vi.mock('../utils/spawn-executor.js', () => ({
@@ -20,7 +20,7 @@ vi.mock('../utils/spawn-executor.js', () => ({
 describe('FileService executor failures', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    impersonationMocks.resolveExecutorReadAsUser.mockResolvedValue(undefined);
+    impersonationMocks.resolveDelegatedExecutionHomeKey.mockResolvedValue(undefined);
   });
 
   it('does not report executor failure as an empty repository', async () => {
@@ -77,7 +77,7 @@ describe('FileService executor failures', () => {
   ])(
     'passes the resolved execution-substrate identity through file $operation',
     async ({ invoke, command, data }) => {
-      impersonationMocks.resolveExecutorReadAsUser.mockResolvedValue('alice');
+      impersonationMocks.resolveDelegatedExecutionHomeKey.mockResolvedValue('alice');
       vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data });
       const service = new FileService(
         { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
@@ -97,7 +97,7 @@ describe('FileService executor failures', () => {
 
       expect(runExecutorCommand).toHaveBeenCalledWith(
         expect.objectContaining({ command }),
-        expect.objectContaining({ asUser: 'alice' })
+        expect.objectContaining({ delegatedHomeKey: 'alice' })
       );
     }
   );
@@ -108,7 +108,7 @@ describe('FileService executor failures', () => {
       expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
       return { branch_id: 'branch-1' };
     });
-    impersonationMocks.resolveExecutorReadAsUser.mockImplementation(async () => {
+    impersonationMocks.resolveDelegatedExecutionHomeKey.mockImplementation(async () => {
       expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
       return 'alice';
     });

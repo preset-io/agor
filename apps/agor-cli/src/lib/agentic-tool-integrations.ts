@@ -102,7 +102,7 @@ async function assertManagedPackageTreeShared(directory: string): Promise<void> 
   }
 }
 
-/** Repair the deployment-global path traversed by strict/insulated executor users. */
+/** Repair the deployment-global path traversed by installed integrations. */
 export async function repairManagedIntegrationPermissions(
   tool: InstallableAgenticTool,
   agorVersion: string

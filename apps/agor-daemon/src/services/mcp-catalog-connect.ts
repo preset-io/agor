@@ -11,7 +11,7 @@
  * It also does not re-implement that gate. The server row is created through
  * the `mcp-servers` service and the session through `sessions`, with the
  * caller's own params, so policy, ownership stamping, the remote-transport
- * restriction, branch permissions, and Unix identity all resolve exactly once,
+ * restriction, branch permissions, and execution identity all resolve exactly once,
  * in the places that already own them.
  *
  * Scope: remote transport, no authentication. OAuth and API-key entries need

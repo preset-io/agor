@@ -41,12 +41,6 @@ import {
   handleGitRepoRealignOrigin,
 } from './git.js';
 import { handleBranchKnowledgeRead, handleBranchKnowledgeWrite } from './knowledge.js';
-import {
-  handleUnixSyncBoard,
-  handleUnixSyncBranch,
-  handleUnixSyncRepo,
-  handleUnixSyncUser,
-} from './unix.js';
 import { handleBranchUploadMaterialize } from './upload.js';
 import { handleZellijAttach, handleZellijTab } from './zellij.js';
 
@@ -268,10 +262,6 @@ registerCommand('git.repo.realign-origin', handleGitRepoRealignOrigin);
 registerCommand('git.repo.delete', handleGitRepoDelete);
 registerCommand('git.repo.inspect', handleGitRepoInspect);
 registerCommand('git.managed-credentials.reconcile', handleGitManagedCredentialsReconcile);
-registerCommand('unix.sync-repo', handleUnixSyncRepo);
-registerCommand('unix.sync-branch', handleUnixSyncBranch);
-registerCommand('unix.sync-board', handleUnixSyncBoard);
-registerCommand('unix.sync-user', handleUnixSyncUser);
 registerCommand('zellij.attach', handleZellijAttach);
 registerCommand('zellij.tab', handleZellijTab);
 registerCommand('codex.auth-file', handleCodexAuthFile);

@@ -1,5 +1,5 @@
 import { loadConfigSync } from '@agor/core/config';
-import { runWithTenantContext, UsersRepository } from '@agor/core/db';
+import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCodexAuthLogoutService } from './codex-auth-logout';
@@ -11,13 +11,7 @@ vi.mock('@agor/core/config', async () => {
 
 vi.mock('@agor/core/db', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/db')>('@agor/core/db');
-  return { ...actual, UsersRepository: vi.fn() };
-});
-
-vi.mock('@agor/core/unix', async () => {
-  const actual = await vi.importActual<typeof import('@agor/core/unix')>('@agor/core/unix');
-  // The real validator checks /etc/passwd — the mocked Unix accounts here don't exist.
-  return { ...actual, validateResolvedUnixUser: vi.fn() };
+  return actual;
 });
 
 vi.mock('../utils/executor-codex-auth.js', async () => {
@@ -29,7 +23,6 @@ vi.mock('../utils/executor-codex-auth.js', async () => {
 
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
 const deleteCodexAuthViaExecutorMock = vi.mocked(deleteCodexAuthViaExecutor);
-const usersRepositoryMock = vi.mocked(UsersRepository);
 
 const TEST_DB = { run: vi.fn() } as never;
 const AUTH_PARAMS = {
@@ -72,10 +65,11 @@ describe('codex-auth-logout', () => {
     const { app, usersService } = makeApp();
     const result = await service(app).create({}, AUTH_PARAMS);
 
-    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith(null, {
-      reportedUnixUser: null,
+    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith({
+      delegatedHomeKey: null,
       userId: 'user-1',
-    }); // simple mode → daemon user
+      codexHome: undefined,
+    });
     // Only the codex key is sent — the users-service merge clears it against the
     // FRESH record, preserving any concurrently-updated method for another tool.
     // userId comes from the auth context, never from request data. No token
@@ -140,18 +134,5 @@ describe('codex-auth-logout', () => {
     const { app } = makeApp();
 
     await expect(service(app).create({}, AUTH_PARAMS)).resolves.toEqual({ status: 'removed' });
-  });
-
-  it('strict mode targets the caller’s own unix_username for the delete', async () => {
-    loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'strict' } } as never);
-    usersRepositoryMock.mockImplementation(function mockRepo() {
-      return { findById: vi.fn(async () => ({ unix_username: 'alice' })) };
-    } as never);
-    const { app } = makeApp();
-    await service(app).create({}, AUTH_PARAMS);
-    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith('alice', {
-      reportedUnixUser: 'alice',
-      userId: 'user-1',
-    });
   });
 });

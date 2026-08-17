@@ -37,7 +37,7 @@ import { isAgenticToolName } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
-import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
+import { resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 const FETCH_TIMEOUT_MS = 8_000;
 const SDK_AUTH_PROBE_TIMEOUT_MS = 10_000;
@@ -235,9 +235,8 @@ function resultFromKeyStatus(status: AuthCheckStatus, rejectedHint: string): Aut
 }
 
 /**
- * Probe the Codex `auth.json` belonging to the Unix identity that will run
- * Codex for this user (daemon user in simple mode, shared executor user in
- * insulated, the caller's own account in strict). File contents stay on the
+ * Probe the Codex `auth.json` selected by this user's credential route (the
+ * local daemon home or a delegated execution-home key). File contents stay on the
  * daemon side; only shape/metadata drive the result.
  *
  * An embedded API key is verified against the provider; ChatGPT login tokens
@@ -249,7 +248,7 @@ async function probeCodexAuthFile(
   withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>,
   config: DeepReadonly<AgorConfig>
 ): Promise<AuthCheckResult> {
-  const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase, config);
+  const identity = await resolveCodexCredentialRoute(userId, withTenantDatabase, config);
   if (!identity.ok) {
     // A missing unix_username is a real configuration gap (no credential can
     // exist for this user yet). An unsupported mode means the daemon cannot
@@ -258,22 +257,22 @@ async function probeCodexAuthFile(
     if (identity.reason === 'missing-username') {
       return unauthenticated(
         'none',
-        'Codex subscription login needs a Unix account — ask an admin to set your unix_username.'
+        'Codex subscription login needs an execution home — ask an admin to set your execution home key.'
       );
     }
     if (identity.reason === 'unsupported-mode') {
       return unknown(identity.message);
     }
-    return unknown('Could not resolve the Unix account that holds the Codex login.');
+    return unknown('Could not resolve the execution home that holds the Codex login.');
   }
 
-  const inspection = await inspectCodexAuthViaExecutor(identity.unixUser, {
-    reportedUnixUser: identity.reportedUnixUser,
+  const inspection = await inspectCodexAuthViaExecutor({
+    delegatedHomeKey: identity.delegatedHomeKey,
     userId: identity.userId,
     codexHome: identity.codexHome,
   });
   if (!inspection.ok) {
-    // Only a genuinely absent file proves "no login". Permission/sudo/
+    // Only a genuinely absent file proves "no login". Permission/launcher/
     // transport failures mean we could not LOOK, which must never surface as
     // the persistent "credentials aren't working" state.
     return inspection.reason === 'not-found'

@@ -19,7 +19,6 @@ import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, exists, getTableColumns, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
-import { resolveBranchGroupName, resolveBranchGroupUpdate } from '../../unix/group-manager';
 import { getBranchUrl } from '../../utils/url';
 import type { Database } from '../client';
 import {
@@ -153,7 +152,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         permission_source: row.permission_source ?? 'override',
         others_can: row.others_can ?? undefined,
         others_fs_access: row.others_fs_access ?? undefined,
-        unix_group: row.unix_group ?? undefined,
         // Branch storage mode
         storage_mode: row.storage_mode ?? 'worktree',
         clone_depth: row.clone_depth ?? undefined,
@@ -209,8 +207,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       permission_source: branch.permission_source ?? 'override',
       others_can: branch.others_can ?? 'session',
       others_fs_access: branch.others_fs_access ?? null,
-      unix_group:
-        branch.unix_group == null ? null : resolveBranchGroupName(branchId, branch.unix_group),
       // Branch storage mode (default 'worktree' matches schema default)
       storage_mode: branch.storage_mode ?? 'worktree',
       clone_depth: branch.clone_depth ?? null,
@@ -580,11 +576,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         created_at: current.created_at, // Never change created timestamp
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
-      merged.unix_group = resolveBranchGroupUpdate(
-        current.branch_id,
-        current.unix_group,
-        Object.hasOwn(updates, 'unix_group') ? updates.unix_group : undefined
-      );
       // A materialization error describes only the failed filesystem state.
       // Clear it atomically with every explicit transition away from failed
       // so a successful retry/unarchive cannot remain visually poisoned by

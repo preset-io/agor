@@ -9,15 +9,15 @@ export interface EffectiveUserInfo {
 type UserInfoLookup = () => { homedir: string; shell: string | null };
 
 /**
- * Resolve paths from the executor's effective uid passwd entry. HOME is
- * intentionally ignored: sudo configurations commonly preserve the invoking
- * daemon's HOME even though the executor has changed uid.
+ * Resolve paths from the executor process's effective uid passwd entry. HOME
+ * is intentionally ignored because external launchers may preserve a
+ * control-plane HOME while selecting another execution namespace.
  */
 export function resolveEffectiveUserInfo(
   lookup: UserInfoLookup = () => userInfo({ encoding: 'utf8' })
 ): EffectiveUserInfo {
   const info = lookup();
-  if (!info.homedir) throw new Error('Effective Unix user has no home directory');
+  if (!info.homedir) throw new Error('Executor process has no home directory');
   return { homedir: info.homedir, shell: info.shell || '/bin/sh' };
 }
 

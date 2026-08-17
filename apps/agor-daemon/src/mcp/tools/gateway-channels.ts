@@ -45,7 +45,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { GatewayService } from '../../services/gateway.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
-import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
 import {
   generateScopedServiceToken,
@@ -1245,8 +1245,12 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         },
         {
           logPrefix: `[Upload materialize ${ctx.sessionId}]`,
-          asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
+          delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+            resolveDelegatedExecutionHomeKey(
+              db,
+              ctx.authenticatedUser.user_id,
+              ctx.app.get('config')
+            )
           ),
         }
       );
@@ -1737,8 +1741,12 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           },
           {
             logPrefix: `[Gateway Slack upload ${target.channel.id}]`,
-            asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-              resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
+            delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+              resolveDelegatedExecutionHomeKey(
+                db,
+                ctx.authenticatedUser.user_id,
+                ctx.app.get('config')
+              )
             ),
           }
         );

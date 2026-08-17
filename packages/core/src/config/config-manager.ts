@@ -27,6 +27,7 @@ import {
   type BranchStorageMode,
   DEFAULT_BRANCH_STORAGE_MODE,
   type ResolvedBranchStorageConfig,
+  type UnixUserMode,
   type UnknownJson,
 } from './types';
 
@@ -216,6 +217,22 @@ async function ensureAgorHome(): Promise<void> {
 /**
  * Validate config and throw helpful errors for deprecated/invalid settings
  */
+function assertSupportedUnixUserMode(mode: unknown): asserts mode is UnixUserMode | undefined {
+  if (mode === undefined || mode === 'simple' || mode === 'sandbox' || mode === 'delegated') return;
+  if (mode === 'opportunistic' || mode === 'strict' || mode === 'insulated') {
+    throw new Error(
+      `Config error: execution.unix_user_mode '${String(mode)}' was removed in Agor 0.25.0.\n` +
+        `Migrate with the latest Agor 0.24.x release, then choose one of:\n` +
+        `  - 'sandbox': fail-closed local Linux filesystem isolation (recommended)\n` +
+        `  - 'simple': trusted local execution without Agor filesystem isolation\n` +
+        `  - 'delegated': identity and isolation supplied by an external execution substrate`
+    );
+  }
+  throw new Error(
+    `Config error: execution.unix_user_mode must be one of: simple, sandbox, delegated (received ${JSON.stringify(mode)})`
+  );
+}
+
 function validateConfig(config: AgorConfig): void {
   const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
     ?.plugins;
@@ -274,6 +291,21 @@ function validateConfig(config: AgorConfig): void {
   if (removedProviderConfig.execution?.cursor_sdk_enabled !== undefined) {
     throw new Error(
       "Config error: 'execution.cursor_sdk_enabled' has been removed. Configure Cursor availability in workspace agentic-tool settings."
+    );
+  }
+  const removedUnixExecution = config.execution as
+    | (NonNullable<AgorConfig['execution']> & {
+        executor_unix_user?: unknown;
+        sync_unix_passwords?: unknown;
+      })
+    | undefined;
+  const removedUnixKeys = ['executor_unix_user', 'sync_unix_passwords'].filter(
+    (key) => removedUnixExecution?.[key as keyof typeof removedUnixExecution] !== undefined
+  );
+  if (removedUnixKeys.length > 0) {
+    throw new Error(
+      `Config error: removed host Unix execution ${removedUnixKeys.length === 1 ? 'key' : 'keys'}: ${removedUnixKeys.map((key) => `execution.${key}`).join(', ')}. ` +
+        "Remove them and choose execution.unix_user_mode 'simple', 'sandbox', or 'delegated'."
     );
   }
 
@@ -429,7 +461,6 @@ function validateConfig(config: AgorConfig): void {
     'masterSecret',
     'mcpEnabled',
     'mcpToolSearch',
-    'unix_user',
     'instanceLabel',
     'instanceDescription',
     'impersonation_token_expiry_ms',
@@ -516,7 +547,6 @@ function validateConfig(config: AgorConfig): void {
     'executor_heartbeat',
     'sdk_watchdog',
     'dispatch_connect_timeout_ms',
-    'executor_unix_user',
     'unix_user_mode',
     'branch_rbac',
     'allow_web_terminal',
@@ -525,7 +555,6 @@ function validateConfig(config: AgorConfig): void {
     'session_token_expiration_ms',
     'session_token_max_uses',
     'mcp_token_expiration_ms',
-    'sync_unix_passwords',
     'daemon_writes_user_message',
     'permission_timeout_ms',
     'executor_command_template',
@@ -716,18 +745,7 @@ function validateConfig(config: AgorConfig): void {
     );
   }
 
-  // Check for deprecated 'opportunistic' unix_user_mode
-  const mode = config.execution?.unix_user_mode;
-  if (mode === ('opportunistic' as never)) {
-    throw new Error(
-      `Config error: 'opportunistic' unix_user_mode has been deprecated.\n` +
-        `Please update your config to use one of:\n` +
-        `  - 'insulated': Filesystem isolation via Unix groups (recommended)\n` +
-        `  - 'strict': Full process impersonation required\n` +
-        `\n` +
-        `Edit ~/.agor/config.yaml and set execution.unix_user_mode: insulated`
-    );
-  }
+  assertSupportedUnixUserMode(config.execution?.unix_user_mode);
 
   const managedEnvExecutionMode = config.execution?.managed_envs_execution_mode;
   if (
@@ -1006,7 +1024,6 @@ export function getDefaultConfig(): AgorConfig {
       session_token_expiration_ms: 86400000, // 24 hours
       session_token_max_uses: 1, // Single-use tokens
       mcp_token_expiration_ms: MCP_TOKEN.DEFAULT_EXPIRATION_MS,
-      sync_unix_passwords: true, // Default: sync passwords to Unix
       executor_heartbeat: resolveExecutorHeartbeatConfig(),
     },
     analytics: getDefaultAnalyticsConfig(),
@@ -1039,9 +1056,9 @@ export function resolveEffectiveConfig(
 
   // Resolve the effective Unix isolation mode (env override wins) so the
   // `sandbox` mode can imply the rest of its machinery.
-  const effectiveUnixMode = (env.AGOR_UNIX_USER_MODE ??
-    config.execution?.unix_user_mode ??
-    'simple') as NonNullable<AgorConfig['execution']>['unix_user_mode'];
+  const configuredUnixMode = env.AGOR_UNIX_USER_MODE ?? config.execution?.unix_user_mode;
+  assertSupportedUnixUserMode(configuredUnixMode);
+  const effectiveUnixMode = configuredUnixMode ?? 'simple';
   const sandboxIsolation = effectiveUnixMode === 'sandbox';
 
   // Fold config file + env vars + `sandbox`-mode implications into ONE sandbox
@@ -1087,7 +1104,6 @@ export function resolveEffectiveConfig(
       ...config.daemon,
       ...(Number.isSafeInteger(port) ? { port } : {}),
       ...(env.DAEMON_HOST ? { host: env.DAEMON_HOST } : {}),
-      ...(env.AGOR_DAEMON_UNIX_USER ? { unix_user: env.AGOR_DAEMON_UNIX_USER } : {}),
       ...(env.AGOR_JWT_SECRET ? { jwtSecret: env.AGOR_JWT_SECRET } : {}),
       ...(env.AGOR_MASTER_SECRET ? { masterSecret: env.AGOR_MASTER_SECRET } : {}),
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
@@ -1096,7 +1112,6 @@ export function resolveEffectiveConfig(
     execution: {
       ...defaults.execution,
       ...config.execution,
-      ...(env.AGOR_EXECUTOR_USERNAME ? { executor_unix_user: env.AGOR_EXECUTOR_USERNAME } : {}),
       ...(env.AGOR_RBAC_ENABLED === 'true' ? { branch_rbac: true } : {}),
       ...(env.AGOR_UNIX_USER_MODE
         ? {
@@ -1104,9 +1119,6 @@ export function resolveEffectiveConfig(
               AgorConfig['execution']
             >['unix_user_mode'],
           }
-        : {}),
-      ...(env.AGOR_USE_EXECUTOR === 'true' && !env.AGOR_EXECUTOR_USERNAME
-        ? { executor_unix_user: 'agor_executor' }
         : {}),
       // Folded sandbox settings (config file + AGOR_SANDBOX_* env + `sandbox`
       // isolation-mode implications). Computed above. AGOR_SANDBOX_ENABLED /
@@ -1147,19 +1159,6 @@ export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
   const execution = config.execution;
   if (execution?.sandbox?.enabled !== true) return;
 
-  const mode = execution.unix_user_mode ?? 'simple';
-  if (mode === 'strict' || mode === 'insulated') {
-    throw new Error(
-      `execution.sandbox.enabled is incompatible with unix_user_mode: ${mode}. ` +
-        'Use unix_user_mode: sandbox for local bubblewrap isolation, or disable the sandbox.'
-    );
-  }
-  if (execution.executor_unix_user) {
-    throw new Error(
-      'execution.sandbox.enabled is incompatible with execution.executor_unix_user because ' +
-        'the local sandbox does not wrap impersonated executor processes.'
-    );
-  }
   if (execution.executor_command_template) {
     throw new Error(
       'execution.sandbox.enabled is incompatible with execution.executor_command_template because ' +
@@ -1504,104 +1503,16 @@ export function loadConfigSync(): AgorConfig {
   return finalConfig;
 }
 
-/**
- * Get the Unix user that the Agor daemon runs as
- *
- * Resolution order:
- * 1. daemon.unix_user from config (explicit configuration)
- * 2. Current process user (development mode fallback)
- *
- * Used for:
- * - Git operations with fresh group memberships (sudo su -)
- * - Unix integration service initialization
- * - Terminal impersonation decisions
- *
- * @returns Unix username, or undefined if not determinable
- *
- * @example
- * ```ts
- * const daemonUser = getDaemonUser();
- * if (daemonUser && isUnixGroupRefreshNeeded()) {
- *   runAsUser('git status', { asUser: daemonUser });
- * }
- * ```
- */
-export function getDaemonUser(): string | undefined {
-  try {
-    const config = loadConfigSync();
-    if (config.daemon?.unix_user) {
-      return config.daemon.unix_user;
-    }
-    // Fall back to current process user (dev mode)
-    return os.userInfo().username;
-  } catch {
-    // If config load fails or userInfo throws, return undefined
-    return undefined;
-  }
-}
-
-/**
- * Get daemon user, throwing if RBAC is enabled but user not configured
- *
- * Use this when initializing services that require Unix isolation.
- * For most operations, prefer getDaemonUser() which returns undefined on failure.
- *
- * @param config - Agor configuration (pass pre-loaded config to avoid re-loading)
- * @returns Unix username for the daemon
- * @throws Error if Unix isolation is enabled but daemon.unix_user is not configured
- */
-export function requireDaemonUser(config: AgorConfig): string {
-  // 1. If explicitly configured, always use it
-  if (config.daemon?.unix_user) {
-    return config.daemon.unix_user;
-  }
-
-  // 2. Check if Unix impersonation/isolation is enabled - if so, require explicit config.
-  // Branch RBAC alone is logical app-level authorization and does not require
-  // Unix users/groups in Cloud simple mode.
-  const unixIsolationEnabled = resolveExecutionSecurityMode(config).requiresDaemonUnixUser;
-
-  if (unixIsolationEnabled) {
-    throw new Error(
-      'Unix isolation is enabled (execution.unix_user_mode is insulated or strict) but daemon.unix_user is not configured.\n' +
-        'Please set daemon.unix_user in ~/.agor/config.yaml to the user running the daemon.\n' +
-        'Example:\n' +
-        '  daemon:\n' +
-        '    unix_user: agor'
-    );
-  }
-
-  // 3. Fall back to current process user (dev mode on Mac/Linux without isolation)
-  const user = process.env.USER || os.userInfo().username;
-  if (!user) {
-    throw new Error(
-      'Could not determine current user and daemon.unix_user is not configured.\n' +
-        'Please set daemon.unix_user in ~/.agor/config.yaml.'
-    );
-  }
-  return user;
-}
-
 export interface ResolvedExecutionSecurityMode {
   /** App-layer branch ownership/visibility/action enforcement. */
   appRbacEnabled: boolean;
   /** Configured Unix execution mode with default applied. */
   unixUserMode: import('./types').UnixUserMode;
-  /** Whether executors/terminals may run as non-daemon OS users. */
-  unixImpersonationEnabled: boolean;
-  /** Whether branch filesystem permissions/groups should be materialized. */
-  unixFsIsolationEnabled: boolean;
-  /** Whether git/executor spawns need fresh supplemental Unix groups. */
-  unixGroupRefreshNeeded: boolean;
-  /** Whether daemon.unix_user must be explicitly configured. */
-  requiresDaemonUnixUser: boolean;
-  /** Whether new repos/branches should initialize Unix groups. */
-  shouldInitUnixGroups: boolean;
   /**
-   * Whether every user must have a `unix_username` (strict and delegated).
+   * Whether every user must have a `unix_username` home key (delegated).
    * Session creation and executor/terminal launches fail loudly without one.
    */
-  requiresUserUnixUsername: boolean;
+  requiresExecutionHomeKey: boolean;
 }
 
 /**
@@ -1610,65 +1521,43 @@ export interface ResolvedExecutionSecurityMode {
  * Keep this as the single semantic boundary between app-layer RBAC and
  * OS/filesystem isolation:
  * - `branch_rbac` controls Agor app permissions only.
- * - `insulated`/`strict` `unix_user_mode` controls Unix impersonation/groups/FS ACLs.
  * - `delegated` requires per-user `unix_username` but performs no OS-level
- *   work on the daemon host (no sudo, no groups, no sudoers) — identity
+ *   work on the daemon host — identity
  *   enforcement is delegated to the execution substrate.
  */
 export function resolveExecutionSecurityMode(
   config: AgorConfig = loadConfigSync()
 ): ResolvedExecutionSecurityMode {
   const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
-  const unixIsolationEnabled = unixUserMode === 'insulated' || unixUserMode === 'strict';
-
   return {
     appRbacEnabled: config.execution?.branch_rbac === true,
     unixUserMode,
-    unixImpersonationEnabled: unixIsolationEnabled,
-    unixFsIsolationEnabled: unixIsolationEnabled,
-    unixGroupRefreshNeeded: unixIsolationEnabled,
-    requiresDaemonUnixUser: unixIsolationEnabled,
-    shouldInitUnixGroups: unixIsolationEnabled,
-    requiresUserUnixUsername: unixUserModeRequiresUsername(unixUserMode),
+    requiresExecutionHomeKey: unixUserModeRequiresExecutionHomeKey(unixUserMode),
   };
 }
 
 /**
- * Whether a Unix user mode treats per-user `unix_username` as load-bearing
- * identity. Single predicate shared by `resolveExecutionSecurityMode()` and
- * call sites that only have the raw mode, so the strict/delegated pairing
- * cannot drift.
+ * Whether an execution mode requires the transitional `unix_username`
+ * execution-home key. Shared by config resolution and launch call sites.
  */
-export function unixUserModeRequiresUsername(mode: import('./types').UnixUserMode): boolean {
-  return mode === 'strict' || mode === 'delegated';
+export function unixUserModeRequiresExecutionHomeKey(
+  mode: import('./types').UnixUserMode
+): boolean {
+  return mode === 'delegated';
 }
 
 /**
  * Check if logical branch RBAC is enabled.
  *
  * This controls app-level branch ownership/visibility. It does not necessarily
- * imply Unix group/ACL setup; Cloud simple mode may enable branch RBAC while
- * running all filesystem work as the daemon user.
+ * imply local filesystem isolation; simple mode may enable branch RBAC while
+ * running filesystem work as the daemon user.
  *
  * @returns true if branch_rbac is enabled in config
  */
 export function isBranchRbacEnabled(): boolean {
   try {
     return resolveExecutionSecurityMode().appRbacEnabled;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Check if Unix user impersonation is enabled
- *
- * Returns true when unix_user_mode is 'insulated' or 'strict'. 'delegated'
- * does not impersonate — identity enforcement lives in the execution substrate.
- */
-export function isUnixImpersonationEnabled(): boolean {
-  try {
-    return resolveExecutionSecurityMode().unixImpersonationEnabled;
   } catch {
     return false;
   }
@@ -1739,19 +1628,6 @@ export function ensureBranchCloneDepthAllowed(cloneDepth: number | undefined): v
       'clone_depth is unavailable on this Agor instance because execution.branch_storage.allow_shallow_clones is false. Omit clone_depth to create a full clone.'
     );
   }
-}
-
-/**
- * Whether the daemon needs to wrap git operations in `sudo -u` to pick up
- * supplemental Unix groups created after daemon startup.
- *
- * Cloud simple mode can enable logical `branch_rbac` without Unix groups. Only
- * non-simple Unix modes require group refresh / sudo wrapping.
- *
- * Returns true when `unix_user_mode` is `insulated` or `strict`.
- */
-export function isUnixGroupRefreshNeeded(): boolean {
-  return resolveExecutionSecurityMode().unixGroupRefreshNeeded;
 }
 
 // =============================================================================

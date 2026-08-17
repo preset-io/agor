@@ -81,28 +81,18 @@ RUN set -eux; \
       groupmod -n agor -g "${GID}" node; \
     fi; \
     usermod -g agor agor; \
-    # Grant passwordless sudo for fixing volume permissions and executor spawning
+    # Development image only: allow the entrypoint to repair bind-mount ownership.
     echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor; \
     chmod 0440 /etc/sudoers.d/agor; \
     # Create .agor directory for database and config (will be mounted as volume)
     mkdir -p /home/agor/.agor; \
     chown -R agor:agor /home/agor
 
-# Create 'agor_executor' user (unprivileged user for isolated SDK execution)
-# This user has no sudo privileges and limited permissions
-RUN useradd -m -s /bin/bash agor_executor && \
-    # Create home directory with restricted permissions
-    mkdir -p /home/agor_executor/.agor && \
-    chown -R agor_executor:agor_executor /home/agor_executor
-
-# Copy Zellij config for both users
+# Copy Zellij config for the daemon user.
 COPY docker/zellij-config.kdl /tmp/zellij-config.kdl
 RUN mkdir -p /home/agor/.config/zellij && \
-    mkdir -p /home/agor_executor/.config/zellij && \
     cp /tmp/zellij-config.kdl /home/agor/.config/zellij/config.kdl && \
-    cp /tmp/zellij-config.kdl /home/agor_executor/.config/zellij/config.kdl && \
     chown -R agor:agor /home/agor/.config && \
-    chown -R agor_executor:agor_executor /home/agor_executor/.config && \
     rm /tmp/zellij-config.kdl
 
 # Set working directory

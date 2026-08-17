@@ -1,5 +1,10 @@
 # Executor Sandboxing (bubblewrap) — Filesystem Isolation + Path to Replacing strict
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 **Status:** 🧪 POC implemented & validated live (opt-in, disabled by default)
 **Author:** Max + pairing
 **Date:** 2026-08-15

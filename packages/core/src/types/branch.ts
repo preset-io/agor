@@ -360,28 +360,17 @@ export interface Branch {
    */
   others_can?: BranchPermissionLevel;
 
-  // ===== RBAC: OS-layer permissions (unix-user-modes.md) =====
-
   /**
-   * Unix group for this branch (if Unix modes enabled)
+   * Sandbox filesystem access level for non-owners.
    *
-   * Format: 'agor_wt_<canonical-24-char-short-id>'; legacy persisted rows may
-   * retain the older 8-character form until explicitly migrated.
-   * Owners are added to this group for filesystem access.
-   */
-  unix_group?: string;
-
-  /**
-   * Filesystem access level for non-owners ("others" in Unix terms)
+   * Controls the branch mount exposed to users who are NOT branch owners.
+   * Branch owners receive a writable mount.
    *
-   * Controls OS-level permissions for users who are NOT branch owners.
-   * Branch owners always have full access (7 = rwx) via group membership.
+   * - 'none': The branch is not mounted
+   * - 'read': The branch is mounted read-only
+   * - 'write': The branch is mounted read-write
    *
-   * - 'none': Others get no access (chmod 2770 → drwxrws---)
-   * - 'read': Others can read files (chmod 2775 → drwxrwsr-x)
-   * - 'write': Others can read and write files (chmod 2777 → drwxrwsrwx)
-   *
-   * This controls OS-level permissions independent of app-layer 'others_can'.
+   * This controls sandbox mounts independently of app-layer `others_can`.
    */
   others_fs_access?: 'none' | 'read' | 'write';
 
@@ -421,7 +410,7 @@ export interface Branch {
    * Default (false / undefined): When user A calls `agor_sessions_spawn` or
    * `agor_sessions_prompt(mode:"fork"|"subsession")` against user B's session,
    * the new child session is attributed to A — `child.created_by = A.id` —
-   * and runs under A's Unix identity, credentials, and env vars.
+   * and uses A's execution-home, credentials, and env vars.
    *
    * When true: legacy behavior is preserved — the child inherits
    * `parent.created_by`, so it executes under the *parent owner's* identity

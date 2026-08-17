@@ -46,7 +46,7 @@ import {
   isDeploymentAgenticToolAvailable,
   isTenantAgenticToolEnabled,
   normalizePersistedScheduleAgenticToolConfig,
-  unixUserModeRequiresUsername,
+  unixUserModeRequiresExecutionHomeKey,
 } from '@agor/core/config';
 import {
   boundedBackoffDelay,
@@ -242,7 +242,7 @@ export interface SchedulerConfig {
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
   gracePeriod?: number;
-  /** Unix user mode for validation (default: 'simple') */
+  /** Execution mode for home-key validation (default: 'simple') */
   unixUserMode?: UnixUserMode;
   /** Static/single-tenant id used for request-less cron ticks. Undefined means discover due schedule tenants from schedule rows. */
   tenantId?: TenantID | string;
@@ -714,14 +714,12 @@ export class SchedulerService {
    * model as today, but keyed off `schedules.created_by` rather than
    * `branches.created_by`).
    *
-   * - simple: unix_username optional (no impersonation)
-   * - insulated: unix_username optional (uses executor user)
-   * - strict: unix_username required (throws if missing)
+   * - simple: execution home key is optional
+   * - sandbox/delegated: execution home key is required
    *
    * @returns Object with creator and resolved unixUsername (may be null
-   *   in non-strict modes)
-   * @throws Error if creator not found or unix_username missing in
-   *   strict mode
+   *   in simple mode)
+   * @throws Error if creator is missing or a required home key is absent
    */
   private async resolveCreatorUnixUsername(
     schedule: Schedule
@@ -738,9 +736,9 @@ export class SchedulerService {
 
     const unixUsername = creator.unix_username || null;
 
-    if (!unixUsername && unixUserModeRequiresUsername(this.config.unixUserMode)) {
+    if (!unixUsername && unixUserModeRequiresExecutionHomeKey(this.config.unixUserMode)) {
       throw new Error(
-        `Schedule creator ${creator.email} has no unix_username set. Cannot spawn scheduled session in ${this.config.unixUserMode} Unix user mode.`
+        `Schedule creator ${creator.email} has no unix_username set. Cannot spawn scheduled session in ${this.config.unixUserMode} execution mode.`
       );
     }
 

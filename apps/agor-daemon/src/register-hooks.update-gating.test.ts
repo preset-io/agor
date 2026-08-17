@@ -300,7 +300,6 @@ describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) 
  * the source before adding one.
  */
 const UPDATE_NOT_ROUTED: Record<string, string | readonly string[]> = {
-  'admin/local-actions': 'no update method — the service exposes create only',
   'agentic-tool-presets': 'no update method — AgenticToolPresetsService is not a DrizzleService',
   'agentic-tool-settings':
     'no update method — TenantAgenticToolSettingsService is not a DrizzleService',

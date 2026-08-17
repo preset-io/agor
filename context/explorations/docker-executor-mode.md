@@ -1,5 +1,10 @@
 # Docker-Backed Executor Mode — Feasibility & Design
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 **Status:** 🔬 Exploration / design-only (no code written)
 **Author:** design pass for Max
 **Date:** 2026-08-14
