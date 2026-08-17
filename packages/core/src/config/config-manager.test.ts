@@ -448,6 +448,77 @@ describe('loadConfig', () => {
     expect(loaded).toEqual(defaults);
   });
 
+  it('should explain the sandbox rather than fabricate a config when masked', async () => {
+    // The executor sandbox masks the daemon's config.yaml with a `--ro-bind
+    // /dev/null` mount, so reads from inside fail with EACCES rather than
+    // ENOENT. Falling back to defaults here would be worse than failing: the
+    // defaults carry no `paths` key and disable filesystem isolation, so a
+    // fabricated config resolves tenant data roots to the wrong directory.
+    // Mounting needs privileges tests don't have; an unreadable file produces
+    // the same EACCES the mask does.
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump(createConfigData()), 'utf-8');
+    await fs.chmod(configPath, 0o000);
+    vi.stubEnv('AGOR_OUTER_SANDBOX', '1');
+
+    try {
+      await expect(loadConfig()).rejects.toThrow(
+        /masked by Agor's executor sandbox.*payload\.resolvedConfig and DAEMON_URL/s
+      );
+
+      __resetConfigCacheForTests();
+      expect(() => loadConfigSync()).toThrow(/masked by Agor's executor sandbox/s);
+    } finally {
+      // restoreAllMocks() does not undo stubEnv, and the marker leaking into
+      // later tests would silently rewrite their expected errors.
+      vi.unstubAllEnvs();
+      await fs.chmod(configPath, 0o600);
+    }
+  });
+
+  // The masked-config diagnostic is a better message, never a different
+  // outcome: outside the sandbox the same failures stay loud and unchanged.
+  it('should fail loudly when the config path is a directory', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.mkdir(configPath);
+
+    await expect(loadConfig()).rejects.toThrow(/Failed to load config.*EISDIR/s);
+
+    __resetConfigCacheForTests();
+    expect(() => loadConfigSync()).toThrow(/Failed to load config.*EISDIR/s);
+  });
+
+  // Permission bits don't constrain root, and non-POSIX hosts don't honor
+  // mode 000 at all, so this can only assert anything as an unprivileged
+  // POSIX user.
+  it.skipIf(process.getuid === undefined || process.getuid() === 0)(
+    'should fail loudly when a regular config file is unreadable',
+    async () => {
+      const agorDir = path.join(tempDir, '.agor');
+      const configPath = path.join(agorDir, 'config.yaml');
+
+      await fs.mkdir(agorDir, { recursive: true });
+      await fs.writeFile(configPath, yaml.dump(createConfigData()), 'utf-8');
+      await fs.chmod(configPath, 0o000);
+
+      try {
+        await expect(loadConfig()).rejects.toThrow(/Failed to load config.*EACCES/s);
+
+        __resetConfigCacheForTests();
+        expect(() => loadConfigSync()).toThrow(/Failed to load config.*EACCES/s);
+      } finally {
+        // Restore so the afterEach cleanup can remove it.
+        await fs.chmod(configPath, 0o600);
+      }
+    }
+  );
+
   it('should return empty config for empty YAML file', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');

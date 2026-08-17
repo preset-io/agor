@@ -115,6 +115,34 @@ function cacheKeyMatches(a: CacheKey, b: CacheKey): boolean {
   return a.mtimeMs === b.mtimeMs && a.size === b.size;
 }
 
+/**
+ * Wrap a config read/stat failure, explaining the sandbox when we're inside it.
+ *
+ * The executor sandbox masks the daemon config with a `/dev/null` bind mount,
+ * so reads from inside fail with EACCES rather than ENOENT. That is the mask
+ * working as designed. Code running in the sandbox is contractually forbidden
+ * from reading the daemon config (see `packages/executor/src/contract.test.ts`)
+ * and receives what it needs via `payload.resolvedConfig` and `DAEMON_URL`.
+ *
+ * Deliberately an error and not a fall back to `getDefaultConfig()`: the
+ * defaults carry no `paths` key and disable filesystem isolation, so
+ * fabricating them would silently resolve tenant data roots to the wrong
+ * directory instead of failing. A wrong answer here crosses a tenant boundary;
+ * a loud one does not.
+ */
+function configLoadError(configPath: string, error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  if (process.env.AGOR_OUTER_SANDBOX === '1') {
+    return new Error(
+      `${configPath} is masked by Agor's executor sandbox and is intentionally out of reach. ` +
+        'Code inside the sandbox must not read the daemon config — it receives configuration ' +
+        'via payload.resolvedConfig and DAEMON_URL. Run this on the daemon host instead. ' +
+        `See context/explorations/executor-sandboxing.md. (underlying error: ${detail})`
+    );
+  }
+  return new Error(`Failed to load config: ${detail}`);
+}
+
 function statCacheKey(configPath: string): CacheKey | null {
   try {
     const stat = statSync(configPath);
@@ -863,9 +891,7 @@ export async function loadConfig(): Promise<AgorConfig> {
       writeCachedConfig(configPath, defaults, NO_FILE_KEY);
       return defaults;
     }
-    throw new Error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    throw configLoadError(configPath, error);
   }
 
   let finalConfig: AgorConfig;
@@ -1485,9 +1511,7 @@ export function loadConfigSync(): AgorConfig {
       writeCachedConfig(configPath, defaults, NO_FILE_KEY);
       return defaults;
     }
-    throw new Error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    throw configLoadError(configPath, error);
   }
 
   let finalConfig: AgorConfig;

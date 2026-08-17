@@ -36,9 +36,20 @@ export function loadConfigSync(): AgorConfig {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return getDefaultConfig();
     }
-    throw new Error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    const detail = error instanceof Error ? error.message : String(error);
+    // Agor's executor sandbox masks the daemon config with a `/dev/null` bind
+    // mount, so reads from inside fail with EACCES rather than ENOENT. The
+    // sandbox supplies DAEMON_URL precisely so this loader is never reached;
+    // arriving here inside the sandbox means that injection is the thing that
+    // broke. Explain that rather than fabricating a daemon address.
+    if (process.env.AGOR_OUTER_SANDBOX === '1') {
+      throw new Error(
+        `DAEMON_URL is unset and ${configPath} is masked by Agor's executor sandbox. ` +
+          'The sandbox provides DAEMON_URL — if it is missing, that is the bug. ' +
+          `See context/explorations/executor-sandboxing.md. (underlying error: ${detail})`
+      );
+    }
+    throw new Error(`Failed to load config: ${detail}`);
   }
 }
 
