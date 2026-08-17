@@ -1,13 +1,13 @@
 /**
  * MCPCatalogService tests
  *
- * The service maps a validated Feathers query onto catalog filters and applies
- * the page bounds. What it must not do is answer a filter it does not
- * understand as though it had applied it, so these assert on which entries come
- * back rather than on the shape of the response.
+ * The service has two jobs: hand over the whole catalog, and resolve one entry
+ * by name for the connect flow. It takes no query, so what these assert is that
+ * a query cannot change the answer — a filter that appeared to be honoured here
+ * would be a second, divergent implementation of the browser's filtering.
  *
  * The ordering and matching rules themselves live in `@agor/core/mcp-catalog`
- * and are tested there.
+ * and are tested there, by `query.test.ts`.
  */
 
 import * as fs from 'node:fs/promises';
@@ -20,8 +20,8 @@ import { MCPCatalogService } from './mcp-catalog';
  * A fixture catalog rather than the shipped one.
  *
  * Asserting against `curated.yaml` would make every entry added to the
- * marketplace a test edit, and would tie assertions about paging to however
- * many servers happen to be on offer.
+ * marketplace a test edit, and would tie assertions about the response to
+ * however many servers happen to be on offer.
  */
 const CATALOG = `
 entries:
@@ -95,70 +95,42 @@ describe('MCPCatalogService find', () => {
     ]);
   });
 
-  it('searches name, title, and description case-insensitively', async () => {
-    expect(names((await service().find({ query: { search: 'BRAVO' } })).data)).toEqual([
-      'com.bravo/mcp',
-    ]);
-    expect(names((await service().find({ query: { search: 'searching' } })).data)).toEqual([
-      'com.bravo/mcp',
-    ]);
+  it('describes the response as the whole catalog, unpaged', async () => {
+    const result = await service().find();
+
+    // The envelope stays, because it is the shape every client parses. It says
+    // "one page, containing everything" rather than describing a window.
+    expect(result.limit).toBe(4);
+    expect(result.skip).toBe(0);
+    expect(result.data).toHaveLength(result.total);
   });
 
-  it('narrows by category and capability', async () => {
-    expect(names((await service().find({ query: { category: 'search' } })).data)).toEqual([
-      'com.bravo/mcp',
-    ]);
-    expect(names((await service().find({ query: { capability: 'logs' } })).data)).toEqual([
-      'com.charlie/mcp',
-    ]);
-  });
+  it('ignores every filter and page bound a stale client might still send', async () => {
+    // The query validator strips these before they arrive; this is the second
+    // line, so that a filter reaching the method cannot half-work. Answering a
+    // narrowed list here would mean two implementations of "search" that have to
+    // agree forever.
+    const unchanged = names((await service().find()).data);
 
-  it('keeps entries that state nothing when hiding account-only ones', async () => {
-    const result = await service().find({ query: { auth_types: ['none', 'unknown'] } });
+    for (const query of [
+      { search: 'BRAVO' },
+      { category: 'search' },
+      { capability: 'logs' },
+      { auth_types: ['none', 'unknown'] },
+      { auth_type: 'oauth' },
+      { has_remote: false },
+      { sort: 'name' },
+      { name: 'com.alpha/mcp' },
+      { $limit: 2, $skip: 1 },
+      { $limit: 5000 },
+    ] as const) {
+      const result = await service().find({ query } as never);
 
-    // Charlie states no auth type and Delta has no endpoint to state one for;
-    // both are still offered, and connecting is what checks them.
-    expect(names(result.data)).toEqual(['com.alpha/mcp', 'com.charlie/mcp', 'com.delta/mcp']);
-    expect(result.total).toBe(3);
-  });
-
-  it('distinguishes entries with an endpoint from ones without', async () => {
-    expect(names((await service().find({ query: { has_remote: false } })).data)).toEqual([
-      'com.delta/mcp',
-    ]);
-  });
-
-  it('sorts by name when asked', async () => {
-    const result = await service().find({ query: { sort: 'name' } });
-    expect(names(result.data)).toEqual([
-      'com.alpha/mcp',
-      'com.bravo/mcp',
-      'com.charlie/mcp',
-      'com.delta/mcp',
-    ]);
-  });
-
-  it('reports the total across the whole match, not the page', async () => {
-    const result = await service().find({ query: { $limit: 2, $skip: 1 } });
-
-    expect(result.total).toBe(4);
-    expect(result.limit).toBe(2);
-    expect(result.skip).toBe(1);
-    expect(names(result.data)).toEqual(['com.bravo/mcp', 'com.charlie/mcp']);
-  });
-
-  it('caps a caller-supplied page size', async () => {
-    const result = await service().find({ query: { $limit: 5000 } });
-    expect(result.limit).toBe(100);
-  });
-
-  it('pages without repeating or skipping an entry', async () => {
-    const seen: string[] = [];
-    for (let skip = 0; skip < 4; skip += 2) {
-      const page = await service().find({ query: { $limit: 2, $skip: skip } });
-      seen.push(...names(page.data));
+      expect(result.total, `query ${JSON.stringify(query)} changed the total`).toBe(4);
+      expect(names(result.data), `query ${JSON.stringify(query)} changed the entries`).toEqual(
+        unchanged
+      );
     }
-    expect(seen).toEqual(['com.alpha/mcp', 'com.bravo/mcp', 'com.charlie/mcp', 'com.delta/mcp']);
   });
 });
 

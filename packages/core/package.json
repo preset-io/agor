@@ -364,6 +364,12 @@
       "import": "./dist/mcp-catalog/index.js",
       "require": "./dist/mcp-catalog/index.cjs"
     },
+    "./mcp-catalog/query": {
+      "source": "./src/mcp-catalog/query.ts",
+      "types": "./dist/mcp-catalog/query.d.ts",
+      "import": "./dist/mcp-catalog/query.js",
+      "require": "./dist/mcp-catalog/query.cjs"
+    },
     "./mcp": {
       "source": "./src/mcp/index.ts",
       "types": "./dist/mcp/index.d.ts",

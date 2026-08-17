@@ -250,12 +250,12 @@ export function catalogServerSlug(name: string): string {
 export type MCPCatalogSort = 'popularity' | 'name';
 
 /**
- * Filters a catalog read narrows by.
+ * What the Marketplace narrows the catalog by.
  *
- * The service's query maps onto this shape, and every field is applied over the
- * loaded entries in memory. That is the whole catalog — a few dozen frozen
- * objects held for the process's lifetime — so narrowing costs a pass over an
- * array rather than a query.
+ * These are exactly the toolbar's controls. The catalog is a few dozen frozen
+ * objects the browser already holds, so applying them is a pass over an array,
+ * not a request — which is why there is no `limit`/`offset` here: paging a list
+ * you hold is a `slice`, and it is the grid's business rather than a filter's.
  */
 export interface MCPCatalogFilters {
   /** Case-insensitive substring match over name, title, and description. */
@@ -263,20 +263,15 @@ export interface MCPCatalogFilters {
   category?: MCPCatalogCategory;
   /** Matches entries carrying this capability tag. */
   capability?: string;
-  has_remote?: boolean;
-  auth_type?: MCPCatalogAuthType;
   /**
    * Match any one of several auth types.
    *
    * "Not known to need an account" spans two values — stated open, and not
-   * stated — and a single-value filter cannot say that. Callers that mean a set
-   * pass one; the singular field stays for callers that mean exactly one.
+   * stated — and a single-value filter cannot say that, which is why the
+   * toolbar's one auth control passes a set.
    */
   auth_types?: MCPCatalogAuthType[];
-  names?: string[];
   sort?: MCPCatalogSort;
-  limit?: number;
-  offset?: number;
 }
 
 /**

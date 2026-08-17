@@ -70,7 +70,8 @@ export default defineConfig({
     'gateway/connectors/slack-manifest': 'src/gateway/connectors/slack-manifest.ts', // Browser-safe Slack manifest/scope derivation (no connector deps)
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
     'knowledge/index': 'src/knowledge/index.ts', // Knowledge editing helpers
-    'mcp-catalog/index': 'src/mcp-catalog/index.ts', // MCP marketplace catalog: registry mirror, curation, probe
+    'mcp-catalog/index': 'src/mcp-catalog/index.ts', // MCP marketplace catalog: the checked-in file, and the connect probe
+    'mcp-catalog/query': 'src/mcp-catalog/query.ts', // Browser-safe catalog filtering/ordering (no loader, no fs)
   },
   format: ['cjs', 'esm'],
   dts: false,

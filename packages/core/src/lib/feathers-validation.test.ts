@@ -210,26 +210,35 @@ describe('mcpServerQueryValidator', () => {
 });
 
 describe('mcpCatalogQueryValidator', () => {
-  it('preserves a set of auth types, which one filter genuinely needs', async () => {
+  it('strips every filter, because the catalog read takes no parameters', async () => {
+    // `find` returns the whole catalog and the browser narrows it. A tab left
+    // open across the deploy that removed these still sends them; stripping
+    // here is what stops them reaching a method that would ignore them
+    // silently, which is how a filter ends up looking like it works.
     const context = {
       params: {
-        query: { auth_types: ['none', 'unknown'], has_remote: 'true', unknown: 'removed' },
+        query: {
+          search: 'linear',
+          category: 'dev-tools',
+          capability: 'issues',
+          auth_types: ['none', 'unknown'],
+          sort: 'name',
+          $limit: 24,
+          $skip: 48,
+          unknown: 'removed',
+        },
       },
     };
 
     await typedValidateQuery(mcpCatalogQueryValidator)(context);
 
-    // `removeAdditional: 'all'` strips anything unlisted, so a filter the
-    // schema does not name arrives as no filter at all.
-    expect(context.params.query).toEqual({
-      auth_types: ['none', 'unknown'],
-      has_remote: true,
-    });
+    expect(context.params.query).toEqual({});
   });
 
-  it('refuses an auth type outside the closed set', async () => {
-    const context = { params: { query: { auth_types: ['none', 'sudo'] } } };
+  it('accepts an empty query rather than rejecting the only call there is', async () => {
+    const context = { params: { query: {} } };
 
-    await expect(typedValidateQuery(mcpCatalogQueryValidator)(context)).rejects.toThrow();
+    await expect(typedValidateQuery(mcpCatalogQueryValidator)(context)).resolves.not.toThrow();
+    expect(context.params.query).toEqual({});
   });
 });

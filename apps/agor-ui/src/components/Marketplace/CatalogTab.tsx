@@ -1,9 +1,9 @@
 /**
  * The Catalog: browse the MCP catalog, open an entry, connect it.
  *
- * The grid renders one page at a time. Filtering, ordering and paging are the
- * server's, so the toolbar's controls stay one query rather than growing a
- * second, divergent implementation here.
+ * The whole catalog arrives in one read, so filtering, ordering and paging all
+ * happen over what the browser holds — see `useCatalogSearch`. The grid still
+ * renders one page at a time; only the round trip per page is gone.
  */
 
 import type { AgenticToolName, MCPCatalogCategory, MCPCatalogEntry } from '@agor/core/types';

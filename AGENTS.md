@@ -530,6 +530,16 @@ written down, since parsing flattens the two.
 `name` is the identity. It is what an installed server records in
 `catalog_entry_name`, so renaming an entry orphans every install of it.
 
+The read path is one endpoint. `find` takes no query and returns all ~50 entries
+at once; the Marketplace holds them and does its own searching, filtering,
+sorting and paging. So there is no server-side filter to add a case to —
+narrowing lives in `packages/core/src/mcp-catalog/query.ts`, which the browser
+imports directly as `@agor/core/mcp-catalog/query`. It is kept apart from
+`catalog.ts` because that one reads the file off disk and so cannot be bundled.
+One implementation, which is what stops a change to what "search" matches from
+applying on only one side. `get(name)` still resolves a single entry — that is
+how connect turns a `catalog_key` into a URL and transport.
+
 Each entry states an `auth_type` (`none` / `oauth` / `credentials`), or omits it
 where nobody has established the answer. It decides what the marketplace tells a
 user before they press Connect, and nothing else: `mcp-catalog-connect.ts`

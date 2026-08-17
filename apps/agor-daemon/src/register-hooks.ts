@@ -2086,11 +2086,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
-  // The MCP catalog mirrors a public registry plus a repo-checked-in curation
-  // file — no tenant data, and no writes through this service. Authentication
+  // The MCP catalog is a file checked into this repository — no tenant data, no
+  // database behind it, and no writes through this service. Authentication
   // still gates it so an unauthenticated visitor cannot enumerate the browse
-  // surface, and query validation is also the SQL-injection boundary because
-  // every catalog filter reaches the database.
+  // surface. Query validation no longer guards a query: `find` takes no
+  // parameters, and the empty schema is what strips a stale client's filters
+  // instead of letting them look honoured.
   safeService('mcp-catalog')?.hooks({
     before: {
       all: [typedValidateQuery(mcpCatalogQueryValidator), requireAuth],

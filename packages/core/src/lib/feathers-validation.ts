@@ -9,7 +9,6 @@ import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
-import { MCP_CATALOG_AUTH_TYPES, MCP_CATALOG_CATEGORIES } from '../types/mcp-catalog';
 
 /**
  * Query validator with type coercion enabled
@@ -413,50 +412,20 @@ export const mcpServerQuerySchema = createQuerySchema(
 );
 
 /**
- * MCP catalog query schema
+ * MCP catalog query schema: deliberately empty.
  *
- * `removeAdditional: 'all'` drops anything not listed here, so this is also
- * what decides which filters exist: a key the service reads but this omits
- * arrives stripped, and the filter silently does nothing.
+ * `find` takes no parameters — it returns the whole catalog and the browser
+ * narrows it — so there is nothing here to name. The schema stays registered
+ * rather than being deleted because `removeAdditional: 'all'` is what makes
+ * that contract enforced instead of merely documented: a `search=` or `$skip=`
+ * from a tab left open across the deploy that removed them is stripped here, so
+ * it cannot reach `find` and be quietly ignored one layer further in.
+ *
+ * Stripping rather than rejecting is the deliberate choice: the stale tab gets
+ * the full catalog and renders it, and recovers on reload. A 400 would blank
+ * the Marketplace for anyone mid-deploy.
  */
-export const mcpCatalogQuerySchema = Type.Intersect(
-  [
-    Type.Object({
-      name: Type.Optional(Type.String({ maxLength: 512 })),
-      search: Type.Optional(Type.String({ maxLength: 128 })),
-      category: Type.Optional(
-        Type.Union(MCP_CATALOG_CATEGORIES.map((category) => Type.Literal(category)))
-      ),
-      capability: Type.Optional(Type.String({ maxLength: 64 })),
-      has_remote: Type.Optional(Type.Boolean()),
-      auth_type: Type.Optional(
-        Type.Union(MCP_CATALOG_AUTH_TYPES.map((value) => Type.Literal(value)))
-      ),
-      // The plural has to be named here too: `removeAdditional: 'all'` would
-      // otherwise strip it silently and the filter would arrive as no filter at
-      // all, which is how a control ends up looking like it works.
-      auth_types: Type.Optional(
-        Type.Array(Type.Union(MCP_CATALOG_AUTH_TYPES.map((value) => Type.Literal(value))), {
-          maxItems: MCP_CATALOG_AUTH_TYPES.length,
-        })
-      ),
-      sort: Type.Optional(Type.Union([Type.Literal('popularity'), Type.Literal('name')])),
-    }),
-    // Deliberately not `createQuerySchema`: that shape also advertises `$sort`
-    // and `$select`, and this service honours neither. Ordering is the domain
-    // `sort` above; a caller-supplied `$sort` over arbitrary fields would
-    // silently do nothing. Listing only what is implemented keeps the schema an
-    // accurate contract rather than a wish.
-    Type.Object({
-      // Mirrors MCP_CATALOG_PAGINATION.MAX_LIMIT in the catalog service. Every
-      // entry carries several paragraphs of copy, so a page bound the shared
-      // schema would allow is a needlessly large response.
-      $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
-      $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
-    }),
-  ],
-  { additionalProperties: false }
-);
+export const mcpCatalogQuerySchema = Type.Object({}, { additionalProperties: false });
 
 /**
  * Create validators for each schema
