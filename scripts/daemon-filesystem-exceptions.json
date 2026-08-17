@@ -1274,20 +1274,6 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-198",
-    "class": "A",
-    "file": "apps/agor-daemon/src/utils/sandbox-wrap.ts",
-    "import": "node:fs",
-    "symbol": "existsSync",
-    "local": "existsSync",
-    "operation": "call:existsSync@canonicalizeExistingPath#1",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Checks whether a deployment-controlled sandbox path exists before canonicalizing it.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
     "id": "DAEMON-FS-CAP-197",
     "class": "A",
     "file": "apps/agor-daemon/src/utils/sandbox-wrap.ts",
