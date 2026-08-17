@@ -318,7 +318,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const backgroundTooltip = `Creates the session in the background, on ${boardPhrase} — check on it anytime.`;
 
   const content = (
-    <div style={{ width: 680, maxWidth: '90vw' }}>
+    <div style={{ width: 450, maxWidth: '90vw' }}>
       <Typography.Text strong style={{ display: 'block', marginBottom: token.marginSM }}>
         {primaryBranch ? (
           <>
