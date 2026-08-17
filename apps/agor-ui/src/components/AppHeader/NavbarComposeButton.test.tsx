@@ -214,6 +214,14 @@ describe('NavbarComposeButton', () => {
     expect(await screen.findByText('🤖')).toBeInTheDocument();
   });
 
+  it('shows a "Start quick session" tooltip on the trigger', async () => {
+    renderCompose({ primary: primaryBranch });
+    fireEvent.mouseEnter(
+      screen.getByRole('button', { name: 'Compose — ask your primary assistant' })
+    );
+    expect(await screen.findByText('Start quick session')).toBeInTheDocument();
+  });
+
   it('opens the compose popover with a heading and prompt', async () => {
     renderCompose({ primary: primaryBranch });
     openPopover();
@@ -293,11 +301,12 @@ describe('NavbarComposeButton', () => {
     expect(screen.getByText(/Opens on Ada/)).toBeInTheDocument();
   });
 
-  it('shows the off-board wayfinding line on a non-board surface', async () => {
+  it('shows no wayfinding line on a non-board surface', async () => {
     renderCompose({ primary: primaryBranch, currentBoardId: '', pathname: '/knowledge' });
     openPopover();
     await screen.findByTestId('compose-prompt');
-    expect(screen.getByText(/Opens a panel here/)).toBeInTheDocument();
+    expect(screen.queryByText(/Opens a panel here/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Opens on/)).not.toBeInTheDocument();
   });
 
   it('omits the wayfinding line when already on the primary’s own board', async () => {
