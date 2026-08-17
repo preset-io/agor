@@ -14,7 +14,12 @@
  * one word at a time with nothing failing.
  */
 
-import type { MCPCatalogEntry, MCPCatalogFilters, MCPCatalogSort } from '../types/mcp-catalog';
+import {
+  catalogDisplayName,
+  type MCPCatalogEntry,
+  type MCPCatalogFilters,
+  type MCPCatalogSort,
+} from '../types/mcp-catalog';
 
 /** Case-insensitive substring test that tolerates an absent field. */
 function contains(haystack: string | undefined, needle: string): boolean {
@@ -44,26 +49,49 @@ function matches(entry: MCPCatalogEntry, filters: MCPCatalogFilters): boolean {
 }
 
 /**
- * Compare two entries for a given sort key.
+ * The catalog name, which is unique across the file.
  *
- * Every ordering ends in `name`, which is unique across the catalog, so the
- * result is a total order: the grid cannot show an entry twice or drop one
- * because two entries compared equal and the sort was free to pick either.
+ * Every ordering ends here, so each is a total order: the grid cannot show an
+ * entry twice or drop one because two entries compared equal and the sort was
+ * free to pick either. It is a reverse-DNS identifier and appears on no screen,
+ * which is why it is only ever the last key and never the first.
  */
+function byIdentifier(a: MCPCatalogEntry, b: MCPCatalogEntry): number {
+  return a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.name.localeCompare(b.name);
+}
+
+/**
+ * Alphabetical by the name the card shows.
+ *
+ * Sorting by `name` instead puts `ai.exa/exa` before `com.airtable/mcp` — Exa
+ * ahead of Airtable — because the leading label is a TLD. The user is reading
+ * display names, so ordering by anything else reads as broken, and no entry in
+ * the file states a `title`, which means every visible name is derived.
+ *
+ * `catalogDisplayName` is the same function the card and the drawer call, so
+ * the order and the labels cannot disagree. Display names are not guaranteed
+ * unique — two publishers could state one title — so the identifier still
+ * settles ties.
+ */
+function byDisplayName(a: MCPCatalogEntry, b: MCPCatalogEntry): number {
+  const display = catalogDisplayName(a)
+    .toLowerCase()
+    .localeCompare(catalogDisplayName(b).toLowerCase());
+  return display || byIdentifier(a, b);
+}
+
+/** Compare two entries for a given sort key. */
 function comparatorFor(
   sort: MCPCatalogSort | undefined
 ): (a: MCPCatalogEntry, b: MCPCatalogEntry) => number {
-  const byName = (a: MCPCatalogEntry, b: MCPCatalogEntry): number =>
-    a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.name.localeCompare(b.name);
-
-  if (sort === 'name') return byName;
+  if (sort === 'name') return byDisplayName;
 
   return (a, b) => {
     // An entry nobody ranked sorts after every ranked one rather than ahead of
     // rank 1, which is where an absent value would land compared numerically.
     const rankA = a.popularity_rank ?? Number.POSITIVE_INFINITY;
     const rankB = b.popularity_rank ?? Number.POSITIVE_INFINITY;
-    return rankA - rankB || byName(a, b);
+    return rankA - rankB || byIdentifier(a, b);
   };
 }
 

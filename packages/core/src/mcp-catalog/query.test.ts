@@ -8,8 +8,9 @@
  * two active filters combine — rather than about how the function is written.
  */
 
-import type { MCPCatalogEntry } from '@agor/core/types';
+import { catalogDisplayName, type MCPCatalogEntry } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
+import { loadCatalog } from './catalog';
 import { filterCatalog } from './query';
 
 function entry(overrides: Partial<MCPCatalogEntry> & { name: string }): MCPCatalogEntry {
@@ -52,12 +53,47 @@ describe('filterCatalog ordering', () => {
     ]);
   });
 
-  it('orders by name case-insensitively when asked', () => {
-    expect(names({ sort: 'name' })).toEqual([
-      'com.alpha/mcp',
-      'com.bravo/mcp',
-      'com.mike/mcp',
-      'com.zulu/mcp',
+  it('orders alphabetically by the displayed name, not by the identifier', () => {
+    // The identifier's leading label is a TLD, so identifier order and display
+    // order genuinely disagree here. Sorting by `name` yields exa, linear,
+    // airtable — which is what the user sees as a broken A–Z.
+    const mixed = [
+      entry({ name: 'com.airtable/mcp' }), // "Airtable"
+      entry({ name: 'ai.exa/exa' }), // "Exa"
+      entry({ name: 'app.linear/linear' }), // "Linear"
+    ];
+
+    expect(filterCatalog(mixed, { sort: 'name' }).map((e) => e.name)).toEqual([
+      'com.airtable/mcp',
+      'ai.exa/exa',
+      'app.linear/linear',
+    ]);
+  });
+
+  it('prefers a stated title over the derived publisher when ordering', () => {
+    // `com.zzz` derives "Zzz" but states "Aardvark", so the title decides.
+    const titled = [
+      entry({ name: 'com.aaa/mcp' }), // derives "Aaa"
+      entry({ name: 'com.zzz/mcp', title: 'Aardvark' }),
+    ];
+
+    expect(filterCatalog(titled, { sort: 'name' }).map((e) => e.name)).toEqual([
+      'com.aaa/mcp',
+      'com.zzz/mcp',
+    ]);
+  });
+
+  it('falls back to the identifier only to break a display-name tie', () => {
+    // Display names are not unique — nothing stops two publishers stating the
+    // same title — so the ordering still has to be total.
+    const tied = [
+      entry({ name: 'com.zebra/mcp', title: 'Same' }),
+      entry({ name: 'com.apple/mcp', title: 'Same' }),
+    ];
+
+    expect(filterCatalog(tied, { sort: 'name' }).map((e) => e.name)).toEqual([
+      'com.apple/mcp',
+      'com.zebra/mcp',
     ]);
   });
 
@@ -157,6 +193,40 @@ describe('filterCatalog filters', () => {
   it('treats an absent filter as no constraint', () => {
     expect(names({})).toHaveLength(ENTRIES.length);
     expect(names({ search: undefined, category: undefined })).toHaveLength(ENTRIES.length);
+  });
+});
+
+describe('filterCatalog A–Z over the shipped catalog', () => {
+  // Reads the real `curated.yaml` on purpose. The fixtures above state the rule;
+  // this states that the shelf a user actually sees obeys it, and it fails if
+  // either the comparator or the file regresses.
+  it('sorts the shipped entries by what the cards read', async () => {
+    const sorted = filterCatalog(await loadCatalog(), { sort: 'name' });
+    const display = sorted.map((entry) => catalogDisplayName(entry));
+
+    expect(display).toEqual(
+      [...display].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+    );
+  });
+
+  it('puts Airtable before Exa, whose identifiers order the other way', async () => {
+    // `ai.exa/exa` sorts first of all 50 by identifier and 17th by display name;
+    // `com.airtable/mcp` is 4th by identifier and 1st by display name. This is
+    // the case reported from the marketplace.
+    const sorted = filterCatalog(await loadCatalog(), { sort: 'name' });
+    const position = (name: string) => sorted.findIndex((entry) => entry.name === name);
+
+    const airtable = position('com.airtable/mcp');
+    const exa = position('ai.exa/exa');
+
+    expect(airtable, 'com.airtable/mcp missing from the catalog').toBeGreaterThanOrEqual(0);
+    expect(exa, 'ai.exa/exa missing from the catalog').toBeGreaterThanOrEqual(0);
+    expect(catalogDisplayName(sorted[airtable])).toBe('Airtable');
+    expect(catalogDisplayName(sorted[exa])).toBe('Exa');
+    expect(airtable).toBeLessThan(exa);
+
+    // And the entry the old ordering led with is no longer first.
+    expect(sorted[0]?.name).not.toBe('ai.exa/exa');
   });
 });
 
