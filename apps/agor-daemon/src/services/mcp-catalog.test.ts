@@ -59,9 +59,10 @@ unpublished:
   - name: com.delta/mcp
     category: data-storage
     capabilities: [databases]
-    benefit: Delta runs locally.
+    benefit: Delta reads a database.
     starter_prompt: Query the database.
     permission_disclosure: Reads the database.
+    remote_url: https://mcp.delta.example/mcp
 `;
 
 let catalogPath: string;

@@ -9,6 +9,8 @@ import {
   parseCuratedCatalog,
 } from './curated-loader';
 
+// Names an endpoint because the loader now refuses an entry that does not:
+// see `parseCuratedCatalog — entries nothing could install`.
 const VALID_ENTRY = `
 entries:
   - name: com.example/mcp
@@ -17,6 +19,7 @@ entries:
     benefit: Does a useful thing.
     starter_prompt: Try the useful thing.
     permission_disclosure: Reads your repositories.
+    remote_url: https://mcp.example.com/mcp
     popularity_rank: 1
 `;
 
@@ -30,6 +33,7 @@ entries:
     benefit: Searches.
     starter_prompt: Search something.
     permission_disclosure: Sends queries to the provider.
+    remote_url: https://mcp.example.com/mcp
 `);
 
     expect(entry.name).toBe('com.example/mcp');
@@ -92,6 +96,7 @@ entries:
     benefit: Real.
     starter_prompt: Do it.
     permission_disclosure: Reads repos.
+    remote_url: https://mcp.published.com/mcp
     popularity_rank: 1
 unpublished:
   - name: ${name}
@@ -100,6 +105,7 @@ unpublished:
     benefit: Guessed.
     starter_prompt: Do it.
     permission_disclosure: Reads repos.
+    remote_url: https://mcp.guessed.com/mcp
     popularity_rank: ${rank}
 `;
 
@@ -148,11 +154,14 @@ describe('auth_type', () => {
 
 describe('has_remote', () => {
   it('is derived from the endpoint rather than stated alongside it', () => {
-    expect(parseCuratedCatalog(VALID_ENTRY)[0].has_remote).toBe(false);
-    const withRemote = parseCuratedCatalog(
-      `${VALID_ENTRY}    remote_url: https://mcp.example.com/mcp\n    transport: streamable-http\n`
-    );
-    expect(withRemote[0].has_remote).toBe(true);
+    // Only ever true now — an entry without an endpoint fails the load — so
+    // what is left to hold is that it is still *derived*, never authored. A
+    // file that could state `has_remote: true` beside no `remote_url` would
+    // offer a Connect button with nothing behind it.
+    expect(parseCuratedCatalog(VALID_ENTRY)[0].has_remote).toBe(true);
+    expect(() =>
+      parseCuratedCatalog(VALID_ENTRY.replace('    remote_url: https://mcp.example.com/mcp\n', ''))
+    ).toThrow(CuratedCatalogError);
   });
 });
 
@@ -228,26 +237,22 @@ describe('loadCuratedCatalog', () => {
       expect(entry.remote_url).toMatch(/^https:\/\//);
     }
 
-    // The catalog is a browse surface for servers users can connect, so most of
-    // it has to name an endpoint. The remainder are package-only servers with
-    // no remote to record, which the marketplace shows as running locally.
-    const withRemote = entries.filter((entry) => entry.remote_url).length;
-    expect(withRemote / entries.length).toBeGreaterThan(0.8);
+    // Not "most of it" any more: the catalog is a browse surface for servers
+    // users can connect, and an entry nothing can install is a dead card. The
+    // loader enforces this; asserting it here keeps the shipped file honest
+    // even if that rule is ever loosened.
+    expect(entries.filter((entry) => !entry.remote_url)).toEqual([]);
   });
 
   it('states an auth type for every entry with an endpoint, and none without', async () => {
     const entries = await loadCuratedCatalog();
 
     for (const entry of entries) {
-      if (entry.remote_url) {
-        // An unstated endpoint still works — connecting checks it — but it
-        // makes the marketplace say "not checked yet" about a server somebody
-        // could have checked once, for everyone, in a pull request.
-        expect(entry.auth_type, `${entry.name} states no auth_type`).not.toBe('unknown');
-      } else {
-        // Nothing to dial, so there is nothing to state.
-        expect(entry.auth_type, `${entry.name} has no endpoint`).toBe('unknown');
-      }
+      // Every entry names an endpoint now, so every entry owes an auth_type.
+      // An unstated one still works — connecting checks it — but it makes the
+      // marketplace say "not checked yet" about a server somebody could have
+      // checked once, for everyone, in a pull request.
+      expect(entry.auth_type, `${entry.name} states no auth_type`).not.toBe('unknown');
     }
   });
 
@@ -280,6 +285,7 @@ entries:
     benefit: Does a useful thing.
     starter_prompt: Try the useful thing.
     permission_disclosure: Reads your issues.
+    remote_url: https://mcp.example.com/mcp
     auth_type: oauth
     oauth:
 ${block}
@@ -344,5 +350,98 @@ describe('the shipped catalog', () => {
   it('carries no secret-shaped value anywhere in the file', async () => {
     const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
     expect(source).not.toMatch(/client_secret|token_url|authorization_url|api[_-]?key/i);
+  });
+});
+
+/**
+ * Entries the marketplace could render but never install.
+ *
+ * Two shipped: metadata-only rows that drew a card, a category and a Connect
+ * affordance where every route out was a refusal. Nothing objected — not the
+ * schema, not the loader, not a test — which is why the rule is here rather
+ * than left to a reviewer noticing.
+ */
+describe('parseCuratedCatalog — entries nothing could install', () => {
+  const base = `
+    category: dev-tools
+    capabilities: [issues]
+    benefit: Does a useful thing.
+    starter_prompt: Try the useful thing.
+    permission_disclosure: Reads your issues.`;
+
+  it('refuses an entry naming no endpoint', () => {
+    expect(() =>
+      parseCuratedCatalog(`
+entries:
+  - name: com.example/mcp${base}
+`)
+    ).toThrow(CuratedCatalogError);
+  });
+
+  it('tells a curator which entry, what is wrong, and how to fix it', () => {
+    // This message is the whole point: the next dozen entries are hand-written,
+    // and a curator meets this before a user meets a dead card.
+    let message = '';
+    try {
+      parseCuratedCatalog(`
+entries:
+  - name: com.example/mcp${base}
+`);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('com.example/mcp');
+    expect(message).toMatch(/remote_url/);
+    expect(message).toMatch(/or remove the entry/);
+  });
+
+  it('refuses a stdio entry, which connect refuses too', () => {
+    expect(() =>
+      parseCuratedCatalog(`
+entries:
+  - name: com.example/mcp${base}
+    remote_url: https://mcp.example.com/mcp
+    transport: stdio
+`)
+    ).toThrow(/stdio/);
+  });
+
+  it('fails the whole file, matching how every other invariant behaves', () => {
+    // Not "skip the bad entry": a partially-served catalog is one a reviewer
+    // cannot see the shape of, and the file is checked in, so failing it is
+    // something CI catches before any user does.
+    expect(() =>
+      parseCuratedCatalog(`
+entries:
+  - name: com.good/mcp${base}
+    remote_url: https://mcp.good.com/mcp
+  - name: com.bad/mcp${base}
+`)
+    ).toThrow(CuratedCatalogError);
+  });
+
+  it('accepts an entry that names an endpoint and no transport', () => {
+    // The default is remote; only `stdio` is the uninstallable one.
+    const [entry] = parseCuratedCatalog(`
+entries:
+  - name: com.example/mcp${base}
+    remote_url: https://mcp.example.com/mcp
+`);
+    expect(entry.has_remote).toBe(true);
+  });
+});
+
+describe('the shipped catalog — everything on the shelf can be taken off it', () => {
+  it('names an endpoint for every entry', async () => {
+    const entries = await loadCuratedCatalog();
+    expect(entries.filter((entry) => !entry.remote_url)).toEqual([]);
+    expect(entries.every((entry) => entry.has_remote)).toBe(true);
+  });
+
+  it('declares no stdio entry', async () => {
+    // Local servers are declined, not deferred: running a packaged server means
+    // executing third-party code on the executor host, beside every session.
+    const entries = await loadCuratedCatalog();
+    expect(entries.filter((entry) => entry.transport === 'stdio')).toEqual([]);
   });
 });

@@ -61,10 +61,12 @@ describe('connectBlockedReason', () => {
     expect(connectBlockedReason(entry({ auth_type: 'unknown' }))).toBeUndefined();
   });
 
-  it('refuses a locally-run server', () => {
+  it('refuses an entry with no endpoint to dial', () => {
+    // Unreachable for anything the loader served — it refuses such an entry
+    // outright now — but these arrive over the wire, so the UI still answers.
     expect(
       connectBlockedReason(entry({ transport: 'stdio', has_remote: false, remote_url: undefined }))
-    ).toMatch(/runs locally/i);
+    ).toMatch(/cannot be installed/i);
   });
 
   it('allows oauth: connecting sets it up and the user signs in afterwards', () => {
@@ -95,7 +97,7 @@ describe('connectStatus', () => {
       connectStatus(entry({ transport: 'stdio', has_remote: false, remote_url: undefined }))
     ).toMatchObject({
       readiness: 'blocked',
-      label: 'Runs locally',
+      label: 'Not installable',
     });
     expect(connectStatus(entry({ auth_type: 'credentials' }))).toMatchObject({
       readiness: 'blocked',
@@ -131,7 +133,7 @@ describe('isConnectable', () => {
     expect(isConnectable(entry({ auth_type: 'oauth' }))).toBe(true);
   });
 
-  it('still excludes a local oauth server — no endpoint to sign into', () => {
+  it('still excludes an endpoint-less oauth entry — nothing to sign into', () => {
     expect(
       isConnectable(
         entry({ auth_type: 'oauth', transport: 'stdio', has_remote: false, remote_url: undefined })

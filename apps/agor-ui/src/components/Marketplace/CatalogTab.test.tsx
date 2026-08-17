@@ -440,13 +440,17 @@ describe('connect', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it('offers no connect control for a server that runs locally', async () => {
+  it('offers no connect control for an entry with no endpoint', async () => {
+    // The loader refuses such an entry now, so nothing served reaches this.
+    // Kept because the drawer renders whatever the wire hands it, and offering
+    // a Connect button over an entry with nothing to connect to is the failure
+    // this guards.
     catalogRows = [{ ...DEEPWIKI, has_remote: false, remote_url: undefined }];
     renderTab();
     fireEvent.click(await findCard('DeepWiki'));
     const drawer = await findDrawer();
 
-    expect(drawer.getByText(/runs locally/)).toBeVisible();
+    expect(drawer.getByText(/cannot be installed/)).toBeVisible();
     expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
     expect(drawer.queryByRole('checkbox')).not.toBeInTheDocument();
   });

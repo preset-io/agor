@@ -120,6 +120,55 @@ export function curatedCatalogPath(): string {
 }
 
 /**
+ * Refuse an entry the marketplace could offer but never install.
+ *
+ * The condition is connect's own: `assertConnectableEntry` refuses anything
+ * without a `remote_url`, and anything declaring `stdio`. An entry failing that
+ * is not a lesser entry, it is an unusable one — it renders a card, a category,
+ * a disclosure and a Connect affordance, and every route out of that card is a
+ * refusal. Two such entries shipped, and nothing in the file, the loader, or
+ * the tests objected; the marketplace simply had two shelves nobody could take
+ * anything off. That silence is the defect this closes. The rule is stated here
+ * so a file that cannot work fails where a curator is looking, rather than
+ * per-user at the point of pressing Connect.
+ *
+ * This does not replace connect's check, which stays. The loader constrains the
+ * checked-in file; connect authorizes a request, and the remote-only rule it
+ * enforces is a security boundary — `stdio` names a command the executor runs on
+ * its host, next to every session. A boundary that held only because an input
+ * file had been validated somewhere else would be one bad catalog source away
+ * from not holding at all.
+ *
+ * Local servers are not deferred by this, they are declined. Installing a
+ * package-based entry means executing third-party code on the executor host,
+ * which is a supply-chain decision rather than a credential one, and it is the
+ * risk the members-remote-only rule exists to contain. Whatever eventually
+ * offers local servers has to answer that question first, and will need its own
+ * fields to describe how the thing is run — the two removed entries carried
+ * none, because the package data that would have described them lived in the
+ * registry mirror. So this is not a rule to relax when local support lands; it
+ * is a rule that will be replaced by one that knows what it is admitting.
+ */
+function assertEntryIsServable(entry: {
+  name: string;
+  remote_url?: string;
+  transport?: MCPCatalogTransport;
+}): void {
+  if (entry.transport === 'stdio') {
+    throw new CuratedCatalogError(
+      `curated.yaml entry ${entry.name} declares transport: stdio, which the marketplace cannot install. ` +
+        'Give it the vendor\'s remote endpoint and a remote transport ("streamable-http" or "sse"), or remove the entry.'
+    );
+  }
+  if (!entry.remote_url) {
+    throw new CuratedCatalogError(
+      `curated.yaml entry ${entry.name} names no remote_url, so nothing could ever install it. ` +
+        'Add the vendor\'s remote MCP endpoint (and transport: "streamable-http" or "sse" if it is not the default), or remove the entry.'
+    );
+  }
+}
+
+/**
  * Parse the catalog file.
  *
  * Both top-level lists are one catalog: every entry in either is offered. The
@@ -132,6 +181,9 @@ export function curatedCatalogPath(): string {
  * Rejects duplicate `name`s and duplicate `popularity_rank`s across both lists:
  * either would make the marketplace's ordering depend on file order, which is
  * not something a reviewer can see in a diff.
+ *
+ * Rejects entries the catalog could never serve: see
+ * {@link assertEntryIsServable}.
  */
 export function parseCuratedCatalog(source: string): MCPCatalogEntry[] {
   let document: unknown;
@@ -156,6 +208,8 @@ export function parseCuratedCatalog(source: string): MCPCatalogEntry[] {
   const seenNames = new Set<string>();
   const seenRanks = new Map<number, string>();
   for (const entry of parsedEntries) {
+    assertEntryIsServable(entry);
+
     if (seenNames.has(entry.name)) {
       throw new CuratedCatalogError(`curated.yaml has duplicate entry name: ${entry.name}`);
     }
@@ -177,6 +231,12 @@ export function parseCuratedCatalog(source: string): MCPCatalogEntry[] {
     // Derived rather than stated: an entry is dialable exactly when it names an
     // endpoint, and a file that could disagree with itself about that would
     // offer a Connect button with nothing to connect to.
+    //
+    // Now always true, because {@link assertEntryIsServable} has already
+    // refused the file otherwise. Kept as a derivation rather than hardcoded:
+    // it states the reason a served entry is dialable, and it is what the
+    // consumers of `MCPCatalogEntry` — which still types `remote_url` as
+    // optional — read instead of re-deriving it.
     has_remote: Boolean(entry.remote_url),
     auth_type: entry.auth_type ?? 'unknown',
   }));

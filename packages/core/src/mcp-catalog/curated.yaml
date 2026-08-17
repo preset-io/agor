@@ -109,15 +109,6 @@ entries:
     transport: streamable-http
     auth_type: oauth
 
-  - name: com.auth0/mcp
-    category: dev-tools
-    capabilities: [deployments, logs]
-    benefit: Inspect and configure Auth0 tenants from the session instead of clicking through the dashboard.
-    starter_prompt: List the applications in my Auth0 tenant and flag any with an unusually permissive callback URL.
-    permission_disclosure: Reads and writes application, connection, and tenant configuration in the Auth0 tenants you authorise.
-    icon_url: https://www.google.com/s2/favicons?domain=auth0.com&sz=64
-    popularity_rank: 38
-
   - name: com.wix/mcp
     category: dev-tools
     capabilities: [deployments, content-cms]
@@ -166,15 +157,6 @@ entries:
     remote_url: https://mcp.airtable.com/mcp
     transport: streamable-http
     auth_type: oauth
-
-  - name: io.github.ClickHouse/mcp-clickhouse
-    category: data-storage
-    capabilities: [sql, analytics, schema]
-    benefit: Query ClickHouse directly so an agent can answer analytical questions instead of guessing at them.
-    starter_prompt: Describe my ClickHouse tables and run a query summarising events over the last seven days.
-    permission_disclosure: Runs SQL against the ClickHouse cluster you configure, with whatever access its credentials carry.
-    icon_url: https://www.google.com/s2/favicons?domain=clickhouse.com&sz=64
-    popularity_rank: 30
 
   - name: co.huggingface/hf-mcp-server
     category: data-storage

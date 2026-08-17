@@ -140,11 +140,28 @@ export interface ConnectStatus {
 }
 
 const CONNECT_STATUSES = {
-  local: {
+  /**
+   * An entry with no endpoint to dial.
+   *
+   * This used to read "Runs locally — an admin configures it directly", which
+   * described a capability that does not exist: the two entries it applied to
+   * carried no package or command data either, so there was no path to
+   * installing them for an admin or anyone else. The copy is gone with them,
+   * and the loader now refuses such an entry outright
+   * (`assertEntryIsServable`), so nothing served can reach this.
+   *
+   * The branch stays because `MCPCatalogEntry.remote_url` is optional and these
+   * entries arrive over the wire — the UI does not get to assume the loader
+   * that produced them was this one. What it must not do is describe the entry
+   * as a working feature; it says the marketplace cannot install it, which is
+   * true whatever produced it. If local servers are ever offered they arrive
+   * with fields describing how the server is run, and an affordance designed
+   * against those — not this string.
+   */
+  unavailable: {
     readiness: 'blocked',
-    label: 'Runs locally',
-    detail:
-      'This server runs locally rather than over the network. An admin configures it directly.',
+    label: 'Not installable',
+    detail: 'This entry names no endpoint to connect to, so it cannot be installed.',
   },
   signIn: {
     readiness: 'sign-in',
@@ -189,7 +206,8 @@ export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = ['none', 'oauth', 'u
 
 export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
   // `has_remote` is derived from `remote_url`, so testing the URL tests both.
-  if (!entry.remote_url || entry.transport === 'stdio') return CONNECT_STATUSES.local;
+  // Unreachable for anything the loader served; see `unavailable` above.
+  if (!entry.remote_url || entry.transport === 'stdio') return CONNECT_STATUSES.unavailable;
   if (entry.auth_type === 'credentials') return CONNECT_STATUSES.needsKey;
   if (entry.auth_type === 'oauth') return CONNECT_STATUSES.signIn;
   if (entry.auth_type !== 'none') return CONNECT_STATUSES.unchecked;
