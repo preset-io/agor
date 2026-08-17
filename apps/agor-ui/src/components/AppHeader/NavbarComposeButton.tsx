@@ -475,7 +475,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         content={content}
       >
         <Button
-          type="primary"
+          type="default"
           aria-label="Compose — ask your primary assistant"
           title="Ask your primary assistant"
           style={{

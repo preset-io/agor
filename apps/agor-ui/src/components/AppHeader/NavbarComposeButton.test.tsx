@@ -341,11 +341,12 @@ describe('NavbarComposeButton', () => {
     expect(onCreateSession.mock.calls[0][0].attachmentFiles).toHaveLength(1);
   });
 
-  it('gives the trigger and Send & Open primary weight, Send in Background secondary', async () => {
+  it('keeps the navbar trigger neutral (not primary) while Send & Open stays primary', async () => {
     renderCompose({ primary: primaryBranch });
+    // The collapsed trigger is a calm default button, not a loud primary CTA.
     expect(
       screen.getByRole('button', { name: 'Compose — ask your primary assistant' })
-    ).toHaveClass('ant-btn-primary');
+    ).not.toHaveClass('ant-btn-primary');
 
     openPopover();
     await screen.findByTestId('compose-prompt');
