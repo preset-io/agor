@@ -308,6 +308,12 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     return null;
   })();
 
+  const boardPhrase = primaryBranch
+    ? `${teammateName(primaryBranch)}'s board`
+    : "your primary assistant's board";
+  const openTooltip = `Creates the session and takes you there now, on ${boardPhrase}.`;
+  const backgroundTooltip = `Creates the session in the background, on ${boardPhrase} — check on it anytime.`;
+
   const content = (
     <div style={{ width: 680, maxWidth: '90vw' }}>
       <Typography.Text strong style={{ display: 'block', marginBottom: token.marginSM }}>
@@ -430,7 +436,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
           )}
 
           <Flex justify="flex-end" gap={token.marginXS}>
-            <Tooltip title="Send and stay here — come back to it later">
+            <Tooltip title={backgroundTooltip}>
               <Button
                 onClick={() => runSend('background')}
                 loading={submitting === 'background'}
@@ -439,7 +445,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
                 Send in Background
               </Button>
             </Tooltip>
-            <Tooltip title="Send and go to the session">
+            <Tooltip title={openTooltip}>
               <Button
                 type="primary"
                 onClick={() => runSend('open')}

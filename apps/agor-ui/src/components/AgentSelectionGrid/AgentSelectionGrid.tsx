@@ -96,9 +96,17 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
           options={visibleAgents.map((agent) => ({
             value: agent.id,
             label: (
-              <Space size={8}>
-                {/* height:0 keeps the icon from inflating the single-line control past controlHeight */}
-                <span style={{ display: 'inline-flex', height: 0, alignItems: 'center' }}>
+              <Space size={8} align="center">
+                {/* height:0 stops the badge inflating the single-line control; the small
+                    translate re-centers it (the badge is baseline-, not center-aligned). */}
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    height: 0,
+                    alignItems: 'center',
+                    transform: 'translateY(3px)',
+                  }}
+                >
                   <ToolIcon tool={agent.id} size={16} />
                 </span>
                 <span>{agent.name}</span>
