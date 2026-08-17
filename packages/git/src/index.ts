@@ -1191,18 +1191,18 @@ export interface CreateBranchAsCloneOptions {
   /**
    * Optional `git clone --reference <path>` object-cache borrow.
    *
-   * When set AND the path exists on the calling process's filesystem at
-   * runtime, this turns the per-branch `.git/objects/` into an `alternates`
-   * pointer at `<path>/.git/objects/` — disk drops from "full pack copy"
-   * (hundreds of MB for big repos) to "a few MB of refs/config". The
-   * config/credentials isolation that clone mode buys is preserved: only
+   * When set AND the path is a full Git repository on the calling process's
+   * filesystem at runtime, this turns the per-branch `.git/objects/` into an
+   * `alternates` pointer at `<path>/.git/objects/` — disk drops from "full
+   * pack copy" (hundreds of MB for big repos) to "a few MB of refs/config".
+   * The config/credentials isolation that clone mode buys is preserved: only
    * the immutable object store is shared with the daemon-owned base clone.
    *
-   * When set but the path does NOT exist (executor running in a different
-   * mount, base clone not yet seeded, etc.), the `--reference` flag is
-   * silently dropped and a regular clone runs — at higher disk cost but
-   * still correct. This lets the daemon hand the executor a "use this if
-   * you have it" hint without coupling the two filesystems.
+   * When set but the path is missing, invalid, or shallow (executor running
+   * in a different mount, base clone not yet seeded, etc.), the `--reference`
+   * flag is dropped and a regular clone runs — at higher disk cost but still
+   * correct. Git rejects shallow reference repositories outright, so this is
+   * part of the correctness fallback rather than only an optimization.
    *
    * NEVER paired with `--dissociate`: dissociate copies all reachable
    * objects out of the reference into the new clone (~equivalent to a
@@ -1352,21 +1352,37 @@ export async function createBranchAsClone(
   }
 
   // Resolve `--reference` opportunistically: caller passes the base-cache
-  // path they'd *like* to use; we check on this process's filesystem and
-  // either use it or fall back silently. This decouples the daemon's
-  // knowledge of "where the base clone lives" from the executor's
-  // filesystem reality, so future mount asymmetry (remote executors,
-  // hosted env-pods, etc.) doesn't break clone creation — it just costs
-  // more disk for branches that can't see the cache.
+  // path they'd *like* to use; we verify it is a full Git repository on this
+  // process's filesystem and otherwise fall back. Git refuses shallow
+  // reference repositories, while remote executors may see an absent or
+  // unrelated path. None of those cache-hint failures should prevent the
+  // authoritative remote clone from succeeding.
   let useReference = false;
   if (referencePath) {
-    if (existsSync(referencePath)) {
-      useReference = true;
-    } else {
+    if (!existsSync(referencePath)) {
       console.log(
         `[createBranchAsClone] referencePath '${referencePath}' not present on this filesystem — ` +
           `falling back to a full clone without --reference.`
       );
+    } else {
+      try {
+        const { git: referenceGit } = createGit(referencePath);
+        const rawGitDir = (await referenceGit.revparse(['--git-dir'])).trim();
+        const gitDir = isAbsolute(rawGitDir) ? rawGitDir : resolve(referencePath, rawGitDir);
+        if (existsSync(join(gitDir, 'shallow'))) {
+          console.log(
+            `[createBranchAsClone] referencePath '${referencePath}' is shallow — ` +
+              `falling back to a clone without --reference.`
+          );
+        } else {
+          useReference = true;
+        }
+      } catch (error) {
+        console.warn(
+          `[createBranchAsClone] referencePath '${referencePath}' is not a usable Git repository — ` +
+            `falling back to a clone without --reference: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
   }
 
