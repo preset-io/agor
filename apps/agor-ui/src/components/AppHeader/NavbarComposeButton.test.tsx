@@ -302,10 +302,10 @@ describe('NavbarComposeButton', () => {
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'hi' } });
 
     fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send & Open' }));
-    expect(await screen.findByText('Send and go to the session')).toBeInTheDocument();
+    expect(await screen.findByText(/takes you there now, on Ada's board/)).toBeInTheDocument();
 
     fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send in Background' }));
-    expect(await screen.findByText(/Send and stay here/)).toBeInTheDocument();
+    expect(await screen.findByText(/in the background, on Ada's board/)).toBeInTheDocument();
   });
 
   it('lets a dropped file be sent even with an empty prompt', async () => {
