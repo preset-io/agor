@@ -27,8 +27,16 @@ vi.mock('../../store/agorStore', () => ({
 }));
 
 vi.mock('../AgenticConfigChipRow', () => ({
-  AgenticConfigChipRow: ({ tool }: { tool: string }) => (
-    <div data-testid="config-chip-row" data-tool={tool} />
+  AgenticConfigChipRow: ({
+    tool,
+    leadingField,
+  }: {
+    tool: string;
+    leadingField?: React.ReactNode;
+  }) => (
+    <div data-testid="config-chip-row" data-tool={tool}>
+      {leadingField}
+    </div>
   ),
 }));
 
@@ -206,6 +214,8 @@ describe('NavbarComposeButton', () => {
     openPopover();
     expect(await screen.findByTestId('pick-teammate')).toBeInTheDocument();
     expect(screen.getByText(/don't have a primary assistant yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/default teammate for personal, ambient work/i)).toBeInTheDocument();
+    expect(screen.getByText(/change it anytime in Settings/i)).toBeInTheDocument();
   });
 
   it('shows the first-time hint once, then never again after dismissal', async () => {
@@ -242,10 +252,13 @@ describe('NavbarComposeButton', () => {
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({ agent: 'codex' });
   });
 
-  it('renders the agent picker as the compact select variant', async () => {
+  it('renders the agent picker as the compact select variant, co-located with the config row', async () => {
     renderCompose({ primary: primaryBranch });
     openPopover();
-    expect(await screen.findByTestId('agent-grid')).toHaveAttribute('data-variant', 'select');
+    const agentGrid = await screen.findByTestId('agent-grid');
+    expect(agentGrid).toHaveAttribute('data-variant', 'select');
+    // Agent field lives in the config row's leadingField slot (side-by-side layout).
+    expect(screen.getByTestId('config-chip-row')).toContainElement(agentGrid);
   });
 
   it('shows the resolved primary as a tag once resolved', async () => {
