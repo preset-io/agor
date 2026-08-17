@@ -1843,7 +1843,7 @@
     "operation": "call:realpathSync@canonicalizeExistingPath#1",
     "owner": "daemon host/operator runtime",
     "boundary": "deployment-local host capability",
-    "rationale": "Canonicalizes the daemon passwd home, the operator-configured data root, and the protected data roots before they become executor sandbox mount and mask arguments; every input is the daemon's own OS account or immutable startup configuration, not caller or tenant input.",
+    "rationale": "Canonicalizes the daemon passwd home, the operator-configured data root, and the protected data roots before they become executor sandbox mount and mask arguments; every input is the daemon's own OS account or immutable startup configuration, not caller or tenant input. Declared on the shared helper, so it is inherited by every caller of canonicalizeExistingPath: a new caller must be confirmed to pass a deployment-global path, since it will not surface here.",
     "reviewTarget": null,
     "reviewDate": null
   },
@@ -1857,7 +1857,7 @@
     "operation": "call:existsSync@canonicalizeExistingPath#1",
     "owner": "daemon host/operator runtime",
     "boundary": "deployment-local host capability",
-    "rationale": "Gates that canonicalization so a deployment path that does not exist yet resolves lexically instead of throwing; it stats the same daemon-account and operator-configured paths, and reads no content.",
+    "rationale": "Gates that canonicalization so a deployment path that does not exist yet resolves lexically instead of throwing; it stats the same daemon-account and operator-configured paths, reading metadata only. Inherited by every caller of canonicalizeExistingPath on the same terms as the realpathSync it guards.",
     "reviewTarget": null,
     "reviewDate": null
   },
