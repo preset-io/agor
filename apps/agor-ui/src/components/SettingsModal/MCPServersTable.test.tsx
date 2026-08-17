@@ -49,7 +49,8 @@ function makeClient(
   policy: MCPMemberPolicy,
   role: string | undefined,
   findError?: Error,
-  omitCanConfigure = false
+  omitCanConfigure = false,
+  findPending = false
 ) {
   // The daemon answers `can_configure` from the caller's role and the policy
   // together; the fake answers it the same way rather than inventing one, so a
@@ -57,9 +58,13 @@ function makeClient(
   const setting = omitCanConfigure
     ? ({ policy } as { policy: MCPMemberPolicy; can_configure: boolean })
     : { policy, can_configure: canConfigureMCPServers(role, policy) };
-  const find = findError
-    ? vi.fn().mockRejectedValue(findError)
-    : vi.fn().mockResolvedValue(setting);
+  const find = findPending
+    ? // Never settles, so the in-flight state holds still while it is asserted
+      // across both panes rather than racing the resolution.
+      vi.fn().mockReturnValue(new Promise<never>(() => {}))
+    : findError
+      ? vi.fn().mockRejectedValue(findError)
+      : vi.fn().mockResolvedValue(setting);
   const patch = vi.fn(async (_id: null, data: { policy: MCPMemberPolicy }) =>
     omitCanConfigure
       ? ({ ...data } as { policy: MCPMemberPolicy; can_configure: boolean })
@@ -83,12 +88,15 @@ function renderTable(options: {
   findError?: Error;
   /** Answer without the capability field, as a daemon of another version may. */
   omitCanConfigure?: boolean;
+  /** Hold the read in flight, for the state between mount and an answer. */
+  findPending?: boolean;
 }) {
   const { client, find, patch } = makeClient(
     options.policy,
     options.currentUser.role,
     options.findError,
-    options.omitCanConfigure
+    options.omitCanConfigure,
+    options.findPending
   );
   const mcpServerById = new Map(
     (options.servers ?? []).map((server) => [server.mcp_server_id, server])
@@ -108,20 +116,30 @@ function renderTable(options: {
 
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
-/** Open the admin's folded policy options, which sit behind a Change control. */
-const expandPolicy = () => fireEvent.click(screen.getByRole('button', { name: 'Change' }));
+/** Switch to the policy pane; the servers are what the tab opens on. */
+const openPolicyPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Member policy' }));
+const openServersPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Servers' }));
 
 describe('MCPServersTable member policy', () => {
+  it('opens on the servers, with the policy a pane away', async () => {
+    const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
+
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    // The table is what the tab is opened for, so nothing about the policy
+    // stands between the reader and it.
+    expect(screen.getByRole('tab', { name: 'Servers' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeInTheDocument();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+    expect(screen.queryByText(/One setting for the whole workspace/i)).not.toBeInTheDocument();
+  });
+
   it('lets an admin read the policy in plain language and change it', async () => {
     const { find, patch } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
 
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    // Folded, the value in force is the whole of what the admin is shown.
-    expect(screen.getByText('Use existing servers only')).toBeVisible();
-    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
-
-    expandPolicy();
+    openPolicyPane();
 
     expect(screen.getByText(/One setting for the whole workspace, not per user/i)).toBeVisible();
     const inForce = policyRadio(/Use existing servers only/);
@@ -134,10 +152,9 @@ describe('MCPServersTable member policy', () => {
     fireEvent.click(policyRadio(/Members can add shared servers/));
 
     await waitFor(() => expect(patch).toHaveBeenCalledWith(null, { policy: 'allow_crud' }));
-    // The header follows the value it was changed to, not the one it opened on.
-    await waitFor(() =>
-      expect(screen.getAllByText('Members can add shared servers').length).toBeGreaterThan(1)
-    );
+    // The pane follows the value it was changed to, not the one it opened on.
+    await waitFor(() => expect(policyRadio(/Members can add shared servers/)).toBeChecked());
+    expect(policyRadio(/Use existing servers only/)).not.toBeChecked();
   });
 
   it('shows a member the policy read-only, with the reason adding is refused', async () => {
@@ -145,11 +162,15 @@ describe('MCPServersTable member policy', () => {
 
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    // A choice a member does not have is stated, not rendered as a control.
+    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
+
+    // The pane is not admin-gated: the reader who is refused is the one who
+    // needs it. It states the choice rather than rendering one they lack.
+    openPolicyPane();
+
     expect(screen.getByText(/Use existing servers only/)).toBeVisible();
     expect(screen.getByText(/Only an admin can change it/i)).toBeVisible();
     expect(screen.queryByRole('radio')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
     expect(patch).not.toHaveBeenCalled();
   });
 
@@ -162,11 +183,18 @@ describe('MCPServersTable member policy', () => {
   });
 
   it('withholds the add action, without naming a policy, until the policy is known', () => {
-    // No `await`: this is the state between mount and the fetch resolving.
-    renderTable({ policy: 'allow_crud', currentUser: MEMBER });
+    // The read is held in flight: this is the state between mount and an answer.
+    renderTable({ policy: 'allow_crud', currentUser: MEMBER, findPending: true });
 
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
     expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
+
+    // The pane must not name the restrictive value it is falling back to either.
+    openPolicyPane();
+
+    expect(screen.queryByText(/Members can add shared servers/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Use existing servers only/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Only an admin can change it/i)).not.toBeInTheDocument();
   });
 
   it('offers a member only the transports the daemon accepts from them', async () => {
@@ -219,18 +247,23 @@ describe('MCPServersTable member policy', () => {
   });
 
   it('states no policy at all when the policy could not be read', async () => {
-    renderTable({
+    const { find } = renderTable({
       policy: 'allow_crud',
       currentUser: MEMBER,
       findError: new Error('Network request failed'),
     });
 
-    await waitFor(() => expect(screen.getByText('Network request failed')).toBeInTheDocument());
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
     // The workspace may well allow adding; the daemon was simply unreachable.
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
     expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
-    // The restrictive value the UI falls back to is not a policy to state.
+
+    openPolicyPane();
+
+    // The failure is what the pane has to report — the restrictive value the UI
+    // falls back to meanwhile is not a policy to state.
+    expect(screen.getByText('Network request failed')).toBeInTheDocument();
     expect(screen.queryByText(/Use existing servers only/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Only an admin can change it/i)).not.toBeInTheDocument();
   });
@@ -244,14 +277,16 @@ describe('MCPServersTable member policy', () => {
       findError: new Error('Network request failed'),
     });
 
-    await waitFor(() => expect(screen.getByText('Network request failed')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled()
+    );
 
-    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
-    expect(screen.queryByText('Members can add shared servers')).not.toBeInTheDocument();
+    openPolicyPane();
 
-    // The options stay reachable; none of them is presented as the one in force.
-    expandPolicy();
+    // The options render; none of them is presented as the one in force.
+    expect(screen.getByText('Network request failed')).toBeInTheDocument();
     expect(policyRadio(/Members can add shared servers/)).not.toBeChecked();
+    expect(policyRadio(/Use existing servers only/)).not.toBeChecked();
   });
 
   it('holds the edit form to the transports a member may switch to', async () => {
@@ -320,10 +355,11 @@ describe('MCPServersTable member policy', () => {
     });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    expandPolicy();
+    openPolicyPane();
     fireEvent.click(policyRadio(/Members can add shared servers/));
     await waitFor(() => expect(patch).toHaveBeenCalled());
 
+    openServersPane();
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeEnabled();
   });
 

@@ -27,6 +27,7 @@ import {
   Popconfirm,
   Space,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -66,6 +67,8 @@ interface MCPServersTableProps {
 /** How an unowned server reads: it is the workspace's, not nobody's. */
 const SHARED_OWNER_LABEL = 'Shared with workspace';
 const SHARED_OWNER_HINT = 'No owner — everyone in this workspace can use this server.';
+
+type ServersPaneKey = 'servers' | 'policy';
 
 const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…";
 const POLICY_UNREADABLE_HINT =
@@ -143,6 +146,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  // The servers are what the tab is opened for; the policy that governs them is
+  // a pane away rather than a band above them.
+  const [activePane, setActivePane] = useState<ServersPaneKey>('servers');
 
   // Sync editing server when mcpServerById updates (real-time WebSocket updates).
   // Also keeps the open edit modal in sync if the underlying record changes.
@@ -592,17 +598,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const canAdd = !policyPending && canAddMcpServer(capability);
 
-  return (
-    <div>
-      <MCPMemberPolicySetting
-        policy={memberPolicy.policy}
-        loading={memberPolicy.loading}
-        saving={memberPolicy.saving}
-        error={memberPolicy.error}
-        editable={capability.isAdmin}
-        onChange={memberPolicy.save}
-      />
-
+  const serversPane = (
+    <>
       <div
         style={{
           marginBottom: 16,
@@ -804,6 +801,33 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           </Descriptions>
         )}
       </Modal>
-    </div>
+    </>
+  );
+
+  return (
+    <Tabs
+      activeKey={activePane}
+      onChange={(key) => setActivePane(key as ServersPaneKey)}
+      items={[
+        { key: 'servers', label: 'Servers', children: serversPane },
+        {
+          key: 'policy',
+          // Ungated on purpose: this is the answer to "why is New MCP Server
+          // greyed out for me?", and the member who is refused is the reader who
+          // needs it.
+          label: 'Member policy',
+          children: (
+            <MCPMemberPolicySetting
+              policy={memberPolicy.policy}
+              loading={memberPolicy.loading}
+              saving={memberPolicy.saving}
+              error={memberPolicy.error}
+              editable={capability.isAdmin}
+              onChange={memberPolicy.save}
+            />
+          ),
+        },
+      ]}
+    />
   );
 };
