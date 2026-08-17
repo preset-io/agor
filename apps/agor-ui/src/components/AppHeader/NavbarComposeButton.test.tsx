@@ -204,15 +204,26 @@ describe('NavbarComposeButton', () => {
     renderCompose({ primary: primaryBranch });
     openPopover();
     expect(await screen.findByTestId('compose-prompt')).toBeInTheDocument();
-    expect(screen.getByText('Ask your primary assistant')).toBeInTheDocument();
+    expect(screen.getByText(/your primary assistant/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send & Open' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send in Background' })).toBeInTheDocument();
   });
 
-  it('explains the null-primary state above the inline picker', async () => {
+  it('merges the resolved primary name into the header line', async () => {
+    renderCompose({ primary: primaryBranch });
+    openPopover();
+    await screen.findByTestId('compose-prompt');
+    expect(screen.getByText(/your primary assistant/i)).toHaveTextContent(
+      'Ask Ada, your primary assistant'
+    );
+  });
+
+  it('explains the null-primary state above the inline picker (no name in header)', async () => {
     renderCompose({ primary: null });
     openPopover();
     expect(await screen.findByTestId('pick-teammate')).toBeInTheDocument();
+    // No resolved name yet, so the header stays generic (no broken/empty identity).
+    expect(screen.getByText('Ask your primary assistant')).toBeInTheDocument();
     expect(screen.getByText(/don't have a primary assistant yet/i)).toBeInTheDocument();
     expect(screen.getByText(/default teammate for personal, ambient work/i)).toBeInTheDocument();
     expect(screen.getByText(/change it anytime in Settings/i)).toBeInTheDocument();
@@ -261,12 +272,40 @@ describe('NavbarComposeButton', () => {
     expect(screen.getByTestId('config-chip-row')).toContainElement(agentGrid);
   });
 
-  it('shows the resolved primary as a tag once resolved', async () => {
-    renderCompose({ primary: primaryBranch });
+  it('shows a board-switch wayfinding line when the primary lives on another board', async () => {
+    renderCompose({ primary: primaryBranch, currentBoardId: 'board-current' });
     openPopover();
     await screen.findByTestId('compose-prompt');
-    // The tag renders the bare teammate name; the wayfinding sentence embeds it in prose.
-    expect(screen.getByText('Ada')).toBeInTheDocument();
+    expect(screen.getByText(/Opens on Ada/)).toBeInTheDocument();
+  });
+
+  it('shows the off-board wayfinding line on a non-board surface', async () => {
+    renderCompose({ primary: primaryBranch, currentBoardId: '', pathname: '/knowledge' });
+    openPopover();
+    await screen.findByTestId('compose-prompt');
+    expect(screen.getByText(/Opens a panel here/)).toBeInTheDocument();
+  });
+
+  it('omits the wayfinding line when already on the primary’s own board', async () => {
+    renderCompose({ primary: primaryBranch, currentBoardId: 'board-primary' });
+    openPopover();
+    await screen.findByTestId('compose-prompt');
+    expect(screen.queryByText(/Opens on/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Opens a panel here/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Creates a session/)).not.toBeInTheDocument();
+  });
+
+  it('gives both send buttons an explanatory tooltip', async () => {
+    renderCompose({ primary: primaryBranch });
+    openPopover();
+    // Enable the buttons first; AntD tooltips don't fire on disabled controls.
+    fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'hi' } });
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send & Open' }));
+    expect(await screen.findByText('Send and go to the session')).toBeInTheDocument();
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send in Background' }));
+    expect(await screen.findByText(/Send and stay here/)).toBeInTheDocument();
   });
 
   it('lets a dropped file be sent even with an empty prompt', async () => {

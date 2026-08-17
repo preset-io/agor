@@ -97,7 +97,10 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
             value: agent.id,
             label: (
               <Space size={8}>
-                <ToolIcon tool={agent.id} size={16} />
+                {/* height:0 keeps the icon from inflating the single-line control past controlHeight */}
+                <span style={{ display: 'inline-flex', height: 0, alignItems: 'center' }}>
+                  <ToolIcon tool={agent.id} size={16} />
+                </span>
                 <span>{agent.name}</span>
                 {agent.beta && <Tag color="warning">BETA</Tag>}
               </Space>
