@@ -114,6 +114,12 @@ function renderTable(options: {
   return { find, patch };
 }
 
+// The hints the servers pane gives instead of a policy it has not read. Matched
+// on their distinctive wording rather than imported, so a test cannot widen the
+// component's surface.
+const POLICY_LOADING_HINT = /Checking what this workspace's MCP policy allows/i;
+const POLICY_UNREADABLE_HINT = /MCP policy could not be read/i;
+
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
 /** Switch to the policy pane; the servers are what the tab opens on. */
@@ -182,11 +188,18 @@ describe('MCPServersTable member policy', () => {
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeEnabled();
   });
 
-  it('withholds the add action, without naming a policy, until the policy is known', () => {
+  it('withholds the add action, without naming a policy, until the policy is known', async () => {
     // The read is held in flight: this is the state between mount and an answer.
     renderTable({ policy: 'allow_crud', currentUser: MEMBER, findPending: true });
 
-    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
+    const add = screen.getByRole('button', { name: /New MCP Server/i });
+    expect(add).toBeDisabled();
+
+    // The reason has to be read from the tooltip: its content is rendered on
+    // hover, so asserting the absent phrase alone would prove nothing.
+    fireEvent.mouseOver(add);
+
+    expect(await screen.findByText(POLICY_LOADING_HINT)).toBeInTheDocument();
     expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
 
     // The pane must not name the restrictive value it is falling back to either.
@@ -256,7 +269,12 @@ describe('MCPServersTable member policy', () => {
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
     // The workspace may well allow adding; the daemon was simply unreachable.
-    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
+    const add = screen.getByRole('button', { name: /New MCP Server/i });
+    expect(add).toBeDisabled();
+
+    fireEvent.mouseOver(add);
+
+    expect(await screen.findByText(POLICY_UNREADABLE_HINT)).toBeInTheDocument();
     expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
 
     openPolicyPane();

@@ -68,8 +68,6 @@ interface MCPServersTableProps {
 const SHARED_OWNER_LABEL = 'Shared with workspace';
 const SHARED_OWNER_HINT = 'No owner — everyone in this workspace can use this server.';
 
-type ServersPaneKey = 'servers' | 'policy';
-
 const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…";
 const POLICY_UNREADABLE_HINT =
   "This workspace's MCP policy could not be read, so nothing is offered here.";
@@ -146,9 +144,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  // The servers are what the tab is opened for; the policy that governs them is
-  // a pane away rather than a band above them.
-  const [activePane, setActivePane] = useState<ServersPaneKey>('servers');
 
   // Sync editing server when mcpServerById updates (real-time WebSocket updates).
   // Also keeps the open edit modal in sync if the underlying record changes.
@@ -806,8 +801,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   return (
     <Tabs
-      activeKey={activePane}
-      onChange={(key) => setActivePane(key as ServersPaneKey)}
+      // The servers are what the tab is opened for; the policy that governs them
+      // is a pane away rather than a band above them.
+      defaultActiveKey="servers"
       items={[
         { key: 'servers', label: 'Servers', children: serversPane },
         {

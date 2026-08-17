@@ -14,9 +14,6 @@ import { Alert, Radio, Skeleton, Space, Typography, theme } from 'antd';
 import { MCP_MEMBER_POLICY_DESCRIPTIONS } from '../MCPServer/memberPolicy';
 
 const DESCRIPTION_ID_PREFIX = 'mcp-member-policy-';
-const TITLE = 'MCP member policy';
-/** Prose reads badly across a full settings pane; hold it to a column. */
-const PROSE_MAX_WIDTH = 720;
 
 export interface MCPMemberPolicySettingProps {
   policy: MCPMemberPolicy;
@@ -47,7 +44,8 @@ export const MCPMemberPolicySetting: React.FC<MCPMemberPolicySettingProps> = ({
     <Space
       orientation="vertical"
       size={token.marginMD}
-      style={{ width: '100%', maxWidth: PROSE_MAX_WIDTH }}
+      // Prose reads badly across a full settings pane; hold it to a column.
+      style={{ width: '100%', maxWidth: 720 }}
     >
       {error && <Alert type="error" showIcon title={error} />}
       {editable && (
@@ -61,7 +59,7 @@ export const MCPMemberPolicySetting: React.FC<MCPMemberPolicySettingProps> = ({
         <Skeleton active paragraph={{ rows: editable ? 3 : 1 }} title={false} />
       ) : editable ? (
         <Radio.Group
-          aria-label={TITLE}
+          aria-label="MCP member policy"
           value={known ? policy : undefined}
           disabled={!known || saving}
           onChange={(event) => onChange(event.target.value as MCPMemberPolicy)}
