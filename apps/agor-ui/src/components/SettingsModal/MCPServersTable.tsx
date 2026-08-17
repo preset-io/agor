@@ -21,6 +21,7 @@ import {
   Badge,
   Button,
   Descriptions,
+  Flex,
   Form,
   Input,
   Modal,
@@ -31,6 +32,7 @@ import {
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
@@ -116,6 +118,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
+  const { token } = theme.useToken();
   const memberPolicy = useMcpMemberPolicy(client);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   // Which transports a user may configure turns on role alone, so this is known
@@ -595,24 +598,20 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const serversPane = (
     <>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
+      <Flex vertical gap={token.marginSM} style={{ marginBottom: token.marginMD }}>
         <Typography.Text type="secondary">
           Configure Model Context Protocol servers for enhanced AI capabilities.
         </Typography.Text>
-        <Space>
+        {/* Search and add stay together at the end of their own row; the caption
+            above them keeps its full width instead of being squeezed into four
+            lines by a search box that cannot shrink. */}
+        <Flex justify="flex-end" align="center" gap={token.marginXS} wrap>
           <Input
             allowClear
             placeholder="Search name, owner, URL, command, tools, transport, or scope"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 360 }}
+            style={{ flex: '1 1 220px', maxWidth: 360 }}
           />
           {canAdd ? (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
@@ -627,8 +626,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
               </span>
             </Tooltip>
           )}
-        </Space>
-      </div>
+        </Flex>
+      </Flex>
 
       <Table
         dataSource={servers}

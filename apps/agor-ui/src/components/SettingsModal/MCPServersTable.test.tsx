@@ -122,7 +122,13 @@ const POLICY_UNREADABLE_HINT = /MCP policy could not be read/i;
 
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
-/** Switch to the policy pane; the servers are what the tab opens on. */
+/**
+ * Switch to the policy pane; the servers are what the tab opens on.
+ *
+ * A pane is mounted on first visit and kept hidden thereafter, so an assertion
+ * that the policy is absent holds only before the reader has been there — it is
+ * not yet mounted, rather than torn down on the way out.
+ */
 const openPolicyPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Member policy' }));
 const openServersPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Servers' }));
 
