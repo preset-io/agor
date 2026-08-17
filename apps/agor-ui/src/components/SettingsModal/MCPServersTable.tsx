@@ -598,14 +598,15 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const serversPane = (
     <>
-      <Flex vertical gap={token.marginSM} style={{ marginBottom: token.marginMD }}>
+      <Flex vertical gap={token.marginMD} style={{ marginBottom: token.marginMD }}>
         <Typography.Text type="secondary">
           Configure Model Context Protocol servers for enhanced AI capabilities.
         </Typography.Text>
-        {/* Search and add stay together at the end of their own row; the caption
-            above them keeps its full width instead of being squeezed into four
-            lines by a search box that cannot shrink. */}
-        <Flex justify="flex-end" align="center" gap={token.marginXS} wrap>
+        {/* Search and add take the ends of their own row, so the caption above
+            keeps its full width instead of being squeezed into four lines by a
+            search box that cannot shrink. The input's cap leaves the slack
+            between them as the gap. */}
+        <Flex justify="space-between" align="center" gap={token.marginXS} wrap>
           <Input
             allowClear
             placeholder="Search name, owner, URL, command, tools, transport, or scope"
