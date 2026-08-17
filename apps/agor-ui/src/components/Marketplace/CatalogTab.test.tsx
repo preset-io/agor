@@ -265,7 +265,7 @@ describe('catalog browsing', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
       target: { value: 'deep' },
     });
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
 
     await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
     expect(queryCard('DeepWiki')).toBeInTheDocument();
@@ -278,7 +278,7 @@ describe('catalog browsing', () => {
     await findCard('DeepWiki');
     expect(screen.queryByText(/servers match/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
     expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
   });
 
@@ -293,22 +293,22 @@ describe('catalog browsing', () => {
     renderTab();
     await findCard('DeepWiki');
 
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
 
     expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
     expect(queryCard('DeepWiki')).toBeInTheDocument();
     expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
   });
 
-  it('drops servers known to need an account', async () => {
+  it('drops servers known to need an API key', async () => {
     catalogRows = [
       { ...DEEPWIKI, auth_type: 'unknown' },
-      { ...LINEAR, auth_type: 'oauth' },
+      { ...LINEAR, auth_type: 'credentials' },
     ];
     renderTab();
     await findCard('Linear');
 
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
 
     await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
     expect(queryCard('DeepWiki')).toBeInTheDocument();

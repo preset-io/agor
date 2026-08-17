@@ -9,7 +9,12 @@
  */
 
 import type { MCPCatalogEntry } from '@agor/core/types';
-import { CheckCircleOutlined, LockOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import {
+  CheckCircleOutlined,
+  LockOutlined,
+  LoginOutlined,
+  QuestionCircleOutlined,
+} from '@ant-design/icons';
 import { Avatar, Card, Flex, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { memo } from 'react';
 import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
@@ -85,6 +90,11 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
           <Space size={token.marginXXS} align="center">
             {connect.readiness === 'ready' ? (
               <CheckCircleOutlined style={{ color: token.colorSuccess }} />
+            ) : connect.readiness === 'sign-in' ? (
+              // The icon a session already shows on a server awaiting sign-in
+              // (`MCPServerPill`), so the card and the thing it installs are
+              // recognisably about the same step.
+              <LoginOutlined style={{ color: token.colorTextTertiary }} />
             ) : connect.readiness === 'unchecked' ? (
               <QuestionCircleOutlined style={{ color: token.colorTextTertiary }} />
             ) : (

@@ -14,6 +14,8 @@ import {
   MCP_CATALOG_AUTHORED_AUTH_TYPES,
   MCP_CATALOG_CAPABILITIES,
   MCP_CATALOG_CATEGORIES,
+  MCP_OAUTH_COMPATIBILITY_MODES,
+  MCP_OAUTH_DCR_MODES,
 } from '@agor/core/types';
 import { z } from 'zod';
 import { load as loadYaml } from '../yaml';
@@ -42,6 +44,33 @@ const httpUrl = z.url().refine((value) => /^https?:\/\//i.test(value), {
   message: 'must be an http(s) URL',
 });
 
+/**
+ * The per-server OAuth settings an entry may state.
+ *
+ * `.strict()` is what keeps a secret out. The obvious mistake this file invites
+ * is pasting a whole OAuth client configuration into an entry, and the
+ * dangerous halves of one — `client_secret`, `token_url`, `authorization_url` —
+ * are exactly the keys someone would reach for. Under `.strict()` any of them
+ * fails the load loudly at review time and at daemon start, rather than being
+ * dropped in silence: a published client secret that nobody was told about is
+ * strictly worse than a catalog that will not parse. See
+ * {@link MCPCatalogEntryOAuth} for why each accepted key is accepted.
+ */
+const catalogEntryOAuthSchema = z
+  .object({
+    scope: nonEmpty.optional(),
+    client_id: nonEmpty.optional(),
+    dcr_mode: z.enum(MCP_OAUTH_DCR_MODES).optional(),
+    compatibility_mode: z.enum(MCP_OAUTH_COMPATIBILITY_MODES).optional(),
+  })
+  .strict()
+  // An `oauth: {}` that states nothing is a reviewer's leftover, and it reads
+  // as though something was configured. Absence is how an entry says "discover
+  // it all", and there should be exactly one way to say that.
+  .refine((value) => Object.values(value).some((field) => field !== undefined), {
+    message: 'must state at least one setting, or be omitted entirely',
+  });
+
 const catalogEntrySchema = z
   .object({
     name: nonEmpty,
@@ -62,6 +91,14 @@ const catalogEntrySchema = z
      * established it: absence is read as "not stated", never as "open".
      */
     auth_type: z.enum(MCP_CATALOG_AUTHORED_AUTH_TYPES).optional(),
+    /**
+     * Settings for the OAuth flow, used when connecting finds the endpoint
+     * wants one. Not gated on `auth_type`: the probe decides what an endpoint
+     * requires, so an entry stating `none` that has since been put behind an
+     * account still gets these, and an entry stating `oauth` that has been
+     * opened up simply never uses them.
+     */
+    oauth: catalogEntryOAuthSchema.optional(),
   })
   .strict();
 

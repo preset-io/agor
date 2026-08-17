@@ -111,17 +111,21 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
           <Col flex="none">
             <Space size={token.marginXS}>
               {/* Named for what it removes, because what it keeps includes
-                  endpoints nobody has checked yet. */}
-              <Tooltip title="Hides servers Agor knows need an account. Unchecked endpoints stay — connecting is what checks them.">
+                  endpoints nobody has checked yet. Servers that sign the user
+                  in are no longer among the removed: they connect, and the
+                  sign-in happens afterwards. What is left to remove is the
+                  servers wanting an API key, which the marketplace cannot
+                  set up at all. */}
+              <Tooltip title="Hides servers Agor knows need an API key, which cannot be set up here. Servers you sign into stay, and so do endpoints nobody has checked — connecting is what checks them.">
                 <Text type="secondary" style={{ cursor: 'help' }}>
-                  Hide account-only
+                  Hide key-only
                 </Text>
               </Tooltip>
               <Switch
                 size="small"
                 checked={connectableOnly}
                 onChange={onConnectableOnlyChange}
-                aria-label="Hide servers known to need an account"
+                aria-label="Hide servers known to need an API key"
               />
             </Space>
           </Col>

@@ -261,3 +261,88 @@ describe('loadCuratedCatalog', () => {
     expect(open.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+/**
+ * The `oauth:` block: what an entry may state about a server's sign-in flow.
+ *
+ * The block exists for servers that fall short of the MCP authorization spec's
+ * discovery chain. Everything a compliant server publishes about itself is
+ * fetched at the moment somebody signs in, so the shipped catalog states none
+ * of this — an authored fact about a third party's endpoint decays and nothing
+ * sweeps this file for rot.
+ */
+describe('parseCuratedCatalog — oauth settings', () => {
+  const withOAuth = (block: string) => `
+entries:
+  - name: com.example/mcp
+    category: dev-tools
+    capabilities: [issues]
+    benefit: Does a useful thing.
+    starter_prompt: Try the useful thing.
+    permission_disclosure: Reads your issues.
+    auth_type: oauth
+    oauth:
+${block}
+`;
+
+  it('accepts the settings a server may need stated', () => {
+    const [entry] = parseCuratedCatalog(
+      withOAuth(`      scope: read:issues write:issues
+      client_id: public-client-123
+      dcr_mode: fallback
+      compatibility_mode: legacy`)
+    );
+
+    expect(entry.oauth).toEqual({
+      scope: 'read:issues write:issues',
+      client_id: 'public-client-123',
+      dcr_mode: 'fallback',
+      compatibility_mode: 'legacy',
+    });
+  });
+
+  it.each([
+    ['client_secret', '      client_secret: sh-hunter2'],
+    ['token_url', '      token_url: https://example.com/token'],
+    ['authorization_url', '      authorization_url: https://example.com/authorize'],
+  ])('refuses %s, which does not belong in a public shared file', (_field, block) => {
+    // A client secret here is a published secret shared by every tenant. The
+    // two URLs are where an authorization code and a client credential get
+    // sent, so a stale one delivers a live grant to whatever now answers there
+    // — and they are the facts discovery is most reliable about. Failing the
+    // load is the point: a dropped key would be a silent leak.
+    expect(() => parseCuratedCatalog(withOAuth(block))).toThrow(CuratedCatalogError);
+  });
+
+  it('refuses an empty block, so absence is the only way to say "discover it"', () => {
+    expect(() => parseCuratedCatalog(withOAuth('      {}'))).toThrow(CuratedCatalogError);
+  });
+
+  it('refuses a mode it would silently ignore', () => {
+    expect(() => parseCuratedCatalog(withOAuth('      dcr_mode: whatever'))).toThrow(
+      CuratedCatalogError
+    );
+  });
+
+  it('leaves the block absent when an entry states nothing', () => {
+    const [entry] = parseCuratedCatalog(VALID_ENTRY);
+    expect(entry.oauth).toBeUndefined();
+  });
+});
+
+describe('the shipped catalog', () => {
+  it('states no oauth settings, because discovery covers every entry', async () => {
+    // Not a style rule: each of these is an authored claim about somebody
+    // else's endpoint that nothing in the running system can contradict, so an
+    // entry acquiring one should be a deliberate, reviewed exception rather
+    // than something that accumulates. Delete this expectation with the PR that
+    // adds the first justified one.
+    const entries = await loadCuratedCatalog();
+    expect(entries.filter((entry) => entry.oauth !== undefined)).toEqual([]);
+  });
+
+  it('carries no secret-shaped value anywhere in the file', async () => {
+    const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
+    expect(source).not.toMatch(/client_secret|token_url|authorization_url|api[_-]?key/i);
+  });
+});
