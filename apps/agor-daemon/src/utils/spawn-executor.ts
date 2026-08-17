@@ -50,7 +50,7 @@ import {
   untrackExecutorProcess,
 } from '../executor-tracking.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
-import { buildSandboxWrap } from './sandbox-wrap.js';
+import { buildSandboxWrap, type SandboxRuntimePaths } from './sandbox-wrap.js';
 
 let configuredDaemonUrl: string | null = null;
 
@@ -81,12 +81,13 @@ let requireExecutorTenantContext = false;
 /** Set default executor template + impersonation user from config. Call once at daemon startup. */
 export function configureExecutor(
   config?: ExecutorConfig | null,
-  options: { requireTenantContext?: boolean } = {}
+  options: { requireTenantContext?: boolean; sandboxRuntimePaths?: SandboxRuntimePaths } = {}
 ): void {
   configuredExecutorDefaults = {
     executorCommandTemplate: config?.executor_command_template || undefined,
     asUser: config?.executor_unix_user || undefined,
     sandbox: config?.sandbox?.enabled ? config.sandbox : undefined,
+    sandboxRuntimePaths: options.sandboxRuntimePaths,
   };
   requireExecutorTenantContext = options.requireTenantContext === true;
 
@@ -99,6 +100,9 @@ export function configureExecutor(
   }
   if (configuredExecutorDefaults.asUser) {
     console.log(`[Executor] Default impersonation user: ${configuredExecutorDefaults.asUser}`);
+  }
+  if (configuredExecutorDefaults.sandbox && !configuredExecutorDefaults.sandboxRuntimePaths) {
+    throw new Error('Sandbox executor configuration requires resolved runtime paths');
   }
 }
 
@@ -474,6 +478,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     | {
         sandboxBaseRepoPath?: unknown;
         sandboxHomeStore?: unknown;
+        sandboxWorktreesRoot?: unknown;
         principalBranchAccess?: unknown;
       }
     | undefined;
@@ -484,6 +489,10 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   const sandboxHomeStore =
     typeof sandboxParams?.sandboxHomeStore === 'string'
       ? sandboxParams.sandboxHomeStore
+      : undefined;
+  const sandboxWorktreesRoot =
+    typeof sandboxParams?.sandboxWorktreesRoot === 'string'
+      ? sandboxParams.sandboxWorktreesRoot
       : undefined;
   const principalBranchAccess =
     sandboxParams?.principalBranchAccess === 'read' ||
@@ -499,7 +508,9 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
         args,
         baseRepoPath: sandboxBaseRepoPath,
         ownerHomeStore: sandboxHomeStore,
+        worktreesRoot: sandboxWorktreesRoot,
         branchAccess: principalBranchAccess,
+        runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
       });
       if (wrap) {
         spawnCmd = wrap.cmd;
@@ -1510,6 +1521,8 @@ interface ExecutorSpawnDefaults {
   asUser?: string;
   /** OS-level sandbox policy (SRT) wrapped around every local executor spawn. */
   sandbox?: AgorExecutionSettings['sandbox'];
+  /** Deployment paths captured from the immutable startup configuration. */
+  sandboxRuntimePaths?: SandboxRuntimePaths;
 }
 
 /** DI-based factory that bakes execution config into a spawner, independent of module-level defaults. */

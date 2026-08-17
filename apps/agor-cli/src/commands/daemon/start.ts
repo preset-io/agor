@@ -67,7 +67,10 @@ export default class DaemonStart extends Command {
       this.log(chalk.bold('Starting Agor daemon in foreground...'));
       try {
         const daemonModule = await this.importDaemonModule();
-        await daemonModule.startDaemon({ config });
+        await daemonModule.startDaemon({
+          config,
+          ...(flags.config ? { configPath: resolve(flags.config) } : {}),
+        });
       } catch (error) {
         this.log(chalk.red('Failed to start daemon:'));
         this.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));

@@ -181,6 +181,10 @@ import {
 } from './utils/realtime-access-cache.js';
 import { configureRealtimePublish } from './utils/realtime-publish.js';
 import {
+  resolveSandboxProtectedDataRoots,
+  validateFilesystemHomeOverride,
+} from './utils/sandbox-context.js';
+import {
   ensureCurrentScheduleLoaded,
   ensureScheduleRunsAsCaller,
   recomputeNextRunAt,
@@ -710,6 +714,41 @@ export function authorizeUsersGet(context: HookContext): HookContext {
   }
 
   ensureMinimumRole(params, ROLES.MEMBER, 'view users');
+  return context;
+}
+
+/** Protect and canonicalize the admin-owned host path used for sandbox homes. */
+export function protectFilesystemHomeWrite(context: HookContext, config: AgorConfig): HookContext {
+  const records = Array.isArray(context.data) ? context.data : [context.data];
+  const writesFilesystemHome = records.some(
+    (record) => record && Object.hasOwn(record as object, 'filesystem_home')
+  );
+  if (!writesFilesystemHome) return context;
+
+  const params = context.params as AuthenticatedParams;
+  if (params.provider && !hasMinimumRole(params.user?.role, ROLES.ADMIN)) {
+    throw new Forbidden('Only admins can modify filesystem_home');
+  }
+
+  const protectedDataRoots = resolveSandboxProtectedDataRoots(config);
+  for (const record of records) {
+    if (!record || !Object.hasOwn(record as object, 'filesystem_home')) continue;
+    const writable = record as Record<string, unknown>;
+    const value = writable.filesystem_home;
+    if (value === null) continue;
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new BadRequest('filesystem_home must be a non-empty absolute path or null');
+    }
+    try {
+      let validated = value.trim();
+      for (const root of protectedDataRoots) {
+        validated = validateFilesystemHomeOverride(validated, root);
+      }
+      writable.filesystem_home = validated;
+    } catch (error) {
+      throw new BadRequest(error instanceof Error ? error.message : String(error));
+    }
+  }
   return context;
 }
 
@@ -2521,6 +2560,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       get: [authorizeUsersGet],
       create: [
+        (context) => protectFilesystemHomeWrite(context, config),
         async (context: HookContext<Board>) => {
           const params = context.params as AuthenticatedParams;
 
@@ -2548,13 +2588,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       patch: [
+        (context) => protectFilesystemHomeWrite(context, config),
         async (context) => {
           const params = context.params as AuthenticatedParams;
           const userId = context.id as string;
           const callerRole = params.user?.role;
           const callerIsAdmin = hasMinimumRole(callerRole, ROLES.ADMIN);
 
-          // Field-level restrictions: only admins can modify unix_username, role, and must_change_password
+          // Field-level restrictions: only admins can modify unix_username, role, and must_change_password.
+          // filesystem_home is protected and validated by the preceding hook.
           if (!Array.isArray(context.data)) {
             if (context.data?.unix_username !== undefined) {
               if (!callerIsAdmin) {

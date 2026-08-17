@@ -1116,7 +1116,14 @@ export function resolveEffectiveConfig(
       // is what the mount policy enforces). Force it on last so it wins.
       ...(sandboxIsolation ? { branch_rbac: true } : {}),
     },
-    paths: { ...defaults.paths, ...config.paths },
+    paths: {
+      ...defaults.paths,
+      ...config.paths,
+      // Project the deployment override into the immutable effective snapshot.
+      // Runtime services must consume this value instead of consulting the
+      // environment or re-reading config.yaml on each request.
+      ...(env.AGOR_DATA_HOME ? { data_home: expandHomePath(env.AGOR_DATA_HOME) } : {}),
+    },
     analytics: { ...defaults.analytics, ...config.analytics },
     telemetry: {
       ...defaults.telemetry,
@@ -1129,6 +1136,36 @@ export function resolveEffectiveConfig(
     uploads: { ...defaults.uploads, ...config.uploads },
     multi_tenancy: { ...defaults.multi_tenancy, ...config.multi_tenancy },
   };
+}
+
+/**
+ * Reject execution combinations that the local filesystem sandbox cannot
+ * enforce. Call this on the resolved effective config so environment-derived
+ * settings are covered as well as YAML settings.
+ */
+export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
+  const execution = config.execution;
+  if (execution?.sandbox?.enabled !== true) return;
+
+  const mode = execution.unix_user_mode ?? 'simple';
+  if (mode === 'strict' || mode === 'insulated') {
+    throw new Error(
+      `execution.sandbox.enabled is incompatible with unix_user_mode: ${mode}. ` +
+        'Use unix_user_mode: sandbox for local bubblewrap isolation, or disable the sandbox.'
+    );
+  }
+  if (execution.executor_unix_user) {
+    throw new Error(
+      'execution.sandbox.enabled is incompatible with execution.executor_unix_user because ' +
+        'the local sandbox does not wrap impersonated executor processes.'
+    );
+  }
+  if (execution.executor_command_template) {
+    throw new Error(
+      'execution.sandbox.enabled is incompatible with execution.executor_command_template because ' +
+        'templated executors run outside the daemon local sandbox. Enforce isolation in the external substrate instead.'
+    );
+  }
 }
 
 export function formatConfigYaml(config: AgorConfig): string {
@@ -1768,10 +1805,7 @@ export function getDataHome(): string {
 
   // 2. Check config file
   try {
-    const config = loadConfigSync();
-    if (config.paths?.data_home) {
-      return expandHomePath(config.paths.data_home);
-    }
+    return resolveDataHomeFromConfig(loadConfigSync());
   } catch {
     // Config load failed, fall through to default
   }
@@ -1780,11 +1814,24 @@ export function getDataHome(): string {
   return getAgorHome();
 }
 
+/** Resolve the data root from an already-loaded config snapshot. */
+export function resolveDataHomeFromConfig(
+  config: { readonly paths?: { readonly data_home?: string } },
+  agorHome = getAgorHome()
+): string {
+  return config.paths?.data_home ? expandHomePath(config.paths.data_home) : agorHome;
+}
+
 /**
  * Pure tenant-data-root policy shared by sync and async config loaders.
  */
-function resolveTenantDataRoot(
-  config: AgorConfig,
+export function resolveTenantDataRootFromConfig(
+  config: {
+    readonly multi_tenancy?: {
+      readonly filesystem_isolation_enabled?: boolean;
+      readonly tenants_base_folder?: string;
+    };
+  },
   dataHome: string,
   agorHome: string,
   tenantId?: string
@@ -1806,12 +1853,18 @@ function resolveTenantDataRoot(
     );
   }
 
-  const configuredBase = config.multi_tenancy.tenants_base_folder || '~/.agor/tenants';
-  const expandedBase = expandHomePath(configuredBase);
-  const tenantsBase = path.isAbsolute(expandedBase)
-    ? expandedBase
-    : path.resolve(agorHome, expandedBase);
+  const tenantsBase = resolveTenantsBaseFolderFromConfig(config, agorHome);
   return path.join(tenantsBase, normalizedTenantId);
+}
+
+/** Resolve the configured parent of all filesystem-isolated tenant roots. */
+export function resolveTenantsBaseFolderFromConfig(
+  config: { readonly multi_tenancy?: { readonly tenants_base_folder?: string } },
+  agorHome = getAgorHome()
+): string {
+  const configuredBase = config.multi_tenancy?.tenants_base_folder || '~/.agor/tenants';
+  const expandedBase = expandHomePath(configuredBase);
+  return path.isAbsolute(expandedBase) ? expandedBase : path.resolve(agorHome, expandedBase);
 }
 
 /**
@@ -1822,7 +1875,7 @@ function resolveTenantDataRoot(
  * `<tenants_base_folder>/<tenantId>`.
  */
 export function getTenantDataRoot(tenantId?: string): string {
-  return resolveTenantDataRoot(loadConfigSync(), getDataHome(), getAgorHome(), tenantId);
+  return resolveTenantDataRootFromConfig(loadConfigSync(), getDataHome(), getAgorHome(), tenantId);
 }
 
 /**
@@ -1899,7 +1952,7 @@ export async function getDataHomeAsync(): Promise<string> {
 /** Async counterpart to {@link getTenantDataRoot}. */
 export async function getTenantDataRootAsync(tenantId?: string): Promise<string> {
   const [config, dataHome] = await Promise.all([loadConfig(), getDataHomeAsync()]);
-  return resolveTenantDataRoot(config, dataHome, getAgorHome(), tenantId);
+  return resolveTenantDataRootFromConfig(config, dataHome, getAgorHome(), tenantId);
 }
 
 /**

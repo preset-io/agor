@@ -153,8 +153,10 @@ violate the contract). Only non-security policy tunables under
 `execution.sandbox.*` (e.g. `include.*`, `extra_allow_write`, `extra_deny_read`)
 are honored. If you want a _tunable_ standalone sandbox, use a non-`sandbox`
 `unix_user_mode` with `sandbox.enabled: true` and set those explicitly. See the
-design notes in `context/explorations/executor-sandboxing.md`. No sudoers, no
-Unix accounts.
+design notes in `context/explorations/executor-sandboxing.md`. Sandbox settings
+cannot be combined with `strict`, `insulated`, `executor_unix_user`, or an
+`executor_command_template`; the daemon rejects those unsupported combinations
+at startup. No sudoers, no Unix accounts.
 
 Hosts that symlink the daemon home to another filesystem location can preserve
 that canonical alias for path-keyed SDK state created before migration:

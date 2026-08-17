@@ -23,8 +23,7 @@
  */
 
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   type AgorSandboxSettings,
   resolveBwrapArgs,
@@ -36,6 +35,21 @@ export interface SandboxWrap {
   cmd: string;
   args: string[];
   extraEnv: Record<string, string>;
+}
+
+/** Deployment paths resolved once from the daemon's immutable startup state. */
+export interface SandboxRuntimePaths {
+  homeDir: string;
+  dataHome: string;
+  protectedDataRoots: string[];
+  worktreesRoot: string;
+  agenticToolsPath: string;
+  agorConfigPath: string;
+  agorDbPath?: string;
+}
+
+function canonicalizeExistingPath(path: string): string {
+  return existsSync(path) ? realpathSync(path) : resolve(path);
 }
 
 // FUNCTIONAL availability: bwrap must be on PATH AND able to create an
@@ -88,10 +102,24 @@ export function buildSandboxWrap(params: {
   args: string[];
   baseRepoPath?: string;
   ownerHomeStore?: string;
+  /** Tenant-scoped worktrees root resolved from the immutable config. */
+  worktreesRoot?: string;
   /** RBAC-resolved fs access of the session owner to the branch. Default 'write'. */
   branchAccess?: 'write' | 'read' | 'none';
+  /** Immutable deployment paths injected by configureExecutor at startup. */
+  runtimePaths: SandboxRuntimePaths;
 }): SandboxWrap | null {
-  const { sandbox, branchPath, cmd, args, baseRepoPath, ownerHomeStore, branchAccess } = params;
+  const {
+    sandbox,
+    branchPath,
+    cmd,
+    args,
+    baseRepoPath,
+    ownerHomeStore,
+    worktreesRoot,
+    branchAccess,
+    runtimePaths,
+  } = params;
   if (!sandbox?.enabled) return null;
 
   const unavailableReason =
@@ -111,8 +139,8 @@ export function buildSandboxWrap(params: {
     return null;
   }
 
-  const home = homedir();
-  const dataHome = process.env.AGOR_DATA_HOME?.trim() || join(home, '.agor');
+  const home = runtimePaths.homeDir;
+  const dataHome = runtimePaths.dataHome;
 
   const perUser = sandbox.home_mode === 'per_user' && !!ownerHomeStore;
   if (perUser) {
@@ -137,17 +165,19 @@ export function buildSandboxWrap(params: {
     branchAccess,
     pidNamespace: pidNamespaceAvailable(),
     homeDir: home,
-    canonicalHomeDir: realpathSync(home),
+    canonicalHomeDir: canonicalizeExistingPath(home),
     dataHome,
-    canonicalDataHome: realpathSync(dataHome),
-    // Worktrees root is <dataHome>/worktrees regardless of repo-slug depth
-    // (slugs contain "/", so deriving from cwd is unreliable).
-    worktreesRoot: join(dataHome, 'worktrees'),
+    canonicalDataHome: canonicalizeExistingPath(dataHome),
+    protectedDataRoots: runtimePaths.protectedDataRoots.flatMap((root) => [
+      root,
+      canonicalizeExistingPath(root),
+    ]),
+    worktreesRoot: worktreesRoot ?? runtimePaths.worktreesRoot,
     baseRepoPath,
     ownerHomeStore: perUser ? ownerHomeStore : undefined,
-    agenticToolsPath: perUser ? join(dataHome, 'agentic-tools') : undefined,
-    agorConfigPath: join(dataHome, 'config.yaml'),
-    agorDbPath: join(dataHome, 'agor.db'),
+    agenticToolsPath: perUser ? runtimePaths.agenticToolsPath : undefined,
+    agorConfigPath: runtimePaths.agorConfigPath,
+    agorDbPath: runtimePaths.agorDbPath,
   };
 
   const bwrapArgs = dropMasksForMissingTargets(resolveBwrapArgs(sandbox, ctx));

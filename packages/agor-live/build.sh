@@ -411,6 +411,11 @@ mkdir -p "$RELEASE_DIR"
 for directory in "${INTEGRATION_DIRS[@]}" "$CLIENT_DIR"; do
   npm pack --ignore-scripts --pack-destination "$RELEASE_DIR" "$directory" >/dev/null
 done
+CLIENT_TARBALL="$RELEASE_DIR/agor-live-client-$NEW_VERSION.tgz"
+if [[ ! -f "$CLIENT_TARBALL" ]]; then
+  echo "  ✗ @agor-live/client pack did not produce the expected tarball: $CLIENT_TARBALL"
+  exit 1
+fi
 LIVE_TARBALL=$(node "$SCRIPT_DIR/scripts/pack-release.mjs" \
   --destination "$RELEASE_DIR" --internal-root "$INTERNAL_STAGE")
 if [[ -z "$LIVE_TARBALL" || ! -f "$LIVE_TARBALL" ]]; then
@@ -434,4 +439,6 @@ tree -L 2 -d "$SCRIPT_DIR/dist" 2>/dev/null || find "$SCRIPT_DIR/dist" -type d -
 echo ""
 echo "🚀 Next steps:"
 echo "  Review artifacts in $RELEASE_DIR"
+printf "  Install this exact build: sudo npm install -g %q %q\n" "$CLIENT_TARBALL" "$LIVE_TARBALL"
+echo "  Then run the deployment's operator-controlled stop → migrate → start sequence"
 echo "  Merge the version-bump PR, then push v$NEW_VERSION to run the protected release workflow"

@@ -203,7 +203,7 @@ import {
   isSessionMcpServerLinkVisibleToCaller,
   loadMcpServerForCaller,
 } from './utils/mcp-server-authorization.js';
-import { resolveOwnerHomeStore } from './utils/sandbox-context.js';
+import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
@@ -1003,6 +1003,10 @@ function createExecuteHandler(
     const rbacOn = config.execution?.branch_rbac === true;
     let cwd = process.cwd();
     let sandboxBaseRepoPath: string | undefined;
+    const sandboxWorktreesRoot =
+      sandboxCfg?.enabled === true
+        ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
+        : undefined;
     // Effective fs access of the OWNER on the branch: 'write' | 'read' | 'none'.
     // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
     // to 'write' when RBAC is off (open-access behavior).
@@ -1066,6 +1070,7 @@ function createExecuteHandler(
           .then((u) => u?.filesystem_home?.trim() || undefined)
       );
       sandboxHomeStore = resolveOwnerHomeStore({
+        config,
         tenantId,
         ownerUserId: session.created_by,
         filesystemHome: ownerFilesystemHome,
@@ -1229,6 +1234,7 @@ function createExecuteHandler(
         // buildSandboxWrap). Undefined when the sandbox / per_user home is off.
         sandboxBaseRepoPath,
         sandboxHomeStore,
+        sandboxWorktreesRoot,
         principalBranchAccess,
       },
     };

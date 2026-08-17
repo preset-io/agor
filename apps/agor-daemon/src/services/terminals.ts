@@ -41,7 +41,7 @@ import {
 } from '../terminal-socket-connection.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
-import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
+import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -289,6 +289,10 @@ export class TerminalsService {
     const rbacOn = config.execution?.branch_rbac === true;
     let sandboxHomeStore: string | undefined;
     let sandboxBaseRepoPath: string | undefined;
+    const sandboxWorktreesRoot =
+      sandboxCfg?.enabled === true
+        ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
+        : undefined;
     let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
     if (sandboxCfg?.enabled === true) {
       if (branch.storage_mode !== 'clone' && branch.repo_id) {
@@ -312,6 +316,7 @@ export class TerminalsService {
       }
       if (sandboxCfg.home_mode === 'per_user') {
         sandboxHomeStore = resolveOwnerHomeStore({
+          config,
           tenantId,
           ownerUserId: userId,
           filesystemHome: user?.filesystem_home,
@@ -378,6 +383,7 @@ export class TerminalsService {
             // Undefined when the sandbox / per_user home is off.
             sandboxHomeStore,
             sandboxBaseRepoPath,
+            sandboxWorktreesRoot,
             principalBranchAccess,
           },
         },

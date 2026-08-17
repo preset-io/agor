@@ -104,6 +104,8 @@ export interface SandboxPathContext {
   dataHome?: string;
   /** Canonical target of {@link dataHome}, for the same alias protection. */
   canonicalDataHome?: string;
+  /** Additional deployment data roots (for example a custom tenants base). */
+  protectedDataRoots?: string[];
   /** The worktrees root containing every branch dir. Required for `isolate_branches`. */
   worktreesRoot?: string;
   /**
@@ -222,15 +224,25 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // files visible. Mask that root, then re-expose only the authorized paths
     // below. Bubblewrap resolves bind sources before applying these mounts, so
     // owner stores/branches beneath the masked root remain valid sources.
-    const dataHomes = [ctx.dataHome, ctx.canonicalDataHome].filter(
-      (path): path is string => !!path
-    );
+    const dataHomes = [
+      ctx.dataHome,
+      ctx.canonicalDataHome,
+      ...(ctx.protectedDataRoots ?? []),
+    ].filter((path): path is string => !!path);
     for (const dataHome of dataHomes) {
       if (!isAbsolute(dataHome) || dataHome === '/') {
         throw new Error(`Invalid sandbox data root ${dataHome}: expected an absolute path below /`);
       }
       if (!homeDirs.some((homeDir) => isPathWithin(dataHome, homeDir))) {
         hiddenRoots.add(dataHome);
+      }
+    }
+    // Keep only outermost masks. Applying a tmpfs to a parent removes nested
+    // mountpoints, so emitting another tmpfs for a child could make bwrap fail
+    // even though the broader parent mask already provides the protection.
+    for (const root of [...hiddenRoots]) {
+      if ([...hiddenRoots].some((parent) => parent !== root && isPathWithin(root, parent))) {
+        hiddenRoots.delete(root);
       }
     }
     for (const root of hiddenRoots) args.push('--tmpfs', root);

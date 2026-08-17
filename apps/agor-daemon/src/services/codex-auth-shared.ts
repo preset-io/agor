@@ -179,6 +179,7 @@ export async function resolveCodexUnixIdentity(
       );
       codexHome = join(
         resolveOwnerHomeStore({
+          config,
           tenantId,
           ownerUserId: userId,
           filesystemHome: row?.filesystem_home,

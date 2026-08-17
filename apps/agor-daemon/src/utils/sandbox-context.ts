@@ -9,12 +9,61 @@
  */
 
 import { existsSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
+import {
+  type AgorConfig,
+  getAgorHome,
+  resolveDataHomeFromConfig,
+  resolveTenantDataRootFromConfig,
+  resolveTenantsBaseFolderFromConfig,
+} from '@agor/core/config';
+import type { DeepReadonly } from '@agor/core/types';
 
-/** Resolve `$AGOR_DATA_HOME`, falling back to `~/.agor`. */
-export function resolveDataHome(): string {
-  return process.env.AGOR_DATA_HOME?.trim() || join(homedir(), '.agor');
+export interface SandboxStoragePaths {
+  dataHome: string;
+  protectedDataRoots: string[];
+  worktreesRoot: string;
+  ownerHomesRoot: string;
+}
+
+/** Resolve tenant-aware sandbox storage paths from the immutable config snapshot. */
+export function resolveSandboxStoragePaths(
+  config: DeepReadonly<AgorConfig>,
+  tenantId: string | undefined
+): SandboxStoragePaths {
+  const agorHome = getAgorHome();
+  const dataHome = resolveDataHomeFromConfig(config, agorHome);
+  const filesystemIsolation = config.multi_tenancy?.filesystem_isolation_enabled === true;
+  const tenantDataRoot = filesystemIsolation
+    ? resolveTenantDataRootFromConfig(config, dataHome, agorHome, tenantId)
+    : dataHome;
+  const protectedDataRoots = [dataHome];
+  if (filesystemIsolation) {
+    protectedDataRoots.push(resolveTenantsBaseFolderFromConfig(config, agorHome));
+  }
+  return {
+    dataHome,
+    protectedDataRoots: [...new Set(protectedDataRoots)],
+    worktreesRoot: join(tenantDataRoot, 'worktrees'),
+    ownerHomesRoot: filesystemIsolation
+      ? join(tenantDataRoot, 'homes')
+      : join(
+          dataHome,
+          'tenants',
+          tenantId ?? config.multi_tenancy?.static_tenant_id ?? 'default',
+          'homes'
+        ),
+  };
+}
+
+/** Resolve deployment-global roots that a per-user sandbox must hide. */
+export function resolveSandboxProtectedDataRoots(config: DeepReadonly<AgorConfig>): string[] {
+  const agorHome = getAgorHome();
+  const roots = [resolveDataHomeFromConfig(config, agorHome)];
+  if (config.multi_tenancy?.filesystem_isolation_enabled === true) {
+    roots.push(resolveTenantsBaseFolderFromConfig(config, agorHome));
+  }
+  return [...new Set(roots)];
 }
 
 /**
@@ -25,10 +74,7 @@ export function resolveDataHome(): string {
  * re-expose `config.yaml`/`agor.db`/worktrees). Canonicalizes via `realpath`
  * when the dir already exists to blunt symlink swaps. Throws on violation.
  */
-export function validateFilesystemHomeOverride(
-  rawPath: string,
-  dataHome = resolveDataHome()
-): string {
+export function validateFilesystemHomeOverride(rawPath: string, dataHome: string): string {
   // Reject relative paths OUTRIGHT — do not silently `resolve()` them against
   // the daemon cwd (a value like `tmp/user` would otherwise be accepted).
   if (!isAbsolute(rawPath)) {
@@ -60,13 +106,19 @@ export function validateFilesystemHomeOverride(
  * construction and needs no validation.
  */
 export function resolveOwnerHomeStore(params: {
+  config: DeepReadonly<AgorConfig>;
   tenantId: string | undefined;
   ownerUserId: string;
   filesystemHome?: string | null;
-  dataHome?: string;
 }): string {
-  const dataHome = params.dataHome ?? resolveDataHome();
+  const storage = resolveSandboxStoragePaths(params.config, params.tenantId);
   const override = params.filesystemHome?.trim();
-  if (override) return validateFilesystemHomeOverride(override, dataHome);
-  return join(dataHome, 'tenants', params.tenantId ?? 'default', 'homes', params.ownerUserId);
+  if (override) {
+    let validated = override;
+    for (const root of storage.protectedDataRoots) {
+      validated = validateFilesystemHomeOverride(validated, root);
+    }
+    return validated;
+  }
+  return join(storage.ownerHomesRoot, params.ownerUserId);
 }

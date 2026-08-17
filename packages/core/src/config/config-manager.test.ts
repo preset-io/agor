@@ -9,6 +9,7 @@ import * as yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
+  assertValidEffectiveExecutionConfig,
   createInitialConfig,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
@@ -118,6 +119,14 @@ describe('resolveEffectiveConfig', () => {
     expect(input).toEqual({ daemon: { host: 'yaml-host', port: 1234 } });
   });
 
+  it('projects AGOR_DATA_HOME into the effective config snapshot', () => {
+    const resolved = resolveEffectiveConfig(
+      { paths: { data_home: '/from-yaml' } },
+      { AGOR_DATA_HOME: '/from-environment' }
+    );
+    expect(resolved.paths?.data_home).toBe('/from-environment');
+  });
+
   it('keeps Unix executor impersonation opt-in while preserving explicit overrides', () => {
     expect(
       resolveEffectiveConfig(
@@ -203,6 +212,67 @@ describe('resolveEffectiveConfig', () => {
     );
     expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
     expect(resolved.execution?.branch_rbac).not.toBe(true); // not sandbox mode → no forced RBAC
+  });
+});
+
+describe('assertValidEffectiveExecutionConfig', () => {
+  it.each(['strict', 'insulated'] as const)(
+    'rejects sandboxing combined with %s Unix mode',
+    (unix_user_mode) => {
+      expect(() =>
+        assertValidEffectiveExecutionConfig({
+          execution: { unix_user_mode, sandbox: { enabled: true } },
+        })
+      ).toThrow(/incompatible/);
+    }
+  );
+
+  it('rejects sandboxing combined with a local impersonation user', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          unix_user_mode: 'simple',
+          executor_unix_user: 'agor_executor',
+          sandbox: { enabled: true },
+        },
+      })
+    ).toThrow(/executor_unix_user/);
+  });
+
+  it('rejects unsupported combinations introduced entirely by environment overrides', () => {
+    const resolved = resolveEffectiveConfig(
+      {},
+      {
+        AGOR_SANDBOX_ENABLED: 'true',
+        AGOR_USE_EXECUTOR: 'true',
+      }
+    );
+    expect(() => assertValidEffectiveExecutionConfig(resolved)).toThrow(/executor_unix_user/);
+  });
+
+  it('rejects sandboxing combined with an external executor template', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          unix_user_mode: 'delegated',
+          executor_command_template: 'docker run {{command}}',
+          sandbox: { enabled: true },
+        },
+      })
+    ).toThrow(/executor_command_template/);
+  });
+
+  it('allows supported standalone and named sandbox configurations', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig({ execution: { unix_user_mode: 'sandbox' } }, {})
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: { unix_user_mode: 'simple', sandbox: { enabled: true } },
+      })
+    ).not.toThrow();
   });
 });
 

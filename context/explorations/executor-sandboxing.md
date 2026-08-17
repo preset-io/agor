@@ -125,7 +125,8 @@ correctly.
 
 The overlay **source** is the owner's `users.filesystem_home` when set (the strict→sandbox migration
 points it at their existing `/home/<unix_username>` so no files move), else the canonical store
-`<data_home>/tenants/<tenant>/homes/<owner_id>`. The daemon `mkdir`s the store before spawn; a fresh
+`<data_home>/tenants/<tenant>/homes/<owner_id>` (or `<tenant_data_root>/homes/<owner_id>` when
+filesystem multitenancy is enabled). The daemon `mkdir`s the store before spawn; a fresh
 owner gets an empty home tools seed themselves, migration pre-populates it.
 
 The branch is re-exposed **per the owner's RBAC filesystem access**: `write` → `--bind` (rw), `read`
@@ -240,8 +241,9 @@ tool state:
 ## 6. Scope / limitations
 
 - **`sandbox` isolation mode runs as the daemon user (no `asUser`).** That IS the design — the
-  strict-replacement deliberately drops OS impersonation. The `asUser` (sudo) path is still skipped
-  under a raw `sandbox.enabled` on `strict`/`insulated` (those keep their own impersonation).
+  strict-replacement deliberately drops OS impersonation. Startup rejects `sandbox.enabled` with
+  `strict`, `insulated`, `executor_unix_user`, or `executor_command_template`; those combinations
+  cannot be wrapped by the daemon's local bubblewrap boundary and must not silently run unwrapped.
 - **Linux only** (bubblewrap). macOS would use Seatbelt (`sandbox-exec`) — a follow-up. The daemon
   warns at startup if `unix_user_mode: sandbox` is set on a non-Linux host.
 - **Per-task, branch-scoped.** Wraps prompts/terminals/commands that carry a branch work dir;

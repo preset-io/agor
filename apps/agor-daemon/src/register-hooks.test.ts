@@ -34,6 +34,7 @@ import {
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
   protectExternalTaskCreate,
+  protectFilesystemHomeWrite,
   protectServerManagedTaskWrites,
   protectServerManagedUnixGroupWrites,
   type RegisterHooksContext,
@@ -61,6 +62,52 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('protectFilesystemHomeWrite', () => {
+  const config = { paths: { data_home: '/srv/agor-data' } };
+  const context = (
+    role: string | undefined,
+    filesystem_home: unknown,
+    provider: string | null = 'rest'
+  ) =>
+    ({
+      data: { filesystem_home },
+      params: {
+        provider,
+        user: role ? { user_id: 'user-1', role } : undefined,
+      },
+    }) as unknown as import('@agor/core/types').HookContext;
+
+  it('rejects a member changing their own host home path', () => {
+    expect(() => protectFilesystemHomeWrite(context('member', '/home/member'), config)).toThrow(
+      'Only admins can modify filesystem_home'
+    );
+  });
+
+  it('allows an admin to set a validated absolute path', () => {
+    const hook = context('admin', '/home/member');
+    expect(protectFilesystemHomeWrite(hook, config)).toBe(hook);
+    expect(hook.data).toEqual({ filesystem_home: '/home/member' });
+  });
+
+  it('validates trusted internal writes against the effective data root', () => {
+    expect(() =>
+      protectFilesystemHomeWrite(context(undefined, '/srv/agor-data/tenants/t1', null), config)
+    ).toThrow(/must not overlap/);
+  });
+
+  it('also rejects homes overlapping a configured external tenants base', () => {
+    expect(() =>
+      protectFilesystemHomeWrite(context('admin', '/mnt/tenants/tenant-a/homes/user-1'), {
+        paths: { data_home: '/srv/agor-data' },
+        multi_tenancy: {
+          filesystem_isolation_enabled: true,
+          tenants_base_folder: '/mnt/tenants',
+        },
+      })
+    ).toThrow(/must not overlap/);
+  });
+});
 
 describe('protectExternalTaskCreate', () => {
   const context = (data: unknown, provider: string | null = 'rest') =>

@@ -220,6 +220,35 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     expect(toolsIdx).toBeGreaterThan(maskIdx);
   });
 
+  it('also masks a custom external tenants base', () => {
+    const tenantsBase = '/mnt/agor-tenants';
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user' },
+      {
+        ...PER_USER_CTX,
+        protectedDataRoots: [tenantsBase],
+        branchPath: `${tenantsBase}/tenant-a/worktrees/acme/feature-x`,
+        worktreesRoot: `${tenantsBase}/tenant-a/worktrees`,
+      }
+    );
+    expect(hasPair(args, '--tmpfs', tenantsBase)).toBe(true);
+  });
+
+  it('emits only the outermost mask for nested data roots', () => {
+    const dataHome = '/var/lib/agor';
+    const tenantsBase = `${dataHome}/tenants`;
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user' },
+      {
+        ...PER_USER_CTX,
+        dataHome,
+        protectedDataRoots: [tenantsBase],
+      }
+    );
+    expect(hasPair(args, '--tmpfs', dataHome)).toBe(true);
+    expect(hasPair(args, '--tmpfs', tenantsBase)).toBe(false);
+  });
+
   it('masks canonical home aliases when the passwd home is a symlink', () => {
     const canonicalHomeDir = '/var/lib/agor/home/agor';
     const args = resolveBwrapArgs(

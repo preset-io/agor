@@ -50,23 +50,47 @@ describe('resolveOwnerHomeStore', () => {
   it('uses the validated filesystem_home override when set', () => {
     expect(
       resolveOwnerHomeStore({
+        config: { paths: { data_home: '/srv/agor/.agor' } },
         tenantId: 't1',
         ownerUserId: 'u1',
         filesystemHome: '/home/anna',
-        dataHome: '/srv/agor/.agor',
       })
     ).toBe('/home/anna');
   });
 
   it('falls back to the canonical tenant-scoped store when no override', () => {
     expect(
-      resolveOwnerHomeStore({ tenantId: 't1', ownerUserId: 'u1', dataHome: '/srv/agor/.agor' })
+      resolveOwnerHomeStore({
+        config: { paths: { data_home: '/srv/agor/.agor' } },
+        tenantId: 't1',
+        ownerUserId: 'u1',
+      })
     ).toBe('/srv/agor/.agor/tenants/t1/homes/u1');
   });
 
   it('defaults tenant to "default"', () => {
-    expect(resolveOwnerHomeStore({ tenantId: undefined, ownerUserId: 'u1', dataHome: '/d' })).toBe(
-      '/d/tenants/default/homes/u1'
-    );
+    expect(
+      resolveOwnerHomeStore({
+        config: { paths: { data_home: '/d' } },
+        tenantId: undefined,
+        ownerUserId: 'u1',
+      })
+    ).toBe('/d/tenants/default/homes/u1');
+  });
+
+  it('uses the configured tenant root when filesystem isolation is enabled', () => {
+    expect(
+      resolveOwnerHomeStore({
+        config: {
+          paths: { data_home: '/srv/agor' },
+          multi_tenancy: {
+            filesystem_isolation_enabled: true,
+            tenants_base_folder: '/mnt/tenants',
+          },
+        },
+        tenantId: 'tenant-a',
+        ownerUserId: 'u1',
+      })
+    ).toBe('/mnt/tenants/tenant-a/homes/u1');
   });
 });
