@@ -28,28 +28,39 @@ export function getDefaultConfig(): AgorConfig {
 
 export function loadConfigSync(): AgorConfig {
   const configPath = path.join(homedir(), '.agor', 'config.yaml');
+  let content: string;
+  // Read and parse are caught separately: only a read failure can be the
+  // sandbox mask, and blaming it for malformed YAML in a file we just read
+  // successfully would send the reader after the wrong thing.
   try {
-    const content = readFileSync(configPath, 'utf-8');
-    const config = yaml.load(content) as AgorConfig;
-    return config || {};
+    content = readFileSync(configPath, 'utf-8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return getDefaultConfig();
     }
     const detail = error instanceof Error ? error.message : String(error);
     // Agor's executor sandbox masks the daemon config with a `/dev/null` bind
-    // mount, so reads from inside fail with EACCES rather than ENOENT. The
-    // sandbox supplies DAEMON_URL precisely so this loader is never reached;
-    // arriving here inside the sandbox means that injection is the thing that
-    // broke. Explain that rather than fabricating a daemon address.
+    // mount, so reads from inside fail with EACCES rather than ENOENT.
+    // `getDaemonUrl()` only consults this loader when DAEMON_URL is unset, and
+    // the sandbox is meant to supply it — so reaching here inside the sandbox
+    // points at that injection, not at the config file.
     if (process.env.AGOR_OUTER_SANDBOX === '1') {
       throw new Error(
-        `DAEMON_URL is unset and ${configPath} is masked by Agor's executor sandbox. ` +
-          'The sandbox provides DAEMON_URL — if it is missing, that is the bug. ' +
-          `See context/explorations/executor-sandboxing.md. (underlying error: ${detail})`
+        `${configPath} is masked by Agor's executor sandbox and is intentionally out of reach. ` +
+          'Inside the sandbox the daemon address comes from DAEMON_URL; if that is unset, ' +
+          `that is the bug. See context/explorations/executor-sandboxing.md. (underlying error: ${detail})`
       );
     }
     throw new Error(`Failed to load config: ${detail}`);
+  }
+
+  try {
+    const config = yaml.load(content) as AgorConfig;
+    return config || {};
+  } catch (error) {
+    throw new Error(
+      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 

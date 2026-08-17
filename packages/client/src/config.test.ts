@@ -38,14 +38,23 @@ describe('loadConfigSync', () => {
   // DAEMON_URL is injected precisely so this path is never reached — so
   // arriving here means the injection is what broke. Say that instead of
   // reporting a bare EACCES against a file the caller was never meant to read.
-  it('explains the sandbox when the config is masked and DAEMON_URL is unset', async () => {
+  it('explains the sandbox when the config is unreadable', async () => {
     const agorDir = path.join(tempDir, '.agor');
     await fs.mkdir(agorDir, { recursive: true });
     await fs.mkdir(path.join(agorDir, 'config.yaml'));
     vi.stubEnv('AGOR_OUTER_SANDBOX', '1');
 
-    expect(() => loadConfigSync()).toThrow(
-      /DAEMON_URL is unset.*masked by Agor's executor sandbox/s
-    );
+    expect(() => loadConfigSync()).toThrow(/masked by Agor's executor sandbox/s);
+  });
+
+  // A file we read successfully is not a masked file, whatever it contains.
+  it('reports malformed YAML as a parse failure even inside the sandbox', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), 'daemon: [unclosed\n', 'utf-8');
+    vi.stubEnv('AGOR_OUTER_SANDBOX', '1');
+
+    expect(() => loadConfigSync()).toThrow(/Failed to load config/);
+    expect(() => loadConfigSync()).not.toThrow(/executor sandbox/);
   });
 });

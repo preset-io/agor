@@ -11,7 +11,12 @@ import path from 'node:path';
  * through `os.homedir()`, so without this every suite that loads config reads
  * the machine's own `~/.agor/config.yaml`.
  */
-process.env.HOME = mkdtempSync(path.join(os.tmpdir(), 'agor-daemon-test-home-'));
+const testHome = mkdtempSync(path.join(os.tmpdir(), 'agor-daemon-test-home-'));
+
+// `os.homedir()` reads HOME on POSIX and USERPROFILE on Windows; set both so
+// the isolation doesn't quietly become a no-op on one platform.
+process.env.HOME = testHome;
+process.env.USERPROFILE = testHome;
 
 delete process.env.AGOR_DATA_HOME;
 delete process.env.AGOR_OUTER_SANDBOX;

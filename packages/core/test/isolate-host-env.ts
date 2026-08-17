@@ -19,7 +19,12 @@ import path from 'node:path';
  * Host env vars that feed the same resolution are cleared for the same reason.
  * Tests that care about them set them explicitly.
  */
-process.env.HOME = mkdtempSync(path.join(os.tmpdir(), 'agor-test-home-'));
+const testHome = mkdtempSync(path.join(os.tmpdir(), 'agor-test-home-'));
+
+// `os.homedir()` reads HOME on POSIX and USERPROFILE on Windows; set both so
+// the isolation doesn't quietly become a no-op on one platform.
+process.env.HOME = testHome;
+process.env.USERPROFILE = testHome;
 
 delete process.env.AGOR_DATA_HOME;
 delete process.env.AGOR_OUTER_SANDBOX;
