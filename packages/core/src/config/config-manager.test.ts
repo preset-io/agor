@@ -140,6 +140,18 @@ describe('resolveEffectiveConfig', () => {
     );
   });
 
+  it('treats an empty AGOR_UNIX_USER_MODE from Compose as no override', () => {
+    expect(resolveEffectiveConfig({}, { AGOR_UNIX_USER_MODE: '' }).execution?.unix_user_mode).toBe(
+      resolveEffectiveConfig({}, {}).execution?.unix_user_mode
+    );
+    expect(
+      resolveEffectiveConfig(
+        { execution: { unix_user_mode: 'sandbox' } },
+        { AGOR_UNIX_USER_MODE: '' }
+      ).execution?.unix_user_mode
+    ).toBe('sandbox');
+  });
+
   it('unix_user_mode: sandbox implies RBAC + enabled per-user sandbox that fails closed', () => {
     const resolved = resolveEffectiveConfig({ execution: { unix_user_mode: 'sandbox' } }, {});
     expect(resolved.execution?.branch_rbac).toBe(true);

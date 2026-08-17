@@ -1056,7 +1056,9 @@ export function resolveEffectiveConfig(
 
   // Resolve the effective Unix isolation mode (env override wins) so the
   // `sandbox` mode can imply the rest of its machinery.
-  const configuredUnixMode = env.AGOR_UNIX_USER_MODE ?? config.execution?.unix_user_mode;
+  // Compose exports an empty string when AGOR_UNIX_USER_MODE is unset. Treat
+  // that as no override, matching the conditional merge below.
+  const configuredUnixMode = env.AGOR_UNIX_USER_MODE || config.execution?.unix_user_mode;
   assertSupportedUnixUserMode(configuredUnixMode);
   const effectiveUnixMode = configuredUnixMode ?? 'simple';
   const sandboxIsolation = effectiveUnixMode === 'sandbox';
