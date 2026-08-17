@@ -42,6 +42,7 @@ import {
   sessions,
   shortId,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UserMCPOAuthTokenRepository,
   UsersRepository,
   visibleSessionReferenceAccessExists,
@@ -923,6 +924,14 @@ function createExecuteHandler(
 ) {
   const { db, app, config, daemonUrl } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
+  // Only the modes that impersonate per user read the creator back; the others
+  // never stamped a `unix_username` for it to have drifted from.
+  const unixIdentityGuard = resolveExecutionSecurityMode(config).requiresUserUnixUsername
+    ? {
+        loadCreator: (tenantDb: TenantScopedDatabase) => (userId: string) =>
+          new UsersRepository(tenantDb).findById(userId),
+      }
+    : undefined;
 
   return async (
     sessionId: string,
@@ -942,7 +951,8 @@ function createExecuteHandler(
       sessionsService,
       sessionId,
       params,
-      deploymentAgenticToolPolicy
+      deploymentAgenticToolPolicy,
+      unixIdentityGuard
     );
     assertHaTaskPermissionSupported(ctx.deployment, {
       session,
@@ -2308,8 +2318,8 @@ async function registerMCPServices(
   });
 
   // Read-only marketplace browse surface. Only find/get are exposed; the
-  // catalog's writers are the ingestion job and the curated.yaml seeder.
-  app.use('/mcp-catalog', createMCPCatalogService(db), { methods: ['find', 'get'] });
+  // catalog is a file in this repository and has no writers at runtime.
+  app.use('/mcp-catalog', createMCPCatalogService(), { methods: ['find', 'get'] });
 
   // JWT test endpoint
   app.use('/mcp-servers/test-jwt', {

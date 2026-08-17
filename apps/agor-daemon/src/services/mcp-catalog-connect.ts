@@ -3,7 +3,7 @@
  * can use it.
  *
  * The request names a catalog entry and where the session should live, and
- * nothing else. URL, transport, and auth are read from the catalog row —
+ * nothing else. URL, transport, and auth are read from the catalog entry —
  * accepting them from the client would make this a way to register any server
  * at all without passing the `mcp_member_policy` gate that guards
  * `POST /mcp-servers`.
@@ -14,11 +14,11 @@
  * restriction, branch permissions, and Unix identity all resolve exactly once,
  * in the places that already own them.
  *
- * Scope: curated entries, remote transport, no authentication. OAuth and
- * API-key entries need the credential model that does not exist yet.
+ * Scope: remote transport, no authentication. OAuth and API-key entries need
+ * the credential model that does not exist yet.
  */
 
-import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
+import { BadRequest, NotFound } from '@agor/core/feathers';
 import { probeRemoteAuthType } from '@agor/core/mcp-catalog';
 import type {
   AuthenticatedParams,
@@ -26,6 +26,7 @@ import type {
   MCPCatalogConnectData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
+  MCPCatalogProbedAuthType,
   MCPServer,
   MCPTransport,
   Session,
@@ -73,12 +74,12 @@ function sameEndpoint(a: string | undefined, b: string): boolean {
  *
  * What is compared is everything that decides where the session's traffic goes
  * and what it carries: the endpoint, and the credential routing. Connect only
- * serves entries whose probe said `none` and creates them with no headers and
- * `auth: { type: 'none' }`, so any of either means the row is no longer this
- * entry's install. `auth.type` is the load-bearing field — `resolveMCPAuthHeaders`
- * contributes nothing for `none` and switches on it for the rest — so an
- * `oauth` row with a caller-chosen authorization endpoint is exactly the drift
- * that must not be reused.
+ * serves entries an unauthenticated probe accepted, and creates them with no
+ * headers and `auth: { type: 'none' }`, so any of either means the row is no
+ * longer this entry's install. `auth.type` is the load-bearing field —
+ * `resolveMCPAuthHeaders` contributes nothing for `none` and switches on it for
+ * the rest — so an `oauth` row with a caller-chosen authorization endpoint is
+ * exactly the drift that must not be reused.
  *
  * Custom headers are refused wholesale rather than screened for the
  * dangerous-looking ones. Agor redacts every custom header value on read and
@@ -91,16 +92,16 @@ function sameEndpoint(a: string | undefined, b: string): boolean {
  * Genuinely cosmetic fields stay the owner's: name, labels, description, and
  * scope. A second row for a benign edit would be its own bug.
  *
- * NOTE for the credentialed-entry phase: the `auth.type === 'none'` and
- * zero-header conditions below are load-bearing for reuse, not only for safety.
- * They hold because every entry this service can connect today is
- * unauthenticated — connect refuses the others before reaching here. The first
- * catalog entry carrying a credential inverts that: its own install stores an
- * `auth` block, stops matching itself, and every subsequent connect creates a
- * fresh row beside the one the caller already has. Whatever replaces these two
- * conditions has to separate "the configuration this entry prescribes" from "an
- * edit its owner made" — the distinction they stand in for while there is only
- * ever one possible prescription.
+ * NOTE: the `auth.type === 'none'` and zero-header conditions below are
+ * load-bearing for reuse, not only for safety. They hold because every entry
+ * this service can connect is unauthenticated — connect refuses the others
+ * before reaching here. The first catalog entry that can be installed with a
+ * credential inverts that: its own install stores an `auth` block, stops
+ * matching itself, and every subsequent connect creates a fresh row beside the
+ * one the caller already has. Whatever replaces these two conditions has to
+ * separate "the configuration this entry prescribes" from "an edit its owner
+ * made" — the distinction they stand in for while there is only ever one
+ * possible prescription.
  */
 function isInstallOf(server: MCPServer, entry: MCPCatalogEntry & { remote_url: string }): boolean {
   return (
@@ -115,12 +116,9 @@ function isInstallOf(server: MCPServer, entry: MCPCatalogEntry & { remote_url: s
 function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCatalogEntry & {
   remote_url: string;
 } {
-  if (!entry.curated) {
-    throw new Forbidden(
-      `Only reviewed catalog entries can be connected; ${catalogDisplayName(entry)} has not been reviewed`
-    );
-  }
-  if (!entry.has_remote || !entry.remote_url || entry.transport === 'stdio') {
+  // `has_remote` is derived from `remote_url`, so testing the URL tests both —
+  // and is also what narrows the type.
+  if (!entry.remote_url || entry.transport === 'stdio') {
     throw new BadRequest(
       `${catalogDisplayName(entry)} has no remote endpoint; locally-run MCP servers are configured by an admin`
     );
@@ -140,16 +138,7 @@ function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCat
  * re-read it instead of connecting against the old one.
  */
 function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unknown): void {
-  const stored = (entry.permission_disclosure ?? '').trim();
-  // Curation requires a disclosure on every entry it writes, so this is a
-  // curation gap rather than a caller's mistake — say that, instead of telling
-  // the user prose they never saw has changed.
-  if (!stored) {
-    throw new BadRequest(
-      `${catalogDisplayName(entry)} states nothing about what it can access, so it cannot be connected`
-    );
-  }
-
+  const stored = entry.permission_disclosure.trim();
   const shown = typeof acknowledged === 'string' ? acknowledged.trim() : '';
   if (!shown) {
     throw new BadRequest(
@@ -164,29 +153,60 @@ function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unkn
 }
 
 /**
- * The entry's authentication requirement, probing when the catalog has not
- * recorded one yet.
+ * Record an endpoint that answered differently from what its entry states.
  *
- * The stored verdict comes from the registry sync, which an operator may never
- * turn on, so relying on it alone would make connect refuse every curated entry
- * on a default install. `unknown` means "not determined", never "open", so it
- * is resolved rather than assumed.
+ * `auth_type` is authored text about somebody else's server, and connecting is
+ * the only moment anything compares it against that server. Without this the
+ * claim is unfalsifiable: nothing in the running system can ever contradict it,
+ * so an entry that was right when it was written stays "right" long after the
+ * vendor changed the endpoint. The disagreement is a curation defect whose fix
+ * is an edit to `curated.yaml`, so it is a warning and the connect carries on
+ * to whatever the endpoint actually said.
+ *
+ * Only a verdict about credentials counts. `unreachable` and `unknown` mean the
+ * endpoint disclosed nothing about authentication, and reporting those as a
+ * wrong entry would fill the log with claims about hosts nothing was learned
+ * from.
+ */
+function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAuthType): void {
+  if (entry.auth_type === 'unknown' || probed === entry.auth_type) return;
+  if (probed !== 'none' && probed !== 'oauth' && probed !== 'credentials') return;
+  console.warn(
+    '[mcp-catalog/connect] Catalog auth_type disagrees with the endpoint ' +
+      `entry=${entry.name} stated=${entry.auth_type} probed=${probed}`
+  );
+}
+
+/**
+ * Establish that the entry's endpoint will accept an unauthenticated client,
+ * and refuse the connect otherwise.
+ *
+ * Every connectable entry is probed, whatever it states. `auth_type` is a claim
+ * about a third party's endpoint recorded when the file was last edited, and a
+ * vendor can put a server behind an account, or take it out from behind one, at
+ * any time. Believing the claim in either direction goes wrong, and one of the
+ * two directions goes wrong silently and forever: a stale `none` produces an
+ * install that fails on first use, which the user reports, while a stale
+ * `oauth` produces a refusal nothing can contradict. So the file decides what
+ * the marketplace renders, the endpoint decides what gets installed, and
+ * {@link logProbeDisagreement} is what keeps the two from drifting apart
+ * unnoticed.
+ *
+ * The cost is one request, on a connect the user explicitly asked for.
  */
 async function resolveAuthRequirement(
   entry: MCPCatalogEntry & { remote_url: string }
 ): Promise<void> {
-  const probed =
-    entry.probed_auth_type === 'unknown' || entry.probed_auth_type === undefined
-      ? (await probeRemoteAuthType(entry.remote_url)).probed_auth_type
-      : entry.probed_auth_type;
+  const probed = await probeRemoteAuthType(entry.remote_url);
+  logProbeDisagreement(entry, probed);
 
   if (probed === 'none') return;
-
   if (probed === 'oauth' || probed === 'credentials') {
     throw new BadRequest(
       `${catalogDisplayName(entry)} requires authentication, which is not supported yet`
     );
   }
+
   throw new BadRequest(
     `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`
   );
@@ -208,11 +228,9 @@ export function createMCPCatalogConnectService(
   /**
    * An install of this entry the caller can already use, if there is one.
    *
-   * Matched on the registry name, so an entry the registry withdrew and
-   * republished — a fresh row for the same server — still recognises the
-   * install the user already has instead of adding a duplicate beside it. Both
-   * sides carry the catalog's own `name` verbatim, which is what the entry is
-   * unique on, so there is no second normalisation to keep in step.
+   * Matched on the catalog name. Both sides carry it verbatim, and it is what
+   * the entry is unique on, so there is no second normalisation to keep in
+   * step and an install survives every edit to the entry except a rename.
    *
    * The name alone does not settle it, though: see {@link isInstallOf}. A row
    * that no longer carries the entry's configuration is passed over rather

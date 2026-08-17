@@ -22,6 +22,7 @@ import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import type { Database } from './client';
 import type * as postgresSchema from './schema.postgres';
 import type * as sqliteSchema from './schema.sqlite';
+import type { DatabaseDialect } from './schema-factory';
 import { getCurrentTenantId } from './tenant-context';
 
 /**
@@ -101,6 +102,11 @@ export function isSQLiteDatabase(db: Database): db is LibSQLDatabase<typeof sqli
 export function isPostgresDatabase(db: Database): db is PostgresJsDatabase<typeof postgresSchema> {
   // PostgreSQL doesn't have .run() method
   return !('run' in db);
+}
+
+/** Return the canonical dialect for an already-created database instance. */
+export function getDatabaseInstanceDialect(db: Database): DatabaseDialect {
+  return isSQLiteDatabase(db) ? 'sqlite' : 'postgresql';
 }
 
 /**

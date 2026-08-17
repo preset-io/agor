@@ -16,34 +16,34 @@ vi.mock('react-router-dom', async () => {
 const SESSION_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d6';
 
 const DEEPWIKI = {
-  catalog_entry_id: 'entry-deepwiki',
-  created_at: new Date(0),
-  updated_at: new Date(0),
   name: 'com.deepwiki/mcp',
   title: 'DeepWiki',
+  category: 'dev-tools',
   benefit: 'Ask questions about any public GitHub repository.',
   permission_disclosure: 'Reads public GitHub repository content only.',
   starter_prompt: 'Explain how authentication works in a repo I name.',
   capabilities: ['docs', 'code-search'],
   has_remote: true,
-  has_package: false,
-  curated: true,
-  verified: false,
   remote_url: 'https://mcp.deepwiki.com/mcp',
   transport: 'streamable-http',
-  probed_auth_type: 'none',
+  auth_type: 'none',
 };
 
 const LINEAR = {
   ...DEEPWIKI,
-  catalog_entry_id: 'entry-linear',
   name: 'app.linear/linear',
   title: 'Linear',
   permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
 };
 
-/** Every catalog read the page makes, in call order, so queries can be asserted. */
-let catalogQueries: Array<Record<string, unknown>>;
+/**
+ * Every catalog read the page makes, in call order.
+ *
+ * The service takes no query and returns the whole catalog, so this exists to
+ * assert *how many* reads happen — that filtering and paging cost none, and
+ * that nothing is read before the socket can answer.
+ */
+let catalogReads: Array<Record<string, unknown> | undefined>;
 let catalogRows: (typeof DEEPWIKI)[];
 let connectCalls: Array<Record<string, unknown>>;
 let connectImpl: (data: Record<string, unknown>) => Promise<unknown>;
@@ -53,18 +53,18 @@ function makeClient(): AgorClient {
   const service = (path: string) => {
     if (path === 'mcp-catalog') {
       return {
-        find: async ({ query }: { query: Record<string, unknown> }) => {
-          catalogQueries.push(query);
+        // Deliberately unfiltered, whatever it is passed: the browser does the
+        // narrowing now, using the same `filterCatalog` the daemon uses. A mock
+        // that filtered would be testing itself rather than the component.
+        find: async (params?: { query?: Record<string, unknown> }) => {
+          catalogReads.push(params?.query);
           if (catalogFindError) throw catalogFindError;
-          const verdicts = query.probed_auth_types as string[] | undefined;
-          const filtered = catalogRows
-            .filter((row) =>
-              typeof query.search === 'string'
-                ? row.name.toLowerCase().includes(String(query.search).toLowerCase())
-                : true
-            )
-            .filter((row) => (verdicts ? verdicts.includes(row.probed_auth_type) : true));
-          return { total: filtered.length, limit: 24, skip: 0, data: filtered };
+          return {
+            total: catalogRows.length,
+            limit: catalogRows.length,
+            skip: 0,
+            data: catalogRows,
+          };
         },
       };
     }
@@ -122,7 +122,7 @@ async function findDrawer() {
 }
 
 beforeEach(() => {
-  catalogQueries = [];
+  catalogReads = [];
   catalogRows = [DEEPWIKI, LINEAR];
   catalogFindError = null;
   connectCalls = [];
@@ -155,7 +155,7 @@ describe('catalog browsing', () => {
     // Let any effect that was going to fire, fire.
     await act(() => Promise.resolve());
 
-    expect(catalogQueries).toHaveLength(0);
+    expect(catalogReads).toHaveLength(0);
     expect(container.querySelectorAll('.ant-skeleton').length).toBeGreaterThan(0);
     expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
     expect(screen.queryByText('Could not load the catalog')).not.toBeInTheDocument();
@@ -186,7 +186,7 @@ describe('catalog browsing', () => {
         <CatalogTab client={client} connected={false} />
       </MemoryRouter>
     );
-    expect(catalogQueries).toHaveLength(0);
+    expect(catalogReads).toHaveLength(0);
 
     rerender(
       <MemoryRouter>
@@ -254,12 +254,23 @@ describe('catalog browsing', () => {
     expect(await findCard('DeepWiki')).toBeInTheDocument();
   });
 
-  it('pushes filters and page bounds to the server rather than filtering in the browser', async () => {
+  it('reads the catalog once and filters what it holds, with no query', async () => {
     renderTab();
     await findCard('DeepWiki');
 
-    const listQuery = catalogQueries.find((query) => query.$limit === 24);
-    expect(listQuery).toMatchObject({ sort: 'popularity', $limit: 24, $skip: 0 });
+    // One read, carrying nothing. The old surface sent `search`/`$limit`/`$skip`
+    // and made a second request whose only purpose was to learn the total.
+    expect(catalogReads).toEqual([undefined]);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
+      target: { value: 'deep' },
+    });
+    fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
+
+    await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
+    expect(queryCard('DeepWiki')).toBeInTheDocument();
+    // Filtering cost no further reads.
+    expect(catalogReads).toEqual([undefined]);
   });
 
   it('hides the match count until something is actually filtering (REQ-CAT-3)', async () => {
@@ -267,18 +278,17 @@ describe('catalog browsing', () => {
     await findCard('DeepWiki');
     expect(screen.queryByText(/servers match/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('switch', { name: /Reviewed by Preset/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /known to need an account/i }));
     expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
-    expect(catalogQueries.some((query) => query.curated === true)).toBe(true);
   });
 
-  it('keeps unprobed servers when hiding account-only ones', async () => {
-    // A stock install has never run a registry sync, so every curated row is
-    // `unknown`. A filter that demanded `none` could only ever return nothing,
-    // while the cards beside it called those same entries connectable.
+  it('keeps servers with no stated auth when hiding account-only ones', async () => {
+    // An entry the file says nothing about is still worth offering: connecting
+    // checks the endpoint. A filter that demanded `none` would hide it while
+    // the card beside it called it connectable.
     catalogRows = [
-      { ...DEEPWIKI, probed_auth_type: 'unknown' },
-      { ...LINEAR, probed_auth_type: 'unknown' },
+      { ...DEEPWIKI, auth_type: 'unknown' },
+      { ...LINEAR, auth_type: 'unknown' },
     ];
     renderTab();
     await findCard('DeepWiki');
@@ -292,8 +302,8 @@ describe('catalog browsing', () => {
 
   it('drops servers known to need an account', async () => {
     catalogRows = [
-      { ...DEEPWIKI, probed_auth_type: 'unknown' },
-      { ...LINEAR, probed_auth_type: 'oauth' },
+      { ...DEEPWIKI, auth_type: 'unknown' },
+      { ...LINEAR, auth_type: 'oauth' },
     ];
     renderTab();
     await findCard('Linear');
@@ -302,28 +312,66 @@ describe('catalog browsing', () => {
 
     await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
     expect(queryCard('DeepWiki')).toBeInTheDocument();
-    expect(catalogQueries.at(-1)?.probed_auth_types).toEqual(['none', 'unknown']);
   });
 
-  it('debounces search into one server-side query', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      renderTab();
-      await findCard('DeepWiki');
-      const before = catalogQueries.length;
+  it('narrows on the keystroke, with no debounce and no round trip', async () => {
+    renderTab();
+    await findCard('DeepWiki');
+    const before = catalogReads.length;
 
-      const input = screen.getByRole('textbox', { name: 'Search MCP servers' });
-      for (const value of ['d', 'de', 'dee', 'deep']) {
-        fireEvent.change(input, { target: { value } });
-      }
-      expect(catalogQueries.length).toBe(before);
-
-      await vi.advanceTimersByTimeAsync(400);
-      await waitFor(() => expect(catalogQueries.length).toBe(before + 1));
-      expect(catalogQueries.at(-1)).toMatchObject({ search: 'deep' });
-    } finally {
-      vi.useRealTimers();
+    const input = screen.getByRole('textbox', { name: 'Search MCP servers' });
+    for (const value of ['d', 'de', 'dee', 'deep']) {
+      fireEvent.change(input, { target: { value } });
     }
+
+    // No timer to advance: 'deep' matches DeepWiki's name and not Linear's, and
+    // the grid has already settled. The debounce existed to spare the server a
+    // request per keystroke; there is no request now.
+    await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
+    expect(queryCard('DeepWiki')).toBeInTheDocument();
+    expect(catalogReads.length).toBe(before);
+  });
+
+  it('searches title and description, not just name', async () => {
+    // The server searched name, title and description. The browser has to search
+    // the same three, or a term that used to find a server silently stops.
+    catalogRows = [
+      { ...DEEPWIKI, title: 'DeepWiki', description: 'Ask about a repository.' },
+      { ...LINEAR, title: 'Linear', description: 'Track issues and projects.' },
+    ] as typeof catalogRows;
+    renderTab();
+    await findCard('DeepWiki');
+
+    const input = screen.getByRole('textbox', { name: 'Search MCP servers' });
+
+    // Matched on `description` alone: the term is in neither name nor title.
+    fireEvent.change(input, { target: { value: 'projects' } });
+    await waitFor(() => expect(queryCard('DeepWiki')).not.toBeInTheDocument());
+    expect(queryCard('Linear')).toBeInTheDocument();
+
+    // Matched on `title`, case-insensitively and partially.
+    fireEvent.change(input, { target: { value: 'DEEPW' } });
+    await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
+    expect(queryCard('DeepWiki')).toBeInTheDocument();
+  });
+
+  it('pages the entries it holds without reading again', async () => {
+    // 30 entries is more than one 24-entry page.
+    catalogRows = Array.from({ length: 30 }, (_, index) => ({
+      ...DEEPWIKI,
+      name: `com.entry-${String(index).padStart(2, '0')}/mcp`,
+      title: `Entry ${String(index).padStart(2, '0')}`,
+    }));
+    renderTab();
+    await findCard('Entry 00');
+    expect(queryCard('Entry 29')).not.toBeInTheDocument();
+    const before = catalogReads.length;
+
+    fireEvent.click(screen.getByTitle('2'));
+
+    expect(await findCard('Entry 29')).toBeInTheDocument();
+    expect(queryCard('Entry 00')).not.toBeInTheDocument();
+    expect(catalogReads.length).toBe(before);
   });
 });
 
@@ -353,16 +401,6 @@ describe('connect', () => {
   // the AntD Form and its Selects twice; the drawer takes the entry as a prop
   // and states the same invariant in one mount.
 
-  it('offers no connect control for an entry that discloses nothing', async () => {
-    catalogRows = [{ ...DEEPWIKI, permission_disclosure: '' }];
-    renderTab();
-    fireEvent.click(await findCard('DeepWiki'));
-    const drawer = await findDrawer();
-
-    expect(drawer.getByText(/has not stated what it can access/)).toBeVisible();
-    expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
-  });
-
   it('connects by catalog key alone and lands in the new session with the prompt loaded', async () => {
     const drawer = await openDrawer();
     const connect = drawer.getByRole('button', { name: /Connect/ });
@@ -373,7 +411,7 @@ describe('connect', () => {
 
     await waitFor(() => expect(connectCalls).toHaveLength(1));
     expect(connectCalls[0]).toEqual({
-      catalog_key: 'entry-deepwiki',
+      catalog_key: 'com.deepwiki/mcp',
       branch_id: 'branch-1',
       agentic_tool: 'claude-code',
       // The exact text the drawer rendered, so the daemon can refuse a connect
@@ -402,13 +440,13 @@ describe('connect', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it('offers no connect control for an entry that has not been reviewed', async () => {
-    catalogRows = [{ ...DEEPWIKI, curated: false }];
+  it('offers no connect control for a server that runs locally', async () => {
+    catalogRows = [{ ...DEEPWIKI, has_remote: false, remote_url: undefined }];
     renderTab();
     fireEvent.click(await findCard('DeepWiki'));
     const drawer = await findDrawer();
 
-    expect(drawer.getByText(/Only servers reviewed by Preset/)).toBeVisible();
+    expect(drawer.getByText(/runs locally/)).toBeVisible();
     expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
     expect(drawer.queryByRole('checkbox')).not.toBeInTheDocument();
   });

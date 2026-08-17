@@ -9,32 +9,26 @@
  * rather than through a close/reopen that only approximates it.
  */
 
-import type { Branch, MCPCatalogEntry, MCPCatalogEntryID } from '@agor/core/types';
+import type { Branch, MCPCatalogEntry } from '@agor/core/types';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
 
 const DEEPWIKI = {
-  catalog_entry_id: 'entry-deepwiki' as MCPCatalogEntryID,
-  created_at: new Date(0),
-  updated_at: new Date(0),
   name: 'com.deepwiki/mcp',
   title: 'DeepWiki',
+  category: 'dev-tools',
   benefit: 'Ask questions about any public GitHub repository.',
   permission_disclosure: 'Reads public GitHub repository content only.',
   capabilities: ['docs'],
   has_remote: true,
-  has_package: false,
-  curated: true,
-  verified: false,
   remote_url: 'https://mcp.deepwiki.com/mcp',
   transport: 'streamable-http',
-  probed_auth_type: 'none',
+  auth_type: 'none',
 } as unknown as MCPCatalogEntry;
 
 const LINEAR = {
   ...DEEPWIKI,
-  catalog_entry_id: 'entry-linear' as MCPCatalogEntryID,
   name: 'app.linear/linear',
   title: 'Linear',
   permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',

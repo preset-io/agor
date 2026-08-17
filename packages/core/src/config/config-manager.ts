@@ -37,6 +37,7 @@ export const RETIRED_CONFIG_KEYS = {
   execution: ['managed_envs_minimum_role'],
   branches: ['others_can_default', 'others_fs_access_default'],
   onboarding: ['teammatePending', 'assistantPending', 'persistedAgentPending'],
+  mcp_catalog: ['registry_sync_enabled', 'sync_interval_hours', 'probe_budget', 'registry_url'],
 } as const;
 
 export const RETIRED_CONFIG_PATHS = new Set<string>(
@@ -52,6 +53,7 @@ type LegacyConfig = AgorConfig & {
   execution?: AgorConfig['execution'] & Record<string, unknown>;
   branches?: Record<string, unknown>;
   onboarding?: Record<string, unknown>;
+  mcp_catalog?: Record<string, unknown>;
 };
 
 /** Resolve the renamed operator setting while keeping old YAML loadable. */
@@ -704,12 +706,10 @@ function validateConfig(config: AgorConfig): void {
     'auth_claim',
     'trusted_header',
   ]);
-  only(config.mcp_catalog, 'mcp_catalog', [
-    'registry_sync_enabled',
-    'sync_interval_hours',
-    'probe_budget',
-    'registry_url',
-  ]);
+  // The catalog is the file checked into this repository, so it has nothing to
+  // configure. The section stays loadable because a config file naming it must
+  // not stop a daemon from booting on upgrade; the keys are read and ignored.
+  only(legacyConfig.mcp_catalog, 'mcp_catalog', RETIRED_CONFIG_KEYS.mcp_catalog);
   if (unknownPaths.length > 0) {
     throw new Error(
       `Config error: unrecognized ${unknownPaths.length === 1 ? 'key' : 'keys'}: ${unknownPaths.join(', ')}`

@@ -65,12 +65,12 @@ const captureRegisteredHooks = (
     config: {
       database: { dialect: 'postgresql' },
       multi_tenancy: { mode: 'static', static_tenant_id: 'update-gating-test' },
+      execution: { branch_rbac: branchRbacEnabled },
     } as RegisterHooksContext['config'],
     jwtSecret: 'update-gating-test-secret',
     // The HA gates are `before.all` entries, so they cannot satisfy or defeat a
     // per-verb invariant; standalone keeps the captured map to the real hooks.
     deployment: { mode: 'standalone' },
-    branchRbacEnabled,
     requireAuth: async (context) => context,
     superadminOpts: { allowSuperadmin: true },
     sessionsService: {} as RegisterHooksContext['sessionsService'],

@@ -589,6 +589,13 @@
       "when": 1786900000000,
       "tag": "0084_add_user_filesystem_home",
       "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1787000000000,
+      "tag": "0085_drop_mcp_catalog_entries",
+      "breakpoints": true
     }
   ]
 }

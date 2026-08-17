@@ -1,336 +1,167 @@
 /**
  * MCPCatalogService tests
  *
- * The service's whole reason for bypassing the generic Drizzle adapter is that
- * it resolves filters, ordering, page bounds, and the total in SQL. Asserting
- * on the returned rows alone would pass just as well against an implementation
- * that read the entire table and filtered in JS, so these tests assert on the
- * statements the database actually executed and the rows it emitted.
+ * The service has two jobs: hand over the whole catalog, and resolve one entry
+ * by name for the connect flow. It takes no query, so what these assert is that
+ * a query cannot change the answer — a filter that appeared to be honoured here
+ * would be a second, divergent implementation of the browser's filtering.
+ *
+ * The ordering and matching rules themselves live in `@agor/core/mcp-catalog`
+ * and are tested there, by `query.test.ts`.
  */
 
-import type { Database, TenantScopeAwareDatabase } from '@agor/core/db';
-import {
-  createTenantScopedDatabaseProxy,
-  MCPCatalogRepository,
-  MissingTenantDatabaseScopeError,
-  runWithTenantContext,
-} from '@agor/core/db';
-import { describe, expect } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MCPCatalogService } from './mcp-catalog';
 
-interface ExecutedStatement {
-  sql: string;
-  rows: number;
-}
+/**
+ * A fixture catalog rather than the shipped one.
+ *
+ * Asserting against `curated.yaml` would make every entry added to the
+ * marketplace a test edit, and would tie assertions about the response to
+ * however many servers happen to be on offer.
+ */
+const CATALOG = `
+entries:
+  - name: com.alpha/mcp
+    category: dev-tools
+    capabilities: [issues, docs]
+    benefit: Alpha does issues.
+    starter_prompt: Show me my issues.
+    permission_disclosure: Reads issues.
+    popularity_rank: 1
+    remote_url: https://mcp.alpha.example/mcp
+    transport: streamable-http
+    auth_type: none
+  - name: com.bravo/mcp
+    title: Bravo
+    description: A searching thing.
+    category: search
+    capabilities: [web-search]
+    benefit: Bravo searches.
+    starter_prompt: Search for something.
+    permission_disclosure: Reads the public web.
+    popularity_rank: 2
+    remote_url: https://mcp.bravo.example/mcp
+    transport: streamable-http
+    auth_type: oauth
+unpublished:
+  - name: com.charlie/mcp
+    category: observability
+    capabilities: [logs]
+    benefit: Charlie reads logs.
+    starter_prompt: Show me the errors.
+    permission_disclosure: Reads logs.
+    remote_url: https://mcp.charlie.example/mcp
+    transport: streamable-http
+  - name: com.delta/mcp
+    category: data-storage
+    capabilities: [databases]
+    benefit: Delta runs locally.
+    starter_prompt: Query the database.
+    permission_disclosure: Reads the database.
+`;
 
-/** Record every statement Drizzle issues, with the row count it returned. */
-function recordStatements(db: Database): ExecutedStatement[] {
-  const client = (
-    db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
-  ).$client;
-  const statements: ExecutedStatement[] = [];
-  const original = client.execute.bind(client);
+let catalogPath: string;
+let tempDir: string;
 
-  client.execute = async (...args: unknown[]) => {
-    const result = (await original(...args)) as { rows?: unknown[] };
-    const first = args[0] as { sql?: string } | string;
-    statements.push({
-      sql: typeof first === 'string' ? first : (first?.sql ?? ''),
-      rows: Array.isArray(result?.rows) ? result.rows.length : 0,
-    });
-    return result as never;
-  };
+beforeAll(async () => {
+  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-catalog-service-'));
+  catalogPath = path.join(tempDir, 'curated.yaml');
+  await fs.writeFile(catalogPath, CATALOG, 'utf-8');
+});
 
-  return statements;
-}
+afterAll(async () => {
+  await fs.rm(tempDir, { recursive: true, force: true });
+});
 
-/** Seed enough rows that a full-table scan would be obvious in the counts. */
-async function seedCatalog(db: Database, count = 150): Promise<MCPCatalogRepository> {
-  const repository = new MCPCatalogRepository(db);
-  for (let index = 0; index < count; index += 1) {
-    await repository.upsertRegistryEntry({
-      name: `io.filler${String(index).padStart(3, '0')}/server`,
-      title: `Filler ${index}`,
-      description: 'An ordinary registry entry',
-      transport: 'streamable-http',
-      remote_url: `https://filler${index}.example.com/mcp`,
-    });
-  }
-  return repository;
-}
+const service = () => new MCPCatalogService(catalogPath);
 
-function service(db: Database): MCPCatalogService {
-  return new MCPCatalogService(db as unknown as TenantScopeAwareDatabase);
-}
+const names = (entries: Array<{ name: string }>) => entries.map((entry) => entry.name);
 
 describe('MCPCatalogService find', () => {
-  dbTest('reads only the requested page, not the whole catalog', async ({ db }) => {
-    await seedCatalog(db);
+  it('returns every entry from both lists, most popular first', async () => {
+    const result = await service().find();
 
-    const statements = recordStatements(db);
-    const result = await service(db).find({ query: { $limit: 24, $skip: 24 } });
-
-    expect(result.total).toBe(150);
-    expect(result.data).toHaveLength(24);
-    expect(result.limit).toBe(24);
-    expect(result.skip).toBe(24);
-
-    // Exactly two statements: the bounded page read and the count. The page
-    // read emitted 24 rows and the count emitted one aggregate row — an
-    // adapter that paginated in memory would have emitted 150.
-    expect(statements).toHaveLength(2);
-    const listed = statements.find(
-      (statement) => !statement.sql.toLowerCase().includes('count(*)')
-    );
-    const counted = statements.find((statement) =>
-      statement.sql.toLowerCase().includes('count(*)')
-    );
-    expect(listed?.rows).toBe(24);
-    expect(counted?.rows).toBe(1);
-    expect(listed?.sql.toLowerCase()).toContain('limit');
-    expect(listed?.sql.toLowerCase()).toContain('offset');
+    expect(result.total).toBe(4);
+    // Ranked entries lead; the unranked pair falls back to name order.
+    expect(names(result.data)).toEqual([
+      'com.alpha/mcp',
+      'com.bravo/mcp',
+      'com.charlie/mcp',
+      'com.delta/mcp',
+    ]);
   });
 
-  dbTest('pushes the search filter into SQL', async ({ db }) => {
-    const repository = await seedCatalog(db);
-    await repository.upsertRegistryEntry({
-      name: 'com.needle/mcp',
-      title: 'Needle',
-      description: 'The one entry mentioning haystackneedle',
-    });
+  it('describes the response as the whole catalog, unpaged', async () => {
+    const result = await service().find();
 
-    const statements = recordStatements(db);
-    const result = await service(db).find({ query: { search: 'haystackneedle' } });
+    // The envelope stays, because it is the shape every client parses. It says
+    // "one page, containing everything" rather than describing a window.
+    expect(result.limit).toBe(4);
+    expect(result.skip).toBe(0);
+    expect(result.data).toHaveLength(result.total);
+  });
 
-    expect(result.total).toBe(1);
-    expect(result.data.map((entry) => entry.name)).toEqual(['com.needle/mcp']);
-    for (const statement of statements) {
-      expect(statement.sql.toLowerCase()).toContain('like');
+  it('ignores every filter and page bound a stale client might still send', async () => {
+    // The query validator strips these before they arrive; this is the second
+    // line, so that a filter reaching the method cannot half-work. Answering a
+    // narrowed list here would mean two implementations of "search" that have to
+    // agree forever.
+    const unchanged = names((await service().find()).data);
+
+    for (const query of [
+      { search: 'BRAVO' },
+      { category: 'search' },
+      { capability: 'logs' },
+      { auth_types: ['none', 'unknown'] },
+      { auth_type: 'oauth' },
+      { has_remote: false },
+      { sort: 'name' },
+      { name: 'com.alpha/mcp' },
+      { $limit: 2, $skip: 1 },
+      { $limit: 5000 },
+    ] as const) {
+      const result = await service().find({ query } as never);
+
+      expect(result.total, `query ${JSON.stringify(query)} changed the total`).toBe(4);
+      expect(names(result.data), `query ${JSON.stringify(query)} changed the entries`).toEqual(
+        unchanged
+      );
     }
-    const listed = statements.find(
-      (statement) => !statement.sql.toLowerCase().includes('count(*)')
-    );
-    expect(listed?.rows).toBe(1);
-  });
-
-  dbTest('pushes category, capability, and verified filters into SQL together', async ({ db }) => {
-    const repository = await seedCatalog(db);
-    await repository.upsertCuration({
-      name: 'com.match/mcp',
-      category: 'observability',
-      capabilities: ['traces'],
-      benefit: 'Traces things',
-      starter_prompt: 'Trace something',
-      permission_disclosure: 'Reads traces',
-      verified: true,
-    });
-    await repository.upsertCuration({
-      name: 'com.unverified/mcp',
-      category: 'observability',
-      capabilities: ['traces'],
-      benefit: 'Also traces things',
-      starter_prompt: 'Trace something else',
-      permission_disclosure: 'Reads traces',
-      verified: false,
-    });
-
-    const statements = recordStatements(db);
-    const result = await service(db).find({
-      query: { category: 'observability', capability: 'traces', verified: true },
-    });
-
-    expect(result.data.map((entry) => entry.name)).toEqual(['com.match/mcp']);
-    expect(result.total).toBe(1);
-    const listed = statements.find(
-      (statement) => !statement.sql.toLowerCase().includes('count(*)')
-    );
-    expect(listed?.rows).toBe(1);
-    expect(listed?.sql).toContain('"category"');
-    expect(listed?.sql).toContain('"capability_tags"');
-    expect(listed?.sql).toContain('"verified"');
-  });
-
-  dbTest('reports a total that reflects the filter, not the table size', async ({ db }) => {
-    const repository = await seedCatalog(db);
-    for (const suffix of ['a', 'b', 'c']) {
-      await repository.upsertRegistryEntry({
-        name: `com.distinctive-${suffix}/mcp`,
-        description: 'contains uniquetoken',
-      });
-    }
-
-    const result = await service(db).find({ query: { search: 'uniquetoken', $limit: 2 } });
-
-    expect(result.total).toBe(3);
-    expect(result.data).toHaveLength(2);
-  });
-
-  dbTest('sorts curated entries first without a JS sort pass', async ({ db }) => {
-    const repository = await seedCatalog(db, 10);
-    await repository.upsertCuration({
-      name: 'com.top/mcp',
-      category: 'dev-tools',
-      capabilities: ['repos'],
-      benefit: 'Top entry',
-      starter_prompt: 'Do the thing',
-      permission_disclosure: 'Reads repos',
-      verified: true,
-      popularity_rank: 1,
-    });
-
-    const statements = recordStatements(db);
-    const result = await service(db).find({ query: { sort: 'popularity', $limit: 1 } });
-
-    expect(result.data.map((entry) => entry.name)).toEqual(['com.top/mcp']);
-    const listed = statements.find(
-      (statement) => !statement.sql.toLowerCase().includes('count(*)')
-    );
-    expect(listed?.sql.toLowerCase()).toContain('order by');
-    // The database returned the single row the caller asked for, already ordered.
-    expect(listed?.rows).toBe(1);
   });
 });
 
 describe('MCPCatalogService get', () => {
-  dbTest('resolves by catalog entry id and by registry name', async ({ db }) => {
-    const repository = new MCPCatalogRepository(db);
-    await repository.upsertRegistryEntry({ name: 'com.example/mcp', title: 'Example' });
-    const seeded = await repository.findByName('com.example/mcp');
-
-    const byName = await service(db).get('com.example/mcp');
-    const byId = await service(db).get(seeded?.catalog_entry_id ?? '');
-
-    expect(byName.name).toBe('com.example/mcp');
-    expect(byId.catalog_entry_id).toBe(seeded?.catalog_entry_id);
+  it('fetches an entry by its catalog name', async () => {
+    const entry = await service().get('com.charlie/mcp');
+    expect(entry.benefit).toBe('Charlie reads logs.');
+    // Absent from the file, so read as "not stated" rather than as open.
+    expect(entry.auth_type).toBe('unknown');
   });
 
-  dbTest('throws NotFound for an unknown entry', async ({ db }) => {
-    await expect(service(db).get('com.missing/mcp')).rejects.toThrow(/MCPCatalogEntry/);
+  it('reports a name the catalog does not carry as not found', async () => {
+    await expect(service().get('com.nope/mcp')).rejects.toThrow(/com\.nope\/mcp/);
   });
-});
-
-describe('MCPCatalogService under a scope-requiring database proxy', () => {
-  /**
-   * `required_from_auth` builds the daemon database with `requireScope: true`,
-   * so any read taken outside a tenant or system scope throws. The catalog is
-   * registered tenant-identity-only, which opens no scope — without the
-   * service's own `withTenantDatabase`, every browse would fail in cloud mode
-   * while passing in single-tenant tests.
-   */
-  dbTest('serves reads that the guard would otherwise refuse', async ({ db }) => {
-    const repository = new MCPCatalogRepository(db);
-    await repository.upsertRegistryEntry({ name: 'com.example/mcp', title: 'Example' });
-
-    const guarded = createTenantScopedDatabaseProxy(db, {
-      requireScope: true,
-      label: 'daemon database',
-    });
-    const guardedService = new MCPCatalogService(guarded);
-
-    await runWithTenantContext('tenant-a', async () => {
-      const result = await guardedService.find({ query: {} });
-      expect(result.total).toBe(1);
-      expect((await guardedService.get('com.example/mcp')).name).toBe('com.example/mcp');
-    });
-  });
-
-  dbTest(
-    'reads the guard would refuse without the service opening its own scope',
-    async ({ db }) => {
-      const guarded = createTenantScopedDatabaseProxy(db, {
-        requireScope: true,
-        label: 'daemon database',
-      });
-
-      // The counterfactual: a repository handed the guarded proxy directly, which
-      // is what the service does if `withTenantDatabase` is removed. It throws, so
-      // the test above is not passing by accident.
-      await runWithTenantContext('tenant-a', async () => {
-        // The repository wraps driver failures in RepositoryError, so assert on
-        // the cause rather than the wrapper.
-        const rejection = await new MCPCatalogRepository(guarded)
-          .count()
-          .then(() => null)
-          .catch((error: { cause?: unknown }) => error);
-        expect(rejection?.cause).toBeInstanceOf(MissingTenantDatabaseScopeError);
-      });
-    }
-  );
 });
 
 describe('MCPCatalogService write surface', () => {
-  dbTest('exposes no mutation methods', async ({ db }) => {
-    const instance = service(db) as unknown as Record<string, unknown>;
+  it('exposes no mutation methods', async () => {
+    const instance = service() as unknown as Record<string, unknown>;
 
-    // The catalog is written only by the ingestion worker under the
-    // `mcp_catalog_ingestion` system capability. A mutation method here would
-    // be reachable from a tenant-scoped request.
+    // The catalog is a file in this repository. A mutation method here would be
+    // a way to change what the marketplace offers without a pull request.
     for (const method of ['create', 'update', 'patch', 'remove']) {
       expect(instance[method]).toBeUndefined();
     }
   });
 
-  dbTest('narrows on catalog_entry_id rather than ignoring it', async ({ db }) => {
-    const repository = await seedCatalog(db);
-    await repository.upsertCuration({
-      name: 'com.target/mcp',
-      category: 'observability',
-      capabilities: ['traces'],
-      benefit: 'Traces things',
-      starter_prompt: 'Trace something',
-      permission_disclosure: 'Reads traces',
-      verified: true,
-    });
-    const target = await repository.findByName('com.target/mcp');
+  it('hands each caller its own array, so one cannot disturb another', async () => {
+    const first = await service().find();
+    first.data.length = 0;
 
-    const found = await service(db).find({
-      query: { catalog_entry_id: target?.catalog_entry_id },
-    });
-
-    // A filter the service accepted but ignored would return every row, which
-    // is a worse answer than refusing the query.
-    expect(found.data).toHaveLength(1);
-    expect(found.data[0]?.name).toBe('com.target/mcp');
-  });
-
-  dbTest('defaults to a screenful rather than the shared ten-thousand', async ({ db }) => {
-    await seedCatalog(db);
-
-    const result = await service(db).find({});
-
-    // The shared bound is 10,000 either way, which for a full registry mirror
-    // is a multi-megabyte answer to a bare GET.
-    expect(result.limit).toBe(24);
-    expect(result.data).toHaveLength(24);
-  });
-
-  dbTest('caps a caller asking for more than the ceiling', async ({ db }) => {
-    await seedCatalog(db);
-
-    const result = await service(db).find({ query: { $limit: 100 } });
-    expect(result.limit).toBe(100);
-  });
-
-  dbTest('hides a withdrawn server from the default browse read', async ({ db }) => {
-    const repository = await seedCatalog(db);
-    await repository.upsertCuration({
-      name: 'com.gone/mcp',
-      category: 'observability',
-      capabilities: ['traces'],
-      benefit: 'Traces things',
-      starter_prompt: 'Trace something',
-      permission_disclosure: 'Reads traces',
-      verified: true,
-      popularity_rank: 1,
-    });
-    await repository.retireWithdrawnEntry('com.gone/mcp');
-
-    const listed = await service(db).find({});
-    expect(listed.data.map((entry) => entry.name)).not.toContain('com.gone/mcp');
-
-    // Still reachable for a caller that asks for that state by name.
-    const asked = await service(db).find({ query: { registry_status: 'deleted' } });
-    expect(asked.data.map((entry) => entry.name)).toEqual(['com.gone/mcp']);
+    expect((await service().find()).data).toHaveLength(4);
   });
 });

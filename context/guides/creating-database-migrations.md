@@ -179,8 +179,19 @@ pnpm db:studio               # open Drizzle Studio
 
 # From repo root:
 pnpm agor db status          # show pending migrations
+pnpm agor db status --json   # emit the versioned automation contract
 pnpm agor db migrate         # apply pending migrations to local DB
 ```
+
+`db status --json` writes exactly one JSON document to stdout. Version 1 reports
+the database `dialect` (`sqlite` or `postgresql`), `appliedMigrations`, structured
+`pendingMigrations`, the aggregate
+`requiresOfflineCutover` decision, and `databaseAheadOfBinary`. Each pending
+migration includes the runtime-owned `requiresOfflineCutover` decision and a
+bounded `impact` object (`classification`, `userAction`,
+`rollbackCompatibility`, and `summary`). Missing impact metadata is represented
+conservatively with explicit `unknown` values; callers must not infer impact by
+parsing migration names, SQL, or human-readable command output.
 
 **File locations:**
 

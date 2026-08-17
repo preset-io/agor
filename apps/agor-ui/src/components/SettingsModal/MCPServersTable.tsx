@@ -21,15 +21,18 @@ import {
   Badge,
   Button,
   Descriptions,
+  Flex,
   Form,
   Input,
   Modal,
   Popconfirm,
   Space,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
@@ -56,7 +59,7 @@ import {
   explainManageRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
-import { MCPMemberPolicyCard } from './MCPMemberPolicyCard';
+import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface MCPServersTableProps {
@@ -121,6 +124,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
+  const { token } = theme.useToken();
   const memberPolicy = useMcpMemberPolicy(client);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   // Which transports a user may configure turns on role alone, so this is known
@@ -611,35 +615,23 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const canAdd = !policyPending && canAddMcpServer(capability);
 
-  return (
-    <div>
-      <MCPMemberPolicyCard
-        policy={memberPolicy.policy}
-        loading={memberPolicy.loading}
-        saving={memberPolicy.saving}
-        error={memberPolicy.error}
-        editable={capability.isAdmin}
-        onChange={memberPolicy.save}
-      />
-
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
+  const serversPane = (
+    <>
+      <Flex vertical gap={token.marginMD} style={{ marginBottom: token.marginMD }}>
         <Typography.Text type="secondary">
           Configure Model Context Protocol servers for enhanced AI capabilities.
         </Typography.Text>
-        <Space>
+        {/* Search and add take the ends of their own row, so the caption above
+            keeps its full width instead of being squeezed into four lines by a
+            search box that cannot shrink. The input's cap leaves the slack
+            between them as the gap. */}
+        <Flex justify="space-between" align="center" gap={token.marginXS} wrap>
           <Input
             allowClear
             placeholder="Search name, owner, URL, command, tools, transport, or scope"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 360 }}
+            style={{ flex: '1 1 220px', maxWidth: 360 }}
           />
           {canAdd ? (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
@@ -654,8 +646,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
               </span>
             </Tooltip>
           )}
-        </Space>
-      </div>
+        </Flex>
+      </Flex>
 
       <Table
         dataSource={servers}
@@ -842,6 +834,34 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           </Descriptions>
         )}
       </Modal>
-    </div>
+    </>
+  );
+
+  return (
+    <Tabs
+      // The servers are what the tab is opened for; the policy that governs them
+      // is a pane away rather than a band above them.
+      defaultActiveKey="servers"
+      items={[
+        { key: 'servers', label: 'Servers', children: serversPane },
+        {
+          key: 'policy',
+          // Ungated on purpose: this is the answer to "why is New MCP Server
+          // greyed out for me?", and the member who is refused is the reader who
+          // needs it.
+          label: 'Member policy',
+          children: (
+            <MCPMemberPolicySetting
+              policy={memberPolicy.policy}
+              loading={memberPolicy.loading}
+              saving={memberPolicy.saving}
+              error={memberPolicy.error}
+              editable={capability.isAdmin}
+              onChange={memberPolicy.save}
+            />
+          ),
+        },
+      ]}
+    />
   );
 };

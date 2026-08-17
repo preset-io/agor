@@ -375,43 +375,29 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 ---
 
-## MCP catalog (`mcp_catalog.*`)
+## MCP catalog
 
-Agor ships a browsable catalog of MCP servers. Around fifty curated entries are
-checked into the repository and reapplied on every daemon start, so the
-marketplace is populated even with no network access.
+Agor ships a browsable catalog of MCP servers. It is a file in the repository —
+around fifty reviewed entries — loaded by the daemon at startup, so the
+marketplace works with no network access and there is nothing to configure.
 
-Mirroring the public [MCP registry](https://registry.modelcontextprotocol.io) on
-top of that is **off by default**. Turning it on makes outbound requests to the
-registry and, while probing which servers need authorization, to arbitrary
-hosts those registry records name.
+What the catalog offers is therefore a function of the deployed binary: rolling
+back to an older release withdraws entries added since, until you roll forward
+again. That is intended, but it is not something to discover during an incident.
 
-```yaml
-# ~/.agor/config.yaml
-mcp_catalog:
-  registry_sync_enabled: false # true = also mirror the public registry
-  sync_interval_hours: 6
-  probe_budget: 40 # entries auth-probed per sync; 0 disables probing
-  # registry_url: https://registry.internal  # advanced override
-```
+Each entry records whether its endpoint needs an account. Only servers that need
+none can be connected from the marketplace today; the rest are shown with what
+they would ask for, and Connect is not offered. Connecting always checks the
+endpoint first, so an entry whose vendor has since started requiring an account
+is refused rather than installed broken.
 
-| Setting                 | Default           | Notes                                                                               |
-| ----------------------- | ----------------- | ----------------------------------------------------------------------------------- |
-| `registry_sync_enabled` | `false`           | Mirror the public registry in addition to the curated entries.                      |
-| `sync_interval_hours`   | `6`               | Held between one minute and roughly 24 days; values outside that range are clamped. |
-| `probe_budget`          | `40`              | Entries auth-probed per sync. `0` disables probing while leaving the mirror on.     |
-| `registry_url`          | official registry | Point at a private mirror.                                                          |
+If you previously set an `mcp_catalog:` block in `~/.agor/config.yaml`, leave it
+or delete it — either works. The daemon still accepts the section so an upgrade
+cannot fail on it, and ignores every setting in it.
 
-Because the seed _reconciles_ rather than merely applies, the catalog's contents
-are a function of the deployed binary: rolling back to an older release
-withdraws curation added since, until you roll forward again. That is intended,
-but it is not something to discover during an incident.
-
-The registry is far larger than one sync can walk, so each run resumes from
-where the previous one stopped and the probe sweep always gets a share of the
-run's time budget. Outbound probes only connect to public addresses: the
-hostname is resolved first and refused unless every resolved address is
-globally reachable.
+That connect-time check is a single request, to the entry's own URL and nowhere
+else, and it only connects to public addresses: the hostname is resolved first
+and refused unless every resolved address is globally reachable.
 
 ---
 

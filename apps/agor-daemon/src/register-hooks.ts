@@ -427,7 +427,6 @@ export interface RegisterHooksContext {
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   jwtSecret: string;
-  branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
   realtimeRelay?: Pick<RedisRealtimeRuntime, 'relay' | 'setRelayHandler'>;
@@ -758,7 +757,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     app,
     config,
     jwtSecret,
-    branchRbacEnabled,
     requireAuth,
     superadminOpts,
     sessionsService,
@@ -1161,6 +1159,46 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Helper to get usersService from app
   const usersService = app.service('users');
 
+  /**
+   * Authorization chain shared by the two externally-initiated prompt writes,
+   * `messages.create` and `tasks.create`.
+   *
+   * Two independently configured properties put hooks in here, and each hook
+   * is gated on the one that makes it load-bearing rather than on whichever
+   * flag happens to be nearby:
+   *
+   *  - `branch_rbac` decides whether the caller may prompt in this branch.
+   *  - `unix_user_mode` decides whether the session may execute as the
+   *    identity it was stamped with. Only `delegated`/`strict` consume the
+   *    stamp *as the executor's OS identity* — `register-services.ts` feeds
+   *    `session.unix_username` to `resolveUnixUserForImpersonation`, which
+   *    never reads it in the `simple` or `insulated` arms. (`insulated` does
+   *    read the stamp, but for Unix group membership in `unix.sync-branch`,
+   *    which no prompt write triggers.) Once the creator's username changes,
+   *    the stamp names an identity the user no longer has and the SDK state
+   *    lives in a home directory this instance cannot reach, so the prompt is
+   *    refused. Branch permissions have no bearing on that: an open-access
+   *    instance can be running strict, and an RBAC instance can be running
+   *    simple, where refusing would only lock a user out of their own sessions
+   *    over an identity nothing executes as.
+   *
+   * The session load is the precondition of both, and is memoised per request.
+   */
+  const promptWriteGuards = [
+    ...(executionMode.appRbacEnabled || executionMode.requiresUserUnixUsername
+      ? [resolveSessionContext(), loadSession(sessionsService)]
+      : []),
+    ...(executionMode.requiresUserUnixUsername
+      ? [validateSessionUnixUsername(usersRepository)]
+      : []),
+    ...(executionMode.appRbacEnabled
+      ? [
+          loadBranchFromSession(branchRepository),
+          ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
+        ]
+      : []),
+  ];
+
   // ============================================================================
   // Messages hooks
   // ============================================================================
@@ -1182,10 +1220,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // RBAC: Scope messages.find() to sessions the caller can access.
         // Without this backstop, any authenticated member could list messages
         // across every session/branch by omitting the session_id filter.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -1200,15 +1238,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         protectProviderFailureMetadata,
         protectWidgetMessageWrites,
         protectPermissionMessageWrites,
-        ...(branchRbacEnabled
-          ? [
-              resolveSessionContext(),
-              loadSession(sessionsService),
-              validateSessionUnixUsername(usersRepository), // Defensive check: session.unix_username must match creator's current unix_username
-              loadBranchFromSession(branchRepository),
-              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
-            ]
-          : []),
+        ...promptWriteGuards,
         // Reclassify executor-scoped credential and narrow provider-credit
         // failures structurally, never by matching arbitrary provider text.
         classifyMissingCredentialFailure(
@@ -1226,7 +1256,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),
         protectProviderFailureMetadata,
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -1239,7 +1269,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete messages'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -1302,7 +1332,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       // rows. The service composes this marker into an object-specific SQL
       // predicate: branch-bound rows require branch access; loose rows require
       // board visibility.
-      find: [...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : [])],
+      find: [
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+      ],
     },
   });
 
@@ -1324,7 +1356,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       find: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [scopeFindToAccessibleBoards(new BoardRepository(db), superadminOpts)]
           : []),
       ],
@@ -1372,7 +1404,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // Scope find() to the branches the caller can access. The service pushes
         // this into SQL as a correlated visibility predicate rather than
         // preloading ids and injecting `branch_id IN (...)`.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
       publishFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'publish artifacts')],
@@ -1610,7 +1642,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // Board comments inherit board visibility for pure board/spatial
         // comments and branch/session/task/message visibility for attached
         // comments. The service pushes the marker into SQL.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create board comments'), injectCreatedBy()],
       update: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
@@ -1653,10 +1685,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       find: [
         // RBAC: mark external regular-user finds for BranchesService to compose
         // the shared branch visibility predicate directly into its SQL read.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadBranch(branchRepository),
               ensureCanView(superadminOpts), // Require 'view' permission to read branch
@@ -1681,7 +1713,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadBranch(branchRepository),
               ensureBranchPermission('all', 'update branches', superadminOpts), // Require 'all' permission to update
@@ -1709,7 +1741,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete branches'),
         loadBranch(branchRepository),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               ensureBranchPermission('all', 'delete branches', superadminOpts), // Require 'all' permission to delete
             ]
@@ -1719,7 +1751,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
     after: {
       create: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               async (context: HookContext) => {
                 // RBAC: Add the creator as the initial branch owner
@@ -2086,11 +2118,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
-  // The MCP catalog mirrors a public registry plus a repo-checked-in curation
-  // file — no tenant data, and no writes through this service. Authentication
+  // The MCP catalog is a file checked into this repository — no tenant data, no
+  // database behind it, and no writes through this service. Authentication
   // still gates it so an unauthenticated visitor cannot enumerate the browse
-  // surface, and query validation is also the SQL-injection boundary because
-  // every catalog filter reaches the database.
+  // surface. Query validation no longer guards a query: `find` takes no
+  // parameters, and the empty schema is what strips a stale client's filters
+  // instead of letting them look honoured.
   safeService('mcp-catalog')?.hooks({
     before: {
       all: [typedValidateQuery(mcpCatalogQueryValidator), requireAuth],
@@ -2102,7 +2135,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       find: [
         // RBAC: Scope to sessions the caller can access.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
     },
     after: {
@@ -2359,7 +2392,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // that branch before running git ls-files. If sessionId is missing
         // the service itself returns []; we skip the permission check in that
         // case rather than throwing.
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               createTenantScopedBeforeHookChain(db, async (context: HookContext) => {
                 if (!context.params.provider) return context;
@@ -2387,7 +2420,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'read files'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               createTenantScopedBeforeHookChain(
                 db,
@@ -2822,7 +2855,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   configureRealtimePublish({
     app,
     db,
-    branchRbacEnabled,
+    branchRbacEnabled: executionMode.appRbacEnabled,
     branchRepository,
     sessionsRepository,
     accessCache: realtimeAccessCache,
@@ -2843,7 +2876,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     // independently of branch_rbac, so their immutability cannot be conditional
     // on it — an open-access instance can still be running delegated or strict.
     ensureSessionImmutability(),
-    ...(branchRbacEnabled
+    ...(executionMode.appRbacEnabled
       ? [
           resolveSessionContext(),
           loadSession(sessionsService),
@@ -2896,10 +2929,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       find: [
         // RBAC: mark external regular-user finds for SessionsService to compose
         // the shared branch visibility predicate directly into its SQL read.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               // Load session's branch and check permissions
               loadSessionBranch(sessionsService, branchRepository),
@@ -2913,10 +2946,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // registered without RBAC when the Unix mode (strict/delegated) makes
         // unix_username load-bearing — otherwise sessions would be stamped
         // null and fail only at prompt time.
-        ...(branchRbacEnabled || executionMode.requiresUserUnixUsername
+        ...(executionMode.appRbacEnabled || executionMode.requiresUserUnixUsername
           ? [setSessionUnixUsername(usersRepository, executionMode.unixUserMode)]
           : []),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               // Check branch permission BEFORE injecting created_by (need branch_id)
               async (context: HookContext) => {
@@ -2987,7 +3020,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       update: sessionWriteGuards,
       patch: sessionWriteGuards,
       remove: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -3118,10 +3151,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       find: [
-        ...(branchRbacEnabled ? [scopeScheduleQuery(scheduleRepository, superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled
+          ? [scopeScheduleQuery(scheduleRepository, superadminOpts)]
+          : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadScheduleAndBranch(scheduleRepository, branchRepository),
               ensureCanView(superadminOpts),
@@ -3130,7 +3165,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create schedules'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [loadBranch(branchRepository, 'branch_id'), ensureCanCreateSession(superadminOpts)]
           : []),
         enforcePublicWriteFields('Schedule', SCHEDULE_CREATE_WRITE_FIELDS),
@@ -3141,7 +3176,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update schedules'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadScheduleAndBranch(scheduleRepository, branchRepository),
               ensureCanModifySchedule(superadminOpts),
@@ -3160,7 +3195,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete schedules'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadScheduleAndBranch(scheduleRepository, branchRepository),
               ensureBranchPermission('all', 'delete schedule', superadminOpts),
@@ -3180,10 +3215,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(taskQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Scope tasks.find() to sessions the caller can access.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -3194,21 +3229,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create tasks'),
-        ...(branchRbacEnabled
-          ? [
-              resolveSessionContext(),
-              loadSession(sessionsService),
-              validateSessionUnixUsername(usersRepository), // Defensive check: session.unix_username must match creator's current unix_username
-              loadBranchFromSession(branchRepository),
-              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
-            ]
-          : []),
+        ...promptWriteGuards,
         protectExternalTaskCreate,
         injectCreatedBy(),
       ],
       patch: [
         protectServerManagedTaskWrites,
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -3226,7 +3253,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // RBAC: deleting a task requires 'all' permission on the branch
         // (mirrors sessions.remove). Without this, any member with 'session'
         // access could delete tasks owned by other users on shared branches.
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -3247,7 +3274,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const boardRepository = new BoardRepository(db);
   const ensureBoardAccess = (mode: 'view' | 'mutate', action: string) => {
     return async (context: HookContext) => {
-      if (!branchRbacEnabled || !context.params.provider) return context;
+      if (!executionMode.appRbacEnabled || !context.params.provider) return context;
       const user = context.params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
       if (user._isServiceAccount) return context;
@@ -3311,7 +3338,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // RBAC: restrict boards.find to boards the caller created or has a
         // branch on. The service pushes this into the repository query as one
         // SQL predicate, avoiding a preloaded `board_id IN (...)` list.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       get: [ensureCanViewBoard('view this board')],
       findBySlug: [ensureCanViewBoard('view this board')],

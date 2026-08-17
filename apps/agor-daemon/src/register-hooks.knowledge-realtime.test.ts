@@ -37,7 +37,6 @@ describe('Knowledge command realtime suppression', () => {
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
-      branchRbacEnabled: false,
       requireAuth: async (context) => context,
       superadminOpts: { allowSuperadmin: true },
       sessionsService: {} as RegisterHooksContext['sessionsService'],

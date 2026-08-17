@@ -520,8 +520,16 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
  * be checked rather than trusted: a table that carries tenant data and is then
  * named here would otherwise skip the entire tenant contract and be silently
  * left behind by every deletion.
+ *
+ * Exported for its tests. {@link GLOBAL_TABLES} is empty, so nothing in the
+ * live catalogue can reach this through `deleteTenantData` — and a guard for a
+ * decision made this rarely is one that has to be exercised deliberately or it
+ * will have quietly stopped working by the time it matters.
  */
-function assertDeclaredGlobalRelation(relation: CatalogRelation, qualifiedName: string): void {
+export function assertDeclaredGlobalRelation(
+  relation: CatalogRelation,
+  qualifiedName: string
+): void {
   if (relation.hasTenantColumn) {
     throw new TenantDeletionCatalogError(
       `Refusing tenant deletion: ${qualifiedName} is declared global but has a tenant_id column`

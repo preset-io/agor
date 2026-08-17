@@ -5,12 +5,18 @@
 import {
   checkMigrationStatus,
   createDatabase,
+  getDatabaseInstanceDialect,
   pendingOfflineCutoverMigrations,
-  sanitizeDbError,
 } from '@agor/core/db';
-import { expandPath, extractDbFilePath } from '@agor/core/utils/path';
+import { expandPath } from '@agor/core/utils/path';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import {
+  databaseBackupGuidance,
+  MigrationVerificationError,
+  migrationFailureMessage,
+  migrationVerificationDiagnostics,
+} from '../../lib/db-migrate-presentation.js';
 import {
   requireOfflineCutoverAcknowledgement,
   runConfirmedMigrations,
@@ -42,12 +48,11 @@ export default class DbMigrate extends Command {
       // Priority: DATABASE_URL > AGOR_DB_PATH > default SQLite path
       const dbUrl =
         process.env.DATABASE_URL || expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db');
-      const dbFilePath = extractDbFilePath(dbUrl);
-
       this.log(chalk.bold('🔍 Checking database migration status...'));
       this.log('');
 
       const db = createDatabase({ url: dbUrl });
+      const dialect = getDatabaseInstanceDialect(db);
       const status = await checkMigrationStatus(db);
 
       if (!status.hasPending) {
@@ -68,12 +73,12 @@ export default class DbMigrate extends Command {
       });
       this.log('');
 
-      const offlineCutovers = pendingOfflineCutoverMigrations(status);
+      const offlineCutovers = pendingOfflineCutoverMigrations(dialect, status);
       if (offlineCutovers.length > 0) {
         this.log(chalk.red.bold('⛔ OFFLINE CUTOVER REQUIRED'));
         this.log('');
         this.log(
-          `${offlineCutovers.join(', ')} changes a distributed state/ownership protocol and is not rolling-compatible.`
+          `${offlineCutovers.join(', ')} includes migration work that is not safe while existing daemons are writing.`
         );
         this.log('Old and new daemons must not index this database concurrently.');
         this.log('');
@@ -84,14 +89,15 @@ export default class DbMigrate extends Command {
         );
         this.log('  3. Start only daemons running the new release.');
         this.log('');
-        requireOfflineCutoverAcknowledgement(status, flags['offline-cutover']);
+        requireOfflineCutoverAcknowledgement(db, status, flags['offline-cutover']);
       }
 
       // Warn about backup
       this.log(chalk.bold('⚠️  IMPORTANT: Backup your database before proceeding!'));
       this.log('');
-      this.log(`Run this command to create a backup:`);
-      this.log(chalk.cyan(`  cp ${dbFilePath} ${dbFilePath}.backup-$(date +%s)`));
+      databaseBackupGuidance(dialect, dbUrl).forEach((line) => {
+        this.log(chalk.cyan(line));
+      });
       this.log('');
 
       // Skip confirmation if --yes flag is set
@@ -145,14 +151,11 @@ export default class DbMigrate extends Command {
         this.log('  3. Schema changes were made manually outside migrations');
         this.log('');
         this.log(chalk.bold('Diagnostic steps:'));
-        this.log('  1. Check if columns already exist:');
-        this.log(chalk.cyan(`     sqlite3 ${dbFilePath} "PRAGMA table_info(branches)"`));
-        this.log('  2. Rebuild core package:');
-        this.log(chalk.cyan('     cd packages/core && pnpm build'));
-        this.log('  3. Check migration hashes:');
-        this.log(chalk.cyan(`     sqlite3 ${dbFilePath} "SELECT hash FROM __drizzle_migrations"`));
+        migrationVerificationDiagnostics(dialect, dbUrl).forEach((line) => {
+          this.log(chalk.cyan(line));
+        });
         this.log('');
-        this.error(`Migration verification failed`);
+        throw new MigrationVerificationError();
       }
 
       this.log('');
@@ -164,8 +167,7 @@ export default class DbMigrate extends Command {
       // Force exit to close database connections (postgres-js keeps connections open)
       process.exit(0);
     } catch (error) {
-      const safeError = sanitizeDbError(error);
-      this.error(`Failed to run migrations: ${safeError.message}`);
+      this.error(migrationFailureMessage(error));
     }
   }
 }

@@ -512,48 +512,53 @@ pnpm agor config --yaml
 Tunable from `~/.agor/config.yaml` under `security.*` — see
 [`context/concepts/security.md`](context/concepts/security.md).
 
-### MCP Catalog (`mcp_catalog.*`)
+### MCP Catalog
 
-The MCP marketplace catalog is a mirror of the public
-[MCP registry](https://registry.modelcontextprotocol.io) with a curated overlay
-from `packages/core/src/mcp-catalog/curated.yaml`. Unlike every other table,
-`mcp_catalog_entries` has no `tenant_id`: it holds only public-registry and
-repo-checked-in data, and Agor resolves tenants from request auth so there is no
-tenant list an ingestion job could enumerate. Postgres RLS keeps reads open to
-all tenants and confines writes to the `mcp_catalog_ingestion` system
-capability.
+The MCP marketplace catalog is `packages/core/src/mcp-catalog/curated.yaml`,
+checked into this repository and loaded into the daemon process on first read.
+There is no catalog table and no ingestion job: the marketplace offers exactly
+what that file names, so adding a server is a pull request and removing one
+takes it off the shelf on the next deploy.
 
-Registry sync is **off by default**: it makes outbound requests to the registry
-and, during the auth probe, to arbitrary registry-published hosts, and nothing
-renders uncurated registry rows yet. The ~50 curated entries seed on every
-daemon start regardless, so the marketplace is populated offline.
+The file lists ~50 entries across two keys. `entries:` are servers the public
+[MCP registry](https://registry.modelcontextprotocol.io) publishes under exactly
+that `name`; `unpublished:` are vendor-run endpoints whose reverse-DNS name Agor
+inferred. The split is a curation record only — both lists are offered on one
+shelf and connect the same way — and it is the only place that distinction is
+written down, since parsing flattens the two.
 
-Curation is reconciled, not merely applied: an entry removed from `curated.yaml`
-has its overlay withdrawn on the next seed, so the file stays the source of
-truth for what the marketplace offers.
+`name` is the identity. It is what an installed server records in
+`catalog_entry_name`, so renaming an entry orphans every install of it.
 
-Every request the auth probe makes goes through `createPinnedFetch`
+The read path is one endpoint. `find` takes no query and returns all ~50 entries
+at once; the Marketplace holds them and does its own searching, filtering,
+sorting and paging. So there is no server-side filter to add a case to —
+narrowing lives in `packages/core/src/mcp-catalog/query.ts`, which the browser
+imports directly as `@agor/core/mcp-catalog/query`. It is kept apart from
+`catalog.ts` because that one reads the file off disk and so cannot be bundled.
+One implementation, which is what stops a change to what "search" matches from
+applying on only one side. `get(name)` still resolves a single entry — that is
+how connect turns a `catalog_key` into a URL and transport.
+
+Each entry states an `auth_type` (`none` / `oauth` / `credentials`), or omits it
+where nobody has established the answer. It decides what the marketplace tells a
+user before they press Connect, and nothing else: `mcp-catalog-connect.ts`
+probes the endpoint on every connect, whatever the entry says, and installs only
+on a valid JSON-RPC `initialize` result. Servers the probe finds behind an
+account are refused — there is no credential model for them yet. When the probe
+contradicts the entry, the daemon logs it at `warn` with the stated and probed
+values; that log is the only thing that can catch a stale `auth_type`, because
+nothing else compares the file against the servers it describes.
+
+That probe goes through `createPinnedFetch`
 (`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,
 refuses it unless every resolved address is public, and connects to the address
-it checked — so a registry-published hostname resolving into private space is
-refused rather than fetched. Verdicts record the URL they describe and are
-discarded when the endpoint moves, and only a valid JSON-RPC `initialize` result
-earns `probed_auth_type: none`.
+it checked. It is one request, to the entry's URL and nowhere else.
 
-One sync cannot walk the whole registry — a page takes seconds and there are
-hundreds — so a run checkpoints its cursor and the next resumes from it, and
-pagination gets only part of the deadline so the probe sweep still runs. The
-checkpoint lives in the worker process: a daemon restart re-reads the head,
-which is cheap because unchanged rows are skipped.
-
-```yaml
-# ~/.agor/config.yaml
-mcp_catalog:
-  registry_sync_enabled: false # true = also mirror the public registry
-  sync_interval_hours: 6
-  probe_budget: 40 # entries auth-probed per sync; 0 disables probing
-  # registry_url: https://registry.internal  # advanced override
-```
+The `mcp_catalog:` config section is retired. It stays loadable — an
+unrecognized top-level key throws, so removing it would stop the daemon of
+anyone who still has one — and every key it accepted is ignored. See
+`RETIRED_CONFIG_KEYS` in `packages/core/src/config/config-manager.ts`.
 
 ### Git Config Hardening (`security.git_config_parameters`)
 

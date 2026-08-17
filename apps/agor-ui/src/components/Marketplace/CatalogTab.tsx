@@ -1,9 +1,9 @@
 /**
  * The Catalog: browse the MCP catalog, open an entry, connect it.
  *
- * Filtering and paging happen in SQL — the grid renders one page and never the
- * result set, because the catalog reaches thousands of rows once registry
- * ingestion is on.
+ * The whole catalog arrives in one read, so filtering, ordering and paging all
+ * happen over what the browser holds — see `useCatalogSearch`. The grid still
+ * renders one page at a time; only the round trip per page is gone.
  */
 
 import type { AgenticToolName, MCPCatalogCategory, MCPCatalogEntry } from '@agor/core/types';
@@ -33,7 +33,6 @@ const GRID_SPANS = { xs: 24, sm: 12, lg: 8, xxl: 6 } as const;
 
 const INITIAL_FILTERS: CatalogFilterState = {
   search: '',
-  reviewedOnly: false,
   connectableOnly: false,
   sort: DEFAULT_SORT,
 };
@@ -71,7 +70,7 @@ const CatalogGrid = memo<{
 }>(({ entries, onOpen }) => (
   <Row gutter={[16, 16]}>
     {entries.map((entry) => (
-      <Col key={entry.catalog_entry_id} {...GRID_SPANS}>
+      <Col key={entry.name} {...GRID_SPANS}>
         <CatalogCard entry={entry} onOpen={onOpen} />
       </Col>
     ))}
@@ -123,10 +122,6 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
     (capability?: string) => applyFilter({ capability }),
     [applyFilter]
   );
-  const onReviewedOnlyChange = useCallback(
-    (reviewedOnly: boolean) => applyFilter({ reviewedOnly }),
-    [applyFilter]
-  );
   const onConnectableOnlyChange = useCallback(
     (connectableOnly: boolean) => applyFilter({ connectableOnly }),
     [applyFilter]
@@ -171,7 +166,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
       setConnectError(null);
       try {
         const result = await client.service('mcp-catalog/connect').create({
-          catalog_key: selected.catalog_entry_id,
+          catalog_key: selected.name,
           branch_id: branchId,
           agentic_tool: agenticTool,
           acknowledged_disclosure: acknowledgedDisclosure,
@@ -197,13 +192,11 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         search={filters.search}
         category={filters.category}
         capability={filters.capability}
-        reviewedOnly={filters.reviewedOnly}
         connectableOnly={filters.connectableOnly}
         sort={filters.sort}
         onSearchChange={onSearchChange}
         onCategoryChange={onCategoryChange}
         onCapabilityChange={onCapabilityChange}
-        onReviewedOnlyChange={onReviewedOnlyChange}
         onConnectableOnlyChange={onConnectableOnlyChange}
         onSortChange={onSortChange}
         matchSummary={matchSummary}
@@ -246,8 +239,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
       ) : entries.length === 0 ? (
         // "No servers match" means the filters excluded everything. With
         // nothing filtering there is nothing to have excluded, so an empty read
-        // is an empty catalog — which on a fresh daemon means seeding has not
-        // finished, several quiet minutes after `/health` starts answering.
+        // means the daemon could not read its catalog at all.
         isFilterActive(filters) ? (
           <Empty description="No servers match" />
         ) : (

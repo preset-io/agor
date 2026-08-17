@@ -9,7 +9,7 @@
  */
 
 import type { AgenticToolName, Branch, MCPCatalogEntry } from '@agor/core/types';
-import { SafetyCertificateOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { ThunderboltOutlined } from '@ant-design/icons';
 import {
   Alert,
   Avatar,
@@ -77,7 +77,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   const [branchId, setBranchId] = useState<string | undefined>();
   const [agenticTool, setAgenticTool] = useState<AgenticToolName>(DEFAULT_AGENT);
 
-  const entryId = entry?.catalog_entry_id;
+  const entryId = entry?.name;
 
   const branchOptions = useMemo(
     () =>
@@ -126,11 +126,6 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
               {title.charAt(0).toUpperCase()}
             </Avatar>
             <Text strong>{title}</Text>
-            {entry.curated && (
-              <Tag color="success" icon={<SafetyCertificateOutlined />}>
-                Reviewed by Preset
-              </Tag>
-            )}
           </Space>
         )
       }
@@ -139,9 +134,9 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
         <Flex vertical gap={token.margin}>
           <div>
             <Title level={4} style={{ marginTop: 0, marginBottom: token.marginXXS }}>
-              {entry.benefit ?? entry.description ?? title}
+              {entry.benefit}
             </Title>
-            {entry.benefit && entry.description && (
+            {entry.description && (
               <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                 {entry.description}
               </Paragraph>
@@ -151,22 +146,13 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
             </Text>
           </div>
 
-          {(entry.website_url || entry.repository_url) && (
-            <Space size={token.margin} wrap>
-              {entry.website_url && (
-                <Link href={entry.website_url} target="_blank" rel="noopener noreferrer">
-                  Website
-                </Link>
-              )}
-              {entry.repository_url && (
-                <Link href={entry.repository_url} target="_blank" rel="noopener noreferrer">
-                  Source
-                </Link>
-              )}
-            </Space>
+          {entry.website_url && (
+            <Link href={entry.website_url} target="_blank" rel="noopener noreferrer">
+              Website
+            </Link>
           )}
 
-          {(entry.capabilities?.length ?? 0) > 0 && (
+          {entry.capabilities.length > 0 && (
             <div>
               <Text strong>What you can do</Text>
               <Space
@@ -174,7 +160,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                 wrap
                 style={{ marginTop: token.marginXS }}
               >
-                {entry.capabilities?.map((capability) => (
+                {entry.capabilities.map((capability) => (
                   <Tag key={capability} color="processing" style={{ marginInlineEnd: 0 }}>
                     {capabilityLabel(capability)}
                   </Tag>

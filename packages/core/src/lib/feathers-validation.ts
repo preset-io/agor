@@ -9,7 +9,6 @@ import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
-import { MCP_CATALOG_CATEGORIES, MCP_CATALOG_PROBED_AUTH_TYPES } from '../types/mcp-catalog';
 
 /**
  * Query validator with type coercion enabled
@@ -413,64 +412,20 @@ export const mcpServerQuerySchema = createQuerySchema(
 );
 
 /**
- * MCP catalog query schema
+ * MCP catalog query schema: deliberately empty.
  *
- * The catalog's filters reach SQL, so validation is also the injection
- * boundary: `removeAdditional: 'all'` drops anything not listed here before a
- * value can be interpolated into a LIKE pattern or an ORDER BY.
+ * `find` takes no parameters — it returns the whole catalog and the browser
+ * narrows it — so there is nothing here to name. The schema stays registered
+ * rather than being deleted because `removeAdditional: 'all'` is what makes
+ * that contract enforced instead of merely documented: a `search=` or `$skip=`
+ * from a tab left open across the deploy that removed them is stripped here, so
+ * it cannot reach `find` and be quietly ignored one layer further in.
+ *
+ * Stripping rather than rejecting is the deliberate choice: the stale tab gets
+ * the full catalog and renders it, and recovers on reload. A 400 would blank
+ * the Marketplace for anyone mid-deploy.
  */
-export const mcpCatalogQuerySchema = Type.Intersect(
-  [
-    Type.Object({
-      catalog_entry_id: Type.Optional(CommonSchemas.uuid),
-      name: Type.Optional(Type.String({ maxLength: 512 })),
-      search: Type.Optional(Type.String({ maxLength: 128 })),
-      category: Type.Optional(
-        Type.Union(MCP_CATALOG_CATEGORIES.map((category) => Type.Literal(category)))
-      ),
-      capability: Type.Optional(Type.String({ maxLength: 64 })),
-      verified: Type.Optional(Type.Boolean()),
-      curated: Type.Optional(Type.Boolean()),
-      has_remote: Type.Optional(Type.Boolean()),
-      probed_auth_type: Type.Optional(
-        Type.Union(MCP_CATALOG_PROBED_AUTH_TYPES.map((value) => Type.Literal(value)))
-      ),
-      // The plural has to be named here too: `removeAdditional: 'all'` would
-      // otherwise strip it silently and the filter would reach SQL as no filter
-      // at all, which is how a control ends up looking like it works.
-      probed_auth_types: Type.Optional(
-        Type.Array(Type.Union(MCP_CATALOG_PROBED_AUTH_TYPES.map((value) => Type.Literal(value))), {
-          maxItems: MCP_CATALOG_PROBED_AUTH_TYPES.length,
-        })
-      ),
-      // Asking for a lifecycle state by name opts out of the default exclusion
-      // of withdrawn servers, so it has to survive validation rather than be
-      // stripped as an unknown key.
-      registry_status: Type.Optional(Type.String({ maxLength: 32 })),
-      sort: Type.Optional(
-        Type.Union([
-          Type.Literal('popularity'),
-          Type.Literal('name'),
-          Type.Literal('recently_updated'),
-          Type.Literal('relevance'),
-        ])
-      ),
-    }),
-    // Deliberately not `createQuerySchema`: that shape also advertises `$sort`
-    // and `$select`, and this service honours neither. Ordering is the domain
-    // `sort` above, which maps onto indexed SQL; a caller-supplied `$sort` over
-    // arbitrary columns would silently do nothing. Listing only what is
-    // implemented keeps the schema an accurate contract rather than a wish.
-    Type.Object({
-      // Mirrors MCP_CATALOG_PAGINATION.MAX_LIMIT in the catalog service. Every
-      // row carries curation copy and registry metadata, so a page bound the
-      // shared schema would allow is a multi-megabyte response.
-      $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
-      $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
-    }),
-  ],
-  { additionalProperties: false }
-);
+export const mcpCatalogQuerySchema = Type.Object({}, { additionalProperties: false });
 
 /**
  * Create validators for each schema

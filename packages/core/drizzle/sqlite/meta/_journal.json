@@ -603,6 +603,13 @@
       "when": 1786900000000,
       "tag": "0087_add_user_filesystem_home",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "6",
+      "when": 1787000000000,
+      "tag": "0088_drop_mcp_catalog_entries",
+      "breakpoints": true
     }
   ]
 }

@@ -29,6 +29,7 @@ import type {
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
+import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -1202,6 +1203,57 @@ export function setSessionUnixUsername(
   };
 }
 
+/** Loads a user by id for an identity-consistency comparison. */
+export type SessionCreatorLoader = (
+  userId: string
+) => Promise<{ unix_username?: string | null } | null | undefined>;
+
+/**
+ * Refuse a session whose creator no longer owns the `unix_username` the
+ * session was stamped with.
+ *
+ * The stamp is the OS identity the executor runs as under `delegated`/`strict`
+ * (`register-services.ts` feeds `session.unix_username` to
+ * `resolveUnixUserForImpersonation`). Once it drifts, that identity is no
+ * longer the caller's, and the SDK state the session resumes from lives in a
+ * home directory this instance cannot read.
+ *
+ * That is the stamp's role as an *execution* identity, and the only one this
+ * refusal covers. `unix.sync-branch` also reads it, to grant Unix group
+ * membership under `insulated`/`strict`, on a path no caller of this function
+ * sits on — see the `agor_wt_*` reconciliation gap noted in #2287.
+ *
+ * Shared by the transport guard ({@link validateSessionUnixUsername}) and the
+ * executor-startup guard, so both refuse on the same terms with the same
+ * message.
+ *
+ * A session with no stamp is not covered: there is no identity to have drifted,
+ * and `resolveUnixUserForImpersonation` already refuses a missing username in
+ * the modes that need one.
+ */
+export async function assertSessionUnixIdentityUnchanged(
+  session: { created_by: string; unix_username?: string | null },
+  loadCreator: SessionCreatorLoader
+): Promise<void> {
+  if (!session.unix_username) return;
+
+  const creator = await loadCreator(session.created_by);
+
+  if (!creator) {
+    throw new Forbidden(`Session creator not found: ${session.created_by}`);
+  }
+
+  if (creator.unix_username !== session.unix_username) {
+    throw new Forbidden(
+      `Session security context has changed. ` +
+        `Session was created with unix_username="${session.unix_username}" ` +
+        `but creator's current unix_username="${creator.unix_username || 'null'}". ` +
+        `Cannot execute this session with a different unix user. ` +
+        `SDK session data is stored in the original user's home directory and cannot be accessed.`
+    );
+  }
+}
+
 /**
  * Validate session unix_username before prompting
  *
@@ -1214,6 +1266,16 @@ export function setSessionUnixUsername(
  * - User's unix_username changed after session creation
  * - SDK session data would be inaccessible (stored in old home directory)
  * - Execution would happen as wrong Unix user
+ *
+ * The executor of this very session is exempt. It authenticates with a session
+ * token minted for the prompting user, so it is not a service account and would
+ * otherwise be held to this check on every transcript row it writes. By then the
+ * process is already running as the stamped user: refusing its writes only loses
+ * the transcript, and the launch that mattered was already gated by
+ * `prepareSessionForExecutorStart`. The exemption compares the token's own
+ * session claim rather than merely asking whether an executor token is present,
+ * so it cannot be widened by a caller registering this hook somewhere
+ * `executorRuntimeScopeGuard` has not already pinned the claims.
  *
  * @param userRepo - UserRepository instance
  */
@@ -1237,28 +1299,11 @@ export function validateSessionUnixUsername(
       throw new Error('loadSession hook must run before validateSessionUnixUsername');
     }
 
-    // If session has no unix_username, allow (backward compatibility)
-    if (!session.unix_username) {
+    if (executorRuntimeScopeSessionId(context) === session.session_id) {
       return context;
     }
 
-    // Load session creator to check current unix_username
-    const creator = await userRepo.findById(session.created_by);
-
-    if (!creator) {
-      throw new Forbidden(`Session creator not found: ${session.created_by}`);
-    }
-
-    // DEFENSIVE CHECK: Creator's current unix_username must match session's
-    if (creator.unix_username !== session.unix_username) {
-      throw new Forbidden(
-        `Session security context has changed. ` +
-          `Session was created with unix_username="${session.unix_username}" ` +
-          `but creator's current unix_username="${creator.unix_username || 'null'}". ` +
-          `Cannot execute this session with a different unix user. ` +
-          `SDK session data is stored in the original user's home directory and cannot be accessed.`
-      );
-    }
+    await assertSessionUnixIdentityUnchanged(session, (userId) => userRepo.findById(userId));
 
     return context;
   };
