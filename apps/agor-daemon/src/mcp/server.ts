@@ -30,7 +30,7 @@ import {
   UserApiKeysRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { SessionID, TenantContext, UserID } from '@agor/core/types';
+import type { PersistedAgenticToolName, SessionID, TenantContext, UserID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
@@ -83,6 +83,8 @@ export interface McpContext {
   userId: UserID;
   /** Current Agor session context, when the caller supplied or authenticated with one. */
   sessionId?: SessionID;
+  /** Trusted assistant identity resolved from the current tenant-scoped Session. */
+  assistantIdentity?: { sessionId: SessionID; agenticTool: PersistedAgenticToolName };
   authenticatedUser: AuthenticatedUser;
   baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated' | 'provider' | 'tenant'>;
 }
@@ -727,10 +729,15 @@ export function setupMCPRoutes(
         // normal service on every request. Personal keys may supply a short ID;
         // internal tokens carry a signed full ID, but still need fresh branch
         // RBAC after a permission change. This also canonicalizes short IDs.
+        let assistantIdentity: McpContext['assistantIdentity'];
         if (sessionId) {
           try {
             const session = await app.service('sessions').get(sessionId, baseServiceParams);
             sessionId = session.session_id;
+            assistantIdentity = {
+              sessionId: session.session_id,
+              agenticTool: session.agentic_tool,
+            };
           } catch {
             return res.status(403).json({
               ...jsonRpcError(
@@ -753,6 +760,7 @@ export function setupMCPRoutes(
           db,
           userId,
           sessionId,
+          assistantIdentity,
           authenticatedUser,
           baseServiceParams,
         };

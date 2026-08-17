@@ -27,7 +27,9 @@ import type {
   KnowledgeDocumentVersion,
   KnowledgeNamespaceID,
   NullableId,
+  PersistedAgenticToolName,
   QueryParams,
+  SessionID,
   User,
   UserID,
 } from '@agor/core/types';
@@ -73,7 +75,10 @@ export type KnowledgeDocumentParams = QueryParams<{
   includeIndexing?: boolean;
   version?: string | number;
 }> &
-  AuthenticatedParams;
+  AuthenticatedParams & {
+    /** Server-derived only; MCP callers cannot provide service params. */
+    knowledgeWriteAttribution?: { sessionId: SessionID; agenticTool: PersistedAgenticToolName };
+  };
 
 type KnowledgeDocumentWriteData = (CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput) & {
   document_id?: string;
@@ -84,6 +89,14 @@ type KnowledgeDocumentWriteData = (CreateKnowledgeDocumentInput | UpdateKnowledg
   namespace_display_name?: string | null;
   expected_version?: string | number;
 };
+
+function assistantAttribution(params?: KnowledgeDocumentParams) {
+  const identity = params?.knowledgeWriteAttribution;
+  return {
+    updated_by_session_id: identity?.sessionId ?? null,
+    updated_by_agentic_tool: identity?.agenticTool ?? null,
+  };
+}
 
 type KnowledgeDocumentRef = {
   document_id?: string;
@@ -532,6 +545,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
             namespace_slug: undefined,
             path: path ?? existing.path,
             updated_by: this.attributionUserId(params, data.updated_by),
+            ...(typeof data.content_text === 'string' ? assistantAttribution(params) : {}),
           },
           existing
         )
@@ -580,6 +594,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
         path,
         created_by: userId,
         updated_by: this.attributionUserId(params, data.updated_by),
+        ...assistantAttribution(params),
       })
     );
     await this.replaceSearchUnitsForContent(result, data.content_text);
@@ -598,6 +613,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
         ...data,
         created_by: userId,
         updated_by: this.attributionUserId(params, data.updated_by),
+        ...assistantAttribution(params),
       },
       null
     );
@@ -672,6 +688,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
+      ...(typeof data.content_text === 'string' ? assistantAttribution(params) : {}),
     });
     await this.replaceSearchUnitsForContent(
       result,
@@ -715,6 +732,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
+      ...(typeof data.content_text === 'string' ? assistantAttribution(params) : {}),
     });
     await this.replaceSearchUnitsForContent(
       result,

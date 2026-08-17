@@ -292,7 +292,11 @@ function knowledgeNotImplementedResult(toolName: string, servicePaths: string[])
 }
 
 function mcpParams(ctx: McpContext, query?: Record<string, unknown>): Record<string, unknown> {
-  return query ? { ...ctx.baseServiceParams, query } : { ...ctx.baseServiceParams };
+  return {
+    ...ctx.baseServiceParams,
+    ...(ctx.assistantIdentity ? { knowledgeWriteAttribution: ctx.assistantIdentity } : {}),
+    ...(query ? { query } : {}),
+  };
 }
 
 /**

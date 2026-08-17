@@ -217,6 +217,26 @@ describe('Knowledge MCP input schemas', () => {
     expect(data).not.toHaveProperty('first_line_is_title');
   });
 
+  it('passes trusted current-Session assistant attribution to Knowledge writes', async () => {
+    const putDocument = vi.fn().mockResolvedValue({ document_id: 'doc-1' });
+    const tools = await captureKnowledgeTools(
+      { 'kb/documents': { putDocument } },
+      {
+        assistantIdentity: { sessionId: 'session-1', agenticTool: 'codex' },
+      }
+    );
+
+    await tools.agor_kb_put.handler?.({
+      namespace: 'global',
+      path: 'page.md',
+      content: '# Page',
+    });
+
+    expect(putDocument.mock.calls[0][1]).toMatchObject({
+      knowledgeWriteAttribution: { sessionId: 'session-1', agenticTool: 'codex' },
+    });
+  });
+
   it('requires document content to be a string when provided', async () => {
     const tools = await captureKnowledgeTools();
 

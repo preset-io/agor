@@ -1,3 +1,4 @@
+import type { PersistedAgenticToolName } from './agentic-tool';
 import type {
   ArtifactID,
   BoardID,
@@ -610,6 +611,9 @@ export interface KnowledgeDocument {
   created_by?: UserID | null;
   created_at: Date;
   updated_by?: UserID | null;
+  /** Trusted Session attribution for the most recent assistant-authored version. */
+  updated_by_session_id?: SessionID | null;
+  updated_by_agentic_tool?: PersistedAgenticToolName | null;
   updated_at?: Date | null;
   archived: boolean;
   archived_at?: Date | null;
@@ -635,6 +639,9 @@ export interface KnowledgeDocumentVersion {
   metadata?: Record<string, unknown> | null;
   change_summary?: string | null;
   created_by?: UserID | null;
+  /** Present only when this version was written through a Session-scoped agent request. */
+  created_by_session_id?: SessionID | null;
+  created_by_agentic_tool?: PersistedAgenticToolName | null;
   created_at: Date;
 }
 

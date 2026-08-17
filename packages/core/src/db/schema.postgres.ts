@@ -2386,6 +2386,8 @@ export const kbDocuments = pgTable(
     updated_by: varchar('updated_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
     }),
+    updated_by_session_id: varchar('updated_by_session_id', { length: 36 }),
+    updated_by_agentic_tool: text('updated_by_agentic_tool'),
     updated_at: t.timestamp('updated_at'),
     archived: t.bool('archived').notNull().default(false),
     archived_at: t.timestamp('archived_at'),
@@ -2433,6 +2435,8 @@ export const kbDocumentVersions = pgTable(
     created_by: varchar('created_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
     }),
+    created_by_session_id: varchar('created_by_session_id', { length: 36 }),
+    created_by_agentic_tool: text('created_by_agentic_tool'),
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({
