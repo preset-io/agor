@@ -24,6 +24,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tooltip,
   Typography,
   theme,
 } from 'antd';
@@ -303,28 +304,27 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     if (primaryBranch.board_id && primaryBranch.board_id !== currentBoardId) {
       return `→ Opens on ${name}${board ? ` · ${board.name}` : ''}`;
     }
-    return `Creates a session with ${name} here.`;
+    // On the primary's own board: identity is already in the header, no nav to preview.
+    return null;
   })();
 
   const content = (
     <div style={{ width: 680, maxWidth: '90vw' }}>
-      <Flex
-        align="center"
-        justify="space-between"
-        gap={token.marginSM}
-        style={{ marginBottom: token.marginSM }}
-      >
-        <Typography.Text strong>Ask your primary assistant</Typography.Text>
-        {primaryBranch && (
-          <Tag
-            icon={teammateEmoji(primaryBranch) ? undefined : <RobotOutlined />}
-            style={{ marginInlineEnd: 0 }}
-          >
-            {teammateEmoji(primaryBranch) ? `${teammateEmoji(primaryBranch)} ` : ''}
-            {teammateName(primaryBranch)}
-          </Tag>
+      <Typography.Text strong style={{ display: 'block', marginBottom: token.marginSM }}>
+        {primaryBranch ? (
+          <>
+            Ask{' '}
+            {teammateEmoji(primaryBranch) ? (
+              `${teammateEmoji(primaryBranch)} `
+            ) : (
+              <RobotOutlined style={{ marginInlineEnd: token.marginXXS }} />
+            )}
+            {teammateName(primaryBranch)}, your primary assistant
+          </>
+        ) : (
+          'Ask your primary assistant'
         )}
-      </Flex>
+      </Typography.Text>
 
       {!hintDismissed && (
         <Flex
@@ -396,7 +396,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
               <AutocompleteTextarea
                 value={prompt}
                 onChange={setPrompt}
-                placeholder="Ask your primary assistant…"
+                placeholder={
+                  'Ask your primary assistant… e.g. “connect Slack”, “find the API docs”, “fix this bug”'
+                }
                 autoSize={{ minRows: 2, maxRows: 6 }}
                 client={client}
                 sessionId={null}
@@ -428,21 +430,25 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
           )}
 
           <Flex justify="flex-end" gap={token.marginXS}>
-            <Button
-              onClick={() => runSend('background')}
-              loading={submitting === 'background'}
-              disabled={sendDisabled}
-            >
-              Send in Background
-            </Button>
-            <Button
-              type="primary"
-              onClick={() => runSend('open')}
-              loading={submitting === 'open'}
-              disabled={sendDisabled}
-            >
-              Send &amp; Open
-            </Button>
+            <Tooltip title="Send and stay here — come back to it later">
+              <Button
+                onClick={() => runSend('background')}
+                loading={submitting === 'background'}
+                disabled={sendDisabled}
+              >
+                Send in Background
+              </Button>
+            </Tooltip>
+            <Tooltip title="Send and go to the session">
+              <Button
+                type="primary"
+                onClick={() => runSend('open')}
+                loading={submitting === 'open'}
+                disabled={sendDisabled}
+              >
+                Send &amp; Open
+              </Button>
+            </Tooltip>
           </Flex>
         </Form>
       )}

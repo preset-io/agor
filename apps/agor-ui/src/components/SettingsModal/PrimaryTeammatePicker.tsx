@@ -107,8 +107,10 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
     try {
       const branch = await client.service('users').setPrimaryTeammate({ branchId });
       setCurrent(branch);
-      message.success('Primary assistant updated');
-      if (branch) onPicked?.(branch);
+      if (branch) {
+        message.success(`Primary assistant set to ${teammateLabel(branch)}`);
+        onPicked?.(branch);
+      }
     } catch (error) {
       message.error(
         `Failed to update primary assistant: ${error instanceof Error ? error.message : String(error)}`

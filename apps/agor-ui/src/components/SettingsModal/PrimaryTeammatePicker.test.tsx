@@ -97,5 +97,7 @@ describe('PrimaryTeammatePicker', () => {
     fireEvent.click(await screen.findByText('Grace'));
 
     await waitFor(() => expect(setPrimaryTeammate).toHaveBeenCalledWith({ branchId: 'branch-2' }));
+    // Named confirmation toast on a successful pick.
+    expect(await screen.findByText(/Primary assistant set to/)).toBeInTheDocument();
   });
 });
