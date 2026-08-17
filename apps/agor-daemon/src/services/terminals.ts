@@ -42,7 +42,11 @@ import {
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
-import { generateScopedServiceToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  spawnExecutorFireAndForget,
+} from '../utils/spawn-executor.js';
 
 const TERMINAL_EXECUTOR_TOKEN_TTL = '30d';
 
@@ -346,7 +350,7 @@ export class TerminalsService {
       },
       TERMINAL_EXECUTOR_TOKEN_TTL
     );
-    const daemonUrl = `http://127.0.0.1:${config.daemon?.port || 3030}`;
+    const daemonUrl = getDaemonUrl();
 
     this.terminals.set(terminalId, terminal);
     this.terminalByScope.set(scopeKey, terminalId);

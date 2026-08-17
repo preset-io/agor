@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
     branchesById: new Map<string, typeof branch>([[branch.branch_id, branch]]),
     spawnExecutorFireAndForget: vi.fn(),
     generateScopedServiceToken: vi.fn(() => 'terminal-token'),
+    getDaemonUrl: vi.fn(() => 'http://daemon.internal:3030'),
     resolveUnixUserForImpersonation: vi.fn(() => ({
       unixUser: null,
       reportedUnixUser: null,
@@ -84,6 +85,7 @@ vi.mock('../utils/branch-authorization.js', () => ({
 
 vi.mock('../utils/spawn-executor.js', () => ({
   generateScopedServiceToken: mocks.generateScopedServiceToken,
+  getDaemonUrl: mocks.getDaemonUrl,
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
 
@@ -247,7 +249,7 @@ describe('process-affine attachment creation', () => {
     );
     expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
       expect.objectContaining({
-        daemonUrl: 'http://127.0.0.1:3030',
+        daemonUrl: 'http://daemon.internal:3030',
         params: expect.objectContaining({
           terminalId: result.terminalId,
           channel: result.channel,
