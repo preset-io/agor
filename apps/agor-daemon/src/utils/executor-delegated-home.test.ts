@@ -1,4 +1,4 @@
-import type { Database } from '@agor/core/db';
+import { type Database, runWithTenantContext } from '@agor/core/db';
 import type { User, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,6 +16,9 @@ vi.mock('@agor/core/db', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/db');
   return {
     ...actual,
+    runWithTenantDatabaseScope: vi.fn(
+      async (_db: unknown, _tenantId: string, work: (tenantDb: unknown) => unknown) => work({})
+    ),
     UsersRepository: class {
       findById = mocks.findById;
     },
@@ -52,7 +55,9 @@ describe('resolveDelegatedExecutionHomeKey', () => {
     mocks.findById.mockResolvedValue(user);
 
     await expect(
-      resolveDelegatedExecutionHomeKey(db, user.user_id, mocks.loadConfigSync())
+      runWithTenantContext('tenant-test', () =>
+        resolveDelegatedExecutionHomeKey(db, user.user_id, mocks.loadConfigSync())
+      )
     ).resolves.toBe('alice');
     expect(mocks.findById).toHaveBeenCalledWith(user.user_id);
   });
@@ -74,7 +79,23 @@ describe('resolveDelegatedExecutionHomeKey', () => {
     mocks.findById.mockResolvedValue({ user_id: user.user_id });
 
     await expect(
-      resolveDelegatedExecutionHomeKey(db, user.user_id, mocks.loadConfigSync())
+      runWithTenantContext('tenant-test', () =>
+        resolveDelegatedExecutionHomeKey(db, user.user_id, mocks.loadConfigSync())
+      )
     ).rejects.toThrow(/unix_username/);
+  });
+
+  it('fails closed when an id lookup has no active tenant context', async () => {
+    mocks.loadConfigSync.mockReturnValue({
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_command_template: 'launcher --user {unix_user} -- agor-executor --stdin',
+      },
+    });
+
+    await expect(
+      resolveDelegatedExecutionHomeKey(db, user.user_id, mocks.loadConfigSync())
+    ).rejects.toThrow(/Missing active tenant context/);
+    expect(mocks.findById).not.toHaveBeenCalled();
   });
 });
