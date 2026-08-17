@@ -16,6 +16,7 @@ import type {
 import { and, eq, isNull, like, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { restoreRedactedMCPAuthSecrets } from '../../tools/mcp/auth-secrets';
+import { restoreRedactedMCPEnvSecrets } from '../../tools/mcp/env-secrets';
 import {
   normalizeMCPCustomHeaders,
   restoreRedactedMCPCustomHeaders,
@@ -282,6 +283,12 @@ export class MCPServerRepository
         merged.auth = restoreRedactedMCPAuthSecrets({
           current: current.auth,
           next: updates.auth,
+        });
+      }
+      if ('env' in updates) {
+        merged.env = restoreRedactedMCPEnvSecrets({
+          current: current.env,
+          next: updates.env,
         });
       }
       const insertData = this.mcpServerToInsert(merged);

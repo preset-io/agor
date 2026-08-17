@@ -316,6 +316,12 @@
       "import": "./dist/tools/mcp/auth-secrets.js",
       "require": "./dist/tools/mcp/auth-secrets.cjs"
     },
+    "./tools/mcp/env-secrets": {
+      "source": "./src/tools/mcp/env-secrets.ts",
+      "types": "./dist/tools/mcp/env-secrets.d.ts",
+      "import": "./dist/tools/mcp/env-secrets.js",
+      "require": "./dist/tools/mcp/env-secrets.cjs"
+    },
     "./tools/mcp/jwt-auth": {
       "source": "./src/tools/mcp/jwt-auth.ts",
       "types": "./dist/tools/mcp/jwt-auth.d.ts",

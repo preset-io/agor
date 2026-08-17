@@ -56,6 +56,7 @@ export default defineConfig({
     'client/claude-system-suppression': 'src/client/claude-system-suppression.ts', // Browser-safe Claude system event suppression rules
     'tools/mcp/http-headers': 'src/tools/mcp/http-headers.ts', // MCP custom HTTP header utilities
     'tools/mcp/auth-secrets': 'src/tools/mcp/auth-secrets.ts', // MCP auth secret redaction/restoration utilities
+    'tools/mcp/env-secrets': 'src/tools/mcp/env-secrets.ts', // MCP env secret redaction/restoration utilities
     'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
     'tools/mcp/oauth-auth': 'src/tools/mcp/oauth-auth.ts', // MCP OAuth 2.0 authentication utilities
     'tools/mcp/oauth-mcp-transport': 'src/tools/mcp/oauth-mcp-transport.ts', // MCP OAuth 2.1 protocol transport
