@@ -3,7 +3,8 @@
  */
 
 import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
-import { getDaemonUrl, loadConfig } from '@agor/core/config';
+import { type AgorConfig, getDaemonUrl, loadConfig, loadConfigFromFile } from '@agor/core/config';
+import { resolveDatabaseUrl } from '@agor/core/db';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
@@ -44,9 +45,21 @@ export default class DaemonRestart extends Command {
       this.exit(1);
     }
 
+    const identity = getManagedDaemonIdentity();
+    let restartConfig: AgorConfig;
+    try {
+      restartConfig = identity?.configPath
+        ? await loadConfigFromFile(identity.configPath)
+        : await loadConfig();
+    } catch (error) {
+      this.log(chalk.red('✗ Failed to load daemon configuration'));
+      this.log(error instanceof Error ? error.message : String(error));
+      this.exit(1);
+    }
+
     // Validate the new package set before stopping a currently healthy daemon.
     try {
-      await assertConfiguredAgenticToolsReady(await loadConfig());
+      await assertConfiguredAgenticToolsReady(restartConfig);
     } catch (error) {
       this.log(chalk.red('✗ Agentic tools are not ready'));
       this.log(error instanceof Error ? error.message : String(error));
@@ -55,7 +68,9 @@ export default class DaemonRestart extends Command {
 
     let migrationBlocker: string | null;
     try {
-      migrationBlocker = await getDaemonStartMigrationBlocker();
+      migrationBlocker = await getDaemonStartMigrationBlocker(
+        resolveDatabaseUrl({ config: restartConfig })
+      );
     } catch (error) {
       this.log(chalk.red('✗ Failed to check database migration status'));
       this.log(error instanceof Error ? error.message : String(error));
@@ -68,7 +83,6 @@ export default class DaemonRestart extends Command {
 
     try {
       // Stop daemon if running
-      const identity = getManagedDaemonIdentity();
       const daemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
       const existingPid = getDaemonPid();
       let stopped = false;

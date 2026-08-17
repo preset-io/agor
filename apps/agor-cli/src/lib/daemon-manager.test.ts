@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getDaemonIdentityFilePath,
+  getDaemonPid,
   getLogFilePath,
   getManagedDaemonIdentity,
   getManagedDaemonInstanceId,
@@ -49,6 +50,19 @@ describe('daemon-manager logs', () => {
       daemonUrl: 'http://127.0.0.1:4040',
       configPath: '/tmp/custom-agor.yaml',
     });
+  });
+
+  it('clears both ownership records when the PID is stale', () => {
+    fs.mkdirSync(path.dirname(getDaemonIdentityFilePath()), { recursive: true });
+    fs.writeFileSync(path.join(tempHome, '.agor', 'daemon.pid'), '424242');
+    fs.writeFileSync(getDaemonIdentityFilePath(), 'stale-instance');
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('missing process'), { code: 'ESRCH' });
+    });
+
+    expect(getDaemonPid()).toBeNull();
+    expect(fs.existsSync(path.join(tempHome, '.agor', 'daemon.pid'))).toBe(false);
+    expect(fs.existsSync(getDaemonIdentityFilePath())).toBe(false);
   });
 
   it('returns the last requested lines without reading the whole file', () => {

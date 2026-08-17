@@ -45,7 +45,7 @@ import {
   resolveManagedAgenticToolVersion,
   validateInteractiveAgenticToolSelection,
 } from '../lib/agentic-tool-integrations.js';
-import { getManagedDaemonIdentity } from '../lib/daemon-manager.js';
+import { getDaemonPid, getManagedDaemonIdentity } from '../lib/daemon-manager.js';
 import { probeAgorDaemon } from '../lib/daemon-probe.js';
 
 export function isFreshInitState(state: {
@@ -229,11 +229,15 @@ export default class Init extends Command {
     // Use the same environment/config resolution and health probe as
     // `agor daemon status` so re-init cannot drift from the CLI's canonical
     // answer about which daemon endpoint is active.
-    const daemonUrl = getManagedDaemonIdentity()?.daemonUrl ?? (await getDaemonUrl());
-    if ((await probeAgorDaemon(daemonUrl)).running) {
-      throw new Error(
-        `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`
-      );
+    const configuredUrl = await getDaemonUrl();
+    const managedUrl = getDaemonPid() !== null ? getManagedDaemonIdentity()?.daemonUrl : undefined;
+    const urls = [...new Set([managedUrl, configuredUrl].filter((url): url is string => !!url))];
+    for (const daemonUrl of urls) {
+      if ((await probeAgorDaemon(daemonUrl)).running) {
+        throw new Error(
+          `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`
+        );
+      }
     }
   }
 

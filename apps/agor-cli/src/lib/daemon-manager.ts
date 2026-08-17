@@ -102,6 +102,8 @@ export function getDaemonPid(): number | null {
   } catch {
     // Process not found, clean up stale PID file
     fs.unlinkSync(pidFile);
+    const identityFile = getDaemonIdentityFilePath();
+    if (fs.existsSync(identityFile)) fs.unlinkSync(identityFile);
     return null;
   }
 }
