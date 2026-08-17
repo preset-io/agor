@@ -4351,6 +4351,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
       const dbProbe = await probeDatabase(db);
       const publicResponse = {
+        service: 'agor-daemon',
+        // Present only for daemons detached by `agor daemon start`. The CLI
+        // compares this opaque ID with its local ownership record before it
+        // sends a signal, preventing a stale/recycled PID from being killed.
+        managedInstanceId: process.env.AGOR_MANAGED_DAEMON_INSTANCE_ID,
         status:
           healthStatus(dbProbe) === 'ok' && (!realtimeRuntime || realtimeRuntime.isReady())
             ? 'ok'

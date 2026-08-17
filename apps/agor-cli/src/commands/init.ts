@@ -14,6 +14,7 @@ import {
   type AgorConfig,
   createInitialConfig,
   getConfigPath,
+  getDaemonUrl,
   getDefaultConfig,
   loadConfig,
 } from '@agor/core/config';
@@ -33,8 +34,6 @@ import {
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
 import { diagnoseGit } from '@agor/git';
-import { isDaemonRunning } from '@agor-live/client';
-import { getDaemonUrl } from '@agor-live/client/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -46,6 +45,7 @@ import {
   resolveManagedAgenticToolVersion,
   validateInteractiveAgenticToolSelection,
 } from '../lib/agentic-tool-integrations.js';
+import { probeAgorDaemon } from '../lib/daemon-probe.js';
 
 export function isFreshInitState(state: {
   baseExists: boolean;
@@ -229,7 +229,7 @@ export default class Init extends Command {
     // `agor daemon status` so re-init cannot drift from the CLI's canonical
     // answer about which daemon endpoint is active.
     const daemonUrl = await getDaemonUrl();
-    if (await isDaemonRunning(daemonUrl)) {
+    if ((await probeAgorDaemon(daemonUrl)).running) {
       throw new Error(
         `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`
       );
@@ -376,11 +376,6 @@ export default class Init extends Command {
         );
       }
 
-      // A live daemon owns the SQLite database and its WAL/SHM sidecars. Unlinking
-      // those files underneath it can make the replacement migration fail with
-      // SQLITE_IOERR (and can strand writes in the old unlinked database).
-      await this.assertDaemonStoppedBeforeReinit();
-
       // Gather information about what exists
       const dbStats = dbExists ? await this.getDbStats(dbPath) : null;
       const repos = reposExist ? await this.listDirs(reposDir) : [];
@@ -425,6 +420,7 @@ export default class Init extends Command {
 
       // If --force, skip prompts and nuke everything
       if (flags.force) {
+        await this.assertDaemonStoppedBeforeReinit();
         this.log(chalk.yellow('🗑️  --force flag set: deleting everything without prompts...'));
         await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
         await this.performInit(baseDir, dbPath, true);
@@ -443,9 +439,13 @@ export default class Init extends Command {
 
       if (!confirmed) {
         this.log(chalk.dim('Cancelled. Use --force to skip this prompt.'));
-        process.exit(0);
         return;
       }
+
+      // A live daemon owns the SQLite database and its WAL/SHM sidecars. Check
+      // only after the user chooses reset: re-running init must still offer the
+      // intended reset UX, but must never unlink a live database.
+      await this.assertDaemonStoppedBeforeReinit();
 
       // User confirmed - clean up and reinitialize
       await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
@@ -672,7 +672,7 @@ export default class Init extends Command {
 
     // Check if daemon is running
     const daemonUrl = await getDaemonUrl();
-    const daemonRunning = await isDaemonRunning(daemonUrl);
+    const daemonRunning = (await probeAgorDaemon(daemonUrl)).running;
     const isDevMode = await this.isDevMode();
 
     this.log(chalk.bold('Next steps:'));

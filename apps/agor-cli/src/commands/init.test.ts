@@ -370,7 +370,7 @@ describe('initial agentic tool selection', () => {
 
     const server = createServer((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end('{"status":"ok"}');
+      response.end('{"service":"agor-daemon","status":"ok"}');
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();

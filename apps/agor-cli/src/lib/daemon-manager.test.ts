@@ -2,7 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getLogFilePath, readLogs, rotateDaemonLogIfNeeded } from './daemon-manager.js';
+import {
+  getDaemonIdentityFilePath,
+  getLogFilePath,
+  getManagedDaemonInstanceId,
+  readLogs,
+  rotateDaemonLogIfNeeded,
+} from './daemon-manager.js';
 
 describe('daemon-manager logs', () => {
   let tempHome: string;
@@ -19,6 +25,12 @@ describe('daemon-manager logs', () => {
 
   it('returns "No logs found" when daemon log is missing', () => {
     expect(readLogs(50)).toBe('No logs found');
+  });
+
+  it('reads the CLI-managed daemon identity record', () => {
+    fs.mkdirSync(path.dirname(getDaemonIdentityFilePath()), { recursive: true });
+    fs.writeFileSync(getDaemonIdentityFilePath(), ' instance-id\n');
+    expect(getManagedDaemonInstanceId()).toBe('instance-id');
   });
 
   it('returns the last requested lines without reading the whole file', () => {

@@ -3,14 +3,19 @@
  */
 
 import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
-import { loadConfig } from '@agor/core/config';
+import { getDaemonUrl, loadConfig } from '@agor/core/config';
 import { isDaemonRunning } from '@agor-live/client';
-import { getDaemonUrl } from '@agor-live/client/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';
-import { startDaemon, stopDaemon } from '../../lib/daemon-manager.js';
+import {
+  getDaemonPid,
+  getManagedDaemonInstanceId,
+  startDaemon,
+  stopDaemon,
+} from '../../lib/daemon-manager.js';
+import { probeAgorDaemon } from '../../lib/daemon-probe.js';
 
 export default class DaemonRestart extends Command {
   static description = 'Restart daemon';
@@ -64,7 +69,23 @@ export default class DaemonRestart extends Command {
 
     try {
       // Stop daemon if running
-      const stopped = stopDaemon();
+      const daemonUrl = await getDaemonUrl();
+      const existingPid = getDaemonPid();
+      let stopped = false;
+      if (existingPid !== null) {
+        const probe = await probeAgorDaemon(daemonUrl);
+        const managedInstanceId = getManagedDaemonInstanceId();
+        if (!managedInstanceId || probe.managedInstanceId !== managedInstanceId) {
+          throw new Error(
+            `Refusing to signal PID ${existingPid}: it cannot be verified as the CLI-managed Agor daemon at ${daemonUrl}.`
+          );
+        }
+        stopped = stopDaemon();
+      } else if ((await probeAgorDaemon(daemonUrl)).running) {
+        throw new Error(
+          `An Agor daemon is running at ${daemonUrl}, but it is not managed by this CLI. Stop its service, container, or foreground terminal instead.`
+        );
+      }
       if (stopped) {
         this.log(chalk.green('✓ Daemon stopped'));
       }
@@ -85,7 +106,6 @@ export default class DaemonRestart extends Command {
 
       // Wait a moment and check if it's actually running
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      const daemonUrl = await getDaemonUrl();
       const running = await isDaemonRunning(daemonUrl);
 
       if (!running) {

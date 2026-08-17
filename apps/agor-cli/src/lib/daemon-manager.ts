@@ -6,6 +6,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,6 +35,19 @@ export function getAgorHome(): string {
  */
 export function getPidFilePath(): string {
   return path.join(getAgorHome(), 'daemon.pid');
+}
+
+export function getDaemonIdentityFilePath(): string {
+  return path.join(getAgorHome(), 'daemon.instance');
+}
+
+export function getManagedDaemonInstanceId(): string | null {
+  try {
+    const value = fs.readFileSync(getDaemonIdentityFilePath(), 'utf8').trim();
+    return value || null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -105,6 +119,7 @@ export function startDaemon(daemonPath: string, extraEnv?: Record<string, string
   const logStream = fs.openSync(logFile, 'a');
 
   // Spawn daemon in detached mode
+  const managedInstanceId = randomUUID();
   const child = spawn('node', [daemonPath], {
     detached: true,
     stdio: ['ignore', logStream, logStream],
@@ -112,6 +127,7 @@ export function startDaemon(daemonPath: string, extraEnv?: Record<string, string
       ...process.env,
       NODE_ENV: 'production',
       ...extraEnv,
+      AGOR_MANAGED_DAEMON_INSTANCE_ID: managedInstanceId,
     },
   });
 
@@ -120,6 +136,7 @@ export function startDaemon(daemonPath: string, extraEnv?: Record<string, string
 
   // Write PID file
   fs.writeFileSync(getPidFilePath(), child.pid!.toString());
+  fs.writeFileSync(getDaemonIdentityFilePath(), managedInstanceId, { mode: 0o600 });
 
   // Close log stream (child process keeps it open)
   fs.closeSync(logStream);
@@ -177,6 +194,8 @@ export function stopDaemon(): boolean {
     if (fs.existsSync(pidFile)) {
       fs.unlinkSync(pidFile);
     }
+    const identityFile = getDaemonIdentityFilePath();
+    if (fs.existsSync(identityFile)) fs.unlinkSync(identityFile);
 
     return true;
   } catch (error) {

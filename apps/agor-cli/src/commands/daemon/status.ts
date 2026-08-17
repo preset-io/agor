@@ -2,12 +2,12 @@
  * `agor daemon status` - Check daemon status
  */
 
-import { isDaemonRunning } from '@agor-live/client';
-import { getDaemonUrl } from '@agor-live/client/config';
+import { getDaemonUrl } from '@agor/core/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { isAgorInitialized, isInstalledPackage } from '../../lib/context.js';
 import { getDaemonPid, getLogFilePath, getPidFilePath } from '../../lib/daemon-manager.js';
+import { probeAgorDaemon } from '../../lib/daemon-probe.js';
 
 export default class DaemonStatus extends Command {
   static description = 'Check daemon status';
@@ -23,7 +23,7 @@ export default class DaemonStatus extends Command {
     // Get daemon info
     const daemonUrl = await getDaemonUrl();
     const pid = getDaemonPid();
-    const running = initialized ? await isDaemonRunning(daemonUrl) : false;
+    const running = initialized ? (await probeAgorDaemon(daemonUrl)).running : false;
 
     this.log(chalk.bold('\nDaemon Status'));
     this.log(chalk.dim('─'.repeat(50)));
