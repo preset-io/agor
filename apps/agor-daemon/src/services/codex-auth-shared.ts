@@ -16,12 +16,13 @@
  *   ownership and 0600 permissions hold in insulated/strict modes.
  */
 
+import { join } from 'node:path';
 import {
   type AgorConfig,
   hasTenantSafeExecutorCredentialHome,
   unixUserModeRequiresUsername,
 } from '@agor/core/config';
-import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
+import { getCurrentTenantId, type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
@@ -37,6 +38,7 @@ import {
 } from '@agor/core/unix';
 import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
 import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
+import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
 
 export interface AppLike {
   get(name: 'config'): DeepReadonly<AgorConfig>;
@@ -62,6 +64,14 @@ export type CodexUnixIdentityResolution =
       reportedUnixUser: string | null;
       /** Stable trusted identity for persistent-per-user storage selection. */
       userId: UserID;
+      /**
+       * Explicit `CODEX_HOME` (the `.codex` dir) for the auth-file executor.
+       * Set in `unix_user_mode: sandbox` to the caller's per-user home store so
+       * auth is written where the sandboxed session (with that store overlaid at
+       * `~`) reads it. Undefined in other modes (executor uses the effective
+       * user's `~/.codex`).
+       */
+      codexHome?: string;
     }
   | {
       ok: false;
@@ -157,11 +167,32 @@ export async function resolveCodexUnixIdentity(
         message: 'Codex credential routing requires an authenticated user identity.',
       };
     }
+    // In sandbox mode the executor runs as the daemon user with the caller's
+    // per-user store overlaid at `~`. Auth must be written to THAT store's
+    // `.codex` (honoring an explicit filesystem_home), so both the auth flow and
+    // later sandboxed sessions agree on where auth.json lives.
+    let codexHome: string | undefined;
+    if (mode === 'sandbox') {
+      const tenantId = getCurrentTenantId();
+      const row = await withTenantDatabase((tenantDb) =>
+        new UsersRepository(tenantDb).findById(userId)
+      );
+      codexHome = join(
+        resolveOwnerHomeStore({
+          config,
+          tenantId,
+          ownerUserId: userId,
+          filesystemHome: row?.filesystem_home,
+        }),
+        '.codex'
+      );
+    }
     return {
       ok: true,
       unixUser: resolved.unixUser,
       reportedUnixUser: resolved.reportedUnixUser,
       userId,
+      codexHome,
     };
   } catch (err) {
     return {
@@ -186,14 +217,18 @@ export async function persistVerifiedCodexAuth(options: {
   reportedUnixUser: string | null;
   userId: UserID;
   authUser: NonNullable<AuthenticatedParams['user']>;
+  /** Per-user store `.codex` for sandbox mode (see CodexUnixIdentityResolution.codexHome). */
+  codexHome?: string;
 }): Promise<CodexAuthSummary> {
-  const { app, normalized, targetUnixUser, reportedUnixUser, userId, authUser } = options;
+  const { app, normalized, targetUnixUser, reportedUnixUser, userId, authUser, codexHome } =
+    options;
 
   let summary: CodexAuthSummary;
   try {
     summary = await writeCodexAuthViaExecutor(normalized, targetUnixUser, {
       reportedUnixUser,
       userId,
+      codexHome,
     });
   } catch (err) {
     // The error may carry sudo/bash stderr; log a class-level summary only

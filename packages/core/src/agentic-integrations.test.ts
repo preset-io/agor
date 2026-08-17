@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  assertConfiguredAgenticToolsReady,
+  createManagedAgenticToolInstallManifest,
   getAgenticToolInstallDir,
   getAgenticToolSelectionManifestPath,
   InvalidAgenticToolSelectionManifestError,
@@ -65,6 +67,15 @@ async function createFakeManagedClaude(version: string): Promise<string> {
 }
 
 describe('managed agentic tool loading', () => {
+  it('creates a minimal exact integration manifest with no lifecycle policy', () => {
+    expect(createManagedAgenticToolInstallManifest('opencode', '1.2.3')).toEqual({
+      name: 'agor-managed-opencode',
+      version: '0.0.0',
+      private: true,
+      dependencies: { '@agor-live/opencode': '1.2.3' },
+    });
+  });
+
   it('loads only the version-aligned package from the managed directory', async () => {
     const packageDirectory = await createFakeManagedClaude('1.2.3');
     await writeFile(
@@ -186,5 +197,66 @@ describe('agentic tool selection policy', () => {
     await expect(resolveAgenticToolSelectionPolicy({})).rejects.toThrow(
       'unsupported schema or tool selection'
     );
+  });
+});
+
+describe('configured agentic tool startup readiness', () => {
+  it('does not apply the packaged-install contract to source checkouts', async () => {
+    await expect(
+      assertConfiguredAgenticToolsReady(
+        { agentic_tools: { installed: ['codex'] } },
+        { AGOR_MANAGED_AGENTIC_TOOLS: '0' }
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it('requires an intentional policy instead of starting with an implicit empty selection', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-agentic-policy-'));
+    temporaryDirectories.push(root);
+    process.env.AGOR_AGENTIC_TOOLS_DIR = root;
+
+    await expect(
+      assertConfiguredAgenticToolsReady(
+        {},
+        { AGOR_MANAGED_AGENTIC_TOOLS: '1', AGOR_VERSION: '1.2.3' }
+      )
+    ).rejects.toThrow(/agor install[\s\S]*agentic_tools\.installed: \[\]/);
+  });
+
+  it('allows an explicitly tool-free headless deployment', async () => {
+    await expect(
+      assertConfiguredAgenticToolsReady(
+        { agentic_tools: { installed: [] } },
+        { AGOR_MANAGED_AGENTIC_TOOLS: '1', AGOR_VERSION: '1.2.3' }
+      )
+    ).resolves.toEqual([]);
+  });
+
+  it('fails an upgraded selected tool with the exact repair command', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-agentic-policy-'));
+    temporaryDirectories.push(root);
+    process.env.AGOR_AGENTIC_TOOLS_DIR = root;
+
+    await expect(
+      assertConfiguredAgenticToolsReady(
+        { agentic_tools: { installed: ['codex'] } },
+        { AGOR_MANAGED_AGENTIC_TOOLS: '1', AGOR_VERSION: '1.2.3' }
+      )
+    ).rejects.toThrow(/Codex: missing or invalid[\s\S]*agor install --sync/);
+  });
+
+  it('returns the selected tools when their exact managed packages are ready', async () => {
+    const packageDirectory = await createFakeManagedClaude('1.2.3');
+    await writeFile(
+      join(packageDirectory, 'index.js'),
+      "export const AGOR_INTEGRATION_VERSION = '1.2.3'; export const sdk = {};"
+    );
+
+    await expect(
+      assertConfiguredAgenticToolsReady(
+        { agentic_tools: { installed: ['claude-code'] } },
+        { AGOR_MANAGED_AGENTIC_TOOLS: '1', AGOR_VERSION: '1.2.3' }
+      )
+    ).resolves.toEqual(['claude-code']);
   });
 });

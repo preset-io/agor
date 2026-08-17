@@ -54,14 +54,15 @@ async function appendTaskFailureMessage(
   const safeFailure = formatExecutorFailure(failure);
   try {
     const existingMessages = await client.service('messages').find({
-      query: { session_id: sessionId, $limit: 0 },
+      query: {
+        session_id: sessionId,
+        $sort: { index: -1 },
+        $limit: 1,
+        $select: ['index'],
+      },
     });
-    const messageCount =
-      typeof existingMessages === 'object' && 'total' in existingMessages
-        ? existingMessages.total
-        : Array.isArray(existingMessages)
-          ? existingMessages.length
-          : 0;
+    const rows = Array.isArray(existingMessages) ? existingMessages : existingMessages.data;
+    const nextIndex = rows.length > 0 ? rows[0].index + 1 : 0;
 
     await client.service('messages').create({
       message_id: generateId() as MessageID,
@@ -69,7 +70,7 @@ async function appendTaskFailureMessage(
       task_id: taskId,
       type: 'system',
       role: MessageRole.SYSTEM,
-      index: messageCount,
+      index: nextIndex,
       timestamp: new Date().toISOString(),
       content: safeFailure,
       content_preview: safeFailure.substring(0, 200),

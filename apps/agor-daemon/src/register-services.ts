@@ -11,6 +11,7 @@ import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon
 import {
   type AgorConfig,
   isDeploymentAgenticToolAvailable,
+  MESSAGE_PAGINATION,
   PublicBaseUrlNotConfiguredError,
   type ResolvedDeploymentConfig,
   requirePublicBaseUrl,
@@ -31,6 +32,7 @@ import {
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
   mcpServers,
+  RepoRepository,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
   SessionMCPServerRepository,
@@ -201,6 +203,7 @@ import {
   isSessionMcpServerLinkVisibleToCaller,
   loadMcpServerForCaller,
 } from './utils/mcp-server-authorization.js';
+import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
@@ -325,6 +328,35 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   app.use('/leaderboard', createLeaderboardService(db));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
+  const messageOpenApiProperties = {
+    message_id: { type: 'string', format: 'uuid' },
+    session_id: { type: 'string', format: 'uuid' },
+    task_id: { type: 'string', format: 'uuid' },
+    type: {
+      type: 'string',
+      enum: [
+        'user',
+        'assistant',
+        'system',
+        'file-history-snapshot',
+        'permission_request',
+        'input_request',
+        'daemon_restart',
+        'daemon_crash',
+        'widget_request',
+      ],
+    },
+    role: { type: 'string', enum: ['user', 'assistant', 'system'] },
+    index: { type: 'integer', minimum: 0 },
+    timestamp: { type: 'string', format: 'date-time' },
+    content_preview: { type: 'string' },
+    content: {
+      oneOf: [{ type: 'string' }, { type: 'array', items: {} }, { type: 'object' }],
+    },
+    tool_uses: { type: 'array', items: { type: 'object' } },
+    parent_tool_use_id: { type: 'string', nullable: true },
+    metadata: { type: 'object', additionalProperties: true },
+  };
 
   app.use('/messages', messagesService, {
     methods: [...MESSAGES_SERVICE_TRANSPORT_METHODS],
@@ -341,20 +373,37 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     ],
     docs: {
       description: 'Conversation messages within AI agent sessions',
+      refs: { createRequest: 'messagesCreate', createResponse: 'messages' },
       definitions: {
         messages: {
           type: 'object',
+          properties: messageOpenApiProperties,
+        },
+        messagesCreate: {
+          type: 'object',
+          required: [
+            'session_id',
+            'type',
+            'role',
+            'index',
+            'timestamp',
+            'content_preview',
+            'content',
+          ],
+          additionalProperties: false,
+          properties: messageOpenApiProperties,
+        },
+        messagesList: {
+          type: 'object',
+          required: ['total', 'limit', 'skip', 'data'],
           properties: {
-            message_id: { type: 'string', format: 'uuid' },
-            session_id: { type: 'string', format: 'uuid' },
-            task_id: { type: 'string', format: 'uuid' },
-            type: {
-              type: 'string',
-              enum: ['user', 'assistant', 'system', 'tool_use', 'tool_result'],
+            total: { type: 'integer', minimum: 0 },
+            limit: { type: 'integer', minimum: 0, maximum: MESSAGE_PAGINATION.MAX_LIMIT },
+            skip: { type: 'integer', minimum: 0 },
+            data: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/messages' },
             },
-            role: { type: 'string' },
-            content: { type: 'string' },
-            created_at: { type: 'string', format: 'date-time' },
           },
         },
       },
@@ -944,16 +993,88 @@ function createExecuteHandler(
 
     const taskId = data.taskId;
 
-    // Get branch path
+    // Get branch path (+ authoritative base repo path for the sandbox) and, for
+    // RBAC-aware mounting, the session OWNER's effective filesystem access to
+    // the branch. The filesystem sandbox binds `<baseRepoPath>/.git` writable so
+    // worktree commits work; we resolve `repo.local_path` from Agor's own DB
+    // state rather than parsing the on-disk `.git` pointer (deterministic, and
+    // unaffected if a worktree's origin/gitdir is later rewritten).
+    const sandboxCfg = config.execution?.sandbox;
+    const rbacOn = config.execution?.branch_rbac === true;
     let cwd = process.cwd();
+    let sandboxBaseRepoPath: string | undefined;
+    const sandboxWorktreesRoot =
+      sandboxCfg?.enabled === true
+        ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
+        : undefined;
+    // Effective fs access of the OWNER on the branch: 'write' | 'read' | 'none'.
+    // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
+    // to 'write' when RBAC is off (open-access behavior).
+    let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
     if (session.branch_id) {
-      const branchPath = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
-        const branch = await new BranchRepository(tenantDb).findById(session.branch_id);
-        return branch?.path;
+      const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+        const branchRepo = new BranchRepository(tenantDb);
+        const branch = await branchRepo.findById(session.branch_id);
+        if (!branch?.path) return undefined;
+        let baseRepoPath: string | undefined;
+        // Only linked worktrees need the shared git dir; a self-standing clone
+        // carries its own `.git` inside the branch dir.
+        if (branch.storage_mode !== 'clone' && branch.repo_id) {
+          const repo = await new RepoRepository(tenantDb).findById(branch.repo_id);
+          baseRepoPath = repo?.local_path ?? undefined;
+        }
+        let fsAccess: 'write' | 'read' | 'none' = 'write';
+        if (rbacOn && session.created_by) {
+          const access = await branchRepo.resolveUserAccess(branch, session.created_by as UUID);
+          fsAccess =
+            access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
+        }
+        return { path: branch.path, baseRepoPath, fsAccess };
       });
-      if (!branchPath)
+      if (!branchMounts)
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);
-      cwd = branchPath;
+      cwd = branchMounts.path;
+      sandboxBaseRepoPath = branchMounts.baseRepoPath;
+      principalBranchAccess = branchMounts.fsAccess;
+      // Under the sandbox, 'none' means the branch would not be mounted at all,
+      // so the task cannot operate on it. Fail fast with a clear message rather
+      // than letting bwrap abort on a missing chdir target.
+      if (sandboxCfg?.enabled === true && principalBranchAccess === 'none') {
+        throw new Error(
+          `The session owner has no filesystem access to branch ${session.branch_id}. ` +
+            'Grant at least read access (others_fs_access) to run sessions on this branch under ' +
+            'the filesystem sandbox.'
+        );
+      }
+    }
+
+    // Per-owner home store for `sandbox.home_mode: per_user` — a private,
+    // persistent home overlaid at the passwd home inside the sandbox. Keyed by
+    // the SESSION OWNER (not the prompter): the home carries the owner's tool
+    // auth/state, so prompting another user's session runs against the owner's
+    // home (carry strict's warning). The SOURCE is the owner's `filesystem_home`
+    // if set (the migration points it at their existing /home/<user> so no files
+    // move), else the canonical store (see resolveOwnerHomeStore). Only computed
+    // when the mode is active — and FAIL CLOSED if the owner can't be resolved.
+    let sandboxHomeStore: string | undefined;
+    if (sandboxCfg?.enabled === true && sandboxCfg?.home_mode === 'per_user') {
+      if (!session.created_by) {
+        throw new Error(
+          'sandbox home_mode=per_user requires a resolvable session owner; refusing to spawn ' +
+            'with a shared home (fail closed).'
+        );
+      }
+      const ownerFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        new UsersRepository(tenantDb)
+          .findById(session.created_by as string)
+          .then((u) => u?.filesystem_home?.trim() || undefined)
+      );
+      sandboxHomeStore = resolveOwnerHomeStore({
+        config,
+        tenantId,
+        ownerUserId: session.created_by,
+        filesystemHome: ownerFilesystemHome,
+      });
     }
 
     // Determine Unix user for executor
@@ -1109,6 +1230,12 @@ function createExecuteHandler(
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
+        // Authoritative sandbox mount inputs (consumed in spawn-executor →
+        // buildSandboxWrap). Undefined when the sandbox / per_user home is off.
+        sandboxBaseRepoPath,
+        sandboxHomeStore,
+        sandboxWorktreesRoot,
+        principalBranchAccess,
       },
     };
 

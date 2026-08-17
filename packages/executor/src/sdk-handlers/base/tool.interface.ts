@@ -15,9 +15,7 @@ import type { AuthCheckResult, Message } from '@agor/core/types';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type {
   CreateSessionConfig,
-  ImportOptions,
   MessageRange,
-  SessionData,
   SessionHandle,
   SessionMetadata,
   StreamingCallbacks,
@@ -50,21 +48,6 @@ export interface ITool {
    * Check if tool is installed and accessible
    */
   checkInstalled(): Promise<boolean>;
-
-  // ============================================================
-  // Session Import (if supportsSessionImport)
-  // ============================================================
-
-  /**
-   * Import existing session from tool's storage
-   *
-   * Example: Load Claude Code session from ~/.claude/projects/
-   *
-   * @param sessionId - Tool's session identifier
-   * @param options - Import options (e.g., project directory)
-   * @returns Rich session data with messages and metadata
-   */
-  importSession?(sessionId: string, options?: ImportOptions): Promise<SessionData>;
 
   // ============================================================
   // Session Creation (if supportsSessionCreate)

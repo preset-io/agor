@@ -9,6 +9,7 @@ import * as yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
+  assertValidEffectiveExecutionConfig,
   createInitialConfig,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
@@ -119,6 +120,14 @@ describe('resolveEffectiveConfig', () => {
     expect(input).toEqual({ daemon: { host: 'yaml-host', port: 1234 } });
   });
 
+  it('projects AGOR_DATA_HOME into the effective config snapshot', () => {
+    const resolved = resolveEffectiveConfig(
+      { paths: { data_home: '/from-yaml' } },
+      { AGOR_DATA_HOME: '/from-environment' }
+    );
+    expect(resolved.paths?.data_home).toBe('/from-environment');
+  });
+
   it('keeps Unix executor impersonation opt-in while preserving explicit overrides', () => {
     expect(
       resolveEffectiveConfig(
@@ -147,6 +156,124 @@ describe('resolveEffectiveConfig', () => {
         }
       ).execution?.executor_unix_user
     ).toBe('custom-runner');
+  });
+
+  it('unix_user_mode: sandbox implies RBAC + enabled per-user sandbox that fails closed', () => {
+    const resolved = resolveEffectiveConfig({ execution: { unix_user_mode: 'sandbox' } }, {});
+    expect(resolved.execution?.branch_rbac).toBe(true);
+    expect(resolved.execution?.sandbox).toMatchObject({
+      enabled: true,
+      home_mode: 'per_user',
+      fail_if_unavailable: true,
+    });
+  });
+
+  it('sandbox mode FORCES its security invariants — config/env cannot weaken them', () => {
+    const resolved = resolveEffectiveConfig(
+      {
+        execution: {
+          unix_user_mode: 'sandbox',
+          // Every one of these attempts to weaken the mode and must be ignored.
+          sandbox: { enabled: false, home_mode: 'shared', fail_if_unavailable: false },
+        },
+      },
+      { AGOR_SANDBOX_HOME_MODE: 'shared' }
+    );
+    expect(resolved.execution?.sandbox).toMatchObject({
+      enabled: true,
+      home_mode: 'per_user',
+      fail_if_unavailable: true,
+    });
+  });
+
+  it('sandbox mode preserves non-security tunables (include/extras/protect_secrets)', () => {
+    const resolved = resolveEffectiveConfig(
+      {
+        execution: {
+          unix_user_mode: 'sandbox',
+          sandbox: {
+            extra_allow_write: ['/opt/cache'],
+            include: { tmp: false },
+            preserve_canonical_home_alias: true,
+          },
+        },
+      },
+      {}
+    );
+    expect(resolved.execution?.sandbox?.extra_allow_write).toEqual(['/opt/cache']);
+    expect(resolved.execution?.sandbox?.include).toMatchObject({ tmp: false });
+    expect(resolved.execution?.sandbox?.preserve_canonical_home_alias).toBe(true);
+    expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
+  });
+
+  it('AGOR_SANDBOX_HOME_MODE env still overrides home_mode without the sandbox isolation mode', () => {
+    const resolved = resolveEffectiveConfig(
+      { execution: { sandbox: { enabled: true } } },
+      { AGOR_SANDBOX_HOME_MODE: 'per_user' }
+    );
+    expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
+    expect(resolved.execution?.branch_rbac).not.toBe(true); // not sandbox mode → no forced RBAC
+  });
+});
+
+describe('assertValidEffectiveExecutionConfig', () => {
+  it.each(['strict', 'insulated'] as const)(
+    'rejects sandboxing combined with %s Unix mode',
+    (unix_user_mode) => {
+      expect(() =>
+        assertValidEffectiveExecutionConfig({
+          execution: { unix_user_mode, sandbox: { enabled: true } },
+        })
+      ).toThrow(/incompatible/);
+    }
+  );
+
+  it('rejects sandboxing combined with a local impersonation user', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          unix_user_mode: 'simple',
+          executor_unix_user: 'agor_executor',
+          sandbox: { enabled: true },
+        },
+      })
+    ).toThrow(/executor_unix_user/);
+  });
+
+  it('rejects unsupported combinations introduced entirely by environment overrides', () => {
+    const resolved = resolveEffectiveConfig(
+      {},
+      {
+        AGOR_SANDBOX_ENABLED: 'true',
+        AGOR_USE_EXECUTOR: 'true',
+      }
+    );
+    expect(() => assertValidEffectiveExecutionConfig(resolved)).toThrow(/executor_unix_user/);
+  });
+
+  it('rejects sandboxing combined with an external executor template', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          unix_user_mode: 'delegated',
+          executor_command_template: 'docker run {{command}}',
+          sandbox: { enabled: true },
+        },
+      })
+    ).toThrow(/executor_command_template/);
+  });
+
+  it('allows supported standalone and named sandbox configurations', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig({ execution: { unix_user_mode: 'sandbox' } }, {})
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: { unix_user_mode: 'simple', sandbox: { enabled: true } },
+      })
+    ).not.toThrow();
   });
 });
 
@@ -219,11 +346,52 @@ describe('loadConfig', () => {
     expect(loaded).toMatchObject(configData);
   });
 
+  it('loads the documented canonical-home sandbox compatibility setting', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      'execution:\n  unix_user_mode: sandbox\n  sandbox:\n    preserve_canonical_home_alias: true\n',
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      execution: {
+        unix_user_mode: 'sandbox',
+        sandbox: { preserve_canonical_home_alias: true },
+      },
+    });
+  });
+
+  it('rejects unknown sandbox keys and a non-boolean canonical-home option', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      'execution:\n  sandbox:\n    preserve_canonical_home_alias: true\n    surprise: true\n',
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/execution\.sandbox\.surprise/);
+
+    await fs.writeFile(
+      configPath,
+      'execution:\n  sandbox:\n    preserve_canonical_home_alias: "true"\n',
+      'utf-8'
+    );
+    __resetConfigCacheForTests();
+    await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
+  });
+
   it('boots with a full mcp_catalog block from before the catalog moved into the repository', async () => {
     // The catalog is a file in this repository and has nothing to configure,
     // but an unrecognized top-level key throws — so removing the section
     // outright would stop the daemon of every operator who has one in their
     // config. Every key it ever accepted has to keep loading, and be ignored.
+    //
+    // AGENTS.md no longer documents the block, so this restates the keys rather
+    // than scraping them out of the docs the way the pre-retirement test did.
     const agorDir = path.join(tempDir, '.agor');
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(

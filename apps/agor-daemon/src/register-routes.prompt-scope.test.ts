@@ -21,6 +21,28 @@ describe('prompt and widget transaction scopes', () => {
     );
   });
 
+  it('enforces branch prompt RBAC before admitting a Task (repository admission bypasses the tasks.create hook)', () => {
+    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
+    const prompt = source.slice(promptStart, promptEnd);
+
+    // The check must run before the durable Task admission — otherwise a
+    // 'session'-tier collaborator prompting another user's session would be
+    // admitted (and run under the owner's identity/home) instead of 403'd.
+    const rbacCheck = prompt.indexOf('resolveSessionPromptAccess({');
+    const taskAdmission = prompt.indexOf('taskRepo.createPending(');
+    expect(rbacCheck).toBeGreaterThan(0);
+    expect(taskAdmission).toBeGreaterThan(0);
+    expect(rbacCheck).toBeLessThan(taskAdmission);
+
+    // Internal/daemon callers (spawn-prompt forward, widgets, scheduler,
+    // gateway) and executor service accounts are exempt from the user-facing
+    // branch check.
+    expect(prompt).toContain('const isInternalPrompt = !params.provider;');
+    expect(prompt).toContain('_isServiceAccount');
+    expect(prompt).toContain('branchRbacEnabled && !isInternalPrompt');
+  });
+
   it('does not keep a route-wide tenant transaction over widget external work', () => {
     for (const path of ["'/widgets/:id/submit'", "'/widgets/:id/dismiss'"]) {
       const start = source.indexOf(path);

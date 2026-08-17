@@ -77,6 +77,7 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
         reportedUnixUser: identity.reportedUnixUser,
         userId,
         authUser,
+        codexHome: identity.codexHome,
       });
 
       return {

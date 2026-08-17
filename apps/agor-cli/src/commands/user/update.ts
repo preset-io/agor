@@ -44,6 +44,10 @@ export default class UserUpdate extends BaseCommand {
     'unix-username': Flags.string({
       description: 'New Unix username for shell access',
     }),
+    'filesystem-home': Flags.string({
+      description:
+        'Absolute host home dir for the per-user sandbox overlay (unix_user_mode: sandbox). Admin-only.',
+    }),
     'force-password-change': Flags.boolean({
       description: 'Force user to change password on next login (omit to leave unchanged)',
       allowNo: true, // Allows --no-force-password-change to clear the flag
@@ -173,12 +177,14 @@ export default class UserUpdate extends BaseCommand {
         password?: string;
         must_change_password?: boolean;
         unix_username?: string;
+        filesystem_home?: string;
       } = {};
       if (flags.email) updates.email = flags.email;
       if (flags.name) updates.name = flags.name;
       if (flags.password) updates.password = flags.password;
       if (flags.role) updates.role = flags.role as 'superadmin' | 'admin' | 'member' | 'viewer';
       if (flags['unix-username']) updates.unix_username = flags['unix-username'];
+      if (flags['filesystem-home']) updates.filesystem_home = flags['filesystem-home'];
       if (flags['force-password-change'] !== undefined) {
         updates.must_change_password = flags['force-password-change'];
       }

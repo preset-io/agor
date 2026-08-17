@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agor.live/schemas/kb-materialization/2026-06-06.json",
+  "document_id": "019fff26-faf6-743f-a685-e8463bcb25f7",
+  "uri": "agor://kb/agor-cloud-team/architecture/executor-sandboxing-srt-2026-08.md",
+  "namespace": "agor-cloud-team",
+  "path": "architecture/executor-sandboxing-srt-2026-08.md",
+  "version_id": "019fff26-faf6-74ba-8e38-94d2e08d9d9b",
+  "version_number": 1,
+  "content_sha256": "6d38063cde291b9b6a47fb9e6c3e4579c7a2c786635852446efe004e9875b382",
+  "materialized_at": null,
+  "materialized_by": null,
+  "published_at": "2026-08-14T07:22:52.673Z",
+  "published_by": "4ba459df-7de6-454f-b5b0-1aed95bc5084"
+}

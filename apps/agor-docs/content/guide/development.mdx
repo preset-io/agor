@@ -65,8 +65,8 @@ Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.ago
 | **`postgres`**           | Postgres backend (closer to multi-user prod). RBAC off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from pg_catalog).       | same as `sqlite`                                  |
 | **`full`**               | Postgres + branch RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. Same PG13+ floor as `postgres`. | same as `sqlite`                                  |
 | **`docs`**               | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone (no daemon, no DB).                                   | `7000 + branch.unique_id`                         |
-| **`sqlite-demo`**        | `sqlite` plus `LOAD_FIXTURES=true`, which boots a populated demo board with 4 loginable demo users for instant E2E testing. Dev-only.              | same as `sqlite`                                  |
-| **`postgres-demo`**      | `postgres` plus `LOAD_FIXTURES=true`, with the same demo fixtures on a Postgres backend. Dev-only.                                                    | same as `sqlite`                                  |
+| **`sqlite-demo`**        | `sqlite` plus `LOAD_FIXTURES=true`, which boots a populated demo board with 4 loginable demo users for instant E2E testing. Dev-only.         | same as `sqlite`                                  |
+| **`postgres-demo`**      | `postgres` plus `LOAD_FIXTURES=true`, with the same demo fixtures on a Postgres backend. Dev-only.                                            | same as `sqlite`                                  |
 
 Ports derive from `branch.unique_id` so multiple branches run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host.
 
@@ -129,10 +129,12 @@ To test the **packaged artifact** end-to-end (the way users actually install Ago
 ```bash
 cd packages/agor-live
 ./build.sh
-npm i -g .            # or: npm i -g ./agor-live-<version>.tgz
+CLIENT_TARBALL=$(ls "$PWD"/release/agor-live-client-*.tgz)
+AGOR_TARBALL=$(ls "$PWD"/release/agor-live-[0-9]*.tgz)
+npm i -g "$CLIENT_TARBALL" "$AGOR_TARBALL"
 ```
 
-`build.sh` produces a single self-contained package: the UI is built as static assets and bundled into `agor-live` so the daemon serves it directly. After `npm i -g .`, the global `agor` and `agor-live` commands run your local build instead of the published version.
+`build.sh` produces immutable release tarballs in `packages/agor-live/release/`: the UI is built as static assets and bundled into `agor-live` so the daemon serves it directly, internal packages are materialized in the tarball, and workspace dependencies are rewritten to exact release versions. The package has no required install lifecycle script, so the local artifact uses the same plain npm command as a registry release. After installation, the global `agor` and `agor-live` commands run your local build instead of the published version.
 
 Useful when you want to:
 
@@ -178,7 +180,6 @@ agor/
 │   │   ├── types/           # TypeScript types (Session, Task, Branch, etc.)
 │   │   ├── db/              # Drizzle ORM + repositories + schema
 │   │   ├── git/             # Git utils (simple-git only, no subprocess)
-│   │   ├── claude/          # Claude Code session loading utilities
 │   │   └── api/             # FeathersJS client utilities
 │   └── agor-live/           # Published npm package
 └── context/                 # 📚 Architecture documentation (READ THIS!)

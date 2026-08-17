@@ -39,6 +39,12 @@ import { userSelectLabel } from '@/utils/selectSearch';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
+import {
+  describeMissingForSave,
+  firstFormErrorMessage,
+  missingMCPFieldLabels,
+  useFormRevision,
+} from '../MCPServer/mcp-form-requirements';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
 import {
   allowedMcpScopes,
@@ -144,6 +150,19 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
 
+  const [formRevision, bumpFormRevision] = useFormRevision();
+  // Only ask the form once it is rendered — an unmounted instance warns.
+  const missingRequiredFields = createModalOpen
+    ? missingMCPFieldLabels(createForm.getFieldsValue(true), {
+        mode: 'create',
+        transport,
+        authType,
+      })
+    : [];
+  // Once the row exists the button only dismisses the modal, so nothing about
+  // the form should be able to trap the user behind it.
+  const createBlocked = !createdServerId && missingRequiredFields.length > 0;
+
   // Sync editing server when mcpServerById updates (real-time WebSocket updates).
   // Also keeps the open edit modal in sync if the underlying record changes.
   useEffect(() => {
@@ -203,9 +222,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
       return createdServerId;
     } catch (error) {
-      if (!(error && typeof error === 'object' && 'errorFields' in error)) {
-        showError(error instanceof Error ? error.message : 'Failed to save MCP server');
-      }
+      // Say which field. Swallowing a validation rejection here left the OAuth
+      // button doing nothing at all, with nothing on screen to explain it.
+      showError(
+        firstFormErrorMessage(error) ??
+          (error instanceof Error ? error.message : 'Failed to save MCP server')
+      );
       return null;
     }
   };
@@ -234,10 +256,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       })
       .catch((error) => {
         console.error('Form validation failed:', error);
-        if (error.errorFields && error.errorFields.length > 0) {
-          const firstError = error.errorFields[0];
-          showError(firstError.errors[0] || 'Please fill in required fields');
-        }
+        showError(firstFormErrorMessage(error) || 'Please fill in required fields');
       });
   };
 
@@ -650,13 +669,31 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       <Modal
         title="Add MCP Server"
         open={createModalOpen}
-        onOk={handleCreate}
         onCancel={resetCreateModal}
-        okText={createdServerId ? 'Done' : 'Create'}
         width={600}
         destroyOnHidden
+        footer={
+          <Space>
+            <Button onClick={resetCreateModal}>Cancel</Button>
+            {/* A disabled button can't host a tooltip of its own — hence the span. */}
+            <Tooltip
+              title={createBlocked ? describeMissingForSave(missingRequiredFields) : undefined}
+            >
+              <span>
+                <Button type="primary" disabled={createBlocked} onClick={handleCreate}>
+                  {createdServerId ? 'Done' : 'Create'}
+                </Button>
+              </span>
+            </Tooltip>
+          </Space>
+        }
       >
-        <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form
+          form={createForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onValuesChange={bumpFormRevision}
+        >
           <MCPServerFormFields
             mode="create"
             transport={transport}
@@ -672,6 +709,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             testing={testing}
             testResult={testResult}
             onPrepareOAuthStart={prepareOAuthStartForCreate}
+            formRevision={formRevision}
           />
         </Form>
       </Modal>

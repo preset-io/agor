@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveCodexAuthPath, resolveEffectiveUserInfo } from './user-runtime-paths.js';
+import {
+  resolveCodexAuthPath,
+  resolveEffectiveUserInfo,
+  resolveExecutorWorkingDirectory,
+} from './user-runtime-paths.js';
 
 describe('effective executor user paths', () => {
   const originalHome = process.env.HOME;
@@ -21,5 +25,13 @@ describe('effective executor user paths', () => {
     expect(resolveCodexAuthPath('/runtime/codex', () => ({ homedir: '/wrong', shell: '' }))).toBe(
       '/runtime/codex/auth.json'
     );
+  });
+
+  it('uses bwrap cwd only inside the outer sandbox', () => {
+    const branchPath = '/home/agor/.agor/worktrees/acme/feature';
+    const canonicalCwd = () => '/var/lib/agor/home/agor/.agor/worktrees/acme/feature';
+
+    expect(resolveExecutorWorkingDirectory(branchPath, false, canonicalCwd)).toBe(branchPath);
+    expect(resolveExecutorWorkingDirectory(branchPath, true, canonicalCwd)).toBe(canonicalCwd());
   });
 });

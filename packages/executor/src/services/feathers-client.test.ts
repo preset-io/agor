@@ -48,12 +48,6 @@ describe('registerExecutorClientHooks – size guard', () => {
     await expect(hook(ctx)).rejects.toThrow(/transport budget/);
   });
 
-  it('rejects oversized messages/bulk.create', async () => {
-    const { hook } = captureHook();
-    const ctx = makeContext('messages/bulk', 'create', { items: [oversizedPayload()] });
-    await expect(hook(ctx)).rejects.toThrow(/transport budget/);
-  });
-
   it('allows under-budget transcript payloads', async () => {
     const { hook } = captureHook();
     const ctx = makeContext('messages', 'create', { content: 'small' });

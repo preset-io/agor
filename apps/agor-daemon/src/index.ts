@@ -14,7 +14,8 @@
  */
 
 import 'dotenv/config';
-import { platform } from 'node:os';
+import { homedir, platform } from 'node:os';
+import { isAbsolute, join, resolve } from 'node:path';
 
 // Patch console methods to respect LOG_LEVEL env var
 import { configureAnalyticsLogger } from '@agor/core/analytics';
@@ -24,22 +25,30 @@ import {
   openSourceTelemetryLogger,
 } from '@agor/core/telemetry';
 import { patchConsole } from '@agor/core/utils/logger';
+import { extractDbFilePath } from '@agor/core/utils/path';
 import { UI_MOUNT_PATH } from '@agor/core/utils/url';
 
 patchConsole();
 
+import {
+  assertConfiguredAgenticToolsReady,
+  getAgenticToolsRoot,
+} from '@agor/core/agentic-integrations';
 import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
 import {
+  assertValidEffectiveExecutionConfig,
+  getConfigPath,
   loadConfig,
   loadConfigFromFile,
   renderGitConfigParametersForLog,
+  resolveDataHomeFromConfig,
   resolveDeploymentConfig,
   resolveEffectiveConfig,
   resolveGitConfigParameters,
   resolveMultiTenancyConfig,
   resolveSecurity,
 } from '@agor/core/config';
-import { generateId, getDatabaseUrl } from '@agor/core/db';
+import { generateId, resolveDatabaseUrl } from '@agor/core/db';
 import {
   authenticate,
   Forbidden,
@@ -60,7 +69,6 @@ import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
-import { assertConfiguredAgenticToolsAligned } from './setup/agentic-tool-alignment.js';
 import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
@@ -80,6 +88,7 @@ import { deepFreezeClone } from './utils/deep-freeze.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
+import { resolveSandboxProtectedDataRoots } from './utils/sandbox-context.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
 import { configureUploadStagingStoreFromConfig } from './utils/upload-staging.js';
 import { registerAllWidgets } from './widgets/index.js';
@@ -96,9 +105,6 @@ console.log(
     `builtAt=${DAEMON_BUILD_INFO.builtAt ?? 'unknown'} ` +
     `(source=${DAEMON_BUILD_INFO.source})`
 );
-
-// Database URL (env vars > config.yaml > defaults)
-const DB_PATH = getDatabaseUrl();
 
 // ============================================================================
 // GLOBAL ERROR HANDLERS
@@ -169,11 +175,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.
   config = resolveEffectiveConfig(config);
+  assertValidEffectiveExecutionConfig(config);
+  const databaseUrl = resolveDatabaseUrl({ config, env: process.env });
 
   // Deployment package availability is instance-global. Validate it before
   // database or tenant initialization so no tenant can expand the daemon's
   // installed-code surface and a broken upgrade never starts listening.
-  const resolvedAgenticTools = await assertConfiguredAgenticToolsAligned(config);
+  const resolvedAgenticTools = await assertConfiguredAgenticToolsReady(config);
   if (resolvedAgenticTools) {
     // In-memory projection only: config.yaml remains immutable while every
     // service consumes the same deployment policy resolved at startup.
@@ -186,7 +194,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // HA is an explicit, validated topology boundary. REDIS_URL alone never
   // changes standalone behavior. Resolve this after immutable environment
   // projection so every startup consumer observes one effective snapshot.
-  const deployment = resolveDeploymentConfig(config, process.env, DB_PATH);
+  const deployment = resolveDeploymentConfig(config, process.env, databaseUrl);
   console.log(`🌐 Deployment mode: ${deployment.mode}`);
 
   const multiTenancy = resolveMultiTenancyConfig(config);
@@ -285,6 +293,20 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const daemonUrl = effectiveConfig.daemon?.public_url || `http://localhost:${DAEMON_PORT}`;
   configureDaemonUrl(daemonUrl);
 
+  const dataHome = resolveDataHomeFromConfig(effectiveConfig);
+  if (effectiveConfig.execution?.sandbox?.enabled === true && !isAbsolute(dataHome)) {
+    throw new Error(
+      `execution.sandbox.enabled requires an absolute effective paths.data_home; received ${dataHome}`
+    );
+  }
+  const configuredPath = resolve(
+    options?.configPath ?? process.env.AGOR_CONFIG_PATH ?? getConfigPath()
+  );
+  const localDatabasePath =
+    databaseUrl.startsWith('file:') || isAbsolute(databaseUrl) || databaseUrl.startsWith('~/')
+      ? extractDbFilePath(databaseUrl)
+      : undefined;
+
   // Wire the configured executor command template + impersonation user so the
   // ~10 spawnExecutorFireAndForget() call sites pick them up without needing
   // their own config-threading code. Local-subprocess remains the default
@@ -292,6 +314,15 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // for existing deployments).
   configureExecutor(effectiveConfig.execution, {
     requireTenantContext: multiTenancy.mode === 'required_from_auth',
+    sandboxRuntimePaths: {
+      homeDir: homedir(),
+      dataHome,
+      protectedDataRoots: resolveSandboxProtectedDataRoots(effectiveConfig),
+      worktreesRoot: join(dataHome, 'worktrees'),
+      agenticToolsPath: getAgenticToolsRoot(),
+      agorConfigPath: configuredPath,
+      agorDbPath: localDatabasePath,
+    },
   });
 
   // --------------------------------------------------------------------------
@@ -465,10 +496,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
   // Default to a 10MB JSON body. The previous 10MB pre-hardening default was
   // unbounded enough to allow trivial memory-pressure DoS, and a 1MB ceiling
-  // turned out to break legitimate flows (large prompts, /messages/bulk
-  // batches, oversized template payloads). 10MB is the balance: tight enough
-  // to bound a single attacker request, loose enough that real bulk-message
-  // payloads pass without per-route overrides. Multipart uploads bypass this
+  // turned out to break legitimate flows (large prompts and oversized
+  // template payloads). 10MB is the balance: tight enough to bound a single
+  // attacker request while allowing real prompts and templates. Multipart uploads bypass this
   // limit (multer parses the body itself) and are capped separately.
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -630,7 +660,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   configureChannels(app, { multiTenancy });
   configureSwagger(app, { version: DAEMON_VERSION, port: DAEMON_PORT });
 
-  const { db } = await initializeDatabase(DB_PATH, {
+  const { db } = await initializeDatabase(databaseUrl, {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     requireTenantScope: multiTenancy.mode === 'required_from_auth',
     skipFirstRunAdminBootstrap: effectiveConfig.external_launch?.enabled === true,
@@ -756,7 +786,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     requireAuth,
     enforcePasswordChange,
     superadminOpts,
-    DB_PATH,
+    DB_PATH: databaseUrl,
     DAEMON_PORT,
     DAEMON_VERSION,
     AGOR_VERSION,
@@ -766,7 +796,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     distributedWorkIdentity,
     deployment,
     sessionsService: services.sessionsService,
-    messagesService: services.messagesService,
     boardsService: services.boardsService,
     branchRepository: services.branchRepository,
     usersRepository: services.usersRepository,

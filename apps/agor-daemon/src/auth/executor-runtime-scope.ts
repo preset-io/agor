@@ -337,13 +337,6 @@ export function executorRuntimeScopeGuard() {
       }
     } else if (path === 'repos') {
       await requireRepoReadScope(context, id, scope);
-    } else if (path === 'messages/bulk') {
-      if (context.method !== 'create') {
-        throw new Forbidden('Executor token is not valid for this endpoint');
-      }
-      for (const record of recordsFromData(context.data)) {
-        scopeTaskRecord(record, scope);
-      }
     } else if (path === 'messages/streaming' || path === 'tasks/streaming') {
       if (context.method !== 'create') {
         throw new Forbidden('Executor token is not valid for this endpoint');

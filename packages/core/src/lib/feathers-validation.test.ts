@@ -4,7 +4,9 @@ import {
   branchQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
+  messageQueryValidator,
   sessionQueryValidator,
+  taskQueryValidator,
   typedValidateQuery,
   userQueryValidator,
 } from './feathers-validation';
@@ -118,6 +120,69 @@ describe('sessionQueryValidator', () => {
       session_id: '019e8e1c',
       _swapReplace: true,
     });
+  });
+});
+
+describe('messageQueryValidator', () => {
+  it('coerces supported pagination and preserves a bounded session set', async () => {
+    const context = {
+      params: {
+        query: {
+          session_id: { $in: ['019e8e1c', '019e8e1d'] },
+          message_id: { $gt: '019e8e1a', $lte: '019e8e1f' },
+          task_id: '019e8e1e',
+          role: 'assistant',
+          $limit: '1000',
+          $skip: '12000',
+          $sort: { index: '-1' },
+          $select: ['message_id', 'content'],
+        },
+      },
+    };
+
+    await typedValidateQuery(messageQueryValidator)(context);
+
+    expect(context.params.query).toEqual({
+      session_id: { $in: ['019e8e1c', '019e8e1d'] },
+      message_id: { $gt: '019e8e1a', $lte: '019e8e1f' },
+      task_id: '019e8e1e',
+      role: 'assistant',
+      $limit: 1000,
+      $skip: 12000,
+      $sort: { index: -1 },
+      $select: ['message_id', 'content'],
+    });
+  });
+
+  it('rejects unknown filters instead of broadening the query', async () => {
+    const context = { params: { query: { task: '019e8e1e' } } };
+    await expect(typedValidateQuery(messageQueryValidator)(context)).rejects.toThrow();
+  });
+});
+
+describe('taskQueryValidator', () => {
+  it('preserves bounded hydration cursors and rejects unsupported fields', async () => {
+    const valid = {
+      params: {
+        query: {
+          session_id: '019e8e1c',
+          task_id: { $gt: '019e8e1d', $lte: '019e8e1f' },
+          $limit: '1000',
+        },
+      },
+    };
+    await typedValidateQuery(taskQueryValidator)(valid);
+    expect(valid.params.query).toEqual({
+      session_id: '019e8e1c',
+      task_id: { $gt: '019e8e1d', $lte: '019e8e1f' },
+      $limit: 1000,
+    });
+
+    await expect(
+      typedValidateQuery(taskQueryValidator)({
+        params: { query: { session_id: '019e8e1c', updated_at: 123 } },
+      })
+    ).rejects.toThrow();
   });
 });
 

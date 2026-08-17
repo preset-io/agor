@@ -349,34 +349,6 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
   });
 
-  it('validates every bulk message payload item against task scope', async () => {
-    const context = ctx({
-      path: 'messages/bulk',
-      method: 'create',
-      data: [
-        { message_id: 'message-1', task_id: 'task-1', session_id: 'session-1' },
-        { message_id: 'message-2' },
-      ],
-    });
-
-    await executorRuntimeScopeGuard()(context);
-
-    expect(context.data).toEqual([
-      { message_id: 'message-1', task_id: 'task-1', session_id: 'session-1' },
-      { message_id: 'message-2', task_id: 'task-1', session_id: 'session-1' },
-    ]);
-  });
-
-  it('rejects bulk message payloads for another task', async () => {
-    const context = ctx({
-      path: 'messages/bulk',
-      method: 'create',
-      data: [{ message_id: 'message-1', task_id: 'task-2', session_id: 'session-1' }],
-    });
-
-    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
-  });
-
   it('validates streaming event payload scope', async () => {
     const context = ctx({
       path: 'tasks/streaming',

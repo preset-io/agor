@@ -90,21 +90,6 @@ export const WEBSOCKET = {
 export const SOCKET_IO_MAX_BUFFER_SIZE_BYTES = 1_000_000;
 
 /**
- * Database Constants
- */
-export const DATABASE = {
-  /**
-   * Batch size for bulk message inserts
-   */
-  MESSAGE_BATCH_SIZE: 100,
-
-  /**
-   * Batch size for bulk task inserts
-   */
-  TASK_BATCH_SIZE: 100,
-} as const;
-
-/**
  * Pagination Constants
  *
  * High limits to avoid silent truncation of results.
@@ -125,6 +110,16 @@ export const PAGINATION = {
    * Default limit for CLI list commands - reasonable for terminal display
    */
   CLI_DEFAULT_LIMIT: 50,
+} as const;
+
+/**
+ * Messages carry transcript/tool payloads and are materially heavier than most
+ * list resources. Keep each transport page small; callers that intentionally
+ * need a complete Task transcript use the client's paginated `findAll()` loop.
+ */
+export const MESSAGE_PAGINATION = {
+  DEFAULT_LIMIT: 100,
+  MAX_LIMIT: 1_000,
 } as const;
 
 /**

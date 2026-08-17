@@ -19,13 +19,20 @@ const sourceManifests = [
   'packages/executor/package.json',
 ];
 
-// Internal workspace packages are bundled/copied into agor-live dist.
-// They are not publishable npm dependencies and should not be synced into dependencies.
+// Internal workspace packages are materialized inside the agor-live tarball.
+// Keep workspace references in the source manifest so pnpm links local projects;
+// the release packer rewrites them to the materialized packages' exact versions.
 const skipDeps = new Set([
   '@agor/agentic-tool-opencode',
   '@agor/agentic-tools',
   '@agor/core',
   '@agor/daemon',
+  '@agor/git',
+]);
+const bundledInternalPackages = new Set([
+  '@agor/agentic-tool-opencode',
+  '@agor/agentic-tools',
+  '@agor/core',
   '@agor/git',
 ]);
 const mode = process.argv.includes('--check') ? 'check' : 'write';
@@ -36,12 +43,19 @@ const writeJson = (relPath, data) =>
 
 const target = readJson(targetManifest);
 const targetDeps = { ...(target.dependencies ?? {}) };
+const targetOptionalDeps = { ...(target.optionalDependencies ?? {}) };
 // This is the only dependency owned directly by the publishable wrapper.
 // Everything else is derived from the copied workspace packages below.
 const targetOnlyDependencies = new Set(['@agor-live/client']);
 
 const aggregated = new Map();
+const aggregatedOptional = new Map();
 const conflicts = [];
+
+for (const manifest of sourceManifests) {
+  const pkg = readJson(manifest);
+  if (bundledInternalPackages.has(pkg.name)) aggregated.set(pkg.name, 'workspace:*');
+}
 
 for (const manifest of sourceManifests) {
   const pkg = readJson(manifest);
@@ -52,6 +66,15 @@ for (const manifest of sourceManifests) {
       conflicts.push({ dep, seen, version, manifest });
     } else if (!seen) {
       aggregated.set(dep, version);
+    }
+  }
+  for (const [dep, version] of Object.entries(pkg.optionalDependencies ?? {})) {
+    if (skipDeps.has(dep) || aggregated.has(dep)) continue;
+    const seen = aggregatedOptional.get(dep);
+    if (seen && seen !== version) {
+      conflicts.push({ dep, seen, version, manifest });
+    } else if (!seen) {
+      aggregatedOptional.set(dep, version);
     }
   }
 }
@@ -82,6 +105,19 @@ for (const [dep, version] of aggregated) {
     }
   }
 }
+for (const dep of Object.keys(targetOptionalDeps)) {
+  if (!aggregatedOptional.has(dep)) {
+    updates.push({ dep: `optional:${dep}`, from: targetOptionalDeps[dep], to: undefined });
+    if (mode === 'write') delete targetOptionalDeps[dep];
+  }
+}
+for (const [dep, version] of aggregatedOptional) {
+  const current = targetOptionalDeps[dep];
+  if (current !== version) {
+    updates.push({ dep: `optional:${dep}`, from: current, to: version });
+    if (mode === 'write') targetOptionalDeps[dep] = version;
+  }
+}
 
 if (mode === 'check') {
   if (updates.length) {
@@ -107,6 +143,9 @@ for (const dep of Object.keys(targetDeps).sort()) {
 }
 
 target.dependencies = sortedDeps;
+target.optionalDependencies = Object.fromEntries(
+  Object.entries(targetOptionalDeps).sort(([left], [right]) => left.localeCompare(right))
+);
 writeJson(targetManifest, target);
 
 console.log(`Updated ${targetManifest} with ${updates.length} change(s):`);

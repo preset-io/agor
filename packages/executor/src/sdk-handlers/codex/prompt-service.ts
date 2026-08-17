@@ -1066,7 +1066,13 @@ export class CodexPromptService {
       | CodexSandboxMode
       | undefined;
     const configuredSandboxMode = codexConfig?.sandboxMode ?? defaults.sandboxMode;
-    const sandboxMode = sandboxModeEnvOverride ?? configuredSandboxMode;
+    // When Agor wraps the whole executor in its own OS-level sandbox (SRT), do
+    // NOT let Codex start its own nested bwrap — run full-access INSIDE Agor's
+    // sandbox, which already enforces the filesystem/network boundary. One layer.
+    const outerSandbox = process.env.AGOR_OUTER_SANDBOX === '1';
+    const sandboxMode: CodexSandboxMode = outerSandbox
+      ? 'danger-full-access'
+      : (sandboxModeEnvOverride ?? configuredSandboxMode);
     const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
     const networkAccess = codexConfig?.networkAccess ?? defaults.networkAccess;
     // Apps can mutate remote systems outside the filesystem sandbox. Only

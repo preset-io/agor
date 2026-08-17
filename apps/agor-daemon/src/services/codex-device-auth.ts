@@ -229,6 +229,7 @@ interface DeviceAuthAttempt {
   authUser: NonNullable<AuthenticatedParams['user']>;
   targetUnixUser: string | null;
   reportedUnixUser: string | null;
+  codexHome?: string;
   phase: CodexDeviceAuthStatus['phase'];
   deviceAuthId: string;
   userCode: string;
@@ -336,6 +337,7 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
           reportedUnixUser: attempt.reportedUnixUser,
           userId: attempt.userId,
           authUser: attempt.authUser,
+          codexHome: attempt.codexHome,
         })
       );
       attempt.planType = summary.planType;
@@ -429,6 +431,7 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         authUser,
         targetUnixUser: identity.unixUser,
         reportedUnixUser: identity.reportedUnixUser,
+        codexHome: identity.codexHome,
         phase: 'pending',
         deviceAuthId: '',
         userCode: '',

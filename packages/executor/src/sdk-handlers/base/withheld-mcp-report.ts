@@ -57,7 +57,7 @@ export async function reportWithheldMcpServers(
         task_id: args.taskId,
         type: 'system',
         role: MessageRole.SYSTEM,
-        index: await messagesRepo.countBySessionId(args.sessionId),
+        index: await messagesRepo.getNextIndexBySessionId(args.sessionId),
         timestamp: new Date().toISOString(),
         content_preview: `MCP server "${name}" withheld by tool permissions`,
         content: `MCP server "${name}" was withheld from this session: ${reason}`,

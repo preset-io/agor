@@ -37,6 +37,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MCPServersConfig, SessionID, TaskID } from '../../types.js';
+import { resolveExecutorWorkingDirectory } from '../../user-runtime-paths.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { createMcpToolPermissionHook } from '../base/mcp-tool-permission-hook.js';
@@ -150,7 +151,7 @@ export async function setupQuery(
     try {
       const branch = await deps.branchesRepo.findById(session.branch_id);
       if (branch) {
-        cwd = branch.path;
+        cwd = resolveExecutorWorkingDirectory(branch.path);
       } else {
         console.warn(
           `⚠️  Session ${sessionId} references non-existent branch ${session.branch_id}, using process.cwd(): ${cwd}`

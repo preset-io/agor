@@ -20,6 +20,12 @@ Agor's multiplayer mode brings back the power of shared development servers with
 
 Think of it as **"once upon a time, teams shared servers"**, but with proper RBAC, credential isolation, and modern workflows.
 
+> **Start here:** for most trusted-org multi-user deployments, use
+> [`unix_user_mode: sandbox`](#sandbox-mode-recommended) — it delivers this
+> isolation via a per-session filesystem sandbox with **no sudoers, host
+> accounts, or Unix groups**. The `insulated`/`strict` Unix-account modes
+> documented below still work but are being phased out.
+
 ---
 
 ## Security Model
@@ -80,7 +86,117 @@ All filesystem operations are **strictly scoped** to Agor-managed paths:
 
 ---
 
+## Sandbox mode (recommended)
+
+`unix_user_mode: sandbox` is the recommended way to run a trusted-org multi-user
+Agor. It replaces the Unix-account machinery (sudoers, host accounts, per-branch
+groups, password sync) documented in the [Setup Guide](#setup-guide) below with
+an **executor filesystem sandbox**: each **provider agent process (prompt task)
+and web terminal** is wrapped in
+[bubblewrap](https://github.com/containers/bubblewrap) — a user + PID + mount
+namespace. Everything runs as the daemon user, but the namespaces (computed
+directly from Agor's RBAC) enforce isolation. Daemon-internal bounded executor
+commands (git-state / autocomplete probes, file reads, OAuth flows) are Agor's
+own code governed by app-layer authorization and run unwrapped — they never
+execute agent-authored commands.
+
+### What it gives you
+
+- **Per-user home.** Each session gets a private, persistent `~` (a per-owner
+  home overlaid at the passwd home). The daemon's `~/.agor` trust root
+  (`config.yaml`, `agor.db`, JWT secret) and every _other_ user's home are
+  hidden by construction.
+- **Cross-branch isolation.** Only the task's branch is mounted; sibling
+  branches and repos are not visible.
+- **RBAC-aware mounts.** The branch is mounted read-write, read-only, or not at
+  all according to the owner's effective `others_fs_access` on it.
+- **`/tmp` in the user's home.** `/tmp` is an on-disk per-user dir (not a shared
+  host `/tmp`, not a RAM tmpfs), persisting across turns.
+- **Host toolchain for free.** The host filesystem is mounted read-only, so
+  `git`, `node`, `rg`, compilers, etc. all work without building an image; only
+  _writes_ are scoped.
+- **Process isolation (where the host allows it).** On hosts that support it, a
+  fresh PID namespace means the sandbox's `/proc` shows only its own processes —
+  the daemon and other users' executors are invisible, so their
+  environment/fds/secrets can't be reached via `/proc` (independent of host
+  `ptrace_scope`). Many container runtimes block this; there the sandbox falls
+  back to a user + mount namespace (filesystem masks still apply) and `agor
+doctor` reports **PID namespace** as unavailable. Verify with `agor doctor`.
+
+The **network** namespace stays shared, so the executor keeps daemon/model
+connectivity. Network egress control, if wanted, is deferred to each tool's own
+config.
+
+### Setup
+
+```bash
+# 1. Install bubblewrap on the daemon host (Linux only).
+sudo apt-get install -y bubblewrap          # Debian/Ubuntu
+# Ubuntu 24.04+ may restrict unprivileged user namespaces; if so:
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+# 2. Verify the host can actually run it (functional userns probe, not just PATH):
+agor doctor                                  # look for the "unprivileged userns" row
+```
+
+```yaml
+# 3. ~/.agor/config.yaml — that's the whole config.
+execution:
+  unix_user_mode: sandbox
+```
+
+`sandbox` mode **forces** `branch_rbac: true`, `sandbox.enabled: true`,
+`sandbox.home_mode: per_user`, and fail-closed (`fail_if_unavailable: true`) —
+these security invariants **cannot** be overridden by config or env in this mode
+(a `sandbox` that silently ran with a shared home or spawned unsandboxed would
+violate the contract). Only non-security policy tunables under
+`execution.sandbox.*` (e.g. `include.*`, `extra_allow_write`, `extra_deny_read`)
+are honored. If you want a _tunable_ standalone sandbox, use a non-`sandbox`
+`unix_user_mode` with `sandbox.enabled: true` and set those explicitly. See the
+design notes in `context/explorations/executor-sandboxing.md`. Sandbox settings
+cannot be combined with `strict`, `insulated`, `executor_unix_user`, or an
+`executor_command_template`; the daemon rejects those unsupported combinations
+at startup. No sudoers, no Unix accounts.
+
+Hosts that symlink the daemon home to another filesystem location can preserve
+that canonical alias for path-keyed SDK state created before migration:
+
+```yaml
+execution:
+  unix_user_mode: sandbox
+  sandbox:
+    preserve_canonical_home_alias: true
+```
+
+This re-exposes the same per-user home store and authorized branch/git mounts at
+the daemon-resolved canonical home path. It does not expose the canonical homes
+parent or sibling homes. Leave it off for conventional, non-symlinked homes.
+
+If `AGOR_DATA_HOME` is outside the daemon user's passwd home (for example, on a
+persistent volume), Agor masks that external data root before re-exposing only
+the current branch, its authorized git data, and managed agent tools. It also
+masks canonical path aliases when the passwd home or data root traverses
+symlinks.
+
+> **Not for hostile multi-tenant.** A bubblewrap/kernel escape lands as the
+> daemon user (a namespace boundary, not a separate uid). For mutually-hostile
+> tenants use containers / microVMs / k8s. `sandbox` targets **trusted-org
+> multi-user** — the same audience as `strict`/`insulated`.
+
+> **macOS/Windows:** bubblewrap is Linux-only. On other platforms the sandbox is
+> unavailable; with `fail_if_unavailable` (the default in this mode) sessions
+> refuse to start rather than run unsandboxed.
+
+**Migrating an existing `strict`/`insulated` deployment?** See the in-repo guide
+`context/guides/migrate-strict-to-sandbox.md`.
+
+---
+
 ## Setup Guide
+
+> The steps below (PostgreSQL, volumes, **sudoers**, Unix accounts) apply to the
+> legacy `insulated` / `strict` modes. For a new multi-user deployment, prefer
+> [Sandbox mode](#sandbox-mode-recommended) above — it needs none of this.
 
 ### Prerequisites
 
@@ -228,42 +344,60 @@ execution:
   # Unix user mode (default: simple)
   # Options:
   #   - simple: No isolation, all runs as daemon user
+  #   - sandbox: RECOMMENDED for multi-user. OS isolation via the executor
+  #     FILESYSTEM SANDBOX (bubblewrap) instead of Unix accounts — no sudoers,
+  #     no host accounts, no per-branch groups, no password sync. Implies RBAC +
+  #     a per-user home overlay. Linux only. See "Sandbox mode" below.
   #   - delegated: Like simple (no sudo, no groups), but every user must have
   #     a unix_username; it is passed to the executor command template as
   #     {unix_user} and its absence fails loudly. For hosted/containerized
   #     deployments where the orchestration layer enforces identity.
-  #   - insulated: Branch groups + single executor user
-  #   - strict: Full per-user isolation, enforced impersonation
-  unix_user_mode: insulated # or strict
+  #   - insulated: (being phased out) Branch groups + single executor user
+  #   - strict: (being phased out) Full per-user isolation, enforced impersonation
+  unix_user_mode: sandbox
 
-  # Optional: Specific Unix user for executor (insulated mode)
+  # Optional: Specific Unix user for executor (insulated mode only)
   executor_unix_user: agor_executor
 ```
 
+> **`insulated` and `strict` are being phased out** in favor of `sandbox`, which
+> delivers the same multi-user isolation without the sudoers / host-account /
+> password-sync apparatus. They still work (the daemon logs a deprecation
+> warning on startup). See [Sandbox mode](#sandbox-mode-recommended) and the
+> in-repo migration guide `context/guides/migrate-strict-to-sandbox.md`.
+
 **Mode Comparison:**
 
-| Mode        | Unix Groups | FS Permissions | Process Impersonation | `unix_username` Required | Use Case                    |
-| ----------- | ----------- | -------------- | --------------------- | ------------------------ | --------------------------- |
-| `simple`    | ❌          | ❌             | ❌                    | ❌                       | Single user, dev/testing    |
-| `delegated` | ❌          | ❌             | ❌                    | ✅                       | Hosted/containerized, identity enforced by orchestration |
-| `insulated` | ✅          | ✅             | Optional              | ❌                       | Shared dev, FS isolation    |
-| `strict`    | ✅          | ✅             | ✅ Required           | ✅                       | Production, compliance      |
+| Mode        | Isolation mechanism            | Unix Groups | Process Impersonation | Sudoers / host accounts | Use Case                                                 |
+| ----------- | ------------------------------ | ----------- | --------------------- | ----------------------- | -------------------------------------------------------- |
+| `simple`    | none                           | ❌          | ❌                    | ❌                      | Single user, dev/testing                                 |
+| `sandbox`   | **filesystem sandbox** (bwrap) | ❌          | ❌                    | ❌                      | **Multi-user (recommended)**                             |
+| `delegated` | external substrate             | ❌          | ❌                    | ❌                      | Hosted/containerized, identity enforced by orchestration |
+| `insulated` | Unix groups + FS perms         | ✅          | Optional              | ✅                      | Shared dev (being phased out)                            |
+| `strict`    | Unix uids + groups + FS        | ✅          | ✅ Required           | ✅                      | Compliance (being phased out)                            |
 
 **When to use each mode:**
 
 - **`simple`** - Default, single user or fully trusted team, no setup required
+- **`sandbox`** - **Recommended for any multi-user, trusted-org deployment.** OS
+  isolation without OS plumbing: everything runs as the daemon user, but each
+  session is wrapped in a bubblewrap filesystem sandbox (per-user home overlay,
+  cross-branch/secret isolation, RBAC-aware mounts). Only prerequisite is
+  `bubblewrap` + unprivileged user namespaces on the host (Linux). See below.
 - **`delegated`** - Hosted/containerized deployments where the execution
   substrate (e.g. per-user home mounts selected via the `{unix_user}` template
   variable) enforces identity. No sudoers or local Unix accounts needed, but a
   session whose user has no `unix_username` fails loudly instead of silently
   sharing an identity
-- **`insulated`** - Recommended for shared development, isolates daemon from executors
-- **`strict`** - Production environments, compliance requirements, full audit trail
+- **`insulated`** _(being phased out)_ - Daemon-from-executor isolation via a shared executor user + branch groups
+- **`strict`** _(being phased out)_ - Full per-user Unix isolation with enforced impersonation
 
 `branch_rbac` and `unix_user_mode` are intentionally independent: RBAC controls
 Agor app permissions; `insulated`/`strict` Unix modes control OS identities,
 Unix groups, and filesystem permissions. `delegated` performs no OS-level work
 on the daemon host — it only requires and propagates per-user identity.
+`sandbox` implies `branch_rbac: true` (the mount policy enforces branch
+authorization directly from RBAC).
 
 ### 4b. (Optional) Disable the Web Terminal
 
@@ -294,6 +428,11 @@ When set to `false`:
 >   opening a terminal gains a shell with read access to `~/.agor/config.yaml`,
 >   `agor.db`, and the JWT secret. The daemon prints a startup warning on every
 >   boot in this combination (which is the default for fresh installs).
+> - In `unix_user_mode: sandbox`, the terminal runs inside the filesystem
+>   sandbox with the SAME treatment as prompts: the terminal user's per-user home
+>   overlay, an RBAC-aware branch mount (read-only, or refused, if they lack
+>   write), and the daemon trust root + sibling branches masked. A member shell
+>   cannot read `config.yaml`/`agor.db`/the JWT secret or other users' homes.
 > - In `unix_user_mode: insulated`, the terminal runs as the shared executor
 >   user. Daemon secrets are protected, but members share `$HOME`/`/tmp` with
 >   each other.
@@ -388,10 +527,10 @@ agor_wt_019ffd3d2cef79d1a1c64073:x:1050:alice,bob
 Agor defines three permission levels per branch:
 
 | Level    | Filesystem Access | View Sessions | Prompt Sessions | Modify Branch |
-| -------- | ----------------- | ------------- | --------------- | --------------- |
-| `view`   | Read-only         | ✅            | ❌              | ❌              |
-| `prompt` | No direct access  | ✅            | ✅              | ❌              |
-| `all`    | Read-write        | ✅            | ✅              | ✅              |
+| -------- | ----------------- | ------------- | --------------- | ------------- |
+| `view`   | Read-only         | ✅            | ❌              | ❌            |
+| `prompt` | No direct access  | ✅            | ✅              | ❌            |
+| `all`    | Read-write        | ✅            | ✅              | ✅            |
 
 **Permission Grant Levels:**
 

@@ -629,7 +629,7 @@ export async function loadDemoFixtures(
         }
       );
     }
-    await messagesRepo.createMany(allMessages);
+    for (const message of allMessages) await messagesRepo.create(message);
 
     // ── STEP 10: Cards (placed via board_objects rows) ──────────────────────
     console.log('🔟 Creating demo cards...');

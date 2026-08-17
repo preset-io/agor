@@ -80,10 +80,8 @@ function makeApp(opts: {
   sessionCreator: string;
   creatorEnvVars?: Record<string, { set: true; scope: 'global' | 'session' }>;
   /**
-   * The session's tasks. Mirrors how the real `TasksService.find({ session_id })`
-   * returns ALL session tasks (ASC by created_at) regardless of status / sort,
-   * because of the short-circuit at `services/tasks.ts:65-110`.
-   * When omitted, a single RUNNING task is returned.
+   * The session's tasks. The fake below applies the same exact status, sort,
+   * skip, and limit query semantics used by the host-Task selector.
    */
   sessionTasks?: FakeTask[] | null;
 }): {
@@ -120,11 +118,31 @@ function makeApp(opts: {
     tasks: {
       find: async (...args: unknown[]) => {
         calls.push({ service: 'tasks', method: 'find', args });
+        const query = ((args[0] as { query?: Record<string, unknown> } | undefined)?.query ??
+          {}) as Record<string, unknown>;
+        const filtered = query.status
+          ? sessionTasks.filter((task) => task.status === query.status)
+          : [...sessionTasks];
+        const sort = (query.$sort ?? {}) as Record<string, 1 | -1>;
+        const sortEntries = Object.entries(sort);
+        if (sortEntries.length > 0) {
+          filtered.sort((left, right) => {
+            for (const [field, direction] of sortEntries) {
+              const a = String(left[field as keyof FakeTask] ?? '');
+              const b = String(right[field as keyof FakeTask] ?? '');
+              const comparison = a.localeCompare(b);
+              if (comparison !== 0) return comparison * direction;
+            }
+            return 0;
+          });
+        }
+        const skip = typeof query.$skip === 'number' ? query.$skip : 0;
+        const limit = typeof query.$limit === 'number' ? query.$limit : filtered.length;
         return {
-          data: sessionTasks,
-          total: sessionTasks.length,
-          limit: 1000,
-          skip: 0,
+          data: filtered.slice(skip, skip + limit),
+          total: filtered.length,
+          limit,
+          skip,
         };
       },
       get: async (...args: unknown[]) => {

@@ -29,6 +29,7 @@ import type {
   CursorMoveEvent,
   PresenceUpdatedEvent,
   TenantContext,
+  TerminalAllocatedEvent,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, ServerOptions, Socket } from 'socket.io';
@@ -42,6 +43,10 @@ import {
   tenantUserChannelName,
 } from '../realtime/routing.js';
 import type { TerminalAttachmentIdentity } from '../services/terminals.js';
+import {
+  TERMINAL_REQUEST_JOIN_CHANNEL,
+  type TerminalRequestConnection,
+} from '../terminal-socket-connection.js';
 import {
   executorTaskChannelName,
   joinExecutorTaskChannel,
@@ -380,6 +385,131 @@ export function createSocketIOConfig(
     let unauthenticatedDisconnects = 0;
     // Weak per-socket state owns both auth-log dedupe and durable auth history.
     const authenticatedIdentities = new WeakMap<Socket, string>();
+    // Revokes captured terminal-subscription functions across logout and live
+    // authentication replacement, even when the transport stays connected.
+    const terminalAuthGenerations = new WeakMap<Socket, number>();
+    // Serialize subscription operations for one socket/channel. Socket.IO room
+    // membership is a set, not reference-counted: overlapping join cleanup
+    // must never remove another valid operation's membership.
+    const terminalJoinQueues = new WeakMap<Socket, Map<string, Promise<void>>>();
+
+    const invalidateTerminalRequestJoin = (socket: FeathersSocket): void => {
+      terminalAuthGenerations.set(socket, (terminalAuthGenerations.get(socket) ?? 0) + 1);
+      const connection = socket.feathers as TerminalRequestConnection | undefined;
+      if (connection) Reflect.deleteProperty(connection, TERMINAL_REQUEST_JOIN_CHANNEL);
+    };
+
+    /**
+     * Give services a narrow, server-only way to subscribe the authenticated
+     * socket that owns a Feathers request. The service derives the room from
+     * trusted tenant/user/id state; clients never receive or invoke this
+     * capability directly.
+     */
+    const bindTerminalRequestJoin = (socket: FeathersSocket): void => {
+      const connection = socket.feathers as
+        | (NonNullable<FeathersSocket['feathers']> & TerminalRequestConnection)
+        | undefined;
+      if (!connection) return;
+
+      const boundAuth = getSocketAuthState(socket);
+      const boundUserId = boundAuth.userId;
+      const boundTenantId = boundAuth.tenant?.tenant_id;
+      if (!boundUserId || boundAuth.isService || !boundTenantId) {
+        Reflect.deleteProperty(connection, TERMINAL_REQUEST_JOIN_CHANNEL);
+        return;
+      }
+      const boundGeneration = terminalAuthGenerations.get(socket) ?? 0;
+
+      const isCurrentAllocation = (
+        channel: string,
+        allocation: TerminalAllocatedEvent
+      ): boolean => {
+        if (
+          !socket.connected ||
+          socket.feathers !== connection ||
+          (terminalAuthGenerations.get(socket) ?? 0) !== boundGeneration
+        ) {
+          return false;
+        }
+        const currentAuth = getSocketAuthState(socket);
+        if (
+          currentAuth.isService ||
+          currentAuth.userId !== boundUserId ||
+          currentAuth.tenant?.tenant_id !== boundTenantId
+        ) {
+          return false;
+        }
+        const parsed = parseTerminalChannel(channel);
+        return (
+          typeof allocation?.userId === 'string' &&
+          allocation.userId === boundUserId &&
+          typeof allocation.terminalId === 'string' &&
+          allocation.terminalId.length > 0 &&
+          typeof allocation.branchId === 'string' &&
+          allocation.branchId.length > 0 &&
+          parsed?.tenantId === boundTenantId &&
+          parsed.userId === allocation.userId &&
+          parsed.terminalId === allocation.terminalId
+        );
+      };
+
+      Object.defineProperty(connection, TERMINAL_REQUEST_JOIN_CHANNEL, {
+        configurable: true,
+        enumerable: false,
+        value: async (channel: string, allocation: TerminalAllocatedEvent) => {
+          if (!isCurrentAllocation(channel, allocation)) return false;
+          let queues = terminalJoinQueues.get(socket);
+          if (!queues) {
+            queues = new Map();
+            terminalJoinQueues.set(socket, queues);
+          }
+          const previous = queues.get(channel) ?? Promise.resolve();
+          let release!: () => void;
+          const turn = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const tail = previous.then(
+            () => turn,
+            () => turn
+          );
+          queues.set(channel, tail);
+
+          await previous.catch(() => undefined);
+          try {
+            // Authentication may have changed while this operation waited for
+            // an earlier join. Revalidate before touching room membership.
+            if (!isCurrentAllocation(channel, allocation)) return false;
+            // A redundant create for an established attachment needs no new
+            // Socket.IO operation and therefore cannot disrupt membership if
+            // a second join attempt would fail.
+            if (socket.rooms.has(channel)) {
+              socket.emit('terminal:allocated', allocation);
+              return true;
+            }
+            try {
+              await socket.join(channel);
+            } catch {
+              // Membership is checked below: an independently completed,
+              // authorized join still satisfies the subscription boundary.
+            }
+            if (!socket.rooms.has(channel) || !isCurrentAllocation(channel, allocation)) {
+              await socket.leave(channel);
+              return false;
+            }
+            // Establish the terminal identity in the browser before the
+            // executor can emit output/readiness on its separate connection.
+            socket.emit('terminal:allocated', allocation);
+            return true;
+          } finally {
+            release();
+            if (queues.get(channel) === tail) {
+              queues.delete(channel);
+              if (queues.size === 0) terminalJoinQueues.delete(socket);
+            }
+          }
+        },
+      });
+    };
 
     const logAuthenticated = (socket: Socket, userId?: string) => {
       const identity = userId ? `user:${userId}` : 'service';
@@ -545,7 +675,9 @@ export function createSocketIOConfig(
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
       activeConnections++;
-      const user = (socket as FeathersSocket).feathers?.user;
+      const feathersSocket = socket as FeathersSocket;
+      bindTerminalRequestJoin(feathersSocket);
+      const user = feathersSocket.feathers?.user;
       console.debug(
         `🔌 Socket.io connection established: ${socket.id} (auth: ${user ? 'handshake' : 'anonymous'}, user: ${user ? shortId(user.user_id) : 'unknown'}, total: ${activeConnections})`
       );
@@ -1219,6 +1351,9 @@ export function createSocketIOConfig(
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
           const fs = socket as FeathersSocket & { tenant?: TenantContext };
+          // Revoke captured functions before any yields or room changes. A
+          // replacement login may reuse the same transport/connection object.
+          invalidateTerminalRequestJoin(fs);
           const isService =
             result.user?._isServiceAccount === true || isTerminalExecutorIdentity(result.user);
           const isTerminalExecutor = isTerminalExecutorIdentity(result.user);
@@ -1266,6 +1401,10 @@ export function createSocketIOConfig(
               socket.join(tenantUserChannelName(tenantId, userId));
             }
           }
+          // Bind only after the replacement identity and tenant are installed.
+          // Anonymous and service identities deliberately receive no terminal
+          // request capability.
+          bindTerminalRequestJoin(fs);
           break;
         }
       }
@@ -1279,6 +1418,7 @@ export function createSocketIOConfig(
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers !== context.connection) continue;
         const fs = socket as FeathersSocket;
+        invalidateTerminalRequestJoin(fs);
         for (const room of socket.rooms) {
           if (room.startsWith('tenant:') || parseTerminalChannel(room)) socket.leave(room);
         }

@@ -3,12 +3,14 @@ import {
   resolveAgenticToolSelectionPolicy,
   resolveManagedAgenticToolVersion,
 } from '@agor/core/agentic-integrations';
-import { loadConfig } from '@agor/core/config';
+import { loadConfig, resolveEffectiveConfig } from '@agor/core/config';
 import { diagnoseGit } from '@agor/git';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
 import { listManagedAgorVersions } from '../lib/agentic-tool-integrations.js';
+import { diagnoseWebTerminalRuntime } from '../lib/optional-capabilities.js';
+import { diagnoseSandbox, sandboxInstallHint } from '../lib/sandbox-diagnostics.js';
 
 export default class Doctor extends Command {
   static description = 'Check this Agor installation and its agentic tools';
@@ -20,15 +22,29 @@ export default class Doctor extends Command {
     const { flags } = await this.parse(Doctor);
     const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
     const git = await diagnoseGit();
+    const webTerminal = await diagnoseWebTerminalRuntime();
     const agenticTools = await diagnoseAgenticTools(agorVersion);
     const staleVersions = (await listManagedAgorVersions()).filter(
       (version) => version !== agorVersion
     );
-    const policy = await resolveAgenticToolSelectionPolicy(await loadConfig());
+    const cfg = await loadConfig();
+    const policy = await resolveAgenticToolSelectionPolicy(cfg);
+    // Effective config so the sandbox row reflects env overrides
+    // (e.g. AGOR_SANDBOX_ENABLED from the `sandbox` .agor.yml variant), matching
+    // what the daemon actually runs — not just the raw config.yaml.
+    const sandbox = diagnoseSandbox(resolveEffectiveConfig(cfg));
     if (flags.json) {
       this.log(
         JSON.stringify(
-          { ok: git.status === 'ready', git, policy, staleVersions, agenticTools },
+          {
+            ok: git.status === 'ready',
+            git,
+            optionalCapabilities: { webTerminal },
+            policy,
+            sandbox,
+            staleVersions,
+            agenticTools,
+          },
           null,
           2
         )
@@ -42,6 +58,15 @@ export default class Doctor extends Command {
       this.log(`${chalk.green('✓')} Git ${git.version} is executable (${git.binary})`);
     } else {
       this.log(`${chalk.red('✗')} ${git.detail}`);
+    }
+    this.log('');
+    this.log(chalk.bold('Optional capabilities'));
+    if (webTerminal.status === 'ready') {
+      this.log(`  ${chalk.green('✓')} Web terminal runtime: ready`);
+    } else {
+      this.log(`  ${chalk.yellow('○')} Web terminal runtime: unavailable (optional)`);
+      if (webTerminal.detail) this.log(chalk.dim(`      ${webTerminal.detail}`));
+      this.log(chalk.dim(`      ${webTerminal.docs}`));
     }
     this.log('');
     this.log(chalk.bold('Agentic tools'));
@@ -59,6 +84,35 @@ export default class Doctor extends Command {
       );
       if (item.detail && selected.has(item.id)) this.log(chalk.dim(`      ${item.detail}`));
     }
+    this.log('');
+    this.log(chalk.bold('Executor sandbox (SRT)'));
+    if (!sandbox.enabled) {
+      this.log(
+        chalk.dim(
+          '  ○ Disabled (execution.sandbox.enabled: false). Agents have open filesystem access.'
+        )
+      );
+    } else if (!sandbox.supported) {
+      this.log(
+        chalk.red(`  ✗ Enabled but unsupported on ${sandbox.platform} (SRT needs Linux or macOS).`)
+      );
+    } else {
+      for (const dep of sandbox.deps) {
+        const marker = dep.present ? chalk.green('✓') : chalk.red('✗');
+        const label = dep.note ? `${dep.name} (${dep.note})` : dep.name;
+        this.log(`  ${marker} ${label}${dep.present ? '' : ' — MISSING'}`);
+      }
+      this.log(
+        sandbox.ok
+          ? chalk.green('  ✓ Sandbox enabled and ready')
+          : chalk.red('  ✗ Sandbox enabled but dependencies are missing')
+      );
+      if (!sandbox.ok) {
+        const hint = sandboxInstallHint(sandbox.platform);
+        if (hint) this.log(chalk.dim(`      ${hint}`));
+      }
+    }
+
     if (staleVersions.length > 0)
       this.log(chalk.yellow(`\n  Stale Agor versions: ${staleVersions.join(', ')}`));
     if (policy.source === 'missing-manifest')

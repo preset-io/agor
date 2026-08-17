@@ -385,6 +385,7 @@ export const tasks = pgTable(
   (table) => ({
     tenantIdx: index('tasks_tenant_id_idx').on(table.tenant_id),
     sessionIdx: index('tasks_session_idx').on(table.session_id),
+    sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
     // Composite for "latest task for session" queries (ORDER BY created_at DESC LIMIT 1).
@@ -547,6 +548,11 @@ export const messages = pgTable(
     // Indexes for efficient lookups
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
+    sessionMessageIdIdx: index('messages_session_message_id_idx').on(
+      table.session_id,
+      table.message_id
+    ),
+    taskMessageIdIdx: index('messages_task_message_id_idx').on(table.task_id, table.message_id),
     sessionIndexIdx: index('messages_session_index_idx').on(table.session_id, table.index),
     timestampIdx: index('messages_timestamp_idx').on(table.timestamp),
     sessionTimestampIdx: index('messages_session_timestamp_idx').on(
@@ -1017,6 +1023,11 @@ export const users = pgTable(
 
     // Unix username for process impersonation (optional, app-enforced uniqueness)
     unix_username: text('unix_username'),
+
+    // Absolute host home dir used as the per-user sandbox overlay SOURCE under
+    // unix_user_mode: sandbox (home_mode: per_user). Null → canonical store
+    // <data_home>/tenants/<tenant>/homes/<user_id>. See types/user.ts.
+    filesystem_home: text('filesystem_home'),
 
     // Onboarding state
     onboarding_completed: t.bool('onboarding_completed').notNull().default(false),

@@ -27,6 +27,9 @@ agor daemon start
 agor open
 ```
 
+Later, `agor install` changes or repairs the selected agentic-tool packages without initializing or
+recreating Agor.
+
 ## Features
 
 - **Multi-Agent Support**: Claude Code, OpenAI Codex, Google Gemini

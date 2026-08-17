@@ -1,45 +1,62 @@
 import { execFileSync } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const limits = {
-  // Raised from 2400 once main measured 2419: the Redis HA foundation, the MCP
-  // catalog data layer (which ships its own dist tree plus curated.yaml), and
-  // the MCP protocol work all landed after the budget was first set. The
-  // headroom is deliberately modest so the ratchet still trips on the next
-  // unexplained jump rather than absorbing it silently.
   files: 2600,
-  // A modest byte increase buys a much larger inode/package reduction: select
-  // high-fanout pure-JS trees are bundled into dist instead of extracted as
-  // hundreds of dependency files during a cold global npm install.
   unpackedBytes: 95 * 1024 * 1024,
   packedBytes: 23 * 1024 * 1024,
 };
 
-let filename;
-try {
-  const output = execFileSync('npm', ['pack', '--json', '--ignore-scripts'], {
-    cwd: new URL('..', import.meta.url),
-    encoding: 'utf8',
-  });
-  const [pack] = JSON.parse(output);
-  filename = pack.filename;
-  const measurements = {
-    files: pack.entryCount ?? pack.files.length,
-    unpackedBytes: pack.unpackedSize,
-    packedBytes: pack.size,
-  };
-  const failures = Object.entries(limits)
-    .filter(([key, limit]) => measurements[key] > limit)
-    .map(([key, limit]) => `${key}: ${measurements[key]} > ${limit}`);
-
-  console.log(
-    `Package content: ${measurements.files} files, ` +
-      `${(measurements.packedBytes / 1024 / 1024).toFixed(2)} MiB packed, ` +
-      `${(measurements.unpackedBytes / 1024 / 1024).toFixed(2)} MiB unpacked`
-  );
-  if (failures.length) {
-    throw new Error(`agor-live package-content budget exceeded:\n- ${failures.join('\n- ')}`);
+function measureDirectory(directory) {
+  let files = 0;
+  let unpackedBytes = 0;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      const nested = measureDirectory(path);
+      files += nested.files;
+      unpackedBytes += nested.unpackedBytes;
+    } else {
+      files += 1;
+      unpackedBytes += statSync(path).size;
+    }
   }
-} finally {
-  if (filename) rmSync(new URL(`../${filename}`, import.meta.url), { force: true });
+  return { files, unpackedBytes };
+}
+
+const scriptRoot = resolve(import.meta.dirname, '..');
+const version = JSON.parse(readFileSync(join(scriptRoot, 'package.json'), 'utf8')).version;
+const tarball = process.argv[2]
+  ? resolve(process.argv[2])
+  : join(scriptRoot, 'release', `agor-live-${version}.tgz`);
+try {
+  const extractRoot = mkdtempSync(join(tmpdir(), 'agor-live-content-extract-'));
+  try {
+    execFileSync('tar', ['-xzf', tarball, '-C', extractRoot]);
+    const measurements = {
+      ...measureDirectory(join(extractRoot, 'package')),
+      packedBytes: statSync(tarball).size,
+    };
+    const failures = Object.entries(limits)
+      .filter(([key, limit]) => measurements[key] > limit)
+      .map(([key, limit]) => `${key}: ${measurements[key]} > ${limit}`);
+
+    console.log(
+      `Package content: ${measurements.files} files, ` +
+        `${(measurements.packedBytes / 1024 / 1024).toFixed(2)} MiB packed, ` +
+        `${(measurements.unpackedBytes / 1024 / 1024).toFixed(2)} MiB unpacked`
+    );
+    if (failures.length) {
+      throw new Error(`agor-live package-content budget exceeded:\n- ${failures.join('\n- ')}`);
+    }
+  } finally {
+    rmSync(extractRoot, { recursive: true, force: true });
+  }
+} catch (error) {
+  if (error?.code === 'ENOENT') {
+    throw new Error(`Release tarball not found: ${tarball}. Run build.sh first.`, { cause: error });
+  }
+  throw error;
 }

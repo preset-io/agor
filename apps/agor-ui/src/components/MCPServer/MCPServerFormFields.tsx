@@ -22,6 +22,7 @@ import {
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
+import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
 import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
 import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
@@ -77,6 +78,12 @@ export interface MCPServerFormFieldsProps {
   } | null;
   /** Persist current settings and return the authoritative server ID before every OAuth start. */
   onPrepareOAuthStart: () => Promise<string | null>;
+  /**
+   * Changes whenever the owner's form values do. The connection actions read
+   * the form store directly, so they need a reason to re-render — see
+   * `useFormRevision`.
+   */
+  formRevision?: number;
 }
 
 /**
@@ -106,6 +113,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   testing = false,
   testResult,
   onPrepareOAuthStart,
+  // Consumed by re-rendering, not by reading — see `formRevision` above.
+  formRevision: _formRevision,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testingAuth, setTestingAuth] = useState(false);
@@ -113,6 +122,15 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const [oauthAdvancedOpen, setOauthAdvancedOpen] = useState(false);
 
   const [disconnectingOAuth, setDisconnectingOAuth] = useState(false);
+
+  // `Start OAuth Flow` writes the server row before it redirects, so it needs
+  // everything a save needs — not just the URL it puts in the request. Read
+  // from the store the save itself reads; `formRevision` is what re-renders us.
+  const missingRequiredFields = missingMCPFieldLabels(form.getFieldsValue(true), {
+    mode,
+    transport,
+    authType,
+  });
 
   const {
     cancelOAuthWait,
@@ -306,6 +324,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     }
   };
 
+  // One label for both the live and the blocked button, so a retry still reads
+  // as a retry while it waits on a field.
+  const oauthStartLabel = oauthFailure?.diagnostic
+    ? 'Save OAuth settings & retry'
+    : oauthFailure
+      ? 'Retry OAuth Flow'
+      : 'Start OAuth Flow';
+
   const isRemoteTransport = isRemoteTransportValue(transport);
   const showAdvancedSection = isRemoteTransport && authType === 'oauth';
 
@@ -417,7 +443,9 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="Command"
             name="command"
-            rules={mode === 'create' ? [{ required: true, message: 'Please enter a command' }] : []}
+            // Required in both modes: a stdio server with no command is as
+            // unusable after an edit as it would be on creation.
+            rules={[{ required: true, message: 'Please enter a command' }]}
             tooltip="Command to execute (e.g., npx, node, python)"
           >
             <Input placeholder="npx" />
@@ -435,7 +463,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="URL"
             name="url"
-            rules={mode === 'create' ? [{ required: true, message: 'Please enter a URL' }] : []}
+            rules={[{ required: true, message: 'Please enter a URL' }]}
             tooltip="Server URL. Supports templates like {{ user.env.MCP_URL }}"
           >
             <Input placeholder="https://mcp.example.com" />
@@ -532,15 +560,24 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 Test Authentication
               </Button>
             )}
-            {authType === 'oauth' && oauthBrowserFlowAvailable && (
-              <Button type="primary" loading={startingOAuthFlow} onClick={handleStartOAuthFlow}>
-                {oauthFailure?.diagnostic
-                  ? 'Save OAuth settings & retry'
-                  : oauthFailure
-                    ? 'Retry OAuth Flow'
-                    : 'Start OAuth Flow'}
-              </Button>
-            )}
+            {authType === 'oauth' &&
+              oauthBrowserFlowAvailable &&
+              (missingRequiredFields.length > 0 ? (
+                // Disabled rather than hidden: the user has already earned this
+                // button with a successful auth test, so it has to say what is
+                // still holding it back.
+                <Tooltip title={describeMissingForOAuth(missingRequiredFields)}>
+                  <span>
+                    <Button type="primary" disabled>
+                      {oauthStartLabel}
+                    </Button>
+                  </span>
+                </Tooltip>
+              ) : (
+                <Button type="primary" loading={startingOAuthFlow} onClick={handleStartOAuthFlow}>
+                  {oauthStartLabel}
+                </Button>
+              ))}
             {authType === 'oauth' && serverId && !oauthBrowserFlowAvailable && (
               <Button
                 type="default"

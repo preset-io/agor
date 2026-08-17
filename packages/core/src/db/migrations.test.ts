@@ -11,6 +11,15 @@ interface JournalEntry {
   when: number;
 }
 
+/** Both journals, Postgres first, as the migrator reads them off disk. */
+const readJournals = () =>
+  Promise.all(
+    [
+      new URL('../../drizzle/postgres/meta/_journal.json', import.meta.url),
+      new URL('../../drizzle/sqlite/meta/_journal.json', import.meta.url),
+    ].map(async (url) => JSON.parse(await readFile(url, 'utf8')) as { entries: JournalEntry[] })
+  );
+
 describe('Postgres migrations', () => {
   it('requires the Knowledge claim protocol migration to be an offline existing-db cutover', () => {
     expect(
@@ -57,6 +66,47 @@ describe('Postgres migrations', () => {
     ).toEqual([]);
   });
 
+  it('enforces PostgreSQL transcript indexes as an offline existing-db cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: ['0082_github_install_state'],
+        pending: ['0083_transcript_hydration_keysets'],
+      })
+    ).toEqual(['0083_transcript_hydration_keysets']);
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: ['0085_github_install_state'],
+        pending: ['0086_transcript_hydration_keysets'],
+      })
+    ).toEqual([]);
+    expect(
+      pendingOfflineCutoverMigrations({
+        applied: [],
+        pending: ['0000_pretty_mac_gargan', '0083_transcript_hydration_keysets'],
+      })
+    ).toEqual([]);
+  });
+
+  it('assigns GitHub install state unique post-HA migration watermarks', async () => {
+    const [postgresJournal, sqliteJournal] = await readJournals();
+
+    for (const [journal, expectedTag, expectedIndex, hydrationTag, hydrationIndex] of [
+      [postgresJournal, '0082_github_install_state', 82, '0083_transcript_hydration_keysets', 83],
+      [sqliteJournal, '0085_github_install_state', 85, '0086_transcript_hydration_keysets', 86],
+    ] as const) {
+      const entry = journal.entries.find(({ tag }) => tag === expectedTag);
+      const predecessor = journal.entries.find(({ idx }) => idx === expectedIndex - 1);
+      expect(entry).toMatchObject({ idx: expectedIndex, tag: expectedTag });
+      expect(entry?.when).toBeGreaterThan(predecessor?.when ?? 0);
+
+      // Find by tag rather than assuming it is the newest entry — later
+      // migrations (e.g. add_user_filesystem_home) legitimately follow it.
+      const hydrationEntry = journal.entries.find(({ tag }) => tag === hydrationTag);
+      expect(hydrationEntry).toMatchObject({ idx: hydrationIndex, tag: hydrationTag });
+      expect(hydrationEntry?.when).toBeGreaterThan(entry?.when ?? 0);
+    }
+  });
+
   it('gives the newest migration a unique watermark that sorts it last', async () => {
     // Drizzle applies pending migrations in `when` order, so a new migration
     // that does not sort after the one before it can run out of order against a
@@ -71,14 +121,7 @@ describe('Postgres migrations', () => {
     // Deliberately not pinned to a tag: naming the newest migration makes every
     // migration an edit to this test, and that edit is the moment the property
     // stops being checked.
-    const [postgresJournal, sqliteJournal] = await Promise.all(
-      [
-        new URL('../../drizzle/postgres/meta/_journal.json', import.meta.url),
-        new URL('../../drizzle/sqlite/meta/_journal.json', import.meta.url),
-      ].map(async (url) => JSON.parse(await readFile(url, 'utf8')) as { entries: JournalEntry[] })
-    );
-
-    for (const { entries } of [postgresJournal, sqliteJournal]) {
+    for (const { entries } of await readJournals()) {
       expect(entries.length).toBeGreaterThan(1);
 
       // `idx` is not dense — the history has a gap where a generated migration

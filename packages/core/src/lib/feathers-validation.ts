@@ -22,6 +22,16 @@ export const queryValidator = new Ajv({
 });
 
 /**
+ * Message queries reject unknown fields instead of silently removing them.
+ * Silently turning a misspelled filter into a broad transcript query is both
+ * surprising and potentially expensive.
+ */
+export const strictQueryValidator = new Ajv({
+  coerceTypes: true,
+  useDefaults: true,
+});
+
+/**
  * Common TypeBox schemas for reusable field types
  */
 export const CommonSchemas = {
@@ -121,28 +131,152 @@ export const sessionQuerySchema = createQuerySchema(
 /**
  * Task query schema
  */
-export const taskQuerySchema = createQuerySchema(
-  Type.Object({
-    task_id: Type.Optional(CommonSchemas.uuid),
-    session_id: Type.Optional(CommonSchemas.uuid),
-    status: Type.Optional(
+const taskSortDirection = Type.Union([Type.Literal(1), Type.Literal(-1)]);
+export const taskQuerySchema = Type.Intersect(
+  [
+    Type.Object({
+      task_id: Type.Optional(
+        Type.Union([
+          CommonSchemas.uuid,
+          Type.Object(
+            {
+              $gt: Type.Optional(CommonSchemas.uuid),
+              $lte: CommonSchemas.uuid,
+            },
+            { additionalProperties: false }
+          ),
+        ])
+      ),
+      session_id: Type.Optional(CommonSchemas.uuid),
+      status: Type.Optional(
+        Type.Union([
+          Type.Literal('queued'),
+          Type.Literal('created'),
+          Type.Literal('dispatching'),
+          Type.Literal('running'),
+          Type.Literal('stopping'),
+          Type.Literal('awaiting_permission'),
+          Type.Literal('awaiting_input'),
+          Type.Literal('timed_out'),
+          Type.Literal('completed'),
+          Type.Literal('failed'),
+          Type.Literal('stopped'),
+        ])
+      ),
+      created_at: Type.Optional(CommonSchemas.timestamp),
+    }),
+    Type.Object({
+      $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+      // Retained for compatible exact-Session callers. The shared client now
+      // hydrates Tasks with a Task-ID high-water keyset instead of OFFSET.
+      $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+      $sort: Type.Optional(
+        Type.Partial(
+          Type.Object(
+            {
+              task_id: taskSortDirection,
+              session_id: taskSortDirection,
+              status: taskSortDirection,
+              created_at: taskSortDirection,
+              created_by: taskSortDirection,
+            },
+            { additionalProperties: false }
+          )
+        )
+      ),
+      $select: Type.Optional(Type.Array(Type.String())),
+    }),
+  ],
+  { additionalProperties: false }
+);
+
+const messageTypeSchema = Type.Union([
+  Type.Literal('user'),
+  Type.Literal('assistant'),
+  Type.Literal('system'),
+  Type.Literal('file-history-snapshot'),
+  Type.Literal('permission_request'),
+  Type.Literal('input_request'),
+  Type.Literal('daemon_restart'),
+  Type.Literal('daemon_crash'),
+  Type.Literal('widget_request'),
+]);
+const messageRoleSchema = Type.Union([
+  Type.Literal('user'),
+  Type.Literal('assistant'),
+  Type.Literal('system'),
+]);
+const sortDirectionSchema = Type.Union([Type.Literal(1), Type.Literal(-1)]);
+const messageSelectableFieldSchema = Type.Union(
+  [
+    'message_id',
+    'session_id',
+    'task_id',
+    'type',
+    'role',
+    'index',
+    'timestamp',
+    'content_preview',
+    'content',
+    'tool_uses',
+    'parent_tool_use_id',
+    'metadata',
+  ].map((field) => Type.Literal(field))
+);
+
+/**
+ * Message list contract. `$limit` is accepted above the service ceiling so
+ * Feathers can clamp it consistently. Exact hydration uses the bounded
+ * message_id range above; `$skip` remains for compatible exact-transcript
+ * callers, while MessagesService rejects broad deep offsets.
+ */
+export const messageQuerySchema = Type.Object(
+  {
+    message_id: Type.Optional(
       Type.Union([
-        Type.Literal('queued'),
-        Type.Literal('created'),
-        Type.Literal('dispatching'),
-        Type.Literal('running'),
-        Type.Literal('stopping'),
-        Type.Literal('awaiting_permission'),
-        Type.Literal('awaiting_input'),
-        Type.Literal('timed_out'),
-        Type.Literal('completed'),
-        Type.Literal('failed'),
-        Type.Literal('stopped'),
+        CommonSchemas.uuid,
+        Type.Object(
+          {
+            $gt: Type.Optional(CommonSchemas.uuid),
+            $lte: CommonSchemas.uuid,
+          },
+          { additionalProperties: false }
+        ),
       ])
     ),
-    created_at: Type.Optional(CommonSchemas.timestamp),
-    updated_at: Type.Optional(CommonSchemas.timestamp),
-  })
+    session_id: Type.Optional(
+      Type.Union([
+        CommonSchemas.uuid,
+        Type.Object(
+          { $in: Type.Array(CommonSchemas.uuid, { maxItems: 1_000 }) },
+          { additionalProperties: false }
+        ),
+      ])
+    ),
+    task_id: Type.Optional(CommonSchemas.uuid),
+    type: Type.Optional(messageTypeSchema),
+    role: Type.Optional(messageRoleSchema),
+    $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+    $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+    $sort: Type.Optional(
+      Type.Object(
+        {
+          message_id: Type.Optional(sortDirectionSchema),
+          session_id: Type.Optional(sortDirectionSchema),
+          type: Type.Optional(sortDirectionSchema),
+          role: Type.Optional(sortDirectionSchema),
+          index: Type.Optional(sortDirectionSchema),
+          timestamp: Type.Optional(sortDirectionSchema),
+          created_at: Type.Optional(sortDirectionSchema),
+        },
+        { additionalProperties: false }
+      )
+    ),
+    $select: Type.Optional(
+      Type.Array(messageSelectableFieldSchema, { maxItems: 12, uniqueItems: true })
+    ),
+  },
+  { additionalProperties: false }
 );
 
 /**
@@ -328,7 +462,8 @@ export const mcpCatalogQuerySchema = Type.Intersect(
  * Create validators for each schema
  */
 export const sessionQueryValidator = getValidator(sessionQuerySchema, queryValidator);
-export const taskQueryValidator = getValidator(taskQuerySchema, queryValidator);
+export const taskQueryValidator = getValidator(taskQuerySchema, strictQueryValidator);
+export const messageQueryValidator = getValidator(messageQuerySchema, strictQueryValidator);
 export const branchQueryValidator = getValidator(branchQuerySchema, queryValidator);
 export const boardQueryValidator = getValidator(boardQuerySchema, queryValidator);
 export const userQueryValidator = getValidator(userQuerySchema, queryValidator);

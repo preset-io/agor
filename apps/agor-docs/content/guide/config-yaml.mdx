@@ -29,9 +29,10 @@ packages before returning. Fresh headless init requires `--agentic-tools` (or
 `AGOR_AGENTIC_TOOLS`); `all` and `none` are explicit shorthands.
 
 If `agentic_tools.installed` is absent in an older config, local CLI installs use a backward-compatible
-host-local managed manifest. Run interactive `agor install` to create or change it. The manifest is
-never exposed for mutation through API, UI, or MCP. Headless deployments should use an explicit
-YAML list, including `[]`.
+host-local managed manifest. Run interactive `agor install` and select at least one tool to create or
+change it; the packaged daemon refuses to start while both policy sources are absent. The manifest
+is never exposed for mutation through API, UI, or MCP. Headless deployments should use an explicit
+YAML list, including `[]` when a tool-free deployment is intentional.
 
 ## Environment precedence
 

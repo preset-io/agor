@@ -162,6 +162,15 @@ services:
       - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-}
       - AGOR_DAEMON_UNIX_USER=${AGOR_DAEMON_UNIX_USER:-agor}
 
+      # OS-level executor filesystem sandbox (bubblewrap). AGOR_SANDBOX_ENABLED=true
+      # → execution.sandbox.enabled: true (resolved in memory). Used by the
+      # `sandbox` .agor.yml env variant. See context/explorations/executor-sandboxing.md.
+      - AGOR_SANDBOX_ENABLED=${AGOR_SANDBOX_ENABLED:-}
+      # AGOR_SANDBOX_HOME_MODE=per_user overlays a private, persistent per-owner
+      # home at the passwd home inside the sandbox (Phase 2 / strict-mode
+      # replacement). Default (unset/shared) uses the daemon user's home.
+      - AGOR_SANDBOX_HOME_MODE=${AGOR_SANDBOX_HOME_MODE:-}
+
       # Instance identification (optional - displayed in UI navbar)
       - INSTANCE_LABEL=${INSTANCE_LABEL:-}
 

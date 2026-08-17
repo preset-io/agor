@@ -55,7 +55,6 @@ agor/
 │       ├── types/           # TypeScript types (Session, Task, Branch, etc.)
 │       ├── db/              # Drizzle ORM + repositories + schema
 │       ├── git/             # Git utils (simple-git only, no subprocess)
-│       ├── claude/          # Claude Code session loading utilities
 │       └── api/             # FeathersJS client utilities
 │
 ├── apps/agor-docs/         # User-facing docs site (Nextra) — canonical reference

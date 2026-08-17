@@ -60,6 +60,7 @@ import {
   branchQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
+  messageQueryValidator,
   repoQueryValidator,
   sessionQueryValidator,
   taskQueryValidator,
@@ -114,8 +115,12 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { rejectInConstrainedHa } from './ha-support.js';
-import { classifyMissingCredentialFailure } from './hooks/classify-missing-credential.js';
+import {
+  classifyMissingCredentialFailure,
+  protectExternalProviderFailureMetadata,
+} from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
+import { validateMessageCreate } from './hooks/validate-message-create.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
@@ -175,6 +180,10 @@ import {
   type RealtimeAccessSessionRepository,
 } from './utils/realtime-access-cache.js';
 import { configureRealtimePublish } from './utils/realtime-publish.js';
+import {
+  resolveSandboxProtectedDataRoots,
+  validateFilesystemHomeOverride,
+} from './utils/sandbox-context.js';
 import {
   ensureCurrentScheduleLoaded,
   ensureScheduleRunsAsCaller,
@@ -708,6 +717,41 @@ export function authorizeUsersGet(context: HookContext): HookContext {
   return context;
 }
 
+/** Protect and canonicalize the admin-owned host path used for sandbox homes. */
+export function protectFilesystemHomeWrite(context: HookContext, config: AgorConfig): HookContext {
+  const records = Array.isArray(context.data) ? context.data : [context.data];
+  const writesFilesystemHome = records.some(
+    (record) => record && Object.hasOwn(record as object, 'filesystem_home')
+  );
+  if (!writesFilesystemHome) return context;
+
+  const params = context.params as AuthenticatedParams;
+  if (params.provider && !hasMinimumRole(params.user?.role, ROLES.ADMIN)) {
+    throw new Forbidden('Only admins can modify filesystem_home');
+  }
+
+  const protectedDataRoots = resolveSandboxProtectedDataRoots(config);
+  for (const record of records) {
+    if (!record || !Object.hasOwn(record as object, 'filesystem_home')) continue;
+    const writable = record as Record<string, unknown>;
+    const value = writable.filesystem_home;
+    if (value === null) continue;
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new BadRequest('filesystem_home must be a non-empty absolute path or null');
+    }
+    try {
+      let validated = value.trim();
+      for (const root of protectedDataRoots) {
+        validated = validateFilesystemHomeOverride(validated, root);
+      }
+      writable.filesystem_home = validated;
+    } catch (error) {
+      throw new BadRequest(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return context;
+}
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -1124,13 +1168,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const protectWidgetMessageWrites = protectExternalWidgetMessageWrites((messageId) =>
     messagesService.findByIdForScopeCheck(messageId as MessageID)
   );
+  const protectProviderFailureMetadata = protectExternalProviderFailureMetadata((messageId) =>
+    messagesService.findByIdForScopeCheck(messageId as MessageID)
+  );
   const protectPermissionMessageWrites = protectExternalPermissionMessageWrites((messageId) =>
     messagesService.findByIdForScopeCheck(messageId as MessageID)
   );
 
   app.service('messages').hooks({
     before: {
-      all: [requireAuth, executorRuntimeScopeGuard()],
+      all: [typedValidateQuery(messageQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Scope messages.find() to sessions the caller can access.
         // Without this backstop, any authenticated member could list messages
@@ -1149,6 +1196,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create messages'),
+        validateMessageCreate,
+        protectProviderFailureMetadata,
         protectWidgetMessageWrites,
         protectPermissionMessageWrites,
         ...(branchRbacEnabled
@@ -1160,9 +1209,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
-        // Detect "no credential resolved for this session's provider"
-        // structurally, never by matching raw provider error text. Drives the
-        // Connect-AI empty state instead of a raw "/login" message.
+        // Reclassify executor-scoped credential and narrow provider-credit
+        // failures structurally, never by matching arbitrary provider text.
         classifyMissingCredentialFailure(
           db,
           taskRepository,
@@ -1170,9 +1218,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           AGENTIC_TOOL_DISPLAY_NAMES
         ),
       ],
-      update: [protectWidgetMessageWrites, protectPermissionMessageWrites],
+      update: [
+        protectProviderFailureMetadata,
+        protectWidgetMessageWrites,
+        protectPermissionMessageWrites,
+      ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),
+        protectProviderFailureMetadata,
         ...(branchRbacEnabled
           ? [
               resolveSessionContext(),
@@ -2507,6 +2560,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       get: [authorizeUsersGet],
       create: [
+        (context) => protectFilesystemHomeWrite(context, config),
         async (context: HookContext<Board>) => {
           const params = context.params as AuthenticatedParams;
 
@@ -2534,13 +2588,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       patch: [
+        (context) => protectFilesystemHomeWrite(context, config),
         async (context) => {
           const params = context.params as AuthenticatedParams;
           const userId = context.id as string;
           const callerRole = params.user?.role;
           const callerIsAdmin = hasMinimumRole(callerRole, ROLES.ADMIN);
 
-          // Field-level restrictions: only admins can modify unix_username, role, and must_change_password
+          // Field-level restrictions: only admins can modify unix_username, role, and must_change_password.
+          // filesystem_home is protected and validated by the preceding hook.
           if (!Array.isArray(context.data)) {
             if (context.data?.unix_username !== undefined) {
               if (!callerIsAdmin) {

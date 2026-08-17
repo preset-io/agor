@@ -86,6 +86,7 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
         await deleteCodexAuthViaExecutor(identity.unixUser, {
           reportedUnixUser: identity.reportedUnixUser,
           userId: identity.userId,
+          codexHome: identity.codexHome,
         });
       } catch (err) {
         console.error(

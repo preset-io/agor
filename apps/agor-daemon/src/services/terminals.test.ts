@@ -1,5 +1,6 @@
 import type { BranchID, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 
 const mocks = vi.hoisted(() => {
@@ -19,11 +20,13 @@ const mocks = vi.hoisted(() => {
     branchesById: new Map<string, typeof branch>([[branch.branch_id, branch]]),
     spawnExecutorFireAndForget: vi.fn(),
     generateScopedServiceToken: vi.fn(() => 'terminal-token'),
+    getDaemonUrl: vi.fn(() => 'http://daemon.internal:3030'),
     resolveUnixUserForImpersonation: vi.fn(() => ({
       unixUser: null,
       reportedUnixUser: null,
     })),
     createUserProcessEnvironment: vi.fn(async () => ({})),
+    joinRequestingSocket: vi.fn(async () => true),
     config: {
       daemon: { port: 3030 },
       execution: { branch_rbac: false, unix_user_mode: 'simple' },
@@ -82,6 +85,7 @@ vi.mock('../utils/branch-authorization.js', () => ({
 
 vi.mock('../utils/spawn-executor.js', () => ({
   generateScopedServiceToken: mocks.generateScopedServiceToken,
+  getDaemonUrl: mocks.getDaemonUrl,
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
 
@@ -110,6 +114,9 @@ function makeApp() {
 const params = {
   provider: 'socketio',
   user: { user_id: 'user-1', role: 'admin' },
+  connection: {
+    [TERMINAL_REQUEST_JOIN_CHANNEL]: mocks.joinRequestingSocket,
+  },
 };
 
 beforeEach(() => {
@@ -124,6 +131,7 @@ beforeEach(() => {
     reportedUnixUser: null,
   });
   mocks.createUserProcessEnvironment.mockResolvedValue({});
+  mocks.joinRequestingSocket.mockResolvedValue(true);
   mocks.config = {
     daemon: { port: 3030 },
     execution: { branch_rbac: false, unix_user_mode: 'simple' },
@@ -146,6 +154,9 @@ describe('branch-scoped terminal identity', () => {
     await expect(
       service.create({ branchId: 'branch-1' as BranchID }, { ...params, provider: 'rest' } as never)
     ).rejects.toThrow('owning Socket.IO connection');
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, { ...params, connection: {} } as never)
+    ).rejects.toThrow('cannot subscribe to this terminal');
   });
 
   it('rejects a missing branch even when branch RBAC is disabled', async () => {
@@ -166,6 +177,46 @@ describe('branch-scoped terminal identity', () => {
 });
 
 describe('process-affine attachment creation', () => {
+  it('subscribes the requesting browser before the executor can emit startup state', async () => {
+    const order: string[] = [];
+    mocks.joinRequestingSocket.mockImplementation(async () => {
+      order.push('browser-joined');
+      return true;
+    });
+    mocks.spawnExecutorFireAndForget.mockImplementation(() => {
+      order.push('executor-started');
+    });
+
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+
+    expect(mocks.joinRequestingSocket).toHaveBeenCalledWith(
+      terminal.channel,
+      expect.objectContaining({
+        userId: 'user-1',
+        terminalId: terminal.terminalId,
+        branchId: 'branch-1',
+      })
+    );
+    expect(order).toEqual(['browser-joined', 'executor-started']);
+  });
+
+  it('does not spawn or retain an attachment when the requesting socket disconnects', async () => {
+    mocks.joinRequestingSocket.mockResolvedValue(false);
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).rejects.toThrow('owning Socket.IO connection disconnected');
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+
+    mocks.joinRequestingSocket.mockResolvedValue(true);
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).resolves.toMatchObject({ isNew: true });
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledOnce();
+  });
+
   it('spawns with server-derived branch cwd and fenced tenant/user/branch/owner claims', async () => {
     mocks.createUserProcessEnvironment.mockImplementation(async () => {
       expect(mocks.databaseScopeDepth).toBeGreaterThan(0);
@@ -198,7 +249,7 @@ describe('process-affine attachment creation', () => {
     );
     expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
       expect.objectContaining({
-        daemonUrl: 'http://127.0.0.1:3030',
+        daemonUrl: 'http://daemon.internal:3030',
         params: expect.objectContaining({
           terminalId: result.terminalId,
           channel: result.channel,

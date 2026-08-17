@@ -1,9 +1,8 @@
 # Fast PR + main checks.
 #
 # Everything in this workflow is expected to pass on every PR push.
-# The slow / cross-Node-version / publish-path stuff lives in
-# `heavy-checks.yml` and runs on a nightly cron (and on-demand via
-# workflow_dispatch), not on every push.
+# The slow / cross-Node-version / publish-path stuff runs through the release
+# workflow and on demand via `heavy-checks.yml`, not on every push.
 #
 # Shape: one job, `ci` — one install, then all checks via turbo's
 # internal task graph. The five-jobs-after-an-install fanout we used to
@@ -11,8 +10,8 @@
 # ~4 redundant installs per CI run.
 #
 # `pnpm audit` lives in its own workflow (`audit.yml`) — path-filtered to
-# dependency-manifest changes only, and also invoked by `heavy-checks.yml`
-# nightly to catch ambient CVEs.
+# dependency-manifest changes and on its own nightly schedule to catch ambient
+# CVEs. It is also included in the on-demand `heavy-checks.yml` aggregate.
 name: CI
 
 on:
@@ -70,11 +69,15 @@ jobs:
       # Test runs against a narrower filter set than build/typecheck —
       # only the packages with real test suites worth gating on. Kept as
       # a separate turbo invocation to preserve that filter.
-      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core --filter=@agor/executor
+      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core --filter=@agor/executor --filter=agor-live
 
-  # The Node-version matrix (`npm install agor-live` compat across 22/24/25)
-  # used to live here. It now runs nightly + workflow_dispatch in
-  # `heavy-checks.yml`. PR pushes rely on the agor-live publish smoke
-  # test (which itself does `npm install` of the packed tarball on Node 22)
+      # CLI init tests spawn real child processes and pseudo-terminals. Keep
+      # them required, but outside Turbo's CPU-heavy parallel test fanout.
+      - run: pnpm --filter @agor/cli test
+
+  # The Node-version matrix (`npm install agor-live` compat across 22/24/26)
+  # used to live here. It now runs for releases and on-demand via
+  # `heavy-checks.yml`. PR pushes rely on the agor-live packaged smoke
+  # test (which itself does `npm install` of the packed tarball on Node 24)
   # to catch publish-path regressions when publish-relevant paths change.
   # The `audit` job moved to `audit.yml` (path-filtered to dep changes).

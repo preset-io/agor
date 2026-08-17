@@ -1,5 +1,8 @@
-import type { SessionID } from '@agor/core/types';
+import { generateId } from '@agor/core';
+import type { Message, MessageID, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import type { MessagesService } from '../base/index.js';
+import { createAssistantMessage } from './message-builder.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 
 function createProcessor() {
@@ -70,6 +73,50 @@ describe('SDKMessageProcessor result logging', () => {
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  it('carries the exact #2288 zero-turn result into executor-owned message metadata', async () => {
+    const processor = createProcessor();
+    const events = await processor.process({
+      type: 'result',
+      subtype: 'success',
+      duration_ms: 0,
+      duration_api_ms: 0,
+      is_error: false,
+      num_turns: 0,
+      result: 'Credit balance is too low',
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [],
+      uuid: 'result-uuid',
+      session_id: 'sdk-session',
+    } as never);
+    const complete = events.find(
+      (event): event is Extract<ProcessedEvent, { type: 'complete' }> => event.type === 'complete'
+    );
+    expect(complete?.isSynthesizedResult).toBe(true);
+
+    const messagesService = {
+      create: vi.fn(async (data: Partial<Message>) => data as Message),
+    } as unknown as MessagesService;
+    const message = await createAssistantMessage(
+      'test-session-id' as SessionID,
+      generateId() as MessageID,
+      complete?.content ?? [],
+      complete?.toolUses,
+      undefined,
+      0,
+      complete?.resolvedModel,
+      messagesService,
+      undefined,
+      complete?.parent_tool_use_id,
+      undefined,
+      complete?.isSynthesizedResult
+    );
+
+    expect(message.content).toEqual([{ type: 'text', text: 'Credit balance is too low' }]);
+    expect(message.metadata?.is_zero_turn_result).toBe(true);
   });
 });
 

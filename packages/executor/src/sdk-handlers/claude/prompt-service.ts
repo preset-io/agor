@@ -22,6 +22,7 @@ import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { ClaudeBackgroundTaskLifecycle } from './background-task-lifecycle.js';
+import { AWAIT_TIMEOUT, awaitWithTimeout } from './bounded-await.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
 import { aggregateClaudeResults } from './result-aggregation.js';
@@ -51,6 +52,18 @@ export interface PromptResult {
 export class ClaudePromptService {
   /** Enable token-level streaming from Claude Agent SDK */
   private static readonly ENABLE_TOKEN_STREAMING = true;
+
+  /**
+   * Upper bound on the terminal-result `getContextUsage()` control request.
+   *
+   * This is a fast local round-trip to the CLI subprocess (normally answered in
+   * milliseconds). The SDK gives it no timeout of its own, so when a subprocess
+   * fails to answer after the final `result` — while we are holding stdin open
+   * for exactly this request — the await would otherwise never settle and the
+   * Task would stay `running` forever. 15s is far beyond any healthy response
+   * yet still bounds the hang; on timeout we settle the turn without a context
+   * snapshot rather than wedge the query. */
+  static readonly CONTEXT_USAGE_TIMEOUT_MS = 15_000;
 
   /** Serialize permission checks per session to prevent duplicate prompts for concurrent tool calls */
   private permissionLocks = new Map<SessionID, Promise<void>>();
@@ -282,8 +295,19 @@ If you continue to see authentication errors, please contact your Agor administr
             } else {
               event.raw_sdk_message = aggregateClaudeResults(sdkResults);
               try {
-                const contextUsage = await result.getContextUsage();
-                yield { type: 'context_usage', contextUsage } as ProcessedEvent;
+                // Bounded: a subprocess that never answers this control request
+                // must not wedge the query generator open (Task stuck running).
+                const contextUsage = await awaitWithTimeout(
+                  result.getContextUsage(),
+                  ClaudePromptService.CONTEXT_USAGE_TIMEOUT_MS
+                );
+                if (contextUsage === AWAIT_TIMEOUT) {
+                  console.warn(
+                    `⚠️  getContextUsage() did not respond within ${ClaudePromptService.CONTEXT_USAGE_TIMEOUT_MS}ms; settling turn without a context snapshot`
+                  );
+                } else {
+                  yield { type: 'context_usage', contextUsage } as ProcessedEvent;
+                }
               } catch (error) {
                 console.warn(
                   `⚠️  getContextUsage() unavailable (subprocess may have exited): ${error instanceof Error ? error.message : String(error)}`

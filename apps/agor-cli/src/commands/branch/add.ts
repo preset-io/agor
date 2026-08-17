@@ -62,6 +62,13 @@ export default class BranchAdd extends BaseCommand {
       description: 'Do not pull latest from remote before creating',
       default: false,
     }),
+    'storage-mode': Flags.string({
+      description: 'Branch storage: worktree (default) or clone (self-standing clone)',
+      options: ['worktree', 'clone'],
+    }),
+    'clone-depth': Flags.integer({
+      description: 'Shallow clone depth (only with --storage-mode clone; omit for full clone)',
+    }),
   };
 
   async run(): Promise<void> {
@@ -134,6 +141,8 @@ export default class BranchAdd extends BaseCommand {
         pullLatest,
         sourceBranch,
         boardId: flags['board-id'],
+        storage_mode: flags['storage-mode'] as 'worktree' | 'clone' | undefined,
+        clone_depth: flags['clone-depth'],
       })) as unknown as Branch;
 
       this.log(`${chalk.green('✓')} Branch created and registered`);

@@ -44,6 +44,7 @@ import {
   type InstallableAgenticTool,
   normalizeAgenticToolName,
   resolveManagedAgenticToolVersion,
+  validateInteractiveAgenticToolSelection,
 } from '../lib/agentic-tool-integrations.js';
 
 export function isFreshInitState(state: {
@@ -107,7 +108,8 @@ export default class Init extends Command {
   private initialConfig: AgorConfig = getDefaultConfig();
   private requestedAgenticTools: InstallableAgenticTool[] | undefined;
   private nonInteractive = false;
-  static description = 'Initialize Agor environment (creates ~/.agor/ and database)';
+  static description =
+    'Create the Agor config/database and install the agentic tools selected for first use';
 
   static examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -583,6 +585,42 @@ export default class Init extends Command {
       // Explicit hard opt-out intentionally omits it.
       await this.saveTelemetryPreference(false, true);
     }
+    // Offer the OS-level executor sandbox (SRT). Single y/N — no complex form.
+    // Only on a fresh config (initialConfig is what gets persisted below).
+    if (!skipPrompts && !configAlreadyExists) {
+      const { enableSandbox } = await inquirer.prompt<{ enableSandbox: boolean }>([
+        {
+          type: 'confirm',
+          name: 'enableSandbox',
+          message:
+            "Sandbox agents' filesystem access with sensible defaults? " +
+            '(branch + temp stay writable; ~/.agor secrets and other branches are hidden. ' +
+            'Recommended for shared/production hosts; needs bubblewrap on Linux.)',
+          default: false,
+        },
+      ]);
+      if (enableSandbox) {
+        this.initialConfig.execution = {
+          ...this.initialConfig.execution,
+          sandbox: { ...this.initialConfig.execution?.sandbox, enabled: true },
+        };
+        this.log(
+          `${chalk.green('   ✓')} Executor sandbox enabled (execution.sandbox.enabled: true)`
+        );
+        this.log(
+          chalk.dim(
+            '     Tune it in ~/.agor/config.yaml; run `agor doctor` to verify dependencies.'
+          )
+        );
+      } else {
+        this.log(
+          chalk.dim(
+            '   ○ Sandbox off. Agents have open filesystem access; tool approval flows still apply.'
+          )
+        );
+      }
+    }
+
     this.initialConfig.agentic_tools = { installed: selectedTools };
     if (!configAlreadyExists) {
       await this.persistDuringInitialCreation(this.initialConfig);
@@ -704,6 +742,7 @@ export default class Init extends Command {
       )
     );
     this.log(chalk.dim('Unchecked tools will not be available to workspaces on this deployment.'));
+    this.log(chalk.dim('Use ↑/↓ to move, Space to select, and Enter to continue.'));
     const { selectedTools } = await inquirer.prompt<{ selectedTools: InstallableAgenticTool[] }>([
       {
         type: 'checkbox',
@@ -713,8 +752,7 @@ export default class Init extends Command {
           name: `${definition.displayName} (${definition.packageName}@${agorVersion})`,
           value: tool,
         })),
-        validate: (selection) =>
-          selection.length > 0 || 'Select at least one agentic tool, or press Ctrl+C to exit.',
+        validate: validateInteractiveAgenticToolSelection,
       },
     ]);
     return selectedTools;

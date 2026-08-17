@@ -74,6 +74,30 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
       git_state: { ref_at_start: 'main', sha_at_start: 'postgres-test' },
       tool_use_count: 0,
     });
+    const secondTask = await tasks.create({
+      task_id: generateId(),
+      session_id: session.session_id,
+      created_by: 'postgres-test-user',
+      full_prompt: 'postgres SQL page regression',
+      status: TaskStatus.COMPLETED,
+      message_range: {
+        start_index: 0,
+        end_index: 0,
+        start_timestamp: new Date().toISOString(),
+      },
+      git_state: { ref_at_start: 'main', sha_at_start: 'postgres-test' },
+      tool_use_count: 0,
+    });
+    const taskPage = await tasks.findPage({
+      sessionId: session.session_id,
+      sort: { task_id: 1 },
+      limit: 1,
+      skip: 1,
+    });
+    expect(taskPage).toMatchObject({ total: 2 });
+    expect(taskPage.data.map((row) => row.task_id)).toEqual(
+      [task.task_id, secondTask.task_id].sort().slice(1)
+    );
 
     const beforeClaim = Date.now();
     const first = await tasks.connectExecutor(task.task_id);
