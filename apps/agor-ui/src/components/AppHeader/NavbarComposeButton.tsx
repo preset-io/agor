@@ -300,13 +300,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     if (!primaryBranch) return null;
     const name = teammateName(primaryBranch);
     const board = primaryBranch.board_id ? boardById.get(primaryBranch.board_id) : undefined;
-    if (!onBoardSurface) {
-      return `Opens a panel here — session starts with ${name}${board ? ` on ${board.name}` : ''}.`;
-    }
-    if (primaryBranch.board_id && primaryBranch.board_id !== currentBoardId) {
+    if (onBoardSurface && primaryBranch.board_id && primaryBranch.board_id !== currentBoardId) {
       return `→ Opens on ${name}${board ? ` · ${board.name}` : ''}`;
     }
-    // On the primary's own board: identity is already in the header, no nav to preview.
     return null;
   })();
 
@@ -474,20 +470,21 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         destroyTooltipOnHide
         content={content}
       >
-        <Button
-          type="default"
-          aria-label="Compose — ask your primary assistant"
-          title="Ask your primary assistant"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: token.marginXXS,
-          }}
-        >
-          <span style={{ fontSize: token.fontSize, lineHeight: 1 }}>{triggerEmoji}</span>
-          <EditOutlined style={{ fontSize: token.fontSizeLG }} />
-        </Button>
+        <Tooltip title="Start quick session">
+          <Button
+            type="default"
+            aria-label="Compose — ask your primary assistant"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: token.marginXXS,
+            }}
+          >
+            <span style={{ fontSize: token.fontSize, lineHeight: 1 }}>{triggerEmoji}</span>
+            <EditOutlined style={{ fontSize: token.fontSizeLG }} />
+          </Button>
+        </Tooltip>
       </Popover>
 
       <Drawer
