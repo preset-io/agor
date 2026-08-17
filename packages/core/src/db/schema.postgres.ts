@@ -636,11 +636,7 @@ export const repos = pgTable(
       .notNull()
       .default('remote'),
 
-    // Retired nullable compatibility stamp; runtime ignores it.
-    // Users who have access to ANY branch in this repo get added to this group.
-    // Applied to repo Unix-group-managed paths:
-    // - repo root (non-recursive) for traversal into .git/worktrees/<name>
-    // - .git (recursive) for shared git objects/refs and git operations
+    // Retired nullable compatibility stamp retained for rollback/audit only.
     unix_group: text('unix_group'), // retired nullable compatibility stamp; runtime ignores it
 
     data: t

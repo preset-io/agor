@@ -57,6 +57,10 @@ const executorMocks = vi.hoisted(() => ({
   runExecutorCommand: vi.fn(),
   spawnExecutorFireAndForget: vi.fn(),
 }));
+const delegatedHomeMocks = vi.hoisted(() => ({ resolve: vi.fn(async () => undefined) }));
+vi.mock('../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: delegatedHomeMocks.resolve,
+}));
 vi.mock('../utils/spawn-executor.js', () => {
   return {
     runExecutorCommand: executorMocks.runExecutorCommand,
@@ -124,6 +128,45 @@ describe('ReposService.addLocalRepository executor boundary', () => {
 });
 
 describe('ReposService.createBranch Git lifecycle execution', () => {
+  it('rejects invalid delegated routing before persisting the branch', async () => {
+    delegatedHomeMocks.resolve.mockRejectedValueOnce(
+      new Error('Delegated execution requires a unix_username home key')
+    );
+    const branches = { create: vi.fn(), find: vi.fn(async () => []) };
+    const app = {
+      get: () => ({}),
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return branches;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor',
+      local_path: '/managed/repos/agor',
+      default_branch: 'main',
+    } as never);
+
+    await expect(
+      service.createBranch(
+        '550e8400-e29b-41d4-a716-446655440001',
+        {
+          name: 'invalid-routing',
+          ref: 'invalid-routing',
+          createBranch: true,
+          sourceBranch: 'main',
+          boardId: '550e8400-e29b-41d4-a716-446655440003',
+          storage_mode: 'worktree',
+        },
+        { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+      )
+    ).rejects.toThrow(/unix_username/);
+    expect(branches.create).not.toHaveBeenCalled();
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
   it('does not attach a delegated user to daemon-owned Git lifecycle work', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
 

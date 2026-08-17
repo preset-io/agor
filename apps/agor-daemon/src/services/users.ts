@@ -59,6 +59,7 @@ import {
   AGENTIC_TOOL_NAMES,
   extractAgenticToolsPublicValues,
   hasMinimumRole,
+  isValidExecutionHomeKey,
   normalizeRole,
   ROLES,
   toAgenticToolsStatus,
@@ -280,6 +281,13 @@ interface UpdateUserData {
   default_mcp_server_ids?: string[];
 }
 
+function assertValidExecutionHomeKeyWrite(value: string | undefined): void {
+  if (value === undefined || isValidExecutionHomeKey(value)) return;
+  throw new BadRequest(
+    'Execution home key must start with a lowercase letter or underscore, contain only lowercase letters, numbers, hyphens, or underscores, and be at most 32 characters.'
+  );
+}
+
 /**
  * Users Service Methods
  */
@@ -402,6 +410,7 @@ export class UsersService {
    * Create new user
    */
   async create(data: CreateUserData, params?: Params): Promise<User> {
+    assertValidExecutionHomeKeyWrite(data.unix_username);
     // Check if email already exists
     const existing = await select(this.db)
       .from(users)
@@ -455,6 +464,7 @@ export class UsersService {
    * Update user
    */
   async patch(id: UserID, data: UpdateUserData, params?: Params): Promise<User> {
+    assertValidExecutionHomeKeyWrite(data.unix_username);
     const now = new Date();
     const updates: Record<string, unknown> = { updated_at: now };
 

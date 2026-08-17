@@ -7,11 +7,9 @@
 import { Forbidden } from '@feathersjs/errors';
 import { unixUserModeRequiresExecutionHomeKey } from '../config/config-manager.js';
 import type { UnixUserMode } from '../config/types.js';
+import { isValidExecutionHomeKey } from '../types/user.js';
 
-/** Validate the conservative home-key syntax accepted by `{unix_user}` templates. */
-export function isValidExecutionHomeKey(username: string): boolean {
-  return /^[a-z_][a-z0-9_-]{0,31}$/.test(username);
-}
+export { isValidExecutionHomeKey } from '../types/user.js';
 
 export type { UnixUserMode };
 

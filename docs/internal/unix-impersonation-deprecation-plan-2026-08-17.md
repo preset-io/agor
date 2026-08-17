@@ -1,7 +1,7 @@
 # Unix impersonation deprecation plan
 
-**Status:** Revised for an accelerated pre-1.0 removal  
-**Scope baseline:** `main` after PR #2362  
+**Status:** Revised for an accelerated pre-1.0 removal
+**Scope baseline:** `main` after PR #2362
 **Authoritative brief:** `agor://kb/agor-cloud-team/architecture/unix-impersonation-deprecation-planning-brief.md`
 
 > Production already runs in sandbox mode. The objective is to remove the legacy surface before the

@@ -1,3 +1,4 @@
+import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgorClient,
   CreateUserInput,
@@ -301,11 +302,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           <Form.Item
             label="Execution Home Key"
             name="unix_username"
-            help="Optional. Opaque home key for sandbox or delegated execution (alphanumeric, hyphens, underscores only)"
+            help="Optional transitional home key for delegated execution"
             rules={[
               {
-                pattern: /^[a-z0-9_-]+$/,
-                message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
+                pattern: EXECUTION_HOME_KEY_PATTERN,
+                message:
+                  'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
               },
               { max: 32, message: 'Execution home key must be 32 characters or less' },
             ]}

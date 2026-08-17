@@ -7,6 +7,13 @@ import type {
 import type { UserID } from './id';
 import type { EffortLevel, PermissionMode } from './session';
 
+/** Canonical syntax for the transitional delegated execution-home key. */
+export const EXECUTION_HOME_KEY_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/;
+
+export function isValidExecutionHomeKey(value: string): boolean {
+  return EXECUTION_HOME_KEY_PATTERN.test(value);
+}
+
 /**
  * User role types
  * - superadmin: Full system access including branch RBAC bypass (requires allow_superadmin=true in config)

@@ -677,6 +677,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // can resolve the requesting user's credential route.
     const userId = (params as AuthenticatedParams).user!.user_id as UserID;
 
+    // Delegated routing is configuration/auth validation, not filesystem
+    // materialization. Resolve it before persisting a branch intent so an
+    // invalid or missing home key cannot leave a row stuck in `creating`.
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+      this.db,
+      userId,
+      this.app.get('config')
+    );
+
     if (storageMode === 'clone') {
       if (!repo.remote_url) {
         throw new Error(
@@ -903,14 +912,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
       );
 
-      // Delegated substrates receive the caller's stable home key; local
-      // lifecycle operations use the daemon process identity.
-      const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
-        this.db,
-        userId,
-        this.app.get('config')
-      );
-
       spawnExecutorFireAndForget(
         {
           command: 'git.branch.add',
@@ -936,9 +937,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         }
       );
     } catch (error) {
-      console.error(
-        '[ReposService.createBranch] Failed to spawn executor:',
-        error instanceof Error ? error.message : String(error)
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[ReposService.createBranch] Failed to spawn executor:', message);
+      await branchesService.patch(
+        branch.branch_id,
+        {
+          filesystem_status: 'failed',
+          error_message: `Failed to spawn executor: ${message}`,
+        },
+        { ...params, provider: undefined }
       );
     }
 
