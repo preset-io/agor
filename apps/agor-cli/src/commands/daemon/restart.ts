@@ -3,7 +3,13 @@
  */
 
 import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
-import { type AgorConfig, getDaemonUrl, loadConfig, loadConfigFromFile } from '@agor/core/config';
+import {
+  type AgorConfig,
+  getDaemonUrl,
+  loadConfig,
+  loadConfigFromFile,
+  resolveDaemonUrl,
+} from '@agor/core/config';
 import { resolveDatabaseUrl } from '@agor/core/db';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
@@ -45,6 +51,9 @@ export default class DaemonRestart extends Command {
       this.exit(1);
     }
 
+    // Validate the PID first so a crashed daemon cannot leave a stale config
+    // or URL record that influences the replacement process.
+    const existingPid = getDaemonPid();
     const identity = getManagedDaemonIdentity();
     let restartConfig: AgorConfig;
     try {
@@ -81,22 +90,32 @@ export default class DaemonRestart extends Command {
       this.exit(1);
     }
 
+    const oldDaemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
+    const replacementDaemonUrl = resolveDaemonUrl(restartConfig);
+
     try {
+      if (
+        replacementDaemonUrl !== oldDaemonUrl &&
+        (await probeAgorDaemon(replacementDaemonUrl)).running
+      ) {
+        throw new Error(
+          `An Agor daemon is already running at the replacement URL ${replacementDaemonUrl}. Stop its service, container, or foreground terminal before restarting.`
+        );
+      }
+
       // Stop daemon if running
-      const daemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
-      const existingPid = getDaemonPid();
       let stopped = false;
       if (existingPid !== null) {
         const managedInstanceId = identity?.instanceId;
-        if (!(await isExpectedManagedDaemon(daemonUrl, managedInstanceId))) {
+        if (!(await isExpectedManagedDaemon(oldDaemonUrl, managedInstanceId))) {
           throw new Error(
-            `Refusing to signal PID ${existingPid}: it cannot be verified as the CLI-managed Agor daemon at ${daemonUrl}.`
+            `Refusing to signal PID ${existingPid}: it cannot be verified as the CLI-managed Agor daemon at ${oldDaemonUrl}.`
           );
         }
         stopped = stopDaemon();
-      } else if ((await probeAgorDaemon(daemonUrl)).running) {
+      } else if ((await probeAgorDaemon(oldDaemonUrl)).running) {
         throw new Error(
-          `An Agor daemon is running at ${daemonUrl}, but it is not managed by this CLI. Stop its service, container, or foreground terminal instead.`
+          `An Agor daemon is running at ${oldDaemonUrl}, but it is not managed by this CLI. Stop its service, container, or foreground terminal instead.`
         );
       }
       if (stopped) {
@@ -111,7 +130,7 @@ export default class DaemonRestart extends Command {
         ? { AGOR_CONFIG_PATH: identity.configPath }
         : undefined;
       const pid = startDaemon(daemonPath, restartEnv, {
-        daemonUrl,
+        daemonUrl: replacementDaemonUrl,
         ...(identity?.configPath ? { configPath: identity.configPath } : {}),
       });
 
@@ -126,7 +145,7 @@ export default class DaemonRestart extends Command {
       // Wait a moment and check if it's actually running
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const running = await isExpectedManagedDaemon(
-        daemonUrl,
+        replacementDaemonUrl,
         getManagedDaemonIdentity()?.instanceId
       );
 
