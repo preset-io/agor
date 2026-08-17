@@ -50,10 +50,20 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Cheap structural check — runs before lint so its output is the
-      # first thing you see in failure output.
+      # Cheap structural checks — run before lint so their output is the
+      # first thing you see in failure output. Each stays its own step so a
+      # failure names the specific guard rather than a generic `pnpm check`.
       - run: pnpm check:agor-live-deps
       - run: pnpm check:agentic-tool-packages
+
+      # Boundary guards. These encode invariants no type or lint rule can
+      # express — ID handling, tenant isolation, realtime scoping, and the
+      # daemon's declared filesystem capability surface — so they have to be
+      # enforced here, not left to whoever remembers to run `pnpm check`.
+      - run: pnpm check:shortid
+      - run: pnpm check:multitenancy-boundaries
+      - run: pnpm check:daemon-filesystem-boundaries
+      - run: pnpm check:realtime-boundaries
 
       # Biome at the repo root — not a turbo task. Runs independently of
       # the build graph.
