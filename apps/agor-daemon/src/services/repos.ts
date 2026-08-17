@@ -949,7 +949,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       )) as Branch;
     }
 
-    // Return immediately with 'creating' status - UI will see updates via WebSocket
+    // Return immediately; asynchronous filesystem updates arrive via WebSocket.
+    // A synchronous dispatch failure instead returns the patched failed branch.
     return branch;
   }
 
