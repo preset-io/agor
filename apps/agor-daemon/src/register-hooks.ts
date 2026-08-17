@@ -752,6 +752,30 @@ export function protectFilesystemHomeWrite(context: HookContext, config: AgorCon
   return context;
 }
 
+/**
+ * Strip secret-bearing MCP server fields from anything on its way out to an
+ * external caller.
+ *
+ * Module scope rather than a closure inside `registerHooks` so tests can drive
+ * the real hook against a real service instead of reproducing its body — a
+ * replica passes whatever the replica does, which is exactly the wrong
+ * property for a redaction gate. Which methods it is registered on is pinned
+ * separately in `register-hooks.mcp-headers-redaction.test.ts`.
+ */
+export const redactMCPServerSecretFields = async (context: HookContext) => {
+  if (shouldExposeMCPServerSecrets(context.params)) return context;
+
+  if (Array.isArray(context.result)) {
+    context.result = context.result.map(redactMCPServerSecrets);
+  } else if (context.result?.data && Array.isArray(context.result.data)) {
+    context.result.data = context.result.data.map(redactMCPServerSecrets);
+  } else if (context.result?.mcp_server_id) {
+    context.result = redactMCPServerSecrets(context.result);
+  }
+
+  return context;
+};
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -2009,20 +2033,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const redactMCPServerSecretFields = async (context: HookContext) => {
-    if (shouldExposeMCPServerSecrets(context.params)) return context;
-
-    if (Array.isArray(context.result)) {
-      context.result = context.result.map(redactMCPServerSecrets);
-    } else if (context.result?.data && Array.isArray(context.result.data)) {
-      context.result.data = context.result.data.map(redactMCPServerSecrets);
-    } else if (context.result?.mcp_server_id) {
-      context.result = redactMCPServerSecrets(context.result);
-    }
-
-    return context;
-  };
-
   // Writes are decided by `mcp_member_policy` plus ownership, not by role
   // alone — see `authorizeMcpServerWrite`. Reads are narrowed to the servers
   // the caller may use, because a private server is another user's
@@ -2083,6 +2093,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [redactMCPServerSecretFields],
       patch: [redactMCPServerSecretFields],
       update: [redactMCPServerSecretFields],
+      // `remove` returns the deleted row: the adapter loads it in full before
+      // deleting so it can return it, and that same object becomes the
+      // `removed` payload broadcast to every authenticated connection in the
+      // tenant. Without this it is the one method that hands out raw `env`,
+      // `headers`, and `auth` — a delete is not an exemption from redaction.
+      remove: [redactMCPServerSecretFields],
     },
   });
 

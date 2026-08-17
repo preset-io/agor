@@ -73,13 +73,41 @@ describe('restoreRedactedMCPEnvSecrets', () => {
     ).toEqual({ GITHUB_TOKEN: 'ghp_rotated' });
   });
 
-  it('keeps the sentinel when there is nothing stored to restore', () => {
+  it('never persists the sentinel when there is nothing stored to restore', () => {
     expect(
       restoreRedactedMCPEnvSecrets({
         current: undefined,
         next: { NEW: MCP_HEADER_REDACTED_SENTINEL },
       })
-    ).toEqual({ NEW: MCP_HEADER_REDACTED_SENTINEL });
+    ).toEqual({});
+  });
+
+  it('does not resurrect a variable a concurrent edit deleted', () => {
+    // Two windows open. One deletes GITHUB_TOKEN. The other, holding a form
+    // hydrated before that, saves an unrelated change and echoes the sentinel
+    // back. Persisting it would recreate GITHUB_TOKEN as the literal
+    // `••••••••`, and every executor would launch with a bogus credential.
+    const afterConcurrentDelete = { ALLOWED_PATHS: '/srv' };
+    const staleForm = {
+      GITHUB_TOKEN: MCP_HEADER_REDACTED_SENTINEL,
+      ALLOWED_PATHS: '/srv/changed',
+    };
+
+    expect(
+      restoreRedactedMCPEnvSecrets({ current: afterConcurrentDelete, next: staleForm })
+    ).toEqual({ ALLOWED_PATHS: '/srv/changed' });
+  });
+
+  it('cannot set a value that is literally the sentinel, by construction', () => {
+    // Documented limitation, not an oversight: the sentinel travels in the
+    // same channel as real values, so "unchanged" and "literally this string"
+    // are indistinguishable. Keeping the stored value is the safe reading.
+    expect(
+      restoreRedactedMCPEnvSecrets({
+        current: { TOKEN: 'real' },
+        next: { TOKEN: MCP_HEADER_REDACTED_SENTINEL },
+      })
+    ).toEqual({ TOKEN: 'real' });
   });
 
   it('returns undefined when no env was submitted', () => {

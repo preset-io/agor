@@ -59,6 +59,21 @@ export function redactMCPEnvSecrets(
  *
  * A key absent from `next` is a deletion and stays deleted; a key whose value
  * differs from the sentinel is a genuine edit and is taken as submitted.
+ *
+ * INVARIANT: the sentinel is never persisted. It is in-band signalling — it
+ * travels in the same channel as real values — so a submitted sentinel is
+ * only ever a claim of "unchanged", never a value. If there is nothing stored
+ * to restore, the claim refers to something that no longer exists (a stale
+ * form whose variable was deleted by a concurrent edit), and the key is
+ * dropped rather than written. Writing it would resurrect the variable
+ * holding `••••••••`, and every executor would then launch with a credential
+ * that is silently bogus.
+ *
+ * The cost is that a value which genuinely equals the sentinel cannot be set;
+ * it is indistinguishable from an unchanged field by construction. Eight
+ * bullet characters is not a credential anyone has, and the alternative —
+ * refusing every submitted sentinel — would break the ordinary round-trip
+ * this function exists to support.
  */
 export function restoreRedactedMCPEnvSecrets(options: {
   current?: Record<string, string>;
@@ -68,10 +83,12 @@ export function restoreRedactedMCPEnvSecrets(options: {
 
   const restored: Record<string, string> = {};
   for (const [key, value] of Object.entries(options.next)) {
-    restored[key] =
-      value === MCP_HEADER_REDACTED_SENTINEL && options.current?.[key] !== undefined
-        ? options.current[key]
-        : value;
+    if (value === MCP_HEADER_REDACTED_SENTINEL) {
+      const stored = options.current?.[key];
+      if (stored !== undefined) restored[key] = stored;
+      continue;
+    }
+    restored[key] = value;
   }
 
   return restored;

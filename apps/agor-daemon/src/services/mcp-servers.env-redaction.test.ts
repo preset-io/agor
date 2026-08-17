@@ -15,10 +15,12 @@
  * assert that the paths which must keep the real value still get it, because
  * a redaction that also blinded the executor would be worse than the leak.
  *
- * The redaction after-hook is reproduced here rather than imported: it is
- * defined inline inside `registerHooks`, which needs a loaded config and the
- * full service graph. That it is registered on `mcp-servers` find/get is
- * asserted structurally in `register-hooks.mcp-headers-redaction.test.ts`.
+ * These drive the real `redactMCPServerSecretFields` hook against a real
+ * service and a real database. Booting `registerHooks` itself would need a
+ * loaded config and the full service graph, so the one thing left to a
+ * source-level assertion is which methods the hook is registered on — pinned
+ * in `register-hooks.mcp-headers-redaction.test.ts`, and the reason `remove`
+ * being absent from that list was invisible for as long as it was.
  */
 
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
@@ -32,10 +34,8 @@ import { feathers } from '@agor/core/feathers';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { AuthenticatedParams, MCPServer, User } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import {
-  redactMCPServerSecrets,
-  shouldExposeMCPServerSecrets,
-} from '../utils/mcp-header-secrets.js';
+import { redactMCPServerSecretFields } from '../register-hooks.js';
+import { shouldExposeMCPServerSecrets } from '../utils/mcp-header-secrets.js';
 import { createMCPServersService } from './mcp-servers.js';
 
 const REAL_TOKEN = 'ghp_liveTokenThatMustNeverLeaveTheDaemon';
@@ -77,33 +77,13 @@ async function buildDaemon() {
   const app = feathers();
   app.use('mcp-servers', createMCPServersService(db));
 
-  // Verbatim shape of `redactMCPServerSecretFields` in register-hooks.ts.
+  // The real production hook, not a reproduction of it. Which methods it is
+  // registered on is pinned in `register-hooks.mcp-headers-redaction.test.ts`.
   app.service('mcp-servers').hooks({
     after: {
-      find: [
-        async (context: {
-          params?: AuthenticatedParams;
-          result?: MCPServer[] | { data: MCPServer[] };
-        }) => {
-          if (shouldExposeMCPServerSecrets(context.params)) return context;
-          if (Array.isArray(context.result)) {
-            context.result = context.result.map(redactMCPServerSecrets);
-          } else if (Array.isArray(context.result?.data)) {
-            // The shape `mcp-servers` find actually returns — paginated.
-            context.result.data = context.result.data.map(redactMCPServerSecrets);
-          }
-          return context;
-        },
-      ],
-      get: [
-        async (context: { params?: AuthenticatedParams; result?: MCPServer }) => {
-          if (shouldExposeMCPServerSecrets(context.params)) return context;
-          if (context.result?.mcp_server_id) {
-            context.result = redactMCPServerSecrets(context.result);
-          }
-          return context;
-        },
-      ],
+      find: [redactMCPServerSecretFields],
+      get: [redactMCPServerSecretFields],
+      remove: [redactMCPServerSecretFields],
     },
   } as never);
 
@@ -124,8 +104,17 @@ async function buildDaemon() {
       app.service('mcp-servers').get(shared.mcp_server_id, params) as Promise<MCPServer>,
     patch: (data: Record<string, unknown>, params: AuthenticatedParams) =>
       app.service('mcp-servers').patch(shared.mcp_server_id, data, params) as Promise<MCPServer>,
+    remove: (params: AuthenticatedParams) =>
+      app.service('mcp-servers').remove(shared.mcp_server_id, params) as Promise<MCPServer>,
+    /** Payloads Feathers broadcasts to subscribed connections. */
+    captureRemovedEvents: () => {
+      const events: MCPServer[] = [];
+      app.service('mcp-servers').on('removed', (payload: MCPServer) => events.push(payload));
+      return events;
+    },
     storedEnv: async () =>
       (await repo.findById(shared.mcp_server_id as string))?.env as Record<string, string>,
+    storedServer: () => repo.findById(shared.mcp_server_id as string),
   };
 }
 
@@ -165,6 +154,33 @@ describe('a member reading a shared MCP server', () => {
       'GITHUB_TOKEN',
       'TEMPLATED_TOKEN',
     ]);
+  });
+
+  it('does not receive them from the deleted row a delete hands back', async () => {
+    // `DrizzleService.remove` loads the whole row before deleting so it can
+    // return it. A delete is not an exemption from redaction.
+    const daemon = await buildDaemon();
+
+    const deleted = await daemon.remove(daemon.memberParams);
+
+    expect(deleted.env?.GITHUB_TOKEN).toBe(MCP_HEADER_REDACTED_SENTINEL);
+    expect(JSON.stringify(deleted)).not.toContain(REAL_TOKEN);
+    expect(JSON.stringify(deleted)).not.toContain(REAL_API_KEY);
+  });
+
+  it('does not receive them in the removed event broadcast to every connection', async () => {
+    // The same object becomes the `removed` payload. `mcp-servers` events go
+    // to the tenant-wide authenticated channel, so an unredacted one hands
+    // the credentials to every connected member at once.
+    const daemon = await buildDaemon();
+    const broadcast = daemon.captureRemovedEvents();
+
+    await daemon.remove(daemon.memberParams);
+
+    expect(broadcast).toHaveLength(1);
+    expect(broadcast[0].env?.GITHUB_TOKEN).toBe(MCP_HEADER_REDACTED_SENTINEL);
+    expect(JSON.stringify(broadcast)).not.toContain(REAL_TOKEN);
+    expect(JSON.stringify(broadcast)).not.toContain(REAL_API_KEY);
   });
 
   it('still sees which env var a bare template points at', async () => {
@@ -256,5 +272,47 @@ describe('the paths that must keep the real env value', () => {
     const stored = await daemon.storedEnv();
     expect(stored.GITHUB_TOKEN).toBe('ghp_rotated');
     expect(stored.DATADOG_API_KEY).toBe(REAL_API_KEY);
+  });
+
+  it('does not resurrect a variable that a concurrent edit deleted', async () => {
+    // Two windows. The first hydrates its form and holds the sentinel. The
+    // second deletes GITHUB_TOKEN. Then the first saves an unrelated change,
+    // echoing the stale sentinel back. Persisting it would recreate
+    // GITHUB_TOKEN holding `••••••••` — every executor would then launch with
+    // a credential that is silently bogus, which is worse than either the
+    // deletion or the original value.
+    const daemon = await buildDaemon();
+
+    const staleForm = await daemon.get(daemon.memberParams);
+
+    const { GITHUB_TOKEN: _dropped, ...withoutToken } = staleForm.env ?? {};
+    await daemon.patch({ env: withoutToken }, undefined as unknown as AuthenticatedParams);
+    expect(await daemon.storedEnv()).not.toHaveProperty('GITHUB_TOKEN');
+
+    await daemon.patch(
+      { display_name: 'GitHub (prod)', env: staleForm.env },
+      undefined as unknown as AuthenticatedParams
+    );
+
+    const stored = await daemon.storedEnv();
+    expect(stored).not.toHaveProperty('GITHUB_TOKEN');
+    expect(JSON.stringify(stored)).not.toContain(MCP_HEADER_REDACTED_SENTINEL);
+    // The rest of the row is untouched by the dropped key.
+    expect(stored.DATADOG_API_KEY).toBe(REAL_API_KEY);
+  });
+
+  it('never lets the sentinel reach the database on any write', async () => {
+    // The invariant the two cases above are instances of. Once the sentinel
+    // is stored it looks like a real value to the next restore, so the
+    // corruption would be self-perpetuating.
+    const daemon = await buildDaemon();
+
+    await daemon.patch(
+      { env: { BRAND_NEW: MCP_HEADER_REDACTED_SENTINEL } },
+      undefined as unknown as AuthenticatedParams
+    );
+
+    const stored = await daemon.storedServer();
+    expect(JSON.stringify(stored)).not.toContain(MCP_HEADER_REDACTED_SENTINEL);
   });
 });
