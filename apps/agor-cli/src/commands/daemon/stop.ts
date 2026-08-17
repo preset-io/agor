@@ -6,8 +6,8 @@ import { getDaemonUrl } from '@agor/core/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { isInstalledPackage } from '../../lib/context.js';
-import { getDaemonPid, getManagedDaemonInstanceId, stopDaemon } from '../../lib/daemon-manager.js';
-import { probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { getDaemonPid, getManagedDaemonIdentity, stopDaemon } from '../../lib/daemon-manager.js';
+import { isExpectedManagedDaemon, probeAgorDaemon } from '../../lib/daemon-probe.js';
 
 export default class DaemonStop extends Command {
   static description = 'Stop daemon gracefully';
@@ -26,10 +26,11 @@ export default class DaemonStop extends Command {
     }
 
     try {
-      const daemonUrl = await getDaemonUrl();
+      const identity = getManagedDaemonIdentity();
+      const daemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
       const probe = await probeAgorDaemon(daemonUrl);
       const pid = getDaemonPid();
-      const expectedInstanceId = getManagedDaemonInstanceId();
+      const expectedInstanceId = identity?.instanceId;
 
       if (pid === null) {
         if (probe.running) {
@@ -42,7 +43,7 @@ export default class DaemonStop extends Command {
         return;
       }
 
-      if (!expectedInstanceId || probe.managedInstanceId !== expectedInstanceId) {
+      if (!(await isExpectedManagedDaemon(daemonUrl, expectedInstanceId))) {
         throw new Error(
           `Refusing to signal PID ${pid}: it cannot be verified as the CLI-managed Agor daemon at ${daemonUrl}. Remove stale ~/.agor/daemon.pid and ~/.agor/daemon.instance files only after verifying that PID yourself.`
         );

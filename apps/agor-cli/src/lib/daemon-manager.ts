@@ -41,13 +41,32 @@ export function getDaemonIdentityFilePath(): string {
   return path.join(getAgorHome(), 'daemon.instance');
 }
 
-export function getManagedDaemonInstanceId(): string | null {
+export interface ManagedDaemonIdentity {
+  instanceId: string;
+  daemonUrl?: string;
+  configPath?: string;
+}
+
+export function getManagedDaemonIdentity(): ManagedDaemonIdentity | null {
   try {
     const value = fs.readFileSync(getDaemonIdentityFilePath(), 'utf8').trim();
-    return value || null;
+    if (!value) return null;
+    if (!value.startsWith('{')) return { instanceId: value };
+    const parsed = JSON.parse(value) as Partial<ManagedDaemonIdentity>;
+    return typeof parsed.instanceId === 'string' && parsed.instanceId
+      ? {
+          instanceId: parsed.instanceId,
+          ...(typeof parsed.daemonUrl === 'string' ? { daemonUrl: parsed.daemonUrl } : {}),
+          ...(typeof parsed.configPath === 'string' ? { configPath: parsed.configPath } : {}),
+        }
+      : null;
   } catch {
     return null;
   }
+}
+
+export function getManagedDaemonInstanceId(): string | null {
+  return getManagedDaemonIdentity()?.instanceId ?? null;
 }
 
 /**
@@ -95,7 +114,11 @@ export function getDaemonPid(): number | null {
  * @returns PID of started daemon
  * @throws Error if daemon already running or failed to start
  */
-export function startDaemon(daemonPath: string, extraEnv?: Record<string, string>): number {
+export function startDaemon(
+  daemonPath: string,
+  extraEnv?: Record<string, string>,
+  identity?: Omit<ManagedDaemonIdentity, 'instanceId'>
+): number {
   // Check if already running
   const existingPid = getDaemonPid();
   if (existingPid !== null) {
@@ -136,7 +159,11 @@ export function startDaemon(daemonPath: string, extraEnv?: Record<string, string
 
   // Write PID file
   fs.writeFileSync(getPidFilePath(), child.pid!.toString());
-  fs.writeFileSync(getDaemonIdentityFilePath(), managedInstanceId, { mode: 0o600 });
+  fs.writeFileSync(
+    getDaemonIdentityFilePath(),
+    JSON.stringify({ instanceId: managedInstanceId, ...identity } satisfies ManagedDaemonIdentity),
+    { mode: 0o600 }
+  );
 
   // Close log stream (child process keeps it open)
   fs.closeSync(logStream);

@@ -32,3 +32,9 @@ export async function probeAgorDaemon(url: string): Promise<AgorDaemonProbe> {
     return { running: false };
   }
 }
+
+export async function isExpectedManagedDaemon(url: string, instanceId?: string): Promise<boolean> {
+  if (!instanceId) return false;
+  const probe = await probeAgorDaemon(url);
+  return probe.running && probe.managedInstanceId === instanceId;
+}

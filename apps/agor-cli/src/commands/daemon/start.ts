@@ -12,7 +12,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
 import type { AgorConfig } from '@agor/core/config';
-import { loadConfig, loadConfigFromFile } from '@agor/core/config';
+import { loadConfig, loadConfigFromFile, resolveDaemonUrl } from '@agor/core/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
@@ -91,7 +91,10 @@ export default class DaemonStart extends Command {
     }
 
     try {
-      const pid = startDaemon(daemonPath, env);
+      const pid = startDaemon(daemonPath, env, {
+        daemonUrl: resolveDaemonUrl(config),
+        ...(flags.config ? { configPath: resolve(flags.config) } : {}),
+      });
       this.log(chalk.green(`Daemon started (PID ${pid})`));
       this.log(chalk.dim('  Logs: ~/.agor/logs/daemon.log'));
     } catch (error) {

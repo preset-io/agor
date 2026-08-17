@@ -6,7 +6,12 @@ import { getDaemonUrl } from '@agor/core/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { isAgorInitialized, isInstalledPackage } from '../../lib/context.js';
-import { getDaemonPid, getLogFilePath, getPidFilePath } from '../../lib/daemon-manager.js';
+import {
+  getDaemonPid,
+  getLogFilePath,
+  getManagedDaemonIdentity,
+  getPidFilePath,
+} from '../../lib/daemon-manager.js';
 import { probeAgorDaemon } from '../../lib/daemon-probe.js';
 
 export default class DaemonStatus extends Command {
@@ -21,7 +26,7 @@ export default class DaemonStatus extends Command {
     const initialized = await isAgorInitialized();
 
     // Get daemon info
-    const daemonUrl = await getDaemonUrl();
+    const daemonUrl = getManagedDaemonIdentity()?.daemonUrl ?? (await getDaemonUrl());
     const pid = getDaemonPid();
     const running = initialized ? (await probeAgorDaemon(daemonUrl)).running : false;
 

@@ -1342,15 +1342,12 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
  * @returns Daemon URL (e.g., "http://localhost:3030")
  */
 export async function getDaemonUrl(): Promise<string> {
-  // 1. Check for explicit DAEMON_URL env var (highest priority)
-  if (process.env.DAEMON_URL) {
-    console.log('[getDaemonUrl] Using DAEMON_URL from env:', process.env.DAEMON_URL);
-    return process.env.DAEMON_URL;
-  }
+  return resolveDaemonUrl(await loadConfig());
+}
 
-  console.log('[getDaemonUrl] DAEMON_URL not in env, loading config...');
-  // 2. Construct from host:port (always localhost for internal communication)
-  return constructDaemonLocalUrl(await loadConfig());
+/** Resolve the internal daemon URL from an already processed config snapshot. */
+export function resolveDaemonUrl(config: AgorConfig): string {
+  return process.env.DAEMON_URL || constructDaemonLocalUrl(config);
 }
 
 /**

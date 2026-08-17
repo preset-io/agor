@@ -4,18 +4,17 @@
 
 import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
 import { getDaemonUrl, loadConfig } from '@agor/core/config';
-import { isDaemonRunning } from '@agor-live/client';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';
 import {
   getDaemonPid,
-  getManagedDaemonInstanceId,
+  getManagedDaemonIdentity,
   startDaemon,
   stopDaemon,
 } from '../../lib/daemon-manager.js';
-import { probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { isExpectedManagedDaemon, probeAgorDaemon } from '../../lib/daemon-probe.js';
 
 export default class DaemonRestart extends Command {
   static description = 'Restart daemon';
@@ -69,13 +68,13 @@ export default class DaemonRestart extends Command {
 
     try {
       // Stop daemon if running
-      const daemonUrl = await getDaemonUrl();
+      const identity = getManagedDaemonIdentity();
+      const daemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
       const existingPid = getDaemonPid();
       let stopped = false;
       if (existingPid !== null) {
-        const probe = await probeAgorDaemon(daemonUrl);
-        const managedInstanceId = getManagedDaemonInstanceId();
-        if (!managedInstanceId || probe.managedInstanceId !== managedInstanceId) {
+        const managedInstanceId = identity?.instanceId;
+        if (!(await isExpectedManagedDaemon(daemonUrl, managedInstanceId))) {
           throw new Error(
             `Refusing to signal PID ${existingPid}: it cannot be verified as the CLI-managed Agor daemon at ${daemonUrl}.`
           );
@@ -94,7 +93,13 @@ export default class DaemonRestart extends Command {
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Start daemon
-      const pid = startDaemon(daemonPath);
+      const restartEnv = identity?.configPath
+        ? { AGOR_CONFIG_PATH: identity.configPath }
+        : undefined;
+      const pid = startDaemon(daemonPath, restartEnv, {
+        daemonUrl,
+        ...(identity?.configPath ? { configPath: identity.configPath } : {}),
+      });
 
       this.log(chalk.green('✓ Daemon restarted successfully'));
       this.log('');
@@ -106,7 +111,10 @@ export default class DaemonRestart extends Command {
 
       // Wait a moment and check if it's actually running
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      const running = await isDaemonRunning(daemonUrl);
+      const running = await isExpectedManagedDaemon(
+        daemonUrl,
+        getManagedDaemonIdentity()?.instanceId
+      );
 
       if (!running) {
         this.log(chalk.yellow('⚠ Daemon started but not responding'));

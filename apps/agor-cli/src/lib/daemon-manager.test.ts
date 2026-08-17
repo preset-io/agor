@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getDaemonIdentityFilePath,
   getLogFilePath,
+  getManagedDaemonIdentity,
   getManagedDaemonInstanceId,
   readLogs,
   rotateDaemonLogIfNeeded,
@@ -31,6 +32,23 @@ describe('daemon-manager logs', () => {
     fs.mkdirSync(path.dirname(getDaemonIdentityFilePath()), { recursive: true });
     fs.writeFileSync(getDaemonIdentityFilePath(), ' instance-id\n');
     expect(getManagedDaemonInstanceId()).toBe('instance-id');
+  });
+
+  it('reads structured identity records while retaining legacy compatibility', () => {
+    fs.mkdirSync(path.dirname(getDaemonIdentityFilePath()), { recursive: true });
+    fs.writeFileSync(
+      getDaemonIdentityFilePath(),
+      JSON.stringify({
+        instanceId: 'instance-id',
+        daemonUrl: 'http://127.0.0.1:4040',
+        configPath: '/tmp/custom-agor.yaml',
+      })
+    );
+    expect(getManagedDaemonIdentity()).toEqual({
+      instanceId: 'instance-id',
+      daemonUrl: 'http://127.0.0.1:4040',
+      configPath: '/tmp/custom-agor.yaml',
+    });
   });
 
   it('returns the last requested lines without reading the whole file', () => {
