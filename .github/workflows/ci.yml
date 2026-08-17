@@ -15,12 +15,11 @@
 name: CI
 
 on:
+  # Do not path-filter main pushes: every main-head transition must complete
+  # this gate so a docs-only successor cannot strand an already-tested image
+  # promotion. PRs keep the fast path filters below.
   push:
     branches: [main]
-    paths-ignore:
-      - 'apps/agor-docs/**'
-      - '*.md'
-      - 'context/**'
   pull_request:
     branches: [main]
     paths-ignore:
