@@ -533,6 +533,7 @@ function validateConfig(config: AgorConfig): void {
     ...RETIRED_CONFIG_KEYS.execution,
     'managed_envs_execution_mode',
     'branch_storage',
+    'sandbox',
   ]);
   only(config.execution?.executor_heartbeat, 'execution.executor_heartbeat', [
     'enabled',
@@ -559,6 +560,31 @@ function validateConfig(config: AgorConfig): void {
     'allowed_modes',
     'allow_shallow_clones',
   ]);
+  only(config.execution?.sandbox, 'execution.sandbox', [
+    'enabled',
+    'include',
+    'protect_secrets',
+    'isolate_branches',
+    'home_mode',
+    'preserve_canonical_home_alias',
+    'extra_allow_write',
+    'extra_deny_read',
+    'fail_if_unavailable',
+  ]);
+  only(config.execution?.sandbox?.include, 'execution.sandbox.include', [
+    'branch',
+    'base_repo',
+    'tmp',
+    'home',
+  ]);
+  if (
+    config.execution?.sandbox?.preserve_canonical_home_alias !== undefined &&
+    typeof config.execution.sandbox.preserve_canonical_home_alias !== 'boolean'
+  ) {
+    throw new Error(
+      'Config error: execution.sandbox.preserve_canonical_home_alias must be a boolean'
+    );
+  }
   only(config.execution?.executor_storage, 'execution.executor_storage', [
     'user_home',
     'branch_workspace',

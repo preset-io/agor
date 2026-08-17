@@ -275,6 +275,44 @@ describe('loadConfig', () => {
     expect(loaded).toMatchObject(configData);
   });
 
+  it('loads the documented canonical-home sandbox compatibility setting', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      'execution:\n  unix_user_mode: sandbox\n  sandbox:\n    preserve_canonical_home_alias: true\n',
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      execution: {
+        unix_user_mode: 'sandbox',
+        sandbox: { preserve_canonical_home_alias: true },
+      },
+    });
+  });
+
+  it('rejects unknown sandbox keys and a non-boolean canonical-home option', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      'execution:\n  sandbox:\n    preserve_canonical_home_alias: true\n    surprise: true\n',
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/execution\.sandbox\.surprise/);
+
+    await fs.writeFile(
+      configPath,
+      'execution:\n  sandbox:\n    preserve_canonical_home_alias: "true"\n',
+      'utf-8'
+    );
+    __resetConfigCacheForTests();
+    await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
+  });
+
   it('loads the mcp_catalog block exactly as AGENTS.md documents it', async () => {
     // Read the block out of the docs rather than restating it. An unrecognized
     // top-level key throws, so documenting a section without registering it
