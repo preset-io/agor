@@ -57,6 +57,11 @@ export interface AgenticConfigChipRowProps {
    * callers can disable submission proactively. `reason` explains why.
    */
   onConfigValidityChange?: (valid: boolean, reason?: string) => void;
+  /**
+   * Optional field rendered left of the "Configuration" select, sharing a 50/50
+   * row. Chips still render full-width below. Omit for the default stacked layout.
+   */
+  leadingField?: React.ReactNode;
 }
 
 const EFFORT_LABELS: Record<EffortLevel, string> = {
@@ -98,6 +103,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   enableSaveAsDefault = false,
   showEffort = true,
   onConfigValidityChange,
+  leadingField,
 }) => {
   const { token } = theme.useToken();
   const form = Form.useFormInstance();
@@ -211,6 +217,37 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     </Typography.Text>
   );
 
+  const configField = (
+    <Form.Item
+      name={fieldName}
+      label="Configuration"
+      tooltip="Presets are admin-managed configs; “My default” is your personal setup. Edit any chip below to override just this session."
+      style={{ marginBottom: token.marginSM }}
+      rules={[
+        {
+          validator: () =>
+            configError ? Promise.reject(new Error(configError)) : Promise.resolve(),
+        },
+      ]}
+    >
+      <Select
+        onChange={onSelectSource}
+        loading={loading}
+        options={sourceOptions.map((option) => ({
+          value: option.value,
+          disabled: option.disabled,
+          label:
+            option.value === INLINE_AGENTIC_CONFIGURATION
+              ? 'Custom'
+              : option.summary
+                ? `${option.title} · ${option.summary}`
+                : option.title,
+        }))}
+        style={{ width: '100%' }}
+      />
+    </Form.Item>
+  );
+
   return (
     <div style={{ marginBottom: token.marginLG }}>
       {/* Register the fields the chips edit imperatively so useWatch stays reactive. */}
@@ -220,34 +257,14 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         </Form.Item>
       ))}
 
-      <Form.Item
-        name={fieldName}
-        label="Configuration"
-        tooltip="Presets are admin-managed configs; “My default” is your personal setup. Edit any chip below to override just this session."
-        style={{ marginBottom: token.marginSM }}
-        rules={[
-          {
-            validator: () =>
-              configError ? Promise.reject(new Error(configError)) : Promise.resolve(),
-          },
-        ]}
-      >
-        <Select
-          onChange={onSelectSource}
-          loading={loading}
-          options={sourceOptions.map((option) => ({
-            value: option.value,
-            disabled: option.disabled,
-            label:
-              option.value === INLINE_AGENTIC_CONFIGURATION
-                ? 'Custom'
-                : option.summary
-                  ? `${option.title} · ${option.summary}`
-                  : option.title,
-          }))}
-          style={{ width: '100%' }}
-        />
-      </Form.Item>
+      {leadingField ? (
+        <Flex gap={token.marginSM} align="flex-start">
+          <div style={{ flex: '1 1 0', minWidth: 0 }}>{leadingField}</div>
+          <div style={{ flex: '1 1 0', minWidth: 0 }}>{configField}</div>
+        </Flex>
+      ) : (
+        configField
+      )}
 
       {loadError && (
         <Alert

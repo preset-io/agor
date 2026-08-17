@@ -357,23 +357,14 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             <div style={{ marginBottom: token.marginSM }}>
               <div style={{ ...bannerBox, marginBottom: token.marginSM }}>
                 <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                  You don't have a primary assistant yet — pick one to continue.
+                  You don't have a primary assistant yet. Your primary assistant is your default
+                  teammate for personal, ambient work — pick one below to continue. You can change
+                  it anytime in Settings.
                 </Typography.Text>
               </div>
               <PrimaryTeammatePicker client={client} compact onPicked={handlePicked} />
             </div>
           )}
-
-          <Form.Item label="Coding agent" style={{ marginBottom: token.marginSM }}>
-            <AgentSelectionGrid
-              agents={AVAILABLE_AGENTS}
-              selectedAgentId={selectedAgent}
-              onSelect={setSelectedAgent}
-              variant="select"
-              showComparisonLink={false}
-              fallbackToFirstVisibleAgent
-            />
-          </Form.Item>
 
           <AgenticConfigChipRow
             tool={selectedAgent as AgenticToolName}
@@ -381,6 +372,18 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             currentUser={currentUser}
             client={client}
             showEffort
+            leadingField={
+              <Form.Item label="Coding agent" style={{ marginBottom: token.marginSM }}>
+                <AgentSelectionGrid
+                  agents={AVAILABLE_AGENTS}
+                  selectedAgentId={selectedAgent}
+                  onSelect={setSelectedAgent}
+                  variant="select"
+                  showComparisonLink={false}
+                  fallbackToFirstVisibleAgent
+                />
+              </Form.Item>
+            }
           />
 
           <Form.Item style={{ marginBottom: token.marginXS }}>
