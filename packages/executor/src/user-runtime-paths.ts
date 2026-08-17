@@ -28,3 +28,17 @@ export function resolveCodexAuthPath(
   const home = codexHome || join(resolveEffectiveUserInfo(lookup).homedir, '.codex');
   return join(home, 'auth.json');
 }
+
+/**
+ * Inside Agor's outer sandbox, bwrap's `--chdir` is the authoritative runtime
+ * branch path. It may intentionally use a canonical home alias for continuity
+ * with path-keyed SDK state. Outside that boundary, preserve the branch path
+ * supplied by the daemon database.
+ */
+export function resolveExecutorWorkingDirectory(
+  branchPath: string,
+  outerSandbox = process.env.AGOR_OUTER_SANDBOX === '1',
+  getCwd: () => string = process.cwd
+): string {
+  return outerSandbox ? getCwd() : branchPath;
+}
