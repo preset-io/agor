@@ -16,6 +16,7 @@ import {
   type ResolvedDeploymentConfig,
   requirePublicBaseUrl,
   resolveDeploymentAgenticToolPolicy,
+  resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
@@ -892,8 +893,8 @@ function createExecuteHandler(
 ) {
   const { db, app, config, daemonUrl } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
-  // Only the modes that impersonate per user read the creator back; the others
-  // never stamped a `unix_username` for it to have drifted from.
+  // Only delegated execution reads the creator's home key back; local modes
+  // do not consume the compatibility stamp.
   const unixIdentityGuard = resolveExecutionSecurityMode(config).requiresExecutionHomeKey
     ? {
         loadCreator: (tenantDb: TenantScopedDatabase) => (userId: string) =>
@@ -1030,7 +1031,7 @@ function createExecuteHandler(
     // persistent home overlaid at the passwd home inside the sandbox. Keyed by
     // the SESSION OWNER (not the prompter): the home carries the owner's tool
     // auth/state, so prompting another user's session runs against the owner's
-    // home (carry strict's warning). The SOURCE is the owner's `filesystem_home`
+    // home. The SOURCE is the owner's `filesystem_home`
     // if set (the migration points it at their existing /home/<user> so no files
     // move), else the canonical store (see resolveOwnerHomeStore). Only computed
     // when the mode is active — and FAIL CLOSED if the owner can't be resolved.

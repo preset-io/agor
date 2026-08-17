@@ -1159,7 +1159,25 @@ export function resolveEffectiveConfig(
  */
 export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
   const execution = config.execution;
-  if (execution?.sandbox?.enabled !== true) return;
+  if (!execution) return;
+
+  if (execution.unix_user_mode === 'delegated' && !execution.executor_command_template) {
+    throw new Error(
+      "execution.unix_user_mode 'delegated' requires execution.executor_command_template so execution is actually delegated to an external substrate."
+    );
+  }
+
+  const retiredPlaceholders = execution.executor_command_template?.match(
+    /\{(?:unix_user_uid|unix_user_gid)\}/g
+  );
+  if (retiredPlaceholders?.length) {
+    throw new Error(
+      `execution.executor_command_template uses removed placeholder(s): ${[...new Set(retiredPlaceholders)].join(', ')}. ` +
+        'Use {unix_user} as the opaque delegated execution-home key instead.'
+    );
+  }
+
+  if (execution.sandbox?.enabled !== true) return;
 
   if (execution.executor_command_template) {
     throw new Error(

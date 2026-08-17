@@ -28,8 +28,8 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
-import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js';
 import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
+import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -1212,16 +1212,12 @@ export type SessionCreatorLoader = (
  * Refuse a session whose creator no longer owns the `unix_username` the
  * session was stamped with.
  *
- * The stamp is the OS identity the executor runs as under `delegated`/`strict`
- * (`register-services.ts` feeds `session.unix_username` to
- * `resolveUnixUserForImpersonation`). Once it drifts, that identity is no
- * longer the caller's, and the SDK state the session resumes from lives in a
- * home directory this instance cannot read.
+ * In `delegated` mode the stamp is the opaque execution-home key forwarded to
+ * the external substrate. Once it drifts, that key is no longer the caller's,
+ * and the SDK state the session resumes from may be inaccessible.
  *
  * That is the stamp's role as an *execution* identity, and the only one this
- * refusal covers. `unix.sync-branch` also reads it, to grant Unix group
- * membership under `insulated`/`strict`, on a path no caller of this function
- * sits on — see the `agor_wt_*` reconciliation gap noted in #2287.
+ * refusal covers. Local execution modes do not consume the stamp.
  *
  * Shared by the transport guard ({@link validateSessionUnixUsername}) and the
  * executor-startup guard, so both refuse on the same terms with the same

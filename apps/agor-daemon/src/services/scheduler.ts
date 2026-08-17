@@ -710,12 +710,11 @@ export class SchedulerService {
   /**
    * Resolve creator's unix_username for scheduled session execution.
    *
-   * The schedule's `created_by` user is the execution identity (same
-   * model as today, but keyed off `schedules.created_by` rather than
-   * `branches.created_by`).
+   * The schedule's `created_by` user supplies the compatibility home key,
+   * keyed off `schedules.created_by` rather than `branches.created_by`.
    *
-   * - simple: execution home key is optional
-   * - sandbox/delegated: execution home key is required
+   * - simple/sandbox: execution home key is optional and unused
+   * - delegated: execution home key is required by the external substrate
    *
    * @returns Object with creator and resolved unixUsername (may be null
    *   in simple mode)

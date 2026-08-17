@@ -1,5 +1,10 @@
 import type { AgorConfig } from '@agor/core/config';
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+  UsersRepository,
+} from '@agor/core/db';
 import type { DeepReadonly, User, UserID } from '@agor/core/types';
 import { resolveDelegatedHomeKey } from '@agor/core/unix';
 
@@ -22,8 +27,13 @@ export async function resolveDelegatedExecutionHomeKey(
 
   let user: User | null | undefined;
   if (typeof userOrId === 'string') {
-    const { UsersRepository } = await import('@agor/core/db');
-    user = await new UsersRepository(db).findById(userOrId);
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) {
+      throw new Error('Missing active tenant context while resolving delegated execution home');
+    }
+    user = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+      new UsersRepository(tenantDb).findById(userOrId)
+    );
   } else {
     user = userOrId;
   }

@@ -1,9 +1,8 @@
 /**
  * Regression tests for `resolveCodexCredentialRoute()` mode handling.
  *
- * Delegated + templated execution requires an explicit persistent-per-user
- * home guarantee. Delegated WITHOUT a template keeps the simple-mode local
- * process behavior but still requires a unix_username.
+ * Delegated execution requires an explicit persistent-per-user home guarantee.
+ * Sandbox auth is routed to the same per-user store mounted for sessions.
  */
 import { loadConfigSync, resolveEffectiveConfig } from '@agor/core/config';
 import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
@@ -202,5 +201,35 @@ describe('resolveCodexCredentialRoute — delegated mode', () => {
       delegatedHomeKey: 'alice',
       userId: USER_ID,
     });
+  });
+});
+
+describe('resolveCodexCredentialRoute — sandbox mode', () => {
+  it('writes Codex auth into the user filesystem home mounted by sandbox sessions', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      execution: {
+        unix_user_mode: 'sandbox',
+        sandbox: { enabled: true, home_mode: 'per_user' },
+      },
+    } as never);
+    findById.mockResolvedValue({
+      user_id: USER_ID,
+      unix_username: null,
+      filesystem_home: '/srv/agor-homes/alice',
+    });
+
+    await expect(
+      resolveCodexCredentialRoute(
+        USER_ID,
+        withTenantDatabase,
+        resolveEffectiveConfig(loadConfigSync())
+      )
+    ).resolves.toEqual({
+      ok: true,
+      delegatedHomeKey: null,
+      userId: USER_ID,
+      codexHome: '/srv/agor-homes/alice/.codex',
+    });
+    expect(findById).toHaveBeenCalledOnce();
   });
 });

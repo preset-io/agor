@@ -211,6 +211,26 @@ describe('resolveEffectiveConfig', () => {
 });
 
 describe('assertValidEffectiveExecutionConfig', () => {
+  it('requires delegated mode to name an external execution substrate', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({ execution: { unix_user_mode: 'delegated' } })
+    ).toThrow(/requires execution\.executor_command_template/);
+  });
+
+  it.each(['{unix_user_uid}', '{unix_user_gid}'])(
+    'rejects removed delegated template placeholder %s at startup',
+    (placeholder) => {
+      expect(() =>
+        assertValidEffectiveExecutionConfig({
+          execution: {
+            unix_user_mode: 'delegated',
+            executor_command_template: `launcher --legacy ${placeholder} -- {command}`,
+          },
+        })
+      ).toThrow(/removed placeholder/);
+    }
+  );
+
   it('rejects sandboxing combined with an external executor template', () => {
     expect(() =>
       assertValidEffectiveExecutionConfig({

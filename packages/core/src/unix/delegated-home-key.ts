@@ -20,11 +20,19 @@ export function assertExecutionHomeKeySatisfiesMode(
   mode: UnixUserMode,
   subject = 'your account'
 ): void {
-  if (!unixUserModeRequiresExecutionHomeKey(mode) || homeKey) return;
-  throw new Forbidden(
-    `unix_user_mode '${mode}' requires a unix_username home key, but ${subject} has none. ` +
-      'Ask an admin to set one before creating sessions.'
-  );
+  if (!unixUserModeRequiresExecutionHomeKey(mode)) return;
+  if (!homeKey) {
+    throw new Forbidden(
+      `unix_user_mode '${mode}' requires a unix_username home key, but ${subject} has none. ` +
+        'Ask an admin to set one before creating sessions.'
+    );
+  }
+  if (!isValidExecutionHomeKey(homeKey)) {
+    throw new Forbidden(
+      `unix_user_mode '${mode}' requires a valid unix_username home key, but ${subject}'s key has an invalid format. ` +
+        'Ask an admin to set one before creating sessions.'
+    );
+  }
 }
 
 export interface DelegatedHomeKeyResolution {

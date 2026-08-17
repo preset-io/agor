@@ -19,6 +19,9 @@ describe('delegated home-key compatibility', () => {
     expect(() => assertExecutionHomeKeySatisfiesMode(null, 'simple')).not.toThrow();
     expect(() => assertExecutionHomeKeySatisfiesMode(null, 'sandbox')).not.toThrow();
     expect(() => assertExecutionHomeKeySatisfiesMode(null, 'delegated')).toThrow(/home key/);
+    expect(() => assertExecutionHomeKeySatisfiesMode('../alice', 'delegated')).toThrow(
+      /invalid format/
+    );
   });
 
   it('never selects a host Unix identity for local execution', () => {
