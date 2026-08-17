@@ -1,5 +1,4 @@
 import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
-import { Divider } from 'antd';
 import { useMemo } from 'react';
 import { PRESENCE_CONFIG } from '../../config/presence';
 import { usePresence } from '../../hooks/usePresence';
@@ -59,19 +58,16 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
   if (allActiveUsers.length === 0) return null;
 
   return (
-    <>
-      <Facepile
-        activeUsers={allActiveUsers}
-        currentUserId={currentUser?.user_id}
-        maxVisible={maxVisible}
-        avatarSize={32}
-        boardById={boardById}
-        onUserClick={onUserClick}
-        style={{
-          marginRight: 8,
-        }}
-      />
-      <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
-    </>
+    <Facepile
+      activeUsers={allActiveUsers}
+      currentUserId={currentUser?.user_id}
+      maxVisible={maxVisible}
+      avatarSize={32}
+      boardById={boardById}
+      onUserClick={onUserClick}
+      style={{
+        marginRight: 8,
+      }}
+    />
   );
 };
