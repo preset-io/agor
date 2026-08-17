@@ -26,6 +26,7 @@ import {
   MCPServerRepository,
   resolveMcpMemberPolicy,
   type TenantScopeAwareDatabase,
+  UsersRepository,
 } from '@agor/core/db';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
@@ -46,6 +47,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { runInOAuthTenantScope } from '../oauth-auth-helpers.js';
 
 export type McpServerWriteMethod = 'create' | 'update' | 'patch' | 'remove';
 
@@ -212,21 +214,18 @@ export { canConfigureMCPServers as canConfigureMcpServers } from '@agor/core/mcp
  * ~1,800 lines of `register-services.ts`, so per-endpoint wiring is exactly
  * where the next one gets forgotten.
  *
- * Deliberately absent, and pinned as absent by
- * `register-services.mcp-capability-role.test.ts`:
+ * This list is only the surfaces where flooring the *caller* is the right
+ * instrument. Two others mint a credential with no useful caller role to read,
+ * and are guarded by {@link isMcpGrantSubjectEntitled} instead — see there.
+ * `register-services.mcp-capability-role.test.ts` derives which endpoints mint
+ * from the source rather than trusting either list, so an endpoint that mints
+ * and appears in neither fails the build.
+ *
+ * Genuinely absent, because they issue nothing:
  * - `oauth-disconnect` — revocation. Refusing a demoted user the ability to
  *   drop their own grant would strand the credential this change exists to
  *   contain, so it stays open at every role.
  * - `oauth-status`, `oauth-attempt-status` — reads of the caller's own state.
- * - `oauth-auth-headers` — vends a bearer for an *already-issued* grant to the
- *   executor running a session, under a session token or service account
- *   rather than the owner's role, so there is frequently no user role here to
- *   floor. Whether demotion should invalidate grants already stored is a
- *   separate question from who may issue new ones, and is open — demotion is a
- *   column write today and revokes nothing (#2301).
- * - `oauth-callback` — the provider's redirect. Unauthenticated by
- *   construction; its authorization is the one-shot `state` claim, and the
- *   flow it completes was already gated at `oauth-start`.
  */
 export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
   // Mints an authorization URL and a pending flow against a saved server.
@@ -244,6 +243,67 @@ export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
   // capability list back onto the row.
   'mcp-servers/discover',
 ] as const;
+
+/**
+ * Whether the user a credential would be minted *for* still stands where they
+ * stood when the grant was first authorized.
+ *
+ * The caller floor above cannot answer this, because on these two surfaces the
+ * caller is frequently not the subject:
+ *
+ * - `oauth-callback` is the provider's browser redirect. It carries no session
+ *   at all — its authorization is the one-shot `state` — so the only identity
+ *   available is the one the pending flow recorded when it started. A member
+ *   who starts a flow, is demoted, and then completes the redirect would
+ *   otherwise have a token exchanged and persisted: the floor is on the start,
+ *   and nothing re-asked at the finish.
+ * - `oauth-auth-headers` refreshes and persists new access tokens
+ *   (`refreshAndPersistToken`), which is minting by the same definition, but is
+ *   called by an executor under a session token or service account. Flooring
+ *   that caller would floor a robot; the standing that matters is the grant
+ *   owner's.
+ *
+ * So both ask this about the *subject* rather than the requester. `shared`
+ * grants keep their admin floor — they were always admin-only to start
+ * (`oauth-start`) — and per-user grants get the member floor they never had.
+ *
+ * Deliberately not a `hasMinimumRole` call: see {@link assertMcpCapabilityRole}
+ * for why an absent role must not read as MEMBER here.
+ */
+export function isMcpGrantSubjectEntitled(
+  role: unknown,
+  oauthMode: 'per_user' | 'shared' | undefined
+): boolean {
+  if (!isAtLeastMemberRole(role)) return false;
+  if (oauthMode === 'shared') return hasMinimumRole(role as string, ROLES.ADMIN);
+  return true;
+}
+
+/**
+ * {@link isMcpGrantSubjectEntitled} against the subject's stored role.
+ *
+ * The role is read here rather than taken from the request because on both
+ * calling surfaces the subject is not the requester, so there is no
+ * `params.user` to read it from — the callback has no session at all, and the
+ * refresh path is driven by an executor. Reading it fresh is also what makes a
+ * demotion land without waiting for anything to expire.
+ *
+ * Fails closed on an unknown or unnamed subject: a credential that cannot be
+ * attributed to a current user is not one to keep minting.
+ */
+export async function isMcpGrantOwnerEntitled(
+  db: TenantScopeAwareDatabase,
+  tenantId: string | undefined,
+  ownerUserId: string | undefined,
+  oauthMode: 'per_user' | 'shared' | undefined
+): Promise<boolean> {
+  if (!ownerUserId) return false;
+  const owner = await runInOAuthTenantScope(db, tenantId, () =>
+    new UsersRepository(db).findById(ownerUserId)
+  );
+  if (!owner) return false;
+  return isMcpGrantSubjectEntitled(owner.role, oauthMode);
+}
 
 /**
  * The role floor for the endpoints above.

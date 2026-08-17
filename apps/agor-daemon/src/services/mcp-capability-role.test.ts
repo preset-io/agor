@@ -26,26 +26,32 @@ import { isMCPServerUsableInSession } from '@agor/core/mcp';
 import type { AuthenticatedParams, MCPServer, User, UserID, UserRole } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  isMcpGrantOwnerEntitled,
+  isMcpGrantSubjectEntitled,
   isMcpServerUsableByCaller,
   MCP_CAPABILITY_ISSUING_SERVICE_PATHS,
   registerMcpCapabilityRoleFloor,
 } from '../utils/mcp-server-authorization.js';
 
 /**
- * The surfaces this change deliberately leaves open, named here so removing one
- * from the list is a decision somebody has to make in this file rather than a
- * side effect of editing the other one.
+ * The surfaces that issue nothing and so carry no floor, named here so removing
+ * one is a decision somebody has to make in this file rather than a side effect
+ * of editing the other one.
+ *
+ * `oauth-auth-headers` used to be on this list, on the reading that it only
+ * vends an already-issued bearer. It does not — it calls `refreshAndPersistToken`,
+ * which mints and stores a new one — and listing it here asserted the wrong
+ * classification and hid the gap. It is now guarded on the grant owner's
+ * standing instead, and which endpoints mint is derived from the source rather
+ * than listed by hand; see `register-services.mcp-capability-role.test.ts`.
  */
-const DELIBERATELY_UNGATED = [
+const ISSUE_NOTHING = [
   // Revocation. Refusing a demoted user the ability to drop their own grant
   // would strand the credential this change exists to contain.
   'mcp-servers/oauth-disconnect',
   // Reads of the caller's own state.
   'mcp-servers/oauth-status',
   'mcp-servers/oauth-attempt-status',
-  // Vends a bearer for an already-issued grant to the executor running a
-  // session, under a session token or service account rather than a user role.
-  'mcp-servers/oauth-auth-headers',
 ];
 
 async function buildDaemon(initialRole: UserRole = 'member') {
@@ -94,6 +100,7 @@ async function buildDaemon(initialRole: UserRole = 'member') {
     user,
     server,
     handlers,
+    rawDb: rawDb as never,
     demoteTo: (role: UserRole) => users.update(user.user_id, { role }),
     paramsForStoredRole,
     call: async (path: string) =>
@@ -251,9 +258,78 @@ describe('what demotion deliberately does not take away', () => {
     ).toBe(false);
   });
 
-  it('leaves revocation, status reads, and executor token vending ungated', () => {
-    for (const path of DELIBERATELY_UNGATED) {
+  it('leaves revocation and status reads ungated', () => {
+    for (const path of ISSUE_NOTHING) {
       expect(MCP_CAPABILITY_ISSUING_SERVICE_PATHS as readonly string[]).not.toContain(path);
     }
+  });
+});
+
+/**
+ * The other half of the gap: two surfaces mint a credential for a subject who
+ * is not the caller, so flooring the caller cannot reach them.
+ *
+ * `isMcpGrantOwnerEntitled` is the guard both of them call — the OAuth callback
+ * for its recorded flow initiator, and the executor auth-header refresh for the
+ * grant owner. Driving it against a real database with a real demoted user is
+ * what these assert; that each endpoint calls it, and where, is pinned in
+ * `register-services.mcp-capability-role.test.ts`.
+ */
+describe('minting for a subject who is not the caller', () => {
+  it('refuses to complete a flow whose initiator was demoted after starting it', async () => {
+    // start (as member, which the caller floor allowed) → demote → callback.
+    const { user, rawDb, demoteTo } = await buildDaemon('member');
+    expect(await isMcpGrantOwnerEntitled(rawDb, undefined, user.user_id, 'per_user')).toBe(true);
+
+    await demoteTo('viewer');
+
+    expect(await isMcpGrantOwnerEntitled(rawDb, undefined, user.user_id, 'per_user')).toBe(false);
+  });
+
+  it('refuses to refresh a per-user grant whose owner was demoted', async () => {
+    // The executor path: the caller is a session token, the subject is the
+    // grant owner, and it is the owner's standing that decides.
+    const { user, rawDb, demoteTo } = await buildDaemon('member');
+    await demoteTo('viewer');
+
+    expect(await isMcpGrantOwnerEntitled(rawDb, undefined, user.user_id, 'per_user')).toBe(false);
+  });
+
+  it('keeps the admin floor shared grants already had, and adds member beneath it', () => {
+    // `shared` was admin-only to start; that must not loosen to member now that
+    // a member floor exists beneath it.
+    expect(isMcpGrantSubjectEntitled('admin', 'shared')).toBe(true);
+    expect(isMcpGrantSubjectEntitled('member', 'shared')).toBe(false);
+    expect(isMcpGrantSubjectEntitled('viewer', 'shared')).toBe(false);
+
+    expect(isMcpGrantSubjectEntitled('admin', 'per_user')).toBe(true);
+    expect(isMcpGrantSubjectEntitled('member', 'per_user')).toBe(true);
+    expect(isMcpGrantSubjectEntitled('viewer', 'per_user')).toBe(false);
+  });
+
+  it('refuses a subject with no role, or none at all', async () => {
+    // Same reason as the caller floor: `hasMinimumRole(undefined, MEMBER)` is
+    // true, so an absent role must not be read as member here either.
+    for (const roleless of [undefined, '', null]) {
+      expect(isMcpGrantSubjectEntitled(roleless, 'per_user')).toBe(false);
+    }
+
+    const { rawDb } = await buildDaemon('member');
+    // Unattributable and unknown subjects both fail closed.
+    expect(await isMcpGrantOwnerEntitled(rawDb, undefined, undefined, 'per_user')).toBe(false);
+    expect(
+      await isMcpGrantOwnerEntitled(
+        rawDb,
+        undefined,
+        '00000000-0000-7000-8000-0000000000ff',
+        'per_user'
+      )
+    ).toBe(false);
+  });
+
+  it('still permits a member owner, so the refusals above are about the role', async () => {
+    const { user, rawDb } = await buildDaemon('member');
+
+    expect(await isMcpGrantOwnerEntitled(rawDb, undefined, user.user_id, 'per_user')).toBe(true);
   });
 });
