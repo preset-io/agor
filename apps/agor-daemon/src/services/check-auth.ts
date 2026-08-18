@@ -323,7 +323,7 @@ async function probeClaudeAuthFile(
   withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>,
   config: DeepReadonly<AgorConfig>
 ): Promise<AuthCheckResult> {
-  const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase, config);
+  const identity = await resolveCodexCredentialRoute(userId, withTenantDatabase, config);
   if (!identity.ok) {
     if (identity.reason === 'missing-username') {
       return unauthenticated(
@@ -335,8 +335,8 @@ async function probeClaudeAuthFile(
     return unknown('Could not resolve the Unix account that holds the Claude login.');
   }
 
-  const inspection = await inspectClaudeAuthViaExecutor(identity.unixUser, {
-    reportedUnixUser: identity.reportedUnixUser,
+  const inspection = await inspectClaudeAuthViaExecutor({
+    delegatedHomeKey: identity.delegatedHomeKey,
     userId: identity.userId,
   });
   if (inspection.ok) return authed('oauth', 'Claude subscription login found.');

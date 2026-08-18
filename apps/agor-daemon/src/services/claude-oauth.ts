@@ -51,7 +51,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { writeClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
-import { type AppLike, resolveCodexUnixIdentity } from './codex-auth-shared.js';
+import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 // Constants are the PROD OAuth config (`yol`) read out of the native `claude`
 // binary bundled by the pinned SDK: package.json pins
@@ -168,6 +168,31 @@ export function constantTimeEqual(a: string, b: string): boolean {
 /** Generous upper bound on a plausible token lifetime (> the 1-year setup-token). */
 const MAX_EXPIRES_IN_SEC = 400 * 24 * 60 * 60;
 
+/**
+ * A failed code-for-token exchange, tagged with what it means for the pasted
+ * code. The authorization code is one-time and state-bound, so NEITHER
+ * disposition is replayable — both force the user to start a fresh attempt — but
+ * the tag drives the user-facing hint and lets `submit` reason explicitly rather
+ * than sniff message text:
+ *
+ * - `rejected`: Anthropic returned a definitive 4xx BEFORE issuing tokens (bad/
+ *   expired/already-used code). The code was not consumed here but is now dead.
+ * - `ambiguous`: the request may have reached Anthropic and consumed the code
+ *   even though we got no usable tokens back — a network timeout / connection
+ *   reset, a 5xx, or a 2xx whose body broke the token contract. Replaying the
+ *   same code could double-spend a code Anthropic already burned.
+ *
+ * Extends `BadRequest` so it still surfaces as a clean 400 with safe text.
+ */
+export class TokenExchangeError extends BadRequest {
+  constructor(
+    readonly disposition: 'rejected' | 'ambiguous',
+    message: string
+  ) {
+    super(message);
+  }
+}
+
 export async function exchangeCodeForTokens(
   code: string,
   verifier: string,
@@ -175,35 +200,57 @@ export async function exchangeCodeForTokens(
 ): Promise<ExchangedTokens> {
   // The CLI posts the exchange as JSON (no oauth beta header on this call);
   // token exchange at binary offset ~101464300 uses application/json.
-  const res = await fetchWithTimeout(CLAUDE_TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      grant_type: 'authorization_code',
-      code,
-      state,
-      client_id: CLAUDE_CLIENT_ID,
-      redirect_uri: CLAUDE_REDIRECT_URI,
-      code_verifier: verifier,
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(CLAUDE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        state,
+        client_id: CLAUDE_CLIENT_ID,
+        redirect_uri: CLAUDE_REDIRECT_URI,
+        code_verifier: verifier,
+      }),
+    });
+  } catch {
+    // Timeout (AbortError), connection reset, DNS/TLS failure — the POST may have
+    // reached Anthropic and consumed the one-time code before the connection
+    // dropped. Ambiguous: never replay this code.
+    throw new TokenExchangeError(
+      'ambiguous',
+      'Could not reach Claude to finish signing in — start over to get a fresh code.'
+    );
+  }
   if (!res.ok) {
-    // 4xx here is a rejected/expired code; nothing to retry.
-    throw new BadRequest('Claude rejected the sign-in code — start over and paste a fresh code.');
+    // 4xx is a definitive rejection before any token was issued: the code is dead
+    // (single-use + state-bound), so start over. 5xx may have consumed the code
+    // server-side while failing to return it — ambiguous, equally non-replayable.
+    throw new TokenExchangeError(
+      res.status >= 500 ? 'ambiguous' : 'rejected',
+      res.status >= 500
+        ? 'Claude had a server error finishing sign-in — start over to get a fresh code.'
+        : 'Claude rejected the sign-in code — start over and paste a fresh code.'
+    );
   }
 
   const body = (await res.json()) as Record<string, unknown>;
   const { access_token, refresh_token, expires_in, scope } = body;
-  // A 2xx with a malformed body is a provider-contract break, not a user error:
-  // surface a sanitized failure rather than fabricating an expiry that would
-  // strand the session on a token we cannot actually refresh.
+  // A 2xx with a malformed body is a provider-contract break: Anthropic accepted
+  // (and thus consumed) the code but we cannot use the response. Surface a
+  // sanitized ambiguous failure rather than fabricating an expiry that would
+  // strand the session on a token we cannot refresh — and never replay the code.
   if (
     typeof access_token !== 'string' ||
     !access_token.trim() ||
     typeof refresh_token !== 'string' ||
     !refresh_token.trim()
   ) {
-    throw new BadRequest('Claude sign-in response was missing tokens — try again.');
+    throw new TokenExchangeError(
+      'ambiguous',
+      'Claude sign-in response was missing tokens — start over to get a fresh code.'
+    );
   }
   if (
     typeof expires_in !== 'number' ||
@@ -211,7 +258,10 @@ export async function exchangeCodeForTokens(
     expires_in <= 0 ||
     expires_in > MAX_EXPIRES_IN_SEC
   ) {
-    throw new BadRequest('Claude sign-in response had an invalid expiry — try again.');
+    throw new TokenExchangeError(
+      'ambiguous',
+      'Claude sign-in response had an invalid expiry — start over to get a fresh code.'
+    );
   }
   return {
     accessToken: access_token,
@@ -247,8 +297,7 @@ interface OAuthAttempt {
   userId: UserID;
   tenantId: TenantID | string;
   authUser: NonNullable<AuthenticatedParams['user']>;
-  targetUnixUser: string | null;
-  reportedUnixUser: string | null;
+  delegatedHomeKey: string | null;
   phase: ClaudeOAuthStatus['phase'];
   verifier: string;
   state: string;
@@ -350,17 +399,16 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
       // credential clobbered by this older one.
       if (!isCurrent(attempt)) return;
       try {
-        await writeClaudeAuthViaExecutor(
-          buildClaudeCredentialsJson(tokens),
-          attempt.targetUnixUser,
-          { reportedUnixUser: attempt.reportedUnixUser, userId: attempt.userId }
-        );
+        await writeClaudeAuthViaExecutor(buildClaudeCredentialsJson(tokens), {
+          delegatedHomeKey: attempt.delegatedHomeKey,
+          userId: attempt.userId,
+        });
       } catch (err) {
         // The error may carry sudo/bash stderr; log a class-level summary only
         // so token material never reaches daemon logs.
         console.error(
           `[ClaudeOAuth] Failed to write .credentials.json${
-            attempt.targetUnixUser ? ` as ${attempt.targetUnixUser}` : ''
+            attempt.delegatedHomeKey ? ` as ${attempt.delegatedHomeKey}` : ''
           }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
         );
         throw new BadRequest(
@@ -418,8 +466,23 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
     try {
       tokens = await exchangeCodeForTokens(code, verifier, attemptState);
     } catch (err) {
-      // Let a still-current attempt be retried; a replaced one stays terminal.
-      if (isCurrent(attempt)) attempt.phase = 'awaiting_code';
+      // The code has now been POSTed to Anthropic, so this exact `code#state` must
+      // never be exchanged again — a definitive 4xx killed it, and a network/5xx/
+      // contract failure may have consumed it server-side. So we do NOT return to
+      // `awaiting_code` (which previously let the user replay the same, possibly
+      // spent, code); the attempt goes terminal and the user starts over.
+      // Malformed-paste / wrong-state submissions never reach here — they are
+      // rejected earlier, while the attempt is still `awaiting_code`.
+      if (isCurrent(attempt)) {
+        const rejected = err instanceof TokenExchangeError && err.disposition === 'rejected';
+        finish(
+          attempt,
+          'error',
+          rejected
+            ? 'Claude rejected the sign-in code — start over to get a fresh link.'
+            : 'Sign-in could not be completed and the code may be used up — start over to get a fresh link.'
+        );
+      }
       throw err;
     }
 
@@ -479,7 +542,7 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
 
       // Resolve the destination identity up front so a strict-mode user with no
       // unix_username fails fast instead of after approving in the browser.
-      const identity = await resolveCodexUnixIdentity(
+      const identity = await resolveCodexCredentialRoute(
         userId,
         withTenantDatabase,
         app.get('config')
@@ -497,8 +560,7 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
         userId,
         tenantId,
         authUser,
-        targetUnixUser: identity.unixUser,
-        reportedUnixUser: identity.reportedUnixUser,
+        delegatedHomeKey: identity.delegatedHomeKey,
         phase: 'awaiting_code',
         verifier: pkce.verifier,
         state,

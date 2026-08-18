@@ -1,5 +1,5 @@
 import { loadConfigSync } from '@agor/core/config';
-import { runWithTenantContext, UsersRepository } from '@agor/core/db';
+import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { createClaudeAuthLogoutService } from './claude-auth-logout';
@@ -11,13 +11,7 @@ vi.mock('@agor/core/config', async () => {
 
 vi.mock('@agor/core/db', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/db')>('@agor/core/db');
-  return { ...actual, UsersRepository: vi.fn() };
-});
-
-vi.mock('@agor/core/unix', async () => {
-  const actual = await vi.importActual<typeof import('@agor/core/unix')>('@agor/core/unix');
-  // The real validator checks /etc/passwd — the mocked Unix accounts here don't exist.
-  return { ...actual, validateResolvedUnixUser: vi.fn() };
+  return actual;
 });
 
 vi.mock('../utils/executor-claude-auth.js', async () => {
@@ -29,15 +23,18 @@ vi.mock('../utils/executor-claude-auth.js', async () => {
 
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
 const deleteClaudeAuthViaExecutorMock = vi.mocked(deleteClaudeAuthViaExecutor);
-const usersRepositoryMock = vi.mocked(UsersRepository);
 
 const TEST_DB = { run: vi.fn() } as never;
 const AUTH_PARAMS = {
   user: { user_id: 'user-1', email: 'u@example.com', role: 'member' },
 } as never;
 
-function makeApp() {
-  const usersService = { get: vi.fn(async () => ({})), patch: vi.fn(async () => ({})) };
+function makeApp(
+  current: { agentic_auth_methods: Record<string, string | undefined> } = {
+    agentic_auth_methods: { 'claude-code': 'subscription', codex: 'subscription' },
+  }
+) {
+  const usersService = { get: vi.fn(async () => current), patch: vi.fn(async () => ({})) };
   return { app: { get: () => loadConfigSyncMock(), service: () => usersService }, usersService };
 }
 
@@ -51,6 +48,8 @@ function service(app: { service: () => unknown }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations — reset the delete mock so a throwing
+  // impl from one test can't leak into the next (its default is a no-op void).
   deleteClaudeAuthViaExecutorMock.mockReset();
   loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
 });
@@ -66,8 +65,8 @@ describe('claude-auth-logout', () => {
     const { app, usersService } = makeApp();
     const result = await service(app).create({}, AUTH_PARAMS);
 
-    expect(deleteClaudeAuthViaExecutorMock).toHaveBeenCalledWith(null, {
-      reportedUnixUser: null,
+    expect(deleteClaudeAuthViaExecutorMock).toHaveBeenCalledWith({
+      delegatedHomeKey: null,
       userId: 'user-1',
     }); // simple mode → daemon user
     // Clears BOTH the method and any pasted token, sent as only the claude-code
@@ -120,16 +119,19 @@ describe('claude-auth-logout', () => {
     expect(usersService.patch).not.toHaveBeenCalled();
   });
 
-  it('strict mode targets the caller’s own unix_username for the delete', async () => {
-    loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'strict' } } as never);
-    usersRepositoryMock.mockImplementation(function mockRepo() {
-      return { findById: vi.fn(async () => ({ unix_username: 'alice' })) };
+  it('admits hosted logout with persistent per-user executor homes', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth' },
+      execution: {
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          branch_workspace: 'persistent-per-branch',
+          base_repository: 'unavailable',
+        },
+      },
     } as never);
     const { app } = makeApp();
-    await service(app).create({}, AUTH_PARAMS);
-    expect(deleteClaudeAuthViaExecutorMock).toHaveBeenCalledWith('alice', {
-      reportedUnixUser: 'alice',
-      userId: 'user-1',
-    });
+
+    await expect(service(app).create({}, AUTH_PARAMS)).resolves.toEqual({ status: 'removed' });
   });
 });

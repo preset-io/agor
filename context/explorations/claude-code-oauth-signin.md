@@ -302,19 +302,22 @@ agentic-tool resolver already keys on to select subscription auth for Claude.
 
 - The target unix identity is **always derived from the authenticated user**,
   never from request data — callers act only on their own credentials.
-- Token material flows browser → daemon → target user's filesystem only. It is
-  **never** returned to the UI, logged, echoed, or placed in any agent/LLM
-  context. Failures log an error **class**, never token bytes.
+- The browser carries only the short-lived authorization **code** and `state`
+  back to the daemon; **token material** flows Anthropic → daemon → target user's
+  filesystem only. Tokens are **never** returned to the UI, logged, echoed, or
+  placed in any agent/LLM context. Failures log an error **class**, never token
+  bytes.
 - Status responses (`ClaudeOAuthStatus`) carry only non-secret metadata: the
   phase, the authorize URL, an expiry, an optional plan/subscription hint.
 - The pasted `CODE#STATE` is a short-lived, single-use authorization code, not a
   credential; it is exchanged immediately and never persisted.
 - `state` is verified against the attempt before exchange (CSRF / mix-up
   defense); the PKCE `verifier` never leaves the daemon.
-- Writes happen **as** the target unix user (sudo, content over stdin), so 0600
-  ownership holds in insulated/strict modes.
+- Writes happen in the execution home the daemon routes to (via the delegated
+  home key, content over stdin), so 0600 ownership holds in sandbox/delegated
+  modes.
 - Multi-tenancy: `.credentials.json` is a tenant-owned, per-user derived
-  resource. Identity resolution goes through `resolveCodexUnixIdentity`, which
+  resource. Identity resolution goes through `resolveCodexCredentialRoute`, which
   fails closed for hosted multi-tenant modes without a `persistent-per-user`
   executor home; cross-tenant negative coverage mirrors the Codex device flow.
 

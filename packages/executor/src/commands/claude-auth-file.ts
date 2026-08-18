@@ -6,9 +6,9 @@ import type { CommandOptions } from './index.js';
 
 /**
  * Inspect/write/delete the Claude Code subscription login file
- * (`~/.claude/.credentials.json`) for the effective Unix user. Runs AS the target
- * identity (the daemon selects it via `asUser`), so ownership and 0600 hold in
- * insulated/strict modes. Mirrors `codex.auth-file`; see
+ * (`~/.claude/.credentials.json`) for the effective Unix user. Runs in the
+ * execution home the daemon routes to (via the delegated home key), so ownership
+ * and 0600 hold in sandbox/delegated modes. Mirrors `codex.auth-file`; see
  * `context/explorations/claude-code-oauth-signin.md`.
  *
  * The content is the daemon-built `{ claudeAiOauth: {...} }` document. This

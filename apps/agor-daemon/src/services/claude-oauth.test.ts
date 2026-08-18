@@ -10,12 +10,11 @@ vi.mock('../utils/executor-claude-auth.js', () => ({
 
 let identityResult: unknown = {
   ok: true,
-  unixUser: null,
-  reportedUnixUser: null,
+  delegatedHomeKey: null,
   userId: 'user-A',
 };
 vi.mock('./codex-auth-shared.js', () => ({
-  resolveCodexUnixIdentity: vi.fn(async () => identityResult),
+  resolveCodexCredentialRoute: vi.fn(async () => identityResult),
 }));
 
 let toolEnabled = true;
@@ -37,13 +36,14 @@ import {
   exchangeCodeForTokens,
   generatePkce,
   parsePastedCode,
+  TokenExchangeError,
 } from './claude-oauth.js';
 
 const base64urlOf = (buf: Buffer) =>
   buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-function jsonResponse(body: unknown, ok = true) {
-  return { ok, status: ok ? 200 : 400, json: async () => body } as unknown as Response;
+function jsonResponse(body: unknown, ok = true, status = ok ? 200 : 400) {
+  return { ok, status, json: async () => body } as unknown as Response;
 }
 
 /** Drain the microtask queue so an in-flight `create()` reaches its fetch await. */
@@ -86,7 +86,7 @@ beforeEach(() => {
   writeClaudeAuthViaExecutor.mockClear();
   writeClaudeAuthViaExecutor.mockResolvedValue(undefined);
   toolEnabled = true;
-  identityResult = { ok: true, unixUser: null, reportedUnixUser: null, userId: 'user-A' };
+  identityResult = { ok: true, delegatedHomeKey: null, userId: 'user-A' };
   vi.stubGlobal(
     'fetch',
     vi.fn(async () => jsonResponse(TOKENS))
@@ -151,20 +151,50 @@ describe('PKCE + pure helpers', () => {
 });
 
 describe('exchangeCodeForTokens contract validation', () => {
-  it('rejects a non-2xx as a retryable sanitized error', async () => {
+  it('classifies a definitive 4xx as a "rejected" (pre-consumption) failure', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => jsonResponse({}, false))
     );
     await expect(exchangeCodeForTokens('c', 'v', 's')).rejects.toThrow(/rejected the sign-in code/);
+    // A clean 4xx means the code was rejected before any token was issued.
+    await expect(exchangeCodeForTokens('c', 'v', 's')).rejects.toMatchObject({
+      disposition: 'rejected',
+    });
   });
 
-  it('rejects a 2xx body missing tokens (contract break), not a fabricated success', async () => {
+  it('classifies a 5xx as "ambiguous" — the code may have been consumed server-side', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({}, false, 503))
+    );
+    await expect(exchangeCodeForTokens('c', 'v', 's')).rejects.toBeInstanceOf(TokenExchangeError);
+    await expect(exchangeCodeForTokens('c', 'v', 's')).rejects.toMatchObject({
+      disposition: 'ambiguous',
+    });
+  });
+
+  it('classifies a network failure/timeout as "ambiguous" — never replay the code', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      })
+    );
+    await expect(exchangeCodeForTokens('c', 'v', 's')).rejects.toMatchObject({
+      disposition: 'ambiguous',
+    });
+  });
+
+  it('classifies a 2xx body missing tokens (contract break) as "ambiguous", not a fabricated success', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => jsonResponse({ expires_in: 100 }))
     );
     await expect(exchangeCodeForTokens('c', 'v', 's')).rejects.toThrow(/missing tokens/);
+    await expect(exchangeCodeForTokens('c', 'v', 's')).rejects.toMatchObject({
+      disposition: 'ambiguous',
+    });
   });
 
   it('rejects an invalid/absent expiry instead of fabricating 8h', async () => {
@@ -199,9 +229,8 @@ describe('createClaudeOAuthService — flow + security', () => {
 
     // Written as the identity resolved from the AUTHENTICATED user, not request data.
     expect(writeClaudeAuthViaExecutor).toHaveBeenCalledTimes(1);
-    const [content, asUser, routing] = writeClaudeAuthViaExecutor.mock.calls[0];
-    expect(asUser).toBeNull();
-    expect(routing).toEqual({ reportedUnixUser: null, userId: 'user-A' });
+    const [content, routing] = writeClaudeAuthViaExecutor.mock.calls[0];
+    expect(routing).toEqual({ delegatedHomeKey: null, userId: 'user-A' });
     expect(JSON.parse(content as string).claudeAiOauth.accessToken).toBe(TOKENS.access_token);
 
     // Flips to subscription AND deletes the stale pasted token (null) in one patch.
@@ -279,7 +308,7 @@ describe('createClaudeOAuthService — flow + security', () => {
     expect((await svc.find(asUserA)).phase).toBe('awaiting_code');
   });
 
-  it('a malformed provider response ends in error with no token leak and no write', async () => {
+  it('a malformed provider response ends the attempt in error with no token leak and no write', async () => {
     const { svc } = makeService();
     const state = await startAndGetState(svc);
     vi.stubGlobal(
@@ -290,7 +319,67 @@ describe('createClaudeOAuthService — flow + security', () => {
       /missing tokens/
     );
     expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
-    // The attempt is retryable, not stuck mid-exchange.
+    // A 2xx that consumed the code but returned no usable tokens is ambiguous —
+    // the attempt goes terminal (not back to awaiting_code) so the same, possibly
+    // spent, code cannot be re-exchanged.
+    expect((await svc.find(asUserA)).phase).toBe('error');
+  });
+
+  it('a network timeout ends the attempt terminally and forbids replay of the same code', async () => {
+    const { svc } = makeService();
+    const state = await startAndGetState(svc);
+    // The POST may have reached Anthropic and consumed the one-time code before
+    // the connection dropped. Nothing about that is retryable with the same code.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      })
+    );
+    await expect(svc.create({ code: `AUTHCODE#${state}` }, asUserA)).rejects.toThrow(
+      /Could not reach Claude/
+    );
+    expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
+    // Terminal — not awaiting_code — so the UI won't accept the same code again.
+    expect((await svc.find(asUserA)).phase).toBe('error');
+    // Even if the caller re-pastes the same code, the (now non-awaiting) attempt
+    // refuses it — the code is never sent to Anthropic a second time. The healthy
+    // fetch stub restored by beforeEach would succeed, proving the guard, not luck.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(TOKENS))
+    );
+    await expect(svc.create({ code: `AUTHCODE#${state}` }, asUserA)).rejects.toThrow(
+      /No sign-in is in progress/
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
+  });
+
+  it('a definitive 4xx rejection ends the attempt terminally (no silent retry loop)', async () => {
+    const { svc } = makeService();
+    const state = await startAndGetState(svc);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ error: 'invalid_grant' }, false))
+    );
+    await expect(svc.create({ code: `AUTHCODE#${state}` }, asUserA)).rejects.toThrow(
+      /rejected the sign-in code/
+    );
+    expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
+    // A rejected code is dead (single-use + state-bound): terminal, start over.
+    const after = await svc.find(asUserA);
+    expect(after.phase).toBe('error');
+    expect(after.hint).toMatch(/start over/i);
+  });
+
+  it('a malformed local paste (bad #state) leaves the attempt awaiting a real code', async () => {
+    const { svc } = makeService();
+    await startAndGetState(svc);
+    // Missing/garbled halves are caught locally, BEFORE any provider call, so the
+    // legitimate browser can still paste the genuine code against this attempt.
+    await expect(svc.create({ code: 'AUTHCODE#' }, asUserA)).rejects.toThrow(/whole code/);
+    expect(fetch).not.toHaveBeenCalled();
     expect((await svc.find(asUserA)).phase).toBe('awaiting_code');
   });
 

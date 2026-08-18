@@ -37,7 +37,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
-import { type AppLike, resolveCodexUnixIdentity } from './codex-auth-shared.js';
+import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 /** Minimal users-service surface — mirrors the Claude OAuth service's typing. */
 interface UsersServiceLike {
@@ -65,7 +65,7 @@ export function createClaudeAuthLogoutService(app: AppLike, db: TenantScopeAware
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
 
-      const identity = await resolveCodexUnixIdentity(
+      const identity = await resolveCodexCredentialRoute(
         userId,
         withTenantDatabase,
         app.get('config')
@@ -81,14 +81,14 @@ export function createClaudeAuthLogoutService(app: AppLike, db: TenantScopeAware
       // do NOT clear the method/token in that case so a login we couldn't remove
       // keeps working. Log the error class only — never token bytes.
       try {
-        await deleteClaudeAuthViaExecutor(identity.unixUser, {
-          reportedUnixUser: identity.reportedUnixUser,
+        await deleteClaudeAuthViaExecutor({
+          delegatedHomeKey: identity.delegatedHomeKey,
           userId: identity.userId,
         });
       } catch (err) {
         console.error(
           `[ClaudeAuth] Failed to delete .credentials.json${
-            identity.unixUser ? ` as ${identity.unixUser}` : ''
+            identity.delegatedHomeKey ? ` as ${identity.delegatedHomeKey}` : ''
           }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
         );
         throw new BadRequest(

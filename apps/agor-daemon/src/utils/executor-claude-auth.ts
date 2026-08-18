@@ -20,12 +20,11 @@ export type ExecutorClaudeAuthInspection =
  * callers must treat as inconclusive.
  */
 export async function inspectClaudeAuthViaExecutor(
-  asUser: string | null,
-  routing?: ExecutorClaudeAuthRouting
+  routing: ExecutorClaudeAuthRouting
 ): Promise<ExecutorClaudeAuthInspection> {
   const result = await runExecutorCommand(
     { command: 'claude.auth-file', params: { operation: 'inspect' } },
-    options(asUser, routing)
+    options(routing)
   );
   if (!result.success) return { ok: false, reason: 'unreadable' };
   const data = result.data as Record<string, unknown>;
