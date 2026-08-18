@@ -1,6 +1,15 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { App as AntApp, Button, Flex, Typography, theme } from 'antd';
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo } from 'react';
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { SettingsSection } from '../../hooks/useSettingsRoute';
 
 /**
@@ -91,6 +100,43 @@ export const SettingsDrillProvider: React.FC<SettingsDrillProviderProps> = ({
     [drill, openDrill, closeDrill, confirmLeaveIfDirty, registerController]
   );
   return <SettingsDrillContext.Provider value={value}>{children}</SettingsDrillContext.Provider>;
+};
+
+/**
+ * Self-managed drill provider that owns its own `drill`/`controller` state.
+ * The Workspace Settings shell wires the controlled SettingsDrillProvider, but
+ * this is handy for rendering a settings surface standalone — e.g. focused unit
+ * tests of a single table's drill-in.
+ */
+export const StandaloneSettingsDrillProvider: React.FC<{ children: ReactNode }> = ({
+  children,
+}) => {
+  const [drill, setDrill] = useState<DrillTarget | null>(null);
+  const [controller, setControllerState] = useState<DrillController | null>(null);
+  const controllerRef = useRef<DrillController | null>(null);
+  const setController = useCallback((next: DrillController | null) => {
+    controllerRef.current = next;
+    setControllerState(next);
+  }, []);
+  const getDirty = useCallback(() => controllerRef.current?.dirty ?? false, []);
+  const confirmLeaveIfDirty = useDirtyLeaveGuard(getDirty);
+  const openDrill = useCallback((target: DrillTarget) => setDrill(target), []);
+  const closeDrill = useCallback(() => {
+    setDrill(null);
+    setController(null);
+  }, [setController]);
+  return (
+    <SettingsDrillProvider
+      drill={drill}
+      openDrill={openDrill}
+      closeDrill={closeDrill}
+      confirmLeaveIfDirty={confirmLeaveIfDirty}
+      controller={controller}
+      setController={setController}
+    >
+      {children}
+    </SettingsDrillProvider>
+  );
 };
 
 export interface DrillInFrameProps {

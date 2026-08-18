@@ -35,6 +35,7 @@ import {
   SLACK_AGENT_TOOL_DEFAULTS,
 } from '@agor-live/client';
 import {
+  ArrowLeftOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
   CopyOutlined,
@@ -59,11 +60,11 @@ import {
   Button,
   Checkbox,
   Collapse,
+  Flex,
   Form,
   type FormInstance,
   Input,
   InputNumber,
-  Modal,
   Popconfirm,
   Radio,
   Select,
@@ -93,7 +94,9 @@ import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BranchSelect } from './BranchSelect';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { useSettingsDrill } from './SettingsDrill';
 import { UserSelect } from './UserSelect';
 
 interface GatewayChannelsTableProps {
@@ -2927,8 +2930,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const { token } = theme.useToken();
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
+  // Create/edit open in-place as drill-ins instead of stacking a modal. The two
+  // booleans are derived from the shared drill state; the many effects/renders
+  // that read them keep working unchanged.
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
+  const createModalOpen = drill?.kind === 'gateway' && drill.mode === 'create';
+  const editModalOpen = drill?.kind === 'gateway' && drill.mode === 'edit';
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
   const [channelType, setChannelType] = useState<ChannelType>('slack');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>('claude-code');
@@ -3399,7 +3406,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       await client.service('gateway-channels').create(data);
       showSuccess('Gateway channel created!');
       createForm.resetFields();
-      setCreateModalOpen(false);
+      closeDrill();
       setChannelType('slack');
       resetCreateFlow();
     } catch (error: unknown) {
@@ -3441,7 +3448,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   const closeCreateModal = () => {
     createForm.resetFields();
-    setCreateModalOpen(false);
+    closeDrill();
     setChannelType('slack');
     setSelectedAgent('claude-code');
     setRequiresSupportedToolSelection(false);
@@ -3554,7 +3561,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
 
     editForm.setFieldsValue(formValues);
-    setEditModalOpen(true);
+    openDrill({ kind: 'gateway', mode: 'edit', recordId: channel.id });
   };
 
   const handleUpdate = () => {
@@ -3576,7 +3583,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         );
         onUpdate?.(editingChannel.id, updates);
         editForm.resetFields();
-        setEditModalOpen(false);
+        closeDrill();
         setEditingChannel(null);
         setChannelType('slack');
         setRequiresSupportedToolSelection(false);
@@ -3614,7 +3621,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       dataIndex: 'name',
       key: 'name',
       width: 180,
-      render: (name: string) => <HighlightMatch text={name} query={searchTerm} />,
+      render: (name: string, channel: GatewayChannel) => (
+        <Typography.Link ellipsis title={name} onClick={() => handleEdit(channel)}>
+          <HighlightMatch text={name} query={searchTerm} />
+        </Typography.Link>
+      ),
     },
     {
       title: 'Type',
@@ -3716,20 +3727,170 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     ]);
   }, [gatewayChannelById, searchTerm, branchOptionsById]);
 
+  const closeEditFlow = () => {
+    editForm.resetFields();
+    closeDrill();
+    setEditingChannel(null);
+    setChannelType('slack');
+    setSelectedAgent('claude-code');
+    setRequiresSupportedToolSelection(false);
+    resetConnectionTest();
+  };
+
+  const drillBackHeaderStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: token.marginXS,
+    padding: '10px 16px',
+    borderBottom: `1px solid ${token.colorBorderSecondary}`,
+  };
+  const drillFooterBarStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    padding: '12px 24px',
+    background: token.colorBgContainer,
+    borderTop: `1px solid ${token.colorBorderSecondary}`,
+  };
+
+  // Create wizard as an in-place drill-in (keeps its own multi-step footer;
+  // the header arrow backs out to the list, the footer "Back" steps back).
+  if (createModalOpen) {
+    return (
+      <Flex vertical style={{ height: '100%', background: token.colorBgContainer }}>
+        <div style={drillBackHeaderStyle}>
+          <Button
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            aria-label="Back to channels"
+            onClick={closeCreateModal}
+          />
+          <Typography.Title level={4} style={{ margin: 0, fontWeight: 500 }}>
+            Add Gateway Channel
+          </Typography.Title>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '16px 24px' }}>
+          <Form
+            form={createForm}
+            layout="vertical"
+            preserve
+            onValuesChange={handleProbeFieldsChange}
+            style={{ maxWidth: 620 }}
+          >
+            <ChannelFormFields
+              client={client}
+              form={createForm}
+              mode="create"
+              channelType={channelType}
+              onChannelTypeChange={handleChannelTypeChange}
+              branchById={branchOptionsById}
+              userById={userById}
+              mcpServerById={mcpServerById}
+              selectedAgent={selectedAgent}
+              onAgentChange={handleAgentChange}
+              requiresSupportedToolSelection={requiresSupportedToolSelection}
+              createStep={createStep}
+              githubLoading={githubLoading}
+              githubError={githubError}
+              connectionTestResult={connectionTestResult}
+              connectionTestLoading={connectionTestLoading}
+              onSlackTest={handleSlackTest}
+              onShortcutTest={handleShortcutTest}
+              slackAppInfo={null}
+            />
+          </Form>
+        </div>
+        <div style={drillFooterBarStyle}>
+          <Button
+            type="link"
+            disabled={createStep === 0}
+            onClick={() => setCreateStep((step) => Math.max(0, step - 1))}
+            style={{ paddingLeft: 0 }}
+          >
+            Back
+          </Button>
+          <Space style={{ marginLeft: 'auto' }}>
+            <Button onClick={closeCreateModal}>Cancel</Button>
+            <Button type="primary" loading={creating} onClick={handleCreatePrimary}>
+              {isFinalCreateStep ? 'Create channel' : 'Continue'}
+            </Button>
+          </Space>
+        </div>
+      </Flex>
+    );
+  }
+
+  // Edit as an in-place drill-in (keeps its own Save footer).
+  if (editModalOpen) {
+    return (
+      <Flex vertical style={{ height: '100%', background: token.colorBgContainer }}>
+        <div style={drillBackHeaderStyle}>
+          <Button
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            aria-label="Back to channels"
+            onClick={closeEditFlow}
+          />
+          <Typography.Title level={4} style={{ margin: 0, fontWeight: 500 }}>
+            Edit Gateway Channel
+          </Typography.Title>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '16px 24px' }}>
+          {requiresSupportedToolSelection && (
+            <Alert
+              type="warning"
+              showIcon
+              title="This channel uses a removed agentic tool"
+              description="Its saved configuration is preserved. Choose a supported tool before saving any changes."
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          <Form
+            form={editForm}
+            layout="vertical"
+            preserve
+            onValuesChange={handleProbeFieldsChange}
+            style={{ maxWidth: 620 }}
+          >
+            <ChannelFormFields
+              client={client}
+              form={editForm}
+              mode="edit"
+              channelType={channelType}
+              onChannelTypeChange={setChannelType}
+              branchById={branchOptionsById}
+              userById={userById}
+              mcpServerById={mcpServerById}
+              selectedAgent={selectedAgent}
+              onAgentChange={handleAgentChange}
+              requiresSupportedToolSelection={requiresSupportedToolSelection}
+              editingChannel={editingChannel}
+              createStep={0}
+              githubLoading={false}
+              githubError={null}
+              connectionTestResult={connectionTestResult}
+              connectionTestLoading={connectionTestLoading}
+              onSlackTest={handleSlackEditTest}
+              onShortcutTest={handleShortcutTest}
+              slackAppInfo={slackAppInfo}
+            />
+          </Form>
+        </div>
+        <div style={{ ...drillFooterBarStyle, justifyContent: 'flex-end', gap: token.marginXS }}>
+          <Button onClick={closeEditFlow}>Cancel</Button>
+          <Button type="primary" onClick={handleUpdate} disabled={requiresSupportedToolSelection}>
+            Save
+          </Button>
+        </div>
+      </Flex>
+    );
+  }
+
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Route messages from Slack, GitHub, Microsoft Teams, and other platforms to Agor sessions.
-        </Typography.Text>
-        <Space>
+      <ListPanelHeader
+        title="Gateway Channels"
+        description="Route messages from Slack, GitHub, Microsoft Teams, and other platforms to Agor sessions."
+        search={
           <Input
             allowClear
             placeholder="Search name, type, target branch, key, or config"
@@ -3737,19 +3898,21 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 360 }}
           />
+        }
+        actions={
           <Button
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
               resetConnectionTest();
               createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
-              setCreateModalOpen(true);
+              openDrill({ kind: 'gateway', mode: 'create' });
             }}
           >
             Add Channel
           </Button>
-        </Space>
-      </div>
+        }
+      />
 
       <CompactAlert
         type="warning"
@@ -3798,123 +3961,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           size="small"
         />
       )}
-
-      {/* Create Channel Modal */}
-      <Modal
-        title="Add Gateway Channel"
-        open={createModalOpen}
-        onCancel={closeCreateModal}
-        width={600}
-        footer={
-          // One structurally-identical footer on every step: Back (left),
-          // Cancel + primary (right). Buttons never move between steps.
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <Button
-              type="link"
-              disabled={createStep === 0}
-              onClick={() => setCreateStep((step) => Math.max(0, step - 1))}
-              style={{ paddingLeft: 0 }}
-            >
-              Back
-            </Button>
-            <Space style={{ marginLeft: 'auto' }}>
-              <Button onClick={closeCreateModal}>Cancel</Button>
-              <Button type="primary" loading={creating} onClick={handleCreatePrimary}>
-                {isFinalCreateStep ? 'Create channel' : 'Continue'}
-              </Button>
-            </Space>
-          </div>
-        }
-      >
-        <Form
-          form={createForm}
-          layout="vertical"
-          preserve
-          onValuesChange={handleProbeFieldsChange}
-          style={{ marginTop: 16 }}
-        >
-          <ChannelFormFields
-            client={client}
-            form={createForm}
-            mode="create"
-            channelType={channelType}
-            onChannelTypeChange={handleChannelTypeChange}
-            branchById={branchOptionsById}
-            userById={userById}
-            mcpServerById={mcpServerById}
-            selectedAgent={selectedAgent}
-            onAgentChange={handleAgentChange}
-            requiresSupportedToolSelection={requiresSupportedToolSelection}
-            createStep={createStep}
-            githubLoading={githubLoading}
-            githubError={githubError}
-            connectionTestResult={connectionTestResult}
-            connectionTestLoading={connectionTestLoading}
-            onSlackTest={handleSlackTest}
-            onShortcutTest={handleShortcutTest}
-            slackAppInfo={null}
-          />
-        </Form>
-      </Modal>
-
-      {/* Edit Channel Modal */}
-      <Modal
-        title="Edit Gateway Channel"
-        open={editModalOpen}
-        onOk={handleUpdate}
-        onCancel={() => {
-          editForm.resetFields();
-          setEditModalOpen(false);
-          setEditingChannel(null);
-          setChannelType('slack');
-          setSelectedAgent('claude-code');
-          setRequiresSupportedToolSelection(false);
-          resetConnectionTest();
-        }}
-        okText="Save"
-        okButtonProps={{ disabled: requiresSupportedToolSelection }}
-        width={600}
-      >
-        {requiresSupportedToolSelection && (
-          <Alert
-            type="warning"
-            showIcon
-            title="This channel uses a removed agentic tool"
-            description="Its saved configuration is preserved. Choose a supported tool before saving any changes."
-            style={{ marginTop: 16 }}
-          />
-        )}
-        <Form
-          form={editForm}
-          layout="vertical"
-          preserve
-          onValuesChange={handleProbeFieldsChange}
-          style={{ marginTop: 16 }}
-        >
-          <ChannelFormFields
-            client={client}
-            form={editForm}
-            mode="edit"
-            channelType={channelType}
-            onChannelTypeChange={setChannelType}
-            branchById={branchOptionsById}
-            userById={userById}
-            mcpServerById={mcpServerById}
-            selectedAgent={selectedAgent}
-            onAgentChange={handleAgentChange}
-            requiresSupportedToolSelection={requiresSupportedToolSelection}
-            editingChannel={editingChannel}
-            createStep={0}
-            githubLoading={false}
-            githubError={null}
-            connectionTestResult={connectionTestResult}
-            connectionTestLoading={connectionTestLoading}
-            onSlackTest={handleSlackEditTest}
-            onShortcutTest={handleShortcutTest}
-            slackAppInfo={slackAppInfo}
-          />
-        </Form>
-      </Modal>
     </div>
   );
 };
