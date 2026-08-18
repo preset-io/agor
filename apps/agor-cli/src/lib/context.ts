@@ -98,13 +98,14 @@ export function getDaemonUploadsMaintenanceModulePath(): string | null {
  *
  * @returns UI URL for current context
  */
-export function getUIUrl(daemonUrl?: string): string {
-  if (isInstalledPackage()) {
+export function getUIUrl(daemonUrl: string, localDevelopmentTarget = false): string {
+  if (isInstalledPackage() || !localDevelopmentTarget) {
     // Production: UI is served by the selected daemon. Preserve a configured
-    // base path instead of falling back to the historical localhost default.
-    return `${daemonUrl?.replace(/\/$/, '') ?? 'http://localhost:3030'}/ui`;
+    // base path. A source CLI connected to a remote deployment follows the
+    // same rule instead of accidentally opening its own Vite server.
+    return `${daemonUrl.replace(/\/$/, '')}/ui`;
   } else {
-    // Development: Vite dev server
+    // The local source-development deployment uses its separate Vite server.
     return 'http://localhost:5173';
   }
 }

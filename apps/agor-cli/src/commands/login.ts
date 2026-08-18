@@ -91,11 +91,9 @@ export default class Login extends Command {
     const probe = await probeAgorDaemon(daemonUrl);
     if (!probe.running) {
       this.error(
-        chalk.red('✗ Daemon not running') +
-          '\n\n' +
-          chalk.bold('To start the daemon:') +
-          '\n  ' +
-          chalk.cyan('cd apps/agor-daemon && pnpm dev')
+        localSelected
+          ? `${chalk.red('✗ Local deployment is not reachable')}\n\nStart it with:\n  ${chalk.cyan('agor daemon start')}`
+          : `${chalk.red('✗ Deployment is not reachable')}\n\nTarget: ${chalk.cyan(daemonUrl)}\nCheck the URL and confirm that the deployment is running.`
       );
     }
     if (!probe.deploymentId) {

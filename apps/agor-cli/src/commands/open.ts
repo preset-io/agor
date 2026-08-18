@@ -51,8 +51,17 @@ export default class Open extends Command {
       );
     }
 
-    // Get UI URL (context-aware: dev/prod)
-    const uiUrl = getUIUrl(daemonUrl);
+    let localDevelopmentTarget = flags.local;
+    if (!localDevelopmentTarget) {
+      try {
+        const localTarget = await resolveLocalDeploymentTarget();
+        localDevelopmentTarget =
+          localTarget.deploymentId === target.deploymentId && localTarget.url === target.url;
+      } catch {
+        // No valid local deployment; the connected target remains unambiguously remote.
+      }
+    }
+    const uiUrl = getUIUrl(daemonUrl, localDevelopmentTarget);
 
     // Local environment: try to open browser
     try {
