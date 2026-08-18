@@ -9,6 +9,7 @@ const dbMocks = vi.hoisted(() => ({
   runWithTenantDatabaseScope: vi.fn(
     async (db: unknown, _tenantId: unknown, work: (db: unknown) => unknown) => work(db)
   ),
+  UsersRepository: vi.fn(),
 }));
 
 vi.mock('@agor/core/config', () => configMocks);
@@ -330,6 +331,105 @@ describe('ConfigService.resolveApiKey', () => {
     ).rejects.toBeInstanceOf(Forbidden);
 
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
+  describe('native auth credential-home agreement', () => {
+    const DELEGATED = {
+      execution: { unix_user_mode: 'delegated' },
+    };
+
+    /** Executor asking for the on-disk Claude subscription login of `prompter`. */
+    const resolveNative = (service: ConfigService, opts: { prompter: string; owner: string }) => {
+      service.app = {
+        service(name: string) {
+          if (name === 'tasks') {
+            return {
+              get: vi.fn(async () => ({ created_by: opts.prompter, session_id: 'session-1' })),
+            };
+          }
+          if (name === 'sessions') {
+            return {
+              get: vi.fn(async () => ({ agentic_tool: 'claude-code', created_by: opts.owner })),
+            };
+          }
+          throw new Error(`unexpected service ${name}`);
+        },
+      } as never;
+      return service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'ANTHROPIC_API_KEY', tool: 'claude-code' },
+        {
+          provider: 'socketio',
+          authentication: {
+            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+          },
+        } as never
+      );
+    };
+
+    beforeEach(() => {
+      configMocks.resolveApiKey.mockResolvedValue({
+        apiKey: null,
+        source: 'user',
+        useNativeAuth: true,
+      });
+      dbMocks.UsersRepository.mockImplementation(function UsersRepositoryStub() {
+        return {
+          findById: async (id: string) =>
+            ({
+              alice: { unix_username: 'alice' },
+              bob: { unix_username: 'bob' },
+            })[id] ?? null,
+        };
+      });
+    });
+
+    it('refuses native auth when the prompter and session owner have different homes', async () => {
+      // Reachable via dangerously_allow_session_sharing: the child session kept
+      // the parent creator's identity, so bob's sign-in wrote into bob's home
+      // while the session still executes in alice's. Without this the executor
+      // is told "read the on-disk login" and silently finds none.
+      const service = new ConfigService({} as never, DELEGATED as never);
+
+      await expect(resolveNative(service, { prompter: 'bob', owner: 'alice' })).rejects.toThrow(
+        /different execution home/
+      );
+    });
+
+    it('allows native auth when the prompter owns the session', async () => {
+      const service = new ConfigService({} as never, DELEGATED as never);
+
+      await expect(
+        resolveNative(service, { prompter: 'alice', owner: 'alice' })
+      ).resolves.toMatchObject({ useNativeAuth: true });
+      // Identical identities share a home by construction — no lookup needed.
+      expect(dbMocks.UsersRepository).not.toHaveBeenCalled();
+    });
+
+    it('allows cross-user native auth in simple mode, where the home is shared', async () => {
+      const service = new ConfigService(
+        {} as never,
+        {
+          execution: { unix_user_mode: 'simple' },
+        } as never
+      );
+
+      await expect(
+        resolveNative(service, { prompter: 'bob', owner: 'alice' })
+      ).resolves.toMatchObject({ useNativeAuth: true });
+    });
+
+    it('leaves API-key resolution untouched when the homes differ', async () => {
+      configMocks.resolveApiKey.mockResolvedValue({
+        apiKey: 'resolved-test-key',
+        source: 'user',
+        useNativeAuth: false,
+      });
+      const service = new ConfigService({} as never, DELEGATED as never);
+
+      await expect(
+        resolveNative(service, { prompter: 'bob', owner: 'alice' })
+      ).resolves.toMatchObject({ apiKey: 'resolved-test-key' });
+    });
   });
 
   it('rejects executor runtime tokens for tools without a canonical API key mapping', async () => {

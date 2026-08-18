@@ -21,6 +21,10 @@ import type {
   UserID,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
+import {
+  resolveExecutionCredentialHome,
+  sameExecutionCredentialHome,
+} from './credential-home-identity.js';
 import type { SessionTokenService } from './session-token-service.js';
 
 const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
@@ -243,6 +247,7 @@ export class ConfigService {
           'Shared machine subscription authentication is unavailable in hosted multitenant mode'
         );
       }
+      await this.assertNativeAuthHomeMatchesSession(userId, sessionId, internalParams);
     }
 
     // Map KeyResolutionResult to service response type
@@ -253,6 +258,55 @@ export class ConfigService {
       useNativeAuth: result.useNativeAuth,
       ...(result.decryptionFailed && { decryptionFailed: true }),
     };
+  }
+
+  /**
+   * Refuse native auth whose credential file lives in a different execution
+   * home than the one this session runs in.
+   *
+   * Native auth resolves against the PROMPTER (`task.created_by`) but the
+   * executor runs in the SESSION OWNER's home. Equal identities share a home by
+   * construction, so the common path costs nothing. When they differ — a
+   * collaborator prompting a shared session, or a child session that kept the
+   * parent creator's identity under `dangerously_allow_session_sharing` — the
+   * homes are compared for real. A mismatch means "read the on-disk login"
+   * would find the owner's file or none at all, so the prompter would either
+   * borrow someone else's credential or run unauthenticated while the UI still
+   * says they are signed in. Fail closed instead.
+   */
+  private async assertNativeAuthHomeMatchesSession(
+    promptingUserId: UserID | undefined,
+    sessionId: string | undefined,
+    internalParams: AuthenticatedParams
+  ): Promise<void> {
+    if (!promptingUserId || !sessionId) return;
+    const sessionsService = this.app?.service('sessions');
+    if (!sessionsService) return;
+    const session = (await sessionsService.get(sessionId, internalParams)) as
+      | { created_by?: string }
+      | undefined;
+    const ownerUserId = session?.created_by;
+    if (!ownerUserId || ownerUserId === promptingUserId) return;
+
+    const tenantId = internalParams.tenant?.tenant_id;
+    const homeOf = (userId: UserID) =>
+      resolveExecutionCredentialHome({
+        userId,
+        tenantId,
+        config: this.config,
+        withTenantDatabase: (work) => runWithTenantDatabaseScope(this.db, tenantId, work),
+      });
+    const [prompterHome, ownerHome] = await Promise.all([
+      homeOf(promptingUserId),
+      homeOf(ownerUserId as UserID),
+    ]);
+    if (sameExecutionCredentialHome(prompterHome, ownerHome)) return;
+
+    throw new Forbidden(
+      'Subscription sign-in belongs to a different execution home than this session runs in. ' +
+        "The session executes in its owner's home, so the on-disk login saved for the prompting " +
+        'user is not visible to it. Prompt a session you own, or configure an API key.'
+    );
   }
 }
 
