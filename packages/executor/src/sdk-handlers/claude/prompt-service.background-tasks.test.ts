@@ -809,6 +809,31 @@ describe('ClaudePromptService background task query lifetime', () => {
     });
   });
 
+  it('settles the turn even if the query has no usable interrupt()', async () => {
+    await withFakeTimers(async () => {
+      // `Promise.resolve(x)` evaluates `x` before wrapping it, so a query shape
+      // that throws *synchronously* here — no such method, a test double, a
+      // future SDK — escapes the `.catch()` entirely and lands in the handler
+      // that reports the Task as failed. `interrupt()` is only the optional
+      // cooperative ask on this path; it has no business failing a turn that
+      // has already settled on the model's own output.
+      const { query, teardown } = wedgedQuery();
+      Reflect.deleteProperty(query, 'interrupt');
+      const run = drain(query);
+
+      await vi.advanceTimersByTimeAsync(SILENCE_MS + 1_000);
+      await expect(run.done).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Completed on the accumulated result, not failed — and `close()` still
+      // ran, so the cooperative ask failing does not skip the teardown after it.
+      expect(run.events.at(-1)?.type).toBe('result');
+      expect(run.resultUuids().at(-1)).toBe('parent-result');
+      expect(query.close).toHaveBeenCalledTimes(1);
+      expect(teardown.ran).toBe(true);
+    });
+  });
+
   it('settles the turn even if the wedged query throws out of close()', async () => {
     await withFakeTimers(async () => {
       // Teardown is the last thing a force-settled turn does; an SDK that

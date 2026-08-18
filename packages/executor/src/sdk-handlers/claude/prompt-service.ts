@@ -207,6 +207,27 @@ function announcedQuietRemainingMs(
 }
 
 /**
+ * `interrupt()`, best-effort in both dimensions.
+ *
+ * This is the *optional* cooperative half of a force-settle: the teardown that
+ * has to work is `close()`. So neither a rejection nor a synchronous throw may
+ * reach the turn. The synchronous case is the sharp one —
+ * `Promise.resolve(query.interrupt())` evaluates the call before it wraps it,
+ * so a query shape without the method throws straight past the `.catch()` and
+ * into the handler that reports the Task as **failed**, for a turn this path
+ * has just settled successfully.
+ */
+function interruptQuietly(query: InterruptibleQuery): void {
+  try {
+    void Promise.resolve(query.interrupt()).catch(() => {});
+  } catch (error) {
+    console.warn(
+      `⚠️  query.interrupt() failed during force-settle: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+/**
  * `close()`, best-effort.
  *
  * This is the last thing a force-settled turn does, so an SDK that lacks the
@@ -531,7 +552,7 @@ If you continue to see authentication errors, please contact your Agor administr
           // control request that round-trips over the transport that just went
           // silent, so on this path it may well never resolve. The teardown
           // that actually ends the subprocess is `close()`, in the `finally`.
-          void Promise.resolve(result.interrupt()).catch(() => {});
+          interruptQuietly(result);
           yield* this.finalizeTurn(result);
           if (sdkResults.length > 0) {
             yield { type: 'result', raw_sdk_message: aggregateClaudeResults(sdkResults) };
