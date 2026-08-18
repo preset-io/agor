@@ -14,4 +14,14 @@ describe('CLI development entrypoint', () => {
 
     expect(stdout).toMatch(/@agor\/cli\/\S+/);
   }, 35_000);
+
+  it('keeps the workspace-root CLI entrypoint on the same source-resolving path', async () => {
+    const { stdout } = await execFileAsync('pnpm', ['--workspace-root', 'agor', '--version'], {
+      cwd: new URL('..', import.meta.url),
+      env: process.env,
+      timeout: 30_000,
+    });
+
+    expect(stdout).toMatch(/@agor\/cli\/\S+/);
+  }, 35_000);
 });
