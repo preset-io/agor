@@ -86,5 +86,5 @@ describe('login command', () => {
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });

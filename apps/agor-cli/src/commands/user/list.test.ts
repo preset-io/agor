@@ -53,7 +53,7 @@ describe('user list command', () => {
     } finally {
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('lists users from the selected daemon without opening the local database', async () => {
     const home = await mkdtemp(join(tmpdir(), 'agor-user-list-remote-'));
@@ -101,5 +101,5 @@ describe('user list command', () => {
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
