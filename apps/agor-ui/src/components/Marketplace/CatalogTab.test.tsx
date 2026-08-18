@@ -425,6 +425,78 @@ describe('connect', () => {
     expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBe(DEEPWIKI.starter_prompt);
   });
 
+  /**
+   * 42 of the 48 catalog entries are OAuth, and an OAuth install lands with no
+   * credentials — the row is written before anyone signs in. A starter prompt
+   * is written to exercise the server it ships with, so arming the composer
+   * with one here means the modal outcome of pressing Connect is a loaded
+   * prompt whose only result is a tool-less answer.
+   *
+   * These pin the split. Landing in the session is unchanged: the session is
+   * where the sign-in lives (the alert above the composer, the red MCP badge,
+   * the pill that starts OAuth on click). Only the loaded gun is withheld.
+   */
+  async function connectAndLand(mcpServer: Record<string, unknown>) {
+    connectImpl = async () => ({
+      mcp_server: mcpServer,
+      session: { session_id: SESSION_ID },
+      starter_prompt: DEEPWIKI.starter_prompt,
+      reused_existing_server: false,
+    });
+    const drawer = await openDrawer();
+    const connect = drawer.getByRole('button', { name: /Connect/ });
+    fireEvent.click(drawer.getByRole('checkbox'));
+    await waitFor(() => expect(connect).toBeEnabled());
+    fireEvent.click(connect);
+    await waitFor(() =>
+      expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
+    );
+  }
+
+  it('does not arm the composer when the install still needs signing in', async () => {
+    await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });
+
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+  });
+
+  it('still lands in the session so the sign-in is reachable', async () => {
+    await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });
+
+    // Withholding the prompt must not withhold the session: the MCP badge and
+    // the pill that starts OAuth are both inside it.
+    expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
+    expect(connectCalls).toHaveLength(1);
+  });
+
+  it('arms the composer when a reused install already holds a live token', async () => {
+    // A reused install comes back through `mcp-servers` find, where the daemon
+    // injects the caller's token — redacted to a sentinel, but present, which
+    // is all "is this finished" needs.
+    await connectAndLand({
+      mcp_server_id: 'server-1',
+      auth: {
+        type: 'oauth',
+        oauth_access_token: '••••••••',
+        oauth_token_expires_at: 4102444800000,
+      },
+    });
+
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBe(DEEPWIKI.starter_prompt);
+  });
+
+  it('withholds the prompt when the token the install carries has expired', async () => {
+    await connectAndLand({
+      mcp_server_id: 'server-1',
+      auth: {
+        type: 'oauth',
+        oauth_access_token: '••••••••',
+        oauth_token_expires_at: 1,
+      },
+    });
+
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+  });
+
   it('keeps the drawer open and reports why when connect fails', async () => {
     connectImpl = async () => {
       throw new Error('DeepWiki requires authentication, which is not supported yet');

@@ -1,5 +1,8 @@
 import { type MCPServer, shortId } from '@agor-live/client';
 import { Select, type SelectProps } from 'antd';
+import { useAgorStore } from '../../store/agorStore';
+import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
+import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 
 export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {
   mcpServers: MCPServer[];
@@ -9,7 +12,26 @@ export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {
   filterByScope?: 'global' | 'repo' | 'session';
 }
 
-export function buildMcpServerOptions(mcpServers: MCPServer[], selectedIds: string[] = []) {
+/**
+ * How an install that never finished reads in the picker.
+ *
+ * Connecting a catalog entry creates the row before anyone signs in, so an
+ * OAuth install sits in this list looking exactly like a working one. Saying so
+ * in the label — rather than in a suffix only the renderer sees — keeps it in
+ * whatever `optionFilterProp="label"` searches.
+ */
+export const NEEDS_AUTH_OPTION_SUFFIX = ' · Not signed in';
+
+export function buildMcpServerOptions(
+  mcpServers: MCPServer[],
+  selectedIds: string[] = [],
+  /**
+   * Servers this user has a live OAuth grant for. Defaults to empty, which is
+   * the honest reading for a caller that has no store: `mcpServerNeedsAuth`
+   * still clears any server carrying an unexpired access token.
+   */
+  userAuthenticatedMcpServerIds: Set<string> = new Set()
+) {
   const selected = new Set(selectedIds);
   const options: Array<{ label: string; value: string; disabled: boolean }> = mcpServers
     // Disabled servers cannot be newly attached, but must remain an option when
@@ -24,8 +46,11 @@ export function buildMcpServerOptions(mcpServers: MCPServer[], selectedIds: stri
           : server.auth?.type === 'bearer' || server.auth?.token
             ? ' · Token'
             : '';
+      const needsAuthSuffix = mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)
+        ? NEEDS_AUTH_OPTION_SUFFIX
+        : '';
       return {
-        label: `${name} (${server.transport})${authSuffix}`,
+        label: `${name} (${server.transport})${authSuffix}${needsAuthSuffix}`,
         value: server.mcp_server_id,
         disabled: !server.enabled,
       };
@@ -53,6 +78,7 @@ export function buildMcpServerOptions(mcpServers: MCPServer[], selectedIds: stri
  * - Supports filtering by scope (global, repo, session)
  * - Multi-select mode with search
  * - Shows transport type in parentheses (stdio, http, sse)
+ * - Marks servers whose OAuth sign-in never happened
  */
 export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
   mcpServers,
@@ -62,12 +88,17 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
   filterByScope,
   ...selectProps
 }) => {
+  // Read here rather than as a prop: every caller of this picker would
+  // otherwise have to thread the same set through, and one that forgot would
+  // quietly go back to showing an unfinished install as a working one.
+  const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
+
   // Filter servers by scope if specified
   const filteredServers = filterByScope
     ? mcpServers.filter((server) => server.scope === filterByScope)
     : mcpServers;
 
-  const options = buildMcpServerOptions(filteredServers, value);
+  const options = buildMcpServerOptions(filteredServers, value, userAuthenticatedMcpServerIds);
 
   return (
     <Select

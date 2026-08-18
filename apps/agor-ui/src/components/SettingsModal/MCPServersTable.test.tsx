@@ -485,3 +485,65 @@ describe('MCPServersTable ownership', () => {
     expect(shared.map((button) => button.disabled)).toEqual([false, true, true]);
   });
 });
+
+/**
+ * An install that was created but never authenticated.
+ *
+ * `usableByUserId` filters on ownership alone, so a marketplace connect the
+ * user walked away from is listed here in full — enabled, owned, and otherwise
+ * reading as a working server. Health is the column that answers "does this
+ * work", so it is the one that has to say so.
+ */
+describe('MCPServersTable unfinished installs', () => {
+  const oauthServer = (overrides: Partial<MCPServer> = {}) =>
+    makeServer({
+      name: 'linear',
+      display_name: 'Linear',
+      source: 'catalog',
+      auth: { type: 'oauth' },
+      ...overrides,
+    } as Partial<MCPServer>);
+
+  it('names an unauthenticated OAuth install rather than calling it untested', async () => {
+    renderTable({
+      policy: 'allow_crud',
+      currentUser: ADMIN,
+      servers: [oauthServer()],
+    });
+
+    expect(await screen.findByText('Not signed in')).toBeVisible();
+    // "Not tested" is the reading it would otherwise get, and it says nothing
+    // about the thing that actually stops this server working.
+    expect(screen.queryByText('Not tested')).not.toBeInTheDocument();
+  });
+
+  it('reports health normally once a live token is present', async () => {
+    renderTable({
+      policy: 'allow_crud',
+      currentUser: ADMIN,
+      servers: [
+        oauthServer({
+          auth: {
+            type: 'oauth',
+            oauth_access_token: '••••••••',
+            oauth_token_expires_at: 4102444800000,
+          },
+        } as Partial<MCPServer>),
+      ],
+    });
+
+    expect(await screen.findByText('Not tested')).toBeVisible();
+    expect(screen.queryByText('Not signed in')).not.toBeInTheDocument();
+  });
+
+  it('leaves the health of a non-OAuth server alone', async () => {
+    renderTable({
+      policy: 'allow_crud',
+      currentUser: ADMIN,
+      servers: [makeServer({ tools: [{ name: 'search' }] } as Partial<MCPServer>)],
+    });
+
+    expect(await screen.findByText('1 tools')).toBeVisible();
+    expect(screen.queryByText('Not signed in')).not.toBeInTheDocument();
+  });
+});

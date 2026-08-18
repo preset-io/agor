@@ -12,6 +12,9 @@ import { sessionPath } from '@agor-live/client';
 import { Alert, Button, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAgorStore } from '../../store/agorStore';
+import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
+import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { savePromptDraft } from '../../utils/promptDrafts';
 import { CatalogCard } from './CatalogCard';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
@@ -86,6 +89,12 @@ export interface CatalogTabProps {
 export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
+  // Same set the session panel reads, so "is this install finished?" is one
+  // question with one answer wherever it is asked. On this surface it is
+  // usually empty — the marketplace is standalone chrome and does not hydrate
+  // the workspace store — which costs nothing: `mcpServerNeedsAuth` falls back
+  // to the token the daemon injects on the read that produced `mcp_server`.
+  const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
 
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
   const [page, setPage] = useState(1);
@@ -172,7 +181,18 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
           acknowledged_disclosure: acknowledgedDisclosure,
         });
         rememberConnectBranchId(branchId);
-        if (result.starter_prompt) {
+        // A starter prompt is written to exercise the server it ships with, so
+        // it is only worth arming the composer with once that server can answer
+        // it. Most of the catalog is OAuth, and an OAuth install lands with no
+        // credentials: staging the prompt there hands the user a loaded
+        // composer whose only outcome is a tool-less answer, turning a
+        // recoverable state into an invitation to hit the failure. The session
+        // says what is missing instead — see the unauthenticated-server alert
+        // above the composer and the red MCP badge beside it.
+        if (
+          result.starter_prompt &&
+          !mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)
+        ) {
           savePromptDraft(result.session.session_id, result.starter_prompt);
         }
         setSelected(null);
@@ -183,7 +203,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         setConnecting(false);
       }
     },
-    [client, navigate, selected]
+    [client, navigate, selected, userAuthenticatedMcpServerIds]
   );
 
   return (

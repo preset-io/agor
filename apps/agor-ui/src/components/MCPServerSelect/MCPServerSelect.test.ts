@@ -32,6 +32,42 @@ describe('buildMcpServerOptions', () => {
     ]);
   });
 
+  // Connecting a marketplace entry writes the install before anybody signs in,
+  // so an OAuth row with no grant is enabled and offered here looking exactly
+  // like a working one. These pin that the picker says otherwise, using the
+  // same `mcpServerNeedsAuth` the session footer and the settings table use.
+  it('marks an OAuth server the user has never signed in to', () => {
+    const oauth = server({ auth: { type: 'oauth' } } as Partial<MCPServer>);
+    const [option] = buildMcpServerOptions([oauth], [], new Set());
+    expect(option?.label).toContain('Not signed in');
+    // Still selectable: the fix for an unfinished install is to finish it, and
+    // detaching it from the session is not that.
+    expect(option?.disabled).toBe(false);
+  });
+
+  it('leaves a signed-in OAuth server unmarked', () => {
+    const oauth = server({ auth: { type: 'oauth' } } as Partial<MCPServer>);
+    const [option] = buildMcpServerOptions([oauth], [], new Set([oauth.mcp_server_id]));
+    expect(option?.label).not.toContain('Not signed in');
+  });
+
+  it('leaves an OAuth server holding a live token unmarked without the durable set', () => {
+    // The daemon injects the token on every read, so a caller with no store —
+    // the marketplace is one — still gets the right answer.
+    const oauth = server({
+      auth: {
+        type: 'oauth',
+        oauth_access_token: '••••••••',
+        oauth_token_expires_at: 4102444800000,
+      },
+    } as Partial<MCPServer>);
+    expect(buildMcpServerOptions([oauth])[0]?.label).not.toContain('Not signed in');
+  });
+
+  it('leaves a non-OAuth server unmarked', () => {
+    expect(buildMcpServerOptions([server({})])[0]?.label).not.toContain('Not signed in');
+  });
+
   it('shows a clear short fallback for a selected server missing from hydration', () => {
     const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     expect(buildMcpServerOptions([], [id])).toEqual([
