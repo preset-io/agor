@@ -214,7 +214,14 @@ describe('createClaudeOAuthService — flow + security', () => {
     const status = await svc.create({}, asUserA);
     expect(status.phase).toBe('awaiting_code');
     expect(status.verificationUrl).toContain('https://claude.com/cai/oauth/authorize');
-    expect(Object.keys(status).sort()).toEqual(['expiresAt', 'phase', 'verificationUrl']);
+    // attemptId is echoed so a reconnect (possibly to another replica) can name
+    // the attempt it is asking about. It is not the OAuth state capability.
+    expect(Object.keys(status).sort()).toEqual([
+      'attemptId',
+      'expiresAt',
+      'phase',
+      'verificationUrl',
+    ]);
     expect(JSON.stringify(status)).not.toMatch(/verifier|accessToken|refreshToken|code_verifier/);
   });
 
@@ -277,8 +284,10 @@ describe('createClaudeOAuthService — flow + security', () => {
     );
     const first = svc.create({ code: `AUTHCODE#${state}` }, asUserA);
     await flush();
+    // The reservation is one-shot, so the second submit loses. It now says so
+    // specifically rather than reporting the attempt as absent.
     await expect(svc.create({ code: `AUTHCODE#${state}` }, asUserA)).rejects.toThrow(
-      /No sign-in is in progress/
+      /already being completed/
     );
     release();
     expect((await first).phase).toBe('success');

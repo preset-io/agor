@@ -37,6 +37,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
+import type { ClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
 import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 /** Minimal users-service surface — mirrors the Claude OAuth service's typing. */
@@ -51,7 +52,12 @@ interface UsersServiceLike {
   ): Promise<unknown>;
 }
 
-export function createClaudeAuthLogoutService(app: AppLike, db: TenantScopeAwareDatabase) {
+export function createClaudeAuthLogoutService(
+  app: AppLike,
+  db: TenantScopeAwareDatabase,
+  /** Present when attempts are durable; absent for a standalone daemon. */
+  attemptStore?: ClaudeOAuthAttemptStore
+) {
   return {
     async create(_data: unknown, params?: AuthenticatedParams): Promise<ClaudeAuthLogoutResult> {
       const authUser = params?.user;
@@ -75,6 +81,13 @@ export function createClaudeAuthLogoutService(app: AppLike, db: TenantScopeAware
           `Cannot determine which Unix account holds this Claude login: ${identity.message}`
         );
       }
+
+      // Fence any sign-in still in flight BEFORE removing anything. A submit
+      // that is already exchanging — possibly on another replica — would
+      // otherwise land after this logout and re-write the credential the user
+      // just removed, leaving them signed in against their wishes. The
+      // attempt's pre-write and pre-patch revalidations observe this.
+      await attemptStore?.invalidate({ tenantId: String(tenantId), userId }, 'signed_out');
 
       // Delete the local login (idempotent — a missing file is success). A
       // genuine delete failure is a real server problem worth surfacing, and we

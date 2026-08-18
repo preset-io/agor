@@ -115,7 +115,9 @@ import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeAuthLogoutService } from './services/claude-auth-logout.js';
 import { createClaudeModelsService } from './services/claude-models.js';
-import { createClaudeOAuthService } from './services/claude-oauth.js';
+import { claudeVerificationUrlFrom, createClaudeOAuthService } from './services/claude-oauth.js';
+import { ClaudeOAuthAttemptAuthority } from './services/claude-oauth-attempt-authority.js';
+import { DurableClaudeOAuthAttemptStore } from './services/claude-oauth-attempt-store.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
@@ -704,7 +706,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find
   // reports status. Tokens stay daemon-side end to end.
   // See context/explorations/claude-code-oauth-signin.md.
-  app.use('/claude-auth/oauth', createClaudeOAuthService(app, db));
+  // Attempt state is process-local for a standalone daemon and durable on
+  // PostgreSQL, where any replica may answer the paste-back that another
+  // replica's authorize URL produced.
+  const claudeOAuthStore = isPostgresDatabaseHandle(db)
+    ? new DurableClaudeOAuthAttemptStore(
+        new ClaudeOAuthAttemptAuthority(db),
+        claudeVerificationUrlFrom
+      )
+    : undefined;
+  app.use('/claude-auth/oauth', createClaudeOAuthService(app, db, claudeOAuthStore));
   app
     .service('/claude-auth/oauth')
     .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
@@ -713,7 +724,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ~/.claude/.credentials.json as the right Unix identity and clears the stored
   // token + claude auth method (emitting `patched` so the UI re-probes to
   // disconnected). Server-local only; does not revoke the OAuth grant.
-  app.use('/claude-auth/logout', createClaudeAuthLogoutService(app, db));
+  app.use('/claude-auth/logout', createClaudeAuthLogoutService(app, db, claudeOAuthStore));
   app.service('/claude-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
