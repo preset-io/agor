@@ -62,6 +62,8 @@ import type {
   Branch,
   BranchArchiveOrDeleteOptions,
   BranchArchiveOrDeleteResult,
+  BranchEnvironmentCommandField,
+  BranchEnvironmentCommandOverrides,
   BranchEnvironmentUpdate,
   BranchFsAccessLevel,
   BranchID,
@@ -74,6 +76,7 @@ import type {
 } from '@agor/core/types';
 import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  BRANCH_ENVIRONMENT_COMMAND_FIELDS,
   getTeammateConfig,
   hasMinimumRole,
   isTeammate,
@@ -84,6 +87,7 @@ import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
+import { ensureMinimumRole } from '../utils/authorization.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-realtime.js';
@@ -2935,6 +2939,122 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         params
       )
     );
+  }
+
+  /**
+   * Custom method: set some or all of a branch's materialized environment
+   * command fields directly (start / stop / nuke / logs / health / app), as
+   * branch-level overrides on top of whatever the variant last rendered.
+   *
+   * This is the programmatic equivalent of editing the "branch snapshot" in the
+   * Environment settings tab: it writes raw executable command strings straight
+   * onto the branch, so an agent that inspected a repo can apply the dev
+   * commands it discovered without a trip to Settings. Subsequent
+   * `startEnvironment`/`stopEnvironment`/etc. run the persisted strings.
+   *
+   * Authorization: because these strings execute as the system user, this
+   * requires ADMIN — the same bar as the `requireAdminForEnvConfig` hook that
+   * guards the REST/UI branch patch path. Branch `all` permission alone is NOT
+   * sufficient; that tier only lets a collaborator SELECT a vetted variant via
+   * {@link renderEnvironment}. Setting arbitrary command strings is strictly
+   * more powerful, so it stays admin-only to avoid a privilege escalation.
+   *
+   * Partial-update semantics: a field provided (non-blank) overrides the
+   * current value; an omitted field is left untouched (keeps its current
+   * rendered value). To reset a field back to the variant/repo default, use
+   * `renderEnvironment` (the `agor_environment_set` re-render path).
+   *
+   * Refuses to run while the environment is running/starting — the live process
+   * was launched with the current command strings; stop it first. Mirrors the
+   * variant-change guard in {@link renderEnvironment}.
+   *
+   * The effective set (existing merged with the provided overrides) is
+   * validated against the instance execution policy exactly like a freshly
+   * rendered snapshot, so webhook-only mode and SSRF/URL rules still apply.
+   */
+  async setEnvironmentCommands(
+    id: BranchID,
+    data: BranchEnvironmentCommandOverrides,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    // Raw command strings execute as the system user → admin-only, matching the
+    // requireAdminForEnvConfig hook on the REST/UI branch patch path. Internal
+    // calls (no provider) and service accounts bypass, per ensureMinimumRole.
+    ensureMinimumRole(params, ROLES.ADMIN, 'set branch environment commands');
+
+    // loadEnvironmentForAction also runs the shared env-control gate (all-or-
+    // admin) and loads the branch inside tenant scope. Admin clears both.
+    const branch = await this.loadEnvironmentForAction(
+      id,
+      params,
+      'set branch environment commands'
+    );
+
+    // Map each logical field to its branch column — single source of truth for
+    // the normalize / validate / patch passes below.
+    const FIELD_TO_COLUMN = {
+      start: 'start_command',
+      stop: 'stop_command',
+      nuke: 'nuke_command',
+      logs: 'logs_command',
+      health: 'health_check_url',
+      app: 'app_url',
+    } as const satisfies Record<BranchEnvironmentCommandField, keyof Branch>;
+
+    // Normalize: keep only fields the caller actually supplied (non-blank),
+    // trimmed. A blank/omitted field is treated as "not provided".
+    const normalized: Partial<Record<BranchEnvironmentCommandField, string>> = {};
+    for (const field of BRANCH_ENVIRONMENT_COMMAND_FIELDS) {
+      const value = data[field];
+      if (value !== undefined && value.trim().length > 0) normalized[field] = value.trim();
+    }
+    if (Object.keys(normalized).length === 0) {
+      throw new Error(
+        'No environment commands provided. Supply at least one of: ' +
+          `${BRANCH_ENVIRONMENT_COMMAND_FIELDS.join(', ')}.`
+      );
+    }
+
+    // Refuse while live: the running process was started with the current
+    // command strings; swapping them out from under it would leave us unable to
+    // stop/restart cleanly.
+    const envStatus = branch.environment_instance?.status;
+    if (envStatus === 'running' || envStatus === 'starting') {
+      throw new Error(
+        `Cannot change environment commands while the environment is ${envStatus}. ` +
+          'Stop the environment first.'
+      );
+    }
+
+    // Effective set = current branch fields with the provided overrides applied
+    // (provided wins; omitted keeps its current value).
+    const effectiveOf = (field: BranchEnvironmentCommandField): string | undefined =>
+      normalized[field] ?? (branch[FIELD_TO_COLUMN[field]] as string | undefined);
+
+    // Validate the EFFECTIVE set against the instance execution policy, exactly
+    // like renderEnvironment validates a rendered snapshot (and like the
+    // validateBranchEnvPolicyHook merge on the REST patch path).
+    await this.validateRenderedEnvironmentActions({
+      start: effectiveOf('start'),
+      stop: effectiveOf('stop'),
+      nuke: effectiveOf('nuke'),
+      logs: effectiveOf('logs'),
+    });
+    validateRenderedManagedEnvUrlFields({
+      health: effectiveOf('health'),
+      app: effectiveOf('app'),
+    });
+
+    // Patch only the fields the caller actually provided, so an omitted field is
+    // never accidentally cleared and `updated_at` reflects a real change.
+    const patchData: Partial<Branch> = { updated_at: new Date().toISOString() };
+    for (const field of BRANCH_ENVIRONMENT_COMMAND_FIELDS) {
+      const value = normalized[field];
+      if (value !== undefined)
+        (patchData as Record<string, string>)[FIELD_TO_COLUMN[field]] = value;
+    }
+
+    return await this.withTenantDatabase(params, () => this.patch(id, patchData, params));
   }
 }
 

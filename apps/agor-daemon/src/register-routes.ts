@@ -4104,6 +4104,28 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerLongAuthenticatedRoute(
     app,
+    '/branches/:id/set-environment-commands',
+    {
+      async create(data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.setEnvironmentCommands(
+          id as import('@agor/core/types').BranchID,
+          data as import('@agor/core/types').BranchEnvironmentCommandOverrides,
+          params
+        );
+      },
+    },
+    {
+      // Admin control is enforced at the service layer (raw command strings run
+      // as the system user, so branch `all` alone is not sufficient here).
+      create: { role: ROLES.VIEWER, action: 'set branch environment commands' },
+    },
+    requireAuth
+  );
+
+  registerLongAuthenticatedRoute(
+    app,
     '/branches/:id/health',
     {
       async find(params: RouteParams) {

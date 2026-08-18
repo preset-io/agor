@@ -109,6 +109,7 @@ so do not blindly replay branch creation.
 - **Bulk account provisioning:** Paste a CSV of emails; the agent calls MCP to create users and invite them automatically.
 - **Issue triage pipeline:** Source GitHub issues by label, triage them, and create branches linked to each issue, dropping them onto the active board as cards.
 - **Environment orchestration:** Start/stop branch environments via MCP before delegating work to collaborators or other agents.
+- **"Check out my project and just run it":** An agent inspects a freshly cloned repo, infers its dev commands, calls `agor_environment_set_commands` to persist them on the branch, and passes `andStart: true` to bring the environment up — no trip to Settings.
 
 Because MCP calls are just JSON-RPC, complex workflows can be scripted once and reused by any tool that speaks the protocol.
 
@@ -117,6 +118,16 @@ operator sets `execution.managed_envs_execution_mode: webhook-only`, MCP
 `agor_environment_start`, `agor_environment_stop`, `agor_environment_logs`, and
 `agor_environment_nuke` reject rendered shell commands and only invoke explicit
 HTTP(S) webhook URLs. See [Environments: webhook-only mode](/guide/environment-configuration#webhook-only-mode).
+
+Two configuration verbs pair with these lifecycle tools. `agor_environment_set`
+selects one of the repo's predefined environment variants and re-renders the
+branch's commands from it (requires branch `all` permission or admin).
+`agor_environment_set_commands` writes raw command strings directly onto the
+branch — the programmatic equivalent of editing the branch snapshot in the
+Environment settings tab. Because those strings execute as the system user, it
+is **admin-only** and refuses to change commands while the environment is
+running or starting. Both accept `andStart: true` for one-shot configure-and-run,
+and both honor webhook-only mode.
 
 ## External Agent Access
 

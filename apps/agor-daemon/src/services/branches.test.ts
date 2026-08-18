@@ -2080,6 +2080,136 @@ describe('BranchesService.renderEnvironment running-guard', () => {
   });
 });
 
+describe('BranchesService.setEnvironmentCommands', () => {
+  function createSetCommandsHarness(opts: {
+    status?: 'running' | 'starting' | 'stopped';
+    branch?: Record<string, unknown>;
+    mode?: 'hybrid' | 'webhook-only';
+  }) {
+    const config = opts.mode ? { execution: { managed_envs_execution_mode: opts.mode } } : {};
+    const app = {
+      get: () => config,
+      service(path: string) {
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    // Bypass the shared all-or-admin env-control gate; the admin check and the
+    // running/validation logic under test run separately.
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    const branch = {
+      branch_id: 'wt-1',
+      repo_id: 'repo-1',
+      name: 'wt-1',
+      path: '/tmp/wt-1',
+      branch_unique_id: 1,
+      environment_instance: { status: opts.status ?? 'stopped' },
+      ...opts.branch,
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const patchSpy = vi
+      .spyOn(service, 'patch')
+      .mockImplementation(async (_id, data) => ({ ...branch, ...(data as object) }) as never);
+    return { service, patchSpy };
+  }
+
+  it('requires admin — denies a non-admin caller before touching the branch', async () => {
+    const { service, patchSpy } = createSetCommandsHarness({});
+    const getSpy = vi.spyOn(service, 'get');
+
+    await expect(
+      service.setEnvironmentCommands('wt-1' as BranchID, { start: 'echo hi' }, {
+        provider: 'rest',
+        user: { user_id: 'u1', role: 'member' },
+      } as never)
+    ).rejects.toThrow(/admin access/);
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('patches only the fields provided (partial update leaves others untouched)', async () => {
+    const { service, patchSpy } = createSetCommandsHarness({
+      branch: { start_command: 'old start', stop_command: 'old stop' },
+    });
+
+    await service.setEnvironmentCommands('wt-1' as BranchID, { start: 'new start' });
+
+    expect(patchSpy).toHaveBeenCalledTimes(1);
+    const patched = patchSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(patched.start_command).toBe('new start');
+    expect('stop_command' in patched).toBe(false);
+  });
+
+  it('trims provided command strings before persisting', async () => {
+    const { service, patchSpy } = createSetCommandsHarness({});
+
+    await service.setEnvironmentCommands('wt-1' as BranchID, {
+      start: '  echo hi  ',
+      stop: 'echo bye',
+    });
+
+    const patched = patchSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(patched.start_command).toBe('echo hi');
+    expect(patched.stop_command).toBe('echo bye');
+  });
+
+  it('throws when no commands are provided', async () => {
+    const { service, patchSpy } = createSetCommandsHarness({});
+
+    await expect(service.setEnvironmentCommands('wt-1' as BranchID, {})).rejects.toThrow(
+      /No environment commands provided/
+    );
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses to change commands while the environment is running', async () => {
+    const { service, patchSpy } = createSetCommandsHarness({ status: 'running' });
+
+    await expect(
+      service.setEnvironmentCommands('wt-1' as BranchID, { start: 'echo hi' })
+    ).rejects.toThrow(/while the environment is running/);
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses to change commands while the environment is starting', async () => {
+    const { service, patchSpy } = createSetCommandsHarness({ status: 'starting' });
+
+    await expect(
+      service.setEnvironmentCommands('wt-1' as BranchID, { stop: 'echo bye' })
+    ).rejects.toThrow(/while the environment is starting/);
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid health URL via the URL-field policy', async () => {
+    const { service, patchSpy } = createSetCommandsHarness({});
+
+    await expect(
+      service.setEnvironmentCommands('wt-1' as BranchID, { health: 'not-a-url' })
+    ).rejects.toThrow();
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a shell command for a lifecycle field in webhook-only mode', async () => {
+    const { service, patchSpy } = createSetCommandsHarness({ mode: 'webhook-only' });
+
+    await expect(
+      service.setEnvironmentCommands('wt-1' as BranchID, { start: 'echo hi' })
+    ).rejects.toThrow();
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('accepts a public https webhook for a lifecycle field in webhook-only mode', async () => {
+    const { service, patchSpy } = createSetCommandsHarness({ mode: 'webhook-only' });
+
+    await service.setEnvironmentCommands('wt-1' as BranchID, {
+      start: 'https://ci.example.com/start',
+    });
+
+    const patched = patchSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(patched.start_command).toBe('https://ci.example.com/start');
+  });
+});
+
 describe('BranchesService managed environment control authorization', () => {
   const branchId = 'wt-auth' as BranchID;
   const allUserId = 'user-all';

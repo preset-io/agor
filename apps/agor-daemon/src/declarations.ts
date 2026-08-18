@@ -335,6 +335,11 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
     data: { variant?: string } | undefined,
     params?: FeathersParams
   ): Promise<Branch>;
+  setEnvironmentCommands(
+    id: BranchID,
+    data: import('@agor/core/types').BranchEnvironmentCommandOverrides,
+    params?: FeathersParams
+  ): Promise<Branch>;
   checkHealth(
     id: BranchID,
     params?: FeathersParams,

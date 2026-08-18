@@ -598,6 +598,48 @@ export type BranchEnvironmentUpdate = Omit<
 };
 
 /**
+ * Partial override for a branch's materialized environment command fields.
+ *
+ * These are the raw executable command strings (or HTTP(S) webhook URLs) that
+ * `agor_environment_start`/`stop`/etc. run directly, keyed by the short logical
+ * name used in the repo's variant definitions and the Environment settings tab.
+ * A caller supplies only the fields it wants to change; omitted fields keep
+ * their current rendered value. Used by `BranchesService.setEnvironmentCommands`
+ * (and the `agor_environment_set_commands` MCP tool) to let an agent apply the
+ * dev commands it discovered from a repo without a trip to Settings.
+ *
+ * Because these strings execute as the system user, writing them is an
+ * admin-tier capability — stricter than selecting a vetted variant via
+ * `renderEnvironment`.
+ */
+export interface BranchEnvironmentCommandOverrides {
+  /** Start command (shell string, or http(s) URL webhook). Maps to `start_command`. */
+  start?: string;
+  /** Stop command (shell string, or http(s) URL webhook). Maps to `stop_command`. */
+  stop?: string;
+  /** Destructive reset command. Maps to `nuke_command`. */
+  nuke?: string;
+  /** Recent-logs command. Maps to `logs_command`. */
+  logs?: string;
+  /** Health check http(s) URL. Maps to `health_check_url`. */
+  health?: string;
+  /** App http(s) URL. Maps to `app_url`. */
+  app?: string;
+}
+
+/** Logical field names accepted by {@link BranchEnvironmentCommandOverrides}. */
+export const BRANCH_ENVIRONMENT_COMMAND_FIELDS = [
+  'start',
+  'stop',
+  'nuke',
+  'logs',
+  'health',
+  'app',
+] as const satisfies ReadonlyArray<keyof BranchEnvironmentCommandOverrides>;
+
+export type BranchEnvironmentCommandField = (typeof BRANCH_ENVIRONMENT_COMMAND_FIELDS)[number];
+
+/**
  * Legacy (v1) repository environment configuration — single flat command set.
  *
  * @deprecated Use {@link RepoEnvironment} (v2) with named variants. Retained

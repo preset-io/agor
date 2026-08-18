@@ -512,6 +512,118 @@ describe('agor_environment_set', () => {
 });
 
 // ---------------------------------------------------------------------------
+// agor_environment_set_commands
+// ---------------------------------------------------------------------------
+
+describe('agor_environment_set_commands', () => {
+  it('forwards only the provided command overrides and returns the effective set', async () => {
+    const setCalls: unknown[][] = [];
+    const startCalls: unknown[][] = [];
+
+    const ctx = makeCtx({
+      branches: {
+        setEnvironmentCommands: async (...args: unknown[]) => {
+          setCalls.push(args);
+          return {
+            branch_id: 'wt-1',
+            start_command: 'pnpm dev',
+            stop_command: 'pnpm stop',
+          };
+        },
+        startEnvironment: async (...args: unknown[]) => {
+          startCalls.push(args);
+          return { branch_id: 'wt-1' };
+        },
+      },
+    });
+
+    const handler = await captureEnvironmentTool(ctx, 'agor_environment_set_commands');
+    const result = await handler({ branchId: 'wt-1', start: 'pnpm dev', stop: 'pnpm stop' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.success).toBe(true);
+    expect(setCalls).toHaveLength(1);
+    // Only start + stop were supplied → only those keys reach the service.
+    expect(setCalls[0][1]).toEqual({ start: 'pnpm dev', stop: 'pnpm stop' });
+    expect(parsed.commands).toEqual({
+      start: 'pnpm dev',
+      stop: 'pnpm stop',
+      nuke: null,
+      logs: null,
+      health: null,
+      app: null,
+    });
+    expect(startCalls).toHaveLength(0);
+  });
+
+  it('starts the environment after setting when andStart=true', async () => {
+    const startCalls: unknown[][] = [];
+
+    const ctx = makeCtx({
+      branches: {
+        setEnvironmentCommands: async () => ({
+          branch_id: 'wt-1',
+          start_command: 'pnpm dev',
+        }),
+        startEnvironment: async (...args: unknown[]) => {
+          startCalls.push(args);
+          return { branch_id: 'wt-1', start_command: 'pnpm dev' };
+        },
+      },
+    });
+
+    const handler = await captureEnvironmentTool(ctx, 'agor_environment_set_commands');
+    const result = await handler({ branchId: 'wt-1', start: 'pnpm dev', andStart: true });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.message).toMatch(/start requested/);
+    expect(startCalls).toHaveLength(1);
+  });
+
+  it('surfaces a service error (e.g. admin/running guard) as success:false', async () => {
+    const ctx = makeCtx({
+      branches: {
+        setEnvironmentCommands: async () => {
+          throw new Error(
+            'Cannot change environment commands while the environment is running. Stop the environment first.'
+          );
+        },
+      },
+    });
+
+    const handler = await captureEnvironmentTool(ctx, 'agor_environment_set_commands');
+    const result = await handler({ branchId: 'wt-1', start: 'pnpm dev' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toMatch(/while the environment is running/);
+  });
+
+  it('when andStart succeeds-then-start-fails, reports commands_set:true and a clear error', async () => {
+    const ctx = makeCtx({
+      branches: {
+        setEnvironmentCommands: async () => ({
+          branch_id: 'wt-1',
+          start_command: 'pnpm dev',
+        }),
+        startEnvironment: async () => {
+          throw new Error('boom');
+        },
+      },
+    });
+
+    const handler = await captureEnvironmentTool(ctx, 'agor_environment_set_commands');
+    const result = await handler({ branchId: 'wt-1', start: 'pnpm dev', andStart: true });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.commands_set).toBe(true);
+    expect(parsed.error).toMatch(/start failed: boom/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // agor_branches_create — variant param
 // ---------------------------------------------------------------------------
 
