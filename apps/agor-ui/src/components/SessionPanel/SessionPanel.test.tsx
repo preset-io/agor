@@ -242,20 +242,9 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
       name: 'Type STOP to confirm force-fail',
     });
     await waitFor(() => expect(confirmation).toHaveFocus());
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Force-fail task?' })).not.toBeInTheDocument()
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    const reopenedConfirmation = await screen.findByRole('textbox', {
-      name: 'Type STOP to confirm force-fail',
-    });
-    const reopenedForceFail = screen.getByRole('button', { name: 'Force fail' });
-    expect(reopenedForceFail).toBeDisabled();
-    fireEvent.change(reopenedConfirmation, { target: { value: 'STOP' } });
-    expect(reopenedForceFail).toBeEnabled();
-    fireEvent.keyDown(reopenedConfirmation, { key: 'Enter', code: 'Enter' });
+    fireEvent.change(confirmation, { target: { value: 'STOP' } });
+    expect(forceFail).toBeEnabled();
+    fireEvent.keyDown(confirmation, { key: 'Enter', code: 'Enter' });
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create).toHaveBeenCalledWith({

@@ -1,4 +1,5 @@
 import {
+  createDatabase,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
@@ -38,6 +39,19 @@ function signRuntimeJwt(secret: string, payload: Record<string, unknown>) {
 }
 
 describe('createFreshTenantWriteDatabaseRunner', () => {
+  it('remains a no-op write gate on the single-tenant SQLite path', async () => {
+    const db = createDatabase({ url: ':memory:' });
+    const work = vi.fn(async () => {
+      expect(getCurrentTenantId()).toBe('default');
+      return 'written';
+    });
+
+    await expect(createFreshTenantWriteDatabaseRunner(db, 'default')(work)).resolves.toBe(
+      'written'
+    );
+    expect(work).toHaveBeenCalledOnce();
+  });
+
   it('leaves an inherited DB scope and opens a new short tenant transaction', async () => {
     let transactionNumber = 0;
     const db = {
