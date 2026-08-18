@@ -71,6 +71,7 @@ function createHarness(
     update: vi.fn().mockResolvedValue({ session_id: sessionId }),
   };
   const tasksService = {
+    get: vi.fn().mockResolvedValue({ full_prompt: 'prompt' }),
     patch: vi.fn().mockResolvedValue(undefined),
     emit: vi.fn(),
   };
