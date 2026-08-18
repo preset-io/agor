@@ -4305,6 +4305,32 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  // A connect result is an answer to the caller, not tenant news, so it is
+  // published to nobody.
+  //
+  // The daemon's global publisher (`utils/realtime-publish.ts`) has no path
+  // allowlist: every service that emits `created` fans out to the whole
+  // tenant's authenticated channel unless it says otherwise. That put a
+  // `{ mcp_server, session }` payload on every socket in the tenant, and now
+  // that an install can carry an API key in `mcp_server.auth.token`, this is a
+  // second route out for it — one the `mcp-servers` redaction hook does not
+  // cover, because that hook is registered on `mcp-servers` and this is a
+  // different service forwarding the same object.
+  //
+  // It happens to be redacted today: connect obtains the row from
+  // `mcp-servers` with the caller's own params, so the after hook has already
+  // replaced the token by the time it lands in this result. That is a property
+  // of where the object came from rather than of where it is going, and the
+  // next person to change what connect returns has no reason to know a
+  // broadcast depends on it.
+  //
+  // Nothing is lost by silence. The rows this creates are announced by their
+  // own services — `mcp-servers` emits `created`/`patched` for the install and
+  // `sessions` for the session, both through hooks that redact — so a client
+  // watching for either still learns about them, from the service that owns
+  // them.
+  app.service('mcp-catalog/connect').publish(() => []);
+
   // ============================================================================
   // Session env selections (v0.5 env-var-access)
   //

@@ -36,7 +36,6 @@ const GRID_SPANS = { xs: 24, sm: 12, lg: 8, xxl: 6 } as const;
 
 const INITIAL_FILTERS: CatalogFilterState = {
   search: '',
-  connectableOnly: false,
   sort: DEFAULT_SORT,
 };
 
@@ -131,10 +130,6 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
     (capability?: string) => applyFilter({ capability }),
     [applyFilter]
   );
-  const onConnectableOnlyChange = useCallback(
-    (connectableOnly: boolean) => applyFilter({ connectableOnly }),
-    [applyFilter]
-  );
   const onSortChange = useCallback(
     (sort: CatalogFilterState['sort']) => applyFilter({ sort }),
     [applyFilter]
@@ -165,10 +160,12 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
       branchId,
       agenticTool,
       acknowledgedDisclosure,
+      apiKey,
     }: {
       branchId: string;
       agenticTool: AgenticToolName;
       acknowledgedDisclosure: string;
+      apiKey?: string;
     }) => {
       if (!selected || !client) return;
       setConnecting(true);
@@ -179,6 +176,11 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
           branch_id: branchId,
           agentic_tool: agenticTool,
           acknowledged_disclosure: acknowledgedDisclosure,
+          // Spread rather than sent as `undefined`: the request carries a key
+          // or it carries no such field, and the daemon reads absence as "the
+          // user supplied nothing" rather than having to unpick which kind of
+          // empty arrived.
+          ...(apiKey ? { api_key: apiKey } : {}),
         });
         rememberConnectBranchId(branchId);
         // A starter prompt is written to exercise the server it ships with, so
@@ -212,12 +214,10 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         search={filters.search}
         category={filters.category}
         capability={filters.capability}
-        connectableOnly={filters.connectableOnly}
         sort={filters.sort}
         onSearchChange={onSearchChange}
         onCategoryChange={onCategoryChange}
         onCapabilityChange={onCapabilityChange}
-        onConnectableOnlyChange={onConnectableOnlyChange}
         onSortChange={onSortChange}
         matchSummary={matchSummary}
       />

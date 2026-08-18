@@ -349,15 +349,33 @@ export interface MCPCatalogFilters {
 /**
  * Request body of `POST /mcp-catalog/connect`.
  *
- * A catalog key and where the session should live, and nothing else. URL,
- * transport, and auth come from the catalog entry server-side, so this cannot
- * be used to register an arbitrary server.
+ * A catalog key, where the session should live, and — for an endpoint that asks
+ * for one — the caller's own API key. Nothing else. URL, transport, and the
+ * *kind* of auth still come from the catalog entry and the live endpoint
+ * server-side, so this cannot be used to register an arbitrary server, and a
+ * client cannot name the destination its own credential is sent to.
  */
 export interface MCPCatalogConnectData {
   /** The entry's reverse-DNS catalog name. */
   catalog_key: string;
   branch_id: string;
   agentic_tool: AgenticToolName;
+  /**
+   * An API key for an endpoint that answers unauthenticated clients with a
+   * non-OAuth challenge.
+   *
+   * The one secret this request carries, and the only field on it that is the
+   * caller's rather than the catalog's — precisely because it is the one thing
+   * a checked-in, publicly readable, every-tenant-identical file must never
+   * hold. It is stored as `auth.token` on the installed server row, which is
+   * where every other bearer credential in Agor lives and therefore what the
+   * read-path redaction already covers.
+   *
+   * Required when the endpoint asks for credentials, refused when it does not:
+   * a key sent to a server that never asked for one would be a secret written
+   * to a row with no reason to carry it.
+   */
+  api_key?: string;
   /**
    * The `permission_disclosure` the user was shown and accepted.
    *

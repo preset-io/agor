@@ -1,3 +1,4 @@
+import { redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import type { MCPAuth, MCPCatalogEntry, MCPServer, MCPTransport } from '@agor/core/types';
 
 /** Catalog transports, as `mcp_servers` names them. */
@@ -26,7 +27,7 @@ const RUNTIME_HYDRATED_AUTH_FIELDS = [
 ] as const satisfies readonly (keyof MCPAuth)[];
 
 function significantAuth(value: MCPAuth | undefined): Record<string, unknown> {
-  const entries = Object.entries(value ?? { type: 'none' }).filter(
+  const entries = Object.entries(redactMCPAuthSecrets(value) ?? { type: 'none' }).filter(
     ([key, field]) =>
       field !== undefined && !(RUNTIME_HYDRATED_AUTH_FIELDS as readonly string[]).includes(key)
   );

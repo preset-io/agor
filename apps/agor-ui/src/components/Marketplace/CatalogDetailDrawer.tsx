@@ -18,6 +18,7 @@ import {
   Drawer,
   Flex,
   Form,
+  Input,
   Select,
   Space,
   Tag,
@@ -53,11 +54,17 @@ export interface CatalogDetailDrawerProps {
   /**
    * `acknowledgedDisclosure` is the exact text this drawer put on screen, so
    * what the connect request claims was shown cannot drift from what was.
+   *
+   * `apiKey` is present only for an entry that asks for one, and is the only
+   * thing this drawer sends that the user typed. Everything else about the
+   * server — where it is, how it is reached, what kind of credential it takes —
+   * is the catalog's, resolved on the daemon from `catalog_key`.
    */
   onConnect: (input: {
     branchId: string;
     agenticTool: AgenticToolName;
     acknowledgedDisclosure: string;
+    apiKey?: string;
   }) => void;
 }
 
@@ -111,7 +118,20 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   const [consent, setConsent] = useState<{ entryId: string; disclosure: string } | null>(null);
   const acknowledged =
     entryId !== undefined && consent?.entryId === entryId && consent.disclosure === disclosure;
-  const canConnect = Boolean(!blockedReason && acknowledged && branchId && !connecting);
+
+  // Keyed by entry for the same reason consent is, and more sharply: a bare
+  // string would survive switching entries in an open drawer, leaving one
+  // vendor's key sitting in the field for a connect to another vendor's
+  // endpoint. Pairing it with the entry it was typed for means the field is
+  // empty for any entry it was not.
+  const [pastedKey, setPastedKey] = useState<{ entryId: string; value: string } | null>(null);
+  const needsApiKey = connect?.readiness === 'api-key';
+  const keyField = pastedKey !== null && pastedKey.entryId === entryId ? pastedKey.value : '';
+  const apiKey = keyField.trim();
+
+  const canConnect = Boolean(
+    !blockedReason && acknowledged && branchId && !connecting && (!needsApiKey || apiKey)
+  );
 
   return (
     <Drawer
@@ -220,13 +240,61 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                     notFoundContent={branchesLoading ? 'Loading branches…' : 'No branches yet'}
                   />
                 </Form.Item>
-                <Form.Item label="Agent" style={{ marginBottom: 0 }}>
+                <Form.Item label="Agent" style={{ marginBottom: needsApiKey ? token.marginXS : 0 }}>
                   <Select<AgenticToolName>
                     value={agenticTool}
                     onChange={setAgenticTool}
                     options={AGENT_OPTIONS}
                   />
                 </Form.Item>
+                {needsApiKey && (
+                  <Form.Item
+                    label="API key"
+                    required
+                    style={{ marginBottom: 0 }}
+                    // The two things a user needs and the entry can supply:
+                    // whose key this is, and where to go and get one. Without
+                    // the first, "API key" is ambiguous on a page that also
+                    // mentions Agor; without the second, the answer is a search
+                    // engine. `website_url` is the vendor's own page, so it is
+                    // the honest place to send someone — the marketplace does
+                    // not know each vendor's settings URL and guessing one
+                    // would rot silently.
+                    extra={
+                      <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                        Your own {title} API key. It is stored for you alone and never shown again —
+                        reconnect with a new one to rotate it.
+                        {entry.website_url && (
+                          <>
+                            {' '}
+                            <Link
+                              href={entry.website_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              Where to find it
+                            </Link>
+                          </>
+                        )}
+                      </Text>
+                    }
+                  >
+                    <Input.Password
+                      value={keyField}
+                      onChange={(event) =>
+                        setPastedKey(
+                          entryId === undefined ? null : { entryId, value: event.target.value }
+                        )
+                      }
+                      placeholder={`Paste your ${title} API key`}
+                      autoComplete="off"
+                      // The browser is the one place this drawer cannot promise
+                      // anything about: an autofilled or remembered value here
+                      // is a credential kept somewhere Agor does not manage.
+                      spellCheck={false}
+                    />
+                  </Form.Item>
+                )}
               </Form>
 
               {branchesError && <Alert type="error" showIcon message={branchesError} />}
@@ -240,7 +308,15 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                 disabled={!canConnect}
                 onClick={() =>
                   branchId &&
-                  onConnect({ branchId, agenticTool, acknowledgedDisclosure: disclosure })
+                  onConnect({
+                    branchId,
+                    agenticTool,
+                    acknowledgedDisclosure: disclosure,
+                    // Only for an entry that asks. Sending a key to an endpoint
+                    // that never wanted one is refused by the daemon, and the
+                    // field it would have come from is not rendered anyway.
+                    ...(needsApiKey ? { apiKey } : {}),
+                  })
                 }
               >
                 Connect &amp; try it

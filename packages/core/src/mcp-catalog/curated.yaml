@@ -30,6 +30,15 @@
 # wrong, the probe overrules it and the daemon logs the disagreement, so a
 # stale value shows up in the logs rather than sitting here indefinitely.
 #
+# None of the three is a reason not to list an entry. `oauth` signs the user in
+# after connecting; `credentials` takes a key the user pastes into the drawer.
+# What must never appear in this file is the key itself, or any other secret: it
+# is checked into a public repository and is byte-identical for every tenant, so
+# a secret written here is a published secret shared by everyone. A per-user
+# credential is supplied at connect time and stored per install. Point
+# `website_url` at the vendor's own page for a `credentials` entry — it is what
+# the drawer links to under "Where to find it".
+#
 # `popularity_rank` is hand-assigned, informed by relative install volume on
 # Smithery. Smithery's raw counts are deliberately not stored or displayed: they
 # measure traffic through Smithery, not installs, and presenting them as Agor's
@@ -519,6 +528,11 @@ unpublished:
     remote_url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
     transport: streamable-http
     auth_type: credentials
+    # The drawer links this as "Where to find it" beside the API key field.
+    # Datadog's own key-management page rather than a marketing page: for a
+    # `credentials` entry this is the difference between a user knowing which
+    # key to paste and reaching for a search engine.
+    website_url: https://docs.datadoghq.com/account_management/api-app-keys/
 
   - name: com.firecrawl/mcp
     category: search

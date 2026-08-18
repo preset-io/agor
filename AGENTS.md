@@ -404,16 +404,34 @@ Each entry states an `auth_type` (`none` / `oauth` / `credentials`), or omits it
 where nobody has established the answer. It decides what the marketplace tells a
 user before they press Connect, and nothing else: `mcp-catalog-connect.ts`
 probes the endpoint on every connect, whatever the entry says, and installs only
-on a valid JSON-RPC `initialize` result. Servers the probe finds behind an
-account are refused — there is no credential model for them yet. When the probe
-contradicts the entry, the daemon logs it at `warn` with the stated and probed
-values; that log is the only thing that can catch a stale `auth_type`, because
-nothing else compares the file against the servers it describes.
+on a valid JSON-RPC `initialize` result. Each of the three verdicts installs
+something — open, configured-for-OAuth, or key-bearing — so no stated auth type
+is a dead end. When the probe contradicts the entry, the daemon logs it at
+`warn` with the stated and probed values; that log is the only thing that can
+catch a stale `auth_type`, because nothing else compares the file against the
+servers it describes.
 
-That probe goes through `createPinnedFetch`
+An endpoint the probe finds behind a non-OAuth challenge is installed with a key
+the user pastes into the marketplace drawer. The key never goes in
+`curated.yaml` — that file is checked in, public, and byte-identical for every
+tenant. It arrives as `api_key` on the connect request, the only field on that
+request that is the caller's rather than the catalog's: URL, transport, and the
+kind of credential still derive server-side from the entry, so a client holding
+a key cannot name where it is sent. It is stored as `auth.token` on the
+installed `mcp_servers` row, which is where every bearer credential in Agor
+lives and therefore what `redactMCPAuthSecrets` already covers on read. Connect
+tries the key against the endpoint before writing anything (`probeRemoteApiKey`)
+rather than installing a server whose every tool would fail. Reuse of a row that
+keeps a secret in its own columns is restricted to the row's owner, so two users
+connecting the same entry get two rows and two keys; re-connecting with a new
+key rotates the one row rather than leaving the old key live beside it.
+
+Both probes go through `createPinnedFetch`
 (`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,
-refuses it unless every resolved address is public, and connects to the address
-it checked. It is one request, to the entry's URL and nowhere else.
+refuses it unless every resolved address is public, connects to the address it
+checked, and does not follow redirects. Each is one request, to the entry's URL
+and nowhere else — which is what keeps the authenticated probe from handing the
+key to whatever a redirect names.
 
 The `mcp_catalog:` config section is retired. It stays loadable — an
 unrecognized top-level key throws, so removing it would stop the daemon of

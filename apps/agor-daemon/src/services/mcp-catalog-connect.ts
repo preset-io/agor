@@ -2,27 +2,37 @@
  * Marketplace connect: install one catalog entry and hand back a session that
  * can use it.
  *
- * The request names a catalog entry and where the session should live, and
- * nothing else. URL, transport, and auth are read from the catalog entry —
- * accepting them from the client would make this a way to register any server
- * at all without passing the `mcp_member_policy` gate that guards
- * `POST /mcp-servers`.
+ * The request names a catalog entry, where the session should live, and — for
+ * an endpoint that asks for one — the caller's own API key. Nothing else. URL,
+ * transport, and the kind of auth are read from the catalog entry and the live
+ * endpoint. Accepting those from the client would make this a way to register
+ * any server at all without passing the `mcp_member_policy` gate that guards
+ * `POST /mcp-servers`, and — now that a request can carry a credential — a way
+ * to name the destination that credential is sent to. A client that supplies
+ * both a URL and a key is a client that can post its own key to its own server;
+ * one that supplies only the key can only ever send it where the catalog
+ * already points.
  *
  * It also does not re-implement that gate. The server row is created through
  * the `mcp-servers` service and the session through `sessions`, with the
  * caller's own params, so policy, ownership stamping, the remote-transport
  * restriction, branch permissions, and execution identity all resolve exactly once,
- * in the places that already own them.
+ * in the places that already own them. The key rides along on that same row as
+ * `auth.token`, which is where every bearer credential in Agor lives — so it
+ * inherits the read-path redaction, the ownership rules, and the write
+ * authorizer without any of them learning that the marketplace exists.
  *
  * Scope: remote transport. An endpoint that accepts an unauthenticated client
  * is installed ready to use; one that answers with an OAuth challenge is
  * installed configured-but-unauthenticated, for the user to complete through
- * the OAuth flow that already exists in Settings → MCP Servers. An endpoint
- * wanting an API key still needs a credential model that does not exist.
+ * the OAuth flow that already exists in Settings → MCP Servers; one that asks
+ * for an API key is installed with the key the caller pasted, after that key
+ * has been tried against the endpoint.
  */
 
 import { BadRequest, NotFound } from '@agor/core/feathers';
-import { probeRemoteAuthType } from '@agor/core/mcp-catalog';
+import { probeRemoteApiKey, probeRemoteAuthType } from '@agor/core/mcp-catalog';
+import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import type {
   AuthenticatedParams,
   CreateMCPServerInput,
@@ -180,6 +190,18 @@ function hasLiveCallerGrant(server: MCPServer, now: number): boolean {
   if (!auth?.oauth_access_token) return false;
   const expiresAt = auth.oauth_token_expires_at;
   return !(expiresAt && expiresAt <= now);
+const RUNTIME_HYDRATED_AUTH_FIELDS = [
+  'oauth_access_token',
+  'oauth_refresh_token',
+  'oauth_token_expires_at',
+] as const satisfies readonly (keyof MCPAuth)[];
+
+function carriesRowLevelSecret(auth: MCPAuth | undefined): boolean {
+  const redacted = redactMCPAuthSecrets(auth);
+  if (!redacted) return false;
+  return MCP_AUTH_SECRET_FIELDS.filter(
+    (field) => !(RUNTIME_HYDRATED_AUTH_FIELDS as readonly string[]).includes(field)
+  ).some((field) => redacted[field] !== undefined);
 }
 
 function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCatalogEntry & {
@@ -298,29 +320,107 @@ function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAu
  *   as any other OAuth server. Connect is not the flow and does not start it;
  *   it produces the row the flow completes.
  * - **A non-OAuth 401/403.** An API key, which nothing can obtain on the user's
- *   behalf and which there is nowhere safe to put — the catalog is public and
- *   shared, and connect takes no input beyond a catalog key. Still refused, and
- *   the message says which of the two kinds of authentication it is so it does
- *   not read as the OAuth case being broken.
+ *   behalf — so the user supplies it, and {@link resolveApiKeyAuth} decides
+ *   whether it works before anything is written.
  * - **Nothing identifiable answered.** Refused, unchanged.
+ *
+ * A key offered to either of the first two is refused rather than dropped. The
+ * endpoint did not ask for one, so storing it would put a live secret on a row
+ * that has no use for it and no reason to be read as holding one; and silently
+ * discarding it would leave a user believing a key they pasted is in use. Both
+ * are reachable honestly — an entry stating `credentials` whose vendor has
+ * since opened the endpoint up, or moved it behind OAuth — so the message says
+ * what changed rather than accusing the caller.
  */
 async function resolveAuthRequirement(
-  entry: MCPCatalogEntry & { remote_url: string }
+  entry: MCPCatalogEntry & { remote_url: string },
+  apiKey: string | undefined
 ): Promise<MCPAuth> {
   const probed = await probeRemoteAuthType(entry.remote_url);
   logProbeDisagreement(entry, probed);
 
-  if (probed === 'none') return { type: 'none' };
-  if (probed === 'oauth') return catalogOAuthConfig(entry);
-  if (probed === 'credentials') {
-    throw new BadRequest(
-      `${catalogDisplayName(entry)} needs an API key, which cannot be set up from the marketplace yet`
-    );
+  if (probed === 'none' || probed === 'oauth') {
+    if (apiKey !== undefined) {
+      throw new BadRequest(
+        `${catalogDisplayName(entry)} is not asking for an API key${
+          probed === 'oauth' ? '; it signs you in with your own account' : ''
+        }. Connect it again without one.`
+      );
+    }
+    return probed === 'none' ? { type: 'none' } : catalogOAuthConfig(entry);
   }
+
+  if (probed === 'credentials') return resolveApiKeyAuth(entry, apiKey);
 
   throw new BadRequest(
     `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`
   );
+}
+
+/**
+ * The auth block to install a key-requiring entry with, or the refusal.
+ *
+ * The key is tried against the endpoint before the row exists. Not for form:
+ * a wrong key installs a server whose every tool fails, and it fails later and
+ * somewhere else — the agent reports a broken tool rather than a bad
+ * credential, and the row sits in Settings looking configured. That is the
+ * exact failure this marketplace declined to ship servers with, so producing it
+ * from a typo would be shipping it anyway. The endpoint has already answered
+ * once by this point, so the check costs one more `initialize` on a request a
+ * user is already waiting on.
+ *
+ * A `rejected` verdict is the user's to fix and says so. `unusable` is not:
+ * the endpoint answered the first probe and then did not answer this one as an
+ * MCP server, which is a fact about the endpoint, and reporting it as a bad key
+ * would send somebody to rotate a credential that is fine. Neither installs
+ * anything, because the only thing worse than refusing a good key is accepting
+ * a bad one.
+ *
+ * The key is never in the sentence. There is no branch here that puts it in a
+ * message, and the probe does not log its request — an error string is the
+ * easiest place for a secret to end up, since it travels to the client, into
+ * daemon logs, and into whatever collects them.
+ */
+async function resolveApiKeyAuth(
+  entry: MCPCatalogEntry & { remote_url: string },
+  apiKey: string | undefined
+): Promise<MCPAuth> {
+  const name = catalogDisplayName(entry);
+  if (apiKey === undefined) {
+    throw new BadRequest(`${name} needs an API key; paste one to connect it`);
+  }
+
+  const verdict = await probeRemoteApiKey(entry.remote_url, apiKey);
+  if (verdict === 'accepted') return { type: 'bearer', token: apiKey };
+  if (verdict === 'rejected') {
+    throw new BadRequest(`${name} did not accept that API key; check it and try again`);
+  }
+  throw new BadRequest(
+    `${name} did not answer as an MCP server when that API key was tried, so it was not connected`
+  );
+}
+
+/**
+ * The API key as the request carried it, or `undefined` for a request that
+ * carried none.
+ *
+ * Whitespace-only is `undefined`, not a key: a client that sends an untouched
+ * input field has supplied nothing, and treating that as a credential would
+ * install a server authenticating with a blank string. Trimmed because a key
+ * pasted from a terminal or a vendor's dashboard routinely arrives with a
+ * trailing newline, and `Bearer sk-…\n` is not a header value any server
+ * accepts — a paste that fails for an invisible reason is the worst kind.
+ *
+ * A non-string is refused rather than coerced. `String(value)` on an object
+ * produces `[object Object]`, which is a credential-shaped thing nobody typed.
+ */
+function readApiKey(value: unknown, entry: MCPCatalogEntry): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new BadRequest(`api_key must be a string to connect ${catalogDisplayName(entry)}`);
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
 }
 
 export interface MCPCatalogConnectService {
@@ -403,6 +503,31 @@ export function createMCPCatalogConnectService(
    * made deliberately about a possibly-shared row. Creating a fresh one grants
    * nothing the caller's `mcp_member_policy` did not already grant, and leaves
    * the disabled row exactly as its owner left it.
+   *
+   * And a row that keeps a credential in its own columns is reusable only by
+   * the user who owns it. This is the one rule the API-key install adds, and it
+   * is the whole of what stops the feature from being a credential leak between
+   * colleagues.
+   *
+   * The search is already narrowed by `usableByUserId`, which resolves to
+   * "shared rows, plus private rows owned by this user" — and every marketplace
+   * install is stamped private to its installer under every policy and at every
+   * role (`resolveCatalogInstall`), so on today's data a second user genuinely
+   * cannot see the first one's row. That is a conclusion drawn from three
+   * separate mechanisms holding at once, though, and the failure it prevents is
+   * silent: reuse handing B a row carrying A's key looks exactly like the
+   * feature working. `usableByUserId` widening, one internally-created unowned
+   * row carrying a `catalog_entry_name`, or a later policy that publishes an
+   * install would each turn a working marketplace into one that lends out
+   * credentials, with nothing failing to mark the moment.
+   *
+   * So the property is asserted here rather than inferred from over there. It
+   * costs an ownership comparison, it is expressed in terms of what the row
+   * carries rather than which entry it came from, and it applies to any future
+   * auth type that puts a secret in a column. Sharing stays available for the
+   * cases where it is sound — an unauthenticated server, or an OAuth one, whose
+   * grants are per-user in `user_mcp_oauth_tokens` and so are not the row's to
+   * lend.
    */
   const findExistingInstall = async (
     entry: MCPCatalogEntry & { remote_url: string },
@@ -416,12 +541,16 @@ export function createMCPCatalogConnectService(
       query: { ...(userId ? { usableByUserId: userId } : {}), $limit: 1000 },
     });
     const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
+    const mayReuse = (server: MCPServer): boolean =>
+      !carriesRowLevelSecret(server.auth) ||
+      (userId !== undefined && server.owner_user_id === userId);
     const install = servers.find(
       (server) =>
         server.enabled &&
         isCurrentCatalogInstall(server, entry, prescribed, {
           reconcileMissingCompatibilityMode: true,
-        })
+        }) &&
+        mayReuse(server)
     );
     return install
       ? { server: install, kind: 'catalog_install' }
@@ -577,6 +706,38 @@ export function createMCPCatalogConnectService(
     return undefined;
   };
 
+  /**
+   * Write the key the caller just pasted onto the install being reused.
+   *
+   * Rotation is the ordinary life of an API key, and re-connecting from the
+   * marketplace is where a user would do it — so the alternative is a connect
+   * that reports success while the server keeps authenticating with the key the
+   * user just replaced. Nothing surfaces that: the row reads back redacted, so
+   * both keys look identical from every screen, and the failure arrives later
+   * as a tool that stopped working.
+   *
+   * Written unconditionally rather than only when it changed, because "changed"
+   * is not knowable here — the row arrives with the sentinel in place of its
+   * token, by design. Writing the same key twice costs one update; skipping a
+   * write because the two might be equal costs the rotation.
+   *
+   * Through the service with the caller's own params, so the write authorizer
+   * decides it: the caller owns this row — {@link findExistingInstall} would not
+   * have offered it otherwise — and the after hook redacts what comes back, so
+   * the key does not travel out on the reply. It also means a patch the tenant's
+   * policy refuses fails here rather than half-installing.
+   */
+  const rotateInstalledKey = async (
+    server: MCPServer,
+    prescribed: MCPAuth,
+    params: AuthenticatedParams
+  ): Promise<MCPServer> =>
+    (await service('mcp-servers').patch(
+      server.mcp_server_id,
+      { auth: prescribed },
+      { ...params }
+    )) as MCPServer;
+
   return {
     async create(data, params) {
       if (!data?.catalog_key) throw new BadRequest('catalog_key is required');
@@ -595,10 +756,14 @@ export function createMCPCatalogConnectService(
 
       assertConnectableEntry(entry);
       assertDisclosureAcknowledged(entry, data.acknowledged_disclosure);
-      // Derived from the entry and the live endpoint, never from `data`: the
-      // request names a catalog key and nothing else, so there is no input a
-      // caller could supply that reaches a URL or a credential endpoint here.
-      const auth = await resolveAuthRequirement(entry);
+      // Derived from the entry and the live endpoint, never from `data` — with
+      // one deliberate exception, read here and nowhere else. The request may
+      // name a secret; it may not name where the secret goes, what transport
+      // carries it, or which kind of credential it is. Every one of those still
+      // comes from the entry the catalog resolved and the answer the endpoint
+      // gave, so a caller holding a key can only ever aim it at the URL the
+      // checked-in file already points to.
+      const auth = await resolveAuthRequirement(entry, readApiKey(data.api_key, entry));
 
       const userId = params.user?.user_id as UserID | undefined;
       const existing = await findExistingInstall(entry, auth, userId, params);
@@ -624,12 +789,18 @@ export function createMCPCatalogConnectService(
       // one path that can produce one. Saying so is also what makes the row
       // private to the caller — an install is theirs whatever the tenant's
       // `mcp_member_policy` says. See `McpCatalogInstallParams`.
-      const mcpServer =
-        existing?.server ??
-        ((await service('mcp-servers').create(createInput, {
-          ...params,
-          mcpCatalogInstall: { entry_name: entry.name },
-        })) as MCPServer);
+      //
+      // A reused install that keeps a credential takes the key from this
+      // connect, so re-connecting is how a key is rotated rather than a way to
+      // keep using the old one. See {@link rotateInstalledKey}.
+      const mcpServer = existing
+        ? carriesRowLevelSecret(auth)
+          ? await rotateInstalledKey(existing, auth, params)
+          : existing
+        : ((await service('mcp-servers').create(createInput, {
+            ...params,
+            mcpCatalogInstall: { entry_name: entry.name },
+          })) as MCPServer);
 
       // Three writes across three services, so there is no transaction to lean
       // on. A server nobody can see is the worst thing to leave behind — it is

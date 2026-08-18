@@ -128,8 +128,18 @@ export const entryTitle = catalogDisplayName;
  * promising "no account needed" for a server that needs their Notion account is
  * the promise this vocabulary exists to keep. It is not `blocked` — the sign-in
  * happens, it just happens after connecting rather than instead of it.
+ *
+ * `api-key` is the third of those, and the one that asks something of the user
+ * *before* connecting rather than after. It stopped being `blocked` when the
+ * drawer gained somewhere to paste a key: `blocked` means the marketplace
+ * cannot install this at all and the drawer removes the form entirely, which is
+ * the opposite of what an entry needing a key now wants. Keeping it in the same
+ * enum rather than adding a parallel flag is what makes the card, the drawer
+ * and the "connectable now" filter agree — they all read this one value, and
+ * the last time two of them disagreed a card advertised a connect that the
+ * drawer then refused.
  */
-export type ConnectReadiness = 'ready' | 'sign-in' | 'unchecked' | 'blocked';
+export type ConnectReadiness = 'ready' | 'sign-in' | 'api-key' | 'unchecked' | 'blocked';
 
 export interface ConnectStatus {
   readiness: ConnectReadiness;
@@ -170,9 +180,10 @@ const CONNECT_STATUSES = {
       'This server uses your own account. Connecting sets it up, then you sign in from the session — nobody signs in on your behalf.',
   },
   needsKey: {
-    readiness: 'blocked',
+    readiness: 'api-key',
     label: 'Needs an API key',
-    detail: 'This server needs an API key. Adding one from the marketplace is not available yet.',
+    detail:
+      'This server needs an API key from your own account. Paste one when you connect — Agor stores it for you alone, and never shows it again.',
   },
   unchecked: {
     readiness: 'unchecked',
@@ -191,18 +202,27 @@ const CONNECT_STATUSES = {
  * Auth types that are not a refusal.
  *
  * The same rule the cards state: `none` is stated open, `oauth` signs the user
- * in with their own account after connecting, and `unknown` is simply unstated
- * — connecting checks the endpoint and stops cleanly if it turns out to want an
- * API key. An entry that says nothing is worth offering, so a filter demanding
- * `none` would hide entries the card beside it called connectable.
+ * in with their own account after connecting, `credentials` takes a key the
+ * user pastes into the drawer, and `unknown` is simply unstated — connecting
+ * checks the endpoint. An entry that says nothing is worth offering, so a
+ * filter demanding `none` would hide entries the card beside it called
+ * connectable.
  *
- * `credentials` is the one that stays out: nothing can obtain an API key on the
- * user's behalf, and there is nowhere to put one they typed.
+ * Every value is now on this list, which is the point: after the API-key field
+ * there is no stated auth type the marketplace refuses outright. The list stays
+ * rather than collapsing into `true` because the enum can gain a member, and a
+ * new one should have to be added here deliberately rather than inheriting
+ * "connectable" from a constant that stopped distinguishing anything.
  *
  * Exported so the toolbar's filter and `connectStatus` cannot drift into
  * disagreeing about what "connectable" means.
  */
-export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = ['none', 'oauth', 'unknown'];
+export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = [
+  'none',
+  'oauth',
+  'credentials',
+  'unknown',
+];
 
 export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
   // `has_remote` is derived from `remote_url`, so testing the URL tests both.
