@@ -125,21 +125,17 @@ export default class Init extends Command {
   static description =
     'Create the Agor config/database and install the agentic tools selected for first use';
 
-  static examples = [
-    '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --local',
-  ];
+  static examples = ['<%= config.bin %> <%= command.id %>'];
 
   static flags = {
     local: Flags.boolean({
       char: 'l',
-      description: 'Initialize local .agor/ directory in current working directory',
+      description: 'Deprecated: per-directory installations are no longer supported',
       default: false,
     }),
     force: Flags.boolean({
       char: 'f',
-      description:
-        'Force re-initialization without prompts (deletes database, repos, and branches)',
+      description: 'Force re-initialization without prompts (deletes the entire .agor directory)',
       default: false,
     }),
     'skip-if-exists': Flags.boolean({
@@ -188,6 +184,14 @@ export default class Init extends Command {
     };
     if (await this.pathExists(getConfigPath())) return;
     await createInitialConfig(config);
+  }
+
+  private resetFreshConfig(): void {
+    const defaults = getDefaultConfig();
+    this.initialConfig = {
+      ...defaults,
+      daemon: { ...defaults.daemon, ...this.initialDaemonConfig },
+    };
   }
 
   private expandHome(path: string): string {
@@ -299,6 +303,11 @@ export default class Init extends Command {
   async run(): Promise<void> {
     const { flags } = await this.parse(Init);
     assertInitSupportsConfiguredDatabase();
+    if (flags.local) {
+      this.error(
+        '`agor init --local` is no longer supported because daemon configuration and data must share one canonical installation at ~/.agor. Run `agor init` without --local.'
+      );
+    }
     this.nonInteractive = flags['non-interactive'];
     const requestedTools = flags['agentic-tools'] ?? process.env.AGOR_AGENTIC_TOOLS;
     if (requestedTools !== undefined) {
@@ -309,6 +318,7 @@ export default class Init extends Command {
       }
     }
     this.initialDaemonConfig = {
+      deployment_id: this.deploymentId,
       host: flags['daemon-host'] ?? process.env.DAEMON_HOST ?? 'localhost',
       ...((flags['daemon-port'] ?? process.env.DAEMON_PORT)
         ? { port: Number(flags['daemon-port'] ?? process.env.DAEMON_PORT) }
@@ -328,7 +338,7 @@ export default class Init extends Command {
     this.log(`${chalk.green('✓')} Git ${git.version} is executable (${git.binary})`);
 
     // Determine base directory early
-    const baseDir = flags.local ? join(process.cwd(), '.agor') : join(homedir(), '.agor');
+    const baseDir = join(homedir(), '.agor');
 
     // If --skip-if-exists and directory already exists, handle config and exit
     if (
@@ -450,6 +460,7 @@ export default class Init extends Command {
       // If --force, skip prompts and nuke everything
       if (flags.force) {
         await this.prepareAgenticToolSelection(true);
+        this.resetFreshConfig();
         this.log(chalk.yellow('🗑️  --force flag set: deleting everything without prompts...'));
         await this.deleteExistingInstall(baseDir);
         await this.performInit(baseDir, dbPath, true);
@@ -479,6 +490,9 @@ export default class Init extends Command {
       // Resolve upgraded-install tool policy before deleting anything. A
       // missing headless policy or a cancelled selector must leave data intact.
       await this.prepareAgenticToolSelection(false);
+      // Tool selection may inspect the old config, but a re-init establishes a
+      // new deployment boundary with fresh identity and secrets.
+      this.resetFreshConfig();
 
       if (action === 'backup') {
         await this.backupExistingInstall(baseDir);

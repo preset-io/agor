@@ -348,6 +348,19 @@ describe('initial agentic tool selection', () => {
     }
   );
 
+  it('rejects --local instead of mixing per-directory data with global config', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-init-local-'));
+    temporaryDirectories.push(root);
+    const home = join(root, 'home');
+    await mkdir(home);
+
+    const result = await runInitWithoutPty(home, ['--local']);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.output).toContain('agor init --local` is no longer supported');
+    await expect(access(join(home, '.agor'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 30_000);
+
   it('rejects a non-TTY interactive invocation before creating partial state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-init-nontty-'));
     temporaryDirectories.push(root);
@@ -399,6 +412,9 @@ describe('initial agentic tool selection', () => {
         String(address.port),
       ]);
       expect(firstInit.exitCode, firstInit.output).toBe(0);
+      const originalConfig = loadYaml(
+        await readFile(join(home, '.agor', 'config.yaml'), 'utf8')
+      ) as { daemon?: { deployment_id?: string; jwtSecret?: string } };
 
       const refused = await runInteractiveReinit(home);
       expect(refused.exitCode, refused.output).toBe(2);
@@ -422,8 +438,12 @@ describe('initial agentic tool selection', () => {
       await expect(access(join(home, backupDir!, 'agor.db-shm'))).resolves.toBeUndefined();
       const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
         agentic_tools?: { installed?: string[] };
+        daemon?: { deployment_id?: string; jwtSecret?: string };
       };
       expect(config.agentic_tools?.installed).toEqual([]);
+      expect(config.daemon?.deployment_id).toBeTruthy();
+      expect(config.daemon?.deployment_id).not.toBe(originalConfig.daemon?.deployment_id);
+      expect(config.daemon?.jwtSecret).not.toBe(originalConfig.daemon?.jwtSecret);
     } finally {
       await closeServer(server);
     }
