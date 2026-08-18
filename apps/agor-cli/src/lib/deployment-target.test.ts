@@ -12,6 +12,7 @@ import { loadToken } from './auth.js';
 import {
   resolveConnectedDeploymentTarget,
   resolveLocalDeploymentTarget,
+  resolveLocalDeploymentTargetOrNull,
 } from './deployment-target';
 
 const deploymentId = '019c1234-5678-7123-8123-123456789abc';
@@ -79,5 +80,34 @@ describe('deployment target resolution', () => {
     });
     expect(resolveDaemonUrl).toHaveBeenCalledWith(config);
     expect(requireDeploymentId).toHaveBeenCalledWith(config);
+  });
+
+  it('resolves the local target through the nullable helper when config exists', async () => {
+    const config = { daemon: { deployment_id: deploymentId } };
+    vi.mocked(loadConfig).mockResolvedValue(config);
+    vi.mocked(resolveDaemonUrl).mockReturnValue('http://127.0.0.1:4040');
+    vi.mocked(requireDeploymentId).mockReturnValue(deploymentId);
+
+    await expect(resolveLocalDeploymentTargetOrNull()).resolves.toEqual({
+      url: 'http://127.0.0.1:4040',
+      deploymentId,
+      source: 'local',
+    });
+  });
+
+  it('returns null from the nullable helper when local config is unusable', async () => {
+    vi.mocked(loadConfig).mockRejectedValue(new Error('no config; run agor init'));
+
+    await expect(resolveLocalDeploymentTargetOrNull()).resolves.toBeNull();
+  });
+
+  it('returns null from the nullable helper when the deployment id is missing', async () => {
+    vi.mocked(loadConfig).mockResolvedValue({ daemon: {} });
+    vi.mocked(resolveDaemonUrl).mockReturnValue('http://127.0.0.1:4040');
+    vi.mocked(requireDeploymentId).mockImplementation(() => {
+      throw new Error('deployment_id missing');
+    });
+
+    await expect(resolveLocalDeploymentTargetOrNull()).resolves.toBeNull();
   });
 });

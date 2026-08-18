@@ -38,3 +38,16 @@ export async function resolveLocalDeploymentTarget(): Promise<DeploymentTarget> 
     source: 'local',
   };
 }
+
+/**
+ * Resolve the local deployment target, or `null` when this host has no usable
+ * local configuration (e.g. `agor init` was never run). Lets callers prefer the
+ * local deployment without treating its absence as a hard error.
+ */
+export async function resolveLocalDeploymentTargetOrNull(): Promise<DeploymentTarget | null> {
+  try {
+    return await resolveLocalDeploymentTarget();
+  } catch {
+    return null;
+  }
+}
